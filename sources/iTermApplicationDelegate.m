@@ -2439,9 +2439,11 @@ static iTermKeyEventReplayer *gReplayer;
     DLog(@"newWindow: invoked");
     PseudoTerminal *currentTerminal = [[iTermController sharedInstance] currentTerminal];
     if (currentTerminal.isShowingTideySidebar) {
-        [currentTerminal performTideyWorkspaceMutationPreservingWindowFrame:^{
-            [self newTabAtIndex:nil];
-        }];
+        BOOL cancel;
+        BOOL tmux = [self possiblyTmuxValueForWindow:NO cancel:&cancel];
+        if (!cancel) {
+            [currentTerminal createTideyWorkspacePossiblyTmux:tmux];
+        }
         return;
     }
     BOOL cancel;
@@ -2464,6 +2466,15 @@ static iTermKeyEventReplayer *gReplayer;
 }
 
 - (IBAction)newSession:(id)sender {
+    PseudoTerminal *currentTerminal = [[iTermController sharedInstance] currentTerminal];
+    if (currentTerminal.isShowingTideySidebar) {
+        BOOL cancel;
+        BOOL tmux = [self possiblyTmuxValueForWindow:NO cancel:&cancel];
+        if (!cancel) {
+            [currentTerminal createTideyPanelPossiblyTmux:tmux];
+        }
+        return;
+    }
     [self newTabAtIndex:nil];
 }
 

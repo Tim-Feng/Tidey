@@ -218,6 +218,8 @@ extern NSString *const iTermDidCreateTerminalWindowNotification;
 - (IBAction)selectNextWorkspace:(id)sender;
 - (IBAction)selectPreviousWorkspace:(id)sender;
 - (IBAction)toggleLastWorkspace:(id)sender;
+- (void)createTideyWorkspacePossiblyTmux:(BOOL)possiblyTmux;
+- (void)createTideyPanelPossiblyTmux:(BOOL)possiblyTmux;
 - (BOOL)isShowingTideySidebar;
 - (void)performTideyWorkspaceMutationPreservingWindowFrame:(void (^)(void))block;
 
