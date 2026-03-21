@@ -1900,14 +1900,16 @@ updateDraggingItemsForDrag:(id<NSDraggingInfo>)draggingInfo {
     NSImage *image = [self tideySidebarDragPreviewImageForRow:row
                                                         width:_tideySidebarTableView.bounds.size.width];
     NSRect rowRect = [_tideySidebarTableView rectOfRow:row];
+    NSRect rowRectInWindow = [_tideySidebarTableView convertRect:rowRect toView:nil];
+    NSRect rowRectOnScreen = [self.window convertRectToScreen:rowRectInWindow];
     [session enumerateDraggingItemsWithOptions:0
-                                       forView:tableView
+                                       forView:nil
                                        classes:@[[NSPasteboardItem class]]
                                  searchOptions:@{}
                                     usingBlock:^(NSDraggingItem *draggingItem,
                                                  NSInteger idx,
                                                  BOOL *stop) {
-        [draggingItem setDraggingFrame:rowRect contents:image];
+        [draggingItem setDraggingFrame:rowRectOnScreen contents:image];
     }];
 }
 
