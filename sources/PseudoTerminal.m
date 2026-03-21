@@ -1221,6 +1221,7 @@ ITERM_WEAKLY_REFERENCEABLE
 
     Workspace *currentWorkspace = self.selectedWorkspace;
     [self updateSelectedPanelIndexFromVisibleTabSelection];
+    self.selectedWorkspaceIndex = index;
 
     NSRect preservedFrame = self.window.frame;
     _tideySwitchingWorkspace = YES;
@@ -1254,7 +1255,6 @@ ITERM_WEAKLY_REFERENCEABLE
         }
     }
 
-    self.selectedWorkspaceIndex = index;
     _tideySwitchingWorkspace = NO;
     _tideyPreservingWindowFrame = NO;
 
@@ -1815,6 +1815,7 @@ ITERM_WEAKLY_REFERENCEABLE
 
 - (void)createTideyWorkspacePossiblyTmux:(BOOL)possiblyTmux {
     [self ensureTideyWorkspacesInitialized];
+    [self updateSelectedPanelIndexFromVisibleTabSelection];
     _pendingWorkspaceIndexForInsertedPanel = self.workspaces.count;
     _pendingInsertedPanelCreatesWorkspace = YES;
     _pendingInsertedPanelShouldAssignInitialTitle = YES;
@@ -1823,9 +1824,11 @@ ITERM_WEAKLY_REFERENCEABLE
 
 - (void)createTideyPanelPossiblyTmux:(BOOL)possiblyTmux {
     [self ensureTideyWorkspacesInitialized];
+    [self updateSelectedPanelIndexFromVisibleTabSelection];
     NSInteger targetWorkspaceIndex = self.selectedWorkspaceIndex;
     if (targetWorkspaceIndex < 0) {
         targetWorkspaceIndex = 0;
+        self.selectedWorkspaceIndex = targetWorkspaceIndex;
     }
     _pendingWorkspaceIndexForInsertedPanel = targetWorkspaceIndex;
     _pendingInsertedPanelCreatesWorkspace = NO;
@@ -11658,7 +11661,7 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
         if (_automaticallySelectNewTabs || _contentView.tabView.tabViewItems.count == 1) {
             [_contentView.tabView selectTabViewItemAtIndex:safeIndex];
         }
-        if (self.isShowingTideySidebar) {
+        if (self.isShowingTideySidebar && !_tideySwitchingWorkspace) {
             NSInteger targetWorkspaceIndex = _pendingWorkspaceIndexForInsertedPanel;
             BOOL createdWorkspace = NO;
             if (_pendingInsertedPanelCreatesWorkspace) {
@@ -11686,10 +11689,6 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
                 createdWorkspace = YES;
             }
 
-            _pendingWorkspaceIndexForInsertedPanel = -1;
-            _pendingInsertedPanelCreatesWorkspace = NO;
-            _pendingInsertedPanelShouldAssignInitialTitle = NO;
-
             if (createdWorkspace) {
                 __weak __typeof(self) weakSelf = self;
                 dispatch_async(dispatch_get_main_queue(), ^{
@@ -11700,6 +11699,9 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
                 [_contentView selectTideySidebarWorkspaceAtIndex:self.selectedWorkspaceIndex];
             }
         }
+        _pendingWorkspaceIndexForInsertedPanel = -1;
+        _pendingInsertedPanelCreatesWorkspace = NO;
+        _pendingInsertedPanelShouldAssignInitialTitle = NO;
         if (self.windowInitialized && !_restoringWindow) {
             if (self.tabs.count == 1) {
                 // It's important to do this before makeKeyAndOrderFront because API clients need
