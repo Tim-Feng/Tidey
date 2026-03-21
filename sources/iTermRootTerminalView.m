@@ -82,6 +82,9 @@ typedef struct {
 - (NSString *)tideySidebarWorkspaceSubtitleAtIndex:(NSInteger)index;
 - (NSInteger)tideySidebarSelectedWorkspaceIndex;
 - (void)syncTideySidebarSelection;
+- (NSTableCellView *)newTideySidebarCellView;
+- (void)configureTideySidebarCellView:(NSTableCellView *)cellView row:(NSInteger)row;
+- (NSView *)tideySidebarDragPreviewForRow:(NSInteger)row width:(CGFloat)width;
 
 @end
 
@@ -1841,6 +1844,52 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                                      toIndex:toIndex];
 }
 
+- (void)tableView:(NSTableView *)tableView
+updateDraggingItemsForDrag:(id<NSDraggingInfo>)draggingInfo {
+    if (tableView != _tideySidebarTableView) {
+        return;
+    }
+    __weak typeof(self) weakSelf = self;
+    [draggingInfo enumerateDraggingItemsWithOptions:0
+                                            forView:tableView
+                                            classes:@[[NSPasteboardItem class]]
+                                      searchOptions:@{}
+                                         usingBlock:^(NSDraggingItem *draggingItem,
+                                                      NSInteger idx,
+                                                      BOOL *stop) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        NSPasteboardItem *item = draggingItem.item;
+        NSString *rowString = [item stringForType:iTermRootTerminalViewTideySidebarWorkspacePasteboardType];
+        if (rowString.length == 0) {
+            return;
+        }
+        NSInteger row = rowString.integerValue;
+        if (row < 0 || row >= strongSelf.numberOfTideySidebarWorkspaces) {
+            return;
+        }
+
+        NSView *preview = [strongSelf tideySidebarDragPreviewForRow:row
+                                                              width:strongSelf->_tideySidebarTableView.bounds.size.width];
+        [preview layoutSubtreeIfNeeded];
+        NSRect bounds = preview.bounds;
+        NSBitmapImageRep *bitmap = [preview bitmapImageRepForCachingDisplayInRect:bounds];
+        [preview cacheDisplayInRect:bounds toBitmapImageRep:bitmap];
+        NSImage *image = [[NSImage alloc] initWithSize:bounds.size];
+        [image addRepresentation:bitmap];
+
+        NSPoint dragLocation = [draggingInfo draggingLocation];
+        NSPoint tablePoint = [tableView convertPoint:dragLocation fromView:nil];
+        NSRect frame = NSMakeRect(0,
+                                  floor(tablePoint.y - NSHeight(bounds) / 2.0),
+                                  NSWidth(bounds),
+                                  NSHeight(bounds));
+        [draggingItem setDraggingFrame:frame contents:image];
+    }];
+}
+
 - (NSView *)tableView:(NSTableView *)tableView
     viewForTableColumn:(NSTableColumn *)tableColumn
                    row:(NSInteger)row {
@@ -1850,39 +1899,62 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
     NSTableCellView *cellView = [tableView makeViewWithIdentifier:@"TideySidebarSessionCell" owner:nil];
     if (!cellView) {
-        cellView = [[NSTableCellView alloc] initWithFrame:NSZeroRect];
-        cellView.identifier = @"TideySidebarSessionCell";
-
-        NSTextField *titleField = [NSTextField newLabelStyledTextField];
-        titleField.tag = 1001;
-        titleField.frame = NSMakeRect(16, 30, 180, 20);
-        titleField.autoresizingMask = NSViewWidthSizable;
-        titleField.font = [NSFont systemFontOfSize:14 weight:NSFontWeightSemibold];
-        titleField.textColor = [NSColor whiteColor];
-        titleField.drawsBackground = NO;
-        titleField.backgroundColor = [NSColor clearColor];
-        titleField.bezeled = NO;
-        titleField.editable = NO;
-        titleField.selectable = NO;
-        cellView.textField = titleField;
-        [cellView addSubview:titleField];
-
-        NSTextField *subtitleField = [NSTextField newLabelStyledTextField];
-        subtitleField.tag = 1002;
-        subtitleField.frame = NSMakeRect(16, 12, 180, 16);
-        subtitleField.autoresizingMask = NSViewWidthSizable;
-        subtitleField.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
-        subtitleField.textColor = [NSColor colorWithWhite:0.72 alpha:1];
-        subtitleField.drawsBackground = NO;
-        subtitleField.backgroundColor = [NSColor clearColor];
-        subtitleField.bezeled = NO;
-        subtitleField.editable = NO;
-        subtitleField.selectable = NO;
-        [cellView addSubview:subtitleField];
+        cellView = [self newTideySidebarCellView];
     }
+    [self configureTideySidebarCellView:cellView row:row];
+    return cellView;
+}
+
+- (NSTableCellView *)newTideySidebarCellView {
+    NSTableCellView *cellView = [[NSTableCellView alloc] initWithFrame:NSZeroRect];
+    cellView.identifier = @"TideySidebarSessionCell";
+
+    NSTextField *titleField = [NSTextField newLabelStyledTextField];
+    titleField.tag = 1001;
+    titleField.frame = NSMakeRect(16, 30, 180, 20);
+    titleField.autoresizingMask = NSViewWidthSizable;
+    titleField.font = [NSFont systemFontOfSize:14 weight:NSFontWeightSemibold];
+    titleField.textColor = [NSColor whiteColor];
+    titleField.drawsBackground = NO;
+    titleField.backgroundColor = [NSColor clearColor];
+    titleField.bezeled = NO;
+    titleField.editable = NO;
+    titleField.selectable = NO;
+    cellView.textField = titleField;
+    [cellView addSubview:titleField];
+
+    NSTextField *subtitleField = [NSTextField newLabelStyledTextField];
+    subtitleField.tag = 1002;
+    subtitleField.frame = NSMakeRect(16, 12, 180, 16);
+    subtitleField.autoresizingMask = NSViewWidthSizable;
+    subtitleField.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
+    subtitleField.textColor = [NSColor colorWithWhite:0.72 alpha:1];
+    subtitleField.drawsBackground = NO;
+    subtitleField.backgroundColor = [NSColor clearColor];
+    subtitleField.bezeled = NO;
+    subtitleField.editable = NO;
+    subtitleField.selectable = NO;
+    [cellView addSubview:subtitleField];
+
+    return cellView;
+}
+
+- (void)configureTideySidebarCellView:(NSTableCellView *)cellView row:(NSInteger)row {
     cellView.textField.stringValue = [self tideySidebarWorkspaceTitleAtIndex:row];
     NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
     subtitleField.stringValue = [self tideySidebarWorkspaceSubtitleAtIndex:row];
+}
+
+- (NSView *)tideySidebarDragPreviewForRow:(NSInteger)row width:(CGFloat)width {
+    NSTableCellView *cellView = [self newTideySidebarCellView];
+    cellView.frame = NSMakeRect(0, 0, width, _tideySidebarTableView.rowHeight);
+    cellView.wantsLayer = YES;
+    cellView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.17
+                                                         green:0.19
+                                                          blue:0.25
+                                                         alpha:0.98].CGColor;
+    cellView.layer.cornerRadius = 8;
+    [self configureTideySidebarCellView:cellView row:row];
     return cellView;
 }
 
