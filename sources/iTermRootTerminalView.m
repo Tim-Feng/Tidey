@@ -61,6 +61,9 @@ typedef struct {
     CGFloat bottom;
 } iTermDecorationHeights;
 
+@interface TideySidebarTableView : NSTableView
+@end
+
 @interface iTermRootTerminalView()<
     iTermTabBarControlViewDelegate,
     iTermDragHandleViewDelegate,
@@ -86,6 +89,52 @@ typedef struct {
 - (void)configureTideySidebarCellView:(NSTableCellView *)cellView row:(NSInteger)row;
 - (NSView *)tideySidebarDragPreviewForRow:(NSInteger)row width:(CGFloat)width;
 - (NSImage *)tideySidebarDragPreviewImageForRow:(NSInteger)row width:(CGFloat)width;
+
+@end
+
+@implementation TideySidebarTableView
+
+- (NSImage *)dragImageForRowsWithIndexes:(NSIndexSet *)dragRows
+                            tableColumns:(NSArray<NSTableColumn *> *)tableColumns
+                                   event:(NSEvent *)dragEvent
+                                  offset:(NSPointPointer)dragImageOffset {
+    NSInteger row = dragRows.firstIndex;
+    if (row == NSNotFound) {
+        return [super dragImageForRowsWithIndexes:dragRows
+                                     tableColumns:tableColumns
+                                            event:dragEvent
+                                           offset:dragImageOffset];
+    }
+
+    NSTableRowView *rowView = [self rowViewAtRow:row makeIfNecessary:NO];
+    if (!rowView) {
+        return [super dragImageForRowsWithIndexes:dragRows
+                                     tableColumns:tableColumns
+                                            event:dragEvent
+                                           offset:dragImageOffset];
+    }
+
+    NSRect rowBounds = rowView.bounds;
+    NSBitmapImageRep *bitmap = [rowView bitmapImageRepForCachingDisplayInRect:rowBounds];
+    if (!bitmap) {
+        return [super dragImageForRowsWithIndexes:dragRows
+                                     tableColumns:tableColumns
+                                            event:dragEvent
+                                           offset:dragImageOffset];
+    }
+    [rowView cacheDisplayInRect:rowBounds toBitmapImageRep:bitmap];
+    NSImage *image = [[NSImage alloc] initWithSize:rowBounds.size];
+    [image addRepresentation:bitmap];
+
+    if (dragImageOffset) {
+        NSRect rowRect = [self rectOfRow:row];
+        NSPoint locationInTable = [self convertPoint:dragEvent.locationInWindow fromView:nil];
+        CGFloat xOffset = locationInTable.x - rowRect.origin.x;
+        CGFloat yOffset = NSHeight(rowRect) - (locationInTable.y - rowRect.origin.y);
+        *dragImageOffset = NSMakePoint(floor(xOffset), floor(yOffset));
+    }
+    return image;
+}
 
 @end
 
@@ -217,7 +266,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _tideySidebarScrollView.hasVerticalScroller = YES;
         _tideySidebarScrollView.borderType = NSNoBorder;
 
-        _tideySidebarTableView = [[NSTableView alloc] initWithFrame:NSZeroRect];
+        _tideySidebarTableView = [[TideySidebarTableView alloc] initWithFrame:NSZeroRect];
         _tideySidebarTableView.delegate = self;
         _tideySidebarTableView.dataSource = self;
         _tideySidebarTableView.headerView = nil;
@@ -1843,48 +1892,6 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSInteger toIndex = MAX(0, MIN(row, self.numberOfTideySidebarWorkspaces));
     return [self.delegate rootTerminalViewMoveTideySidebarWorkspaceFromIndex:fromIndex
                                                                      toIndex:toIndex];
-}
-
-- (void)tableView:(NSTableView *)tableView
-updateDraggingItemsForDrag:(id<NSDraggingInfo>)draggingInfo {
-    if (tableView != _tideySidebarTableView) {
-        return;
-    }
-    __weak typeof(self) weakSelf = self;
-    [draggingInfo enumerateDraggingItemsWithOptions:0
-                                            forView:tableView
-                                            classes:@[[NSPasteboardItem class]]
-                                      searchOptions:@{}
-                                         usingBlock:^(NSDraggingItem *draggingItem,
-                                                      NSInteger idx,
-                                                      BOOL *stop) {
-        typeof(self) strongSelf = weakSelf;
-        if (!strongSelf) {
-            return;
-        }
-        NSPasteboardItem *item = draggingItem.item;
-        NSString *rowString = [item stringForType:iTermRootTerminalViewTideySidebarWorkspacePasteboardType];
-        if (rowString.length == 0) {
-            return;
-        }
-        NSInteger row = rowString.integerValue;
-        if (row < 0 || row >= strongSelf.numberOfTideySidebarWorkspaces) {
-            return;
-        }
-
-        NSImage *image = [strongSelf tideySidebarDragPreviewImageForRow:row
-                                                                  width:strongSelf->_tideySidebarTableView.bounds.size.width];
-        NSRect rowRect = [tableView rectOfRow:row];
-        NSPoint dragLocation = [draggingInfo draggingLocation];
-        NSPoint tablePoint = [tableView convertPoint:dragLocation fromView:nil];
-        NSPoint locationInRow = NSMakePoint(tablePoint.x - rowRect.origin.x,
-                                            tablePoint.y - rowRect.origin.y);
-        NSRect frame = NSMakeRect(floor(tablePoint.x - locationInRow.x),
-                                  floor(tablePoint.y - locationInRow.y),
-                                  image.size.width,
-                                  image.size.height);
-        [draggingItem setDraggingFrame:frame contents:image];
-    }];
 }
 
 - (NSView *)tableView:(NSTableView *)tableView
