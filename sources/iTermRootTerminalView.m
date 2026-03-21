@@ -85,6 +85,7 @@ typedef struct {
 - (NSTableCellView *)newTideySidebarCellView;
 - (void)configureTideySidebarCellView:(NSTableCellView *)cellView row:(NSInteger)row;
 - (NSView *)tideySidebarDragPreviewForRow:(NSInteger)row width:(CGFloat)width;
+- (NSImage *)tideySidebarDragPreviewImageForRow:(NSInteger)row width:(CGFloat)width;
 
 @end
 
@@ -1871,22 +1872,42 @@ updateDraggingItemsForDrag:(id<NSDraggingInfo>)draggingInfo {
             return;
         }
 
-        NSView *preview = [strongSelf tideySidebarDragPreviewForRow:row
-                                                              width:strongSelf->_tideySidebarTableView.bounds.size.width];
-        [preview layoutSubtreeIfNeeded];
-        NSRect bounds = preview.bounds;
-        NSBitmapImageRep *bitmap = [preview bitmapImageRepForCachingDisplayInRect:bounds];
-        [preview cacheDisplayInRect:bounds toBitmapImageRep:bitmap];
-        NSImage *image = [[NSImage alloc] initWithSize:bounds.size];
-        [image addRepresentation:bitmap];
+        NSImage *image = [strongSelf tideySidebarDragPreviewImageForRow:row
+                                                                  width:strongSelf->_tideySidebarTableView.bounds.size.width];
+        NSSize size = image.size;
 
         NSPoint dragLocation = [draggingInfo draggingLocation];
         NSPoint tablePoint = [tableView convertPoint:dragLocation fromView:nil];
         NSRect frame = NSMakeRect(0,
-                                  floor(tablePoint.y - NSHeight(bounds) / 2.0),
-                                  NSWidth(bounds),
-                                  NSHeight(bounds));
+                                  floor(tablePoint.y - size.height / 2.0),
+                                  size.width,
+                                  size.height);
         [draggingItem setDraggingFrame:frame contents:image];
+    }];
+}
+
+- (void)tableView:(NSTableView *)tableView
+  draggingSession:(NSDraggingSession *)session
+   willBeginAtPoint:(NSPoint)screenPoint
+    forRowIndexes:(NSIndexSet *)rowIndexes {
+    if (tableView != _tideySidebarTableView) {
+        return;
+    }
+    NSInteger row = rowIndexes.firstIndex;
+    if (row == NSNotFound || row < 0 || row >= self.numberOfTideySidebarWorkspaces) {
+        return;
+    }
+    NSImage *image = [self tideySidebarDragPreviewImageForRow:row
+                                                        width:_tideySidebarTableView.bounds.size.width];
+    NSRect rowRect = [_tideySidebarTableView rectOfRow:row];
+    [session enumerateDraggingItemsWithOptions:0
+                                       forView:tableView
+                                       classes:@[[NSPasteboardItem class]]
+                                 searchOptions:@{}
+                                    usingBlock:^(NSDraggingItem *draggingItem,
+                                                 NSInteger idx,
+                                                 BOOL *stop) {
+        [draggingItem setDraggingFrame:rowRect contents:image];
     }];
 }
 
@@ -1953,6 +1974,17 @@ updateDraggingItemsForDrag:(id<NSDraggingInfo>)draggingInfo {
     cellView.layer.cornerRadius = 8;
     [self configureTideySidebarCellView:cellView row:row];
     return cellView;
+}
+
+- (NSImage *)tideySidebarDragPreviewImageForRow:(NSInteger)row width:(CGFloat)width {
+    NSView *preview = [self tideySidebarDragPreviewForRow:row width:width];
+    [preview layoutSubtreeIfNeeded];
+    NSRect bounds = preview.bounds;
+    NSBitmapImageRep *bitmap = [preview bitmapImageRepForCachingDisplayInRect:bounds];
+    [preview cacheDisplayInRect:bounds toBitmapImageRep:bitmap];
+    NSImage *image = [[NSImage alloc] initWithSize:bounds.size];
+    [image addRepresentation:bitmap];
+    return image;
 }
 
 - (NSInteger)numberOfTideySidebarWorkspaces {
