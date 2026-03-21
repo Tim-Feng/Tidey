@@ -233,6 +233,44 @@ typedef NS_ENUM(int, iTermShouldHaveTitleSeparator) {
     iTermShouldHaveTitleSeparatorNo = 2
 };
 
+@interface Workspace : NSObject
+
+@property(nonatomic, retain) NSMutableArray<PTYTab *> *panels;
+@property(nonatomic) NSInteger selectedPanelIndex;
+
+- (instancetype)initWithPanel:(PTYTab *)panel;
+- (PTYTab *)selectedPanel;
+
+@end
+
+@implementation Workspace
+
+- (instancetype)initWithPanel:(PTYTab *)panel {
+    self = [super init];
+    if (self) {
+        _panels = [[NSMutableArray alloc] init];
+        if (panel) {
+            [_panels addObject:panel];
+        }
+        _selectedPanelIndex = panel ? 0 : -1;
+    }
+    return self;
+}
+
+- (void)dealloc {
+    [_panels release];
+    [super dealloc];
+}
+
+- (PTYTab *)selectedPanel {
+    if (_selectedPanelIndex < 0 || _selectedPanelIndex >= _panels.count) {
+        return _panels.firstObject;
+    }
+    return _panels[_selectedPanelIndex];
+}
+
+@end
+
 @interface PseudoTerminal () <
     iTermBroadcastInputHelperDelegate,
     iTermGraphCodable,
@@ -265,6 +303,11 @@ typedef NS_ENUM(int, iTermShouldHaveTitleSeparator) {
 
 @property(nonatomic, readonly) iTermVariables *variables;
 @property(nonatomic, readonly) iTermSwiftyString *windowTitleOverrideSwiftyString;
+@property(nonatomic, retain) NSMutableArray<Workspace *> *workspaces;
+@property(nonatomic) NSInteger selectedWorkspaceIndex;
+
+- (void)syncWorkspacesFromTabs;
+- (Workspace *)workspaceAtIndex:(NSInteger)index;
 @end
 
 @implementation PseudoTerminal {
@@ -1098,8 +1141,54 @@ ITERM_WEAKLY_REFERENCEABLE
     [_fullScreenEnteredSeal release];
     [_windowSizeHelper release];
     [_titlebarAccessoryNanny release];
+    [_workspaces release];
 
     [super dealloc];
+}
+
+- (Workspace *)workspaceAtIndex:(NSInteger)index {
+    if (index < 0 || index >= self.workspaces.count) {
+        return nil;
+    }
+    return self.workspaces[index];
+}
+
+- (void)syncWorkspacesFromTabs {
+    NSArray<PTYTab *> *tabs = self.tabs;
+    NSMutableArray<Workspace *> *synchronizedWorkspaces = [NSMutableArray arrayWithCapacity:tabs.count];
+
+    for (PTYTab *tab in tabs) {
+        Workspace *workspace = nil;
+        for (Workspace *candidate in self.workspaces) {
+            if ([candidate.panels containsObject:tab]) {
+                workspace = candidate;
+                break;
+            }
+        }
+        if (!workspace) {
+            workspace = [[[Workspace alloc] initWithPanel:tab] autorelease];
+        } else {
+            [workspace.panels removeAllObjects];
+            [workspace.panels addObject:tab];
+            workspace.selectedPanelIndex = 0;
+        }
+        [synchronizedWorkspaces addObject:workspace];
+    }
+
+    self.workspaces = synchronizedWorkspaces;
+
+    PTYTab *currentTab = self.currentTab;
+    NSInteger selectedWorkspaceIndex = -1;
+    for (NSInteger i = 0; i < self.workspaces.count; i++) {
+        if ([self workspaceAtIndex:i].selectedPanel == currentTab) {
+            selectedWorkspaceIndex = i;
+            break;
+        }
+    }
+    if (selectedWorkspaceIndex < 0 && self.workspaces.count > 0) {
+        selectedWorkspaceIndex = 0;
+    }
+    self.selectedWorkspaceIndex = selectedWorkspaceIndex;
 }
 
 - (NSString *)description {
@@ -1230,13 +1319,22 @@ ITERM_WEAKLY_REFERENCEABLE
 
 - (IBAction)toggleTideySidebar:(id)sender {
     _contentView.shouldShowTideySidebar = !_contentView.shouldShowTideySidebar;
+    [_contentView reloadTideySidebar];
     [self repositionWidgets];
     [self notifyTmuxOfWindowResize];
 }
 
-- (IBAction)selectTideySidebarSessionAtIndexAction:(id)sender {
+- (IBAction)selectTideySidebarWorkspaceAtIndexAction:(id)sender {
     const NSInteger index = [sender tag];
-    [_contentView selectTideySidebarSessionAtIndex:index];
+    [self rootTerminalViewSelectTideySidebarWorkspaceAtIndex:index];
+}
+
+- (IBAction)selectTideySidebarSessionAtIndexAction:(id)sender {
+    [self selectTideySidebarWorkspaceAtIndexAction:sender];
+}
+
+- (BOOL)isShowingTideySidebar {
+    return _contentView.shouldShowTideySidebar;
 }
 
 - (void)toggleToolbeltVisibilityWithSideEffects:(BOOL)sideEffects {
@@ -1524,9 +1622,14 @@ ITERM_WEAKLY_REFERENCEABLE
     [[[self currentSession] textview] swipeWithEvent:event];
 }
 
+- (void)selectWorkspaceAtIndexAction:(id)sender
+{
+    [self rootTerminalViewSelectTideySidebarWorkspaceAtIndex:[sender tag]];
+}
+
 - (void)selectSessionAtIndexAction:(id)sender
 {
-    [_contentView.tabView selectTabViewItemAtIndex:[sender tag]];
+    [self selectWorkspaceAtIndexAction:sender];
 }
 
 - (NSInteger)indexOfTab:(PTYTab*)aTab
@@ -1564,6 +1667,7 @@ ITERM_WEAKLY_REFERENCEABLE
 
 - (void)tabTitleDidChange:(PTYTab *)tab {
     [self updateTouchBarIfNeeded:NO];
+    [_contentView reloadTideySidebar];
 }
 
 - (void)tabAddSwiftyStringsToGraph:(iTermSwiftyStringGraph *)graph {
@@ -2244,6 +2348,21 @@ ITERM_WEAKLY_REFERENCEABLE
 }
 
 - (IBAction)closeCurrentTab:(id)sender {
+    if (self.isShowingTideySidebar && self.numberOfTabs > 1) {
+        const NSRect preservedFrame = self.window.frame;
+        PTYTab *tab = self.currentTab;
+        const BOOL didClose = [self closeTabIfConfirmed:tab];
+        if (didClose && self.window) {
+            [self.window setFrame:preservedFrame display:YES];
+            [self fitTabsToWindow];
+            [self syncWorkspacesFromTabs];
+            [_contentView reloadTideySidebar];
+            if (self.selectedWorkspaceIndex >= 0) {
+                [_contentView selectTideySidebarWorkspaceAtIndex:self.selectedWorkspaceIndex];
+            }
+        }
+        return;
+    }
     PTYTab *tab = self.currentTab;
     [self closeTabIfConfirmed:tab];
 }
@@ -6712,7 +6831,7 @@ hidingToolbeltShouldResizeWindow:(BOOL)hidingToolbeltShouldResizeWindow
 
     PTYSession *activeSession = [self currentSession];
     for (PTYSession *s in [self allSessions]) {
-        [s setFocused:(s == activeSession)];
+    [s setFocused:(s == activeSession)];
     }
     [self showOrHideInstantReplayBar];
     [self refreshTools];
@@ -6761,6 +6880,7 @@ hidingToolbeltShouldResizeWindow:(BOOL)hidingToolbeltShouldResizeWindow
     for (PTYTab *aTab in self.tabs) {
         [aTab updateUseMetal];
     }
+    [_contentView reloadTideySidebar];
 }
 
 - (BOOL)proxyIconIsAllowed {
@@ -10478,6 +10598,57 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
     return self;
 }
 
+- (NSInteger)rootTerminalViewNumberOfTideySidebarWorkspaces {
+    [self syncWorkspacesFromTabs];
+    return self.workspaces.count;
+}
+
+- (NSString *)rootTerminalViewTideySidebarWorkspaceTitleAtIndex:(NSInteger)index {
+    [self syncWorkspacesFromTabs];
+    Workspace *workspace = [self workspaceAtIndex:index];
+    PTYTab *panel = workspace.selectedPanel;
+    if (!panel) {
+        return nil;
+    }
+    return panel.title ?: @"Untitled";
+}
+
+- (NSString *)rootTerminalViewTideySidebarWorkspaceSubtitleAtIndex:(NSInteger)index {
+    [self syncWorkspacesFromTabs];
+    Workspace *workspace = [self workspaceAtIndex:index];
+    PTYTab *panel = workspace.selectedPanel;
+    if (!panel) {
+        return nil;
+    }
+    NSString *subtitle = panel.activeSession.subtitle;
+    if (subtitle.length > 0) {
+        return subtitle;
+    }
+    return [panel isProcessing] ? @"running" : @"idle";
+}
+
+- (NSInteger)rootTerminalViewSelectedTideySidebarWorkspaceIndex {
+    [self syncWorkspacesFromTabs];
+    return self.selectedWorkspaceIndex;
+}
+
+- (BOOL)rootTerminalViewSelectTideySidebarWorkspaceAtIndex:(NSInteger)index {
+    [self syncWorkspacesFromTabs];
+    Workspace *workspace = [self workspaceAtIndex:index];
+    PTYTab *panel = workspace.selectedPanel;
+    if (!panel) {
+        return NO;
+    }
+    NSInteger panelIndex = [self indexOfTab:panel];
+    if (panelIndex == NSNotFound) {
+        return NO;
+    }
+    self.selectedWorkspaceIndex = index;
+    [_contentView.tabView selectTabViewItemAtIndex:panelIndex];
+    [_contentView selectTideySidebarWorkspaceAtIndex:index];
+    return YES;
+}
+
 #pragma mark - PSMPUAFontProvider
 
 - (NSFont *)fontForPUACodePoint:(UTF32Char)codePoint {
@@ -11233,6 +11404,7 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
         if (_suppressMakeCurrentTerminal == iTermSuppressMakeCurrentTerminalNone) {
             [[iTermController sharedInstance] setCurrentTerminal:self];
         }
+        [_contentView reloadTideySidebar];
     }
 }
 
@@ -11465,10 +11637,11 @@ typedef NS_ENUM(NSUInteger, iTermBroadcastCommand) {
     } else if ([item action] == @selector(toggleTideySidebar:)) {
         [item setState:_contentView.shouldShowTideySidebar ? NSControlStateValueOn : NSControlStateValueOff];
         return YES;
-    } else if ([item action] == @selector(selectTideySidebarSessionAtIndexAction:)) {
+    } else if ([item action] == @selector(selectTideySidebarSessionAtIndexAction:) ||
+               [item action] == @selector(selectTideySidebarWorkspaceAtIndexAction:)) {
         return _contentView.shouldShowTideySidebar &&
                item.tag >= 0 &&
-               item.tag < [_contentView numberOfTideySidebarSessions];
+               item.tag < [_contentView numberOfTideySidebarWorkspaces];
     } else if ([item action] == @selector(toggleSizeLocked:)) {
         [item setState:_sizeLocked ? NSControlStateValueOn : NSControlStateValueOff];
         return self.windowTypeSupportsSizeLock;
@@ -12906,6 +13079,7 @@ typedef NS_ENUM(NSUInteger, iTermBroadcastCommand) {
         [_contentView.tabView removeTabViewItem:tabViewItem];
         PtyLog(@"tabRemoveTab - calling fitWindowToTabs");
         [self fitWindowToTabs];
+        [_contentView reloadTideySidebar];
     }
 }
 

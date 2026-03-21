@@ -2437,6 +2437,11 @@ static iTermKeyEventReplayer *gReplayer;
 
 - (IBAction)newWindow:(id)sender {
     DLog(@"newWindow: invoked");
+    PseudoTerminal *currentTerminal = [[iTermController sharedInstance] currentTerminal];
+    if (currentTerminal.isShowingTideySidebar) {
+        [self newTabAtIndex:nil];
+        return;
+    }
     BOOL cancel;
     BOOL tmux = [self possiblyTmuxValueForWindow:YES cancel:&cancel];
     if (!cancel) {

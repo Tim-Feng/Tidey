@@ -71,6 +71,11 @@
 - (void)rootTerminalViewDidLayoutSubviews;
 - (NSString *)rootTerminalViewCurrentTabSubtitle;
 - (id<PSMPUAFontProvider>)rootTerminalViewPUAFontProvider;
+- (NSInteger)rootTerminalViewNumberOfTideySidebarWorkspaces;
+- (NSString *)rootTerminalViewTideySidebarWorkspaceTitleAtIndex:(NSInteger)index;
+- (NSString *)rootTerminalViewTideySidebarWorkspaceSubtitleAtIndex:(NSInteger)index;
+- (NSInteger)rootTerminalViewSelectedTideySidebarWorkspaceIndex;
+- (BOOL)rootTerminalViewSelectTideySidebarWorkspaceAtIndex:(NSInteger)index;
 @end
 
 extern const NSInteger iTermRootTerminalViewWindowNumberLabelMargin;
@@ -163,7 +168,8 @@ extern const NSInteger iTermRootTerminalViewWindowNumberLabelWidth;
 - (void)updateTitleAndBorderViews NS_AVAILABLE_MAC(10_14);
 - (void)setSubtitle:(NSString *)subtitle;
 - (void)setCurrentSessionAlpha:(CGFloat)alpha;
-- (BOOL)selectTideySidebarSessionAtIndex:(NSInteger)index;
-- (NSInteger)numberOfTideySidebarSessions;
+- (BOOL)selectTideySidebarWorkspaceAtIndex:(NSInteger)index;
+- (NSInteger)numberOfTideySidebarWorkspaces;
+- (void)reloadTideySidebar;
 
 @end

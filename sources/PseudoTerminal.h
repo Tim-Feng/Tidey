@@ -211,10 +211,11 @@ extern NSString *const iTermDidCreateTerminalWindowNotification;
 // Fix the window frame for fullscreen, top, bottom windows.
 - (void)canonicalizeWindowFrame;
 
-// Make the tab at [sender tag] the foreground tab.
-- (void)selectSessionAtIndexAction:(id)sender;
+// Make the workspace at [sender tag] the foreground workspace.
+- (void)selectWorkspaceAtIndexAction:(id)sender;
 - (IBAction)toggleTideySidebar:(id)sender;
-- (IBAction)selectTideySidebarSessionAtIndexAction:(id)sender;
+- (IBAction)selectTideySidebarWorkspaceAtIndexAction:(id)sender;
+- (BOOL)isShowingTideySidebar;
 
 // A unique number for this window assigned by finishInitializationWithSmartLayout.
 - (NSString *)terminalGuid;

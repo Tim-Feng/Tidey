@@ -76,7 +76,10 @@ typedef struct {
 - (CGFloat)tideySidebarWidth;
 - (void)layoutTideySidebar;
 - (iTermLayoutOutputs)layoutOutputsByApplyingTideySidebarOffset:(iTermLayoutOutputs)outputs;
-- (NSArray<NSString *> *)tideySidebarSessionTitles;
+- (NSString *)tideySidebarWorkspaceTitleAtIndex:(NSInteger)index;
+- (NSString *)tideySidebarWorkspaceSubtitleAtIndex:(NSInteger)index;
+- (NSInteger)tideySidebarSelectedWorkspaceIndex;
+- (void)syncTideySidebarSelection;
 
 @end
 
@@ -151,7 +154,6 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSView *_tideySidebarView;
     NSScrollView *_tideySidebarScrollView;
     NSTableView *_tideySidebarTableView;
-    NSArray<NSString *> *_tideySidebarSessionTitles;
 
     iTermLayerBackedSolidColorView *_titleBackgroundView NS_AVAILABLE_MAC(10_14);
     
@@ -183,12 +185,6 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     if (self) {
         _delegate = delegate;
         _shouldShowTideySidebar = YES;
-        _tideySidebarSessionTitles = @[
-            @"claude-1",
-            @"codex",
-            @"genesis-monitor",
-            @"priest-review",
-        ];
 
         self.autoresizesSubviews = YES;
         _leftTabBarPreferredWidth = round([iTermPreferences doubleForKey:kPreferenceKeyLeftTabBarWidth]);
@@ -1406,8 +1402,27 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     return self.shouldShowTideySidebar ? kTideySidebarWidth : 0;
 }
 
-- (NSArray<NSString *> *)tideySidebarSessionTitles {
-    return _tideySidebarSessionTitles ?: @[];
+- (NSString *)tideySidebarWorkspaceTitleAtIndex:(NSInteger)index {
+    return [self.delegate rootTerminalViewTideySidebarWorkspaceTitleAtIndex:index] ?: @"Untitled";
+}
+
+- (NSString *)tideySidebarWorkspaceSubtitleAtIndex:(NSInteger)index {
+    return [self.delegate rootTerminalViewTideySidebarWorkspaceSubtitleAtIndex:index] ?: @"";
+}
+
+- (NSInteger)tideySidebarSelectedWorkspaceIndex {
+    return [self.delegate rootTerminalViewSelectedTideySidebarWorkspaceIndex];
+}
+
+- (void)syncTideySidebarSelection {
+    const NSInteger index = self.tideySidebarSelectedWorkspaceIndex;
+    if (index < 0 || index >= self.numberOfTideySidebarWorkspaces) {
+        [_tideySidebarTableView deselectAll:nil];
+        return;
+    }
+    NSIndexSet *indexSet = [NSIndexSet indexSetWithIndex:index];
+    [_tideySidebarTableView selectRowIndexes:indexSet byExtendingSelection:NO];
+    [_tideySidebarTableView scrollRowToVisible:index];
 }
 
 - (void)layoutTideySidebar {
@@ -1777,13 +1792,13 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 #pragma mark - Tidey Sidebar Table View
 
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView {
-    return self.tideySidebarSessionTitles.count;
+    return [self.delegate rootTerminalViewNumberOfTideySidebarWorkspaces];
 }
 
 - (NSView *)tableView:(NSTableView *)tableView
     viewForTableColumn:(NSTableColumn *)tableColumn
                    row:(NSInteger)row {
-    if (row < 0 || row >= self.tideySidebarSessionTitles.count) {
+    if (row < 0 || row >= self.numberOfTideySidebarWorkspaces) {
         return nil;
     }
 
@@ -1819,24 +1834,40 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         subtitleField.selectable = NO;
         [cellView addSubview:subtitleField];
     }
-    cellView.textField.stringValue = self.tideySidebarSessionTitles[row];
-    NSTextField *subtitleField = [cellView viewWithTag:1002];
-    subtitleField.stringValue = (row % 2 == 0) ? @"running" : @"idle";
+    cellView.textField.stringValue = [self tideySidebarWorkspaceTitleAtIndex:row];
+    NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
+    subtitleField.stringValue = [self tideySidebarWorkspaceSubtitleAtIndex:row];
     return cellView;
 }
 
-- (NSInteger)numberOfTideySidebarSessions {
-    return self.tideySidebarSessionTitles.count;
+- (NSInteger)numberOfTideySidebarWorkspaces {
+    return [self.delegate rootTerminalViewNumberOfTideySidebarWorkspaces];
 }
 
-- (BOOL)selectTideySidebarSessionAtIndex:(NSInteger)index {
-    if (index < 0 || index >= self.numberOfTideySidebarSessions) {
+- (BOOL)selectTideySidebarWorkspaceAtIndex:(NSInteger)index {
+    if (index < 0 || index >= self.numberOfTideySidebarWorkspaces) {
         return NO;
     }
     NSIndexSet *indexSet = [NSIndexSet indexSetWithIndex:index];
     [_tideySidebarTableView selectRowIndexes:indexSet byExtendingSelection:NO];
     [_tideySidebarTableView scrollRowToVisible:index];
     return YES;
+}
+
+- (void)reloadTideySidebar {
+    [_tideySidebarTableView reloadData];
+    [self syncTideySidebarSelection];
+}
+
+- (void)tableViewSelectionDidChange:(NSNotification *)notification {
+    if (notification.object != _tideySidebarTableView) {
+        return;
+    }
+    const NSInteger selectedRow = _tideySidebarTableView.selectedRow;
+    if (selectedRow < 0 || selectedRow >= self.numberOfTideySidebarWorkspaces) {
+        return;
+    }
+    [self.delegate rootTerminalViewSelectTideySidebarWorkspaceAtIndex:selectedRow];
 }
 
 - (void)layoutIfStatusBarChanged {
