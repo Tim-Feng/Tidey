@@ -308,6 +308,8 @@ typedef NS_ENUM(int, iTermShouldHaveTitleSeparator) {
 
 - (void)syncWorkspacesFromTabs;
 - (Workspace *)workspaceAtIndex:(NSInteger)index;
+- (BOOL)selectWorkspaceAtIndex:(NSInteger)index recordHistory:(BOOL)recordHistory;
+- (BOOL)hasSelectablePreviousWorkspace;
 @end
 
 @implementation PseudoTerminal {
@@ -407,6 +409,7 @@ typedef NS_ENUM(int, iTermShouldHaveTitleSeparator) {
 
     BOOL _tideyPreservingWindowFrame;
     NSRect _preservedTideyWindowFrame;
+    NSInteger _lastSelectedWorkspaceIndex;
 
     // Keeps the touch bar from updating on every keypress which is distracting.
     iTermRateLimitedIdleUpdate *_touchBarRateLimitedUpdate;
@@ -503,6 +506,7 @@ typedef NS_ENUM(int, iTermShouldHaveTitleSeparator) {
     if (self) {
         _automaticallySelectNewTabs = YES;
         self.autoCommandHistorySessionGuid = nil;
+        _lastSelectedWorkspaceIndex = -1;
     }
     return self;
 }
@@ -1167,6 +1171,36 @@ ITERM_WEAKLY_REFERENCEABLE
     self.selectedWorkspaceIndex = selectedWorkspaceIndex;
 }
 
+- (BOOL)selectWorkspaceAtIndex:(NSInteger)index recordHistory:(BOOL)recordHistory {
+    [self syncWorkspacesFromTabs];
+    Workspace *workspace = [self workspaceAtIndex:index];
+    PTYTab *panel = workspace.selectedPanel;
+    if (!panel) {
+        return NO;
+    }
+    NSInteger panelIndex = [self indexOfTab:panel];
+    if (panelIndex == NSNotFound) {
+        return NO;
+    }
+    if (recordHistory &&
+        self.selectedWorkspaceIndex >= 0 &&
+        self.selectedWorkspaceIndex < self.workspaces.count &&
+        self.selectedWorkspaceIndex != index) {
+        _lastSelectedWorkspaceIndex = self.selectedWorkspaceIndex;
+    }
+    self.selectedWorkspaceIndex = index;
+    [_contentView.tabView selectTabViewItemAtIndex:panelIndex];
+    [_contentView selectTideySidebarWorkspaceAtIndex:index];
+    return YES;
+}
+
+- (BOOL)hasSelectablePreviousWorkspace {
+    [self syncWorkspacesFromTabs];
+    return _lastSelectedWorkspaceIndex >= 0 &&
+           _lastSelectedWorkspaceIndex < self.workspaces.count &&
+           _lastSelectedWorkspaceIndex != self.selectedWorkspaceIndex;
+}
+
 - (void)performTideyWorkspaceMutationPreservingWindowFrame:(void (^)(void))block {
     if (!self.isShowingTideySidebar || self.window == nil) {
         if (block) {
@@ -1629,12 +1663,50 @@ ITERM_WEAKLY_REFERENCEABLE
 
 - (void)selectWorkspaceAtIndexAction:(id)sender
 {
-    [self rootTerminalViewSelectTideySidebarWorkspaceAtIndex:[sender tag]];
+    [self selectWorkspaceAtIndex:[sender tag] recordHistory:YES];
 }
 
 - (void)selectSessionAtIndexAction:(id)sender
 {
     [self selectWorkspaceAtIndexAction:sender];
+}
+
+- (IBAction)selectNextWorkspace:(id)sender {
+    [self syncWorkspacesFromTabs];
+    if (!self.isShowingTideySidebar || self.workspaces.count < 2) {
+        return;
+    }
+    NSInteger current = self.selectedWorkspaceIndex;
+    if (current < 0 || current >= self.workspaces.count) {
+        current = 0;
+    }
+    NSInteger next = (current + 1) % self.workspaces.count;
+    [self selectWorkspaceAtIndex:next recordHistory:YES];
+}
+
+- (IBAction)selectPreviousWorkspace:(id)sender {
+    [self syncWorkspacesFromTabs];
+    if (!self.isShowingTideySidebar || self.workspaces.count < 2) {
+        return;
+    }
+    NSInteger current = self.selectedWorkspaceIndex;
+    if (current < 0 || current >= self.workspaces.count) {
+        current = 0;
+    }
+    NSInteger previous = (current - 1 + self.workspaces.count) % self.workspaces.count;
+    [self selectWorkspaceAtIndex:previous recordHistory:YES];
+}
+
+- (IBAction)toggleLastWorkspace:(id)sender {
+    if (!self.isShowingTideySidebar) {
+        return;
+    }
+    NSInteger target = _lastSelectedWorkspaceIndex;
+    if (target < 0 || target >= self.workspaces.count || target == self.selectedWorkspaceIndex) {
+        NSBeep();
+        return;
+    }
+    [self selectWorkspaceAtIndex:target recordHistory:YES];
 }
 
 - (NSInteger)indexOfTab:(PTYTab*)aTab
@@ -10663,20 +10735,7 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
 }
 
 - (BOOL)rootTerminalViewSelectTideySidebarWorkspaceAtIndex:(NSInteger)index {
-    [self syncWorkspacesFromTabs];
-    Workspace *workspace = [self workspaceAtIndex:index];
-    PTYTab *panel = workspace.selectedPanel;
-    if (!panel) {
-        return NO;
-    }
-    NSInteger panelIndex = [self indexOfTab:panel];
-    if (panelIndex == NSNotFound) {
-        return NO;
-    }
-    self.selectedWorkspaceIndex = index;
-    [_contentView.tabView selectTabViewItemAtIndex:panelIndex];
-    [_contentView selectTideySidebarWorkspaceAtIndex:index];
-    return YES;
+    return [self selectWorkspaceAtIndex:index recordHistory:YES];
 }
 
 #pragma mark - PSMPUAFontProvider
@@ -11683,6 +11742,12 @@ typedef NS_ENUM(NSUInteger, iTermBroadcastCommand) {
         return _contentView.shouldShowTideySidebar &&
                item.tag >= 0 &&
                item.tag < [_contentView numberOfTideySidebarWorkspaces];
+    } else if ([item action] == @selector(selectNextWorkspace:) ||
+               [item action] == @selector(selectPreviousWorkspace:)) {
+        return _contentView.shouldShowTideySidebar &&
+               [_contentView numberOfTideySidebarWorkspaces] > 1;
+    } else if ([item action] == @selector(toggleLastWorkspace:)) {
+        return _contentView.shouldShowTideySidebar && [self hasSelectablePreviousWorkspace];
     } else if ([item action] == @selector(toggleSizeLocked:)) {
         [item setState:_sizeLocked ? NSControlStateValueOn : NSControlStateValueOff];
         return self.windowTypeSupportsSizeLock;

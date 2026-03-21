@@ -953,6 +953,24 @@ DQ
                                                 <action selector="selectTideySidebarWorkspaceAtIndexAction:" target="-1" id="U5Y-XL-o3W"/>
                                             </connections>
                                         </menuItem>
+                                        <menuItem title="Previous Workspace" keyEquivalent="[" identifier="Previous Workspace" id="MLm-W3-xoQ">
+                                            <modifierMask key="keyEquivalentModifierMask" control="YES" command="YES"/>
+                                            <connections>
+                                                <action selector="selectPreviousWorkspace:" target="-1" id="f5h-vN-jmP"/>
+                                            </connections>
+                                        </menuItem>
+                                        <menuItem title="Next Workspace" keyEquivalent="]" identifier="Next Workspace" id="xQj-vH-EGs">
+                                            <modifierMask key="keyEquivalentModifierMask" control="YES" command="YES"/>
+                                            <connections>
+                                                <action selector="selectNextWorkspace:" target="-1" id="vVm-Hk-Ngb"/>
+                                            </connections>
+                                        </menuItem>
+                                        <menuItem title="Toggle Last Workspace" keyEquivalent="\" identifier="Toggle Last Workspace" id="s4S-BD-g7f">
+                                            <modifierMask key="keyEquivalentModifierMask" control="YES" command="YES"/>
+                                            <connections>
+                                                <action selector="toggleLastWorkspace:" target="-1" id="Fv5-Kg-rFA"/>
+                                            </connections>
+                                        </menuItem>
                                         <menuItem title="Set Default Width" identifier="Set Default Width" id="81r-Vc-nVm">
                                             <modifierMask key="keyEquivalentModifierMask"/>
                                             <connections>

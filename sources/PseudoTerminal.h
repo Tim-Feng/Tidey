@@ -215,6 +215,9 @@ extern NSString *const iTermDidCreateTerminalWindowNotification;
 - (void)selectWorkspaceAtIndexAction:(id)sender;
 - (IBAction)toggleTideySidebar:(id)sender;
 - (IBAction)selectTideySidebarWorkspaceAtIndexAction:(id)sender;
+- (IBAction)selectNextWorkspace:(id)sender;
+- (IBAction)selectPreviousWorkspace:(id)sender;
+- (IBAction)toggleLastWorkspace:(id)sender;
 - (BOOL)isShowingTideySidebar;
 - (void)performTideyWorkspaceMutationPreservingWindowFrame:(void (^)(void))block;
 
