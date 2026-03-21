@@ -61,6 +61,12 @@ typedef struct {
     CGFloat bottom;
 } iTermDecorationHeights;
 
+@class iTermRootTerminalView;
+
+@interface TideySidebarTableView : NSTableView
+@property(nonatomic, weak) iTermRootTerminalView *tideyRootTerminalView;
+@end
+
 @interface iTermRootTerminalView()<
     iTermTabBarControlViewDelegate,
     iTermDragHandleViewDelegate,
@@ -143,6 +149,36 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 @end
 
+@implementation TideySidebarTableView
+
+- (NSImage *)dragImageForRowsWithIndexes:(NSIndexSet *)dragRows
+                            tableColumns:(NSArray<NSTableColumn *> *)tableColumns
+                                   event:(NSEvent *)dragEvent
+                                  offset:(NSPointPointer)dragImageOffset {
+    NSInteger row = dragRows.firstIndex;
+    if (row == NSNotFound || !self.tideyRootTerminalView) {
+        return [super dragImageForRowsWithIndexes:dragRows
+                                     tableColumns:tableColumns
+                                            event:dragEvent
+                                           offset:dragImageOffset];
+    }
+
+    NSImage *image = [self.tideyRootTerminalView tideySidebarDragPreviewImageForRow:row
+                                                                               width:self.bounds.size.width];
+    NSRect rowRect = [self rectOfRow:row];
+    NSPoint locationInTable = [self convertPoint:dragEvent.locationInWindow fromView:nil];
+    NSPoint locationInRow = NSMakePoint(locationInTable.x - rowRect.origin.x,
+                                        locationInTable.y - rowRect.origin.y);
+    NSPoint center = NSMakePoint(image.size.width / 2.0, image.size.height / 2.0);
+    if (dragImageOffset) {
+        *dragImageOffset = NSMakePoint(center.x - locationInRow.x,
+                                       center.y - locationInRow.y);
+    }
+    return image;
+}
+
+@end
+
 @implementation iTermRootTerminalView {
     BOOL _tabViewFrameReduced;
     BOOL _haveShownToolbelt;
@@ -217,7 +253,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _tideySidebarScrollView.hasVerticalScroller = YES;
         _tideySidebarScrollView.borderType = NSNoBorder;
 
-        _tideySidebarTableView = [[NSTableView alloc] initWithFrame:NSZeroRect];
+        _tideySidebarTableView = [[TideySidebarTableView alloc] initWithFrame:NSZeroRect];
+        ((TideySidebarTableView *)_tideySidebarTableView).tideyRootTerminalView = self;
         _tideySidebarTableView.delegate = self;
         _tideySidebarTableView.dataSource = self;
         _tideySidebarTableView.headerView = nil;
@@ -1843,74 +1880,6 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSInteger toIndex = MAX(0, MIN(row, self.numberOfTideySidebarWorkspaces));
     return [self.delegate rootTerminalViewMoveTideySidebarWorkspaceFromIndex:fromIndex
                                                                      toIndex:toIndex];
-}
-
-- (void)tableView:(NSTableView *)tableView
-updateDraggingItemsForDrag:(id<NSDraggingInfo>)draggingInfo {
-    if (tableView != _tideySidebarTableView) {
-        return;
-    }
-    __weak typeof(self) weakSelf = self;
-    [draggingInfo enumerateDraggingItemsWithOptions:0
-                                            forView:tableView
-                                            classes:@[[NSPasteboardItem class]]
-                                      searchOptions:@{}
-                                         usingBlock:^(NSDraggingItem *draggingItem,
-                                                      NSInteger idx,
-                                                      BOOL *stop) {
-        typeof(self) strongSelf = weakSelf;
-        if (!strongSelf) {
-            return;
-        }
-        NSPasteboardItem *item = draggingItem.item;
-        NSString *rowString = [item stringForType:iTermRootTerminalViewTideySidebarWorkspacePasteboardType];
-        if (rowString.length == 0) {
-            return;
-        }
-        NSInteger row = rowString.integerValue;
-        if (row < 0 || row >= strongSelf.numberOfTideySidebarWorkspaces) {
-            return;
-        }
-
-        NSImage *image = [strongSelf tideySidebarDragPreviewImageForRow:row
-                                                                  width:strongSelf->_tideySidebarTableView.bounds.size.width];
-        NSSize size = image.size;
-
-        NSPoint dragLocation = [draggingInfo draggingLocation];
-        NSPoint tablePoint = [tableView convertPoint:dragLocation fromView:nil];
-        NSRect frame = NSMakeRect(0,
-                                  floor(tablePoint.y - size.height / 2.0),
-                                  size.width,
-                                  size.height);
-        [draggingItem setDraggingFrame:frame contents:image];
-    }];
-}
-
-- (void)tableView:(NSTableView *)tableView
-  draggingSession:(NSDraggingSession *)session
-   willBeginAtPoint:(NSPoint)screenPoint
-    forRowIndexes:(NSIndexSet *)rowIndexes {
-    if (tableView != _tideySidebarTableView) {
-        return;
-    }
-    NSInteger row = rowIndexes.firstIndex;
-    if (row == NSNotFound || row < 0 || row >= self.numberOfTideySidebarWorkspaces) {
-        return;
-    }
-    NSImage *image = [self tideySidebarDragPreviewImageForRow:row
-                                                        width:_tideySidebarTableView.bounds.size.width];
-    NSRect rowRect = [_tideySidebarTableView rectOfRow:row];
-    NSRect rowRectInWindow = [_tideySidebarTableView convertRect:rowRect toView:nil];
-    NSRect rowRectOnScreen = [self.window convertRectToScreen:rowRectInWindow];
-    [session enumerateDraggingItemsWithOptions:0
-                                       forView:nil
-                                       classes:@[[NSPasteboardItem class]]
-                                 searchOptions:@{}
-                                    usingBlock:^(NSDraggingItem *draggingItem,
-                                                 NSInteger idx,
-                                                 BOOL *stop) {
-        [draggingItem setDraggingFrame:rowRectOnScreen contents:image];
-    }];
 }
 
 - (NSView *)tableView:(NSTableView *)tableView
