@@ -52,6 +52,7 @@ const NSInteger iTermRootTerminalViewWindowNumberLabelWidth = 40;
 static const CGFloat kMinimumToolbeltSizeInPoints = 100;
 static const CGFloat kMinimumToolbeltSizeAsFractionOfWindow = 0.05;
 static const CGFloat kMaximumToolbeltSizeAsFractionOfWindow = 0.5;
+static const CGFloat kTideySidebarWidth = 220;
 
 typedef struct {
     CGFloat top;
@@ -69,6 +70,10 @@ typedef struct {
 @property(nonatomic, strong) SolidColorView *divisionView;
 @property(nonatomic, strong) iTermToolbeltView *toolbelt;
 @property(nonatomic, strong) iTermDragHandleView *leftTabBarDragHandle;
+
+- (CGFloat)tideySidebarWidth;
+- (void)layoutTideySidebar;
+- (iTermLayoutOutputs)layoutOutputsByApplyingTideySidebarOffset:(iTermLayoutOutputs)outputs;
 
 @end
 
@@ -140,6 +145,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     iTermGenericStatusBarContainer *_statusBarContainer;
     NSDictionary *_desiredToolbeltProportions;
     iTermWindowSizeView *_windowSizeView NS_AVAILABLE_MAC(10_14);
+    NSView *_tideySidebarView;
+    NSTextField *_tideySidebarLabel;
 
     iTermLayerBackedSolidColorView *_titleBackgroundView NS_AVAILABLE_MAC(10_14);
     
@@ -180,6 +187,24 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _backgroundImage.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         _backgroundImage.hidden = YES;
         [self addSubview:_backgroundImage];
+
+        _tideySidebarView = [[NSView alloc] initWithFrame:NSZeroRect];
+        _tideySidebarView.autoresizingMask = NSViewHeightSizable;
+        _tideySidebarView.wantsLayer = YES;
+        _tideySidebarView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.11
+                                                                      green:0.12
+                                                                       blue:0.15
+                                                                      alpha:1].CGColor;
+        [self addSubview:_tideySidebarView];
+
+        _tideySidebarLabel = [NSTextField newLabelStyledTextField];
+        _tideySidebarLabel.stringValue = @"Tidey";
+        _tideySidebarLabel.font = [NSFont boldSystemFontOfSize:22];
+        _tideySidebarLabel.textColor = [NSColor secondaryLabelColor];
+        _tideySidebarLabel.alignment = NSTextAlignmentCenter;
+        _tideySidebarLabel.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
+        [_tideySidebarView addSubview:_tideySidebarLabel];
+        [self layoutTideySidebar];
 
         // Create the tab view.
         self.tabView = [[PTYTabView alloc] initWithFrame:self.bounds];
@@ -1136,7 +1161,9 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 - (NSRect)toolbeltFrameInWindow:(NSWindow *)thisWindow {
     // Use calculator for toolbelt frame calculation
     iTermLayoutInputs inputs = [self layoutInputsForWindow:thisWindow];
-    return [iTermLayoutCalculator toolbeltFrameWithInputs:inputs];
+    NSRect frame = [iTermLayoutCalculator toolbeltFrameWithInputs:inputs];
+    frame.origin.x += self.tideySidebarWidth;
+    return frame;
 }
 
 - (void)setShouldShowToolbelt:(BOOL)shouldShowToolbelt {
@@ -1299,7 +1326,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     } else {
         contentFrame = self.bounds;
     }
-    inputs.contentViewWidth = contentFrame.size.width;
+    inputs.contentViewWidth = MAX(0, contentFrame.size.width - self.tideySidebarWidth);
     inputs.contentViewHeight = contentFrame.size.height;
 
     // Tab bar dimensions
@@ -1346,6 +1373,36 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     return inputs;
 }
 
+- (CGFloat)tideySidebarWidth {
+    return kTideySidebarWidth;
+}
+
+- (void)layoutTideySidebar {
+    const CGFloat width = self.tideySidebarWidth;
+    _tideySidebarView.hidden = (width <= 0);
+    if (width <= 0) {
+        return;
+    }
+
+    _tideySidebarView.frame = NSMakeRect(0, 0, width, NSHeight(self.bounds));
+    _tideySidebarLabel.frame = NSMakeRect(20,
+                                          NSHeight(_tideySidebarView.bounds) - 64,
+                                          width - 40,
+                                          28);
+}
+
+- (iTermLayoutOutputs)layoutOutputsByApplyingTideySidebarOffset:(iTermLayoutOutputs)outputs {
+    const CGFloat width = self.tideySidebarWidth;
+    if (width <= 0) {
+        return outputs;
+    }
+    outputs.tabViewFrame.origin.x += width;
+    outputs.statusBarFrame.origin.x += width;
+    outputs.toolbeltFrame.origin.x += width;
+    outputs.tabBarFrame.origin.x += width;
+    return outputs;
+}
+
 - (void)layoutSubviewsWithHiddenTabBarForWindow:(NSWindow *)thisWindow {
     if (!_tabBarControlOnLoan) {
         self.tabBarControl.hidden = YES;
@@ -1361,6 +1418,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     iTermLayoutInputs inputs = [self layoutInputsForWindow:thisWindow];
     inputs.tabBarVisible = NO;  // Force hidden for this method
     iTermLayoutOutputs outputs = [iTermLayoutCalculator calculateLayoutWithInputs:inputs];
+    outputs = [self layoutOutputsByApplyingTideySidebarOffset:outputs];
 
     // Apply tab view frame
     DLog(@"repositionWidgets - Set tab view frame to %@", NSStringFromRect(outputs.tabViewFrame));
@@ -1389,6 +1447,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     inputs.tabBarVisible = topTabBarVisible;
     inputs.tabPosition = kLayoutTabPositionTop;
     iTermLayoutOutputs outputs = [iTermLayoutCalculator calculateLayoutWithInputs:inputs];
+    outputs = [self layoutOutputsByApplyingTideySidebarOffset:outputs];
 
     // Apply tab view frame
     DLog(@"repositionWidgets - Set tab view frame to %@", NSStringFromRect(outputs.tabViewFrame));
@@ -1422,6 +1481,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     inputs.tabBarVisible = YES;
     inputs.tabPosition = kLayoutTabPositionBottom;
     iTermLayoutOutputs outputs = [iTermLayoutCalculator calculateLayoutWithInputs:inputs];
+    outputs = [self layoutOutputsByApplyingTideySidebarOffset:outputs];
 
     // Apply tab bar frame and settings
     self.tabBarControl.insets = [self.delegate tabBarInsets];
@@ -1457,6 +1517,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     inputs.tabBarVisible = YES;
     inputs.tabPosition = kLayoutTabPositionLeft;
     iTermLayoutOutputs outputs = [iTermLayoutCalculator calculateLayoutWithInputs:inputs];
+    outputs = [self layoutOutputsByApplyingTideySidebarOffset:outputs];
 
     // Apply tab bar frame and settings
     self.tabBarControl.insets = [self.delegate tabBarInsets];
@@ -1551,6 +1612,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     }
 
     _backgroundImage.frame = self.bounds;
+    [self layoutTideySidebar];
     [self layoutWindowPaneDecorations];
 
     // The tab view frame (calculated below) is based on the toolbelt's width. If the toolbelt is
