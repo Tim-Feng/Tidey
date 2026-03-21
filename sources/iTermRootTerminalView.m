@@ -143,6 +143,28 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 @end
 
+@interface TideySidebarRowView : NSTableRowView
+@end
+
+@implementation TideySidebarRowView
+
+- (void)drawSelectionInRect:(NSRect)dirtyRect {
+    if (!self.selectionHighlightStyle || !self.isSelected) {
+        return;
+    }
+    NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds, 6, 4)
+                                                         xRadius:8
+                                                         yRadius:8];
+    [[NSColor selectedContentBackgroundColor] setFill];
+    [path fill];
+}
+
+- (BOOL)isEmphasized {
+    return YES;
+}
+
+@end
+
 @implementation iTermRootTerminalView {
     BOOL _tabViewFrameReduced;
     BOOL _haveShownToolbelt;
@@ -1855,7 +1877,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     session.draggingFormation = NSDraggingFormationNone;
     __weak typeof(self) weakSelf = self;
     [session enumerateDraggingItemsWithOptions:0
-                                       forView:tableView
+                                       forView:nil
                                        classes:@[[NSPasteboardItem class]]
                                  searchOptions:@{}
                                     usingBlock:^(NSDraggingItem *draggingItem,
@@ -1877,8 +1899,16 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         NSImage *image = [strongSelf tideySidebarDragPreviewImageForRow:row
                                                                   width:strongSelf->_tideySidebarTableView.bounds.size.width];
         NSRect rowRect = [tableView rectOfRow:row];
-        [draggingItem setDraggingFrame:rowRect contents:image];
+        NSRect rowRectInWindow = [tableView convertRect:rowRect toView:nil];
+        [draggingItem setDraggingFrame:rowRectInWindow contents:image];
     }];
+}
+
+- (NSTableRowView *)tableView:(NSTableView *)tableView rowViewForRow:(NSInteger)row {
+    if (tableView != _tideySidebarTableView) {
+        return nil;
+    }
+    return [[TideySidebarRowView alloc] initWithFrame:NSZeroRect];
 }
 
 - (NSView *)tableView:(NSTableView *)tableView
