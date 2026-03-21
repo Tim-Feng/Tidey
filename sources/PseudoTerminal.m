@@ -118,6 +118,7 @@
 #import "iTermSessionFactory.h"
 #import "iTermSessionLauncher.h"
 #import "iTermSessionRestorationStatusProtocol.h"
+#import "iTermVariables.h"
 #import "iTermSessionTitleBuiltInFunction.h"
 #import "iTermShellHistoryController.h"
 #import "iTermSquash.h"
@@ -316,6 +317,7 @@ typedef NS_ENUM(int, iTermShouldHaveTitleSeparator) {
 - (void)showWorkspaceAtIndex:(NSInteger)index;
 - (BOOL)selectWorkspaceAtIndex:(NSInteger)index recordHistory:(BOOL)recordHistory;
 - (BOOL)hasSelectablePreviousWorkspace;
+- (BOOL)moveWorkspaceFromIndex:(NSInteger)fromIndex toIndex:(NSInteger)toIndex;
 @end
 
 @implementation PseudoTerminal {
@@ -1302,6 +1304,43 @@ ITERM_WEAKLY_REFERENCEABLE
     return _lastSelectedWorkspaceIndex >= 0 &&
            _lastSelectedWorkspaceIndex < self.workspaces.count &&
            _lastSelectedWorkspaceIndex != self.selectedWorkspaceIndex;
+}
+
+- (BOOL)moveWorkspaceFromIndex:(NSInteger)fromIndex toIndex:(NSInteger)toIndex {
+    [self ensureTideyWorkspacesInitialized];
+    if (fromIndex < 0 ||
+        fromIndex >= self.workspaces.count ||
+        toIndex < 0 ||
+        toIndex > self.workspaces.count) {
+        return NO;
+    }
+
+    if (fromIndex == toIndex || fromIndex + 1 == toIndex) {
+        return NO;
+    }
+
+    Workspace *selectedWorkspace = [[self selectedWorkspace] retain];
+    Workspace *lastWorkspace = [[self workspaceAtIndex:_lastSelectedWorkspaceIndex] retain];
+    Workspace *movingWorkspace = [[self workspaceAtIndex:fromIndex] retain];
+
+    [self.workspaces removeObjectAtIndex:fromIndex];
+    if (toIndex > fromIndex) {
+        toIndex--;
+    }
+    [self.workspaces insertObject:movingWorkspace atIndex:toIndex];
+
+    self.selectedWorkspaceIndex = selectedWorkspace ? [self.workspaces indexOfObjectIdenticalTo:selectedWorkspace] : -1;
+    _lastSelectedWorkspaceIndex = lastWorkspace ? [self.workspaces indexOfObjectIdenticalTo:lastWorkspace] : -1;
+
+    [selectedWorkspace release];
+    [lastWorkspace release];
+    [movingWorkspace release];
+
+    [_contentView reloadTideySidebar];
+    if (self.selectedWorkspaceIndex >= 0) {
+        [_contentView selectTideySidebarWorkspaceAtIndex:self.selectedWorkspaceIndex];
+    }
+    return YES;
 }
 
 - (void)performTideyWorkspaceMutationPreservingWindowFrame:(void (^)(void))block {
@@ -2323,6 +2362,9 @@ ITERM_WEAKLY_REFERENCEABLE
 
 - (void)tabProcessInfoProviderDidChange:(PTYTab *)tab {
     [self refreshTools];
+    if (self.isShowingTideySidebar) {
+        [_contentView reloadTideySidebar];
+    }
 }
 
 - (void)tab:(PTYTab *)tab progressDidChange:(VT100ScreenProgress)progress {
@@ -10914,15 +10956,40 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
     return @"Untitled";
 }
 
-- (NSString *)tideySidebarDisplaySubtitleForSession:(PTYSession *)session panel:(PTYTab *)panel {
-    NSString *path = [self tideySidebarDisplayPathForSession:session];
-    if (path.length > 0) {
-        return path;
+- (NSString *)tideySidebarRunningCommandForSession:(PTYSession *)session {
+    if (!session.isProcessing) {
+        return nil;
+    }
+
+    NSString *processTitle = [[session.variablesScope valueForVariableName:iTermVariableKeySessionProcessTitle]
+                              stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (processTitle.length > 0) {
+        return processTitle;
+    }
+
+    NSString *jobName = [[session.variablesScope valueForVariableName:iTermVariableKeySessionJob]
+                         stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (jobName.length > 0) {
+        return jobName;
     }
 
     NSString *command = [session.currentCommand stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     if (command.length > 0) {
         return command;
+    }
+
+    return nil;
+}
+
+- (NSString *)tideySidebarDisplaySubtitleForSession:(PTYSession *)session panel:(PTYTab *)panel {
+    NSString *command = [self tideySidebarRunningCommandForSession:session];
+    if (command.length > 0) {
+        return command;
+    }
+
+    NSString *path = [self tideySidebarDisplayPathForSession:session];
+    if (path.length > 0) {
+        return path;
     }
 
     NSString *subtitle = [session.subtitle stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
@@ -10963,6 +11030,11 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
 
 - (BOOL)rootTerminalViewSelectTideySidebarWorkspaceAtIndex:(NSInteger)index {
     return [self selectWorkspaceAtIndex:index recordHistory:YES];
+}
+
+- (BOOL)rootTerminalViewMoveTideySidebarWorkspaceFromIndex:(NSInteger)fromIndex
+                                                   toIndex:(NSInteger)toIndex {
+    return [self moveWorkspaceFromIndex:fromIndex toIndex:toIndex];
 }
 
 #pragma mark - PSMPUAFontProvider
@@ -13430,6 +13502,9 @@ typedef NS_ENUM(NSUInteger, iTermBroadcastCommand) {
 
 - (void)tab:(PTYTab *)tab didChangeProcessingStatus:(BOOL)isProcessing {
     [_contentView.tabBarControl setIsProcessing:isProcessing forTabWithIdentifier:tab];
+    if (self.isShowingTideySidebar) {
+        [_contentView reloadTideySidebar];
+    }
 }
 
 - (void)tab:(PTYTab *)tab didChangeIcon:(NSImage *)icon {
@@ -13557,6 +13632,9 @@ typedef NS_ENUM(NSUInteger, iTermBroadcastCommand) {
         for (PTYSession *session in self.allSessions) {
             [session setWindowTitle:title];
         }
+    }
+    if (self.isShowingTideySidebar) {
+        [_contentView reloadTideySidebar];
     }
 }
 

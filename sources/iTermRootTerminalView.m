@@ -53,6 +53,8 @@ static const CGFloat kMinimumToolbeltSizeInPoints = 100;
 static const CGFloat kMinimumToolbeltSizeAsFractionOfWindow = 0.05;
 static const CGFloat kMaximumToolbeltSizeAsFractionOfWindow = 0.5;
 static const CGFloat kTideySidebarWidth = 220;
+static NSPasteboardType const iTermRootTerminalViewTideySidebarWorkspacePasteboardType =
+    @"com.tidey.workspace-row";
 
 typedef struct {
     CGFloat top;
@@ -221,6 +223,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         }
         _tideySidebarTableView.intercellSpacing = NSMakeSize(0, 0);
         _tideySidebarTableView.rowHeight = 60;
+        [_tideySidebarTableView registerForDraggedTypes:@[ iTermRootTerminalViewTideySidebarWorkspacePasteboardType ]];
+        [_tideySidebarTableView setDraggingSourceOperationMask:NSDragOperationMove forLocal:YES];
 
         NSTableColumn *sidebarColumn = [[NSTableColumn alloc] initWithIdentifier:@"TideySidebarColumn"];
         sidebarColumn.resizingMask = NSTableColumnAutoresizingMask;
@@ -1793,6 +1797,48 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView {
     return [self.delegate rootTerminalViewNumberOfTideySidebarWorkspaces];
+}
+
+- (id<NSPasteboardWriting>)tableView:(NSTableView *)tableView
+                 pasteboardWriterForRow:(NSInteger)row {
+    if (tableView != _tideySidebarTableView ||
+        row < 0 ||
+        row >= self.numberOfTideySidebarWorkspaces) {
+        return nil;
+    }
+    NSPasteboardItem *item = [[NSPasteboardItem alloc] init];
+    [item setString:[NSString stringWithFormat:@"%ld", (long)row]
+            forType:iTermRootTerminalViewTideySidebarWorkspacePasteboardType];
+    return item;
+}
+
+- (NSDragOperation)tableView:(NSTableView *)tableView
+                validateDrop:(id<NSDraggingInfo>)info
+                 proposedRow:(NSInteger)row
+       proposedDropOperation:(NSTableViewDropOperation)dropOperation {
+    if (tableView != _tideySidebarTableView) {
+        return NSDragOperationNone;
+    }
+    [tableView setDropRow:row dropOperation:NSTableViewDropAbove];
+    return NSDragOperationMove;
+}
+
+- (BOOL)tableView:(NSTableView *)tableView
+       acceptDrop:(id<NSDraggingInfo>)info
+              row:(NSInteger)row
+    dropOperation:(NSTableViewDropOperation)dropOperation {
+    if (tableView != _tideySidebarTableView) {
+        return NO;
+    }
+    NSPasteboard *pasteboard = info.draggingPasteboard;
+    NSString *rowString = [pasteboard stringForType:iTermRootTerminalViewTideySidebarWorkspacePasteboardType];
+    if (rowString.length == 0) {
+        return NO;
+    }
+    NSInteger fromIndex = rowString.integerValue;
+    NSInteger toIndex = MAX(0, MIN(row, self.numberOfTideySidebarWorkspaces));
+    return [self.delegate rootTerminalViewMoveTideySidebarWorkspaceFromIndex:fromIndex
+                                                                     toIndex:toIndex];
 }
 
 - (NSView *)tableView:(NSTableView *)tableView

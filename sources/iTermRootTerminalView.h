@@ -76,6 +76,8 @@
 - (NSString *)rootTerminalViewTideySidebarWorkspaceSubtitleAtIndex:(NSInteger)index;
 - (NSInteger)rootTerminalViewSelectedTideySidebarWorkspaceIndex;
 - (BOOL)rootTerminalViewSelectTideySidebarWorkspaceAtIndex:(NSInteger)index;
+- (BOOL)rootTerminalViewMoveTideySidebarWorkspaceFromIndex:(NSInteger)fromIndex
+                                                   toIndex:(NSInteger)toIndex;
 @end
 
 extern const NSInteger iTermRootTerminalViewWindowNumberLabelMargin;
