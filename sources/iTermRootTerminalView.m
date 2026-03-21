@@ -61,6 +61,8 @@ typedef struct {
     CGFloat bottom;
 } iTermDecorationHeights;
 
+@class iTermRootTerminalView;
+
 @interface TideySidebarTableView : NSTableView
 @end
 
@@ -99,15 +101,27 @@ typedef struct {
                                    event:(NSEvent *)dragEvent
                                   offset:(NSPointPointer)dragImageOffset {
     NSInteger row = dragRows.firstIndex;
+    NSLog(@"[TideyDrag] dragImageForRows row=%ld class=%@", (long)row, NSStringFromClass(self.class));
     if (row == NSNotFound) {
+        NSLog(@"[TideyDrag] fallback reason=rowNotFound");
         return [super dragImageForRowsWithIndexes:dragRows
                                      tableColumns:tableColumns
                                             event:dragEvent
                                            offset:dragImageOffset];
     }
 
-    NSTableRowView *rowView = [self rowViewAtRow:row makeIfNecessary:NO];
+    NSTableRowView *rowView = [self rowViewAtRow:row makeIfNecessary:YES];
     if (!rowView) {
+        NSLog(@"[TideyDrag] fallback reason=rowViewNil row=%ld", (long)row);
+        id delegate = self.delegate;
+        if ([delegate isKindOfClass:[iTermRootTerminalView class]]) {
+            iTermRootTerminalView *root = (iTermRootTerminalView *)delegate;
+            NSImage *image = [root tideySidebarDragPreviewImageForRow:row width:self.bounds.size.width];
+            if (dragImageOffset) {
+                *dragImageOffset = NSZeroPoint;
+            }
+            return image;
+        }
         return [super dragImageForRowsWithIndexes:dragRows
                                      tableColumns:tableColumns
                                             event:dragEvent
@@ -115,8 +129,19 @@ typedef struct {
     }
 
     NSRect rowBounds = rowView.bounds;
+    [rowView layoutSubtreeIfNeeded];
     NSBitmapImageRep *bitmap = [rowView bitmapImageRepForCachingDisplayInRect:rowBounds];
     if (!bitmap) {
+        NSLog(@"[TideyDrag] fallback reason=bitmapNil row=%ld", (long)row);
+        id delegate = self.delegate;
+        if ([delegate isKindOfClass:[iTermRootTerminalView class]]) {
+            iTermRootTerminalView *root = (iTermRootTerminalView *)delegate;
+            NSImage *image = [root tideySidebarDragPreviewImageForRow:row width:self.bounds.size.width];
+            if (dragImageOffset) {
+                *dragImageOffset = NSZeroPoint;
+            }
+            return image;
+        }
         return [super dragImageForRowsWithIndexes:dragRows
                                      tableColumns:tableColumns
                                             event:dragEvent
@@ -131,6 +156,12 @@ typedef struct {
         NSPoint locationInTable = [self convertPoint:dragEvent.locationInWindow fromView:nil];
         CGFloat xOffset = locationInTable.x - rowRect.origin.x;
         CGFloat yOffset = NSHeight(rowRect) - (locationInTable.y - rowRect.origin.y);
+        NSLog(@"[TideyDrag] snapshot row=%ld rowRect=%@ location=%@ offset=(%.1f,%.1f)",
+              (long)row,
+              NSStringFromRect(rowRect),
+              NSStringFromPoint(locationInTable),
+              xOffset,
+              yOffset);
         *dragImageOffset = NSMakePoint(floor(xOffset), floor(yOffset));
     }
     return image;
