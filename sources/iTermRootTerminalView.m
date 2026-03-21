@@ -1855,7 +1855,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     session.draggingFormation = NSDraggingFormationNone;
     __weak typeof(self) weakSelf = self;
     [session enumerateDraggingItemsWithOptions:0
-                                       forView:tableView
+                                       forView:nil
                                        classes:@[[NSPasteboardItem class]]
                                  searchOptions:@{}
                                     usingBlock:^(NSDraggingItem *draggingItem,
@@ -1877,7 +1877,9 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         NSImage *image = [strongSelf tideySidebarDragPreviewImageForRow:row
                                                                   width:strongSelf->_tideySidebarTableView.bounds.size.width];
         NSRect rowRect = [tableView rectOfRow:row];
-        [draggingItem setDraggingFrame:rowRect contents:image];
+        NSRect rowRectInWindow = [tableView convertRect:rowRect toView:nil];
+        NSRect rowRectOnScreen = [tableView.window convertRectToScreen:rowRectInWindow];
+        [draggingItem setDraggingFrame:rowRectOnScreen contents:image];
     }];
 }
 
