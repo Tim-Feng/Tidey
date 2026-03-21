@@ -1949,10 +1949,7 @@ updateDraggingItemsForDrag:(id<NSDraggingInfo>)draggingInfo {
     NSTableCellView *cellView = [self newTideySidebarCellView];
     cellView.frame = NSMakeRect(0, 0, width, _tideySidebarTableView.rowHeight);
     cellView.wantsLayer = YES;
-    cellView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.17
-                                                         green:0.19
-                                                          blue:0.25
-                                                         alpha:0.98].CGColor;
+    cellView.layer.backgroundColor = [NSColor selectedContentBackgroundColor].CGColor;
     cellView.layer.cornerRadius = 8;
     [self configureTideySidebarCellView:cellView row:row];
     return cellView;
