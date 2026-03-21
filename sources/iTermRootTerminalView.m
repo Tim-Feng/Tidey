@@ -2014,6 +2014,10 @@ updateDraggingItemsForDrag:(id<NSDraggingInfo>)draggingInfo {
     if (selectedRow < 0 || selectedRow >= self.numberOfTideySidebarWorkspaces) {
         return;
     }
+    if (self.window.firstResponder != _tideySidebarTableView) {
+        [self.window makeFirstResponder:_tideySidebarTableView];
+        [_tideySidebarTableView setNeedsDisplay:YES];
+    }
     [self.delegate rootTerminalViewSelectTideySidebarWorkspaceAtIndex:selectedRow];
 }
 
