@@ -1877,7 +1877,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     session.draggingFormation = NSDraggingFormationNone;
     __weak typeof(self) weakSelf = self;
     [session enumerateDraggingItemsWithOptions:0
-                                       forView:nil
+                                       forView:tableView
                                        classes:@[[NSPasteboardItem class]]
                                  searchOptions:@{}
                                     usingBlock:^(NSDraggingItem *draggingItem,
@@ -1898,9 +1898,16 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         }
         NSImage *image = [strongSelf tideySidebarDragPreviewImageForRow:row
                                                                   width:strongSelf->_tideySidebarTableView.bounds.size.width];
-        NSRect rowRect = [tableView rectOfRow:row];
-        NSRect rowRectInWindow = [tableView convertRect:rowRect toView:nil];
-        [draggingItem setDraggingFrame:rowRectInWindow contents:image];
+        // Only replace the image, keep the system's default frame/position.
+        // This avoids coordinate system mismatches that cause the preview
+        // to jump from the wrong position.
+        draggingItem.imageComponentsProvider = ^NSArray<NSDraggingImageComponent *> * {
+            NSDraggingImageComponent *comp = [[NSDraggingImageComponent alloc]
+                initWithKey:NSDraggingImageComponentIconKey];
+            comp.contents = image;
+            comp.frame = NSMakeRect(0, 0, image.size.width, image.size.height);
+            return @[comp];
+        };
     }];
 }
 
