@@ -1986,11 +1986,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     if (selectedRow < 0 || selectedRow >= self.numberOfTideySidebarWorkspaces) {
         return;
     }
-    if (self.window.firstResponder != _tideySidebarTableView) {
-        [self.window makeFirstResponder:_tideySidebarTableView];
-        [_tideySidebarTableView setNeedsDisplay:YES];
-    }
     [self.delegate rootTerminalViewSelectTideySidebarWorkspaceAtIndex:selectedRow];
+    [_tideySidebarTableView setNeedsDisplay:YES];
 }
 
 - (void)layoutIfStatusBarChanged {

@@ -1267,6 +1267,9 @@ ITERM_WEAKLY_REFERENCEABLE
     [self fitTabsToWindow];
     [_contentView reloadTideySidebar];
     [_contentView selectTideySidebarWorkspaceAtIndex:index];
+    if (self.currentSession.mainResponder) {
+        [[self window] makeFirstResponder:self.currentSession.mainResponder];
+    }
 
     if (currentWorkspace != workspace && workspace.panels.count > 0) {
         [self updateSelectedPanelIndexFromVisibleTabSelection];
@@ -1292,6 +1295,9 @@ ITERM_WEAKLY_REFERENCEABLE
         if (panelIndex != NSNotFound) {
             [_contentView.tabView selectTabViewItemAtIndex:panelIndex];
             [_contentView selectTideySidebarWorkspaceAtIndex:index];
+            if (self.currentSession.mainResponder) {
+                [[self window] makeFirstResponder:self.currentSession.mainResponder];
+            }
             return YES;
         }
     }
