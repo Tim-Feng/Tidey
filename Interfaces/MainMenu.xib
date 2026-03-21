@@ -928,6 +928,31 @@ DQ
                                                 <action selector="toggleToolbeltVisibility:" target="-1" id="v3c-uP-c8Q"/>
                                             </connections>
                                         </menuItem>
+                                        <menuItem title="Show Tidey Sidebar" keyEquivalent="B" identifier="Show Tidey Sidebar" id="X4e-3V-NmJ">
+                                            <modifierMask key="keyEquivalentModifierMask" command="YES" shift="YES"/>
+                                            <connections>
+                                                <action selector="toggleTideySidebar:" target="-1" id="H2r-gf-vzh"/>
+                                            </connections>
+                                        </menuItem>
+                                        <menuItem isSeparatorItem="YES" id="e4Q-yL-Q7V"/>
+                                        <menuItem title="Select Tidey Session 1" keyEquivalent="1" identifier="Select Tidey Session 1" id="q4f-uK-B4d" tag="0">
+                                            <modifierMask key="keyEquivalentModifierMask" command="YES"/>
+                                            <connections>
+                                                <action selector="selectTideySidebarSessionAtIndexAction:" target="-1" id="TLl-vf-XmM"/>
+                                            </connections>
+                                        </menuItem>
+                                        <menuItem title="Select Tidey Session 2" keyEquivalent="2" identifier="Select Tidey Session 2" id="d4h-K5-8dX" tag="1">
+                                            <modifierMask key="keyEquivalentModifierMask" command="YES"/>
+                                            <connections>
+                                                <action selector="selectTideySidebarSessionAtIndexAction:" target="-1" id="R8v-Rq-6Qv"/>
+                                            </connections>
+                                        </menuItem>
+                                        <menuItem title="Select Tidey Session 3" keyEquivalent="3" identifier="Select Tidey Session 3" id="w2u-4d-p7M" tag="2">
+                                            <modifierMask key="keyEquivalentModifierMask" command="YES"/>
+                                            <connections>
+                                                <action selector="selectTideySidebarSessionAtIndexAction:" target="-1" id="U5Y-XL-o3W"/>
+                                            </connections>
+                                        </menuItem>
                                         <menuItem title="Set Default Width" identifier="Set Default Width" id="81r-Vc-nVm">
                                             <modifierMask key="keyEquivalentModifierMask"/>
                                             <connections>

@@ -1228,6 +1228,17 @@ ITERM_WEAKLY_REFERENCEABLE
     [self toggleToolbeltVisibilityWithSideEffects:YES];
 }
 
+- (IBAction)toggleTideySidebar:(id)sender {
+    _contentView.shouldShowTideySidebar = !_contentView.shouldShowTideySidebar;
+    [self repositionWidgets];
+    [self notifyTmuxOfWindowResize];
+}
+
+- (IBAction)selectTideySidebarSessionAtIndexAction:(id)sender {
+    const NSInteger index = [sender tag];
+    [_contentView selectTideySidebarSessionAtIndex:index];
+}
+
 - (void)toggleToolbeltVisibilityWithSideEffects:(BOOL)sideEffects {
     _contentView.shouldShowToolbelt = !_contentView.shouldShowToolbelt;
     BOOL didResizeWindow = NO;
@@ -11451,6 +11462,13 @@ typedef NS_ENUM(NSUInteger, iTermBroadcastCommand) {
     } else if ([item action] == @selector(toggleToolbeltVisibility:)) {
         [item setState:_contentView.shouldShowToolbelt ? NSControlStateValueOn : NSControlStateValueOff];
         return [[iTermToolbeltView availableConfiguredToolsForProfileType:self.currentSession.profile.profileType] count] > 0;
+    } else if ([item action] == @selector(toggleTideySidebar:)) {
+        [item setState:_contentView.shouldShowTideySidebar ? NSControlStateValueOn : NSControlStateValueOff];
+        return YES;
+    } else if ([item action] == @selector(selectTideySidebarSessionAtIndexAction:)) {
+        return _contentView.shouldShowTideySidebar &&
+               item.tag >= 0 &&
+               item.tag < [_contentView numberOfTideySidebarSessions];
     } else if ([item action] == @selector(toggleSizeLocked:)) {
         [item setState:_sizeLocked ? NSControlStateValueOn : NSControlStateValueOff];
         return self.windowTypeSupportsSizeLock;

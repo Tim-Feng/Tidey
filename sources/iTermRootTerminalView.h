@@ -100,6 +100,9 @@ extern const NSInteger iTermRootTerminalViewWindowNumberLabelWidth;
 // Should the toolbelt be visible?
 @property(nonatomic) BOOL shouldShowToolbelt;
 
+// Should the Tidey sidebar be visible?
+@property(nonatomic) BOOL shouldShowTideySidebar;
+
 // How wide the toolbelt should be. User may drag it to change.
 // ALWAYS USE THE FLOOR OF THIS VALUE!
 @property(nonatomic) CGFloat toolbeltWidth;
@@ -160,5 +163,7 @@ extern const NSInteger iTermRootTerminalViewWindowNumberLabelWidth;
 - (void)updateTitleAndBorderViews NS_AVAILABLE_MAC(10_14);
 - (void)setSubtitle:(NSString *)subtitle;
 - (void)setCurrentSessionAlpha:(CGFloat)alpha;
+- (BOOL)selectTideySidebarSessionAtIndex:(NSInteger)index;
+- (NSInteger)numberOfTideySidebarSessions;
 
 @end

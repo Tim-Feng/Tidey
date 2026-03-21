@@ -213,6 +213,8 @@ extern NSString *const iTermDidCreateTerminalWindowNotification;
 
 // Make the tab at [sender tag] the foreground tab.
 - (void)selectSessionAtIndexAction:(id)sender;
+- (IBAction)toggleTideySidebar:(id)sender;
+- (IBAction)selectTideySidebarSessionAtIndexAction:(id)sender;
 
 // A unique number for this window assigned by finishInitializationWithSmartLayout.
 - (NSString *)terminalGuid;
@@ -451,4 +453,3 @@ extern NSString *const iTermDidCreateTerminalWindowNotification;
                     vertical:(BOOL)vertical;
 
 @end
-

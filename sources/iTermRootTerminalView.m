@@ -63,7 +63,9 @@ typedef struct {
     iTermTabBarControlViewDelegate,
     iTermDragHandleViewDelegate,
     iTermGenericStatusBarContainer,
-    iTermStoplightHotboxDelegate>
+    iTermStoplightHotboxDelegate,
+    NSTableViewDataSource,
+    NSTableViewDelegate>
 
 @property(nonatomic, strong) PTYTabView *tabView;
 @property(nonatomic, strong) iTermTabBarControlView *tabBarControl;
@@ -74,6 +76,7 @@ typedef struct {
 - (CGFloat)tideySidebarWidth;
 - (void)layoutTideySidebar;
 - (iTermLayoutOutputs)layoutOutputsByApplyingTideySidebarOffset:(iTermLayoutOutputs)outputs;
+- (NSArray<NSString *> *)tideySidebarSessionTitles;
 
 @end
 
@@ -146,7 +149,9 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSDictionary *_desiredToolbeltProportions;
     iTermWindowSizeView *_windowSizeView NS_AVAILABLE_MAC(10_14);
     NSView *_tideySidebarView;
-    NSTextField *_tideySidebarLabel;
+    NSScrollView *_tideySidebarScrollView;
+    NSTableView *_tideySidebarTableView;
+    NSArray<NSString *> *_tideySidebarSessionTitles;
 
     iTermLayerBackedSolidColorView *_titleBackgroundView NS_AVAILABLE_MAC(10_14);
     
@@ -177,6 +182,13 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     self = [super initWithFrame:frameRect color:color];
     if (self) {
         _delegate = delegate;
+        _shouldShowTideySidebar = YES;
+        _tideySidebarSessionTitles = @[
+            @"claude-1",
+            @"codex",
+            @"genesis-monitor",
+            @"priest-review",
+        ];
 
         self.autoresizesSubviews = YES;
         _leftTabBarPreferredWidth = round([iTermPreferences doubleForKey:kPreferenceKeyLeftTabBarWidth]);
@@ -197,13 +209,30 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                                       alpha:1].CGColor;
         [self addSubview:_tideySidebarView];
 
-        _tideySidebarLabel = [NSTextField newLabelStyledTextField];
-        _tideySidebarLabel.stringValue = @"Tidey";
-        _tideySidebarLabel.font = [NSFont boldSystemFontOfSize:22];
-        _tideySidebarLabel.textColor = [NSColor secondaryLabelColor];
-        _tideySidebarLabel.alignment = NSTextAlignmentCenter;
-        _tideySidebarLabel.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
-        [_tideySidebarView addSubview:_tideySidebarLabel];
+        _tideySidebarScrollView = [[NSScrollView alloc] initWithFrame:NSZeroRect];
+        _tideySidebarScrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        _tideySidebarScrollView.drawsBackground = NO;
+        _tideySidebarScrollView.hasVerticalScroller = YES;
+        _tideySidebarScrollView.borderType = NSNoBorder;
+
+        _tideySidebarTableView = [[NSTableView alloc] initWithFrame:NSZeroRect];
+        _tideySidebarTableView.delegate = self;
+        _tideySidebarTableView.dataSource = self;
+        _tideySidebarTableView.headerView = nil;
+        _tideySidebarTableView.focusRingType = NSFocusRingTypeNone;
+        if (@available(macOS 11.0, *)) {
+            _tideySidebarTableView.style = NSTableViewStyleSourceList;
+        }
+        _tideySidebarTableView.intercellSpacing = NSMakeSize(0, 0);
+        _tideySidebarTableView.rowHeight = 60;
+
+        NSTableColumn *sidebarColumn = [[NSTableColumn alloc] initWithIdentifier:@"TideySidebarColumn"];
+        sidebarColumn.resizingMask = NSTableColumnAutoresizingMask;
+        [_tideySidebarTableView addTableColumn:sidebarColumn];
+
+        _tideySidebarScrollView.documentView = _tideySidebarTableView;
+        [_tideySidebarView addSubview:_tideySidebarScrollView];
+        [_tideySidebarTableView reloadData];
         [self layoutTideySidebar];
 
         // Create the tab view.
@@ -1374,7 +1403,11 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 
 - (CGFloat)tideySidebarWidth {
-    return kTideySidebarWidth;
+    return self.shouldShowTideySidebar ? kTideySidebarWidth : 0;
+}
+
+- (NSArray<NSString *> *)tideySidebarSessionTitles {
+    return _tideySidebarSessionTitles ?: @[];
 }
 
 - (void)layoutTideySidebar {
@@ -1385,10 +1418,12 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     }
 
     _tideySidebarView.frame = NSMakeRect(0, 0, width, NSHeight(self.bounds));
-    _tideySidebarLabel.frame = NSMakeRect(20,
-                                          NSHeight(_tideySidebarView.bounds) - 64,
-                                          width - 40,
-                                          28);
+    const CGFloat titleTopInset = 0;
+    const CGFloat listTop = NSHeight(_tideySidebarView.bounds);
+    _tideySidebarScrollView.frame = NSMakeRect(0,
+                                               titleTopInset,
+                                               width,
+                                               MAX(0, listTop - titleTopInset));
 }
 
 - (iTermLayoutOutputs)layoutOutputsByApplyingTideySidebarOffset:(iTermLayoutOutputs)outputs {
@@ -1737,6 +1772,71 @@ NS_CLASS_AVAILABLE_MAC(10_14)
             decorationHeights->bottom += iTermGetStatusBarHeight();
             break;
     }
+}
+
+#pragma mark - Tidey Sidebar Table View
+
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView {
+    return self.tideySidebarSessionTitles.count;
+}
+
+- (NSView *)tableView:(NSTableView *)tableView
+    viewForTableColumn:(NSTableColumn *)tableColumn
+                   row:(NSInteger)row {
+    if (row < 0 || row >= self.tideySidebarSessionTitles.count) {
+        return nil;
+    }
+
+    NSTableCellView *cellView = [tableView makeViewWithIdentifier:@"TideySidebarSessionCell" owner:nil];
+    if (!cellView) {
+        cellView = [[NSTableCellView alloc] initWithFrame:NSZeroRect];
+        cellView.identifier = @"TideySidebarSessionCell";
+
+        NSTextField *titleField = [NSTextField newLabelStyledTextField];
+        titleField.tag = 1001;
+        titleField.frame = NSMakeRect(16, 30, 180, 20);
+        titleField.autoresizingMask = NSViewWidthSizable;
+        titleField.font = [NSFont systemFontOfSize:14 weight:NSFontWeightSemibold];
+        titleField.textColor = [NSColor whiteColor];
+        titleField.drawsBackground = NO;
+        titleField.backgroundColor = [NSColor clearColor];
+        titleField.bezeled = NO;
+        titleField.editable = NO;
+        titleField.selectable = NO;
+        cellView.textField = titleField;
+        [cellView addSubview:titleField];
+
+        NSTextField *subtitleField = [NSTextField newLabelStyledTextField];
+        subtitleField.tag = 1002;
+        subtitleField.frame = NSMakeRect(16, 12, 180, 16);
+        subtitleField.autoresizingMask = NSViewWidthSizable;
+        subtitleField.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
+        subtitleField.textColor = [NSColor colorWithWhite:0.72 alpha:1];
+        subtitleField.drawsBackground = NO;
+        subtitleField.backgroundColor = [NSColor clearColor];
+        subtitleField.bezeled = NO;
+        subtitleField.editable = NO;
+        subtitleField.selectable = NO;
+        [cellView addSubview:subtitleField];
+    }
+    cellView.textField.stringValue = self.tideySidebarSessionTitles[row];
+    NSTextField *subtitleField = [cellView viewWithTag:1002];
+    subtitleField.stringValue = (row % 2 == 0) ? @"running" : @"idle";
+    return cellView;
+}
+
+- (NSInteger)numberOfTideySidebarSessions {
+    return self.tideySidebarSessionTitles.count;
+}
+
+- (BOOL)selectTideySidebarSessionAtIndex:(NSInteger)index {
+    if (index < 0 || index >= self.numberOfTideySidebarSessions) {
+        return NO;
+    }
+    NSIndexSet *indexSet = [NSIndexSet indexSetWithIndex:index];
+    [_tideySidebarTableView selectRowIndexes:indexSet byExtendingSelection:NO];
+    [_tideySidebarTableView scrollRowToVisible:index];
+    return YES;
 }
 
 - (void)layoutIfStatusBarChanged {
