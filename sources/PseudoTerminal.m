@@ -10888,28 +10888,71 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
     return self.workspaces.count;
 }
 
+- (NSString *)tideySidebarDisplayPathForSession:(PTYSession *)session {
+    NSString *cwd = session.currentLocalWorkingDirectory;
+    if (cwd.length == 0) {
+        return nil;
+    }
+    NSString *abbreviated = [cwd stringByAbbreviatingWithTildeInPath];
+    return abbreviated.length > 0 ? abbreviated : cwd;
+}
+
+- (NSString *)tideySidebarDisplayTitleForSession:(PTYSession *)session {
+    NSString *path = [self tideySidebarDisplayPathForSession:session];
+    if (path.length > 0) {
+        NSString *lastComponent = path.lastPathComponent;
+        if (lastComponent.length > 0 && ![lastComponent isEqualToString:@"/"]) {
+            return lastComponent;
+        }
+        return path;
+    }
+
+    NSString *title = [session.name stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (title.length > 0) {
+        return title;
+    }
+    return @"Untitled";
+}
+
+- (NSString *)tideySidebarDisplaySubtitleForSession:(PTYSession *)session panel:(PTYTab *)panel {
+    NSString *path = [self tideySidebarDisplayPathForSession:session];
+    if (path.length > 0) {
+        return path;
+    }
+
+    NSString *command = [session.currentCommand stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (command.length > 0) {
+        return command;
+    }
+
+    NSString *subtitle = [session.subtitle stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (subtitle.length > 0) {
+        return subtitle;
+    }
+
+    return [panel isProcessing] ? @"running" : @"idle";
+}
+
 - (NSString *)rootTerminalViewTideySidebarWorkspaceTitleAtIndex:(NSInteger)index {
     [self ensureTideyWorkspacesInitialized];
     Workspace *workspace = [self workspaceAtIndex:index];
     PTYTab *panel = workspace.selectedPanel;
-    if (!panel) {
+    PTYSession *session = panel.activeSession;
+    if (!panel || !session) {
         return nil;
     }
-    return panel.title ?: @"Untitled";
+    return [self tideySidebarDisplayTitleForSession:session];
 }
 
 - (NSString *)rootTerminalViewTideySidebarWorkspaceSubtitleAtIndex:(NSInteger)index {
     [self ensureTideyWorkspacesInitialized];
     Workspace *workspace = [self workspaceAtIndex:index];
     PTYTab *panel = workspace.selectedPanel;
-    if (!panel) {
+    PTYSession *session = panel.activeSession;
+    if (!panel || !session) {
         return nil;
     }
-    NSString *subtitle = panel.activeSession.subtitle;
-    if (subtitle.length > 0) {
-        return subtitle;
-    }
-    return [panel isProcessing] ? @"running" : @"idle";
+    return [self tideySidebarDisplaySubtitleForSession:session panel:panel];
 }
 
 - (NSInteger)rootTerminalViewSelectedTideySidebarWorkspaceIndex {
