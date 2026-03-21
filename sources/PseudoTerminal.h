@@ -216,6 +216,7 @@ extern NSString *const iTermDidCreateTerminalWindowNotification;
 - (IBAction)toggleTideySidebar:(id)sender;
 - (IBAction)selectTideySidebarWorkspaceAtIndexAction:(id)sender;
 - (BOOL)isShowingTideySidebar;
+- (void)performTideyWorkspaceMutationPreservingWindowFrame:(void (^)(void))block;
 
 // A unique number for this window assigned by finishInitializationWithSmartLayout.
 - (NSString *)terminalGuid;

@@ -405,6 +405,9 @@ typedef NS_ENUM(int, iTermShouldHaveTitleSeparator) {
 
     iTermPasswordManagerWindowController *_passwordManagerWindowController;
 
+    BOOL _tideyPreservingWindowFrame;
+    NSRect _preservedTideyWindowFrame;
+
     // Keeps the touch bar from updating on every keypress which is distracting.
     iTermRateLimitedIdleUpdate *_touchBarRateLimitedUpdate;
     NSString *_previousTouchBarWord;
@@ -690,36 +693,9 @@ typedef NS_ENUM(int, iTermShouldHaveTitleSeparator) {
         case WINDOW_TYPE_COMPACT:
         case WINDOW_TYPE_NO_TITLE_BAR:
         case WINDOW_TYPE_ACCESSORY:
-            // Use the system-supplied frame which has a reasonable origin. It may
-            // be overridden by smart window placement or a saved window location.
-            initialFrame = [[self window] frame];
-            if (_windowPositioner.isAnchoredToScreen) {
-                // Move the frame to the desired screen
-                NSScreen* baseScreen = [[self window] screen];
-                NSPoint basePoint = [baseScreen visibleFrame].origin;
-                double xoffset = initialFrame.origin.x - basePoint.x;
-                double yoffset = initialFrame.origin.y - basePoint.y;
-                NSPoint destPoint = [screen visibleFrame].origin;
-
-                DLog(@"Assigned screen has origin %@, destination screen has origin %@", NSStringFromPoint(baseScreen.visibleFrame.origin),
-                     NSStringFromPoint(destPoint));
-                destPoint.x += xoffset;
-                destPoint.y += yoffset;
-                initialFrame.origin = destPoint;
-                DLog(@"New initial frame is %@", NSStringFromRect(initialFrame));
-                // Make sure the top-right corner of the window is on the screen too
-                NSRect destScreenFrame = [screen visibleFrame];
-                double xover = destPoint.x + initialFrame.size.width - (destScreenFrame.origin.x + destScreenFrame.size.width);
-                double yover = destPoint.y + initialFrame.size.height - (destScreenFrame.origin.y + destScreenFrame.size.height);
-                if (xover > 0) {
-                    destPoint.x -= xover;
-                }
-                if (yover > 0) {
-                    destPoint.y -= yover;
-                }
-                DLog(@"after adjusting top right, initial origin is %@", NSStringFromPoint(destPoint));
-                [[self window] setFrameOrigin:destPoint];
-            }
+            // Tidey defaults to a maximized window on launch instead of using iTerm2's
+            // normal starting frame / smart-placement behavior.
+            initialFrame = [screen visibleFrameIgnoringHiddenDock];
             break;
     }
     _windowPositioner.preferredOrigin = initialFrame.origin;
@@ -1189,6 +1165,35 @@ ITERM_WEAKLY_REFERENCEABLE
         selectedWorkspaceIndex = 0;
     }
     self.selectedWorkspaceIndex = selectedWorkspaceIndex;
+}
+
+- (void)performTideyWorkspaceMutationPreservingWindowFrame:(void (^)(void))block {
+    if (!self.isShowingTideySidebar || self.window == nil) {
+        if (block) {
+            block();
+        }
+        return;
+    }
+
+    _tideyPreservingWindowFrame = YES;
+    _preservedTideyWindowFrame = self.window.frame;
+    if (block) {
+        block();
+    }
+    _tideyPreservingWindowFrame = NO;
+
+    if (self.window == nil) {
+        return;
+    }
+
+    [self.window setFrame:_preservedTideyWindowFrame display:YES];
+    [self repositionWidgets];
+    [self fitTabsToWindow];
+    [self syncWorkspacesFromTabs];
+    [_contentView reloadTideySidebar];
+    if (self.selectedWorkspaceIndex >= 0) {
+        [_contentView selectTideySidebarWorkspaceAtIndex:self.selectedWorkspaceIndex];
+    }
 }
 
 - (NSString *)description {
@@ -2264,8 +2269,13 @@ ITERM_WEAKLY_REFERENCEABLE
         // now get rid of this tab
         aTabViewItem = [aTab tabViewItem];
         [_contentView.tabView removeTabViewItem:aTabViewItem];
-        PtyLog(@"closeSession - calling fitWindowToTabs");
-        [self fitWindowToTabs];
+        if (_tideyPreservingWindowFrame || self.isShowingTideySidebar) {
+            PtyLog(@"closeSession - preserving Tidey workspace window frame");
+            [self fitTabsToWindow];
+        } else {
+            PtyLog(@"closeSession - calling fitWindowToTabs");
+            [self fitWindowToTabs];
+        }
     }
 }
 
@@ -2349,18 +2359,10 @@ ITERM_WEAKLY_REFERENCEABLE
 
 - (IBAction)closeCurrentTab:(id)sender {
     if (self.isShowingTideySidebar && self.numberOfTabs > 1) {
-        const NSRect preservedFrame = self.window.frame;
         PTYTab *tab = self.currentTab;
-        const BOOL didClose = [self closeTabIfConfirmed:tab];
-        if (didClose && self.window) {
-            [self.window setFrame:preservedFrame display:YES];
-            [self fitTabsToWindow];
-            [self syncWorkspacesFromTabs];
-            [_contentView reloadTideySidebar];
-            if (self.selectedWorkspaceIndex >= 0) {
-                [_contentView selectTideySidebarWorkspaceAtIndex:self.selectedWorkspaceIndex];
-            }
-        }
+        [self performTideyWorkspaceMutationPreservingWindowFrame:^{
+            [self closeTabIfConfirmed:tab];
+        }];
         return;
     }
     PTYTab *tab = self.currentTab;
@@ -5205,6 +5207,9 @@ hidingToolbeltShouldResizeWindow:(BOOL)hidingToolbeltShouldResizeWindow
 }
 
 - (BOOL)tabBarAlwaysVisible {
+    if (self.isShowingTideySidebar) {
+        return YES;
+    }
     return ![iTermPreferences boolForKey:kPreferenceKeyHideTabBar];
 }
 
@@ -7320,7 +7325,9 @@ hidingToolbeltShouldResizeWindow:(BOOL)hidingToolbeltShouldResizeWindow
         const BOOL preserveDueToShowing = generallyPreserveWindowSize && (!preserveOnlyIfExcursion || wouldCauseExcursion);
         const BOOL preserveDueToHiding = willHideTabBar && _excursionPrevented;
         const BOOL actuallyPreserve = preserveDueToHiding || preserveDueToShowing;
-        const BOOL shouldResizeWindow = _windowNeedsInitialSize || !actuallyPreserve;
+        const BOOL tideyShouldPreserveWindowFrame = self.isShowingTideySidebar || _tideyPreservingWindowFrame;
+        const BOOL shouldResizeWindow = !tideyShouldPreserveWindowFrame &&
+                                        (_windowNeedsInitialSize || !actuallyPreserve);
 
         if (shouldResizeWindow) {
             const BOOL neededInitialSize = _windowNeedsInitialSize;
@@ -7338,6 +7345,16 @@ hidingToolbeltShouldResizeWindow:(BOOL)hidingToolbeltShouldResizeWindow
                 // Minimal theme.
                 [self fitTabsToWindow];
             }
+        } else if (tideyShouldPreserveWindowFrame) {
+            _windowNeedsInitialSize = NO;
+            NSRect targetFrame = self.window.frame;
+            if (_tideyPreservingWindowFrame) {
+                targetFrame = _preservedTideyWindowFrame;
+            } else if (self.isShowingTideySidebar && self.window.screen) {
+                targetFrame = self.window.screen.visibleFrameIgnoringHiddenDock;
+            }
+            [self.window setFrame:targetFrame display:YES];
+            [self fitTabsToWindow];
         } else if (!_windowNeedsInitialSize &&
                    wouldCauseExcursion &&
                    preserveDueToShowing &&
@@ -9673,6 +9690,13 @@ typedef NS_ENUM(NSUInteger, PseudoTerminalTabSizeExclusion) {
     DLog(@"fitWindowToTabsExcludingTmuxTabs:%@ preservingHeight:%@ sizeOfLargestTab:%@ from\n%@",
          @(excludeTmux), @(preserveHeight), NSStringFromSize(maxTabSize), [NSThread callStackSymbols]);
 
+    if (_tideyPreservingWindowFrame) {
+        DLog(@"Tidey is preserving window frame, skip fitWindowToTabsExcludingTmuxTabs");
+        [self repositionWidgets];
+        [self fitTabsToWindow];
+        return;
+    }
+
     _windowNeedsInitialSize = NO;
     if (togglingFullScreen_) {
         DLog(@"Toggling full screen, abort");
@@ -9847,6 +9871,12 @@ typedef struct {
 // NOTE: The preferred height is respected only if it would be larger than the height the window would
 // otherwise be set to and is less than the max height (self.maxFrame.size.height).
 - (BOOL)fitWindowToTabSize:(NSSize)tabSize preferredHeight:(NSNumber *)preferredHeight {
+    if (_tideyPreservingWindowFrame) {
+        DLog(@"Tidey is preserving window frame, skip fitWindowToTabSize");
+        [self fitTabsToWindow];
+        return NO;
+    }
+
     PseudoTerminalWindowFrameInfo frameInfo = [self windowFrameForTabSize:tabSize
                                                           preferredHeight:preferredHeight];
     if (!frameInfo.ok) {
@@ -11369,6 +11399,17 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
         [aTabViewItem setLabel:@""];
         assert(aTabViewItem);
         [aTab setTabViewItem:aTabViewItem];
+        if (self.isShowingTideySidebar) {
+            NSString *const initialTitle = @"Terminal";
+            [aTab setTitleOverride:initialTitle];
+            [aTabViewItem setLabel:initialTitle];
+            __weak __typeof(aTab) weakTab = aTab;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                if ([weakTab.titleOverride isEqualToString:initialTitle]) {
+                    [weakTab setTitleOverride:nil];
+                }
+            });
+        }
         PtyLog(@"insertTab:atIndex - calling [_contentView.tabView insertTabViewItem:atIndex]");
         const int safeIndex = MAX(0, MIN(_contentView.tabView.tabViewItems.count, anIndex));
         [_contentView.tabView insertTabViewItem:aTabViewItem atIndex:safeIndex];

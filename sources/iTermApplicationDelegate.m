@@ -2439,7 +2439,9 @@ static iTermKeyEventReplayer *gReplayer;
     DLog(@"newWindow: invoked");
     PseudoTerminal *currentTerminal = [[iTermController sharedInstance] currentTerminal];
     if (currentTerminal.isShowingTideySidebar) {
-        [self newTabAtIndex:nil];
+        [currentTerminal performTideyWorkspaceMutationPreservingWindowFrame:^{
+            [self newTabAtIndex:nil];
+        }];
         return;
     }
     BOOL cancel;
