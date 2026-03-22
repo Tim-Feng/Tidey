@@ -10960,6 +10960,10 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
 }
 
 - (NSString *)tideySidebarDisplayTitleForSession:(PTYSession *)session {
+    if ([self tideyWorkspaceIsInStartupGracePeriod:[self selectedWorkspace]]) {
+        return @"~";
+    }
+
     NSString *path = [self tideySidebarDisplayPathForSession:session];
     if (path.length > 0) {
         NSString *lastComponent = path.lastPathComponent;
