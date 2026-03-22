@@ -1660,6 +1660,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                         [NSJSONSerialization it_jsonStringForObject:_tideyEditorPendingValue]];
         [_tideyEditorWebView evaluateJavaScript:js completionHandler:nil];
     }
+    [_tideyEditorWebView evaluateJavaScript:@"window.__tideyEditor && window.__tideyEditor.layout();"
+                          completionHandler:nil];
 }
 
 - (void)tideyEditorDidBecomeReady {
@@ -1716,6 +1718,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     "    theme: 'vs-dark',"
     "    readOnly: true,"
     "    automaticLayout: true,"
+    "    wordWrap: 'on',"
+    "    wordWrapColumn: 80,"
     "    minimap: { enabled: false },"
     "    scrollBeyondLastLine: false,"
     "    fontSize: 13"
@@ -1784,6 +1788,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     const CGFloat rightEdge = self.shouldShowToolbelt ? NSMinX(outputs.toolbeltFrame) : NSWidth(self.bounds);
     const CGFloat originX = MAX(0, rightEdge - width);
     _tideyEditorPanelView.frame = NSMakeRect(originX, 0, MIN(width, rightEdge), NSHeight(self.bounds));
+    if (_tideyEditorReady) {
+        [_tideyEditorWebView evaluateJavaScript:@"window.__tideyEditor && window.__tideyEditor.layout();"
+                              completionHandler:nil];
+    }
 }
 
 - (iTermLayoutOutputs)layoutOutputsByApplyingTideyChromeOffsets:(iTermLayoutOutputs)outputs {
