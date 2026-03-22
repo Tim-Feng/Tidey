@@ -57,6 +57,7 @@ static const CGFloat kMinimumToolbeltSizeAsFractionOfWindow = 0.05;
 static const CGFloat kMaximumToolbeltSizeAsFractionOfWindow = 0.5;
 static const CGFloat kTideySidebarWidth = 220;
 static const CGFloat kTideyEditorPanelWidth = 400;
+static const CGFloat kTideyEditorFileTreeWidth = 200;
 static NSPasteboardType const iTermRootTerminalViewTideySidebarWorkspacePasteboardType =
     @"com.tidey.workspace-row";
 
@@ -72,6 +73,8 @@ typedef struct {
     iTermStoplightHotboxDelegate,
     NSTableViewDataSource,
     NSTableViewDelegate,
+    NSOutlineViewDataSource,
+    NSOutlineViewDelegate,
     WKNavigationDelegate>
 
 @property(nonatomic, strong) PTYTabView *tabView;
@@ -96,6 +99,10 @@ typedef struct {
 - (void)tideyEditorDidBecomeReady;
 - (void)tideyEditorDidReceiveScriptMessage:(WKScriptMessage *)message;
 - (NSString *)tideyEditorHTML;
+- (void)reloadTideyEditorFileTree;
+- (NSString *)tideyEditorFileTreeRootPath;
+- (void)layoutTideyEditorContents;
+- (NSTableCellView *)newTideyEditorFileTreeCellView;
 - (NSString *)tideySidebarWorkspaceTitleAtIndex:(NSInteger)index;
 - (NSString *)tideySidebarWorkspaceSubtitleAtIndex:(NSInteger)index;
 - (BOOL)tideySidebarWorkspacePinnedAtIndex:(NSInteger)index;
@@ -215,6 +222,62 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 @end
 
+@interface TideyEditorFileNode : NSObject
+@property(nonatomic, copy) NSString *path;
+@property(nonatomic, copy) NSString *displayName;
+@property(nonatomic) BOOL directory;
+@property(nonatomic) BOOL childrenLoaded;
+@property(nonatomic, strong) NSArray<TideyEditorFileNode *> *children;
++ (instancetype)nodeWithPath:(NSString *)path displayName:(NSString *)displayName directory:(BOOL)directory;
+- (NSArray<TideyEditorFileNode *> *)loadChildren;
+@end
+
+@implementation TideyEditorFileNode
+
++ (instancetype)nodeWithPath:(NSString *)path displayName:(NSString *)displayName directory:(BOOL)directory {
+    TideyEditorFileNode *node = [[self alloc] init];
+    node.path = path;
+    node.displayName = displayName.length ? displayName : path.lastPathComponent;
+    node.directory = directory;
+    node.children = @[];
+    return node;
+}
+
+- (NSArray<TideyEditorFileNode *> *)loadChildren {
+    if (!self.directory) {
+        return @[];
+    }
+    if (self.childrenLoaded) {
+        return self.children;
+    }
+    self.childrenLoaded = YES;
+
+    NSArray<NSURL *> *urls = [[NSFileManager defaultManager] contentsOfDirectoryAtURL:[NSURL fileURLWithPath:self.path]
+                                                            includingPropertiesForKeys:@[ NSURLIsDirectoryKey, NSURLNameKey ]
+                                                                               options:(NSDirectoryEnumerationSkipsHiddenFiles | NSDirectoryEnumerationSkipsPackageDescendants)
+                                                                                 error:nil];
+    NSMutableArray<TideyEditorFileNode *> *children = [NSMutableArray array];
+    for (NSURL *url in urls) {
+        NSNumber *isDirectory = nil;
+        NSString *name = nil;
+        [url getResourceValue:&isDirectory forKey:NSURLIsDirectoryKey error:nil];
+        [url getResourceValue:&name forKey:NSURLNameKey error:nil];
+        [children addObject:[TideyEditorFileNode nodeWithPath:url.path
+                                                  displayName:name
+                                                    directory:isDirectory.boolValue]];
+    }
+    [children sortUsingComparator:^NSComparisonResult(TideyEditorFileNode *lhs, TideyEditorFileNode *rhs) {
+        if (lhs.directory != rhs.directory) {
+            return lhs.directory ? NSOrderedAscending : NSOrderedDescending;
+        }
+        return [lhs.displayName localizedCaseInsensitiveCompare:rhs.displayName];
+    }];
+    self.children = children;
+    return self.children;
+}
+
+@end
+
 @implementation iTermRootTerminalView {
     BOOL _tabViewFrameReduced;
     BOOL _haveShownToolbelt;
@@ -235,6 +298,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSView *_tideyEditorPanelView;
     NSTextField *_tideyEditorPanelLabel;
     WKWebView *_tideyEditorWebView;
+    NSView *_tideyEditorFileTreeContainerView;
+    NSScrollView *_tideyEditorFileTreeScrollView;
+    NSOutlineView *_tideyEditorFileTreeView;
+    TideyEditorFileNode *_tideyEditorFileTreeRootNode;
     TideyEditorScriptMessageHandler *_tideyEditorScriptMessageHandler;
     BOOL _tideyEditorShellLoaded;
     BOOL _tideyEditorReady;
@@ -342,6 +409,40 @@ NS_CLASS_AVAILABLE_MAC(10_14)
             [_tideyEditorPanelLabel.centerXAnchor constraintEqualToAnchor:_tideyEditorPanelView.centerXAnchor],
             [_tideyEditorPanelLabel.centerYAnchor constraintEqualToAnchor:_tideyEditorPanelView.centerYAnchor]
         ]];
+
+        _tideyEditorFileTreeContainerView = [[NSView alloc] initWithFrame:NSZeroRect];
+        _tideyEditorFileTreeContainerView.autoresizingMask = NSViewMinXMargin | NSViewHeightSizable;
+        _tideyEditorFileTreeContainerView.wantsLayer = YES;
+        _tideyEditorFileTreeContainerView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.12
+                                                                                      green:0.13
+                                                                                       blue:0.17
+                                                                                      alpha:1].CGColor;
+        [_tideyEditorPanelView addSubview:_tideyEditorFileTreeContainerView];
+
+        _tideyEditorFileTreeScrollView = [[NSScrollView alloc] initWithFrame:NSZeroRect];
+        _tideyEditorFileTreeScrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        _tideyEditorFileTreeScrollView.drawsBackground = NO;
+        _tideyEditorFileTreeScrollView.hasVerticalScroller = YES;
+        _tideyEditorFileTreeScrollView.borderType = NSNoBorder;
+        [_tideyEditorFileTreeContainerView addSubview:_tideyEditorFileTreeScrollView];
+
+        _tideyEditorFileTreeView = [[NSOutlineView alloc] initWithFrame:NSZeroRect];
+        _tideyEditorFileTreeView.delegate = self;
+        _tideyEditorFileTreeView.dataSource = self;
+        _tideyEditorFileTreeView.headerView = nil;
+        _tideyEditorFileTreeView.focusRingType = NSFocusRingTypeNone;
+        if (@available(macOS 11.0, *)) {
+            _tideyEditorFileTreeView.style = NSTableViewStyleSourceList;
+        }
+        _tideyEditorFileTreeView.rowHeight = 22;
+        _tideyEditorFileTreeView.indentationPerLevel = 12;
+        _tideyEditorFileTreeView.autoresizesOutlineColumn = YES;
+        NSTableColumn *fileTreeColumn = [[NSTableColumn alloc] initWithIdentifier:@"TideyEditorFileTreeColumn"];
+        fileTreeColumn.resizingMask = NSTableColumnAutoresizingMask;
+        [_tideyEditorFileTreeView addTableColumn:fileTreeColumn];
+        _tideyEditorFileTreeView.outlineTableColumn = fileTreeColumn;
+        _tideyEditorFileTreeScrollView.documentView = _tideyEditorFileTreeView;
+        [self reloadTideyEditorFileTree];
 
         // Create the tab view.
         self.tabView = [[PTYTabView alloc] initWithFrame:self.bounds];
@@ -1557,6 +1658,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _tideyEditorWebView.inspectable = YES;
     }
     [_tideyEditorPanelView addSubview:_tideyEditorWebView positioned:NSWindowBelow relativeTo:_tideyEditorPanelLabel];
+    [self layoutTideyEditorContents];
 }
 
 - (void)loadTideyEditorShellIfNeeded {
@@ -1567,6 +1669,36 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     _tideyEditorShellLoaded = YES;
     [_tideyEditorWebView loadHTMLString:[self tideyEditorHTML]
                                 baseURL:[NSURL URLWithString:@"https://cdn.jsdelivr.net/"]];
+}
+
+- (NSString *)tideyEditorFileTreeRootPath {
+    NSString *candidate = [NSHomeDirectory() stringByAppendingPathComponent:@"GitHub/iTerm2"];
+    if ([[NSFileManager defaultManager] fileExistsAtPath:candidate]) {
+        return candidate;
+    }
+    return NSHomeDirectory();
+}
+
+- (void)reloadTideyEditorFileTree {
+    NSString *rootPath = [self tideyEditorFileTreeRootPath];
+    BOOL isDirectory = NO;
+    [[NSFileManager defaultManager] fileExistsAtPath:rootPath isDirectory:&isDirectory];
+    _tideyEditorFileTreeRootNode = [TideyEditorFileNode nodeWithPath:rootPath
+                                                         displayName:rootPath.lastPathComponent
+                                                           directory:isDirectory];
+    [_tideyEditorFileTreeView reloadData];
+}
+
+- (void)layoutTideyEditorContents {
+    if (_tideyEditorPanelView.hidden) {
+        return;
+    }
+    const NSRect bounds = _tideyEditorPanelView.bounds;
+    const CGFloat fileTreeWidth = MIN(kTideyEditorFileTreeWidth, MAX(0, NSWidth(bounds) - 120));
+    const CGFloat editorWidth = MAX(0, NSWidth(bounds) - fileTreeWidth);
+    _tideyEditorWebView.frame = NSMakeRect(0, 0, editorWidth, NSHeight(bounds));
+    _tideyEditorFileTreeContainerView.frame = NSMakeRect(editorWidth, 0, fileTreeWidth, NSHeight(bounds));
+    _tideyEditorFileTreeScrollView.frame = _tideyEditorFileTreeContainerView.bounds;
 }
 
 - (void)tideyEditorLoadDemoFileIfNeeded {
@@ -1788,6 +1920,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     const CGFloat rightEdge = self.shouldShowToolbelt ? NSMinX(outputs.toolbeltFrame) : NSWidth(self.bounds);
     const CGFloat originX = MAX(0, rightEdge - width);
     _tideyEditorPanelView.frame = NSMakeRect(originX, 0, MIN(width, rightEdge), NSHeight(self.bounds));
+    [self layoutTideyEditorContents];
     if (_tideyEditorReady) {
         [_tideyEditorWebView evaluateJavaScript:@"window.__tideyEditor && window.__tideyEditor.layout();"
                               completionHandler:nil];
@@ -2162,6 +2295,103 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 
 #pragma mark - Tidey Sidebar Table View
+
+#pragma mark - Tidey Editor File Tree
+
+- (NSInteger)outlineView:(NSOutlineView *)outlineView numberOfChildrenOfItem:(id)item {
+    if (outlineView != _tideyEditorFileTreeView) {
+        return 0;
+    }
+    TideyEditorFileNode *node = item ?: _tideyEditorFileTreeRootNode;
+    return [node loadChildren].count;
+}
+
+- (id)outlineView:(NSOutlineView *)outlineView child:(NSInteger)index ofItem:(id)item {
+    if (outlineView != _tideyEditorFileTreeView) {
+        return nil;
+    }
+    TideyEditorFileNode *node = item ?: _tideyEditorFileTreeRootNode;
+    NSArray<TideyEditorFileNode *> *children = [node loadChildren];
+    if (index < 0 || index >= (NSInteger)children.count) {
+        return nil;
+    }
+    return children[index];
+}
+
+- (BOOL)outlineView:(NSOutlineView *)outlineView isItemExpandable:(id)item {
+    if (outlineView != _tideyEditorFileTreeView) {
+        return NO;
+    }
+    return [(TideyEditorFileNode *)item directory];
+}
+
+- (NSView *)outlineView:(NSOutlineView *)outlineView
+    viewForTableColumn:(NSTableColumn *)tableColumn
+                  item:(id)item {
+    if (outlineView != _tideyEditorFileTreeView) {
+        return nil;
+    }
+    NSTableCellView *cellView = [outlineView makeViewWithIdentifier:@"TideyEditorFileTreeCell" owner:nil];
+    if (!cellView) {
+        cellView = [self newTideyEditorFileTreeCellView];
+    }
+    TideyEditorFileNode *node = item;
+    cellView.textField.stringValue = node.displayName ?: node.path.lastPathComponent;
+    if (@available(macOS 11.0, *)) {
+        NSString *symbolName = node.directory ? @"folder.fill" : @"doc.text";
+        NSImage *image = [NSImage imageWithSystemSymbolName:symbolName accessibilityDescription:nil];
+        image.template = YES;
+        cellView.imageView.image = image;
+        cellView.imageView.contentTintColor = [NSColor colorWithWhite:0.78 alpha:1];
+    }
+    return cellView;
+}
+
+- (NSTableCellView *)newTideyEditorFileTreeCellView {
+    NSTableCellView *cellView = [[NSTableCellView alloc] initWithFrame:NSZeroRect];
+    cellView.identifier = @"TideyEditorFileTreeCell";
+
+    NSImageView *iconView = [[NSImageView alloc] initWithFrame:NSMakeRect(4, 2, 16, 16)];
+    iconView.imageScaling = NSImageScaleProportionallyDown;
+    iconView.autoresizingMask = NSViewMaxXMargin;
+    cellView.imageView = iconView;
+    [cellView addSubview:iconView];
+
+    NSTextField *titleField = [NSTextField newLabelStyledTextField];
+    titleField.frame = NSMakeRect(24, 2, 168, 18);
+    titleField.autoresizingMask = NSViewWidthSizable;
+    titleField.font = [NSFont systemFontOfSize:12 weight:NSFontWeightRegular];
+    titleField.textColor = [NSColor colorWithWhite:0.92 alpha:1];
+    titleField.drawsBackground = NO;
+    titleField.backgroundColor = [NSColor clearColor];
+    titleField.bezeled = NO;
+    titleField.editable = NO;
+    titleField.selectable = NO;
+    cellView.textField = titleField;
+    [cellView addSubview:titleField];
+
+    return cellView;
+}
+
+- (void)outlineViewSelectionDidChange:(NSNotification *)notification {
+    if (notification.object != _tideyEditorFileTreeView) {
+        return;
+    }
+    id item = [_tideyEditorFileTreeView itemAtRow:_tideyEditorFileTreeView.selectedRow];
+    if (![item isKindOfClass:[TideyEditorFileNode class]]) {
+        return;
+    }
+    TideyEditorFileNode *node = item;
+    if (node.directory) {
+        if ([_tideyEditorFileTreeView isItemExpanded:node]) {
+            [_tideyEditorFileTreeView collapseItem:node];
+        } else {
+            [_tideyEditorFileTreeView expandItem:node];
+        }
+        return;
+    }
+    [self tideyEditorLoadFileAtPath:node.path];
+}
 
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView {
     return [self.delegate rootTerminalViewNumberOfTideySidebarWorkspaces];
