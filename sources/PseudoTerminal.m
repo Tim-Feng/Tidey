@@ -10967,19 +10967,33 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
         return nil;
     }
 
-    NSString *processTitle = [[session.variablesScope valueForVariableName:iTermVariableKeySessionProcessTitle]
-                              stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    iTermVariableScope *scope = [[session.variablesScope retain] autorelease];
+    NSString *processTitle = [[[[scope valueForVariableName:iTermVariableKeySessionProcessTitle] description]
+                               stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] retain];
+    processTitle = [processTitle autorelease];
     if (processTitle.length > 0) {
-        return processTitle;
+        NSString *normalized = [processTitle hasPrefix:@"-"] ? [processTitle substringFromIndex:1] : processTitle;
+        static NSSet<NSString *> *shellNames;
+        static dispatch_once_t onceToken;
+        dispatch_once(&onceToken, ^{
+            shellNames = [[NSSet alloc] initWithArray:@[
+                @"sh", @"bash", @"zsh", @"fish", @"tcsh", @"csh", @"ksh", @"dash"
+            ]];
+        });
+        if (![shellNames containsObject:normalized.lowercaseString]) {
+            return processTitle;
+        }
     }
 
-    NSString *jobName = [[session.variablesScope valueForVariableName:iTermVariableKeySessionJob]
-                         stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSString *jobName = [[[[scope valueForVariableName:iTermVariableKeySessionJob] description]
+                          stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] retain];
+    jobName = [jobName autorelease];
     if (jobName.length > 0) {
         return jobName;
     }
 
-    NSString *command = [session.currentCommand stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSString *command = [[session.currentCommand stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] retain];
+    command = [command autorelease];
     if (command.length > 0) {
         return command;
     }
@@ -11009,8 +11023,8 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
 - (NSString *)rootTerminalViewTideySidebarWorkspaceTitleAtIndex:(NSInteger)index {
     [self ensureTideyWorkspacesInitialized];
     Workspace *workspace = [self workspaceAtIndex:index];
-    PTYTab *panel = workspace.selectedPanel;
-    PTYSession *session = panel.activeSession;
+    PTYTab *panel = [[workspace.selectedPanel retain] autorelease];
+    PTYSession *session = [[panel.activeSession retain] autorelease];
     if (!panel || !session) {
         return nil;
     }
@@ -11020,8 +11034,8 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
 - (NSString *)rootTerminalViewTideySidebarWorkspaceSubtitleAtIndex:(NSInteger)index {
     [self ensureTideyWorkspacesInitialized];
     Workspace *workspace = [self workspaceAtIndex:index];
-    PTYTab *panel = workspace.selectedPanel;
-    PTYSession *session = panel.activeSession;
+    PTYTab *panel = [[workspace.selectedPanel retain] autorelease];
+    PTYSession *session = [[panel.activeSession retain] autorelease];
     if (!panel || !session) {
         return nil;
     }
