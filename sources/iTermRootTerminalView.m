@@ -107,6 +107,8 @@ typedef struct {
 - (void)tideyEditorLoadDemoFileIfNeeded;
 - (void)tideyEditorLoadFileAtPath:(NSString *)path;
 - (NSString *)tideyEditorLanguageForPath:(NSString *)path;
+- (NSString *)tideyEditorPreferredRootPathForFileAtPath:(NSString *)path;
+- (void)tideyEditorRevealFileAtPath:(NSString *)path;
 - (void)tideyEditorSetValue:(NSString *)content;
 - (void)tideyEditorSetLanguage:(NSString *)language;
 - (void)tideyEditorApplyPendingStateIfReady;
@@ -333,6 +335,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSString *_tideyEditorPendingLanguage;
     NSString *_tideyEditorLoadedPath;
     NSString *_tideyEditorCurrentRootPath;
+    NSString *_tideyEditorRootOverridePath;
     CGFloat _tideySidebarPreferredWidth;
     CGFloat _tideyEditorPreferredWidth;
     CGFloat _tideyEditorFileTreePreferredWidth;
@@ -1767,6 +1770,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 
 - (NSString *)tideyEditorFileTreeRootPath {
+    NSString *overrideRoot = [_tideyEditorRootOverridePath stringByStandardizingPath];
+    if (overrideRoot.length > 0 && [[NSFileManager defaultManager] fileExistsAtPath:overrideRoot]) {
+        return overrideRoot;
+    }
     NSString *cwd = [[self.delegate rootTerminalViewCurrentWorkingDirectory] stringByStandardizingPath];
     if (cwd.length > 0 && [[NSFileManager defaultManager] fileExistsAtPath:cwd]) {
         return cwd;
@@ -1855,15 +1862,95 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     [self tideyEditorSetValue:contents];
 }
 
+- (NSString *)tideyEditorPreferredRootPathForFileAtPath:(NSString *)path {
+    NSString *normalizedPath = [path stringByStandardizingPath];
+    if (normalizedPath.length == 0) {
+        return [self tideyEditorFileTreeRootPath];
+    }
+    BOOL isDirectory = NO;
+    if (![[NSFileManager defaultManager] fileExistsAtPath:normalizedPath isDirectory:&isDirectory]) {
+        return [self tideyEditorFileTreeRootPath];
+    }
+    NSString *candidate = isDirectory ? normalizedPath : normalizedPath.stringByDeletingLastPathComponent;
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+    while (candidate.length > 1) {
+        NSString *gitPath = [candidate stringByAppendingPathComponent:@".git"];
+        BOOL gitExists = [fileManager fileExistsAtPath:gitPath];
+        if (gitExists) {
+            return candidate;
+        }
+        NSString *parent = candidate.stringByDeletingLastPathComponent;
+        if (parent.length == 0 || [parent isEqualToString:candidate]) {
+            break;
+        }
+        candidate = parent;
+    }
+    return isDirectory ? normalizedPath : normalizedPath.stringByDeletingLastPathComponent;
+}
+
+- (void)tideyEditorRevealFileAtPath:(NSString *)path {
+    NSString *targetPath = [path stringByStandardizingPath];
+    NSString *rootPath = [[self tideyEditorFileTreeRootPath] stringByStandardizingPath];
+    if (targetPath.length == 0 || rootPath.length == 0) {
+        return;
+    }
+
+    if (![targetPath isEqualToString:rootPath] &&
+        ![targetPath hasPrefix:[rootPath stringByAppendingString:@"/"]]) {
+        return;
+    }
+
+    NSString *relativePath = [targetPath isEqualToString:rootPath]
+        ? @""
+        : [targetPath substringFromIndex:[rootPath stringByAppendingString:@"/"].length];
+    NSArray<NSString *> *components = relativePath.length > 0 ? [relativePath pathComponents] : @[];
+
+    TideyEditorFileNode *currentNode = _tideyEditorFileTreeRootNode;
+    TideyEditorFileNode *targetNode = nil;
+    NSString *currentPath = rootPath;
+    for (NSString *component in components) {
+        NSString *nextPath = [currentPath stringByAppendingPathComponent:component];
+        TideyEditorFileNode *nextNode = nil;
+        for (TideyEditorFileNode *child in [currentNode loadChildren]) {
+            if ([[child.path stringByStandardizingPath] isEqualToString:nextPath]) {
+                nextNode = child;
+                break;
+            }
+        }
+        if (!nextNode) {
+            return;
+        }
+        targetNode = nextNode;
+        currentPath = nextPath;
+        currentNode = nextNode;
+        if (nextNode.directory) {
+            [_tideyEditorFileTreeView expandItem:nextNode];
+        }
+    }
+
+    if (!targetNode) {
+        return;
+    }
+    NSInteger row = [_tideyEditorFileTreeView rowForItem:targetNode];
+    if (row != -1) {
+        NSIndexSet *indexSet = [NSIndexSet indexSetWithIndex:row];
+        [_tideyEditorFileTreeView selectRowIndexes:indexSet byExtendingSelection:NO];
+        [_tideyEditorFileTreeView scrollRowToVisible:row];
+    }
+}
+
 - (void)openTideyEditorFileAtPath:(NSString *)path {
     if (path.length == 0) {
         return;
     }
+    _tideyEditorRootOverridePath = [[self tideyEditorPreferredRootPathForFileAtPath:path] copy];
     if (_tideyEditorPanelView.hidden) {
         self.shouldShowTideyEditorPanel = YES;
         [self layoutSubviews];
     }
+    [self reloadTideyEditorFileTree];
     [self tideyEditorLoadFileAtPath:path];
+    [self tideyEditorRevealFileAtPath:path];
 }
 
 - (NSString *)tideyEditorLanguageForPath:(NSString *)path {
