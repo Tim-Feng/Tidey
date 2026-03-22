@@ -126,6 +126,7 @@ static NSView *TideyFindCloseView(NSView *container) {
 - (void)loadTideyEditorShellIfNeeded;
 - (void)tideyEditorLoadDemoFileIfNeeded;
 - (void)tideyEditorLoadFileAtPath:(NSString *)path;
+- (void)tideyOpenEditorFileAtPath:(NSString *)path preview:(BOOL)preview;
 - (void)tideyOpenOrSelectEditorTabAtPath:(NSString *)path;
 - (void)tideyRestoreEditorStateFromDefaults;
 - (void)tideyPersistEditorState;
@@ -158,6 +159,7 @@ static NSView *TideyFindCloseView(NSView *container) {
 - (void)closeTideyEditorTabAtIndex:(NSInteger)index;
 - (void)tideyEditorSelectTab:(id)sender;
 - (void)tideyEditorCloseTab:(id)sender;
+- (void)tideyEditorOpenSelectedFilePermanently:(id)sender;
 - (void)tideyUpdateEditorPlaceholder;
 - (void)tideyEditorDidChangeValue:(NSString *)value;
 - (NSString *)tideyEditorDisplayNameForPath:(NSString *)path;
@@ -458,6 +460,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 @property(nonatomic, copy) NSString *language;
 @property(nonatomic, copy) NSString *content;
 @property(nonatomic) BOOL dirty;
+@property(nonatomic) BOOL preview;
 + (instancetype)tabWithPath:(NSString *)path
                 displayName:(NSString *)displayName
                    language:(NSString *)language
@@ -687,6 +690,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _tideyEditorFileTreeView.rowHeight = 22;
         _tideyEditorFileTreeView.indentationPerLevel = 12;
         _tideyEditorFileTreeView.autoresizesOutlineColumn = YES;
+        _tideyEditorFileTreeView.target = self;
+        _tideyEditorFileTreeView.doubleAction = @selector(tideyEditorOpenSelectedFilePermanently:);
         NSTableColumn *fileTreeColumn = [[NSTableColumn alloc] initWithIdentifier:@"TideyEditorFileTreeColumn"];
         fileTreeColumn.resizingMask = NSTableColumnAutoresizingMask;
         [_tideyEditorFileTreeView addTableColumn:fileTreeColumn];
@@ -2217,7 +2222,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         selectButton.bordered = NO;
         selectButton.buttonType = NSButtonTypeMomentaryChange;
         selectButton.alignment = NSTextAlignmentLeft;
-        selectButton.font = [NSFont systemFontOfSize:12 weight:selected ? NSFontWeightSemibold : NSFontWeightMedium];
+        NSFont *baseFont = [NSFont systemFontOfSize:12 weight:selected ? NSFontWeightSemibold : NSFontWeightMedium];
+        selectButton.font = tab.preview ? [[NSFontManager sharedFontManager] convertFont:baseFont toHaveTrait:NSItalicFontMask] : baseFont;
         selectButton.contentTintColor = [NSColor colorWithWhite:0.95 alpha:1];
         selectButton.title = title;
         selectButton.imagePosition = NSNoImage;
@@ -2288,6 +2294,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 
 - (void)tideyOpenOrSelectEditorTabAtPath:(NSString *)path {
+    [self tideyOpenEditorFileAtPath:path preview:NO];
+}
+
+- (void)tideyOpenEditorFileAtPath:(NSString *)path preview:(BOOL)preview {
     NSString *normalizedPath = [path stringByStandardizingPath];
     if (normalizedPath.length == 0) {
         return;
@@ -2295,7 +2305,36 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     for (NSInteger i = 0; i < (NSInteger)_tideyEditorTabs.count; i++) {
         TideyEditorTab *existing = _tideyEditorTabs[i];
         if ([[existing.path stringByStandardizingPath] isEqualToString:normalizedPath]) {
+            if (!preview && existing.preview) {
+                existing.preview = NO;
+                [self reloadTideyEditorTabs];
+            }
             [self selectTideyEditorTabAtIndex:i];
+            return;
+        }
+    }
+
+    TideyEditorTab *currentTab = [self tideyCurrentEditorTab];
+    if (preview && currentTab.preview) {
+        if (currentTab.dirty) {
+            currentTab.preview = NO;
+        } else {
+            NSError *replaceError = nil;
+            NSString *replacementContents = [NSString stringWithContentsOfFile:normalizedPath
+                                                                      encoding:NSUTF8StringEncoding
+                                                                         error:&replaceError];
+            if (replacementContents == nil) {
+                replacementContents = [NSString stringWithFormat:@"Unable to load %@\n\n%@",
+                                       normalizedPath.lastPathComponent,
+                                       replaceError.localizedDescription ?: @"Unknown error"];
+            }
+            currentTab.path = normalizedPath;
+            currentTab.displayName = [self tideyEditorDisplayNameForPath:normalizedPath];
+            currentTab.language = [self tideyEditorLanguageForPath:normalizedPath];
+            currentTab.content = replacementContents ?: @"";
+            currentTab.dirty = NO;
+            currentTab.preview = YES;
+            [self selectTideyEditorTabAtIndex:_tideySelectedEditorTabIndex];
             return;
         }
     }
@@ -2313,6 +2352,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                           displayName:[self tideyEditorDisplayNameForPath:normalizedPath]
                                              language:[self tideyEditorLanguageForPath:normalizedPath]
                                               content:contents];
+    tab.preview = preview;
     [_tideyEditorTabs addObject:tab];
     [self selectTideyEditorTabAtIndex:_tideyEditorTabs.count - 1];
 }
@@ -2520,9 +2560,13 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         return;
     }
     BOOL wasDirty = tab.dirty;
+    BOOL wasPreview = tab.preview;
     tab.content = value ?: @"";
     tab.dirty = YES;
-    if (!wasDirty) {
+    if (wasPreview) {
+        tab.preview = NO;
+    }
+    if (!wasDirty || wasPreview) {
         [self reloadTideyEditorTabs];
     }
 }
@@ -3285,6 +3329,18 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[ [NSURL fileURLWithPath:path] ]];
 }
 
+- (void)tideyEditorOpenSelectedFilePermanently:(id)sender {
+    id item = [_tideyEditorFileTreeView itemAtRow:_tideyEditorFileTreeView.clickedRow >= 0 ? _tideyEditorFileTreeView.clickedRow : _tideyEditorFileTreeView.selectedRow];
+    if (![item isKindOfClass:[TideyEditorFileNode class]]) {
+        return;
+    }
+    TideyEditorFileNode *node = item;
+    if (node.directory) {
+        return;
+    }
+    [self tideyOpenEditorFileAtPath:node.path preview:NO];
+}
+
 - (void)outlineViewSelectionDidChange:(NSNotification *)notification {
     if (notification.object != _tideyEditorFileTreeView) {
         return;
@@ -3305,7 +3361,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         }
         return;
     }
-    [self tideyEditorLoadFileAtPath:node.path];
+    [self tideyOpenEditorFileAtPath:node.path preview:YES];
 }
 
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView {
