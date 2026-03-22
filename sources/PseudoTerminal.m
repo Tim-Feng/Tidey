@@ -239,6 +239,7 @@ typedef NS_ENUM(int, iTermShouldHaveTitleSeparator) {
 @property(nonatomic, retain) NSMutableArray<PTYTab *> *panels;
 @property(nonatomic) NSInteger selectedPanelIndex;
 @property(nonatomic) NSTimeInterval creationTime;
+@property(nonatomic, copy) NSString *customTitle;
 
 - (instancetype)initWithPanel:(PTYTab *)panel;
 - (PTYTab *)selectedPanel;
@@ -262,6 +263,7 @@ typedef NS_ENUM(int, iTermShouldHaveTitleSeparator) {
 
 - (void)dealloc {
     [_panels release];
+    [_customTitle release];
     [super dealloc];
 }
 
@@ -320,6 +322,11 @@ typedef NS_ENUM(int, iTermShouldHaveTitleSeparator) {
 - (BOOL)selectWorkspaceAtIndex:(NSInteger)index recordHistory:(BOOL)recordHistory;
 - (BOOL)hasSelectablePreviousWorkspace;
 - (BOOL)moveWorkspaceFromIndex:(NSInteger)fromIndex toIndex:(NSInteger)toIndex;
+- (BOOL)workspaceHasCustomTitleAtIndex:(NSInteger)index;
+- (void)setCustomTitle:(NSString *)title forWorkspaceAtIndex:(NSInteger)index;
+- (void)clearCustomTitleForWorkspaceAtIndex:(NSInteger)index;
+- (void)renameWorkspaceAtIndex:(NSInteger)index;
+- (void)closeWorkspacesAtIndexes:(NSIndexSet *)indexes;
 @end
 
 @implementation PseudoTerminal {
@@ -1357,6 +1364,99 @@ ITERM_WEAKLY_REFERENCEABLE
         [_contentView selectTideySidebarWorkspaceAtIndex:self.selectedWorkspaceIndex];
     }
     return YES;
+}
+
+- (BOOL)workspaceHasCustomTitleAtIndex:(NSInteger)index {
+    Workspace *workspace = [self workspaceAtIndex:index];
+    return workspace.customTitle.length > 0;
+}
+
+- (void)setCustomTitle:(NSString *)title forWorkspaceAtIndex:(NSInteger)index {
+    Workspace *workspace = [self workspaceAtIndex:index];
+    if (!workspace) {
+        return;
+    }
+    NSString *trimmed = [title stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    workspace.customTitle = trimmed.length > 0 ? trimmed : nil;
+    [_contentView reloadTideySidebar];
+}
+
+- (void)clearCustomTitleForWorkspaceAtIndex:(NSInteger)index {
+    Workspace *workspace = [self workspaceAtIndex:index];
+    if (!workspace) {
+        return;
+    }
+    workspace.customTitle = nil;
+    [_contentView reloadTideySidebar];
+}
+
+- (void)renameWorkspaceAtIndex:(NSInteger)index {
+    [self ensureTideyWorkspacesInitialized];
+    Workspace *workspace = [self workspaceAtIndex:index];
+    if (!workspace) {
+        return;
+    }
+
+    NSString *currentTitle = workspace.customTitle;
+    if (currentTitle.length == 0) {
+        PTYSession *session = workspace.selectedPanel.activeSession;
+        currentTitle = [self tideySidebarDisplayTitleForSession:session] ?: @"";
+    }
+
+    NSAlert *alert = [[[NSAlert alloc] init] autorelease];
+    alert.messageText = @"Rename Workspace";
+    alert.informativeText = @"Set a custom name for this workspace.";
+
+    NSTextField *textField = [[[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 320, 24)] autorelease];
+    textField.editable = YES;
+    textField.selectable = YES;
+    textField.stringValue = currentTitle ?: @"";
+    alert.accessoryView = textField;
+    [alert addButtonWithTitle:@"OK"];
+    [alert addButtonWithTitle:@"Cancel"];
+
+    if ([alert runSheetModalForWindow:self.window] == NSAlertFirstButtonReturn) {
+        [self setCustomTitle:textField.stringValue forWorkspaceAtIndex:index];
+    }
+}
+
+- (void)closeWorkspacesAtIndexes:(NSIndexSet *)indexes {
+    [self ensureTideyWorkspacesInitialized];
+    if (indexes.count == 0) {
+        return;
+    }
+
+    NSMutableArray<Workspace *> *workspacesToClose = [NSMutableArray array];
+    [indexes enumerateIndexesUsingBlock:^(NSUInteger idx, BOOL *stop) {
+        Workspace *workspace = [self workspaceAtIndex:(NSInteger)idx];
+        if (workspace) {
+            [workspacesToClose addObject:workspace];
+        }
+    }];
+    if (workspacesToClose.count == 0) {
+        return;
+    }
+
+    NSMutableArray<PTYSession *> *sessions = [NSMutableArray array];
+    NSMutableArray<PTYTab *> *panels = [NSMutableArray array];
+    for (Workspace *workspace in workspacesToClose) {
+        [panels addObjectsFromArray:workspace.panels];
+        for (PTYTab *panel in workspace.panels) {
+            [sessions addObjectsFromArray:panel.sessions];
+        }
+    }
+
+    NSString *identifier = workspacesToClose.count == 1 ? @"This workspace" : @"These workspaces";
+    NSString *genericName = workspacesToClose.count == 1 ? @"workspace" : @"workspaces";
+    if (![self confirmCloseForSessions:sessions identifier:identifier genericName:genericName]) {
+        return;
+    }
+
+    [self performTideyWorkspaceMutationPreservingWindowFrame:^{
+        for (PTYTab *panel in panels) {
+            [self closeTab:panel];
+        }
+    }];
 }
 
 - (void)performTideyWorkspaceMutationPreservingWindowFrame:(void (^)(void))block {
@@ -11050,6 +11150,9 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
 - (NSString *)rootTerminalViewTideySidebarWorkspaceTitleAtIndex:(NSInteger)index {
     [self ensureTideyWorkspacesInitialized];
     Workspace *workspace = [self workspaceAtIndex:index];
+    if (workspace.customTitle.length > 0) {
+        return workspace.customTitle;
+    }
     PTYTab *panel = [[workspace.selectedPanel retain] autorelease];
     PTYSession *session = [[panel.activeSession retain] autorelease];
     if (!panel || !session) {
@@ -11082,6 +11185,62 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
 - (BOOL)rootTerminalViewMoveTideySidebarWorkspaceFromIndex:(NSInteger)fromIndex
                                                    toIndex:(NSInteger)toIndex {
     return [self moveWorkspaceFromIndex:fromIndex toIndex:toIndex];
+}
+
+- (void)rootTerminalViewCreateTideyWorkspace {
+    [self createTideyWorkspacePossiblyTmux:NO];
+}
+
+- (BOOL)rootTerminalViewTideySidebarWorkspaceHasCustomTitleAtIndex:(NSInteger)index {
+    return [self workspaceHasCustomTitleAtIndex:index];
+}
+
+- (void)rootTerminalViewRenameTideySidebarWorkspaceAtIndex:(NSInteger)index {
+    [self renameWorkspaceAtIndex:index];
+}
+
+- (void)rootTerminalViewRemoveCustomNameForTideySidebarWorkspaceAtIndex:(NSInteger)index {
+    [self clearCustomTitleForWorkspaceAtIndex:index];
+}
+
+- (void)rootTerminalViewMoveTideySidebarWorkspaceAtIndex:(NSInteger)index byDelta:(NSInteger)delta {
+    NSInteger toIndex = index + delta;
+    if (delta > 0) {
+        toIndex += 1;
+    }
+    [self moveWorkspaceFromIndex:index toIndex:toIndex];
+}
+
+- (void)rootTerminalViewMoveTideySidebarWorkspaceToTopAtIndex:(NSInteger)index {
+    [self moveWorkspaceFromIndex:index toIndex:0];
+}
+
+- (void)rootTerminalViewCloseTideySidebarWorkspaceAtIndex:(NSInteger)index {
+    [self closeWorkspacesAtIndexes:[NSIndexSet indexSetWithIndex:index]];
+}
+
+- (void)rootTerminalViewCloseOtherTideySidebarWorkspacesExceptIndex:(NSInteger)index {
+    [self ensureTideyWorkspacesInitialized];
+    NSMutableIndexSet *indexes = [NSMutableIndexSet indexSetWithIndexesInRange:NSMakeRange(0, self.workspaces.count)];
+    [indexes removeIndex:index];
+    [self closeWorkspacesAtIndexes:indexes];
+}
+
+- (void)rootTerminalViewCloseTideySidebarWorkspacesAboveIndex:(NSInteger)index {
+    [self ensureTideyWorkspacesInitialized];
+    if (index <= 0) {
+        return;
+    }
+    [self closeWorkspacesAtIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, index)]];
+}
+
+- (void)rootTerminalViewCloseTideySidebarWorkspacesBelowIndex:(NSInteger)index {
+    [self ensureTideyWorkspacesInitialized];
+    NSInteger start = index + 1;
+    if (start >= self.workspaces.count) {
+        return;
+    }
+    [self closeWorkspacesAtIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(start, self.workspaces.count - start)]];
 }
 
 #pragma mark - PSMPUAFontProvider

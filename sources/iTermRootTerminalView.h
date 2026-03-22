@@ -78,6 +78,16 @@
 - (BOOL)rootTerminalViewSelectTideySidebarWorkspaceAtIndex:(NSInteger)index;
 - (BOOL)rootTerminalViewMoveTideySidebarWorkspaceFromIndex:(NSInteger)fromIndex
                                                    toIndex:(NSInteger)toIndex;
+- (void)rootTerminalViewCreateTideyWorkspace;
+- (BOOL)rootTerminalViewTideySidebarWorkspaceHasCustomTitleAtIndex:(NSInteger)index;
+- (void)rootTerminalViewRenameTideySidebarWorkspaceAtIndex:(NSInteger)index;
+- (void)rootTerminalViewRemoveCustomNameForTideySidebarWorkspaceAtIndex:(NSInteger)index;
+- (void)rootTerminalViewMoveTideySidebarWorkspaceAtIndex:(NSInteger)index byDelta:(NSInteger)delta;
+- (void)rootTerminalViewMoveTideySidebarWorkspaceToTopAtIndex:(NSInteger)index;
+- (void)rootTerminalViewCloseTideySidebarWorkspaceAtIndex:(NSInteger)index;
+- (void)rootTerminalViewCloseOtherTideySidebarWorkspacesExceptIndex:(NSInteger)index;
+- (void)rootTerminalViewCloseTideySidebarWorkspacesAboveIndex:(NSInteger)index;
+- (void)rootTerminalViewCloseTideySidebarWorkspacesBelowIndex:(NSInteger)index;
 @end
 
 extern const NSInteger iTermRootTerminalViewWindowNumberLabelMargin;

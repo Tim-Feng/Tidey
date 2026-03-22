@@ -86,6 +86,21 @@ typedef struct {
 - (void)configureTideySidebarCellView:(NSTableCellView *)cellView row:(NSInteger)row;
 - (NSView *)tideySidebarDragPreviewForRow:(NSInteger)row width:(CGFloat)width;
 - (NSImage *)tideySidebarDragPreviewImageForRow:(NSInteger)row width:(CGFloat)width;
+- (NSMenu *)tideySidebarMenuForRow:(NSInteger)row;
+- (NSMenuItem *)tideySidebarMenuItemWithTitle:(NSString *)title
+                                       action:(SEL)action
+                                          row:(NSInteger)row;
+- (NSInteger)tideySidebarWorkspaceIndexFromSender:(id)sender;
+- (void)tideySidebarNewWorkspace:(id)sender;
+- (void)tideySidebarRenameWorkspace:(id)sender;
+- (void)tideySidebarRemoveCustomWorkspaceName:(id)sender;
+- (void)tideySidebarMoveWorkspaceUp:(id)sender;
+- (void)tideySidebarMoveWorkspaceDown:(id)sender;
+- (void)tideySidebarMoveWorkspaceToTop:(id)sender;
+- (void)tideySidebarCloseWorkspace:(id)sender;
+- (void)tideySidebarCloseOtherWorkspaces:(id)sender;
+- (void)tideySidebarCloseWorkspacesAbove:(id)sender;
+- (void)tideySidebarCloseWorkspacesBelow:(id)sender;
 
 @end
 
@@ -542,6 +557,13 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 
 - (NSMenu *)menuForEvent:(NSEvent *)event {
+    if (_tideySidebarView && !_tideySidebarView.hidden) {
+        const NSPoint pointInTable = [_tideySidebarTableView convertPoint:event.locationInWindow fromView:nil];
+        if (NSPointInRect(pointInTable, _tideySidebarTableView.bounds)) {
+            NSInteger row = [_tideySidebarTableView rowAtPoint:pointInTable];
+            return [self tideySidebarMenuForRow:row];
+        }
+    }
     if (_windowTitleLabel.hidden) {
         return nil;
     }
@@ -1992,6 +2014,159 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSImage *image = [[NSImage alloc] initWithSize:bounds.size];
     [image addRepresentation:bitmap];
     return image;
+}
+
+- (NSMenuItem *)tideySidebarMenuItemWithTitle:(NSString *)title
+                                       action:(SEL)action
+                                          row:(NSInteger)row {
+    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title action:action keyEquivalent:@""];
+    item.target = self;
+    item.representedObject = @(row);
+    return item;
+}
+
+- (NSInteger)tideySidebarWorkspaceIndexFromSender:(id)sender {
+    id representedObject = [sender representedObject];
+    if (![representedObject isKindOfClass:[NSNumber class]]) {
+        return NSNotFound;
+    }
+    return [representedObject integerValue];
+}
+
+- (NSMenu *)tideySidebarMenuForRow:(NSInteger)row {
+    NSMenu *menu = [[NSMenu alloc] initWithTitle:@"Tidey Sidebar"];
+    [menu addItem:[self tideySidebarMenuItemWithTitle:@"New Workspace"
+                                               action:@selector(tideySidebarNewWorkspace:)
+                                                  row:row]];
+
+    if (row < 0 || row >= self.numberOfTideySidebarWorkspaces) {
+        return menu;
+    }
+
+    [menu addItem:[NSMenuItem separatorItem]];
+
+    [menu addItem:[self tideySidebarMenuItemWithTitle:@"Rename Workspace…"
+                                               action:@selector(tideySidebarRenameWorkspace:)
+                                                  row:row]];
+
+    if ([self.delegate rootTerminalViewTideySidebarWorkspaceHasCustomTitleAtIndex:row]) {
+        [menu addItem:[self tideySidebarMenuItemWithTitle:@"Remove Custom Workspace Name"
+                                                   action:@selector(tideySidebarRemoveCustomWorkspaceName:)
+                                                      row:row]];
+    }
+
+    [menu addItem:[NSMenuItem separatorItem]];
+
+    NSMenuItem *moveUp = [self tideySidebarMenuItemWithTitle:@"Move Up"
+                                                      action:@selector(tideySidebarMoveWorkspaceUp:)
+                                                         row:row];
+    moveUp.enabled = (row > 0);
+    [menu addItem:moveUp];
+
+    NSMenuItem *moveDown = [self tideySidebarMenuItemWithTitle:@"Move Down"
+                                                        action:@selector(tideySidebarMoveWorkspaceDown:)
+                                                           row:row];
+    moveDown.enabled = (row + 1 < self.numberOfTideySidebarWorkspaces);
+    [menu addItem:moveDown];
+
+    NSMenuItem *moveToTop = [self tideySidebarMenuItemWithTitle:@"Move to Top"
+                                                         action:@selector(tideySidebarMoveWorkspaceToTop:)
+                                                            row:row];
+    moveToTop.enabled = (row > 0);
+    [menu addItem:moveToTop];
+
+    [menu addItem:[NSMenuItem separatorItem]];
+
+    [menu addItem:[self tideySidebarMenuItemWithTitle:@"Close Workspace"
+                                               action:@selector(tideySidebarCloseWorkspace:)
+                                                  row:row]];
+
+    NSMenuItem *closeOthers = [self tideySidebarMenuItemWithTitle:@"Close Other Workspaces"
+                                                           action:@selector(tideySidebarCloseOtherWorkspaces:)
+                                                              row:row];
+    closeOthers.enabled = (self.numberOfTideySidebarWorkspaces > 1);
+    [menu addItem:closeOthers];
+
+    NSMenuItem *closeAbove = [self tideySidebarMenuItemWithTitle:@"Close Workspaces Above"
+                                                          action:@selector(tideySidebarCloseWorkspacesAbove:)
+                                                             row:row];
+    closeAbove.enabled = (row > 0);
+    [menu addItem:closeAbove];
+
+    NSMenuItem *closeBelow = [self tideySidebarMenuItemWithTitle:@"Close Workspaces Below"
+                                                          action:@selector(tideySidebarCloseWorkspacesBelow:)
+                                                             row:row];
+    closeBelow.enabled = (row + 1 < self.numberOfTideySidebarWorkspaces);
+    [menu addItem:closeBelow];
+
+    return menu;
+}
+
+- (void)tideySidebarNewWorkspace:(id)sender {
+    [self.delegate rootTerminalViewCreateTideyWorkspace];
+}
+
+- (void)tideySidebarRenameWorkspace:(id)sender {
+    NSInteger row = [self tideySidebarWorkspaceIndexFromSender:sender];
+    if (row != NSNotFound) {
+        [self.delegate rootTerminalViewRenameTideySidebarWorkspaceAtIndex:row];
+    }
+}
+
+- (void)tideySidebarRemoveCustomWorkspaceName:(id)sender {
+    NSInteger row = [self tideySidebarWorkspaceIndexFromSender:sender];
+    if (row != NSNotFound) {
+        [self.delegate rootTerminalViewRemoveCustomNameForTideySidebarWorkspaceAtIndex:row];
+    }
+}
+
+- (void)tideySidebarMoveWorkspaceUp:(id)sender {
+    NSInteger row = [self tideySidebarWorkspaceIndexFromSender:sender];
+    if (row != NSNotFound) {
+        [self.delegate rootTerminalViewMoveTideySidebarWorkspaceAtIndex:row byDelta:-1];
+    }
+}
+
+- (void)tideySidebarMoveWorkspaceDown:(id)sender {
+    NSInteger row = [self tideySidebarWorkspaceIndexFromSender:sender];
+    if (row != NSNotFound) {
+        [self.delegate rootTerminalViewMoveTideySidebarWorkspaceAtIndex:row byDelta:1];
+    }
+}
+
+- (void)tideySidebarMoveWorkspaceToTop:(id)sender {
+    NSInteger row = [self tideySidebarWorkspaceIndexFromSender:sender];
+    if (row != NSNotFound) {
+        [self.delegate rootTerminalViewMoveTideySidebarWorkspaceToTopAtIndex:row];
+    }
+}
+
+- (void)tideySidebarCloseWorkspace:(id)sender {
+    NSInteger row = [self tideySidebarWorkspaceIndexFromSender:sender];
+    if (row != NSNotFound) {
+        [self.delegate rootTerminalViewCloseTideySidebarWorkspaceAtIndex:row];
+    }
+}
+
+- (void)tideySidebarCloseOtherWorkspaces:(id)sender {
+    NSInteger row = [self tideySidebarWorkspaceIndexFromSender:sender];
+    if (row != NSNotFound) {
+        [self.delegate rootTerminalViewCloseOtherTideySidebarWorkspacesExceptIndex:row];
+    }
+}
+
+- (void)tideySidebarCloseWorkspacesAbove:(id)sender {
+    NSInteger row = [self tideySidebarWorkspaceIndexFromSender:sender];
+    if (row != NSNotFound) {
+        [self.delegate rootTerminalViewCloseTideySidebarWorkspacesAboveIndex:row];
+    }
+}
+
+- (void)tideySidebarCloseWorkspacesBelow:(id)sender {
+    NSInteger row = [self tideySidebarWorkspaceIndexFromSender:sender];
+    if (row != NSNotFound) {
+        [self.delegate rootTerminalViewCloseTideySidebarWorkspacesBelowIndex:row];
+    }
 }
 
 - (NSInteger)numberOfTideySidebarWorkspaces {
