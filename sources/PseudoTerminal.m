@@ -11022,7 +11022,7 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
 
 - (NSString *)tideySidebarDisplaySubtitleForSession:(PTYSession *)session panel:(PTYTab *)panel {
     if ([self tideyWorkspaceIsInStartupGracePeriod:[self workspaceAtIndex:[self indexOfWorkspaceContainingPanel:panel]]]) {
-        return @"Terminal";
+        return @"~";
     }
 
     NSString *command = [self tideySidebarRunningCommandForSession:session];
