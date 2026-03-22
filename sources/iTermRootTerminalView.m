@@ -58,6 +58,12 @@ static const CGFloat kMaximumToolbeltSizeAsFractionOfWindow = 0.5;
 static const CGFloat kTideySidebarWidth = 220;
 static const CGFloat kTideyEditorPanelWidth = 400;
 static const CGFloat kTideyEditorFileTreeWidth = 200;
+static const CGFloat kTideyMinimumSidebarWidth = 160;
+static const CGFloat kTideyMinimumTerminalWidth = 200;
+static const CGFloat kTideyMinimumEditorPanelWidth = 280;
+static const CGFloat kTideyMinimumEditorContentWidth = 160;
+static const CGFloat kTideyMinimumFileTreeWidth = 120;
+static const CGFloat kTideyDragHandleWidth = 4;
 static NSPasteboardType const iTermRootTerminalViewTideySidebarWorkspacePasteboardType =
     @"com.tidey.workspace-row";
 
@@ -82,12 +88,18 @@ typedef struct {
 @property(nonatomic, strong) SolidColorView *divisionView;
 @property(nonatomic, strong) iTermToolbeltView *toolbelt;
 @property(nonatomic, strong) iTermDragHandleView *leftTabBarDragHandle;
+@property(nonatomic, strong) iTermDragHandleView *tideySidebarDragHandle;
+@property(nonatomic, strong) iTermDragHandleView *tideyEditorDragHandle;
+@property(nonatomic, strong) iTermDragHandleView *tideyEditorFileTreeDragHandle;
 
 - (CGFloat)tideySidebarWidth;
 - (CGFloat)tideyEditorPanelWidth;
+- (CGFloat)tideyEditorFileTreeWidth;
 - (void)layoutTideySidebar;
 - (void)layoutTideyEditorPanelWithOutputs:(iTermLayoutOutputs)outputs;
 - (iTermLayoutOutputs)layoutOutputsByApplyingTideyChromeOffsets:(iTermLayoutOutputs)outputs;
+- (void)updateTideyChromeDragHandles;
+- (void)syncTideyEditorFileTreeRootIfNeeded;
 - (void)ensureTideyEditorWebView;
 - (void)loadTideyEditorShellIfNeeded;
 - (void)tideyEditorLoadDemoFileIfNeeded;
@@ -309,6 +321,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSString *_tideyEditorPendingValue;
     NSString *_tideyEditorPendingLanguage;
     NSString *_tideyEditorLoadedPath;
+    NSString *_tideyEditorCurrentRootPath;
+    CGFloat _tideySidebarPreferredWidth;
+    CGFloat _tideyEditorPreferredWidth;
+    CGFloat _tideyEditorFileTreePreferredWidth;
 
     iTermLayerBackedSolidColorView *_titleBackgroundView NS_AVAILABLE_MAC(10_14);
     
@@ -341,6 +357,9 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _delegate = delegate;
         _shouldShowTideySidebar = YES;
         _shouldShowTideyEditorPanel = NO;
+        _tideySidebarPreferredWidth = kTideySidebarWidth;
+        _tideyEditorPreferredWidth = kTideyEditorPanelWidth;
+        _tideyEditorFileTreePreferredWidth = kTideyEditorFileTreeWidth;
 
         self.autoresizesSubviews = YES;
         _leftTabBarPreferredWidth = round([iTermPreferences doubleForKey:kPreferenceKeyLeftTabBarWidth]);
@@ -443,6 +462,18 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _tideyEditorFileTreeView.outlineTableColumn = fileTreeColumn;
         _tideyEditorFileTreeScrollView.documentView = _tideyEditorFileTreeView;
         [self reloadTideyEditorFileTree];
+
+        self.tideySidebarDragHandle = [[iTermDragHandleView alloc] initWithFrame:NSZeroRect];
+        self.tideySidebarDragHandle.delegate = self;
+        [self addSubview:self.tideySidebarDragHandle];
+
+        self.tideyEditorDragHandle = [[iTermDragHandleView alloc] initWithFrame:NSZeroRect];
+        self.tideyEditorDragHandle.delegate = self;
+        [self addSubview:self.tideyEditorDragHandle];
+
+        self.tideyEditorFileTreeDragHandle = [[iTermDragHandleView alloc] initWithFrame:NSZeroRect];
+        self.tideyEditorFileTreeDragHandle.delegate = self;
+        [_tideyEditorPanelView addSubview:self.tideyEditorFileTreeDragHandle];
 
         // Create the tab view.
         self.tabView = [[PTYTabView alloc] initWithFrame:self.bounds];
@@ -687,6 +718,9 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     _tabBarControl.itermTabBarDelegate = nil;
     _tabBarControl.delegate = nil;
     _leftTabBarDragHandle.delegate = nil;
+    _tideySidebarDragHandle.delegate = nil;
+    _tideyEditorDragHandle.delegate = nil;
+    _tideyEditorFileTreeDragHandle.delegate = nil;
     [_tideyEditorWebView.configuration.userContentController removeScriptMessageHandlerForName:@"tideyEditorReady"];
     _tideyEditorWebView.navigationDelegate = nil;
 }
@@ -1197,6 +1231,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 - (void)windowTitleDidChangeTo:(NSString *)title {
     _windowTitle = [title copy];
+    [self syncTideyEditorFileTreeRootIfNeeded];
 
     [self setWindowTitleLabelToString:_windowTitle
                              subtitle:[self.delegate rootTerminalViewCurrentTabSubtitle]
@@ -1207,6 +1242,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 
 - (void)setSubtitle:(NSString *)subtitle {
+    [self syncTideyEditorFileTreeRootIfNeeded];
     [self setWindowTitleLabelToString:_windowTitleLabel.windowTitle
                              subtitle:subtitle
                                  icon:_windowTitleLabel.windowIcon];
@@ -1621,11 +1657,43 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 
 - (CGFloat)tideySidebarWidth {
-    return self.shouldShowTideySidebar ? kTideySidebarWidth : 0;
+    if (!self.shouldShowTideySidebar) {
+        return 0;
+    }
+    const CGFloat availableWidth = MAX(0, NSWidth(self.bounds) - (self.shouldShowToolbelt ? floor(self.toolbeltWidth) : 0));
+    const CGFloat reservedEditorWidth = self.shouldShowTideyEditorPanel ? _tideyEditorPreferredWidth : 0;
+    const CGFloat maxWidth = MAX(0, availableWidth - reservedEditorWidth - kTideyMinimumTerminalWidth);
+    if (maxWidth <= 0) {
+        return 0;
+    }
+    const CGFloat minWidth = MIN(kTideyMinimumSidebarWidth, maxWidth);
+    return MAX(minWidth, MIN(_tideySidebarPreferredWidth, maxWidth));
 }
 
 - (CGFloat)tideyEditorPanelWidth {
-    return self.shouldShowTideyEditorPanel ? kTideyEditorPanelWidth : 0;
+    if (!self.shouldShowTideyEditorPanel) {
+        return 0;
+    }
+    const CGFloat availableWidth = MAX(0, NSWidth(self.bounds) - (self.shouldShowToolbelt ? floor(self.toolbeltWidth) : 0));
+    const CGFloat maxWidth = MAX(0, availableWidth - self.tideySidebarWidth - kTideyMinimumTerminalWidth);
+    if (maxWidth <= 0) {
+        return 0;
+    }
+    const CGFloat minWidth = MIN(kTideyMinimumEditorPanelWidth, maxWidth);
+    return MAX(minWidth, MIN(_tideyEditorPreferredWidth, maxWidth));
+}
+
+- (CGFloat)tideyEditorFileTreeWidth {
+    const CGFloat panelWidth = self.tideyEditorPanelWidth;
+    if (panelWidth <= 0) {
+        return 0;
+    }
+    const CGFloat maxWidth = MAX(0, panelWidth - kTideyMinimumEditorContentWidth);
+    if (maxWidth <= 0) {
+        return 0;
+    }
+    const CGFloat minWidth = MIN(kTideyMinimumFileTreeWidth, maxWidth);
+    return MAX(minWidth, MIN(_tideyEditorFileTreePreferredWidth, maxWidth));
 }
 
 - (void)ensureTideyEditorWebView {
@@ -1672,6 +1740,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 
 - (NSString *)tideyEditorFileTreeRootPath {
+    NSString *cwd = [[self.delegate rootTerminalViewCurrentWorkingDirectory] stringByStandardizingPath];
+    if (cwd.length > 0 && [[NSFileManager defaultManager] fileExistsAtPath:cwd]) {
+        return cwd;
+    }
     NSString *candidate = [NSHomeDirectory() stringByAppendingPathComponent:@"GitHub/iTerm2"];
     if ([[NSFileManager defaultManager] fileExistsAtPath:candidate]) {
         return candidate;
@@ -1686,7 +1758,17 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     _tideyEditorFileTreeRootNode = [TideyEditorFileNode nodeWithPath:rootPath
                                                          displayName:rootPath.lastPathComponent
                                                            directory:isDirectory];
+    _tideyEditorCurrentRootPath = [rootPath copy];
     [_tideyEditorFileTreeView reloadData];
+}
+
+- (void)syncTideyEditorFileTreeRootIfNeeded {
+    NSString *rootPath = [self tideyEditorFileTreeRootPath];
+    if ((_tideyEditorCurrentRootPath ?: @"").length > 0 &&
+        [rootPath isEqualToString:_tideyEditorCurrentRootPath]) {
+        return;
+    }
+    [self reloadTideyEditorFileTree];
 }
 
 - (void)layoutTideyEditorContents {
@@ -1694,11 +1776,15 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         return;
     }
     const NSRect bounds = _tideyEditorPanelView.bounds;
-    const CGFloat fileTreeWidth = MIN(kTideyEditorFileTreeWidth, MAX(0, NSWidth(bounds) - 120));
+    const CGFloat fileTreeWidth = MIN(self.tideyEditorFileTreeWidth, MAX(0, NSWidth(bounds) - kTideyMinimumEditorContentWidth));
     const CGFloat editorWidth = MAX(0, NSWidth(bounds) - fileTreeWidth);
     _tideyEditorWebView.frame = NSMakeRect(0, 0, editorWidth, NSHeight(bounds));
     _tideyEditorFileTreeContainerView.frame = NSMakeRect(editorWidth, 0, fileTreeWidth, NSHeight(bounds));
     _tideyEditorFileTreeScrollView.frame = _tideyEditorFileTreeContainerView.bounds;
+    self.tideyEditorFileTreeDragHandle.frame = NSMakeRect(MAX(0, editorWidth - kTideyDragHandleWidth / 2.0),
+                                                          0,
+                                                          kTideyDragHandleWidth,
+                                                          NSHeight(bounds));
 }
 
 - (void)tideyEditorLoadDemoFileIfNeeded {
@@ -1916,6 +2002,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     }
 
     [self loadTideyEditorShellIfNeeded];
+    [self syncTideyEditorFileTreeRootIfNeeded];
 
     const CGFloat rightEdge = self.shouldShowToolbelt ? NSMinX(outputs.toolbeltFrame) : NSWidth(self.bounds);
     const CGFloat originX = MAX(0, rightEdge - width);
@@ -1944,6 +2031,29 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     }
 
     return outputs;
+}
+
+- (void)updateTideyChromeDragHandles {
+    const CGFloat sidebarWidth = self.tideySidebarWidth;
+    self.tideySidebarDragHandle.hidden = (sidebarWidth <= 0);
+    if (sidebarWidth > 0) {
+        self.tideySidebarDragHandle.frame = NSMakeRect(MAX(0, sidebarWidth - kTideyDragHandleWidth / 2.0),
+                                                       0,
+                                                       kTideyDragHandleWidth,
+                                                       NSHeight(self.bounds));
+    }
+
+    const CGFloat editorWidth = self.tideyEditorPanelWidth;
+    self.tideyEditorDragHandle.hidden = (editorWidth <= 0 || _tideyEditorPanelView.hidden);
+    if (editorWidth > 0 && !_tideyEditorPanelView.hidden) {
+        self.tideyEditorDragHandle.frame = NSMakeRect(MAX(0, NSMinX(_tideyEditorPanelView.frame) - kTideyDragHandleWidth / 2.0),
+                                                      0,
+                                                      kTideyDragHandleWidth,
+                                                      NSHeight(self.bounds));
+    }
+
+    const CGFloat fileTreeWidth = self.tideyEditorFileTreeWidth;
+    self.tideyEditorFileTreeDragHandle.hidden = (_tideyEditorPanelView.hidden || fileTreeWidth <= 0);
 }
 
 - (void)layoutSubviewsWithHiddenTabBarForWindow:(NSWindow *)thisWindow {
@@ -2190,6 +2300,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     if (showToolbeltInline) {
         [self updateToolbeltFrameForWindow:thisWindow];
     }
+
+    [self updateTideyChromeDragHandles];
 
     // Update the tab style.
     [self.tabBarControl setDisableTabClose:!iTermAdvancedSettingsModel.tabCloseButtonsAlwaysVisible];
@@ -2919,6 +3031,27 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 // For the left-side tab bar.
 - (CGFloat)dragHandleView:(iTermDragHandleView *)dragHandle didMoveBy:(CGFloat)delta {
+    if (dragHandle == self.tideySidebarDragHandle) {
+        const CGFloat originalWidth = self.tideySidebarWidth;
+        _tideySidebarPreferredWidth = originalWidth + delta;
+        [self layoutSubviews];
+        return self.tideySidebarWidth - originalWidth;
+    }
+
+    if (dragHandle == self.tideyEditorDragHandle) {
+        const CGFloat originalWidth = self.tideyEditorPanelWidth;
+        _tideyEditorPreferredWidth = originalWidth - delta;
+        [self layoutSubviews];
+        return originalWidth - self.tideyEditorPanelWidth;
+    }
+
+    if (dragHandle == self.tideyEditorFileTreeDragHandle) {
+        const CGFloat originalWidth = self.tideyEditorFileTreeWidth;
+        _tideyEditorFileTreePreferredWidth = originalWidth - delta;
+        [self layoutSubviews];
+        return originalWidth - self.tideyEditorFileTreeWidth;
+    }
+
     CGFloat originalValue = _leftTabBarPreferredWidth;
     _leftTabBarPreferredWidth = round([self leftTabBarWidthForPreferredWidth:_leftTabBarPreferredWidth + delta]);
     [self layoutSubviews];  // This may modify _leftTabBarWidth if it's too big or too small.
