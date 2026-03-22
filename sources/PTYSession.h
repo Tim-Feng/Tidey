@@ -557,6 +557,11 @@ backgroundColor:(NSColor *)backgroundColor;
 // NO if shell integration is not in use.
 @property(nonatomic, readonly) BOOL isAtShellPrompt;
 
+// Shell integration is expected to provide prompt marks, but the first prompt
+// has not been observed yet. Useful for suppressing UI churn during shell
+// startup.
+@property(nonatomic, readonly) BOOL isWaitingForFirstPrompt;
+
 // Has it been at least a second since isProcessing became false?
 @property(nonatomic, readonly) BOOL isIdle;
 
@@ -1104,4 +1109,3 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
 - (void)setOrAppendComposerString:(NSString *)string;
 
 @end
-

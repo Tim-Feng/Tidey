@@ -11002,6 +11002,10 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
 }
 
 - (NSString *)tideySidebarDisplaySubtitleForSession:(PTYSession *)session panel:(PTYTab *)panel {
+    if (session.isWaitingForFirstPrompt) {
+        return @"Terminal";
+    }
+
     NSString *command = [self tideySidebarRunningCommandForSession:session];
     if (command.length > 0) {
         return command;

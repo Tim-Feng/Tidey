@@ -5610,6 +5610,10 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
     return _screen.commandRange.start.x >= 0;
 }
 
+- (BOOL)isWaitingForFirstPrompt {
+    return _screen.shouldExpectPromptMarks && _screen.lastPromptMark == nil;
+}
+
 // You're processing if data was read off the socket in the last "idleTimeSeconds".
 - (BOOL)isProcessing {
     // For browser tabs, check if navigation is in progress
