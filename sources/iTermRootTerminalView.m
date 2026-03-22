@@ -66,6 +66,8 @@ static const CGFloat kTideyMinimumFileTreeWidth = 120;
 static const CGFloat kTideyDragHandleWidth = 4;
 static const CGFloat kTideyChromeToggleButtonWidth = 18;
 static const CGFloat kTideyChromeToggleButtonHeight = 34;
+static NSString *const kTideyLastEditorFilePathDefaultsKey = @"TideyLastEditorFilePath";
+static NSString *const kTideyLastEditorFileTreeRootDefaultsKey = @"TideyLastEditorFileTreeRoot";
 static NSPasteboardType const iTermRootTerminalViewTideySidebarWorkspacePasteboardType =
     @"com.tidey.workspace-row";
 
@@ -112,6 +114,8 @@ typedef struct {
 - (void)loadTideyEditorShellIfNeeded;
 - (void)tideyEditorLoadDemoFileIfNeeded;
 - (void)tideyEditorLoadFileAtPath:(NSString *)path;
+- (void)tideyRestoreEditorStateFromDefaults;
+- (void)tideyPersistEditorState;
 - (NSString *)tideyEditorLanguageForPath:(NSString *)path;
 - (NSString *)tideyEditorPreferredRootPathForFileAtPath:(NSString *)path;
 - (void)tideyEditorRevealFileAtPath:(NSString *)path;
@@ -399,6 +403,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _tideySidebarPreferredWidth = kTideySidebarWidth;
         _tideyEditorPreferredWidth = kTideyEditorPanelWidth;
         _tideyEditorFileTreePreferredWidth = kTideyEditorFileTreeWidth;
+        [self tideyRestoreEditorStateFromDefaults];
 
         self.autoresizesSubviews = YES;
         _leftTabBarPreferredWidth = round([iTermPreferences doubleForKey:kPreferenceKeyLeftTabBarWidth]);
@@ -1829,11 +1834,62 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     if (cwd.length > 0 && [[NSFileManager defaultManager] fileExistsAtPath:cwd]) {
         return cwd;
     }
-    NSString *candidate = [NSHomeDirectory() stringByAppendingPathComponent:@"GitHub/iTerm2"];
-    if ([[NSFileManager defaultManager] fileExistsAtPath:candidate]) {
-        return candidate;
-    }
     return NSHomeDirectory();
+}
+
+- (void)tideyRestoreEditorStateFromDefaults {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+
+    NSString *savedFilePath = [[defaults stringForKey:kTideyLastEditorFilePathDefaultsKey] stringByStandardizingPath];
+    BOOL isDirectory = NO;
+    if (savedFilePath.length > 0 &&
+        [fileManager fileExistsAtPath:savedFilePath isDirectory:&isDirectory] &&
+        !isDirectory) {
+        _tideyEditorLoadedPath = [savedFilePath copy];
+        _shouldShowTideyEditorPanel = YES;
+
+        NSString *savedRootPath = [[defaults stringForKey:kTideyLastEditorFileTreeRootDefaultsKey] stringByStandardizingPath];
+        BOOL savedRootIsDirectory = NO;
+        if (savedRootPath.length > 0 &&
+            [fileManager fileExistsAtPath:savedRootPath isDirectory:&savedRootIsDirectory] &&
+            savedRootIsDirectory) {
+            _tideyEditorRootOverridePath = [savedRootPath copy];
+        } else {
+            _tideyEditorRootOverridePath = [[self tideyEditorPreferredRootPathForFileAtPath:savedFilePath] copy];
+        }
+        return;
+    }
+
+    [defaults removeObjectForKey:kTideyLastEditorFilePathDefaultsKey];
+    [defaults removeObjectForKey:kTideyLastEditorFileTreeRootDefaultsKey];
+    _tideyEditorLoadedPath = nil;
+    _tideyEditorRootOverridePath = nil;
+}
+
+- (void)tideyPersistEditorState {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+
+    BOOL isDirectory = NO;
+    NSString *loadedPath = [_tideyEditorLoadedPath stringByStandardizingPath];
+    if (loadedPath.length > 0 &&
+        [fileManager fileExistsAtPath:loadedPath isDirectory:&isDirectory] &&
+        !isDirectory) {
+        [defaults setObject:loadedPath forKey:kTideyLastEditorFilePathDefaultsKey];
+    } else {
+        [defaults removeObjectForKey:kTideyLastEditorFilePathDefaultsKey];
+    }
+
+    NSString *rootPath = [[self tideyEditorFileTreeRootPath] stringByStandardizingPath];
+    BOOL rootIsDirectory = NO;
+    if (rootPath.length > 0 &&
+        [fileManager fileExistsAtPath:rootPath isDirectory:&rootIsDirectory] &&
+        rootIsDirectory) {
+        [defaults setObject:rootPath forKey:kTideyLastEditorFileTreeRootDefaultsKey];
+    } else {
+        [defaults removeObjectForKey:kTideyLastEditorFileTreeRootDefaultsKey];
+    }
 }
 
 - (void)reloadTideyEditorFileTree {
@@ -1845,6 +1901,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                            directory:isDirectory];
     _tideyEditorCurrentRootPath = [rootPath copy];
     [_tideyEditorFileTreeView reloadData];
+    [self tideyPersistEditorState];
 }
 
 - (void)syncTideyEditorFileTreeRootIfNeeded {
@@ -1913,6 +1970,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     _tideyEditorLoadedPath = [path copy];
     [self tideyEditorSetLanguage:[self tideyEditorLanguageForPath:path]];
     [self tideyEditorSetValue:contents];
+    [self tideyPersistEditorState];
 }
 
 - (NSString *)tideyEditorPreferredRootPathForFileAtPath:(NSString *)path {
@@ -2067,7 +2125,18 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     _tideyEditorReady = YES;
     _tideyEditorPanelLabel.hidden = YES;
     [self tideyEditorApplyPendingStateIfReady];
-    [self tideyEditorLoadDemoFileIfNeeded];
+    NSString *restoredPath = [_tideyEditorLoadedPath stringByStandardizingPath];
+    BOOL isDirectory = NO;
+    if (restoredPath.length > 0 &&
+        [[NSFileManager defaultManager] fileExistsAtPath:restoredPath isDirectory:&isDirectory] &&
+        !isDirectory) {
+        [self reloadTideyEditorFileTree];
+        [self tideyEditorLoadFileAtPath:restoredPath];
+        [self tideyEditorRevealFileAtPath:restoredPath];
+        _tideyEditorLoadedDemoFile = YES;
+    } else {
+        [self tideyEditorLoadDemoFileIfNeeded];
+    }
 }
 
 - (void)tideyEditorDidReceiveScriptMessage:(WKScriptMessage *)message {
