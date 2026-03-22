@@ -53,6 +53,7 @@ static const CGFloat kMinimumToolbeltSizeInPoints = 100;
 static const CGFloat kMinimumToolbeltSizeAsFractionOfWindow = 0.05;
 static const CGFloat kMaximumToolbeltSizeAsFractionOfWindow = 0.5;
 static const CGFloat kTideySidebarWidth = 220;
+static const CGFloat kTideyEditorPanelWidth = 400;
 static NSPasteboardType const iTermRootTerminalViewTideySidebarWorkspacePasteboardType =
     @"com.tidey.workspace-row";
 
@@ -76,8 +77,10 @@ typedef struct {
 @property(nonatomic, strong) iTermDragHandleView *leftTabBarDragHandle;
 
 - (CGFloat)tideySidebarWidth;
+- (CGFloat)tideyEditorPanelWidth;
 - (void)layoutTideySidebar;
-- (iTermLayoutOutputs)layoutOutputsByApplyingTideySidebarOffset:(iTermLayoutOutputs)outputs;
+- (void)layoutTideyEditorPanelWithOutputs:(iTermLayoutOutputs)outputs;
+- (iTermLayoutOutputs)layoutOutputsByApplyingTideyChromeOffsets:(iTermLayoutOutputs)outputs;
 - (NSString *)tideySidebarWorkspaceTitleAtIndex:(NSInteger)index;
 - (NSString *)tideySidebarWorkspaceSubtitleAtIndex:(NSInteger)index;
 - (BOOL)tideySidebarWorkspacePinnedAtIndex:(NSInteger)index;
@@ -199,6 +202,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSView *_tideySidebarView;
     NSScrollView *_tideySidebarScrollView;
     NSTableView *_tideySidebarTableView;
+    NSView *_tideyEditorPanelView;
+    NSTextField *_tideyEditorPanelLabel;
 
     iTermLayerBackedSolidColorView *_titleBackgroundView NS_AVAILABLE_MAC(10_14);
     
@@ -230,6 +235,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     if (self) {
         _delegate = delegate;
         _shouldShowTideySidebar = YES;
+        _shouldShowTideyEditorPanel = NO;
 
         self.autoresizesSubviews = YES;
         _leftTabBarPreferredWidth = round([iTermPreferences doubleForKey:kPreferenceKeyLeftTabBarWidth]);
@@ -277,6 +283,27 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         [_tideySidebarView addSubview:_tideySidebarScrollView];
         [_tideySidebarTableView reloadData];
         [self layoutTideySidebar];
+
+        _tideyEditorPanelView = [[NSView alloc] initWithFrame:NSZeroRect];
+        _tideyEditorPanelView.autoresizingMask = NSViewMinXMargin | NSViewHeightSizable;
+        _tideyEditorPanelView.wantsLayer = YES;
+        _tideyEditorPanelView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.10
+                                                                          green:0.11
+                                                                           blue:0.14
+                                                                          alpha:1].CGColor;
+        _tideyEditorPanelView.hidden = YES;
+        [self addSubview:_tideyEditorPanelView];
+
+        _tideyEditorPanelLabel = [NSTextField labelWithString:@"Editor"];
+        _tideyEditorPanelLabel.textColor = [NSColor colorWithWhite:0.92 alpha:1];
+        _tideyEditorPanelLabel.font = [NSFont systemFontOfSize:22 weight:NSFontWeightSemibold];
+        _tideyEditorPanelLabel.alignment = NSTextAlignmentCenter;
+        _tideyEditorPanelLabel.translatesAutoresizingMaskIntoConstraints = NO;
+        [_tideyEditorPanelView addSubview:_tideyEditorPanelLabel];
+        [NSLayoutConstraint activateConstraints:@[
+            [_tideyEditorPanelLabel.centerXAnchor constraintEqualToAnchor:_tideyEditorPanelView.centerXAnchor],
+            [_tideyEditorPanelLabel.centerYAnchor constraintEqualToAnchor:_tideyEditorPanelView.centerYAnchor]
+        ]];
 
         // Create the tab view.
         self.tabView = [[PTYTabView alloc] initWithFrame:self.bounds];
@@ -1456,6 +1483,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     return self.shouldShowTideySidebar ? kTideySidebarWidth : 0;
 }
 
+- (CGFloat)tideyEditorPanelWidth {
+    return self.shouldShowTideyEditorPanel ? kTideyEditorPanelWidth : 0;
+}
+
 - (NSString *)tideySidebarWorkspaceTitleAtIndex:(NSInteger)index {
     return [self.delegate rootTerminalViewTideySidebarWorkspaceTitleAtIndex:index] ?: @"Untitled";
 }
@@ -1499,15 +1530,34 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                MAX(0, listTop - titleTopInset));
 }
 
-- (iTermLayoutOutputs)layoutOutputsByApplyingTideySidebarOffset:(iTermLayoutOutputs)outputs {
-    const CGFloat width = self.tideySidebarWidth;
+- (void)layoutTideyEditorPanelWithOutputs:(iTermLayoutOutputs)outputs {
+    const CGFloat width = self.tideyEditorPanelWidth;
+    _tideyEditorPanelView.hidden = (width <= 0);
     if (width <= 0) {
-        return outputs;
+        return;
     }
-    outputs.tabViewFrame.origin.x += width;
-    outputs.statusBarFrame.origin.x += width;
-    outputs.toolbeltFrame.origin.x += width;
-    outputs.tabBarFrame.origin.x += width;
+
+    const CGFloat rightEdge = self.shouldShowToolbelt ? NSMinX(outputs.toolbeltFrame) : NSWidth(self.bounds);
+    const CGFloat originX = MAX(0, rightEdge - width);
+    _tideyEditorPanelView.frame = NSMakeRect(originX, 0, MIN(width, rightEdge), NSHeight(self.bounds));
+}
+
+- (iTermLayoutOutputs)layoutOutputsByApplyingTideyChromeOffsets:(iTermLayoutOutputs)outputs {
+    const CGFloat sidebarWidth = self.tideySidebarWidth;
+    if (sidebarWidth > 0) {
+        outputs.tabViewFrame.origin.x += sidebarWidth;
+        outputs.statusBarFrame.origin.x += sidebarWidth;
+        outputs.toolbeltFrame.origin.x += sidebarWidth;
+        outputs.tabBarFrame.origin.x += sidebarWidth;
+    }
+
+    const CGFloat editorWidth = self.tideyEditorPanelWidth;
+    if (editorWidth > 0) {
+        outputs.tabViewFrame.size.width = MAX(0, outputs.tabViewFrame.size.width - editorWidth);
+        outputs.statusBarFrame.size.width = MAX(0, outputs.statusBarFrame.size.width - editorWidth);
+        outputs.tabBarFrame.size.width = MAX(0, outputs.tabBarFrame.size.width - editorWidth);
+    }
+
     return outputs;
 }
 
@@ -1526,7 +1576,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     iTermLayoutInputs inputs = [self layoutInputsForWindow:thisWindow];
     inputs.tabBarVisible = NO;  // Force hidden for this method
     iTermLayoutOutputs outputs = [iTermLayoutCalculator calculateLayoutWithInputs:inputs];
-    outputs = [self layoutOutputsByApplyingTideySidebarOffset:outputs];
+    outputs = [self layoutOutputsByApplyingTideyChromeOffsets:outputs];
 
     // Apply tab view frame
     DLog(@"repositionWidgets - Set tab view frame to %@", NSStringFromRect(outputs.tabViewFrame));
@@ -1534,6 +1584,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
     // Layout status bar using calculator outputs
     [self layoutStatusBarWithOutputs:outputs window:thisWindow];
+    [self layoutTideyEditorPanelWithOutputs:outputs];
 
     [self updateDivisionViewAndWindowNumberLabel];
 
@@ -1555,7 +1606,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     inputs.tabBarVisible = topTabBarVisible;
     inputs.tabPosition = kLayoutTabPositionTop;
     iTermLayoutOutputs outputs = [iTermLayoutCalculator calculateLayoutWithInputs:inputs];
-    outputs = [self layoutOutputsByApplyingTideySidebarOffset:outputs];
+    outputs = [self layoutOutputsByApplyingTideyChromeOffsets:outputs];
 
     // Apply tab view frame
     DLog(@"repositionWidgets - Set tab view frame to %@", NSStringFromRect(outputs.tabViewFrame));
@@ -1563,6 +1614,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
     // Layout status bar using calculator outputs
     [self layoutStatusBarWithOutputs:outputs window:thisWindow];
+    [self layoutTideyEditorPanelWithOutputs:outputs];
 
     [self updateDivisionViewAndWindowNumberLabel];
 
@@ -1589,7 +1641,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     inputs.tabBarVisible = YES;
     inputs.tabPosition = kLayoutTabPositionBottom;
     iTermLayoutOutputs outputs = [iTermLayoutCalculator calculateLayoutWithInputs:inputs];
-    outputs = [self layoutOutputsByApplyingTideySidebarOffset:outputs];
+    outputs = [self layoutOutputsByApplyingTideyChromeOffsets:outputs];
 
     // Apply tab bar frame and settings
     self.tabBarControl.insets = [self.delegate tabBarInsets];
@@ -1602,6 +1654,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
     // Layout status bar using calculator outputs
     [self layoutStatusBarWithOutputs:outputs window:thisWindow];
+    [self layoutTideyEditorPanelWithOutputs:outputs];
 
     [self updateDivisionViewAndWindowNumberLabel];
 }
@@ -1625,7 +1678,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     inputs.tabBarVisible = YES;
     inputs.tabPosition = kLayoutTabPositionLeft;
     iTermLayoutOutputs outputs = [iTermLayoutCalculator calculateLayoutWithInputs:inputs];
-    outputs = [self layoutOutputsByApplyingTideySidebarOffset:outputs];
+    outputs = [self layoutOutputsByApplyingTideyChromeOffsets:outputs];
 
     // Apply tab bar frame and settings
     self.tabBarControl.insets = [self.delegate tabBarInsets];
@@ -1638,6 +1691,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
     // Layout status bar using calculator outputs
     [self layoutStatusBarWithOutputs:outputs window:thisWindow];
+    [self layoutTideyEditorPanelWithOutputs:outputs];
 
     [self updateDivisionViewAndWindowNumberLabel];
 

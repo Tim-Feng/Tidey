@@ -934,6 +934,12 @@ DQ
                                                 <action selector="toggleTideySidebar:" target="-1" id="H2r-gf-vzh"/>
                                             </connections>
                                         </menuItem>
+                                        <menuItem title="Show Tidey Editor" keyEquivalent="E" identifier="Show Tidey Editor" id="6D0-Fj-SjN">
+                                            <modifierMask key="keyEquivalentModifierMask" command="YES" shift="YES"/>
+                                            <connections>
+                                                <action selector="toggleTideyEditorPanel:" target="-1" id="M8w-Kc-3oW"/>
+                                            </connections>
+                                        </menuItem>
                                         <menuItem isSeparatorItem="YES" id="e4Q-yL-Q7V"/>
                                         <menuItem title="Select Workspace 1" keyEquivalent="1" identifier="Select Workspace 1" id="q4f-uK-B4d" tag="0">
                                             <modifierMask key="keyEquivalentModifierMask" command="YES"/>

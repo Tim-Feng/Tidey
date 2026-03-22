@@ -214,6 +214,7 @@ extern NSString *const iTermDidCreateTerminalWindowNotification;
 // Make the workspace at [sender tag] the foreground workspace.
 - (void)selectWorkspaceAtIndexAction:(id)sender;
 - (IBAction)toggleTideySidebar:(id)sender;
+- (IBAction)toggleTideyEditorPanel:(id)sender;
 - (IBAction)selectTideySidebarWorkspaceAtIndexAction:(id)sender;
 - (IBAction)selectNextWorkspace:(id)sender;
 - (IBAction)selectPreviousWorkspace:(id)sender;
@@ -221,6 +222,7 @@ extern NSString *const iTermDidCreateTerminalWindowNotification;
 - (void)createTideyWorkspacePossiblyTmux:(BOOL)possiblyTmux;
 - (void)createTideyPanelPossiblyTmux:(BOOL)possiblyTmux;
 - (BOOL)isShowingTideySidebar;
+- (BOOL)isShowingTideyEditorPanel;
 - (void)performTideyWorkspaceMutationPreservingWindowFrame:(void (^)(void))block;
 
 // A unique number for this window assigned by finishInitializationWithSmartLayout.

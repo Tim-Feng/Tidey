@@ -1711,6 +1711,12 @@ ITERM_WEAKLY_REFERENCEABLE
     [self notifyTmuxOfWindowResize];
 }
 
+- (IBAction)toggleTideyEditorPanel:(id)sender {
+    _contentView.shouldShowTideyEditorPanel = !_contentView.shouldShowTideyEditorPanel;
+    [self repositionWidgets];
+    [self notifyTmuxOfWindowResize];
+}
+
 - (IBAction)selectTideySidebarWorkspaceAtIndexAction:(id)sender {
     const NSInteger index = [sender tag];
     [self rootTerminalViewSelectTideySidebarWorkspaceAtIndex:index];
@@ -1722,6 +1728,10 @@ ITERM_WEAKLY_REFERENCEABLE
 
 - (BOOL)isShowingTideySidebar {
     return _contentView.shouldShowTideySidebar;
+}
+
+- (BOOL)isShowingTideyEditorPanel {
+    return _contentView.shouldShowTideyEditorPanel;
 }
 
 - (void)toggleToolbeltVisibilityWithSideEffects:(BOOL)sideEffects {
@@ -12392,6 +12402,9 @@ typedef NS_ENUM(NSUInteger, iTermBroadcastCommand) {
         return [[iTermToolbeltView availableConfiguredToolsForProfileType:self.currentSession.profile.profileType] count] > 0;
     } else if ([item action] == @selector(toggleTideySidebar:)) {
         [item setState:_contentView.shouldShowTideySidebar ? NSControlStateValueOn : NSControlStateValueOff];
+        return YES;
+    } else if ([item action] == @selector(toggleTideyEditorPanel:)) {
+        [item setState:_contentView.shouldShowTideyEditorPanel ? NSControlStateValueOn : NSControlStateValueOff];
         return YES;
     } else if ([item action] == @selector(selectTideySidebarSessionAtIndexAction:) ||
                [item action] == @selector(selectTideySidebarWorkspaceAtIndexAction:)) {
