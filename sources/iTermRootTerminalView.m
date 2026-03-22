@@ -521,6 +521,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         [self addSubview:self.tideySidebarToggleButton];
 
         self.tideyEditorFileTreeToggleButton = [self newTideyChromeToggleButtonWithAction:@selector(toggleTideyEditorFileTree:)];
+        self.tideyEditorFileTreeToggleButton.font = [NSFont systemFontOfSize:9 weight:NSFontWeightSemibold];
+        self.tideyEditorFileTreeToggleButton.wantsLayer = NO;
+        self.tideyEditorFileTreeToggleButton.contentTintColor = [NSColor colorWithWhite:0.78 alpha:1];
+        self.tideyEditorFileTreeToggleButton.bezelStyle = NSBezelStyleRegularSquare;
         [_tideyEditorPanelView addSubview:self.tideyEditorFileTreeToggleButton];
 
         // Create the tab view.
@@ -2246,7 +2250,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     self.tideyEditorFileTreeToggleButton.title = self.shouldShowTideyEditorFileTree ? @"▶" : @"◀";
     const CGFloat editorPanelWidth = NSWidth(_tideyEditorPanelView.bounds);
     const CGFloat fileTreeButtonX = self.shouldShowTideyEditorFileTree
-        ? MAX(0, editorPanelWidth - self.tideyEditorFileTreeWidth - kTideyChromeToggleButtonWidth / 2.0)
+        ? MAX(0, editorPanelWidth - self.tideyEditorFileTreeWidth - kTideyChromeToggleButtonWidth - 1)
         : MAX(0, editorPanelWidth - kTideyChromeToggleButtonWidth);
     const CGFloat fileTreeButtonY = floor((NSHeight(_tideyEditorPanelView.bounds) - kTideyChromeToggleButtonHeight) / 2.0);
     self.tideyEditorFileTreeToggleButton.frame = NSMakeRect(fileTreeButtonX,
