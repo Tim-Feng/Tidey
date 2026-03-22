@@ -321,6 +321,7 @@ typedef NS_ENUM(int, iTermShouldHaveTitleSeparator) {
 - (void)adjustWorkspaceIndexesAfterRemovingWorkspaceAtIndex:(NSInteger)removedIndex;
 - (void)showWorkspaceAtIndex:(NSInteger)index;
 - (BOOL)selectWorkspaceAtIndex:(NSInteger)index recordHistory:(BOOL)recordHistory;
+- (BOOL)selectAdjacentPanelInSelectedWorkspaceMovingForward:(BOOL)forward;
 - (BOOL)hasSelectablePreviousWorkspace;
 - (BOOL)moveWorkspaceFromIndex:(NSInteger)fromIndex toIndex:(NSInteger)toIndex;
 - (BOOL)workspaceHasCustomTitleAtIndex:(NSInteger)index;
@@ -1322,6 +1323,39 @@ ITERM_WEAKLY_REFERENCEABLE
         }
     }
     [self showWorkspaceAtIndex:index];
+    return YES;
+}
+
+- (BOOL)selectAdjacentPanelInSelectedWorkspaceMovingForward:(BOOL)forward {
+    if (!self.isShowingTideySidebar) {
+        return NO;
+    }
+    [self ensureTideyWorkspacesInitialized];
+    [self updateSelectedPanelIndexFromVisibleTabSelection];
+    Workspace *workspace = self.selectedWorkspace;
+    if (!workspace || workspace.panels.count < 2) {
+        return NO;
+    }
+
+    NSInteger currentIndex = workspace.selectedPanelIndex;
+    if (currentIndex < 0 || currentIndex >= workspace.panels.count) {
+        PTYTab *currentTab = self.currentTab;
+        currentIndex = [workspace.panels indexOfObject:currentTab];
+        if (currentIndex == NSNotFound) {
+            currentIndex = 0;
+        }
+        workspace.selectedPanelIndex = currentIndex;
+    }
+
+    NSInteger nextIndex = forward ? (currentIndex + 1) % workspace.panels.count
+                                  : (currentIndex - 1 + workspace.panels.count) % workspace.panels.count;
+    PTYTab *panel = workspace.panels[nextIndex];
+    NSInteger visibleIndex = [self indexOfTab:panel];
+    if (visibleIndex == NSNotFound) {
+        return NO;
+    }
+    workspace.selectedPanelIndex = nextIndex;
+    [_contentView.tabView selectTabViewItemAtIndex:visibleIndex];
     return YES;
 }
 
@@ -2985,11 +3019,15 @@ ITERM_WEAKLY_REFERENCEABLE
 // remove them from the menu because people may have "perform menu item" keyboard shortcuts; and
 // I certainly don't want dead menu items in my window menu. (╯°□°)╯︵ ┻━┻
 - (IBAction)selectNextTab:(nullable id)sender {
-    [[self tabView] cycleForwards:YES];
+    if (![self selectAdjacentPanelInSelectedWorkspaceMovingForward:YES]) {
+        [[self tabView] cycleForwards:YES];
+    }
 }
 
 - (IBAction)selectPreviousTab:(nullable id)sender {
-    [[self tabView] cycleForwards:NO];
+    if (![self selectAdjacentPanelInSelectedWorkspaceMovingForward:NO]) {
+        [[self tabView] cycleForwards:NO];
+    }
 }
 
 // More magic cocoa poop.
@@ -3001,11 +3039,15 @@ ITERM_WEAKLY_REFERENCEABLE
 }
 
 - (IBAction)previousTab:(id)sender {
-    [_contentView.tabView previousTab:sender];
+    if (![self selectAdjacentPanelInSelectedWorkspaceMovingForward:NO]) {
+        [_contentView.tabView previousTab:sender];
+    }
 }
 
 - (IBAction)nextTab:(id)sender {
-    [_contentView.tabView nextTab:sender];
+    if (![self selectAdjacentPanelInSelectedWorkspaceMovingForward:YES]) {
+        [_contentView.tabView nextTab:sender];
+    }
 }
 
 - (IBAction)previousPane:(id)sender {
