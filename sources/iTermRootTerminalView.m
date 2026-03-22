@@ -514,6 +514,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         [_tideyEditorPanelView addSubview:self.tideyEditorFileTreeDragHandle];
 
         self.tideySidebarToggleButton = [self newTideyChromeToggleButtonWithAction:@selector(toggleTideySidebar:)];
+        self.tideySidebarToggleButton.font = [NSFont systemFontOfSize:9 weight:NSFontWeightSemibold];
+        self.tideySidebarToggleButton.wantsLayer = NO;
+        self.tideySidebarToggleButton.contentTintColor = [NSColor colorWithWhite:0.78 alpha:1];
+        self.tideySidebarToggleButton.bezelStyle = NSBezelStyleRegularSquare;
         [self addSubview:self.tideySidebarToggleButton];
 
         self.tideyEditorFileTreeToggleButton = [self newTideyChromeToggleButtonWithAction:@selector(toggleTideyEditorFileTree:)];
@@ -2227,7 +2231,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     self.tideySidebarToggleButton.hidden = NO;
     self.tideySidebarToggleButton.title = self.shouldShowTideySidebar ? @"◀" : @"▶";
     const CGFloat sidebarButtonX = self.shouldShowTideySidebar
-        ? MAX(0, self.tideySidebarWidth - kTideyChromeToggleButtonWidth / 2.0)
+        ? MAX(0, self.tideySidebarWidth - kTideyChromeToggleButtonWidth - 1)
         : 0;
     self.tideySidebarToggleButton.frame = NSMakeRect(sidebarButtonX,
                                                      sidebarButtonY,
