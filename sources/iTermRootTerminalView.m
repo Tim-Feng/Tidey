@@ -368,6 +368,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _delegate = delegate;
         _shouldShowTideySidebar = YES;
         _shouldShowTideyEditorPanel = NO;
+        _shouldShowTideyEditorFileTree = YES;
         _tideySidebarPreferredWidth = kTideySidebarWidth;
         _tideyEditorPreferredWidth = kTideyEditorPanelWidth;
         _tideyEditorFileTreePreferredWidth = kTideyEditorFileTreeWidth;
@@ -1802,14 +1803,14 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         return;
     }
     const NSRect bounds = _tideyEditorPanelView.bounds;
-    const CGFloat fileTreeWidth = MIN(self.tideyEditorFileTreeWidth, MAX(0, NSWidth(bounds) - kTideyMinimumEditorContentWidth));
+    const CGFloat fileTreeWidth = self.shouldShowTideyEditorFileTree
+        ? MIN(self.tideyEditorFileTreeWidth, MAX(0, NSWidth(bounds) - kTideyMinimumEditorContentWidth))
+        : 0;
     const CGFloat editorWidth = MAX(0, NSWidth(bounds) - fileTreeWidth);
     _tideyEditorWebView.frame = NSMakeRect(0, 0, editorWidth, NSHeight(bounds));
+    _tideyEditorFileTreeContainerView.hidden = !self.shouldShowTideyEditorFileTree;
     _tideyEditorFileTreeContainerView.frame = NSMakeRect(editorWidth, 0, fileTreeWidth, NSHeight(bounds));
-    _tideyEditorFileTreeScrollView.frame = NSMakeRect(0,
-                                                      0,
-                                                      fileTreeWidth,
-                                                      NSHeight(_tideyEditorFileTreeContainerView.bounds));
+    _tideyEditorFileTreeScrollView.frame = _tideyEditorFileTreeContainerView.bounds;
     self.tideyEditorFileTreeDragHandle.frame = NSMakeRect(MAX(0, editorWidth - kTideyDragHandleWidth / 2.0),
                                                           0,
                                                           kTideyDragHandleWidth,
@@ -2092,8 +2093,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                       NSHeight(self.bounds));
     }
 
-    const CGFloat fileTreeWidth = self.tideyEditorFileTreeWidth;
-    self.tideyEditorFileTreeDragHandle.hidden = (_tideyEditorPanelView.hidden || fileTreeWidth <= 0);
+    const CGFloat fileTreeWidth = self.shouldShowTideyEditorFileTree ? self.tideyEditorFileTreeWidth : 0;
+    self.tideyEditorFileTreeDragHandle.hidden = (_tideyEditorPanelView.hidden ||
+                                                 !self.shouldShowTideyEditorFileTree ||
+                                                 fileTreeWidth <= 0);
 }
 
 - (void)layoutSubviewsWithHiddenTabBarForWindow:(NSWindow *)thisWindow {

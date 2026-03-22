@@ -1706,6 +1706,7 @@ ITERM_WEAKLY_REFERENCEABLE
 
 - (IBAction)toggleTideySidebar:(id)sender {
     _contentView.shouldShowTideySidebar = !_contentView.shouldShowTideySidebar;
+    _contentView.shouldShowTideyEditorFileTree = !_contentView.shouldShowTideyEditorFileTree;
     [_contentView reloadTideySidebar];
     [self repositionWidgets];
     [self notifyTmuxOfWindowResize];

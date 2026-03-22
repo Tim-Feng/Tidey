@@ -126,6 +126,9 @@ extern const NSInteger iTermRootTerminalViewWindowNumberLabelWidth;
 // Should the Tidey editor panel be visible?
 @property(nonatomic) BOOL shouldShowTideyEditorPanel;
 
+// Should the Tidey editor file tree be visible?
+@property(nonatomic) BOOL shouldShowTideyEditorFileTree;
+
 // How wide the toolbelt should be. User may drag it to change.
 // ALWAYS USE THE FLOOR OF THIS VALUE!
 @property(nonatomic) CGFloat toolbeltWidth;
