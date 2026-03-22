@@ -64,6 +64,7 @@ static const CGFloat kTideyMinimumEditorPanelWidth = 280;
 static const CGFloat kTideyMinimumEditorContentWidth = 160;
 static const CGFloat kTideyMinimumFileTreeWidth = 120;
 static const CGFloat kTideyDragHandleWidth = 4;
+static const CGFloat kTideyEditorFileTreeToolbarHeight = 28;
 static NSPasteboardType const iTermRootTerminalViewTideySidebarWorkspacePasteboardType =
     @"com.tidey.workspace-row";
 
@@ -71,6 +72,8 @@ typedef struct {
     CGFloat top;
     CGFloat bottom;
 } iTermDecorationHeights;
+
+@class TideyEditorFileNode;
 
 @interface iTermRootTerminalView()<
     iTermTabBarControlViewDelegate,
@@ -115,6 +118,16 @@ typedef struct {
 - (NSString *)tideyEditorFileTreeRootPath;
 - (void)layoutTideyEditorContents;
 - (NSTableCellView *)newTideyEditorFileTreeCellView;
+- (NSMenu *)tideyEditorFileTreeMenuForNode:(TideyEditorFileNode *)node;
+- (NSMenuItem *)tideyEditorFileTreeMenuItemWithTitle:(NSString *)title
+                                              action:(SEL)action
+                                                path:(NSString *)path;
+- (NSString *)tideyEditorRelativePathForPath:(NSString *)path;
+- (void)tideyEditorCollapseAllFileTreeItems:(id)sender;
+- (void)tideyEditorCopyFileTreePath:(id)sender;
+- (void)tideyEditorCopyFileTreeRelativePath:(id)sender;
+- (void)tideyEditorOpenFileTreeItemInExternalEditor:(id)sender;
+- (void)tideyEditorRevealFileTreeItemInFinder:(id)sender;
 - (NSString *)tideySidebarWorkspaceTitleAtIndex:(NSInteger)index;
 - (NSString *)tideySidebarWorkspaceSubtitleAtIndex:(NSInteger)index;
 - (BOOL)tideySidebarWorkspacePinnedAtIndex:(NSInteger)index;
@@ -311,6 +324,9 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSTextField *_tideyEditorPanelLabel;
     WKWebView *_tideyEditorWebView;
     NSView *_tideyEditorFileTreeContainerView;
+    NSView *_tideyEditorFileTreeToolbarView;
+    NSTextField *_tideyEditorFileTreeTitleLabel;
+    NSButton *_tideyEditorFileTreeCollapseButton;
     NSScrollView *_tideyEditorFileTreeScrollView;
     NSOutlineView *_tideyEditorFileTreeView;
     TideyEditorFileNode *_tideyEditorFileTreeRootNode;
@@ -437,6 +453,35 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                                                        blue:0.17
                                                                                       alpha:1].CGColor;
         [_tideyEditorPanelView addSubview:_tideyEditorFileTreeContainerView];
+
+        _tideyEditorFileTreeToolbarView = [[NSView alloc] initWithFrame:NSZeroRect];
+        _tideyEditorFileTreeToolbarView.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
+        _tideyEditorFileTreeToolbarView.wantsLayer = YES;
+        _tideyEditorFileTreeToolbarView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.10
+                                                                                    green:0.11
+                                                                                     blue:0.15
+                                                                                    alpha:1].CGColor;
+        [_tideyEditorFileTreeContainerView addSubview:_tideyEditorFileTreeToolbarView];
+
+        _tideyEditorFileTreeTitleLabel = [NSTextField labelWithString:@"Files"];
+        _tideyEditorFileTreeTitleLabel.font = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
+        _tideyEditorFileTreeTitleLabel.textColor = [NSColor colorWithWhite:0.85 alpha:1];
+        _tideyEditorFileTreeTitleLabel.translatesAutoresizingMaskIntoConstraints = NO;
+        [_tideyEditorFileTreeToolbarView addSubview:_tideyEditorFileTreeTitleLabel];
+
+        _tideyEditorFileTreeCollapseButton = [NSButton buttonWithTitle:@"Collapse All"
+                                                                target:self
+                                                                action:@selector(tideyEditorCollapseAllFileTreeItems:)];
+        _tideyEditorFileTreeCollapseButton.bezelStyle = NSBezelStyleTexturedRounded;
+        _tideyEditorFileTreeCollapseButton.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
+        _tideyEditorFileTreeCollapseButton.translatesAutoresizingMaskIntoConstraints = NO;
+        [_tideyEditorFileTreeToolbarView addSubview:_tideyEditorFileTreeCollapseButton];
+        [NSLayoutConstraint activateConstraints:@[
+            [_tideyEditorFileTreeTitleLabel.leadingAnchor constraintEqualToAnchor:_tideyEditorFileTreeToolbarView.leadingAnchor constant:8],
+            [_tideyEditorFileTreeTitleLabel.centerYAnchor constraintEqualToAnchor:_tideyEditorFileTreeToolbarView.centerYAnchor],
+            [_tideyEditorFileTreeCollapseButton.trailingAnchor constraintEqualToAnchor:_tideyEditorFileTreeToolbarView.trailingAnchor constant:-8],
+            [_tideyEditorFileTreeCollapseButton.centerYAnchor constraintEqualToAnchor:_tideyEditorFileTreeToolbarView.centerYAnchor],
+        ]];
 
         _tideyEditorFileTreeScrollView = [[NSScrollView alloc] initWithFrame:NSZeroRect];
         _tideyEditorFileTreeScrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
@@ -766,6 +811,19 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         if (NSPointInRect(pointInTable, _tideySidebarTableView.bounds)) {
             NSInteger row = [_tideySidebarTableView rowAtPoint:pointInTable];
             return [self tideySidebarMenuForRow:row];
+        }
+    }
+    if (_tideyEditorPanelView && !_tideyEditorPanelView.hidden) {
+        const NSPoint pointInFileTree = [_tideyEditorFileTreeView convertPoint:event.locationInWindow fromView:nil];
+        if (NSPointInRect(pointInFileTree, _tideyEditorFileTreeView.bounds)) {
+            NSInteger row = [_tideyEditorFileTreeView rowAtPoint:pointInFileTree];
+            if (row >= 0) {
+                [_tideyEditorFileTreeView selectRowIndexes:[NSIndexSet indexSetWithIndex:row]
+                                      byExtendingSelection:NO];
+                TideyEditorFileNode *node = [_tideyEditorFileTreeView itemAtRow:row];
+                return [self tideyEditorFileTreeMenuForNode:node];
+            }
+            return nil;
         }
     }
     if (_windowTitleLabel.hidden) {
@@ -1782,7 +1840,14 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     const CGFloat editorWidth = MAX(0, NSWidth(bounds) - fileTreeWidth);
     _tideyEditorWebView.frame = NSMakeRect(0, 0, editorWidth, NSHeight(bounds));
     _tideyEditorFileTreeContainerView.frame = NSMakeRect(editorWidth, 0, fileTreeWidth, NSHeight(bounds));
-    _tideyEditorFileTreeScrollView.frame = _tideyEditorFileTreeContainerView.bounds;
+    _tideyEditorFileTreeToolbarView.frame = NSMakeRect(0,
+                                                       NSHeight(_tideyEditorFileTreeContainerView.bounds) - kTideyEditorFileTreeToolbarHeight,
+                                                       fileTreeWidth,
+                                                       kTideyEditorFileTreeToolbarHeight);
+    _tideyEditorFileTreeScrollView.frame = NSMakeRect(0,
+                                                      0,
+                                                      fileTreeWidth,
+                                                      MAX(0, NSHeight(_tideyEditorFileTreeContainerView.bounds) - kTideyEditorFileTreeToolbarHeight));
     self.tideyEditorFileTreeDragHandle.frame = NSMakeRect(MAX(0, editorWidth - kTideyDragHandleWidth / 2.0),
                                                           0,
                                                           kTideyDragHandleWidth,
@@ -1825,6 +1890,17 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     _tideyEditorLoadedPath = [path copy];
     [self tideyEditorSetLanguage:[self tideyEditorLanguageForPath:path]];
     [self tideyEditorSetValue:contents];
+}
+
+- (void)openTideyEditorFileAtPath:(NSString *)path {
+    if (path.length == 0) {
+        return;
+    }
+    if (_tideyEditorPanelView.hidden) {
+        self.shouldShowTideyEditorPanel = YES;
+        [self layoutSubviews];
+    }
+    [self tideyEditorLoadFileAtPath:path];
 }
 
 - (NSString *)tideyEditorLanguageForPath:(NSString *)path {
@@ -2485,6 +2561,92 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     [cellView addSubview:titleField];
 
     return cellView;
+}
+
+- (NSMenu *)tideyEditorFileTreeMenuForNode:(TideyEditorFileNode *)node {
+    if (node.path.length == 0) {
+        return nil;
+    }
+    NSMenu *menu = [[NSMenu alloc] initWithTitle:@"Tidey File Tree"];
+    [menu addItem:[self tideyEditorFileTreeMenuItemWithTitle:@"Copy Path"
+                                                      action:@selector(tideyEditorCopyFileTreePath:)
+                                                        path:node.path]];
+    [menu addItem:[self tideyEditorFileTreeMenuItemWithTitle:@"Copy Relative Path"
+                                                      action:@selector(tideyEditorCopyFileTreeRelativePath:)
+                                                        path:node.path]];
+    [menu addItem:[NSMenuItem separatorItem]];
+    [menu addItem:[self tideyEditorFileTreeMenuItemWithTitle:@"Open in External Editor"
+                                                      action:@selector(tideyEditorOpenFileTreeItemInExternalEditor:)
+                                                        path:node.path]];
+    [menu addItem:[self tideyEditorFileTreeMenuItemWithTitle:@"Reveal in Finder"
+                                                      action:@selector(tideyEditorRevealFileTreeItemInFinder:)
+                                                        path:node.path]];
+    return menu;
+}
+
+- (NSMenuItem *)tideyEditorFileTreeMenuItemWithTitle:(NSString *)title
+                                              action:(SEL)action
+                                                path:(NSString *)path {
+    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title action:action keyEquivalent:@""];
+    item.target = self;
+    item.representedObject = path;
+    return item;
+}
+
+- (NSString *)tideyEditorRelativePathForPath:(NSString *)path {
+    NSString *rootPath = [[self tideyEditorFileTreeRootPath] stringByStandardizingPath];
+    NSString *normalizedPath = [path stringByStandardizingPath];
+    if ([normalizedPath isEqualToString:rootPath]) {
+        return @"~";
+    }
+    NSString *prefix = [rootPath stringByAppendingString:@"/"];
+    if ([normalizedPath hasPrefix:prefix]) {
+        return [normalizedPath substringFromIndex:prefix.length];
+    }
+    return normalizedPath.lastPathComponent ?: normalizedPath;
+}
+
+- (void)tideyEditorCollapseAllFileTreeItems:(id)sender {
+    for (TideyEditorFileNode *child in [_tideyEditorFileTreeRootNode loadChildren]) {
+        [_tideyEditorFileTreeView collapseItem:child collapseChildren:YES];
+    }
+}
+
+- (void)tideyEditorCopyFileTreePath:(id)sender {
+    NSString *path = [sender representedObject];
+    if (path.length == 0) {
+        return;
+    }
+    NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+    [pasteboard clearContents];
+    [pasteboard setString:path forType:NSPasteboardTypeString];
+}
+
+- (void)tideyEditorCopyFileTreeRelativePath:(id)sender {
+    NSString *path = [sender representedObject];
+    if (path.length == 0) {
+        return;
+    }
+    NSString *relativePath = [self tideyEditorRelativePathForPath:path];
+    NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+    [pasteboard clearContents];
+    [pasteboard setString:relativePath forType:NSPasteboardTypeString];
+}
+
+- (void)tideyEditorOpenFileTreeItemInExternalEditor:(id)sender {
+    NSString *path = [sender representedObject];
+    if (path.length == 0) {
+        return;
+    }
+    [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:path]];
+}
+
+- (void)tideyEditorRevealFileTreeItemInFinder:(id)sender {
+    NSString *path = [sender representedObject];
+    if (path.length == 0) {
+        return;
+    }
+    [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[ [NSURL fileURLWithPath:path] ]];
 }
 
 - (void)outlineViewSelectionDidChange:(NSNotification *)notification {

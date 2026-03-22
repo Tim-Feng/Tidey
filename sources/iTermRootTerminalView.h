@@ -189,5 +189,6 @@ extern const NSInteger iTermRootTerminalViewWindowNumberLabelWidth;
 - (BOOL)selectTideySidebarWorkspaceAtIndex:(NSInteger)index;
 - (NSInteger)numberOfTideySidebarWorkspaces;
 - (void)reloadTideySidebar;
+- (void)openTideyEditorFileAtPath:(NSString *)path;
 
 @end

@@ -1717,6 +1717,18 @@ ITERM_WEAKLY_REFERENCEABLE
     [self notifyTmuxOfWindowResize];
 }
 
+- (void)tideyOpenFileInEditor:(NSString *)path {
+    if (path.length == 0) {
+        return;
+    }
+    if (!_contentView.shouldShowTideyEditorPanel) {
+        _contentView.shouldShowTideyEditorPanel = YES;
+        [self repositionWidgets];
+        [self notifyTmuxOfWindowResize];
+    }
+    [_contentView openTideyEditorFileAtPath:path];
+}
+
 - (IBAction)selectTideySidebarWorkspaceAtIndexAction:(id)sender {
     const NSInteger index = [sender tag];
     [self rootTerminalViewSelectTideySidebarWorkspaceAtIndex:index];

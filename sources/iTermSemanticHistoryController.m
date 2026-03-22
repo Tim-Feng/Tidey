@@ -59,6 +59,10 @@ NSString *const kSemanticHistoryColumnNumberKey = @"semanticHistory.columnNumber
 @interface iTermSemanticHistoryController()<iTermObject>
 @end
 
+@interface NSWindowController (TideySemanticHistory)
+- (void)tideyOpenFileInEditor:(NSString *)path;
+@end
+
 @implementation iTermSemanticHistoryController {
     iTermExpressionEvaluator *_expressionEvaluator;
     NSMutableArray<iTermCommandRunner *> *_commandRunners;
@@ -722,6 +726,11 @@ NSString *const kSemanticHistoryColumnNumberKey = @"semanticHistory.columnNumber
 
 - (void)openFile:(NSString *)fullPath fragment:(NSString *)fragment target:(NSString *)target window:(NSWindow *)window {
     DLog(@"Open file %@", fullPath);
+    NSWindowController *windowController = window.windowController;
+    if ([windowController respondsToSelector:@selector(tideyOpenFileInEditor:)]) {
+        [windowController tideyOpenFileInEditor:fullPath];
+        return;
+    }
     [[iTermLaunchServices sharedInstance] openFile:fullPath
                                           fragment:fragment
                                             target:target
