@@ -2250,8 +2250,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     self.tideyEditorFileTreeToggleButton.title = self.shouldShowTideyEditorFileTree ? @"▶" : @"◀";
     const CGFloat editorPanelWidth = NSWidth(_tideyEditorPanelView.bounds);
     const CGFloat fileTreeButtonX = self.shouldShowTideyEditorFileTree
-        ? MAX(0, editorPanelWidth - self.tideyEditorFileTreeWidth - kTideyChromeToggleButtonWidth - 1)
-        : MAX(0, editorPanelWidth - kTideyChromeToggleButtonWidth);
+        ? MAX(0, editorPanelWidth - self.tideyEditorFileTreeWidth + 1)
+        : MAX(0, editorPanelWidth - kTideyChromeToggleButtonWidth - 1);
     const CGFloat fileTreeButtonY = floor((NSHeight(_tideyEditorPanelView.bounds) - kTideyChromeToggleButtonHeight) / 2.0);
     self.tideyEditorFileTreeToggleButton.frame = NSMakeRect(fileTreeButtonX,
                                                             fileTreeButtonY,
