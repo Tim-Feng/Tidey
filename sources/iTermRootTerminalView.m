@@ -55,7 +55,7 @@ const NSInteger iTermRootTerminalViewWindowNumberLabelWidth = 40;
 static const CGFloat kMinimumToolbeltSizeInPoints = 100;
 static const CGFloat kMinimumToolbeltSizeAsFractionOfWindow = 0.05;
 static const CGFloat kMaximumToolbeltSizeAsFractionOfWindow = 0.5;
-static const CGFloat kTideySidebarWidth = 220;
+static const CGFloat kTideySidebarWidth = 200;
 static const CGFloat kTideyEditorPanelWidth = 400;
 static const CGFloat kTideyEditorFileTreeWidth = 200;
 static const CGFloat kTideyMinimumSidebarWidth = 160;
@@ -401,8 +401,9 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _shouldShowTideyEditorPanel = NO;
         _shouldShowTideyEditorFileTree = YES;
         _tideySidebarPreferredWidth = kTideySidebarWidth;
-        _tideyEditorPreferredWidth = kTideyEditorPanelWidth;
         _tideyEditorFileTreePreferredWidth = kTideyEditorFileTreeWidth;
+        _tideyEditorPreferredWidth = MAX(kTideyMinimumEditorPanelWidth,
+                                         floor(NSWidth(frameRect) / 2.0));
         [self tideyRestoreEditorStateFromDefaults];
 
         self.autoresizesSubviews = YES;
