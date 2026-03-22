@@ -64,6 +64,8 @@ static const CGFloat kTideyMinimumEditorPanelWidth = 280;
 static const CGFloat kTideyMinimumEditorContentWidth = 160;
 static const CGFloat kTideyMinimumFileTreeWidth = 120;
 static const CGFloat kTideyDragHandleWidth = 4;
+static const CGFloat kTideyChromeToggleButtonWidth = 18;
+static const CGFloat kTideyChromeToggleButtonHeight = 34;
 static NSPasteboardType const iTermRootTerminalViewTideySidebarWorkspacePasteboardType =
     @"com.tidey.workspace-row";
 
@@ -93,6 +95,8 @@ typedef struct {
 @property(nonatomic, strong) iTermDragHandleView *tideySidebarDragHandle;
 @property(nonatomic, strong) iTermDragHandleView *tideyEditorDragHandle;
 @property(nonatomic, strong) iTermDragHandleView *tideyEditorFileTreeDragHandle;
+@property(nonatomic, strong) NSButton *tideySidebarToggleButton;
+@property(nonatomic, strong) NSButton *tideyEditorFileTreeToggleButton;
 
 - (CGFloat)tideySidebarWidth;
 - (CGFloat)tideyEditorPanelWidth;
@@ -101,6 +105,7 @@ typedef struct {
 - (void)layoutTideyEditorPanelWithOutputs:(iTermLayoutOutputs)outputs;
 - (iTermLayoutOutputs)layoutOutputsByApplyingTideyChromeOffsets:(iTermLayoutOutputs)outputs;
 - (void)updateTideyChromeDragHandles;
+- (void)updateTideyChromeToggleButtons;
 - (void)syncTideyEditorFileTreeRootIfNeeded;
 - (void)ensureTideyEditorWebView;
 - (void)loadTideyEditorShellIfNeeded;
@@ -362,6 +367,24 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     iTermLayerBackedSolidColorView *_notchMask NS_AVAILABLE_MAC(12_0);
 }
 
+- (NSButton *)newTideyChromeToggleButtonWithAction:(SEL)action {
+    NSButton *button = [[NSButton alloc] initWithFrame:NSMakeRect(0, 0,
+                                                                  kTideyChromeToggleButtonWidth,
+                                                                  kTideyChromeToggleButtonHeight)];
+    button.bordered = NO;
+    button.buttonType = NSButtonTypeMomentaryPushIn;
+    button.font = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
+    button.focusRingType = NSFocusRingTypeNone;
+    button.alignment = NSTextAlignmentCenter;
+    button.wantsLayer = YES;
+    button.layer.cornerRadius = 7;
+    button.layer.backgroundColor = [NSColor colorWithWhite:0.20 alpha:0.92].CGColor;
+    button.contentTintColor = [NSColor colorWithWhite:0.92 alpha:1];
+    button.target = _delegate;
+    button.action = action;
+    return button;
+}
+
 - (instancetype)initWithFrame:(NSRect)frameRect
                         color:(NSColor *)color
                tabBarDelegate:(id<iTermTabBarControlViewDelegate,PSMTabBarControlDelegate>)tabBarDelegate
@@ -490,6 +513,12 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         self.tideyEditorFileTreeDragHandle.delegate = self;
         [_tideyEditorPanelView addSubview:self.tideyEditorFileTreeDragHandle];
 
+        self.tideySidebarToggleButton = [self newTideyChromeToggleButtonWithAction:@selector(toggleTideySidebar:)];
+        [self addSubview:self.tideySidebarToggleButton];
+
+        self.tideyEditorFileTreeToggleButton = [self newTideyChromeToggleButtonWithAction:@selector(toggleTideyEditorFileTree:)];
+        [_tideyEditorPanelView addSubview:self.tideyEditorFileTreeToggleButton];
+
         // Create the tab view.
         self.tabView = [[PTYTabView alloc] initWithFrame:self.bounds];
         self.tabView.drawsBackground = NO;
@@ -500,6 +529,11 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _tabView.tabViewType = NSNoTabsNoBorder;
         _tabView.swipeHandler = delegate;
         [self addSubview:_tabView];
+        [self addSubview:self.tideySidebarDragHandle positioned:NSWindowAbove relativeTo:_tabView];
+        [self addSubview:self.tideyEditorDragHandle positioned:NSWindowAbove relativeTo:_tabView];
+        [self addSubview:self.tideySidebarToggleButton positioned:NSWindowAbove relativeTo:_tabView];
+        [_tideyEditorPanelView addSubview:self.tideyEditorFileTreeDragHandle positioned:NSWindowAbove relativeTo:nil];
+        [_tideyEditorPanelView addSubview:self.tideyEditorFileTreeToggleButton positioned:NSWindowAbove relativeTo:nil];
 
         // Create the tab bar.
         NSRect tabBarFrame = self.bounds;
@@ -1807,6 +1841,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 - (void)layoutTideyEditorContents {
     if (_tideyEditorPanelView.hidden) {
+        [self updateTideyChromeToggleButtons];
         return;
     }
     const NSRect bounds = _tideyEditorPanelView.bounds;
@@ -1822,6 +1857,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                           0,
                                                           kTideyDragHandleWidth,
                                                           NSHeight(bounds));
+    [self updateTideyChromeToggleButtons];
 }
 
 - (void)tideyEditorLoadDemoFileIfNeeded {
@@ -2109,17 +2145,16 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 - (void)layoutTideySidebar {
     const CGFloat width = self.tideySidebarWidth;
     _tideySidebarView.hidden = (width <= 0);
-    if (width <= 0) {
-        return;
+    if (width > 0) {
+        _tideySidebarView.frame = NSMakeRect(0, 0, width, NSHeight(self.bounds));
+        const CGFloat titleTopInset = 0;
+        const CGFloat listTop = NSHeight(_tideySidebarView.bounds);
+        _tideySidebarScrollView.frame = NSMakeRect(0,
+                                                   titleTopInset,
+                                                   width,
+                                                   MAX(0, listTop - titleTopInset));
     }
-
-    _tideySidebarView.frame = NSMakeRect(0, 0, width, NSHeight(self.bounds));
-    const CGFloat titleTopInset = 0;
-    const CGFloat listTop = NSHeight(_tideySidebarView.bounds);
-    _tideySidebarScrollView.frame = NSMakeRect(0,
-                                               titleTopInset,
-                                               width,
-                                               MAX(0, listTop - titleTopInset));
+    [self updateTideyChromeToggleButtons];
 }
 
 - (void)layoutTideyEditorPanelWithOutputs:(iTermLayoutOutputs)outputs {
@@ -2184,6 +2219,36 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     self.tideyEditorFileTreeDragHandle.hidden = (_tideyEditorPanelView.hidden ||
                                                  !self.shouldShowTideyEditorFileTree ||
                                                  fileTreeWidth <= 0);
+    [self updateTideyChromeToggleButtons];
+}
+
+- (void)updateTideyChromeToggleButtons {
+    const CGFloat sidebarButtonY = floor((NSHeight(self.bounds) - kTideyChromeToggleButtonHeight) / 2.0);
+    self.tideySidebarToggleButton.hidden = NO;
+    self.tideySidebarToggleButton.title = self.shouldShowTideySidebar ? @"◀" : @"▶";
+    const CGFloat sidebarButtonX = self.shouldShowTideySidebar
+        ? MAX(0, self.tideySidebarWidth - kTideyChromeToggleButtonWidth / 2.0)
+        : 0;
+    self.tideySidebarToggleButton.frame = NSMakeRect(sidebarButtonX,
+                                                     sidebarButtonY,
+                                                     kTideyChromeToggleButtonWidth,
+                                                     kTideyChromeToggleButtonHeight);
+
+    const BOOL showFileTreeToggle = self.shouldShowTideyEditorPanel;
+    self.tideyEditorFileTreeToggleButton.hidden = !showFileTreeToggle;
+    if (!showFileTreeToggle) {
+        return;
+    }
+    self.tideyEditorFileTreeToggleButton.title = self.shouldShowTideyEditorFileTree ? @"▶" : @"◀";
+    const CGFloat editorPanelWidth = NSWidth(_tideyEditorPanelView.bounds);
+    const CGFloat fileTreeButtonX = self.shouldShowTideyEditorFileTree
+        ? MAX(0, editorPanelWidth - self.tideyEditorFileTreeWidth - kTideyChromeToggleButtonWidth / 2.0)
+        : MAX(0, editorPanelWidth - kTideyChromeToggleButtonWidth);
+    const CGFloat fileTreeButtonY = floor((NSHeight(_tideyEditorPanelView.bounds) - kTideyChromeToggleButtonHeight) / 2.0);
+    self.tideyEditorFileTreeToggleButton.frame = NSMakeRect(fileTreeButtonX,
+                                                            fileTreeButtonY,
+                                                            kTideyChromeToggleButtonWidth,
+                                                            kTideyChromeToggleButtonHeight);
 }
 
 - (void)layoutSubviewsWithHiddenTabBarForWindow:(NSWindow *)thisWindow {
