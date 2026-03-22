@@ -238,6 +238,7 @@ typedef NS_ENUM(int, iTermShouldHaveTitleSeparator) {
 
 @property(nonatomic, retain) NSMutableArray<PTYTab *> *panels;
 @property(nonatomic) NSInteger selectedPanelIndex;
+@property(nonatomic) NSTimeInterval creationTime;
 
 - (instancetype)initWithPanel:(PTYTab *)panel;
 - (PTYTab *)selectedPanel;
@@ -254,6 +255,7 @@ typedef NS_ENUM(int, iTermShouldHaveTitleSeparator) {
             [_panels addObject:panel];
         }
         _selectedPanelIndex = panel ? 0 : -1;
+        _creationTime = [NSDate it_timeSinceBoot];
     }
     return self;
 }
@@ -1156,6 +1158,14 @@ ITERM_WEAKLY_REFERENCEABLE
 
 - (Workspace *)selectedWorkspace {
     return [self workspaceAtIndex:self.selectedWorkspaceIndex];
+}
+
+- (BOOL)tideyWorkspaceIsInStartupGracePeriod:(Workspace *)workspace {
+    if (!workspace) {
+        return NO;
+    }
+    static const NSTimeInterval kTideyWorkspaceStartupGracePeriod = 2.0;
+    return ([NSDate it_timeSinceBoot] - workspace.creationTime) < kTideyWorkspaceStartupGracePeriod;
 }
 
 - (void)ensureTideyWorkspacesInitialized {
@@ -10902,6 +10912,10 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
 }
 
 - (NSString *)rootTerminalViewCurrentTabSubtitle {
+    if ([self tideyWorkspaceIsInStartupGracePeriod:self.selectedWorkspace]) {
+        return nil;
+    }
+
     const iTermWindowType windowType = exitingLionFullscreen_ ? _savedWindowType : _windowType;
     switch (windowType) {
         case WINDOW_TYPE_COMPACT:
@@ -11002,7 +11016,7 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
 }
 
 - (NSString *)tideySidebarDisplaySubtitleForSession:(PTYSession *)session panel:(PTYTab *)panel {
-    if (session.isWaitingForFirstPrompt) {
+    if ([self tideyWorkspaceIsInStartupGracePeriod:[self workspaceAtIndex:[self indexOfWorkspaceContainingPanel:panel]]]) {
         return @"Terminal";
     }
 
@@ -11787,7 +11801,7 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
             [aTab setTitleOverride:initialTitle];
             [aTabViewItem setLabel:initialTitle];
             __weak __typeof(aTab) weakTab = aTab;
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 if ([weakTab.titleOverride isEqualToString:initialTitle]) {
                     [weakTab setTitleOverride:nil];
                 }
@@ -11907,6 +11921,9 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
 }
 
 - (NSString *)undecoratedWindowTitle {
+    if ([self tideyWorkspaceIsInStartupGracePeriod:self.selectedWorkspace]) {
+        return @"Terminal";
+    }
     if ([self.scope valueForVariableName:iTermVariableKeyWindowTitleOverrideFormat] &&
         self.scope.windowTitleOverrideFormat.length > 0) {
         return self.scope.windowTitleOverride;
