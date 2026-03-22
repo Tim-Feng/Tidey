@@ -125,6 +125,7 @@ static NSView *TideyFindCloseView(NSView *container) {
 - (void)ensureTideyEditorWebView;
 - (void)loadTideyEditorShellIfNeeded;
 - (void)tideyEditorLoadDemoFileIfNeeded;
+- (BOOL)tideyEditorIsDemoFilePath:(NSString *)path;
 - (void)tideyEditorLoadFileAtPath:(NSString *)path;
 - (void)tideyOpenEditorFileAtPath:(NSString *)path preview:(BOOL)preview;
 - (void)tideyOpenOrSelectEditorTabAtPath:(NSString *)path;
@@ -2031,11 +2032,31 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     return NSHomeDirectory();
 }
 
+- (BOOL)tideyEditorIsDemoFilePath:(NSString *)path {
+    NSString *normalizedPath = [path stringByStandardizingPath];
+    if (normalizedPath.length == 0) {
+        return NO;
+    }
+    NSString *sourcePath = [NSString stringWithUTF8String:__FILE__];
+    NSString *sourcesDir = [sourcePath stringByDeletingLastPathComponent];
+    NSString *repoRoot = [sourcesDir stringByDeletingLastPathComponent];
+    NSArray<NSString *> *candidates = @[
+        [[repoRoot stringByAppendingPathComponent:@"README.md"] stringByStandardizingPath],
+        [[repoRoot stringByAppendingPathComponent:@"sources/PseudoTerminal.m"] stringByStandardizingPath],
+    ];
+    return [candidates containsObject:normalizedPath];
+}
+
 - (void)tideyRestoreEditorStateFromDefaults {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     NSFileManager *fileManager = [NSFileManager defaultManager];
 
     NSString *savedFilePath = [[defaults stringForKey:kTideyLastEditorFilePathDefaultsKey] stringByStandardizingPath];
+    if ([self tideyEditorIsDemoFilePath:savedFilePath]) {
+        [defaults removeObjectForKey:kTideyLastEditorFilePathDefaultsKey];
+        [defaults removeObjectForKey:kTideyLastEditorFileTreeRootDefaultsKey];
+        savedFilePath = nil;
+    }
     BOOL isDirectory = NO;
     if (savedFilePath.length > 0 &&
         [fileManager fileExistsAtPath:savedFilePath isDirectory:&isDirectory] &&
@@ -2068,6 +2089,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     BOOL isDirectory = NO;
     NSString *loadedPath = [_tideyEditorLoadedPath stringByStandardizingPath];
     if (loadedPath.length > 0 &&
+        ![self tideyEditorIsDemoFilePath:loadedPath] &&
         [fileManager fileExistsAtPath:loadedPath isDirectory:&isDirectory] &&
         !isDirectory) {
         [defaults setObject:loadedPath forKey:kTideyLastEditorFilePathDefaultsKey];
@@ -2384,6 +2406,12 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         }
         candidate = parent;
     }
+    NSString *homePath = [NSHomeDirectory() stringByStandardizingPath];
+    if (homePath.length > 0 &&
+        ([normalizedPath isEqualToString:homePath] ||
+         [normalizedPath hasPrefix:[homePath stringByAppendingString:@"/"]])) {
+        return homePath;
+    }
     return isDirectory ? normalizedPath : normalizedPath.stringByDeletingLastPathComponent;
 }
 
@@ -2533,7 +2561,9 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         [self tideyEditorRevealFileAtPath:restoredPath];
         _tideyEditorLoadedDemoFile = YES;
     } else {
-        [self tideyEditorLoadDemoFileIfNeeded];
+        _tideyEditorLoadedPath = nil;
+        _tideyEditorRootOverridePath = nil;
+        [self reloadTideyEditorFileTree];
     }
     [self tideyUpdateEditorPlaceholder];
 }
