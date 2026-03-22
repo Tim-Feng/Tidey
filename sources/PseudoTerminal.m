@@ -1164,7 +1164,7 @@ ITERM_WEAKLY_REFERENCEABLE
     if (!workspace) {
         return NO;
     }
-    static const NSTimeInterval kTideyWorkspaceStartupGracePeriod = 2.0;
+    static const NSTimeInterval kTideyWorkspaceStartupGracePeriod = 3.0;
     return ([NSDate it_timeSinceBoot] - workspace.creationTime) < kTideyWorkspaceStartupGracePeriod;
 }
 
@@ -10981,34 +10981,39 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
         return nil;
     }
 
+    static NSSet<NSString *> *shellNames;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        shellNames = [[NSSet alloc] initWithArray:@[
+            @"sh", @"bash", @"zsh", @"fish", @"tcsh", @"csh", @"ksh", @"dash"
+        ]];
+    });
+    BOOL (^isShellLikeName)(NSString *) = ^BOOL(NSString *value) {
+        if (value.length == 0) {
+            return NO;
+        }
+        NSString *normalized = [value hasPrefix:@"-"] ? [value substringFromIndex:1] : value;
+        return [shellNames containsObject:normalized.lowercaseString];
+    };
+
     iTermVariableScope *scope = [[session.variablesScope retain] autorelease];
     NSString *processTitle = [[[[scope valueForVariableName:iTermVariableKeySessionProcessTitle] description]
                                stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] retain];
     processTitle = [processTitle autorelease];
-    if (processTitle.length > 0) {
-        NSString *normalized = [processTitle hasPrefix:@"-"] ? [processTitle substringFromIndex:1] : processTitle;
-        static NSSet<NSString *> *shellNames;
-        static dispatch_once_t onceToken;
-        dispatch_once(&onceToken, ^{
-            shellNames = [[NSSet alloc] initWithArray:@[
-                @"sh", @"bash", @"zsh", @"fish", @"tcsh", @"csh", @"ksh", @"dash"
-            ]];
-        });
-        if (![shellNames containsObject:normalized.lowercaseString]) {
-            return processTitle;
-        }
+    if (processTitle.length > 0 && !isShellLikeName(processTitle)) {
+        return processTitle;
     }
 
     NSString *jobName = [[[[scope valueForVariableName:iTermVariableKeySessionJob] description]
                           stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] retain];
     jobName = [jobName autorelease];
-    if (jobName.length > 0) {
+    if (jobName.length > 0 && !isShellLikeName(jobName)) {
         return jobName;
     }
 
     NSString *command = [[session.currentCommand stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] retain];
     command = [command autorelease];
-    if (command.length > 0) {
+    if (command.length > 0 && !isShellLikeName(command)) {
         return command;
     }
 
