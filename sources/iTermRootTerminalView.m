@@ -244,6 +244,50 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 @class iTermRootTerminalView;
 
+@interface TideySidebarCellView : NSTableCellView
+@property(nonatomic, weak) iTermRootTerminalView *rootView;
+@property(nonatomic) BOOL hovering;
+@property(nonatomic, strong) NSTrackingArea *hoverTrackingArea;
+- (void)updateHoverState:(BOOL)hovering;
+@end
+
+@implementation TideySidebarCellView
+
+- (void)updateTrackingAreas {
+    [super updateTrackingAreas];
+    if (_hoverTrackingArea) {
+        [self removeTrackingArea:_hoverTrackingArea];
+    }
+    _hoverTrackingArea = [[NSTrackingArea alloc] initWithRect:NSZeroRect
+                                                      options:(NSTrackingMouseEnteredAndExited |
+                                                               NSTrackingActiveInKeyWindow |
+                                                               NSTrackingInVisibleRect)
+                                                        owner:self
+                                                     userInfo:nil];
+    [self addTrackingArea:_hoverTrackingArea];
+}
+
+- (void)mouseEntered:(NSEvent *)event {
+    [super mouseEntered:event];
+    [self updateHoverState:YES];
+}
+
+- (void)mouseExited:(NSEvent *)event {
+    [super mouseExited:event];
+    [self updateHoverState:NO];
+}
+
+- (void)updateHoverState:(BOOL)hovering {
+    _hovering = hovering;
+    NSButton *closeButton = (NSButton *)[self viewWithTag:1004];
+    closeButton.hidden = !hovering;
+    closeButton.alphaValue = hovering ? 1.0 : 0.0;
+}
+
+@end
+
+@class iTermRootTerminalView;
+
 @interface TideyEditorScriptMessageHandler : NSObject<WKScriptMessageHandler>
 @property(nonatomic, weak) iTermRootTerminalView *rootView;
 @end
@@ -2990,8 +3034,9 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 
 - (NSTableCellView *)newTideySidebarCellView {
-    NSTableCellView *cellView = [[NSTableCellView alloc] initWithFrame:NSZeroRect];
+    TideySidebarCellView *cellView = [[TideySidebarCellView alloc] initWithFrame:NSZeroRect];
     cellView.identifier = @"TideySidebarSessionCell";
+    cellView.rootView = self;
 
     NSImageView *pinView = [[NSImageView alloc] initWithFrame:NSMakeRect(12, 34, 12, 12)];
     pinView.tag = 1003;
@@ -3008,7 +3053,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
     NSTextField *titleField = [NSTextField newLabelStyledTextField];
     titleField.tag = 1001;
-    titleField.frame = NSMakeRect(32, 30, 164, 20);
+    titleField.frame = NSMakeRect(32, 30, 144, 20);
     titleField.autoresizingMask = NSViewWidthSizable;
     titleField.font = [NSFont systemFontOfSize:14 weight:NSFontWeightSemibold];
     titleField.textColor = [NSColor whiteColor];
@@ -3022,7 +3067,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
     NSTextField *subtitleField = [NSTextField newLabelStyledTextField];
     subtitleField.tag = 1002;
-    subtitleField.frame = NSMakeRect(32, 12, 164, 16);
+    subtitleField.frame = NSMakeRect(32, 12, 144, 16);
     subtitleField.autoresizingMask = NSViewWidthSizable;
     subtitleField.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
     subtitleField.textColor = [NSColor colorWithWhite:0.72 alpha:1];
@@ -3033,6 +3078,29 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     subtitleField.selectable = NO;
     [cellView addSubview:subtitleField];
 
+    NSButton *closeButton = [[NSButton alloc] initWithFrame:NSMakeRect(182, 31, 18, 18)];
+    closeButton.tag = 1004;
+    closeButton.autoresizingMask = NSViewMinXMargin;
+    closeButton.bordered = NO;
+    closeButton.bezelStyle = NSBezelStyleRegularSquare;
+    closeButton.buttonType = NSButtonTypeMomentaryPushIn;
+    closeButton.hidden = YES;
+    closeButton.alphaValue = 0.0;
+    closeButton.imageScaling = NSImageScaleProportionallyDown;
+    closeButton.target = self;
+    closeButton.action = @selector(tideySidebarCloseWorkspace:);
+    closeButton.contentTintColor = [NSColor colorWithWhite:0.90 alpha:0.80];
+    if (@available(macOS 11.0, *)) {
+        NSImage *closeImage = [NSImage imageWithSystemSymbolName:@"xmark"
+                                            accessibilityDescription:nil];
+        closeImage.template = YES;
+        closeButton.image = closeImage;
+    } else {
+        closeButton.title = @"✕";
+        closeButton.font = [NSFont systemFontOfSize:10 weight:NSFontWeightMedium];
+    }
+    [cellView addSubview:closeButton];
+
     return cellView;
 }
 
@@ -3042,6 +3110,11 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     cellView.textField.stringValue = [self tideySidebarWorkspaceTitleAtIndex:row];
     NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
     subtitleField.stringValue = [self tideySidebarWorkspaceSubtitleAtIndex:row];
+    NSButton *closeButton = (NSButton *)[cellView viewWithTag:1004];
+    closeButton.tag = row;
+    if ([cellView isKindOfClass:[TideySidebarCellView class]]) {
+        [(TideySidebarCellView *)cellView updateHoverState:NO];
+    }
 }
 
 - (NSView *)tideySidebarDragPreviewForRow:(NSInteger)row width:(CGFloat)width {
@@ -3075,6 +3148,12 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 
 - (NSInteger)tideySidebarWorkspaceIndexFromSender:(id)sender {
+    if ([sender isKindOfClass:[NSView class]]) {
+        NSInteger row = [_tideySidebarTableView rowForView:(NSView *)sender];
+        if (row != -1) {
+            return row;
+        }
+    }
     id representedObject = [sender representedObject];
     if (![representedObject isKindOfClass:[NSNumber class]]) {
         return NSNotFound;
