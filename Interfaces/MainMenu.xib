@@ -940,6 +940,12 @@ DQ
                                                 <action selector="toggleTideyEditorPanel:" target="-1" id="M8w-Kc-3oW"/>
                                             </connections>
                                         </menuItem>
+                                        <menuItem title="Show Tidey File Tree" keyEquivalent="f" identifier="Show Tidey File Tree" id="9dH-Ef-8jJ">
+                                            <modifierMask key="keyEquivalentModifierMask" command="YES" control="YES"/>
+                                            <connections>
+                                                <action selector="toggleTideyEditorFileTree:" target="-1" id="pJ7-3w-LgR"/>
+                                            </connections>
+                                        </menuItem>
                                         <menuItem isSeparatorItem="YES" id="e4Q-yL-Q7V"/>
                                         <menuItem title="Select Workspace 1" keyEquivalent="1" identifier="Select Workspace 1" id="q4f-uK-B4d" tag="0">
                                             <modifierMask key="keyEquivalentModifierMask" command="YES"/>

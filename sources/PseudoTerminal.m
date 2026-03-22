@@ -1706,7 +1706,6 @@ ITERM_WEAKLY_REFERENCEABLE
 
 - (IBAction)toggleTideySidebar:(id)sender {
     _contentView.shouldShowTideySidebar = !_contentView.shouldShowTideySidebar;
-    _contentView.shouldShowTideyEditorFileTree = !_contentView.shouldShowTideyEditorFileTree;
     [_contentView reloadTideySidebar];
     [self repositionWidgets];
     [self notifyTmuxOfWindowResize];
@@ -1714,6 +1713,12 @@ ITERM_WEAKLY_REFERENCEABLE
 
 - (IBAction)toggleTideyEditorPanel:(id)sender {
     _contentView.shouldShowTideyEditorPanel = !_contentView.shouldShowTideyEditorPanel;
+    [self repositionWidgets];
+    [self notifyTmuxOfWindowResize];
+}
+
+- (IBAction)toggleTideyEditorFileTree:(id)sender {
+    _contentView.shouldShowTideyEditorFileTree = !_contentView.shouldShowTideyEditorFileTree;
     [self repositionWidgets];
     [self notifyTmuxOfWindowResize];
 }
@@ -12426,6 +12431,9 @@ typedef NS_ENUM(NSUInteger, iTermBroadcastCommand) {
         return YES;
     } else if ([item action] == @selector(toggleTideyEditorPanel:)) {
         [item setState:_contentView.shouldShowTideyEditorPanel ? NSControlStateValueOn : NSControlStateValueOff];
+        return YES;
+    } else if ([item action] == @selector(toggleTideyEditorFileTree:)) {
+        [item setState:_contentView.shouldShowTideyEditorFileTree ? NSControlStateValueOn : NSControlStateValueOff];
         return YES;
     } else if ([item action] == @selector(selectTideySidebarSessionAtIndexAction:) ||
                [item action] == @selector(selectTideySidebarWorkspaceAtIndexAction:)) {
