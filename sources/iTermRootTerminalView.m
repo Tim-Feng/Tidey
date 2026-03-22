@@ -63,6 +63,7 @@ static const CGFloat kTideyMinimumTerminalWidth = 200;
 static const CGFloat kTideyMinimumEditorPanelWidth = 280;
 static const CGFloat kTideyMinimumEditorContentWidth = 160;
 static const CGFloat kTideyMinimumFileTreeWidth = 120;
+static const CGFloat kTideyEditorTabStripHeight = 34;
 static const CGFloat kTideyDragHandleWidth = 4;
 static const CGFloat kTideyChromeToggleButtonWidth = 18;
 static const CGFloat kTideyChromeToggleButtonHeight = 34;
@@ -87,6 +88,7 @@ static NSView *TideyFindCloseView(NSView *container) {
 }
 
 @class TideyEditorFileNode;
+@class TideyEditorTab;
 
 @interface iTermRootTerminalView()<
     iTermTabBarControlViewDelegate,
@@ -124,6 +126,7 @@ static NSView *TideyFindCloseView(NSView *container) {
 - (void)loadTideyEditorShellIfNeeded;
 - (void)tideyEditorLoadDemoFileIfNeeded;
 - (void)tideyEditorLoadFileAtPath:(NSString *)path;
+- (void)tideyOpenOrSelectEditorTabAtPath:(NSString *)path;
 - (void)tideyRestoreEditorStateFromDefaults;
 - (void)tideyPersistEditorState;
 - (NSString *)tideyEditorLanguageForPath:(NSString *)path;
@@ -131,6 +134,7 @@ static NSView *TideyFindCloseView(NSView *container) {
 - (void)tideyEditorRevealFileAtPath:(NSString *)path;
 - (void)tideyEditorSetValue:(NSString *)content;
 - (void)tideyEditorSetLanguage:(NSString *)language;
+- (void)tideyEditorSetEditable:(BOOL)editable;
 - (void)tideyEditorApplyPendingStateIfReady;
 - (void)tideyEditorDidBecomeReady;
 - (void)tideyEditorDidReceiveScriptMessage:(WKScriptMessage *)message;
@@ -148,6 +152,15 @@ static NSView *TideyFindCloseView(NSView *container) {
 - (void)tideyEditorCopyFileTreeRelativePath:(id)sender;
 - (void)tideyEditorOpenFileTreeItemInExternalEditor:(id)sender;
 - (void)tideyEditorRevealFileTreeItemInFinder:(id)sender;
+- (TideyEditorTab *)tideyCurrentEditorTab;
+- (void)reloadTideyEditorTabs;
+- (void)selectTideyEditorTabAtIndex:(NSInteger)index;
+- (void)closeTideyEditorTabAtIndex:(NSInteger)index;
+- (void)tideyEditorSelectTab:(id)sender;
+- (void)tideyEditorCloseTab:(id)sender;
+- (void)tideyUpdateEditorPlaceholder;
+- (void)tideyEditorDidChangeValue:(NSString *)value;
+- (NSString *)tideyEditorDisplayNameForPath:(NSString *)path;
 - (NSString *)tideySidebarWorkspaceTitleAtIndex:(NSInteger)index;
 - (NSString *)tideySidebarWorkspaceSubtitleAtIndex:(NSInteger)index;
 - (BOOL)tideySidebarWorkspacePinnedAtIndex:(NSInteger)index;
@@ -439,6 +452,35 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 @end
 
+@interface TideyEditorTab : NSObject
+@property(nonatomic, copy) NSString *path;
+@property(nonatomic, copy) NSString *displayName;
+@property(nonatomic, copy) NSString *language;
+@property(nonatomic, copy) NSString *content;
+@property(nonatomic) BOOL dirty;
++ (instancetype)tabWithPath:(NSString *)path
+                displayName:(NSString *)displayName
+                   language:(NSString *)language
+                    content:(NSString *)content;
+@end
+
+@implementation TideyEditorTab
+
++ (instancetype)tabWithPath:(NSString *)path
+                displayName:(NSString *)displayName
+                   language:(NSString *)language
+                    content:(NSString *)content {
+    TideyEditorTab *tab = [[self alloc] init];
+    tab.path = path;
+    tab.displayName = displayName;
+    tab.language = language ?: @"plaintext";
+    tab.content = content ?: @"";
+    tab.dirty = NO;
+    return tab;
+}
+
+@end
+
 @implementation iTermRootTerminalView {
     BOOL _tabViewFrameReduced;
     BOOL _haveShownToolbelt;
@@ -458,6 +500,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSTableView *_tideySidebarTableView;
     NSView *_tideyEditorPanelView;
     NSTextField *_tideyEditorPanelLabel;
+    NSView *_tideyEditorTabStripView;
     WKWebView *_tideyEditorWebView;
     NSView *_tideyEditorFileTreeContainerView;
     NSScrollView *_tideyEditorFileTreeScrollView;
@@ -469,9 +512,13 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     BOOL _tideyEditorLoadedDemoFile;
     NSString *_tideyEditorPendingValue;
     NSString *_tideyEditorPendingLanguage;
+    NSNumber *_tideyEditorPendingEditable;
     NSString *_tideyEditorLoadedPath;
     NSString *_tideyEditorCurrentRootPath;
     NSString *_tideyEditorRootOverridePath;
+    NSMutableArray<TideyEditorTab *> *_tideyEditorTabs;
+    NSInteger _tideySelectedEditorTabIndex;
+    BOOL _tideyEditorIsRevealingSelection;
     CGFloat _tideySidebarPreferredWidth;
     CGFloat _tideyEditorPreferredWidth;
     CGFloat _tideyEditorFileTreePreferredWidth;
@@ -526,6 +573,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _shouldShowTideySidebar = YES;
         _shouldShowTideyEditorPanel = NO;
         _shouldShowTideyEditorFileTree = YES;
+        _tideyEditorTabs = [[NSMutableArray alloc] init];
+        _tideySelectedEditorTabIndex = -1;
         _tideySidebarPreferredWidth = kTideySidebarWidth;
         _tideyEditorFileTreePreferredWidth = kTideyEditorFileTreeWidth;
         _tideyEditorPreferredWidth = MAX(kTideyMinimumEditorPanelWidth,
@@ -590,6 +639,15 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                                           alpha:1].CGColor;
         _tideyEditorPanelView.hidden = YES;
         [self addSubview:_tideyEditorPanelView];
+
+        _tideyEditorTabStripView = [[NSView alloc] initWithFrame:NSZeroRect];
+        _tideyEditorTabStripView.autoresizingMask = NSViewWidthSizable;
+        _tideyEditorTabStripView.wantsLayer = YES;
+        _tideyEditorTabStripView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.09
+                                                                             green:0.10
+                                                                              blue:0.13
+                                                                             alpha:1].CGColor;
+        [_tideyEditorPanelView addSubview:_tideyEditorTabStripView];
 
         _tideyEditorPanelLabel = [NSTextField labelWithString:@"Loading Editor…"];
         _tideyEditorPanelLabel.textColor = [NSColor colorWithWhite:0.92 alpha:1];
@@ -1932,6 +1990,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     _tideyEditorScriptMessageHandler = [[TideyEditorScriptMessageHandler alloc] init];
     _tideyEditorScriptMessageHandler.rootView = self;
     [contentController addScriptMessageHandler:_tideyEditorScriptMessageHandler name:@"tideyEditorReady"];
+    [contentController addScriptMessageHandler:_tideyEditorScriptMessageHandler name:@"tideyEditorChanged"];
+    [contentController addScriptMessageHandler:_tideyEditorScriptMessageHandler name:@"tideyEditorSaveRequested"];
     configuration.userContentController = contentController;
 
     _tideyEditorWebView = [[WKWebView alloc] initWithFrame:_tideyEditorPanelView.bounds configuration:configuration];
@@ -2048,18 +2108,21 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         return;
     }
     const NSRect bounds = _tideyEditorPanelView.bounds;
+    _tideyEditorTabStripView.frame = NSMakeRect(0, NSHeight(bounds) - kTideyEditorTabStripHeight, NSWidth(bounds), kTideyEditorTabStripHeight);
+    const CGFloat contentHeight = MAX(0, NSHeight(bounds) - kTideyEditorTabStripHeight);
     const CGFloat fileTreeWidth = self.shouldShowTideyEditorFileTree
         ? MIN(self.tideyEditorFileTreeWidth, MAX(0, NSWidth(bounds) - kTideyMinimumEditorContentWidth))
         : 0;
     const CGFloat editorWidth = MAX(0, NSWidth(bounds) - fileTreeWidth);
-    _tideyEditorWebView.frame = NSMakeRect(0, 0, editorWidth, NSHeight(bounds));
+    _tideyEditorWebView.frame = NSMakeRect(0, 0, editorWidth, contentHeight);
     _tideyEditorFileTreeContainerView.hidden = !self.shouldShowTideyEditorFileTree;
-    _tideyEditorFileTreeContainerView.frame = NSMakeRect(editorWidth, 0, fileTreeWidth, NSHeight(bounds));
+    _tideyEditorFileTreeContainerView.frame = NSMakeRect(editorWidth, 0, fileTreeWidth, contentHeight);
     _tideyEditorFileTreeScrollView.frame = _tideyEditorFileTreeContainerView.bounds;
     self.tideyEditorFileTreeDragHandle.frame = NSMakeRect(MAX(0, editorWidth - kTideyDragHandleWidth / 2.0),
                                                           0,
                                                           kTideyDragHandleWidth,
-                                                          NSHeight(bounds));
+                                                          contentHeight);
+    [self reloadTideyEditorTabs];
     [self updateTideyChromeToggleButtons];
 }
 
@@ -2077,29 +2140,185 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     ];
     for (NSString *candidate in candidates) {
         if ([[NSFileManager defaultManager] fileExistsAtPath:candidate]) {
-            [self tideyEditorLoadFileAtPath:candidate];
+            [self tideyOpenOrSelectEditorTabAtPath:candidate];
             _tideyEditorLoadedDemoFile = YES;
             return;
         }
     }
 
+    [_tideyEditorTabs removeAllObjects];
+    _tideySelectedEditorTabIndex = -1;
     [self tideyEditorSetLanguage:@"plaintext"];
+    [self tideyEditorSetEditable:NO];
     [self tideyEditorSetValue:@"// Tidey editor panel\n// Demo file not found."];
+    [self reloadTideyEditorTabs];
+    [self tideyUpdateEditorPlaceholder];
     _tideyEditorLoadedDemoFile = YES;
 }
 
-- (void)tideyEditorLoadFileAtPath:(NSString *)path {
+- (TideyEditorTab *)tideyCurrentEditorTab {
+    if (_tideySelectedEditorTabIndex < 0 || _tideySelectedEditorTabIndex >= (NSInteger)_tideyEditorTabs.count) {
+        return nil;
+    }
+    return _tideyEditorTabs[_tideySelectedEditorTabIndex];
+}
+
+- (NSString *)tideyEditorDisplayNameForPath:(NSString *)path {
+    NSString *name = path.lastPathComponent;
+    return name.length > 0 ? name : @"Untitled";
+}
+
+- (void)tideyUpdateEditorPlaceholder {
+    TideyEditorTab *tab = [self tideyCurrentEditorTab];
+    BOOL hasCurrentTab = (tab != nil);
+    if (!_tideyEditorReady) {
+        _tideyEditorPanelLabel.hidden = NO;
+        _tideyEditorPanelLabel.stringValue = @"Loading Editor…";
+        return;
+    }
+    _tideyEditorPanelLabel.stringValue = hasCurrentTab ? @"" : @"Open a file";
+    _tideyEditorPanelLabel.hidden = hasCurrentTab;
+    if (!hasCurrentTab) {
+        [self tideyEditorSetLanguage:@"plaintext"];
+        [self tideyEditorSetEditable:NO];
+        [self tideyEditorSetValue:@""];
+    }
+}
+
+- (void)reloadTideyEditorTabs {
+    for (NSView *subview in [_tideyEditorTabStripView.subviews copy]) {
+        [subview removeFromSuperview];
+    }
+
+    const CGFloat insetX = 8;
+    const CGFloat insetY = 4;
+    const CGFloat tabHeight = kTideyEditorTabStripHeight - insetY * 2;
+    CGFloat x = insetX;
+    NSDictionary<NSAttributedStringKey, id> *attributes = @{
+        NSFontAttributeName: [NSFont systemFontOfSize:12 weight:NSFontWeightMedium]
+    };
+    for (NSInteger i = 0; i < (NSInteger)_tideyEditorTabs.count; i++) {
+        TideyEditorTab *tab = _tideyEditorTabs[i];
+        NSString *title = tab.dirty ? [NSString stringWithFormat:@"● %@", tab.displayName ?: @"Untitled"] : (tab.displayName ?: @"Untitled");
+        CGFloat textWidth = ceil([title sizeWithAttributes:attributes].width);
+        CGFloat tabWidth = MIN(MAX(120, textWidth + 34), 240);
+
+        NSView *tabView = [[NSView alloc] initWithFrame:NSMakeRect(x, insetY, tabWidth, tabHeight)];
+        tabView.wantsLayer = YES;
+        BOOL selected = (i == _tideySelectedEditorTabIndex);
+        tabView.layer.cornerRadius = 7;
+        tabView.layer.backgroundColor = (selected
+                                         ? [NSColor colorWithSRGBRed:0.16 green:0.19 blue:0.25 alpha:1]
+                                         : [NSColor colorWithSRGBRed:0.11 green:0.12 blue:0.16 alpha:1]).CGColor;
+        tabView.layer.borderWidth = selected ? 1 : 0;
+        tabView.layer.borderColor = [NSColor colorWithWhite:0.28 alpha:1].CGColor;
+
+        NSButton *selectButton = [[NSButton alloc] initWithFrame:NSMakeRect(0, 0, tabWidth - 24, tabHeight)];
+        selectButton.bordered = NO;
+        selectButton.buttonType = NSButtonTypeMomentaryChange;
+        selectButton.alignment = NSTextAlignmentLeft;
+        selectButton.font = [NSFont systemFontOfSize:12 weight:selected ? NSFontWeightSemibold : NSFontWeightMedium];
+        selectButton.contentTintColor = [NSColor colorWithWhite:0.95 alpha:1];
+        selectButton.title = title;
+        selectButton.imagePosition = NSNoImage;
+        selectButton.tag = i;
+        selectButton.target = self;
+        selectButton.action = @selector(tideyEditorSelectTab:);
+        [tabView addSubview:selectButton];
+
+        NSButton *closeButton = [[NSButton alloc] initWithFrame:NSMakeRect(tabWidth - 22, 0, 22, tabHeight)];
+        closeButton.bordered = NO;
+        closeButton.buttonType = NSButtonTypeMomentaryChange;
+        closeButton.font = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
+        closeButton.contentTintColor = [NSColor colorWithWhite:0.75 alpha:1];
+        closeButton.title = @"✕";
+        closeButton.tag = i;
+        closeButton.target = self;
+        closeButton.action = @selector(tideyEditorCloseTab:);
+        [tabView addSubview:closeButton];
+
+        [_tideyEditorTabStripView addSubview:tabView];
+        x += tabWidth + 6;
+    }
+}
+
+- (void)selectTideyEditorTabAtIndex:(NSInteger)index {
+    if (index < 0 || index >= (NSInteger)_tideyEditorTabs.count) {
+        return;
+    }
+    _tideySelectedEditorTabIndex = index;
+    TideyEditorTab *tab = _tideyEditorTabs[index];
+    _tideyEditorLoadedPath = [tab.path copy];
+    _tideyEditorRootOverridePath = [[self tideyEditorPreferredRootPathForFileAtPath:tab.path] copy];
+    [self reloadTideyEditorTabs];
+    [self reloadTideyEditorFileTree];
+    [self tideyEditorSetLanguage:tab.language ?: @"plaintext"];
+    [self tideyEditorSetEditable:YES];
+    [self tideyEditorSetValue:tab.content ?: @""];
+    [self tideyEditorRevealFileAtPath:tab.path];
+    [self tideyPersistEditorState];
+    [self tideyUpdateEditorPlaceholder];
+}
+
+- (void)closeTideyEditorTabAtIndex:(NSInteger)index {
+    if (index < 0 || index >= (NSInteger)_tideyEditorTabs.count) {
+        return;
+    }
+    [_tideyEditorTabs removeObjectAtIndex:index];
+    if (_tideyEditorTabs.count == 0) {
+        _tideySelectedEditorTabIndex = -1;
+        _tideyEditorLoadedPath = nil;
+        _tideyEditorRootOverridePath = nil;
+        [self reloadTideyEditorFileTree];
+        [self reloadTideyEditorTabs];
+        [self tideyUpdateEditorPlaceholder];
+        [self tideyPersistEditorState];
+        return;
+    }
+    NSInteger newIndex = MIN(index, (NSInteger)_tideyEditorTabs.count - 1);
+    [self selectTideyEditorTabAtIndex:newIndex];
+}
+
+- (void)tideyEditorSelectTab:(id)sender {
+    [self selectTideyEditorTabAtIndex:[sender tag]];
+}
+
+- (void)tideyEditorCloseTab:(id)sender {
+    [self closeTideyEditorTabAtIndex:[sender tag]];
+}
+
+- (void)tideyOpenOrSelectEditorTabAtPath:(NSString *)path {
+    NSString *normalizedPath = [path stringByStandardizingPath];
+    if (normalizedPath.length == 0) {
+        return;
+    }
+    for (NSInteger i = 0; i < (NSInteger)_tideyEditorTabs.count; i++) {
+        TideyEditorTab *existing = _tideyEditorTabs[i];
+        if ([[existing.path stringByStandardizingPath] isEqualToString:normalizedPath]) {
+            [self selectTideyEditorTabAtIndex:i];
+            return;
+        }
+    }
+
     NSError *error = nil;
-    NSString *contents = [NSString stringWithContentsOfFile:path
+    NSString *contents = [NSString stringWithContentsOfFile:normalizedPath
                                                    encoding:NSUTF8StringEncoding
                                                       error:&error];
     if (contents == nil) {
-        contents = [NSString stringWithFormat:@"Unable to load %@\n\n%@", path.lastPathComponent, error.localizedDescription ?: @"Unknown error"];
+        contents = [NSString stringWithFormat:@"Unable to load %@\n\n%@",
+                    normalizedPath.lastPathComponent,
+                    error.localizedDescription ?: @"Unknown error"];
     }
-    _tideyEditorLoadedPath = [path copy];
-    [self tideyEditorSetLanguage:[self tideyEditorLanguageForPath:path]];
-    [self tideyEditorSetValue:contents];
-    [self tideyPersistEditorState];
+    TideyEditorTab *tab = [TideyEditorTab tabWithPath:normalizedPath
+                                          displayName:[self tideyEditorDisplayNameForPath:normalizedPath]
+                                             language:[self tideyEditorLanguageForPath:normalizedPath]
+                                              content:contents];
+    [_tideyEditorTabs addObject:tab];
+    [self selectTideyEditorTabAtIndex:_tideyEditorTabs.count - 1];
+}
+
+- (void)tideyEditorLoadFileAtPath:(NSString *)path {
+    [self tideyOpenOrSelectEditorTabAtPath:path];
 }
 
 - (NSString *)tideyEditorPreferredRootPathForFileAtPath:(NSString *)path {
@@ -2174,8 +2393,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSInteger row = [_tideyEditorFileTreeView rowForItem:targetNode];
     if (row != -1) {
         NSIndexSet *indexSet = [NSIndexSet indexSetWithIndex:row];
+        _tideyEditorIsRevealingSelection = YES;
         [_tideyEditorFileTreeView selectRowIndexes:indexSet byExtendingSelection:NO];
         [_tideyEditorFileTreeView scrollRowToVisible:row];
+        _tideyEditorIsRevealingSelection = NO;
     }
 }
 
@@ -2189,8 +2410,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         [self layoutSubviews];
     }
     [self reloadTideyEditorFileTree];
-    [self tideyEditorLoadFileAtPath:path];
-    [self tideyEditorRevealFileAtPath:path];
+    [self tideyOpenOrSelectEditorTabAtPath:path];
 }
 
 - (NSString *)tideyEditorLanguageForPath:(NSString *)path {
@@ -2232,6 +2452,11 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     [self tideyEditorApplyPendingStateIfReady];
 }
 
+- (void)tideyEditorSetEditable:(BOOL)editable {
+    _tideyEditorPendingEditable = @(editable);
+    [self tideyEditorApplyPendingStateIfReady];
+}
+
 - (void)tideyEditorApplyPendingStateIfReady {
     if (!_tideyEditorReady || _tideyEditorWebView == nil) {
         return;
@@ -2246,13 +2471,17 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                         [NSJSONSerialization it_jsonStringForObject:_tideyEditorPendingValue]];
         [_tideyEditorWebView evaluateJavaScript:js completionHandler:nil];
     }
+    if (_tideyEditorPendingEditable != nil) {
+        NSString *js = [NSString stringWithFormat:@"window.tideyNative && window.tideyNative.setEditable(%@);",
+                        _tideyEditorPendingEditable.boolValue ? @"true" : @"false"];
+        [_tideyEditorWebView evaluateJavaScript:js completionHandler:nil];
+    }
     [_tideyEditorWebView evaluateJavaScript:@"window.__tideyEditor && window.__tideyEditor.layout();"
                           completionHandler:nil];
 }
 
 - (void)tideyEditorDidBecomeReady {
     _tideyEditorReady = YES;
-    _tideyEditorPanelLabel.hidden = YES;
     [self tideyEditorApplyPendingStateIfReady];
     NSString *restoredPath = [_tideyEditorLoadedPath stringByStandardizingPath];
     BOOL isDirectory = NO;
@@ -2260,18 +2489,70 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         [[NSFileManager defaultManager] fileExistsAtPath:restoredPath isDirectory:&isDirectory] &&
         !isDirectory) {
         [self reloadTideyEditorFileTree];
-        [self tideyEditorLoadFileAtPath:restoredPath];
+        [self tideyOpenOrSelectEditorTabAtPath:restoredPath];
         [self tideyEditorRevealFileAtPath:restoredPath];
         _tideyEditorLoadedDemoFile = YES;
     } else {
         [self tideyEditorLoadDemoFileIfNeeded];
     }
+    [self tideyUpdateEditorPlaceholder];
 }
 
 - (void)tideyEditorDidReceiveScriptMessage:(WKScriptMessage *)message {
     if ([message.name isEqualToString:@"tideyEditorReady"]) {
         [self tideyEditorDidBecomeReady];
+        return;
     }
+    if ([message.name isEqualToString:@"tideyEditorChanged"] &&
+        [message.body isKindOfClass:[NSDictionary class]]) {
+        NSString *value = [message.body[@"value"] isKindOfClass:[NSString class]] ? message.body[@"value"] : @"";
+        [self tideyEditorDidChangeValue:value];
+        return;
+    }
+    if ([message.name isEqualToString:@"tideyEditorSaveRequested"]) {
+        [self saveTideyEditorCurrentTab];
+    }
+}
+
+- (void)tideyEditorDidChangeValue:(NSString *)value {
+    TideyEditorTab *tab = [self tideyCurrentEditorTab];
+    if (!tab) {
+        return;
+    }
+    BOOL wasDirty = tab.dirty;
+    tab.content = value ?: @"";
+    tab.dirty = YES;
+    if (!wasDirty) {
+        [self reloadTideyEditorTabs];
+    }
+}
+
+- (BOOL)hasSaveableTideyEditorTab {
+    return ([self tideyCurrentEditorTab] != nil);
+}
+
+- (BOOL)saveTideyEditorCurrentTab {
+    TideyEditorTab *tab = [self tideyCurrentEditorTab];
+    if (!tab || tab.path.length == 0) {
+        return NO;
+    }
+    NSError *error = nil;
+    BOOL ok = [(tab.content ?: @"") writeToFile:tab.path
+                                     atomically:YES
+                                       encoding:NSUTF8StringEncoding
+                                          error:&error];
+    if (!ok) {
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = @"Unable to Save File";
+        alert.informativeText = error.localizedDescription ?: @"Unknown error";
+        [alert addButtonWithTitle:@"OK"];
+        [alert runModal];
+        return NO;
+    }
+    tab.dirty = NO;
+    [self reloadTideyEditorTabs];
+    [self tideyPersistEditorState];
+    return YES;
 }
 
 - (NSString *)tideyEditorHTML {
@@ -2293,7 +2574,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     "window.tideyNative = {"
     "  setValue(value) {"
     "    window.__tideyPendingValue = value || '';"
-    "    if (window.__tideyEditor) { window.__tideyEditor.setValue(window.__tideyPendingValue); }"
+    "    if (window.__tideyEditor) { window.__tideyApplyingNativeUpdate = true; window.__tideyEditor.setValue(window.__tideyPendingValue); window.__tideyApplyingNativeUpdate = false; }"
     "  },"
     "  setLanguage(language) {"
     "    window.__tideyPendingLanguage = language || 'plaintext';"
@@ -2301,6 +2582,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     "      const model = window.__tideyEditor.getModel();"
     "      if (model) { monaco.editor.setModelLanguage(model, window.__tideyPendingLanguage); }"
     "    }"
+    "  },"
+    "  setEditable(editable) {"
+    "    window.__tideyPendingEditable = !!editable;"
+    "    if (window.__tideyEditor) { window.__tideyEditor.updateOptions({ readOnly: !window.__tideyPendingEditable }); }"
     "  }"
     "};"
     "</script>"
@@ -2313,7 +2598,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     "    value: '',"
     "    language: 'plaintext',"
     "    theme: 'vs-dark',"
-    "    readOnly: true,"
+    "    readOnly: false,"
     "    automaticLayout: true,"
     "    wordWrap: 'on',"
     "    wordWrapColumn: 80,"
@@ -2321,8 +2606,23 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     "    scrollBeyondLastLine: false,"
     "    fontSize: 13"
     "  });"
+    "  window.__tideyEditor.onDidChangeModelContent(function() {"
+    "    if (window.__tideyApplyingNativeUpdate) { return; }"
+    "    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.tideyEditorChanged) {"
+    "      window.webkit.messageHandlers.tideyEditorChanged.postMessage({ value: window.__tideyEditor.getValue() });"
+    "    }"
+    "  });"
+    "  window.addEventListener('keydown', function(event) {"
+    "    if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && (event.key === 's' || event.key === 'S')) {"
+    "      event.preventDefault();"
+    "      if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.tideyEditorSaveRequested) {"
+    "        window.webkit.messageHandlers.tideyEditorSaveRequested.postMessage({});"
+    "      }"
+    "    }"
+    "  });"
     "  if (window.__tideyPendingLanguage) { window.tideyNative.setLanguage(window.__tideyPendingLanguage); }"
     "  if (window.__tideyPendingValue !== undefined) { window.tideyNative.setValue(window.__tideyPendingValue); }"
+    "  if (window.__tideyPendingEditable !== undefined) { window.tideyNative.setEditable(window.__tideyPendingEditable); }"
     "  if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.tideyEditorReady) {"
     "    window.webkit.messageHandlers.tideyEditorReady.postMessage({ ready: true });"
     "  }"
@@ -2987,6 +3287,9 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 - (void)outlineViewSelectionDidChange:(NSNotification *)notification {
     if (notification.object != _tideyEditorFileTreeView) {
+        return;
+    }
+    if (_tideyEditorIsRevealingSelection) {
         return;
     }
     id item = [_tideyEditorFileTreeView itemAtRow:_tideyEditorFileTreeView.selectedRow];

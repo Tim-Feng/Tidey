@@ -216,6 +216,7 @@ extern NSString *const iTermDidCreateTerminalWindowNotification;
 - (IBAction)toggleTideySidebar:(id)sender;
 - (IBAction)toggleTideyEditorPanel:(id)sender;
 - (IBAction)toggleTideyEditorFileTree:(id)sender;
+- (IBAction)saveDocument:(id)sender;
 - (void)tideyOpenFileInEditor:(NSString *)path;
 - (IBAction)selectTideySidebarWorkspaceAtIndexAction:(id)sender;
 - (IBAction)selectNextWorkspace:(id)sender;

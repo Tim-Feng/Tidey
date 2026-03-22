@@ -1723,6 +1723,16 @@ ITERM_WEAKLY_REFERENCEABLE
     [self notifyTmuxOfWindowResize];
 }
 
+- (IBAction)saveDocument:(id)sender {
+    if ([_contentView hasSaveableTideyEditorTab]) {
+        if (![_contentView saveTideyEditorCurrentTab]) {
+            NSBeep();
+        }
+        return;
+    }
+    NSBeep();
+}
+
 - (void)tideyOpenFileInEditor:(NSString *)path {
     if (path.length == 0) {
         return;
@@ -12435,6 +12445,8 @@ typedef NS_ENUM(NSUInteger, iTermBroadcastCommand) {
     } else if ([item action] == @selector(toggleTideyEditorFileTree:)) {
         [item setState:_contentView.shouldShowTideyEditorFileTree ? NSControlStateValueOn : NSControlStateValueOff];
         return YES;
+    } else if ([item action] == @selector(saveDocument:)) {
+        return [_contentView hasSaveableTideyEditorTab];
     } else if ([item action] == @selector(selectTideySidebarSessionAtIndexAction:) ||
                [item action] == @selector(selectTideySidebarWorkspaceAtIndexAction:)) {
         return _contentView.shouldShowTideySidebar &&
