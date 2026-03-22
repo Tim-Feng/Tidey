@@ -928,8 +928,8 @@ DQ
                                                 <action selector="toggleToolbeltVisibility:" target="-1" id="v3c-uP-c8Q"/>
                                             </connections>
                                         </menuItem>
-                                        <menuItem title="Show Tidey Sidebar" keyEquivalent="B" identifier="Show Tidey Sidebar" id="X4e-3V-NmJ">
-                                            <modifierMask key="keyEquivalentModifierMask" command="YES" shift="YES"/>
+                                        <menuItem title="Show Tidey Sidebar" keyEquivalent="b" identifier="Show Tidey Sidebar" id="X4e-3V-NmJ">
+                                            <modifierMask key="keyEquivalentModifierMask" command="YES"/>
                                             <connections>
                                                 <action selector="toggleTideySidebar:" target="-1" id="H2r-gf-vzh"/>
                                             </connections>
