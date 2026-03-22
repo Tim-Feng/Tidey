@@ -70,6 +70,7 @@
 - (void)rootTerminalViewWillLayoutSubviews;
 - (void)rootTerminalViewDidLayoutSubviews;
 - (NSString *)rootTerminalViewCurrentTabSubtitle;
+- (NSString *)rootTerminalViewCurrentWorkingDirectory;
 - (id<PSMPUAFontProvider>)rootTerminalViewPUAFontProvider;
 - (NSInteger)rootTerminalViewNumberOfTideySidebarWorkspaces;
 - (NSString *)rootTerminalViewTideySidebarWorkspaceTitleAtIndex:(NSInteger)index;

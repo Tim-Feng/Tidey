@@ -11149,6 +11149,14 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
     }
 }
 
+- (NSString *)rootTerminalViewCurrentWorkingDirectory {
+    NSString *cwd = self.currentSession.currentLocalWorkingDirectory;
+    if (cwd.length > 0) {
+        return cwd;
+    }
+    return NSHomeDirectory();
+}
+
 - (id<PSMPUAFontProvider>)rootTerminalViewPUAFontProvider {
     return self;
 }

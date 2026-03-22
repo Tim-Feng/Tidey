@@ -1660,9 +1660,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     if (!self.shouldShowTideySidebar) {
         return 0;
     }
+    const CGFloat minimumTerminalWidth = 200;
     const CGFloat availableWidth = MAX(0, NSWidth(self.bounds) - (self.shouldShowToolbelt ? floor(self.toolbeltWidth) : 0));
     const CGFloat reservedEditorWidth = self.shouldShowTideyEditorPanel ? _tideyEditorPreferredWidth : 0;
-    const CGFloat maxWidth = MAX(0, availableWidth - reservedEditorWidth - kTideyMinimumTerminalWidth);
+    const CGFloat maxWidth = MAX(0, availableWidth - reservedEditorWidth - minimumTerminalWidth);
     if (maxWidth <= 0) {
         return 0;
     }
@@ -1674,8 +1675,9 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     if (!self.shouldShowTideyEditorPanel) {
         return 0;
     }
+    const CGFloat minimumTerminalWidth = 200;
     const CGFloat availableWidth = MAX(0, NSWidth(self.bounds) - (self.shouldShowToolbelt ? floor(self.toolbeltWidth) : 0));
-    const CGFloat maxWidth = MAX(0, availableWidth - self.tideySidebarWidth - kTideyMinimumTerminalWidth);
+    const CGFloat maxWidth = MAX(0, availableWidth - self.tideySidebarWidth - minimumTerminalWidth);
     if (maxWidth <= 0) {
         return 0;
     }
