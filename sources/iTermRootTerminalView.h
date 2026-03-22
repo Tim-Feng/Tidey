@@ -91,6 +91,9 @@
 - (void)rootTerminalViewCloseOtherTideySidebarWorkspacesExceptIndex:(NSInteger)index;
 - (void)rootTerminalViewCloseTideySidebarWorkspacesAboveIndex:(NSInteger)index;
 - (void)rootTerminalViewCloseTideySidebarWorkspacesBelowIndex:(NSInteger)index;
+- (IBAction)toggleTideySidebar:(id)sender;
+- (IBAction)toggleTideyEditorPanel:(id)sender;
+- (IBAction)toggleTideyEditorFileTree:(id)sender;
 @end
 
 extern const NSInteger iTermRootTerminalViewWindowNumberLabelMargin;

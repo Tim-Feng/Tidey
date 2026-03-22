@@ -68,6 +68,7 @@ static const CGFloat kTideyChromeToggleButtonWidth = 18;
 static const CGFloat kTideyChromeToggleButtonHeight = 34;
 static NSString *const kTideyLastEditorFilePathDefaultsKey = @"TideyLastEditorFilePath";
 static NSString *const kTideyLastEditorFileTreeRootDefaultsKey = @"TideyLastEditorFileTreeRoot";
+static NSUserInterfaceItemIdentifier const kTideySidebarCloseViewIdentifier = @"TideySidebarCloseView";
 static NSPasteboardType const iTermRootTerminalViewTideySidebarWorkspacePasteboardType =
     @"com.tidey.workspace-row";
 
@@ -75,6 +76,15 @@ typedef struct {
     CGFloat top;
     CGFloat bottom;
 } iTermDecorationHeights;
+
+static NSView *TideyFindCloseView(NSView *container) {
+    for (NSView *subview in container.subviews) {
+        if ([subview.identifier isEqualToString:kTideySidebarCloseViewIdentifier]) {
+            return subview;
+        }
+    }
+    return nil;
+}
 
 @class TideyEditorFileNode;
 
@@ -160,6 +170,7 @@ typedef struct {
 - (void)tideySidebarMoveWorkspaceDown:(id)sender;
 - (void)tideySidebarMoveWorkspaceToTop:(id)sender;
 - (void)tideySidebarCloseWorkspace:(id)sender;
+- (void)tideySidebarCloseWorkspaceAtIndex:(NSInteger)row;
 - (void)tideySidebarCloseOtherWorkspaces:(id)sender;
 - (void)tideySidebarCloseWorkspacesAbove:(id)sender;
 - (void)tideySidebarCloseWorkspacesBelow:(id)sender;
@@ -220,48 +231,118 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 @end
 
-@interface TideySidebarRowView : NSTableRowView
-@property(nonatomic) BOOL hovering;
-@property(nonatomic, strong) NSTrackingArea *hoverTrackingArea;
-- (void)updateCloseButtonVisibility;
+@protocol TideySidebarCloseAction <NSObject>
+- (void)tideySidebarCloseWorkspaceAtIndex:(NSInteger)row;
 @end
 
-@implementation TideySidebarRowView
+@interface TideySidebarTableView : NSTableView {
+    NSTrackingArea *_tideyTrackingArea;
+    NSInteger _tideyHoveredRow;
+}
+@property(nonatomic, weak) id<TideySidebarCloseAction> tideyCloseActionTarget;
+- (void)updateTideyCloseButtonVisibility;
+@end
+
+@implementation TideySidebarTableView
+
+- (instancetype)initWithFrame:(NSRect)frameRect {
+    self = [super initWithFrame:frameRect];
+    if (self) {
+        _tideyHoveredRow = -1;
+    }
+    return self;
+}
 
 - (void)updateTrackingAreas {
     [super updateTrackingAreas];
-    if (_hoverTrackingArea) {
-        [self removeTrackingArea:_hoverTrackingArea];
+    if (_tideyTrackingArea) {
+        [self removeTrackingArea:_tideyTrackingArea];
     }
-    _hoverTrackingArea = [[NSTrackingArea alloc] initWithRect:NSZeroRect
-                                                      options:(NSTrackingMouseEnteredAndExited |
-                                                               NSTrackingActiveAlways |
-                                                               NSTrackingInVisibleRect)
+    _tideyTrackingArea = [[NSTrackingArea alloc] initWithRect:NSZeroRect
+                                                      options:(NSTrackingActiveAlways |
+                                                               NSTrackingInVisibleRect |
+                                                               NSTrackingMouseMoved |
+                                                               NSTrackingMouseEnteredAndExited)
                                                         owner:self
                                                      userInfo:nil];
-    [self addTrackingArea:_hoverTrackingArea];
+    [self addTrackingArea:_tideyTrackingArea];
 }
 
 - (void)mouseEntered:(NSEvent *)event {
     [super mouseEntered:event];
-    self.hovering = YES;
-    [self updateCloseButtonVisibility];
+    [self tideyUpdateHoveredRowForPoint:[self convertPoint:event.locationInWindow fromView:nil]];
 }
 
 - (void)mouseExited:(NSEvent *)event {
     [super mouseExited:event];
-    self.hovering = NO;
-    [self updateCloseButtonVisibility];
+    _tideyHoveredRow = -1;
+    [self updateTideyCloseButtonVisibility];
 }
 
-- (void)updateCloseButtonVisibility {
-    NSButton *closeButton = (NSButton *)[self viewWithTag:1004];
-    if (![closeButton isKindOfClass:[NSButton class]]) {
-        return;
-    }
-    closeButton.hidden = !self.hovering;
-    closeButton.alphaValue = self.hovering ? 1.0 : 0.0;
+- (void)mouseMoved:(NSEvent *)event {
+    [super mouseMoved:event];
+    [self tideyUpdateHoveredRowForPoint:[self convertPoint:event.locationInWindow fromView:nil]];
 }
+
+- (void)mouseDown:(NSEvent *)event {
+    NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
+    NSInteger row = [self rowAtPoint:point];
+    if (row >= 0) {
+        NSRect closeRect = [self tideyCloseRectForRow:row];
+        if (!NSIsEmptyRect(closeRect) && NSPointInRect(point, closeRect)) {
+            [self.tideyCloseActionTarget tideySidebarCloseWorkspaceAtIndex:row];
+            return;
+        }
+    }
+    [super mouseDown:event];
+}
+
+- (void)tideyUpdateHoveredRowForPoint:(NSPoint)point {
+    NSInteger row = [self rowAtPoint:point];
+    if (row < 0) {
+        row = -1;
+    }
+    if (_tideyHoveredRow != row) {
+        _tideyHoveredRow = row;
+        [self updateTideyCloseButtonVisibility];
+    }
+}
+
+- (NSRect)tideyCloseRectForRow:(NSInteger)row {
+    NSTableCellView *cellView = [self viewAtColumn:0 row:row makeIfNecessary:NO];
+    NSView *closeView = TideyFindCloseView(cellView);
+    if (closeView) {
+        return [closeView convertRect:closeView.bounds toView:self];
+    }
+    NSRect rowRect = [self rectOfRow:row];
+    if (NSIsEmptyRect(rowRect)) {
+        return NSZeroRect;
+    }
+    return NSMakeRect(NSMaxX(rowRect) - 24, NSMinY(rowRect) + 28, 16, 16);
+}
+
+- (void)updateTideyCloseButtonVisibility {
+    NSRange rows = [self rowsInRect:self.visibleRect];
+    NSInteger limit = NSMaxRange(rows);
+    for (NSInteger row = rows.location; row < limit; row++) {
+        NSTableCellView *cellView = [self viewAtColumn:0 row:row makeIfNecessary:NO];
+        NSView *closeView = TideyFindCloseView(cellView);
+        if (!closeView) {
+            continue;
+        }
+        BOOL visible = (row == _tideyHoveredRow);
+        closeView.hidden = !visible;
+        closeView.alphaValue = visible ? 1.0 : 0.0;
+    }
+}
+
+@end
+
+@interface TideySidebarRowView : NSTableRowView {
+}
+@end
+
+@implementation TideySidebarRowView
 
 - (void)drawSelectionInRect:(NSRect)dirtyRect {
     if (!self.selectionHighlightStyle || !self.isSelected) {
@@ -282,8 +363,18 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 @class iTermRootTerminalView;
 
+@interface TideySidebarCloseView : NSView
+@end
+
+@implementation TideySidebarCloseView
+
+- (void)resetCursorRects {
+    [self addCursorRect:self.bounds cursor:[NSCursor pointingHandCursor]];
+}
+
+@end
+
 @interface TideySidebarCellView : NSTableCellView
-@property(nonatomic, weak) iTermRootTerminalView *rootView;
 @end
 
 @implementation TideySidebarCellView
@@ -479,11 +570,13 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _tideySidebarScrollView.hasVerticalScroller = YES;
         _tideySidebarScrollView.borderType = NSNoBorder;
 
-        _tideySidebarTableView = [[NSTableView alloc] initWithFrame:NSZeroRect];
-        _tideySidebarTableView.delegate = self;
-        _tideySidebarTableView.dataSource = self;
-        _tideySidebarTableView.headerView = nil;
-        _tideySidebarTableView.focusRingType = NSFocusRingTypeNone;
+        TideySidebarTableView *sidebarTableView = [[TideySidebarTableView alloc] initWithFrame:NSZeroRect];
+        sidebarTableView.delegate = self;
+        sidebarTableView.dataSource = self;
+        sidebarTableView.headerView = nil;
+        sidebarTableView.focusRingType = NSFocusRingTypeNone;
+        sidebarTableView.tideyCloseActionTarget = (id<TideySidebarCloseAction>)self;
+        _tideySidebarTableView = sidebarTableView;
         if (@available(macOS 11.0, *)) {
             _tideySidebarTableView.style = NSTableViewStyleSourceList;
         }
@@ -3040,8 +3133,6 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 - (NSTableCellView *)newTideySidebarCellView {
     TideySidebarCellView *cellView = [[TideySidebarCellView alloc] initWithFrame:NSZeroRect];
     cellView.identifier = @"TideySidebarSessionCell";
-    cellView.rootView = self;
-
     NSImageView *pinView = [[NSImageView alloc] initWithFrame:NSMakeRect(12, 34, 12, 12)];
     pinView.tag = 1003;
     pinView.autoresizingMask = NSViewMaxXMargin;
@@ -3082,28 +3173,19 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     subtitleField.selectable = NO;
     [cellView addSubview:subtitleField];
 
-    NSButton *closeButton = [[NSButton alloc] initWithFrame:NSMakeRect(182, 31, 18, 18)];
-    closeButton.tag = 1004;
-    closeButton.autoresizingMask = NSViewMinXMargin;
-    closeButton.bordered = NO;
-    closeButton.bezelStyle = NSBezelStyleRegularSquare;
-    closeButton.buttonType = NSButtonTypeMomentaryPushIn;
-    closeButton.hidden = YES;
-    closeButton.alphaValue = 0.0;
-    closeButton.imageScaling = NSImageScaleProportionallyDown;
-    closeButton.target = self;
-    closeButton.action = @selector(tideySidebarCloseWorkspace:);
-    closeButton.contentTintColor = [NSColor colorWithWhite:0.90 alpha:0.80];
-    if (@available(macOS 11.0, *)) {
-        NSImage *closeImage = [NSImage imageWithSystemSymbolName:@"xmark"
-                                            accessibilityDescription:nil];
-        closeImage.template = YES;
-        closeButton.image = closeImage;
-    } else {
-        closeButton.title = @"✕";
-        closeButton.font = [NSFont systemFontOfSize:10 weight:NSFontWeightMedium];
-    }
-    [cellView addSubview:closeButton];
+    // Close glyph — click is handled by TideySidebarTableView mouseDown hit-testing.
+    TideySidebarCloseView *closeView = [[TideySidebarCloseView alloc] initWithFrame:NSMakeRect(176, 28, 16, 16)];
+    closeView.identifier = kTideySidebarCloseViewIdentifier;
+    closeView.autoresizingMask = NSViewMinXMargin;
+    closeView.hidden = YES;
+    closeView.alphaValue = 0.0;
+    NSTextField *closeSymbol = [NSTextField labelWithString:@"✕"];
+    closeSymbol.font = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
+    closeSymbol.textColor = [NSColor tertiaryLabelColor];
+    closeSymbol.frame = NSMakeRect(0, 0, 16, 16);
+    closeSymbol.alignment = NSTextAlignmentCenter;
+    [closeView addSubview:closeSymbol];
+    [cellView addSubview:closeView];
 
     return cellView;
 }
@@ -3114,13 +3196,12 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     cellView.textField.stringValue = [self tideySidebarWorkspaceTitleAtIndex:row];
     NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
     subtitleField.stringValue = [self tideySidebarWorkspaceSubtitleAtIndex:row];
-    NSButton *closeButton = (NSButton *)[cellView viewWithTag:1004];
-    closeButton.tag = row;
-    closeButton.hidden = YES;
-    closeButton.alphaValue = 0.0;
-    NSTableRowView *rowView = [_tideySidebarTableView rowViewAtRow:row makeIfNecessary:NO];
-    if ([rowView isKindOfClass:[TideySidebarRowView class]]) {
-        [(TideySidebarRowView *)rowView updateCloseButtonVisibility];
+    NSView *closeView = TideyFindCloseView(cellView);
+    closeView.frame = NSMakeRect(MAX(0, NSWidth(cellView.bounds) - 24), 28, 16, 16);
+    closeView.hidden = YES;
+    closeView.alphaValue = 0.0;
+    if ([_tideySidebarTableView isKindOfClass:[TideySidebarTableView class]]) {
+        [(TideySidebarTableView *)_tideySidebarTableView updateTideyCloseButtonVisibility];
     }
 }
 
@@ -3291,6 +3372,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 - (void)tideySidebarCloseWorkspace:(id)sender {
     NSInteger row = [self tideySidebarWorkspaceIndexFromSender:sender];
+    [self tideySidebarCloseWorkspaceAtIndex:row];
+}
+
+- (void)tideySidebarCloseWorkspaceAtIndex:(NSInteger)row {
     if (row != NSNotFound) {
         [self.delegate rootTerminalViewCloseTideySidebarWorkspaceAtIndex:row];
     }
