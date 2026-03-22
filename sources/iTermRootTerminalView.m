@@ -3120,7 +3120,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 - (NSTableCellView *)newTideySidebarCellView {
     TideySidebarCellView *cellView = [[TideySidebarCellView alloc] initWithFrame:NSZeroRect];
     cellView.identifier = @"TideySidebarSessionCell";
-    NSImageView *pinView = [[NSImageView alloc] initWithFrame:NSMakeRect(12, 34, 12, 12)];
+    NSImageView *pinView = [[NSImageView alloc] initWithFrame:NSMakeRect(152, 34, 12, 12)];
     pinView.tag = 1003;
     pinView.autoresizingMask = NSViewMaxXMargin;
     pinView.imageScaling = NSImageScaleProportionallyDown;
@@ -3135,7 +3135,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
     NSTextField *titleField = [NSTextField newLabelStyledTextField];
     titleField.tag = 1001;
-    titleField.frame = NSMakeRect(32, 30, 144, 20);
+    titleField.frame = NSMakeRect(12, 30, 140, 20);
     titleField.autoresizingMask = NSViewWidthSizable;
     titleField.font = [NSFont systemFontOfSize:14 weight:NSFontWeightSemibold];
     titleField.textColor = [NSColor whiteColor];
@@ -3149,7 +3149,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
     NSTextField *subtitleField = [NSTextField newLabelStyledTextField];
     subtitleField.tag = 1002;
-    subtitleField.frame = NSMakeRect(32, 12, 144, 16);
+    subtitleField.frame = NSMakeRect(12, 12, 164, 16);
     subtitleField.autoresizingMask = NSViewWidthSizable;
     subtitleField.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
     subtitleField.textColor = [NSColor colorWithWhite:0.72 alpha:1];
@@ -3160,7 +3160,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     subtitleField.selectable = NO;
     [cellView addSubview:subtitleField];
 
-    NSView *closeView = [[NSView alloc] initWithFrame:NSMakeRect(170, 34, 16, 16)];
+    NSView *closeView = [[NSView alloc] initWithFrame:NSMakeRect(176, 32, 16, 16)];
     closeView.identifier = kTideySidebarCloseViewIdentifier;
     closeView.autoresizingMask = NSViewMinXMargin;
     closeView.hidden = YES;
@@ -3179,11 +3179,15 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 - (void)configureTideySidebarCellView:(NSTableCellView *)cellView row:(NSInteger)row {
     NSImageView *pinView = (NSImageView *)[cellView viewWithTag:1003];
     pinView.hidden = ![self tideySidebarWorkspacePinnedAtIndex:row];
+    CGFloat width = NSWidth(cellView.bounds);
     cellView.textField.stringValue = [self tideySidebarWorkspaceTitleAtIndex:row];
+    cellView.textField.frame = NSMakeRect(12, 30, MAX(0, width - 64), 20);
     NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
     subtitleField.stringValue = [self tideySidebarWorkspaceSubtitleAtIndex:row];
+    subtitleField.frame = NSMakeRect(12, 12, MAX(0, width - 24), 16);
+    pinView.frame = NSMakeRect(MAX(0, width - 48), 34, 12, 12);
     NSView *closeView = TideyFindCloseView(cellView);
-    closeView.frame = NSMakeRect(MAX(0, NSWidth(cellView.bounds) - 30), 34, 16, 16);
+    closeView.frame = NSMakeRect(MAX(0, width - 28), 32, 16, 16);
     closeView.hidden = YES;
     closeView.alphaValue = 0.0;
     if ([_tideySidebarTableView isKindOfClass:[TideySidebarTableView class]]) {
