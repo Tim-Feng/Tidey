@@ -361,19 +361,6 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 @end
 
-@class iTermRootTerminalView;
-
-@interface TideySidebarCloseView : NSView
-@end
-
-@implementation TideySidebarCloseView
-
-- (void)resetCursorRects {
-    [self addCursorRect:self.bounds cursor:[NSCursor pointingHandCursor]];
-}
-
-@end
-
 @interface TideySidebarCellView : NSTableCellView
 @end
 
@@ -3173,8 +3160,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     subtitleField.selectable = NO;
     [cellView addSubview:subtitleField];
 
-    // Close glyph — click is handled by TideySidebarTableView mouseDown hit-testing.
-    TideySidebarCloseView *closeView = [[TideySidebarCloseView alloc] initWithFrame:NSMakeRect(176, 28, 16, 16)];
+    NSView *closeView = [[NSView alloc] initWithFrame:NSMakeRect(170, 34, 16, 16)];
     closeView.identifier = kTideySidebarCloseViewIdentifier;
     closeView.autoresizingMask = NSViewMinXMargin;
     closeView.hidden = YES;
@@ -3197,7 +3183,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
     subtitleField.stringValue = [self tideySidebarWorkspaceSubtitleAtIndex:row];
     NSView *closeView = TideyFindCloseView(cellView);
-    closeView.frame = NSMakeRect(MAX(0, NSWidth(cellView.bounds) - 24), 28, 16, 16);
+    closeView.frame = NSMakeRect(MAX(0, NSWidth(cellView.bounds) - 30), 34, 16, 16);
     closeView.hidden = YES;
     closeView.alphaValue = 0.0;
     if ([_tideySidebarTableView isKindOfClass:[TideySidebarTableView class]]) {
