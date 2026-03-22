@@ -221,9 +221,47 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 @end
 
 @interface TideySidebarRowView : NSTableRowView
+@property(nonatomic) BOOL hovering;
+@property(nonatomic, strong) NSTrackingArea *hoverTrackingArea;
+- (void)updateCloseButtonVisibility;
 @end
 
 @implementation TideySidebarRowView
+
+- (void)updateTrackingAreas {
+    [super updateTrackingAreas];
+    if (_hoverTrackingArea) {
+        [self removeTrackingArea:_hoverTrackingArea];
+    }
+    _hoverTrackingArea = [[NSTrackingArea alloc] initWithRect:NSZeroRect
+                                                      options:(NSTrackingMouseEnteredAndExited |
+                                                               NSTrackingActiveAlways |
+                                                               NSTrackingInVisibleRect)
+                                                        owner:self
+                                                     userInfo:nil];
+    [self addTrackingArea:_hoverTrackingArea];
+}
+
+- (void)mouseEntered:(NSEvent *)event {
+    [super mouseEntered:event];
+    self.hovering = YES;
+    [self updateCloseButtonVisibility];
+}
+
+- (void)mouseExited:(NSEvent *)event {
+    [super mouseExited:event];
+    self.hovering = NO;
+    [self updateCloseButtonVisibility];
+}
+
+- (void)updateCloseButtonVisibility {
+    NSButton *closeButton = (NSButton *)[self viewWithTag:1004];
+    if (![closeButton isKindOfClass:[NSButton class]]) {
+        return;
+    }
+    closeButton.hidden = !self.hovering;
+    closeButton.alphaValue = self.hovering ? 1.0 : 0.0;
+}
 
 - (void)drawSelectionInRect:(NSRect)dirtyRect {
     if (!self.selectionHighlightStyle || !self.isSelected) {
@@ -246,43 +284,9 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 @interface TideySidebarCellView : NSTableCellView
 @property(nonatomic, weak) iTermRootTerminalView *rootView;
-@property(nonatomic) BOOL hovering;
-@property(nonatomic, strong) NSTrackingArea *hoverTrackingArea;
-- (void)updateHoverState:(BOOL)hovering;
 @end
 
 @implementation TideySidebarCellView
-
-- (void)updateTrackingAreas {
-    [super updateTrackingAreas];
-    if (_hoverTrackingArea) {
-        [self removeTrackingArea:_hoverTrackingArea];
-    }
-    _hoverTrackingArea = [[NSTrackingArea alloc] initWithRect:NSZeroRect
-                                                      options:(NSTrackingMouseEnteredAndExited |
-                                                               NSTrackingActiveInKeyWindow |
-                                                               NSTrackingInVisibleRect)
-                                                        owner:self
-                                                     userInfo:nil];
-    [self addTrackingArea:_hoverTrackingArea];
-}
-
-- (void)mouseEntered:(NSEvent *)event {
-    [super mouseEntered:event];
-    [self updateHoverState:YES];
-}
-
-- (void)mouseExited:(NSEvent *)event {
-    [super mouseExited:event];
-    [self updateHoverState:NO];
-}
-
-- (void)updateHoverState:(BOOL)hovering {
-    _hovering = hovering;
-    NSButton *closeButton = (NSButton *)[self viewWithTag:1004];
-    closeButton.hidden = !hovering;
-    closeButton.alphaValue = hovering ? 1.0 : 0.0;
-}
 
 @end
 
@@ -3112,8 +3116,11 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     subtitleField.stringValue = [self tideySidebarWorkspaceSubtitleAtIndex:row];
     NSButton *closeButton = (NSButton *)[cellView viewWithTag:1004];
     closeButton.tag = row;
-    if ([cellView isKindOfClass:[TideySidebarCellView class]]) {
-        [(TideySidebarCellView *)cellView updateHoverState:NO];
+    closeButton.hidden = YES;
+    closeButton.alphaValue = 0.0;
+    NSTableRowView *rowView = [_tideySidebarTableView rowViewAtRow:row makeIfNecessary:NO];
+    if ([rowView isKindOfClass:[TideySidebarRowView class]]) {
+        [(TideySidebarRowView *)rowView updateCloseButtonVisibility];
     }
 }
 
