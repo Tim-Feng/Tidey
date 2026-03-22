@@ -37,6 +37,9 @@
 #import "iTermUserDefaults.h"
 #import "iTermWindowShortcutLabelTitlebarAccessoryViewController.h"
 #import "iTermWindowSizeView.h"
+#import "NSJSONSerialization+iTerm.h"
+
+#import <WebKit/WebKit.h>
 
 static const CGFloat iTermWindowBorderRadius = 12;
 
@@ -68,7 +71,8 @@ typedef struct {
     iTermGenericStatusBarContainer,
     iTermStoplightHotboxDelegate,
     NSTableViewDataSource,
-    NSTableViewDelegate>
+    NSTableViewDelegate,
+    WKNavigationDelegate>
 
 @property(nonatomic, strong) PTYTabView *tabView;
 @property(nonatomic, strong) iTermTabBarControlView *tabBarControl;
@@ -81,6 +85,17 @@ typedef struct {
 - (void)layoutTideySidebar;
 - (void)layoutTideyEditorPanelWithOutputs:(iTermLayoutOutputs)outputs;
 - (iTermLayoutOutputs)layoutOutputsByApplyingTideyChromeOffsets:(iTermLayoutOutputs)outputs;
+- (void)ensureTideyEditorWebView;
+- (void)loadTideyEditorShellIfNeeded;
+- (void)tideyEditorLoadDemoFileIfNeeded;
+- (void)tideyEditorLoadFileAtPath:(NSString *)path;
+- (NSString *)tideyEditorLanguageForPath:(NSString *)path;
+- (void)tideyEditorSetValue:(NSString *)content;
+- (void)tideyEditorSetLanguage:(NSString *)language;
+- (void)tideyEditorApplyPendingStateIfReady;
+- (void)tideyEditorDidBecomeReady;
+- (void)tideyEditorDidReceiveScriptMessage:(WKScriptMessage *)message;
+- (NSString *)tideyEditorHTML;
 - (NSString *)tideySidebarWorkspaceTitleAtIndex:(NSInteger)index;
 - (NSString *)tideySidebarWorkspaceSubtitleAtIndex:(NSInteger)index;
 - (BOOL)tideySidebarWorkspacePinnedAtIndex:(NSInteger)index;
@@ -185,6 +200,21 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 @end
 
+@class iTermRootTerminalView;
+
+@interface TideyEditorScriptMessageHandler : NSObject<WKScriptMessageHandler>
+@property(nonatomic, weak) iTermRootTerminalView *rootView;
+@end
+
+@implementation TideyEditorScriptMessageHandler
+
+- (void)userContentController:(WKUserContentController *)userContentController
+      didReceiveScriptMessage:(WKScriptMessage *)message {
+    [self.rootView tideyEditorDidReceiveScriptMessage:message];
+}
+
+@end
+
 @implementation iTermRootTerminalView {
     BOOL _tabViewFrameReduced;
     BOOL _haveShownToolbelt;
@@ -204,6 +234,14 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSTableView *_tideySidebarTableView;
     NSView *_tideyEditorPanelView;
     NSTextField *_tideyEditorPanelLabel;
+    WKWebView *_tideyEditorWebView;
+    TideyEditorScriptMessageHandler *_tideyEditorScriptMessageHandler;
+    BOOL _tideyEditorShellLoaded;
+    BOOL _tideyEditorReady;
+    BOOL _tideyEditorLoadedDemoFile;
+    NSString *_tideyEditorPendingValue;
+    NSString *_tideyEditorPendingLanguage;
+    NSString *_tideyEditorLoadedPath;
 
     iTermLayerBackedSolidColorView *_titleBackgroundView NS_AVAILABLE_MAC(10_14);
     
@@ -294,7 +332,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _tideyEditorPanelView.hidden = YES;
         [self addSubview:_tideyEditorPanelView];
 
-        _tideyEditorPanelLabel = [NSTextField labelWithString:@"Editor"];
+        _tideyEditorPanelLabel = [NSTextField labelWithString:@"Loading Editor…"];
         _tideyEditorPanelLabel.textColor = [NSColor colorWithWhite:0.92 alpha:1];
         _tideyEditorPanelLabel.font = [NSFont systemFontOfSize:22 weight:NSFontWeightSemibold];
         _tideyEditorPanelLabel.alignment = NSTextAlignmentCenter;
@@ -548,6 +586,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     _tabBarControl.itermTabBarDelegate = nil;
     _tabBarControl.delegate = nil;
     _leftTabBarDragHandle.delegate = nil;
+    [_tideyEditorWebView.configuration.userContentController removeScriptMessageHandlerForName:@"tideyEditorReady"];
+    _tideyEditorWebView.navigationDelegate = nil;
 }
 
 - (void)setDelegate:(id<iTermRootTerminalViewDelegate>)delegate {
@@ -1487,6 +1527,208 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     return self.shouldShowTideyEditorPanel ? kTideyEditorPanelWidth : 0;
 }
 
+- (void)ensureTideyEditorWebView {
+    if (_tideyEditorWebView != nil) {
+        return;
+    }
+
+    WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
+    configuration.applicationNameForUserAgent = @"iTerm2";
+    configuration.websiteDataStore = [WKWebsiteDataStore defaultDataStore];
+    WKPreferences *preferences = [[WKPreferences alloc] init];
+    preferences.javaScriptCanOpenWindowsAutomatically = NO;
+    @try {
+        [preferences setValue:@YES forKey:@"developerExtrasEnabled"];
+    } @catch (NSException *exception) {
+        DLog(@"When setting developerExtrasEnabled for Tidey editor: %@", exception);
+    }
+    configuration.preferences = preferences;
+
+    WKUserContentController *contentController = [[WKUserContentController alloc] init];
+    _tideyEditorScriptMessageHandler = [[TideyEditorScriptMessageHandler alloc] init];
+    _tideyEditorScriptMessageHandler.rootView = self;
+    [contentController addScriptMessageHandler:_tideyEditorScriptMessageHandler name:@"tideyEditorReady"];
+    configuration.userContentController = contentController;
+
+    _tideyEditorWebView = [[WKWebView alloc] initWithFrame:_tideyEditorPanelView.bounds configuration:configuration];
+    _tideyEditorWebView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    _tideyEditorWebView.navigationDelegate = self;
+    if (@available(macOS 13.3, *)) {
+        _tideyEditorWebView.inspectable = YES;
+    }
+    [_tideyEditorPanelView addSubview:_tideyEditorWebView positioned:NSWindowBelow relativeTo:_tideyEditorPanelLabel];
+}
+
+- (void)loadTideyEditorShellIfNeeded {
+    [self ensureTideyEditorWebView];
+    if (_tideyEditorShellLoaded) {
+        return;
+    }
+    _tideyEditorShellLoaded = YES;
+    [_tideyEditorWebView loadHTMLString:[self tideyEditorHTML]
+                                baseURL:[NSURL URLWithString:@"https://cdn.jsdelivr.net/"]];
+}
+
+- (void)tideyEditorLoadDemoFileIfNeeded {
+    if (_tideyEditorLoadedDemoFile) {
+        return;
+    }
+
+    NSString *sourcePath = [NSString stringWithUTF8String:__FILE__];
+    NSString *sourcesDir = [sourcePath stringByDeletingLastPathComponent];
+    NSString *repoRoot = [sourcesDir stringByDeletingLastPathComponent];
+    NSArray<NSString *> *candidates = @[
+        [repoRoot stringByAppendingPathComponent:@"README.md"],
+        [repoRoot stringByAppendingPathComponent:@"sources/PseudoTerminal.m"],
+    ];
+    for (NSString *candidate in candidates) {
+        if ([[NSFileManager defaultManager] fileExistsAtPath:candidate]) {
+            [self tideyEditorLoadFileAtPath:candidate];
+            _tideyEditorLoadedDemoFile = YES;
+            return;
+        }
+    }
+
+    [self tideyEditorSetLanguage:@"plaintext"];
+    [self tideyEditorSetValue:@"// Tidey editor panel\n// Demo file not found."];
+    _tideyEditorLoadedDemoFile = YES;
+}
+
+- (void)tideyEditorLoadFileAtPath:(NSString *)path {
+    NSError *error = nil;
+    NSString *contents = [NSString stringWithContentsOfFile:path
+                                                   encoding:NSUTF8StringEncoding
+                                                      error:&error];
+    if (contents == nil) {
+        contents = [NSString stringWithFormat:@"Unable to load %@\n\n%@", path.lastPathComponent, error.localizedDescription ?: @"Unknown error"];
+    }
+    _tideyEditorLoadedPath = [path copy];
+    [self tideyEditorSetLanguage:[self tideyEditorLanguageForPath:path]];
+    [self tideyEditorSetValue:contents];
+}
+
+- (NSString *)tideyEditorLanguageForPath:(NSString *)path {
+    NSString *extension = path.pathExtension.lowercaseString;
+    static NSDictionary<NSString *, NSString *> *map;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        map = @{
+            @"m": @"objective-c",
+            @"mm": @"objective-cpp",
+            @"h": @"objective-c",
+            @"swift": @"swift",
+            @"md": @"markdown",
+            @"markdown": @"markdown",
+            @"js": @"javascript",
+            @"ts": @"typescript",
+            @"json": @"json",
+            @"html": @"html",
+            @"css": @"css",
+            @"py": @"python",
+            @"sh": @"shell",
+            @"zsh": @"shell",
+            @"yaml": @"yaml",
+            @"yml": @"yaml",
+            @"xml": @"xml",
+            @"plist": @"xml",
+        };
+    });
+    return map[extension] ?: @"plaintext";
+}
+
+- (void)tideyEditorSetValue:(NSString *)content {
+    _tideyEditorPendingValue = [content copy] ?: @"";
+    [self tideyEditorApplyPendingStateIfReady];
+}
+
+- (void)tideyEditorSetLanguage:(NSString *)language {
+    _tideyEditorPendingLanguage = [language copy] ?: @"plaintext";
+    [self tideyEditorApplyPendingStateIfReady];
+}
+
+- (void)tideyEditorApplyPendingStateIfReady {
+    if (!_tideyEditorReady || _tideyEditorWebView == nil) {
+        return;
+    }
+    if (_tideyEditorPendingLanguage != nil) {
+        NSString *js = [NSString stringWithFormat:@"window.tideyNative && window.tideyNative.setLanguage(%@);",
+                        [NSJSONSerialization it_jsonStringForObject:_tideyEditorPendingLanguage]];
+        [_tideyEditorWebView evaluateJavaScript:js completionHandler:nil];
+    }
+    if (_tideyEditorPendingValue != nil) {
+        NSString *js = [NSString stringWithFormat:@"window.tideyNative && window.tideyNative.setValue(%@);",
+                        [NSJSONSerialization it_jsonStringForObject:_tideyEditorPendingValue]];
+        [_tideyEditorWebView evaluateJavaScript:js completionHandler:nil];
+    }
+}
+
+- (void)tideyEditorDidBecomeReady {
+    _tideyEditorReady = YES;
+    _tideyEditorPanelLabel.hidden = YES;
+    [self tideyEditorApplyPendingStateIfReady];
+    [self tideyEditorLoadDemoFileIfNeeded];
+}
+
+- (void)tideyEditorDidReceiveScriptMessage:(WKScriptMessage *)message {
+    if ([message.name isEqualToString:@"tideyEditorReady"]) {
+        [self tideyEditorDidBecomeReady];
+    }
+}
+
+- (NSString *)tideyEditorHTML {
+    return @"<!doctype html>"
+    "<html><head><meta charset='utf-8'>"
+    "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+    "<style>"
+    "html, body, #editor { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#16181d; }"
+    "body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; }"
+    "</style>"
+    "<script>"
+    "window.MonacoEnvironment = {"
+    "  getWorkerUrl: function() {"
+    "    const worker = `self.MonacoEnvironment = { baseUrl: 'https://cdn.jsdelivr.net/npm/monaco-editor@latest/min/' };"
+    "importScripts('https://cdn.jsdelivr.net/npm/monaco-editor@latest/min/vs/base/worker/workerMain.js');`;"
+    "    return 'data:text/javascript;charset=utf-8,' + encodeURIComponent(worker);"
+    "  }"
+    "};"
+    "window.tideyNative = {"
+    "  setValue(value) {"
+    "    window.__tideyPendingValue = value || '';"
+    "    if (window.__tideyEditor) { window.__tideyEditor.setValue(window.__tideyPendingValue); }"
+    "  },"
+    "  setLanguage(language) {"
+    "    window.__tideyPendingLanguage = language || 'plaintext';"
+    "    if (window.__tideyEditor) {"
+    "      const model = window.__tideyEditor.getModel();"
+    "      if (model) { monaco.editor.setModelLanguage(model, window.__tideyPendingLanguage); }"
+    "    }"
+    "  }"
+    "};"
+    "</script>"
+    "<script src='https://cdn.jsdelivr.net/npm/monaco-editor@latest/min/vs/loader.js'></script>"
+    "</head><body><div id='editor'></div>"
+    "<script>"
+    "require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@latest/min/vs' } });"
+    "require(['vs/editor/editor.main'], function() {"
+    "  window.__tideyEditor = monaco.editor.create(document.getElementById('editor'), {"
+    "    value: '',"
+    "    language: 'plaintext',"
+    "    theme: 'vs-dark',"
+    "    readOnly: true,"
+    "    automaticLayout: true,"
+    "    minimap: { enabled: false },"
+    "    scrollBeyondLastLine: false,"
+    "    fontSize: 13"
+    "  });"
+    "  if (window.__tideyPendingLanguage) { window.tideyNative.setLanguage(window.__tideyPendingLanguage); }"
+    "  if (window.__tideyPendingValue !== undefined) { window.tideyNative.setValue(window.__tideyPendingValue); }"
+    "  if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.tideyEditorReady) {"
+    "    window.webkit.messageHandlers.tideyEditorReady.postMessage({ ready: true });"
+    "  }"
+    "});"
+    "</script></body></html>";
+}
+
 - (NSString *)tideySidebarWorkspaceTitleAtIndex:(NSInteger)index {
     return [self.delegate rootTerminalViewTideySidebarWorkspaceTitleAtIndex:index] ?: @"Untitled";
 }
@@ -1536,6 +1778,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     if (width <= 0) {
         return;
     }
+
+    [self loadTideyEditorShellIfNeeded];
 
     const CGFloat rightEdge = self.shouldShowToolbelt ? NSMinX(outputs.toolbeltFrame) : NSWidth(self.bounds);
     const CGFloat originX = MAX(0, rightEdge - width);
@@ -1595,6 +1839,14 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     if ([_delegate iTermTabBarWindowIsFullScreen]) {
         // When in full screen the insets must be reset even though the tab bar is not visible.
         self.tabBarControl.insets = [self.delegate tabBarInsets];
+    }
+}
+
+#pragma mark - WKNavigationDelegate
+
+- (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
+    if (webView == _tideyEditorWebView) {
+        [self tideyEditorApplyPendingStateIfReady];
     }
 }
 
