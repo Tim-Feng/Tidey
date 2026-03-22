@@ -240,6 +240,7 @@ typedef NS_ENUM(int, iTermShouldHaveTitleSeparator) {
 @property(nonatomic) NSInteger selectedPanelIndex;
 @property(nonatomic) NSTimeInterval creationTime;
 @property(nonatomic, copy) NSString *customTitle;
+@property(nonatomic) BOOL pinned;
 
 - (instancetype)initWithPanel:(PTYTab *)panel;
 - (PTYTab *)selectedPanel;
@@ -323,6 +324,8 @@ typedef NS_ENUM(int, iTermShouldHaveTitleSeparator) {
 - (BOOL)hasSelectablePreviousWorkspace;
 - (BOOL)moveWorkspaceFromIndex:(NSInteger)fromIndex toIndex:(NSInteger)toIndex;
 - (BOOL)workspaceHasCustomTitleAtIndex:(NSInteger)index;
+- (BOOL)workspaceIsPinnedAtIndex:(NSInteger)index;
+- (void)setPinned:(BOOL)pinned forWorkspaceAtIndex:(NSInteger)index;
 - (void)setCustomTitle:(NSString *)title forWorkspaceAtIndex:(NSInteger)index;
 - (void)clearCustomTitleForWorkspaceAtIndex:(NSInteger)index;
 - (void)renameWorkspaceAtIndex:(NSInteger)index;
@@ -1346,11 +1349,24 @@ ITERM_WEAKLY_REFERENCEABLE
     Workspace *lastWorkspace = [[self workspaceAtIndex:_lastSelectedWorkspaceIndex] retain];
     Workspace *movingWorkspace = [[self workspaceAtIndex:fromIndex] retain];
 
-    [self.workspaces removeObjectAtIndex:fromIndex];
-    if (toIndex > fromIndex) {
-        toIndex--;
+    NSInteger targetIndex = toIndex;
+    if (targetIndex > fromIndex) {
+        targetIndex--;
     }
-    [self.workspaces insertObject:movingWorkspace atIndex:toIndex];
+
+    [self.workspaces removeObjectAtIndex:fromIndex];
+    NSInteger pinnedCount = 0;
+    for (Workspace *workspace in self.workspaces) {
+        if (workspace.pinned) {
+            pinnedCount++;
+        }
+    }
+    if (movingWorkspace.pinned) {
+        targetIndex = MIN(targetIndex, pinnedCount);
+    } else {
+        targetIndex = MAX(targetIndex, pinnedCount);
+    }
+    [self.workspaces insertObject:movingWorkspace atIndex:targetIndex];
 
     self.selectedWorkspaceIndex = selectedWorkspace ? [self.workspaces indexOfObjectIdenticalTo:selectedWorkspace] : -1;
     _lastSelectedWorkspaceIndex = lastWorkspace ? [self.workspaces indexOfObjectIdenticalTo:lastWorkspace] : -1;
@@ -1364,6 +1380,46 @@ ITERM_WEAKLY_REFERENCEABLE
         [_contentView selectTideySidebarWorkspaceAtIndex:self.selectedWorkspaceIndex];
     }
     return YES;
+}
+
+- (BOOL)workspaceIsPinnedAtIndex:(NSInteger)index {
+    Workspace *workspace = [self workspaceAtIndex:index];
+    return workspace.pinned;
+}
+
+- (void)setPinned:(BOOL)pinned forWorkspaceAtIndex:(NSInteger)index {
+    [self ensureTideyWorkspacesInitialized];
+    Workspace *workspace = [self workspaceAtIndex:index];
+    if (!workspace || workspace.pinned == pinned) {
+        return;
+    }
+
+    Workspace *selectedWorkspace = [[self selectedWorkspace] retain];
+    Workspace *lastWorkspace = [[self workspaceAtIndex:_lastSelectedWorkspaceIndex] retain];
+    Workspace *movingWorkspace = [workspace retain];
+
+    [self.workspaces removeObjectAtIndex:index];
+    movingWorkspace.pinned = pinned;
+    NSInteger pinnedCount = 0;
+    for (Workspace *candidate in self.workspaces) {
+        if (candidate.pinned) {
+            pinnedCount++;
+        }
+    }
+    NSInteger insertIndex = MIN(pinnedCount, self.workspaces.count);
+    [self.workspaces insertObject:movingWorkspace atIndex:insertIndex];
+
+    self.selectedWorkspaceIndex = selectedWorkspace ? [self.workspaces indexOfObjectIdenticalTo:selectedWorkspace] : -1;
+    _lastSelectedWorkspaceIndex = lastWorkspace ? [self.workspaces indexOfObjectIdenticalTo:lastWorkspace] : -1;
+
+    [selectedWorkspace release];
+    [lastWorkspace release];
+    [movingWorkspace release];
+
+    [_contentView reloadTideySidebar];
+    if (self.selectedWorkspaceIndex >= 0) {
+        [_contentView selectTideySidebarWorkspaceAtIndex:self.selectedWorkspaceIndex];
+    }
 }
 
 - (BOOL)workspaceHasCustomTitleAtIndex:(NSInteger)index {
@@ -11172,6 +11228,10 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
     return [self tideySidebarDisplaySubtitleForSession:session panel:panel];
 }
 
+- (BOOL)rootTerminalViewTideySidebarWorkspaceIsPinnedAtIndex:(NSInteger)index {
+    return [self workspaceIsPinnedAtIndex:index];
+}
+
 - (NSInteger)rootTerminalViewSelectedTideySidebarWorkspaceIndex {
     [self ensureTideyWorkspacesInitialized];
     [self updateSelectedPanelIndexFromVisibleTabSelection];
@@ -11189,6 +11249,10 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
 
 - (void)rootTerminalViewCreateTideyWorkspace {
     [self createTideyWorkspacePossiblyTmux:NO];
+}
+
+- (void)rootTerminalViewSetPinned:(BOOL)pinned forTideySidebarWorkspaceAtIndex:(NSInteger)index {
+    [self setPinned:pinned forWorkspaceAtIndex:index];
 }
 
 - (BOOL)rootTerminalViewTideySidebarWorkspaceHasCustomTitleAtIndex:(NSInteger)index {

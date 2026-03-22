@@ -74,11 +74,13 @@
 - (NSInteger)rootTerminalViewNumberOfTideySidebarWorkspaces;
 - (NSString *)rootTerminalViewTideySidebarWorkspaceTitleAtIndex:(NSInteger)index;
 - (NSString *)rootTerminalViewTideySidebarWorkspaceSubtitleAtIndex:(NSInteger)index;
+- (BOOL)rootTerminalViewTideySidebarWorkspaceIsPinnedAtIndex:(NSInteger)index;
 - (NSInteger)rootTerminalViewSelectedTideySidebarWorkspaceIndex;
 - (BOOL)rootTerminalViewSelectTideySidebarWorkspaceAtIndex:(NSInteger)index;
 - (BOOL)rootTerminalViewMoveTideySidebarWorkspaceFromIndex:(NSInteger)fromIndex
                                                    toIndex:(NSInteger)toIndex;
 - (void)rootTerminalViewCreateTideyWorkspace;
+- (void)rootTerminalViewSetPinned:(BOOL)pinned forTideySidebarWorkspaceAtIndex:(NSInteger)index;
 - (BOOL)rootTerminalViewTideySidebarWorkspaceHasCustomTitleAtIndex:(NSInteger)index;
 - (void)rootTerminalViewRenameTideySidebarWorkspaceAtIndex:(NSInteger)index;
 - (void)rootTerminalViewRemoveCustomNameForTideySidebarWorkspaceAtIndex:(NSInteger)index;

@@ -80,6 +80,7 @@ typedef struct {
 - (iTermLayoutOutputs)layoutOutputsByApplyingTideySidebarOffset:(iTermLayoutOutputs)outputs;
 - (NSString *)tideySidebarWorkspaceTitleAtIndex:(NSInteger)index;
 - (NSString *)tideySidebarWorkspaceSubtitleAtIndex:(NSInteger)index;
+- (BOOL)tideySidebarWorkspacePinnedAtIndex:(NSInteger)index;
 - (NSInteger)tideySidebarSelectedWorkspaceIndex;
 - (void)syncTideySidebarSelection;
 - (NSTableCellView *)newTideySidebarCellView;
@@ -92,6 +93,7 @@ typedef struct {
                                           row:(NSInteger)row;
 - (NSInteger)tideySidebarWorkspaceIndexFromSender:(id)sender;
 - (void)tideySidebarNewWorkspace:(id)sender;
+- (void)tideySidebarTogglePinnedWorkspace:(id)sender;
 - (void)tideySidebarRenameWorkspace:(id)sender;
 - (void)tideySidebarRemoveCustomWorkspaceName:(id)sender;
 - (void)tideySidebarMoveWorkspaceUp:(id)sender;
@@ -1462,6 +1464,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     return [self.delegate rootTerminalViewTideySidebarWorkspaceSubtitleAtIndex:index] ?: @"";
 }
 
+- (BOOL)tideySidebarWorkspacePinnedAtIndex:(NSInteger)index {
+    return [self.delegate rootTerminalViewTideySidebarWorkspaceIsPinnedAtIndex:index];
+}
+
 - (NSInteger)tideySidebarSelectedWorkspaceIndex {
     return [self.delegate rootTerminalViewSelectedTideySidebarWorkspaceIndex];
 }
@@ -1959,9 +1965,22 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSTableCellView *cellView = [[NSTableCellView alloc] initWithFrame:NSZeroRect];
     cellView.identifier = @"TideySidebarSessionCell";
 
+    NSImageView *pinView = [[NSImageView alloc] initWithFrame:NSMakeRect(12, 34, 12, 12)];
+    pinView.tag = 1003;
+    pinView.autoresizingMask = NSViewMaxXMargin;
+    pinView.imageScaling = NSImageScaleProportionallyDown;
+    pinView.hidden = YES;
+    if (@available(macOS 11.0, *)) {
+        NSImage *pinImage = [NSImage imageWithSystemSymbolName:@"pin.fill" accessibilityDescription:nil];
+        pinImage.template = YES;
+        pinView.image = pinImage;
+        pinView.contentTintColor = [NSColor colorWithWhite:0.90 alpha:1];
+    }
+    [cellView addSubview:pinView];
+
     NSTextField *titleField = [NSTextField newLabelStyledTextField];
     titleField.tag = 1001;
-    titleField.frame = NSMakeRect(16, 30, 180, 20);
+    titleField.frame = NSMakeRect(32, 30, 164, 20);
     titleField.autoresizingMask = NSViewWidthSizable;
     titleField.font = [NSFont systemFontOfSize:14 weight:NSFontWeightSemibold];
     titleField.textColor = [NSColor whiteColor];
@@ -1975,7 +1994,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
     NSTextField *subtitleField = [NSTextField newLabelStyledTextField];
     subtitleField.tag = 1002;
-    subtitleField.frame = NSMakeRect(16, 12, 180, 16);
+    subtitleField.frame = NSMakeRect(32, 12, 164, 16);
     subtitleField.autoresizingMask = NSViewWidthSizable;
     subtitleField.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
     subtitleField.textColor = [NSColor colorWithWhite:0.72 alpha:1];
@@ -1990,6 +2009,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 
 - (void)configureTideySidebarCellView:(NSTableCellView *)cellView row:(NSInteger)row {
+    NSImageView *pinView = (NSImageView *)[cellView viewWithTag:1003];
+    pinView.hidden = ![self tideySidebarWorkspacePinnedAtIndex:row];
     cellView.textField.stringValue = [self tideySidebarWorkspaceTitleAtIndex:row];
     NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
     subtitleField.stringValue = [self tideySidebarWorkspaceSubtitleAtIndex:row];
@@ -2049,6 +2070,11 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                action:@selector(tideySidebarRenameWorkspace:)
                                                   row:row]];
 
+    NSString *pinTitle = [self tideySidebarWorkspacePinnedAtIndex:row] ? @"Unpin Workspace" : @"Pin Workspace";
+    [menu addItem:[self tideySidebarMenuItemWithTitle:pinTitle
+                                               action:@selector(tideySidebarTogglePinnedWorkspace:)
+                                                  row:row]];
+
     if ([self.delegate rootTerminalViewTideySidebarWorkspaceHasCustomTitleAtIndex:row]) {
         [menu addItem:[self tideySidebarMenuItemWithTitle:@"Remove Custom Workspace Name"
                                                    action:@selector(tideySidebarRemoveCustomWorkspaceName:)
@@ -2104,6 +2130,14 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 - (void)tideySidebarNewWorkspace:(id)sender {
     [self.delegate rootTerminalViewCreateTideyWorkspace];
+}
+
+- (void)tideySidebarTogglePinnedWorkspace:(id)sender {
+    NSInteger row = [self tideySidebarWorkspaceIndexFromSender:sender];
+    if (row != NSNotFound) {
+        BOOL pinned = [self tideySidebarWorkspacePinnedAtIndex:row];
+        [self.delegate rootTerminalViewSetPinned:!pinned forTideySidebarWorkspaceAtIndex:row];
+    }
 }
 
 - (void)tideySidebarRenameWorkspace:(id)sender {
