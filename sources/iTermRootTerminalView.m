@@ -2213,7 +2213,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     configuration.userContentController = contentController;
 
     _tideyEditorWebView = [[WKWebView alloc] initWithFrame:_tideyEditorPanelView.bounds configuration:configuration];
-    _tideyEditorWebView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    _tideyEditorWebView.autoresizingMask = NSViewWidthSizable;
     _tideyEditorWebView.navigationDelegate = self;
     if (@available(macOS 13.3, *)) {
         _tideyEditorWebView.inspectable = YES;
@@ -2430,7 +2430,9 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     const CGFloat tabStripHeight = TideyEditorEffectiveTabStripHeight(_tabBarControl.height);
     _tideyEditorTabStripView.frame = NSMakeRect(0, NSHeight(bounds) - tabStripHeight, NSWidth(bounds), tabStripHeight);
 
-    const CGFloat contentHeight = MAX(0, NSHeight(bounds) - tabStripHeight);
+    // Account for the terminal session title bar so editor content aligns with terminal content.
+    const CGFloat sessionTitleBarHeight = [_delegate rootTerminalViewSessionTitleBarHeight];
+    const CGFloat contentHeight = MAX(0, NSHeight(bounds) - tabStripHeight - sessionTitleBarHeight);
     const CGFloat fileTreeWidth = self.shouldShowTideyEditorFileTree
         ? MIN(self.tideyEditorFileTreeWidth, MAX(0, NSWidth(bounds) - kTideyMinimumEditorContentWidth))
         : 0;
