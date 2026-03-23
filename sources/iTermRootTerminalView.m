@@ -3379,10 +3379,12 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 - (void)setTabBarFrame:(NSRect)frame {
     assert(!_tabBarControlOnLoan);
-    // Extend tab bar backing 1pt taller to cover root view gap
+    // Extend tab bar backing 1pt taller to cover root view gap above tab bar.
+    // Keep tab control at original height (bottom of backing), extra 1pt at top.
+    CGFloat originalHeight = frame.size.height;
     frame.size.height += 1;
     _tabBarBacking.frame = frame;
-    self.tabBarControl.frame = _tabBarBacking.bounds;
+    self.tabBarControl.frame = NSMakeRect(0, 0, NSWidth(_tabBarBacking.bounds), originalHeight);
 }
 
 - (void)layoutSubviewsWithVisibleBottomTabBarForWindow:(NSWindow *)thisWindow {
