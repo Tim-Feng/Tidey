@@ -11741,7 +11741,26 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
 - (CGFloat)rootTerminalViewSessionTitleBarHeight {
     PTYSession *session = self.currentSession;
     if (session && session.view.showTitle) {
-        return [SessionView titleHeight];
+        CGFloat h = [SessionView titleHeight];
+        // --- DEBUG: Log SessionView titleHeight ---
+        {
+            NSString *dbg = [NSString stringWithFormat:
+                @"[rootTerminalViewSessionTitleBarHeight] SessionView titleHeight=%g  session.view.frame=%@  session.view._title.frame=%@\n",
+                h,
+                NSStringFromRect(session.view.frame),
+                NSStringFromRect(session.view.title.frame)];
+            NSData *data = [dbg dataUsingEncoding:NSUTF8StringEncoding];
+            NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:@"/tmp/tidey-view-debug.txt"];
+            if (fh) {
+                [fh seekToEndOfFile];
+                [fh writeData:data];
+                [fh closeFile];
+            } else {
+                [data writeToFile:@"/tmp/tidey-view-debug.txt" atomically:YES];
+            }
+        }
+        // --- END DEBUG ---
+        return h;
     }
     return 0;
 }
