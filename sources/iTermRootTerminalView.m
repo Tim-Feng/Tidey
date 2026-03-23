@@ -4102,7 +4102,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         statusEntries = [[TideyStatusStore sharedStore] statusEntriesForWorkspaceID:workspaceID];
     }
     BOOL hasStatus = (statusEntries.count > 0);
-    CGFloat statusOffset = hasStatus ? 16 : 0;
+    CGFloat statusOffset = 0;
 
     NSTextField *bodyField = (NSTextField *)[cellView viewWithTag:1007];
     NSTextField *statusField = (NSTextField *)[cellView viewWithTag:1008];
@@ -4135,8 +4135,12 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         closeView.alphaValue = 0.0;
     } else {
         // Normal layout (60pt row).
+        // Only indent for badge when there are unread notifications.
+        CGFloat textX = (unreadCount > 0) ? 36 : 12;
+        CGFloat textMaxW = (unreadCount > 0) ? (width - 88) : (width - 64);
+
         cellView.textField.stringValue = [self tideySidebarWorkspaceTitleAtIndex:row];
-        cellView.textField.frame = NSMakeRect(36, 30 + statusOffset, MAX(0, width - 88), 20);
+        cellView.textField.frame = NSMakeRect(textX, 30, MAX(0, textMaxW), 20);
 
         NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
         if (latestNotification) {
@@ -4146,13 +4150,13 @@ NS_CLASS_AVAILABLE_MAC(10_14)
             subtitleField.stringValue = [self tideySidebarWorkspaceSubtitleAtIndex:row];
             subtitleField.textColor = [NSColor colorWithWhite:0.72 alpha:1];
         }
-        subtitleField.frame = NSMakeRect(36, 12 + statusOffset, MAX(0, width - 48), 16);
+        subtitleField.frame = NSMakeRect(textX, 12, MAX(0, width - (textX + 12)), 16);
 
         bodyField.hidden = YES;
         bodyField.stringValue = @"";
 
-        pinView.frame = NSMakeRect(MAX(0, width - 48), 34 + statusOffset, 12, 12);
-        badgeView.frame = NSMakeRect(12, 22 + statusOffset, kTideySidebarBadgeSize, kTideySidebarBadgeSize);
+        pinView.frame = NSMakeRect(MAX(0, width - 48), 34, 12, 12);
+        badgeView.frame = NSMakeRect(12, 22, kTideySidebarBadgeSize, kTideySidebarBadgeSize);
 
         NSView *closeView = TideyFindCloseView(cellView);
         closeView.frame = NSMakeRect(MAX(0, width - 28), 32 + statusOffset, 16, 16);
