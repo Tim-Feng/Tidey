@@ -2573,6 +2573,9 @@ ITERM_WEAKLY_REFERENCEABLE
 }
 
 - (void)performClose:(id)sender {
+    if ([_contentView closeCurrentTideyEditorTab]) {
+        return;
+    }
     [self close];
 }
 
