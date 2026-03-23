@@ -1501,13 +1501,7 @@ void TurnOnDebugLoggingAutomatically(void) {
     [self registerMenuTips];
 #if DEBUG
     NSMenu *appMenu = [[[[NSApp mainMenu] itemArray] firstObject] submenu];
-    [appMenu addItem:[NSMenuItem separatorItem]];
-
-    NSMenuItem *item = [[[NSMenuItem alloc] initWithTitle:@"Toggle Key Recording" action:@selector(toggleKeyRecording:) keyEquivalent:@""] autorelease];
-    [appMenu addItem:item];
-
-    item = [[[NSMenuItem alloc] initWithTitle:@"Replay Recorded Keys" action:@selector(replayRecordedKeys:) keyEquivalent:@""] autorelease];
-    [appMenu addItem:item];
+    // Tidey: Don't add debug key recording items to app menu.
 #endif
 }
 
@@ -2252,6 +2246,7 @@ static iTermKeyEventReplayer *gReplayer;
     NSArray<NSString *> *titlesToHide = @[
         @"Toggle Key Recording",
         @"Replay Recorded Keys",
+        @"Install Shell Integration",
     ];
 
     [self tideyHideMenuItemsWithIdentifiers:identifiersToHide titles:titlesToHide inMenu:mainMenu];
