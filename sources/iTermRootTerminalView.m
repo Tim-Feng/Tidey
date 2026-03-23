@@ -2427,7 +2427,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     const NSRect bounds = _tideyEditorPanelView.bounds;
     const CGFloat tabStripHeight = TideyEditorEffectiveTabStripHeight(_tabBarControl.height);
     _tideyEditorTabStripView.frame = NSMakeRect(0, NSHeight(bounds) - tabStripHeight, NSWidth(bounds), tabStripHeight);
-    const CGFloat contentHeight = MAX(0, NSHeight(bounds) - tabStripHeight);
+    // Subtract kDivisionViewHeight (1pt) to match the terminal's division line between tab bar and content.
+    const CGFloat contentHeight = MAX(0, NSHeight(bounds) - tabStripHeight - kDivisionViewHeight);
     const CGFloat fileTreeWidth = self.shouldShowTideyEditorFileTree
         ? MIN(self.tideyEditorFileTreeWidth, MAX(0, NSWidth(bounds) - kTideyMinimumEditorContentWidth))
         : 0;
