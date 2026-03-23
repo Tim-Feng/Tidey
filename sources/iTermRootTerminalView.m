@@ -4121,11 +4121,12 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
         NSString *notifTitle = latestNotification ? latestNotification.title : (anyNotification.title ?: @"");
         subtitleField.stringValue = notifTitle;
-        subtitleField.textColor = [NSColor controlAccentColor];
+        subtitleField.textColor = selected ? [NSColor whiteColor] : [NSColor controlAccentColor];
         subtitleField.font = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
         subtitleField.frame = NSMakeRect(12, 2 + statusOffset, MAX(0, width - 24), 14);
 
         bodyField.stringValue = anyNotification.body;
+        bodyField.textColor = selected ? [NSColor colorWithWhite:1 alpha:0.8] : [NSColor secondaryLabelColor];
         bodyField.hidden = NO;
         bodyField.frame = NSMakeRect(12, 18 + statusOffset, MAX(0, width - 24), 40);
 
@@ -4149,10 +4150,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         subtitleField.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
         if (latestNotification) {
             subtitleField.stringValue = latestNotification.title;
-            subtitleField.textColor = [NSColor controlAccentColor];
+            subtitleField.textColor = selected ? [NSColor whiteColor] : [NSColor controlAccentColor];
         } else {
             subtitleField.stringValue = [self tideySidebarWorkspaceSubtitleAtIndex:row];
-            subtitleField.textColor = [NSColor colorWithWhite:0.72 alpha:1];
+            subtitleField.textColor = selected ? [NSColor colorWithWhite:1 alpha:0.8] : [NSColor colorWithWhite:0.72 alpha:1];
         }
         subtitleField.frame = NSMakeRect(12, 12, MAX(0, width - 24), 16);
 
