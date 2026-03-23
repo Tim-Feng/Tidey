@@ -3190,16 +3190,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     const CGFloat rightEdge = self.shouldShowToolbelt ? NSMinX(outputs.toolbeltFrame) : NSWidth(self.bounds);
     const CGFloat originX = MAX(0, rightEdge - width);
 
-    // Use the tab bar's maxY so the editor panel top aligns with the terminal tab bar top.
-    // When the tab bar is hidden (CGRectZero), fall back to tabView maxY + editor tab strip height.
-    const CGFloat tabStripHeight = TideyEditorEffectiveTabStripHeight(_tabBarControl.height);
-    CGFloat panelHeight;
-    if (!CGRectIsEmpty(outputs.tabBarFrame)) {
-        panelHeight = CGRectGetMaxY(outputs.tabBarFrame);
-    } else {
-        panelHeight = CGRectGetMaxY(outputs.tabViewFrame) + tabStripHeight;
-    }
-    _tideyEditorPanelView.frame = NSMakeRect(originX, 0, MIN(width, rightEdge), panelHeight);
+    _tideyEditorPanelView.frame = NSMakeRect(originX, 0, MIN(width, rightEdge), NSHeight(self.bounds));
 
     [self layoutTideyEditorContents];
     if (_tideyEditorReady) {
