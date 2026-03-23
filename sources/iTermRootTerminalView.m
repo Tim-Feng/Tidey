@@ -88,6 +88,13 @@ static NSView *TideyFindCloseView(NSView *container) {
     return nil;
 }
 
+static CGFloat TideyEditorEffectiveTabStripHeight(CGFloat terminalTabBarHeight) {
+    if (terminalTabBarHeight > 0) {
+        return round(terminalTabBarHeight);
+    }
+    return kTideyEditorTabStripHeight;
+}
+
 @class TideyEditorFileNode;
 @class TideyEditorTab;
 
@@ -2177,8 +2184,9 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         return;
     }
     const NSRect bounds = _tideyEditorPanelView.bounds;
-    _tideyEditorTabStripView.frame = NSMakeRect(0, NSHeight(bounds) - kTideyEditorTabStripHeight, NSWidth(bounds), kTideyEditorTabStripHeight);
-    const CGFloat contentHeight = MAX(0, NSHeight(bounds) - kTideyEditorTabStripHeight);
+    const CGFloat tabStripHeight = TideyEditorEffectiveTabStripHeight(_tabBarControl.height);
+    _tideyEditorTabStripView.frame = NSMakeRect(0, NSHeight(bounds) - tabStripHeight, NSWidth(bounds), tabStripHeight);
+    const CGFloat contentHeight = MAX(0, NSHeight(bounds) - tabStripHeight);
     const CGFloat fileTreeWidth = self.shouldShowTideyEditorFileTree
         ? MIN(self.tideyEditorFileTreeWidth, MAX(0, NSWidth(bounds) - kTideyMinimumEditorContentWidth))
         : 0;
@@ -2259,34 +2267,43 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         [subview removeFromSuperview];
     }
 
+    _tideyEditorTabStripView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.102
+                                                                         green:0.108
+                                                                          blue:0.135
+                                                                         alpha:1].CGColor;
+    const CGFloat stripHeight = NSHeight(_tideyEditorTabStripView.bounds) > 0 ?
+        NSHeight(_tideyEditorTabStripView.bounds) :
+        TideyEditorEffectiveTabStripHeight(_tabBarControl.height);
     const CGFloat insetX = 8;
-    const CGFloat insetY = 4;
-    const CGFloat tabHeight = kTideyEditorTabStripHeight - insetY * 2;
+    const CGFloat insetY = 3;
+    const CGFloat tabHeight = MAX(22, stripHeight - insetY * 2 - 1);
     CGFloat x = insetX;
     NSDictionary<NSAttributedStringKey, id> *attributes = @{
-        NSFontAttributeName: [NSFont systemFontOfSize:12 weight:NSFontWeightMedium]
+        NSFontAttributeName: [NSFont systemFontOfSize:11 weight:NSFontWeightMedium]
     };
     for (NSInteger i = 0; i < (NSInteger)_tideyEditorTabs.count; i++) {
         TideyEditorTab *tab = _tideyEditorTabs[i];
         NSString *title = tab.dirty ? [NSString stringWithFormat:@"● %@", tab.displayName ?: @"Untitled"] : (tab.displayName ?: @"Untitled");
         CGFloat textWidth = ceil([title sizeWithAttributes:attributes].width);
-        CGFloat tabWidth = MIN(MAX(120, textWidth + 34), 240);
+        CGFloat tabWidth = MIN(MAX(112, textWidth + 38), 240);
 
         NSView *tabView = [[NSView alloc] initWithFrame:NSMakeRect(x, insetY, tabWidth, tabHeight)];
         tabView.wantsLayer = YES;
         BOOL selected = (i == _tideySelectedEditorTabIndex);
-        tabView.layer.cornerRadius = 7;
+        tabView.layer.cornerRadius = 5;
         tabView.layer.backgroundColor = (selected
-                                         ? [NSColor colorWithSRGBRed:0.16 green:0.19 blue:0.25 alpha:1]
-                                         : [NSColor colorWithSRGBRed:0.11 green:0.12 blue:0.16 alpha:1]).CGColor;
-        tabView.layer.borderWidth = selected ? 1 : 0;
-        tabView.layer.borderColor = [NSColor colorWithWhite:0.28 alpha:1].CGColor;
+                                         ? [NSColor colorWithSRGBRed:0.165 green:0.175 blue:0.215 alpha:1]
+                                         : [NSColor colorWithSRGBRed:0.118 green:0.123 blue:0.152 alpha:1]).CGColor;
+        tabView.layer.borderWidth = 1;
+        tabView.layer.borderColor = (selected
+                                     ? [NSColor colorWithWhite:0.30 alpha:1]
+                                     : [NSColor colorWithWhite:0.18 alpha:1]).CGColor;
 
-        NSButton *selectButton = [[NSButton alloc] initWithFrame:NSMakeRect(8, 0, tabWidth - 32, tabHeight)];
+        NSButton *selectButton = [[NSButton alloc] initWithFrame:NSMakeRect(10, 0, tabWidth - 34, tabHeight)];
         selectButton.bordered = NO;
         selectButton.buttonType = NSButtonTypeMomentaryChange;
         selectButton.alignment = NSTextAlignmentLeft;
-        NSFont *baseFont = [NSFont systemFontOfSize:12 weight:selected ? NSFontWeightSemibold : NSFontWeightMedium];
+        NSFont *baseFont = [NSFont systemFontOfSize:11 weight:selected ? NSFontWeightSemibold : NSFontWeightMedium];
         selectButton.font = tab.preview ? [[NSFontManager sharedFontManager] convertFont:baseFont toHaveTrait:NSItalicFontMask] : baseFont;
         selectButton.contentTintColor = [NSColor colorWithWhite:0.95 alpha:1];
         selectButton.title = title;
@@ -2296,11 +2313,11 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         selectButton.action = @selector(tideyEditorSelectTab:);
         [tabView addSubview:selectButton];
 
-        NSButton *closeButton = [[NSButton alloc] initWithFrame:NSMakeRect(tabWidth - 22, 0, 22, tabHeight)];
+        NSButton *closeButton = [[NSButton alloc] initWithFrame:NSMakeRect(tabWidth - 22, 0, 20, tabHeight)];
         closeButton.bordered = NO;
         closeButton.buttonType = NSButtonTypeMomentaryChange;
-        closeButton.font = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
-        closeButton.contentTintColor = [NSColor colorWithWhite:0.75 alpha:1];
+        closeButton.font = [NSFont systemFontOfSize:10 weight:NSFontWeightSemibold];
+        closeButton.contentTintColor = [NSColor colorWithWhite:0.72 alpha:1];
         closeButton.title = @"✕";
         closeButton.tag = i;
         closeButton.target = self;
@@ -2308,7 +2325,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         [tabView addSubview:closeButton];
 
         [_tideyEditorTabStripView addSubview:tabView];
-        x += tabWidth + 6;
+        x += tabWidth + 5;
     }
 }
 
