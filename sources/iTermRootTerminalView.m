@@ -3206,10 +3206,13 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     // When the tab bar is hidden (CGRectZero), fall back to tabView maxY + editor tab strip height.
     const CGFloat tabStripHeight = TideyEditorEffectiveTabStripHeight(_tabBarControl.height);
     CGFloat panelHeight;
+    // The editor panel top is 2pt below the terminal tab bar top due to the
+    // NSVisualEffectView rendering offset in the tab bar backing.
+    const CGFloat kTideyEditorTabBarAlignmentOffset = 2;
     if (!CGRectIsEmpty(outputs.tabBarFrame)) {
-        panelHeight = CGRectGetMaxY(outputs.tabBarFrame);
+        panelHeight = CGRectGetMaxY(outputs.tabBarFrame) - kTideyEditorTabBarAlignmentOffset;
     } else {
-        panelHeight = CGRectGetMaxY(outputs.tabViewFrame) + tabStripHeight;
+        panelHeight = CGRectGetMaxY(outputs.tabViewFrame) + tabStripHeight - kTideyEditorTabBarAlignmentOffset;
     }
     _tideyEditorPanelView.frame = NSMakeRect(originX, 0, MIN(width, rightEdge), panelHeight);
 
