@@ -3178,7 +3178,8 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
                                    completion:(void (^)(NSDictionary<NSString *, NSString *> *,
                                                         NSArray<NSString *> *))completion {
     DLog(@"env=%@ argv=%@", env, argv);
-    if (![iTermProfilePreferences boolForKey:KEY_LOAD_SHELL_INTEGRATION_AUTOMATICALLY inProfile:self.profile]) {
+    // Tidey: always inject shell integration regardless of profile setting
+    if (NO) {
         DLog(@"Injection disabled in profile %@", self.profile[KEY_GUID]);
         completion(env, argv);
         return;
@@ -17741,7 +17742,8 @@ static const NSTimeInterval PTYSessionFocusReportBellSquelchTimeIntervalThreshol
     }
     iTermConductor *previousConductor = [_conductor autorelease];
     NSDictionary *dict = [NSDictionary castFrom:[iTermProfilePreferences objectForKey:KEY_SSH_CONFIG inProfile:self.profile]];
-    const BOOL shouldInjectShellIntegration = [iTermProfilePreferences boolForKey:KEY_LOAD_SHELL_INTEGRATION_AUTOMATICALLY inProfile:self.profile];
+    // Tidey: always inject shell integration
+    const BOOL shouldInjectShellIntegration = YES;
     iTermSSHConfiguration *config = [[[iTermSSHConfiguration alloc] initWithDictionary:dict] autorelease];
     _conductor = [[iTermConductor alloc] init:sshargs
                                      boolArgs:boolArgs
