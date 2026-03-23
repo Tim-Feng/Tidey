@@ -825,10 +825,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _tideyEditorPanelLabel.alignment = NSTextAlignmentCenter;
         _tideyEditorPanelLabel.translatesAutoresizingMaskIntoConstraints = NO;
         [_tideyEditorPanelView addSubview:_tideyEditorPanelLabel];
-        [NSLayoutConstraint activateConstraints:@[
-            [_tideyEditorPanelLabel.centerXAnchor constraintEqualToAnchor:_tideyEditorPanelView.centerXAnchor],
-            [_tideyEditorPanelLabel.centerYAnchor constraintEqualToAnchor:_tideyEditorPanelView.centerYAnchor]
-        ]];
+        // Constraints will be updated in layoutTideyEditorContents to center
+        // within the editor content area (excluding file tree).
+        _tideyEditorPanelLabel.translatesAutoresizingMaskIntoConstraints = YES;
+        _tideyEditorPanelLabel.autoresizingMask = NSViewMinXMargin | NSViewMaxXMargin | NSViewMinYMargin | NSViewMaxYMargin;
 
         _tideyEditorFileTreeContainerView = [[NSView alloc] initWithFrame:NSZeroRect];
         _tideyEditorFileTreeContainerView.autoresizingMask = NSViewMinXMargin | NSViewHeightSizable;
@@ -2440,6 +2440,15 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                           0,
                                                           kTideyDragHandleWidth,
                                                           contentHeight);
+    // Center "Open a file" label within the editor content area (not file tree).
+    if (!_tideyEditorPanelLabel.hidden) {
+        CGFloat labelWidth = 200;
+        CGFloat labelHeight = 30;
+        _tideyEditorPanelLabel.frame = NSMakeRect((editorWidth - labelWidth) / 2.0,
+                                                   (contentHeight - labelHeight) / 2.0,
+                                                   labelWidth,
+                                                   labelHeight);
+    }
     [self reloadTideyEditorTabs];
     [self updateTideyChromeToggleButtons];
 }
