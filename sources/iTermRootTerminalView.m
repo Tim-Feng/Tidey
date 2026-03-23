@@ -2215,7 +2215,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     configuration.userContentController = contentController;
 
     _tideyEditorWebView = [[WKWebView alloc] initWithFrame:_tideyEditorPanelView.bounds configuration:configuration];
-    _tideyEditorWebView.autoresizingMask = NSViewWidthSizable;
+    _tideyEditorWebView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     _tideyEditorWebView.navigationDelegate = self;
     if (@available(macOS 13.3, *)) {
         _tideyEditorWebView.inspectable = YES;
