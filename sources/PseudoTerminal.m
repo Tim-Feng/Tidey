@@ -335,6 +335,8 @@ typedef NS_ENUM(int, iTermShouldHaveTitleSeparator) {
 - (void)clearCustomTitleForWorkspaceAtIndex:(NSInteger)index;
 - (NSString *)tideyWorkspaceIdentifierForWorkspace:(Workspace *)workspace;
 - (void)tideyMarkWorkspaceReadAtIndex:(NSInteger)index;
+- (void)tideyMarkWorkspaceUnreadAtIndex:(NSInteger)index;
+- (void)tideyNotificationStoreDidChange:(NSNotification *)notification;
 - (void)renameWorkspaceAtIndex:(NSInteger)index;
 - (void)closeWorkspacesAtIndexes:(NSIndexSet *)indexes;
 @end
@@ -864,6 +866,10 @@ typedef NS_ENUM(int, iTermShouldHaveTitleSeparator) {
                                              selector:@selector(draggingDidBeginOrEnd:)
                                                  name:PSMTabDragDidBeginNotification
                                                object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(tideyNotificationStoreDidChange:)
+                                                 name:TideyNotificationStoreDidChangeNotification
+                                               object:nil];
     [[[NSWorkspace sharedWorkspace] notificationCenter] addObserver:self
                                                            selector:@selector(activeSpaceDidChange:)
                                                                name:NSWorkspaceActiveSpaceDidChangeNotification
@@ -1188,6 +1194,61 @@ ITERM_WEAKLY_REFERENCEABLE
         return;
     }
     [[TideyNotificationStore sharedStore] markReadForWorkspaceID:workspaceID];
+}
+
+- (void)tideyMarkWorkspaceUnreadAtIndex:(NSInteger)index {
+    Workspace *workspace = [self workspaceAtIndex:index];
+    NSString *workspaceID = [self tideyWorkspaceIdentifierForWorkspace:workspace];
+    if (workspaceID.length == 0) {
+        return;
+    }
+    [[TideyNotificationStore sharedStore] markUnreadForWorkspaceID:workspaceID];
+}
+
+- (void)tideyNotificationStoreDidChange:(NSNotification *)notification {
+    NSString *workspaceID = notification.userInfo[@"workspaceID"];
+    if (workspaceID.length == 0 || [workspaceID isEqualToString:@"*"]) {
+        return;
+    }
+
+    [self ensureTideyWorkspacesInitialized];
+    if (self.workspaces.count <= 1) {
+        return;
+    }
+
+    // Find the workspace that received the notification.
+    NSInteger fromIndex = NSNotFound;
+    for (NSInteger i = 0; i < (NSInteger)self.workspaces.count; i++) {
+        Workspace *ws = self.workspaces[i];
+        if ([[self tideyWorkspaceIdentifierForWorkspace:ws] isEqualToString:workspaceID]) {
+            fromIndex = i;
+            break;
+        }
+    }
+    if (fromIndex == NSNotFound) {
+        return;
+    }
+
+    Workspace *workspace = [self workspaceAtIndex:fromIndex];
+    if (workspace.pinned) {
+        // Pinned workspaces do not move.
+        return;
+    }
+
+    // Calculate the first unpinned position.
+    NSInteger pinnedCount = 0;
+    for (Workspace *ws in self.workspaces) {
+        if (ws.pinned) {
+            pinnedCount++;
+        }
+    }
+
+    if (fromIndex <= pinnedCount) {
+        // Already at or above the first unpinned position.
+        return;
+    }
+
+    [self moveWorkspaceFromIndex:fromIndex toIndex:pinnedCount];
 }
 
 - (BOOL)tideyWorkspaceIsInStartupGracePeriod:(Workspace *)workspace {
@@ -11446,6 +11507,10 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
 
 - (void)rootTerminalViewMarkTideySidebarWorkspaceReadAtIndex:(NSInteger)index {
     [self tideyMarkWorkspaceReadAtIndex:index];
+}
+
+- (void)rootTerminalViewMarkTideySidebarWorkspaceUnreadAtIndex:(NSInteger)index {
+    [self tideyMarkWorkspaceUnreadAtIndex:index];
 }
 
 #pragma mark - PSMPUAFontProvider

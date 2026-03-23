@@ -93,6 +93,7 @@
 - (void)rootTerminalViewCloseTideySidebarWorkspacesAboveIndex:(NSInteger)index;
 - (void)rootTerminalViewCloseTideySidebarWorkspacesBelowIndex:(NSInteger)index;
 - (void)rootTerminalViewMarkTideySidebarWorkspaceReadAtIndex:(NSInteger)index;
+- (void)rootTerminalViewMarkTideySidebarWorkspaceUnreadAtIndex:(NSInteger)index;
 - (IBAction)toggleTideySidebar:(id)sender;
 - (IBAction)toggleTideyTerminal:(id)sender;
 - (IBAction)toggleTideyEditorPanel:(id)sender;

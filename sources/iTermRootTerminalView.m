@@ -203,6 +203,7 @@ static CGFloat TideyEditorEffectiveTabStripHeight(CGFloat terminalTabBarHeight) 
 - (void)tideyNotificationStoreDidChange:(NSNotification *)notification;
 - (NSInteger)tideySidebarWorkspaceIndexForIdentifier:(NSString *)workspaceIdentifier;
 - (TideyNotificationItem *)tideySidebarLatestUnreadNotificationAtIndex:(NSInteger)index;
+- (BOOL)tideySidebarHasReadNotificationsAtIndex:(NSInteger)index;
 - (NSTableCellView *)newTideySidebarCellView;
 - (void)configureTideySidebarCellView:(NSTableCellView *)cellView row:(NSInteger)row;
 - (NSView *)tideySidebarDragPreviewForRow:(NSInteger)row width:(CGFloat)width height:(CGFloat)height;
@@ -215,6 +216,7 @@ static CGFloat TideyEditorEffectiveTabStripHeight(CGFloat terminalTabBarHeight) 
 - (void)tideySidebarNewWorkspace:(id)sender;
 - (void)tideySidebarTogglePinnedWorkspace:(id)sender;
 - (void)tideySidebarMarkWorkspaceRead:(id)sender;
+- (void)tideySidebarMarkWorkspaceUnread:(id)sender;
 - (void)tideySidebarRenameWorkspace:(id)sender;
 - (void)tideySidebarRemoveCustomWorkspaceName:(id)sender;
 - (void)tideySidebarMoveWorkspaceUp:(id)sender;
@@ -642,6 +644,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSMutableArray<TideyEditorTab *> *_tideyEditorTabs;
     NSInteger _tideySelectedEditorTabIndex;
     BOOL _tideyEditorIsRevealingSelection;
+    BOOL _tideyIgnoreNextSidebarSelection;
     CGFloat _tideySidebarPreferredWidth;
     CGFloat _tideyEditorPreferredWidth;
     CGFloat _tideyEditorPreferredWidthBeforeTerminalCollapse;
@@ -1184,6 +1187,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         if (NSPointInRect(pointInTable, _tideySidebarTableView.bounds)) {
             NSInteger row = [_tideySidebarTableView rowAtPoint:pointInTable];
             if (row >= 0) {
+                _tideyIgnoreNextSidebarSelection = YES;
                 [_tideySidebarTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:row]
                                    byExtendingSelection:NO];
             }
@@ -3903,6 +3907,24 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     }];
 }
 
+- (CGFloat)tableView:(NSTableView *)tableView heightOfRow:(NSInteger)row {
+    if (tableView != _tideySidebarTableView) {
+        return tableView.rowHeight;
+    }
+    if (row < 0 || row >= self.numberOfTideySidebarWorkspaces) {
+        return 60;
+    }
+    NSString *workspaceID = [self tideySidebarWorkspaceIdentifierAtIndex:row];
+    TideyNotificationItem *notification = nil;
+    if (workspaceID.length > 0) {
+        notification = [[TideyNotificationStore sharedStore] latestNotificationForWorkspaceID:workspaceID];
+    }
+    if (notification && notification.body.length > 0) {
+        return 90;
+    }
+    return 60;
+}
+
 - (NSTableRowView *)tableView:(NSTableView *)tableView rowViewForRow:(NSInteger)row {
     if (tableView != _tideySidebarTableView) {
         return [[NSTableRowView alloc] initWithFrame:NSZeroRect];
@@ -3983,6 +4005,22 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     subtitleField.selectable = NO;
     [cellView addSubview:subtitleField];
 
+    NSTextField *bodyField = [NSTextField newLabelStyledTextField];
+    bodyField.tag = 1007;
+    bodyField.frame = NSMakeRect(36, 2, 164, 28);
+    bodyField.autoresizingMask = NSViewWidthSizable;
+    bodyField.font = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
+    bodyField.textColor = [NSColor secondaryLabelColor];
+    bodyField.drawsBackground = NO;
+    bodyField.backgroundColor = [NSColor clearColor];
+    bodyField.bezeled = NO;
+    bodyField.editable = NO;
+    bodyField.selectable = NO;
+    bodyField.maximumNumberOfLines = 2;
+    bodyField.lineBreakMode = NSLineBreakByTruncatingTail;
+    bodyField.hidden = YES;
+    [cellView addSubview:bodyField];
+
     NSView *closeView = [[NSView alloc] initWithFrame:NSMakeRect(176, 32, 16, 16)];
     closeView.identifier = kTideySidebarCloseViewIdentifier;
     closeView.autoresizingMask = NSViewMinXMargin;
@@ -4014,23 +4052,70 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSImageView *pinView = (NSImageView *)[cellView viewWithTag:1003];
     pinView.hidden = ![self tideySidebarWorkspacePinnedAtIndex:row];
     CGFloat width = NSWidth(cellView.bounds);
-    cellView.textField.stringValue = [self tideySidebarWorkspaceTitleAtIndex:row];
-    cellView.textField.frame = NSMakeRect(36, 30, MAX(0, width - 88), 20);
-    NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
+
+    // Determine notification state for body display.
+    NSString *workspaceID = [self tideySidebarWorkspaceIdentifierAtIndex:row];
     TideyNotificationItem *latestNotification = [self tideySidebarLatestUnreadNotificationAtIndex:row];
-    if (latestNotification) {
-        subtitleField.stringValue = latestNotification.title;
-        subtitleField.textColor = [NSColor controlAccentColor];
-    } else {
-        subtitleField.stringValue = [self tideySidebarWorkspaceSubtitleAtIndex:row];
-        subtitleField.textColor = [NSColor colorWithWhite:0.72 alpha:1];
+    TideyNotificationItem *anyNotification = nil;
+    if (workspaceID.length > 0) {
+        anyNotification = [[TideyNotificationStore sharedStore] latestNotificationForWorkspaceID:workspaceID];
     }
-    subtitleField.frame = NSMakeRect(36, 12, MAX(0, width - 48), 16);
-    pinView.frame = NSMakeRect(MAX(0, width - 48), 34, 12, 12);
-    NSView *closeView = TideyFindCloseView(cellView);
-    closeView.frame = NSMakeRect(MAX(0, width - 28), 32, 16, 16);
-    closeView.hidden = YES;
-    closeView.alphaValue = 0.0;
+    BOOL hasBody = (anyNotification && anyNotification.body.length > 0);
+
+    NSTextField *bodyField = (NSTextField *)[cellView viewWithTag:1007];
+    if (hasBody) {
+        // Expanded layout: title at top, subtitle (notification title) in middle, body at bottom.
+        cellView.textField.stringValue = [self tideySidebarWorkspaceTitleAtIndex:row];
+        cellView.textField.frame = NSMakeRect(36, 60, MAX(0, width - 88), 20);
+
+        NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
+        if (latestNotification) {
+            subtitleField.stringValue = latestNotification.title;
+            subtitleField.textColor = [NSColor controlAccentColor];
+        } else {
+            subtitleField.stringValue = anyNotification.title ?: @"";
+            subtitleField.textColor = [NSColor colorWithWhite:0.72 alpha:1];
+        }
+        subtitleField.frame = NSMakeRect(36, 42, MAX(0, width - 48), 16);
+
+        bodyField.stringValue = anyNotification.body;
+        bodyField.hidden = NO;
+        bodyField.frame = NSMakeRect(36, 4, MAX(0, width - 48), 36);
+
+        pinView.frame = NSMakeRect(MAX(0, width - 48), 64, 12, 12);
+        badgeView.frame = NSMakeRect(12, 52, kTideySidebarBadgeSize, kTideySidebarBadgeSize);
+
+        NSView *closeView = TideyFindCloseView(cellView);
+        closeView.frame = NSMakeRect(MAX(0, width - 28), 62, 16, 16);
+        closeView.hidden = YES;
+        closeView.alphaValue = 0.0;
+    } else {
+        // Normal layout (60pt row).
+        cellView.textField.stringValue = [self tideySidebarWorkspaceTitleAtIndex:row];
+        cellView.textField.frame = NSMakeRect(36, 30, MAX(0, width - 88), 20);
+
+        NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
+        if (latestNotification) {
+            subtitleField.stringValue = latestNotification.title;
+            subtitleField.textColor = [NSColor controlAccentColor];
+        } else {
+            subtitleField.stringValue = [self tideySidebarWorkspaceSubtitleAtIndex:row];
+            subtitleField.textColor = [NSColor colorWithWhite:0.72 alpha:1];
+        }
+        subtitleField.frame = NSMakeRect(36, 12, MAX(0, width - 48), 16);
+
+        bodyField.hidden = YES;
+        bodyField.stringValue = @"";
+
+        pinView.frame = NSMakeRect(MAX(0, width - 48), 34, 12, 12);
+        badgeView.frame = NSMakeRect(12, 22, kTideySidebarBadgeSize, kTideySidebarBadgeSize);
+
+        NSView *closeView = TideyFindCloseView(cellView);
+        closeView.frame = NSMakeRect(MAX(0, width - 28), 32, 16, 16);
+        closeView.hidden = YES;
+        closeView.alphaValue = 0.0;
+    }
+
     if ([_tideySidebarTableView isKindOfClass:[TideySidebarTableView class]]) {
         [(TideySidebarTableView *)_tideySidebarTableView updateTideyCloseButtonVisibility];
     }
@@ -4106,10 +4191,18 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                action:@selector(tideySidebarRenameWorkspace:)
                                                   row:row]];
 
-    if ([self tideySidebarWorkspaceUnreadCountAtIndex:row] > 0) {
-        [menu addItem:[self tideySidebarMenuItemWithTitle:@"Mark as Read"
-                                                   action:@selector(tideySidebarMarkWorkspaceRead:)
-                                                      row:row]];
+    {
+        NSMenuItem *markRead = [self tideySidebarMenuItemWithTitle:@"Mark as Read"
+                                                            action:@selector(tideySidebarMarkWorkspaceRead:)
+                                                               row:row];
+        markRead.enabled = ([self tideySidebarWorkspaceUnreadCountAtIndex:row] > 0);
+        [menu addItem:markRead];
+
+        NSMenuItem *markUnread = [self tideySidebarMenuItemWithTitle:@"Mark as Unread"
+                                                              action:@selector(tideySidebarMarkWorkspaceUnread:)
+                                                                 row:row];
+        markUnread.enabled = [self tideySidebarHasReadNotificationsAtIndex:row];
+        [menu addItem:markUnread];
     }
 
     NSString *pinTitle = [self tideySidebarWorkspacePinnedAtIndex:row] ? @"Unpin Workspace" : @"Pin Workspace";
@@ -4196,6 +4289,21 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     }
 }
 
+- (void)tideySidebarMarkWorkspaceUnread:(id)sender {
+    NSInteger row = [self tideySidebarWorkspaceIndexFromSender:sender];
+    if (row != NSNotFound) {
+        [self.delegate rootTerminalViewMarkTideySidebarWorkspaceUnreadAtIndex:row];
+    }
+}
+
+- (BOOL)tideySidebarHasReadNotificationsAtIndex:(NSInteger)index {
+    NSString *workspaceID = [self tideySidebarWorkspaceIdentifierAtIndex:index];
+    if (workspaceID.length == 0) {
+        return NO;
+    }
+    return [[TideyNotificationStore sharedStore] hasReadNotificationsForWorkspaceID:workspaceID];
+}
+
 - (void)tideySidebarRemoveCustomWorkspaceName:(id)sender {
     NSInteger row = [self tideySidebarWorkspaceIndexFromSender:sender];
     if (row != NSNotFound) {
@@ -4278,6 +4386,11 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 - (void)tableViewSelectionDidChange:(NSNotification *)notification {
     if (notification.object != _tideySidebarTableView) {
+        return;
+    }
+    if (_tideyIgnoreNextSidebarSelection) {
+        _tideyIgnoreNextSidebarSelection = NO;
+        [_tideySidebarTableView setNeedsDisplay:YES];
         return;
     }
     const NSInteger selectedRow = _tideySidebarTableView.selectedRow;

@@ -90,6 +90,14 @@ static NSString *const kTideyBroadcastWorkspaceIdentifier = @"*";
                                                 subtitle:(NSString *)subtitle
                                                     body:(NSString *)body {
     NSString *effectiveWorkspaceID = workspaceID.length > 0 ? workspaceID : kTideyBroadcastWorkspaceIdentifier;
+    // Replace existing notifications for the same workspace (broadcast notifications are exempt).
+    if (![effectiveWorkspaceID isEqualToString:kTideyBroadcastWorkspaceIdentifier]) {
+        NSIndexSet *existing =
+            [self.notifications indexesOfObjectsPassingTest:^BOOL(TideyNotificationItem *item, NSUInteger idx, BOOL *stop) {
+                return [item.workspaceID isEqualToString:effectiveWorkspaceID];
+            }];
+        [self.notifications removeObjectsAtIndexes:existing];
+    }
     TideyNotificationItem *item =
         [[TideyNotificationItem alloc] initWithNotificationID:NSUUID.UUID.UUIDString
                                                   workspaceID:effectiveWorkspaceID
@@ -107,6 +115,19 @@ static NSString *const kTideyBroadcastWorkspaceIdentifier = @"*";
     for (TideyNotificationItem *item in self.notifications) {
         if (!item.isRead && [self tideyNotificationItem:item matchesWorkspaceID:workspaceID]) {
             item.read = YES;
+            changed = YES;
+        }
+    }
+    if (changed) {
+        [self postDidChangeWithNotification:nil];
+    }
+}
+
+- (void)markUnreadForWorkspaceID:(NSString *)workspaceID {
+    BOOL changed = NO;
+    for (TideyNotificationItem *item in self.notifications) {
+        if (item.isRead && [self tideyNotificationItem:item matchesWorkspaceID:workspaceID]) {
+            item.read = NO;
             changed = YES;
         }
     }
@@ -140,9 +161,27 @@ static NSString *const kTideyBroadcastWorkspaceIdentifier = @"*";
     [self postDidChangeWithNotification:nil];
 }
 
+- (BOOL)hasReadNotificationsForWorkspaceID:(NSString *)workspaceID {
+    for (TideyNotificationItem *item in self.notifications) {
+        if (item.isRead && [self tideyNotificationItem:item matchesWorkspaceID:workspaceID]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
 - (TideyNotificationItem *)latestUnreadForWorkspaceID:(NSString *)workspaceID {
     for (TideyNotificationItem *item in self.notifications) {
         if (!item.isRead && [self tideyNotificationItem:item matchesWorkspaceID:workspaceID]) {
+            return item;
+        }
+    }
+    return nil;
+}
+
+- (TideyNotificationItem *)latestNotificationForWorkspaceID:(NSString *)workspaceID {
+    for (TideyNotificationItem *item in self.notifications) {
+        if ([self tideyNotificationItem:item matchesWorkspaceID:workspaceID]) {
             return item;
         }
     }

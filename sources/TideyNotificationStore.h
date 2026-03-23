@@ -37,11 +37,14 @@ extern NSNotificationName const TideyNotificationStoreDidChangeNotification;
                                                 subtitle:(nullable NSString *)subtitle
                                                     body:(NSString *)body;
 - (void)markReadForWorkspaceID:(NSString *)workspaceID;
+- (void)markUnreadForWorkspaceID:(NSString *)workspaceID;
 - (void)markAllRead;
 - (void)removeNotificationWithID:(NSString *)notificationID;
 - (void)clearAllNotifications;
 
+- (BOOL)hasReadNotificationsForWorkspaceID:(NSString *)workspaceID;
 - (nullable TideyNotificationItem *)latestUnreadForWorkspaceID:(NSString *)workspaceID;
+- (nullable TideyNotificationItem *)latestNotificationForWorkspaceID:(NSString *)workspaceID;
 
 @end
 
