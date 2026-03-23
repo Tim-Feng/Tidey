@@ -729,9 +729,6 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                      delegate:(id<iTermRootTerminalViewDelegate, iTermToolbeltViewDelegate>)delegate {
     self = [super initWithFrame:frameRect color:color];
     if (self) {
-        // Match root view background to tab bar area so the 1pt gap above tab bars is invisible.
-        self.wantsLayer = YES;
-        self.layer.backgroundColor = [NSColor colorWithSRGBRed:0.09 green:0.10 blue:0.13 alpha:1].CGColor;
         _delegate = delegate;
         _shouldShowTideySidebar = YES;
         _shouldShowTideyTerminal = YES;
