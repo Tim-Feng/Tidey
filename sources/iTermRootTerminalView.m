@@ -2629,6 +2629,46 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     return YES;
 }
 
+- (BOOL)tideyEditorShouldHandleFindPanelAction {
+    if (_tideyEditorPanelView.hidden || !_tideyEditorWebView) {
+        return NO;
+    }
+    id responder = self.window.firstResponder;
+    if (![responder isKindOfClass:[NSView class]]) {
+        return NO;
+    }
+    return [(NSView *)responder isDescendantOf:_tideyEditorWebView];
+}
+
+- (IBAction)performFindPanelAction:(id)sender {
+    if ([self tideyEditorShouldHandleFindPanelAction]) {
+        NSInteger tag = [sender isKindOfClass:[NSMenuItem class]] ? ((NSMenuItem *)sender).tag : NSFindPanelActionShowFindPanel;
+        NSString *js = nil;
+        switch ((NSFindPanelAction)tag) {
+            case NSFindPanelActionShowFindPanel:
+                js = @"window.__tideyEditor && window.__tideyEditor.getAction('actions.find').run();";
+                break;
+            case NSFindPanelActionNext:
+                js = @"window.__tideyEditor && window.__tideyEditor.getAction('editor.action.nextMatchFindAction').run();";
+                break;
+            case NSFindPanelActionPrevious:
+                js = @"window.__tideyEditor && window.__tideyEditor.getAction('editor.action.previousMatchFindAction').run();";
+                break;
+            default:
+                break;
+        }
+        if (js) {
+            [_tideyEditorWebView evaluateJavaScript:js completionHandler:nil];
+            return;
+        }
+    }
+
+    NSResponder *nextResponder = self.nextResponder;
+    if ([nextResponder respondsToSelector:@selector(performFindPanelAction:)]) {
+        [(id)nextResponder performFindPanelAction:sender];
+    }
+}
+
 - (NSString *)tideyEditorHTML {
     return @"<!doctype html>"
     "<html><head><meta charset='utf-8'>"
