@@ -3935,11 +3935,11 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     }
     if (notification && notification.body.length > 0) {
         baseHeight = 68;
-    }
-    BOOL hasStatus = (workspaceID.length > 0 &&
-                      [[TideyStatusStore sharedStore] hasStatusForWorkspaceID:workspaceID]);
-    if (hasStatus) {
-        baseHeight += 14;
+        BOOL hasStatus = (workspaceID.length > 0 &&
+                          [[TideyStatusStore sharedStore] hasStatusForWorkspaceID:workspaceID]);
+        if (hasStatus) {
+            baseHeight += 14;
+        }
     }
     return baseHeight;
 }
@@ -4154,7 +4154,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         CGFloat textMaxW = (unreadCount > 0) ? (width - 88) : (width - 64);
 
         cellView.textField.stringValue = [self tideySidebarWorkspaceTitleAtIndex:row];
-        cellView.textField.frame = NSMakeRect(textX, 30, MAX(0, textMaxW), 20);
+        CGFloat titleY = hasStatus ? 36 : 30;
+        cellView.textField.frame = NSMakeRect(textX, titleY, MAX(0, textMaxW), 20);
 
         NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
         subtitleField.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
@@ -4165,7 +4166,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
             subtitleField.stringValue = [self tideySidebarWorkspaceSubtitleAtIndex:row];
             subtitleField.textColor = selected ? [NSColor colorWithWhite:1 alpha:0.8] : [NSColor colorWithWhite:0.72 alpha:1];
         }
-        subtitleField.frame = NSMakeRect(12, 12, MAX(0, width - 24), 16);
+        CGFloat subtitleY = hasStatus ? 20 : 12;
+        subtitleField.frame = NSMakeRect(12, subtitleY, MAX(0, width - 24), 16);
 
         bodyField.hidden = YES;
         bodyField.stringValue = @"";
