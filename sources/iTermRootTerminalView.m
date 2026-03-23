@@ -393,6 +393,90 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 @end
 
+@interface TideyEditorTabItemView : NSView {
+    NSTrackingArea *_trackingArea;
+}
+@property(nonatomic) BOOL tideySelected;
+@property(nonatomic) BOOL tideyHovered;
+@property(nonatomic, strong) NSView *tideyHoverView;
+@property(nonatomic, strong) NSView *tideySelectionLineView;
+@property(nonatomic, strong) NSView *tideySeparatorView;
+- (void)tideyUpdateAppearance;
+@end
+
+@implementation TideyEditorTabItemView
+
+- (instancetype)initWithFrame:(NSRect)frameRect {
+    self = [super initWithFrame:frameRect];
+    if (self) {
+        self.wantsLayer = YES;
+        self.layer.backgroundColor = NSColor.clearColor.CGColor;
+
+        _tideyHoverView = [[NSView alloc] initWithFrame:NSZeroRect];
+        _tideyHoverView.wantsLayer = YES;
+        _tideyHoverView.layer.backgroundColor = [NSColor colorWithWhite:1 alpha:0.06].CGColor;
+        _tideyHoverView.hidden = YES;
+        [self addSubview:_tideyHoverView];
+
+        _tideySelectionLineView = [[NSView alloc] initWithFrame:NSZeroRect];
+        _tideySelectionLineView.wantsLayer = YES;
+        _tideySelectionLineView.layer.backgroundColor = NSColor.controlAccentColor.CGColor;
+        _tideySelectionLineView.hidden = YES;
+        [self addSubview:_tideySelectionLineView];
+
+        _tideySeparatorView = [[NSView alloc] initWithFrame:NSZeroRect];
+        _tideySeparatorView.wantsLayer = YES;
+        _tideySeparatorView.layer.backgroundColor = [NSColor colorWithWhite:0.25 alpha:1].CGColor;
+        [self addSubview:_tideySeparatorView];
+    }
+    return self;
+}
+
+- (BOOL)isFlipped {
+    return YES;
+}
+
+- (void)updateTrackingAreas {
+    [super updateTrackingAreas];
+    if (_trackingArea) {
+        [self removeTrackingArea:_trackingArea];
+    }
+    _trackingArea = [[NSTrackingArea alloc] initWithRect:NSZeroRect
+                                                 options:(NSTrackingActiveInKeyWindow |
+                                                          NSTrackingInVisibleRect |
+                                                          NSTrackingMouseEnteredAndExited)
+                                                   owner:self
+                                                userInfo:nil];
+    [self addTrackingArea:_trackingArea];
+}
+
+- (void)mouseEntered:(NSEvent *)event {
+    [super mouseEntered:event];
+    self.tideyHovered = YES;
+    [self tideyUpdateAppearance];
+}
+
+- (void)mouseExited:(NSEvent *)event {
+    [super mouseExited:event];
+    self.tideyHovered = NO;
+    [self tideyUpdateAppearance];
+}
+
+- (void)layout {
+    [super layout];
+    _tideyHoverView.frame = self.bounds;
+    _tideySelectionLineView.frame = NSMakeRect(0, 0, NSWidth(self.bounds), 2);
+    _tideySeparatorView.frame = NSMakeRect(NSWidth(self.bounds) - 1, 6, 1, MAX(0, NSHeight(self.bounds) - 12));
+}
+
+- (void)tideyUpdateAppearance {
+    _tideySelectionLineView.hidden = !_tideySelected;
+    _tideyHoverView.hidden = (_tideySelected || !_tideyHovered);
+    _tideyHoverView.alphaValue = _tideyHoverView.hidden ? 0 : 1;
+}
+
+@end
+
 @class iTermRootTerminalView;
 
 @interface TideyEditorScriptMessageHandler : NSObject<WKScriptMessageHandler>
@@ -2302,9 +2386,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     const CGFloat stripHeight = NSHeight(_tideyEditorTabStripView.bounds) > 0 ?
         NSHeight(_tideyEditorTabStripView.bounds) :
         TideyEditorEffectiveTabStripHeight(_tabBarControl.height);
-    const CGFloat insetX = 8;
-    const CGFloat insetY = 3;
-    const CGFloat tabHeight = MAX(22, stripHeight - insetY * 2 - 1);
+    const CGFloat insetX = 0;
+    const CGFloat tabHeight = MAX(22, stripHeight);
     CGFloat x = insetX;
     NSDictionary<NSAttributedStringKey, id> *attributes = @{
         NSFontAttributeName: [NSFont systemFontOfSize:11 weight:NSFontWeightMedium]
@@ -2315,25 +2398,19 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         CGFloat textWidth = ceil([title sizeWithAttributes:attributes].width);
         CGFloat tabWidth = MIN(MAX(112, textWidth + 38), 240);
 
-        NSView *tabView = [[NSView alloc] initWithFrame:NSMakeRect(x, insetY, tabWidth, tabHeight)];
-        tabView.wantsLayer = YES;
+        TideyEditorTabItemView *tabView = [[TideyEditorTabItemView alloc] initWithFrame:NSMakeRect(x, 0, tabWidth, tabHeight)];
         BOOL selected = (i == _tideySelectedEditorTabIndex);
-        tabView.layer.cornerRadius = 5;
-        tabView.layer.backgroundColor = (selected
-                                         ? [NSColor colorWithSRGBRed:0.165 green:0.175 blue:0.215 alpha:1]
-                                         : [NSColor colorWithSRGBRed:0.118 green:0.123 blue:0.152 alpha:1]).CGColor;
-        tabView.layer.borderWidth = 1;
-        tabView.layer.borderColor = (selected
-                                     ? [NSColor colorWithWhite:0.30 alpha:1]
-                                     : [NSColor colorWithWhite:0.18 alpha:1]).CGColor;
+        tabView.tideySelected = selected;
+        tabView.tideyHovered = NO;
+        [tabView tideyUpdateAppearance];
 
-        NSButton *selectButton = [[NSButton alloc] initWithFrame:NSMakeRect(10, 0, tabWidth - 34, tabHeight)];
+        NSButton *selectButton = [[NSButton alloc] initWithFrame:NSMakeRect(10, 2, tabWidth - 34, tabHeight - 2)];
         selectButton.bordered = NO;
         selectButton.buttonType = NSButtonTypeMomentaryChange;
         selectButton.alignment = NSTextAlignmentLeft;
         NSFont *baseFont = [NSFont systemFontOfSize:11 weight:selected ? NSFontWeightSemibold : NSFontWeightMedium];
         selectButton.font = tab.preview ? [[NSFontManager sharedFontManager] convertFont:baseFont toHaveTrait:NSItalicFontMask] : baseFont;
-        selectButton.contentTintColor = [NSColor colorWithWhite:0.95 alpha:1];
+        selectButton.contentTintColor = selected ? NSColor.labelColor : NSColor.secondaryLabelColor;
         selectButton.title = title;
         selectButton.imagePosition = NSNoImage;
         selectButton.tag = i;
@@ -2341,19 +2418,21 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         selectButton.action = @selector(tideyEditorSelectTab:);
         [tabView addSubview:selectButton];
 
-        NSButton *closeButton = [[NSButton alloc] initWithFrame:NSMakeRect(tabWidth - 22, 0, 20, tabHeight)];
+        NSButton *closeButton = [[NSButton alloc] initWithFrame:NSMakeRect(tabWidth - 22, 2, 20, tabHeight - 2)];
         closeButton.bordered = NO;
         closeButton.buttonType = NSButtonTypeMomentaryChange;
         closeButton.font = [NSFont systemFontOfSize:10 weight:NSFontWeightSemibold];
-        closeButton.contentTintColor = [NSColor colorWithWhite:0.72 alpha:1];
+        closeButton.contentTintColor = selected ? NSColor.labelColor : NSColor.secondaryLabelColor;
         closeButton.title = @"✕";
         closeButton.tag = i;
         closeButton.target = self;
         closeButton.action = @selector(tideyEditorCloseTab:);
         [tabView addSubview:closeButton];
 
+        tabView.tideySeparatorView.hidden = (i == (NSInteger)_tideyEditorTabs.count - 1);
+
         [_tideyEditorTabStripView addSubview:tabView];
-        x += tabWidth + 5;
+        x += tabWidth;
     }
 }
 
@@ -3654,8 +3733,14 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         if (row < 0 || row >= strongSelf.numberOfTideySidebarWorkspaces) {
             return;
         }
+        NSTableCellView *cellView = [strongSelf->_tideySidebarTableView viewAtColumn:0 row:row makeIfNecessary:NO];
+        CGFloat previewWidth = NSWidth(cellView.bounds);
+        if (previewWidth <= 0) {
+            previewWidth = NSWidth([strongSelf->_tideySidebarTableView rectOfRow:row]);
+        }
+        previewWidth = MAX(0, previewWidth);
         NSImage *image = [strongSelf tideySidebarDragPreviewImageForRow:row
-                                                                  width:strongSelf->_tideySidebarTableView.bounds.size.width];
+                                                                  width:previewWidth];
         // Only replace the image, keep the system's default frame/position.
         // This avoids coordinate system mismatches that cause the preview
         // to jump from the wrong position.
@@ -3770,13 +3855,23 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 
 - (NSView *)tideySidebarDragPreviewForRow:(NSInteger)row width:(CGFloat)width {
+    NSView *container = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, _tideySidebarTableView.rowHeight)];
+    container.wantsLayer = YES;
+    container.layer.backgroundColor = NSColor.clearColor.CGColor;
+
+    NSView *highlight = [[NSView alloc] initWithFrame:NSInsetRect(container.bounds, 6, 4)];
+    highlight.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    highlight.wantsLayer = YES;
+    highlight.layer.backgroundColor = [NSColor selectedContentBackgroundColor].CGColor;
+    highlight.layer.cornerRadius = 8;
+    [container addSubview:highlight];
+
     NSTableCellView *cellView = [self newTideySidebarCellView];
-    cellView.frame = NSMakeRect(0, 0, width, _tideySidebarTableView.rowHeight);
-    cellView.wantsLayer = YES;
-    cellView.layer.backgroundColor = [NSColor selectedContentBackgroundColor].CGColor;
-    cellView.layer.cornerRadius = 8;
+    cellView.frame = highlight.bounds;
+    cellView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     [self configureTideySidebarCellView:cellView row:row];
-    return cellView;
+    [highlight addSubview:cellView];
+    return container;
 }
 
 - (NSImage *)tideySidebarDragPreviewImageForRow:(NSInteger)row width:(CGFloat)width {
