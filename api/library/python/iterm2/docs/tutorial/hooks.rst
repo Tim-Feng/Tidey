@@ -118,7 +118,7 @@ Installation
 ------------
 
 Since a title provider is a long-running daemon, you'll want to put it in
-`~/Library/Application Support/iTerm2/Scripts/AutoLaunch` folder.
+`~/Library/Application Support/Tidey/Scripts/AutoLaunch` folder.
 
 Next, you need to configure your session's profile to use the hook. Once it's been registered properly it will appear as an option in **Preferences > Profiles > General > Title**. Select it there:
 

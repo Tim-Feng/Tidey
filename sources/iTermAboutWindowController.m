@@ -15,7 +15,7 @@
 #import "NSObject+iTerm.h"
 #import "NSStringITerm.h"
 
-static NSString *iTermAboutWindowControllerWhatsNewURLString = @"iterm2://whats-new/";
+static NSString *iTermAboutWindowControllerWhatsNewURLString = @"tidey://whats-new/";
 
 @interface iTermAboutWindowContentView : NSVisualEffectView
 @end
@@ -83,26 +83,8 @@ static NSString *iTermAboutWindowControllerWhatsNewURLString = @"iterm2://whats-
 
 - (void)awakeFromNib {
     [super awakeFromNib];
-    NSMutableParagraphStyle *paragraphStyle = [[NSMutableParagraphStyle alloc] init];
-    paragraphStyle.alignment = NSTextAlignmentCenter;
-    _sponsorsHeading.selectable = YES;
-    _sponsorsHeading.editable = NO;
-    [_sponsorsHeading.textStorage setAttributedString:[NSAttributedString attributedStringWithHTML:_sponsorsHeading.textStorage.string
-                                                                                              font:_sponsorsHeading.font
-                                                                                    paragraphStyle:paragraphStyle]];
-
-    _sponsors = @[ [iTermSponsor sponsorWithView:_whitebox
-                                       textField:_whiteboxText
-                                       container:self
-                                             url:@"https://whitebox.so/?utm_source=iTerm2"],
-                   [iTermSponsor sponsorWithView:_codeRabbit
-                                       textField:nil
-                                       container:self
-                                             url:@"https://coderabbit.ai/"],
-                   [iTermSponsor sponsorWithView:_serpApi
-                                       textField:nil
-                                       container:self
-                                             url:@"https://serpapi.com/?utm_source=iterm"]];
+    // Sponsors removed for Tidey
+    _sponsors = @[];
 }
 
 
@@ -159,56 +141,25 @@ static NSString *iTermAboutWindowControllerWhatsNewURLString = @"iterm2://whats-
         NSDictionary *myDict = [[NSBundle bundleForClass:[self class]] infoDictionary];
         NSString *const versionNumber = myDict[(NSString *)kCFBundleVersionKey];
         NSString *versionString = [NSString stringWithFormat: @"Build %@\n\n", versionNumber];
-        NSAttributedString *whatsNew = nil;
-        if ([versionNumber hasPrefix:@"3.6."] || [versionString isEqualToString:@"unknown"]) {
-            whatsNew = [self attributedStringWithLinkToURL:iTermAboutWindowControllerWhatsNewURLString
-                                                     title:@"What’s New in 3.6?\n"];
-        }
-
-        NSAttributedString *webAString = [self attributedStringWithLinkToURL:@"https://iterm2.com/"
-                                                                       title:@"Home Page"];
-        NSAttributedString *bugsAString =
-                [self attributedStringWithLinkToURL:@"https://iterm2.com/bugs"
-                                              title:@"Report a bug"];
-        NSAttributedString *creditsAString =
-                [self attributedStringWithLinkToURL:@"https://iterm2.com/credits"
-                                              title:@"Credits"];
 
         // Force IBOutlets to be bound by creating window.
         [self window];
 
         NSDictionary *versionAttributes = @{ NSForegroundColorAttributeName: [NSColor controlTextColor] };
-        NSAttributedString *bullet = [[NSAttributedString alloc] initWithString:@" ∙ "
-                                                                     attributes:versionAttributes];
         [_dynamicText setLinkTextAttributes:self.linkTextViewAttributes];
         [[_dynamicText textStorage] deleteCharactersInRange:NSMakeRange(0, [[_dynamicText textStorage] length])];
         [[_dynamicText textStorage] appendAttributedString:[[NSAttributedString alloc] initWithString:versionString
                                                                                             attributes:versionAttributes]];
-        if (whatsNew) {
-            [[_dynamicText textStorage] appendAttributedString:whatsNew];
-        }
-        [[_dynamicText textStorage] appendAttributedString:webAString];
-        [[_dynamicText textStorage] appendAttributedString:bullet];
-        [[_dynamicText textStorage] appendAttributedString:bugsAString];
-        [[_dynamicText textStorage] appendAttributedString:bullet];
-        [[_dynamicText textStorage] appendAttributedString:creditsAString];
+        NSAttributedString *credit = [[NSAttributedString alloc] initWithString:@"Based on iTerm2 by George Nachman\nLicensed under the GNU General Public License v2"
+                                                                     attributes:versionAttributes];
+        [[_dynamicText textStorage] appendAttributedString:credit];
         [_dynamicText setAlignment:NSTextAlignmentCenter
                              range:NSMakeRange(0, [[_dynamicText textStorage] length])];
 
-        [self setPatronsString:[self defaultPatronsString] animate:NO];
-
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-            NSURL *url = [NSURL URLWithString:@"https://iterm2.com/patrons.txt"];
-            NSData *data = [NSData dataWithContentsOfURL:url];
-            NSString *string = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-            NSArray<NSString *> *patronNames = string.length > 0 ? [string componentsSeparatedByString:@"\n"] : nil;
-            patronNames = [patronNames filteredArrayUsingBlock:^BOOL(NSString *name) {
-                return name.length > 0;
-            }];
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [self setPatrons:patronNames];
-            });
-        });
+        // Set a simple credit string instead of loading patrons
+        NSAttributedString *creditString = [[NSAttributedString alloc] initWithString:@"A fast and feature-rich terminal emulator for macOS."
+                                                                           attributes:[self attributes]];
+        [self setPatronsString:creditString animate:NO];
     }
     return self;
 }

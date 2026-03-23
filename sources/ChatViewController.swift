@@ -1620,7 +1620,7 @@ extension Message.Content {
                 case .active:
                     AttributedStringForSystemMessageMarkdown("All terminal commands in the linked session will be sent to AI automatically.") {}
                 case .stoppedAutomatically:
-                    AttributedStringForSystemMessageMarkdown("Terminal commands will no longer be sent to AI automatically. Automatic sending always terminates when iTerm2 restarts or the current chat changes.") {}
+                    AttributedStringForSystemMessageMarkdown("Terminal commands will no longer be sent to AI automatically. Automatic sending always terminates when Tidey restarts or the current chat changes.") {}
                 }
             case let .offerLink(terminal: terminal, guid: _, name: name):
                 return AttributedStringForSystemMessageMarkdown("Link this chat to \(terminal ? "terminal" : "browser") session “\(name ?? "Unnamed session)")”? This gives the AI access to the \(terminal ? "terminal" : "browser") session subject to your permission.") {}

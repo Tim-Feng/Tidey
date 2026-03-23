@@ -9,7 +9,7 @@ The script clears the buffer including scrollback history from all sessions in a
 
 You can bind it to a keystroke in **Prefs > Keys** by selecting the action *Invoke Script Function* and giving it the invocation `clear_all_sessions()`.
 
-Place it in `~/Library/Application Support/iTerm2/Scripts/AutoLaunch/` to start it automatically when iTerm2 is launched.
+Place it in `~/Library/Application Support/Tidey/Scripts/AutoLaunch/` to start it automatically when Tidey is launched.
 
 .. code-block:: python
 

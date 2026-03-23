@@ -51,7 +51,7 @@
     static dispatch_queue_t _queue;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        _queue = dispatch_queue_create("com.googlecode.iterm2.terminfo", DISPATCH_QUEUE_SERIAL);
+        _queue = dispatch_queue_create("com.tidey.terminfo", DISPATCH_QUEUE_SERIAL);
     });
     __block id value = nil;
     dispatch_sync(_queue, ^{

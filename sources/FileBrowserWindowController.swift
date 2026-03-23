@@ -36,7 +36,7 @@ class FileBrowserContainerViewController: NSViewController {
 
 @objc(FileBrowserSplitViewController)
 class FileBrowserSplitViewController: NSSplitViewController {
-    private let splitViewResorationIdentifier = "com.googlecode.iterm2:FileBrowserSplitViewController"
+    private let splitViewResorationIdentifier = "com.tidey:FileBrowserSplitViewController"
 
     lazy var sourceListViewController = FileBrowserSourceListViewController()
     lazy var containerViewController = FileBrowserContainerViewController()
@@ -76,7 +76,7 @@ class FileBrowserSplitViewController: NSSplitViewController {
 @objc(FileBrowserToolbar)
 class FileBrowserToolbar: NSToolbar, NSToolbarDelegate {
     init() {
-        super.init(identifier: "com.googlecode.iterm2:FileBrowserToolbar")
+        super.init(identifier: "com.tidey:FileBrowserToolbar")
         delegate = self
         allowsUserCustomization = true
         autosavesConfiguration = true

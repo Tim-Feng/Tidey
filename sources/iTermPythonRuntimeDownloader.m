@@ -340,9 +340,9 @@ NSString *const iTermPythonRuntimeDownloaderDidInstallRuntimeNotification = @"iT
             NSAlert *alert = [[NSAlert alloc] init];
             alert.messageText = @"Download Python Runtime?";
             if (requiredToContinue) {
-                alert.informativeText = [NSString stringWithFormat:@"The Python Runtime is used by Python scripts that work with iTerm2. It must be downloaded to complete the requested action. The download is about %@. OK to download it now?", [NSString it_formatBytes:info.size]];
+                alert.informativeText = [NSString stringWithFormat:@"The Python Runtime is used by Python scripts that work with Tidey. It must be downloaded to complete the requested action. The download is about %@. OK to download it now?", [NSString it_formatBytes:info.size]];
             } else {
-                alert.informativeText = [NSString stringWithFormat:@"The Python Runtime is used by Python scripts that work with iTerm2. The download is about %@. OK to download it now?", [NSString it_formatBytes:info.size]];
+                alert.informativeText = [NSString stringWithFormat:@"The Python Runtime is used by Python scripts that work with Tidey. The download is about %@. OK to download it now?", [NSString it_formatBytes:info.size]];
             }
             [alert addButtonWithTitle:silent ? @"Download" : @"OK"];
             [alert addButtonWithTitle:@"Cancel"];
@@ -444,10 +444,10 @@ NSString *const iTermPythonRuntimeDownloaderDidInstallRuntimeNotification = @"iT
     }
 
     if (pythonVersion) {
-        alert.informativeText = [NSString stringWithFormat:@"An iTerm2 Python Runtime with Python version %@ must be downloaded to proceed.%@",
+        alert.informativeText = [NSString stringWithFormat:@"A Tidey Python Runtime with Python version %@ must be downloaded to proceed.%@",
                                  pythonVersion, reason];
     } else {
-        alert.informativeText = [NSString stringWithFormat:@"An iTerm2 Python Runtime must be downloaded to proceed.%@",
+        alert.informativeText = [NSString stringWithFormat:@"A Tidey Python Runtime must be downloaded to proceed.%@",
                                  reason];
     }
     [alert runModal];
@@ -669,7 +669,7 @@ NSString *const iTermPythonRuntimeDownloaderDidInstallRuntimeNotification = @"iT
     DLog(@"zip=%@", zip);
     const int runtimeVersion = [self runtimeVersionFromFilename:zip];
     if (runtimeVersion < 0) {
-        completion([NSError errorWithDomain:@"com.googlecode.iterm2"
+        completion([NSError errorWithDomain:@"com.tidey"
                                        code:-1
                                    userInfo:@{ NSLocalizedDescriptionKey: @"Invalid filename. Expected `iterm2env-<version>.zip`."}]);
         return;
@@ -954,7 +954,7 @@ static NSArray<NSString *> *iTermConvertThreePartVersionNumbersToTwoPart(NSArray
                 if (!pythonVersionToUse) {
                     DLog(@"Could not determine Python version");
                     completion([iTermPythonRuntimeDownloader errorWithCode:iTermInstallPythonStatusGeneralFailure
-                                                                    reason:@"Dependency installation failed: could not determine Python version. Please file a bug report at https://iterm2.com/bugs"]);
+                                                                    reason:@"Dependency installation failed: could not determine Python version. Please file a bug report at https://tidey.app/tbd"]);
                     return;
                 }
                 if (createSetupCfg) {

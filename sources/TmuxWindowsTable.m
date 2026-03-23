@@ -10,7 +10,7 @@
 #import "FutureMethods.h"
 #import "NSTextField+iTerm.h"
 
-NSString *kWindowPasteboardType = @"com.googlecode.iterm2.kWindowPasteboardType";
+NSString *kWindowPasteboardType = @"com.tidey.kWindowPasteboardType";
 
 @implementation TmuxWindowsTable {
     NSMutableArray *model_;

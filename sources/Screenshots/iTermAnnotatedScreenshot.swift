@@ -380,7 +380,7 @@ class iTermAnnotatedScreenshot: NSObject {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd-HH-mm-ss"
         let timestamp = formatter.string(from: Date())
-        let filename = "iTerm2-Screenshot-\(timestamp).png"
+        let filename = "Tidey-Screenshot-\(timestamp).png"
 
         // Get Desktop path
         guard let desktopURL = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first else {

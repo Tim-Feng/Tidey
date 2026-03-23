@@ -330,7 +330,7 @@ class SecureUserDefault<T: SecureUserDefaultStringTranscodable & Codable & Equat
         do shell script "
             umask 000
             /bin/mkdir -m 777 -p \(path)
-        " with prompt "iTerm2 needs to create \(path) to store secure settings because your home directory is on a network file system." with administrator privileges
+        " with prompt "Tidey needs to create \(path) to store secure settings because your home directory is on a network file system." with administrator privileges
         """
         DLog("Will execute:\n\(code)")
         let script = NSAppleScript(source: code)
@@ -509,7 +509,7 @@ class SecureUserDefault<T: SecureUserDefaultStringTranscodable & Codable & Equat
                 chmod a+r \\"$TF\\" && \
                 mv \\"$TF\\" \\"\(path)\\" || \
                 rm -f \\"$TF\\"
-        " with prompt "iTerm2 needs to modify a secure setting." with administrator privileges
+        " with prompt "Tidey needs to modify a secure setting." with administrator privileges
         """
         let script = NSAppleScript(source: code)
         var error: NSDictionary? = nil

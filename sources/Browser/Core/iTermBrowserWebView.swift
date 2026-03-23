@@ -110,7 +110,7 @@ class iTermBrowserWebView: iTermBaseWKWebView, iTermEditableTextDetecting {
                                                object: nil)
         registerForDraggedTypes([
             NSPasteboard.PasteboardType(iTermMovePaneDragType),
-            NSPasteboard.PasteboardType("com.iterm2.psm.controlitem")
+            NSPasteboard.PasteboardType("com.tidey.psm.controlitem")
         ])    }
 
     required init?(coder: NSCoder) {

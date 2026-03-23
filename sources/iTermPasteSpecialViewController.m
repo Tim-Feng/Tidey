@@ -91,7 +91,7 @@ static NSString *const kSubstitution = @"Substitution";
     self.delayBetweenChunks = kDelayRange.visualCenter;
     self.chunkSize = kChunkSizeRange.visualCenter;
 
-    [_icuRegexHelpLabel replaceWithHyperlinkTo:[NSURL URLWithString:@"https://iterm2.com/regex"]];
+    [_icuRegexHelpLabel replaceWithHyperlinkTo:[NSURL URLWithString:@"https://tidey.app/tbd"]];
     _icuRegexHelpLabel = nil;
 }
 

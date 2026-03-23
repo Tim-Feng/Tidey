@@ -419,7 +419,7 @@
         if (errorStatus != nil) {
             NSAlert *alert = [[NSAlert alloc] init];
             alert.messageText = @"Installation Failed";
-            alert.informativeText = [NSString stringWithFormat:@"Please file a bug report at https://iterm2.com/bugs. The following error occurred while upgrading a dependency: %@", errorStatus.localizedDescription];
+            alert.informativeText = [NSString stringWithFormat:@"Please file a bug report at https://tidey.app/tbd. The following error occurred while upgrading a dependency: %@", errorStatus.localizedDescription];
             [alert runModal];
             return;
         }

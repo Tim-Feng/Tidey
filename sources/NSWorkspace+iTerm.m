@@ -415,20 +415,20 @@ withApplicationAtURL:appURL
         case iTermOpenStyleWindow:
         case iTermOpenStyleTab:
             if (isFileURL) {
-                consent = ([iTermWarning showWarningWithTitle:@"iTerm2 can display files like this in its built-in web browser! Would you like to open this link in iTerm2?"
-                                                      actions:@[ @"Use Default App", @"Open in iTerm2"]
+                consent = ([iTermWarning showWarningWithTitle:@"Tidey can display files like this in its built-in web browser! Would you like to open this link in Tidey?"
+                                                      actions:@[ @"Use Default App", @"Open in Tidey"]
                                                     accessory:nil
                                                    identifier:identifier
                                                   silenceable:kiTermWarningTypePermanentlySilenceable
-                                                      heading:@"Open in iTerm2?"
+                                                      heading:@"Open in Tidey?"
                                                        window:window] == kiTermWarningSelection1);
             } else {
-                consent = ([iTermWarning showWarningWithTitle:@"iTerm2 can display web pages! Would you like to open this link in iTerm2?"
-                                                      actions:@[ @"Use Default Browser", @"Open in iTerm2"]
+                consent = ([iTermWarning showWarningWithTitle:@"Tidey can display web pages! Would you like to open this link in Tidey?"
+                                                      actions:@[ @"Use Default Browser", @"Open in Tidey"]
                                                     accessory:nil
                                                    identifier:identifier
                                                   silenceable:kiTermWarningTypePermanentlySilenceable
-                                                      heading:@"Open in iTerm2?"
+                                                      heading:@"Open in Tidey?"
                                                        window:window] == kiTermWarningSelection1);
             }
             break;

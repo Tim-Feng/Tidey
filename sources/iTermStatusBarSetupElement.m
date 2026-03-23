@@ -11,7 +11,7 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-NSString *const iTermStatusBarElementPasteboardType = @"com.iterm2.status-bar-element";
+NSString *const iTermStatusBarElementPasteboardType = @"com.tidey.status-bar-element";
 
 @interface iTermStatusBarSetupElement() <iTermStatusBarComponentDelegate>
 @end

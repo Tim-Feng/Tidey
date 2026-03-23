@@ -57,22 +57,22 @@ class AITermRegistrationWindowController: NSWindowController {
         case .openAI, .llama:
             ["https://auth.openai.com/create-account",
              "https://platform.openai.com/api-keys",
-             "https://iterm2.com/aiterm",
+             "https://tidey.app/tbd",
              "OpenAI"]
         case .anthropic:
             ["https://console.anthropic.com/login",
              "https://console.anthropic.com/settings/keys",
-             "https://iterm2.com/aiterm",
+             "https://tidey.app/tbd",
              "Claude"]
         case .deepSeek:
             ["https://chat.deepseek.com/sign_up",
              "https://platform.deepseek.com/api_keys",
-             "https://iterm2.com/aiterm",
+             "https://tidey.app/tbd",
              "Deep Seek"]
         case .gemini:
             ["https://aistudio.google.com/prompts/new_chat",
              "https://aistudio.google.com/app/api-keys",
-             "https://iterm2.com/aiterm",
+             "https://tidey.app/tbd",
              "Gemini"]
         @unknown default:
             it_fatalError()

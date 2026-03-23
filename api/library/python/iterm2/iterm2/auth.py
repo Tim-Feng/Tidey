@@ -125,7 +125,7 @@ class LSBackgroundContextManager():
             del info["LSBackgroundOnly"]
 
 def applescript_auth_disabled():
-    filename = os.path.expanduser("~/Library/Application Support/iTerm2/disable-automation-auth")
+    filename = os.path.expanduser("~/Library/Application Support/Tidey/disable-automation-auth")
     try:
         magic = "61DF88DC-3423-4823-B725-22570E01C027"
         expected = filename.encode("utf-8").hex() + " " + magic

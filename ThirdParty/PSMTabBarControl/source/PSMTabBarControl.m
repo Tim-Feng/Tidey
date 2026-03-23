@@ -255,7 +255,7 @@ PSMTabBarControlOptionKey PSMTabBarControlOptionPUAFontProvider = @"PSMTabBarCon
         // the overflow button/menu
         [self setupButtons];
 
-        [self registerForDraggedTypes:[NSArray arrayWithObjects:@"com.iterm2.psm.controlitem", nil]];
+        [self registerForDraggedTypes:[NSArray arrayWithObjects:@"com.tidey.psm.controlitem", nil]];
 
         // resize
         [self setPostsFrameChangedNotifications:YES];
@@ -474,7 +474,7 @@ PSMTabBarControlOptionKey PSMTabBarControlOptionPUAFontProvider = @"PSMTabBarCon
 - (void)setDelegate:(id<PSMTabBarControlDelegate>)object {
     _delegate = object;
 
-    NSMutableArray *types = [NSMutableArray arrayWithObject:@"com.iterm2.psm.controlitem"];
+    NSMutableArray *types = [NSMutableArray arrayWithObject:@"com.tidey.psm.controlitem"];
 
     //Update the allowed drag types
     if ([[self delegate] respondsToSelector:@selector(allowedDraggedTypesForTabView:)]) {
@@ -2021,7 +2021,7 @@ static CFAbsoluteTime gDragMoveFirstTime = 0;
 #pragma mark NSDraggingDestination
 
 - (NSDragOperation)draggingEntered:(id <NSDraggingInfo>)sender {
-    if ([[[sender draggingPasteboard] types] indexOfObject:@"com.iterm2.psm.controlitem"] != NSNotFound) {
+    if ([[[sender draggingPasteboard] types] indexOfObject:@"com.tidey.psm.controlitem"] != NSNotFound) {
         if ([[self delegate] respondsToSelector:@selector(tabView:shouldDropTabViewItem:inTabBar:moveSourceWindow:)] &&
             ![[self delegate] tabView:[[sender draggingSource] tabView]
                 shouldDropTabViewItem:[[[PSMTabDragAssistant sharedDragAssistant] draggedCell] representedObject]
@@ -2047,7 +2047,7 @@ static CFAbsoluteTime gDragMoveFirstTime = 0;
 - (NSDragOperation)draggingUpdated:(id <NSDraggingInfo>)sender {
     PSMTabBarCell *cell = [self cellForPoint:[self convertPoint:[sender draggingLocation] fromView:nil] cellFrame:nil];
 
-    if ([[[sender draggingPasteboard] types] indexOfObject:@"com.iterm2.psm.controlitem"] != NSNotFound) {
+    if ([[[sender draggingPasteboard] types] indexOfObject:@"com.tidey.psm.controlitem"] != NSNotFound) {
 
         if ([[self delegate] respondsToSelector:@selector(tabView:shouldDropTabViewItem:inTabBar:moveSourceWindow:)] &&
             ![[self delegate] tabView:[[sender draggingSource] tabView]
@@ -2078,7 +2078,7 @@ static CFAbsoluteTime gDragMoveFirstTime = 0;
 
 - (BOOL)prepareForDragOperation:(id <NSDraggingInfo>)sender {
     // validate the drag operation only if there's a valid tab bar to drop into
-    BOOL badType = [[[sender draggingPasteboard] types] indexOfObject:@"com.iterm2.psm.controlitem"] == NSNotFound;
+    BOOL badType = [[[sender draggingPasteboard] types] indexOfObject:@"com.tidey.psm.controlitem"] == NSNotFound;
     if (badType && [[self delegate] respondsToSelector:@selector(tabView:shouldAcceptDragFromSender:)] &&
         ![[self delegate] tabView:_tabView shouldAcceptDragFromSender:sender]) {
         badType = YES;
@@ -2094,7 +2094,7 @@ static CFAbsoluteTime gDragMoveFirstTime = 0;
 
 - (BOOL)performDragOperation:(id <NSDraggingInfo>)sender {
     _haveInitialDragLocation = NO;
-    if ([[[sender draggingPasteboard] types] indexOfObject:@"com.iterm2.psm.controlitem"] != NSNotFound ||
+    if ([[[sender draggingPasteboard] types] indexOfObject:@"com.tidey.psm.controlitem"] != NSNotFound ||
         [self _delegateAcceptsSender:sender]) {
         [[PSMTabDragAssistant sharedDragAssistant] performDragOperation:sender];
     } else if ([[self delegate] respondsToSelector:@selector(tabView:acceptedDraggingInfo:onTabViewItem:)]) {

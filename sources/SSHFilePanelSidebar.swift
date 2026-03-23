@@ -6,12 +6,12 @@
 //
 
 fileprivate let favoriteReorderPasteboardType =
-    NSPasteboard.PasteboardType("com.iterm2.ssh-favorite-reorder")
+    NSPasteboard.PasteboardType("com.tidey.ssh-favorite-reorder")
 
 @available(macOS 11, *)
 class SSHFilePanelSourceList: NSOutlineView {
-    static let sshFileNodePasteboardType = NSPasteboard.PasteboardType("com.iterm2.ssh-file-node")
-    static let sshFileNodeDirectoryPasteboardType = NSPasteboard.PasteboardType("com.iterm2.ssh-file-node-directory")
+    static let sshFileNodePasteboardType = NSPasteboard.PasteboardType("com.tidey.ssh-file-node")
+    static let sshFileNodeDirectoryPasteboardType = NSPasteboard.PasteboardType("com.tidey.ssh-file-node-directory")
 
     init() {
         super.init(frame: .zero)

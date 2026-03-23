@@ -249,8 +249,8 @@ static NSMutableSet<NSString *> *iTermTransferrableFileLockedFileNames(void) {
 
     NSBundle *bundle = [NSBundle mainBundle];
     NSDictionary *info = bundle.infoDictionary;
-    properties[(__bridge NSString *)kLSQuarantineAgentNameKey] = info[(__bridge NSString *)kCFBundleNameKey] ?: @"iTerm2";
-    properties[(__bridge NSString *)kLSQuarantineAgentBundleIdentifierKey] = info[(__bridge NSString *)kCFBundleIdentifierKey] ?: @"com.googlecode.iterm2";
+    properties[(__bridge NSString *)kLSQuarantineAgentNameKey] = info[(__bridge NSString *)kCFBundleNameKey] ?: @"Tidey";
+    properties[(__bridge NSString *)kLSQuarantineAgentBundleIdentifierKey] = info[(__bridge NSString *)kCFBundleIdentifierKey] ?: @"com.tidey.app";
     if (sourceURL.absoluteString) {
         properties[(__bridge NSString *)kLSQuarantineDataURLKey] = sourceURL.absoluteString;
     }

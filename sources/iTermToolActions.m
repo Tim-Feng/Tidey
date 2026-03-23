@@ -22,7 +22,7 @@
 
 static const CGFloat kButtonHeight = 23;
 static const CGFloat kMargin = 4;
-static NSString *const iTermToolActionsPasteboardType = @"com.googlecode.iterm2.iTermToolActionsPasteboardType";
+static NSString *const iTermToolActionsPasteboardType = @"com.tidey.iTermToolActionsPasteboardType";
 
 
 @interface iTermToolActions() <NSTableViewDataSource, NSTableViewDelegate>

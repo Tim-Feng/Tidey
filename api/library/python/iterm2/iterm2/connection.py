@@ -352,7 +352,7 @@ class Connection:
                 del os.environ[var]
 
     def _unix_domain_socket_path(self):
-        applicationSupport = os.path.expanduser("~/Library/Application Support/iTerm2")
+        applicationSupport = os.path.expanduser("~/Library/Application Support/Tidey")
         return os.path.join(applicationSupport, "private", "socket")
 
     def _get_unix_connect_coro(self):

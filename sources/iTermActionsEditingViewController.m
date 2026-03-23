@@ -23,7 +23,7 @@
 #import <Carbon/Carbon.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
-static NSString *const iTermActionsEditingPasteboardType = @"com.googlecode.iterm2.iTermActionsEditingPasteboardType";
+static NSString *const iTermActionsEditingPasteboardType = @"com.tidey.iTermActionsEditingPasteboardType";
 
 @interface iTermActionsEditingView: NSView
 @end

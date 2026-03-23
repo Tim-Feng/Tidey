@@ -15,7 +15,7 @@
 #import "NSStringITerm.h"
 
 static NSString *const kTestAppName = @"iTerm2ForAppleScriptTesting.app";
-static NSString *const kTestBundleId = @"com.googlecode.iterm2.applescript";
+static NSString *const kTestBundleId = @"com.tidey.applescript";
 
 @implementation AppleScriptTest
 

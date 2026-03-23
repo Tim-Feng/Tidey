@@ -710,7 +710,7 @@ class AITermController {
         DLog("------- parse new stream response of length \(data.count) -------------")
         let string = String(data: parserState.buffer + data, encoding: .utf8) ?? ""
         guard let parser = llmProvider.streamingResponseParser(stream: true) else {
-            handle(event: .error(AIError("Streaming is not supported by this language model in iTerm2. You can disable streaming in Settings > General > AI.")))
+            handle(event: .error(AIError("Streaming is not supported by this language model in Tidey. You can disable streaming in Settings > General > AI.")))
             return nil
         }
         var (first, rest) = parser.splitFirstJSONEvent(from: string)
@@ -756,7 +756,7 @@ class AITermController {
                     }
                     do {
                         guard var parser = llmProvider.streamingResponseParser(stream: true) else {
-                            handle(event: .error(AIError("Streaming is not supported by this language model in iTerm2. You can disable streaming in Settings > General > AI.")))
+                            handle(event: .error(AIError("Streaming is not supported by this language model in Tidey. You can disable streaming in Settings > General > AI.")))
                             return nil
                         }
                         let response = try parser.parse(data: firstData)
@@ -791,7 +791,7 @@ class AITermController {
                     }
                 }
                 guard let parser = llmProvider.streamingResponseParser(stream: true) else {
-                    handle(event: .error(AIError("Streaming is not supported by this language model in iTerm2. You can disable streaming in Settings > General > AI.")))
+                    handle(event: .error(AIError("Streaming is not supported by this language model in Tidey. You can disable streaming in Settings > General > AI.")))
                     return nil
                 }
 

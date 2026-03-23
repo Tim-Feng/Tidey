@@ -28,7 +28,7 @@ class DonateViewController: NSTitlebarAccessoryViewController {
 
     let innerVC = DismissableLinkViewController(userDefaultsKey: "NoSyncHideDonateLabel",
                                                 text: DonateViewController.textString(),
-                                                url: URL(string: "https://iterm2.com/donate.html")!,
+                                                url: URL(string: "https://tidey.app/tbd")!,
                                                 clickToHide: true)
     init() {
         super.init(nibName: nil, bundle: nil)

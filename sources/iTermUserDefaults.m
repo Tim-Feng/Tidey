@@ -69,7 +69,7 @@ static NSUserDefaults *iTermPrivateUserDefaults(void) {
         if (gCustomSuiteName) {
             suiteName = [gCustomSuiteName stringByAppendingString:@".private"];
         } else {
-            suiteName = @"com.googlecode.iterm2.private";
+            suiteName = @"com.tidey.private";
         }
         privateUserDefaults = [[NSUserDefaults alloc] initWithSuiteName:suiteName];
     });

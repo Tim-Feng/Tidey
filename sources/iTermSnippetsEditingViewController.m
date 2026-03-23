@@ -23,7 +23,7 @@
 #import "NSView+iTerm.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
-static NSString *const iTermSnippetsEditingPasteboardType = @"com.googlecode.iterm2.iTermSnippetsEditingPasteboardType";
+static NSString *const iTermSnippetsEditingPasteboardType = @"com.tidey.iTermSnippetsEditingPasteboardType";
 
 @interface iTermSnippetsEditingView: NSView
 @end

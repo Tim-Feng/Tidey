@@ -5,7 +5,7 @@
 Resize Font in All Sessions in Window
 =====================================
 
-This script registers a function that resizes the font of all sessions in a window. To use it, place it in `~/Library/Application Support/iTerm2/Scripts/AutoLaunch`. Then restart iTerm2 or launch it manually. Then add keybindings with the action *Invoke Script Function…* and use a command of `change_font_size(session_id:id,delta:1)` for the keystroke that will make the font bigger and `change_font_size(session_id:id,delta:-1)` for the keystroke that will make the font smaller.
+This script registers a function that resizes the font of all sessions in a window. To use it, place it in `~/Library/Application Support/Tidey/Scripts/AutoLaunch`. Then restart Tidey or launch it manually. Then add keybindings with the action *Invoke Script Function…* and use a command of `change_font_size(session_id:id,delta:1)` for the keystroke that will make the font bigger and `change_font_size(session_id:id,delta:-1)` for the keystroke that will make the font smaller.
 
 .. code-block:: python
 

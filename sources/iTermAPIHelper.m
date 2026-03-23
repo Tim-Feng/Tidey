@@ -442,7 +442,7 @@ static BOOL iTermAPIHelperLastApplescriptAuthRequiredSetting;
 
     // "Reveal Preference" is a one-time navigation action and shouldn't be remembered.
     iTermWarning *warning = [[iTermWarning alloc] init];
-    warning.title = @"The location of your Application Support directory appears to have moved or its contents have changed unexpectedly. As a precaution, the authentication mechanism for Python API scripts for iTerm2 has been reverted to always require Automation permission.";
+    warning.title = @"The location of your Application Support directory appears to have moved or its contents have changed unexpectedly. As a precaution, the authentication mechanism for Python API scripts for Tidey has been reverted to always require Automation permission.";
     warning.actionLabels = @[ @"OK", @"Reveal Preference" ];
     warning.identifier = @"NoSyncAppSupportMoved";
     warning.warningType = kiTermWarningTypePermanentlySilenceable;
@@ -471,7 +471,7 @@ static BOOL iTermAPIHelperLastApplescriptAuthRequiredSetting;
         case kiTermWarningSelection1:
             return NO;
         case kiTermWarningSelection2:
-            [[NSWorkspace sharedWorkspace] it_openURL:[NSURL URLWithString:@"https://iterm2.com/python-api-auth.html"]
+            [[NSWorkspace sharedWorkspace] it_openURL:[NSURL URLWithString:@"https://tidey.app/tbd"]
                                                target:nil
                                                 style:iTermOpenStyleTab
                                                window:window];
@@ -537,7 +537,7 @@ static BOOL iTermAPIHelperLastApplescriptAuthRequiredSetting;
     NSString *path = [self noauthPath];
     path = [path stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
     path = [path stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\\\\\""];
-    NSString *sourceCode = [NSString stringWithFormat:@"do shell script \"umask 077; TF=$(mktemp); printf '%%s' '%@' > \\\"$TF\\\" && chmod a+r \\\"$TF\\\" && mv \\\"$TF\\\" \\\"%@\\\" || rm -f \\\"$TF\\\"\" with prompt \"iTerm2 needs to modify a secure setting.\" with administrator privileges",
+    NSString *sourceCode = [NSString stringWithFormat:@"do shell script \"umask 077; TF=$(mktemp); printf '%%s' '%@' > \\\"$TF\\\" && chmod a+r \\\"$TF\\\" && mv \\\"$TF\\\" \\\"%@\\\" || rm -f \\\"$TF\\\"\" with prompt \"Tidey needs to modify a secure setting.\" with administrator privileges",
                             [self noauthMagic],
                             path];
     NSAppleScript *script = [[NSAppleScript alloc] initWithSource:sourceCode];
@@ -627,7 +627,7 @@ static BOOL iTermAPIHelperLastApplescriptAuthRequiredSetting;
     warning.actionLabels = @[ @"OK", @"Cancel" ];
     warning.identifier = iTermAPIHelperEnablePythonAPIWarningIdentifier;
     warning.warningType = forced ? kiTermWarningTypePersistent : kiTermWarningTypePermanentlySilenceable;
-    warning.title = @"The Python API allows scripts you run to control iTerm2 and access all its data.";
+    warning.title = @"The Python API allows scripts you run to control Tidey and access all its data.";
     static BOOL showing;
     if (showing) {
         // This can happen because the call to -runModal below starts a runloop and a delayed perform can then call this.
@@ -1507,7 +1507,7 @@ static BOOL iTermAPIHelperLastApplescriptAuthRequiredSetting;
     }
 
     NSString *message =
-        @"Another process is trying to use the iTerm2 API. The API allows a script to control iTerm2 and view and modify its contents. Allow the connection?";
+        @"Another process is trying to use the Tidey API. The API allows a script to control Tidey and view and modify its contents. Allow the connection?";
 
     if ([iTermAdvancedSettingsModel setCookie]) {
         message = [NSString stringWithFormat:@"%@\n\nAlthough you have chosen to allow connections automatically, this script has not presented a valid cookie.", message];
@@ -1534,7 +1534,7 @@ static BOOL iTermAPIHelperLastApplescriptAuthRequiredSetting;
             return NO;
         case kiTermWarningSelection2:
             *reason = @"Denied by user";
-            [[NSWorkspace sharedWorkspace] it_openURL:[NSURL URLWithString:@"https://iterm2.com/python-api-security-model"]
+            [[NSWorkspace sharedWorkspace] it_openURL:[NSURL URLWithString:@"https://tidey.app/tbd"]
                                                target:nil
                                                 style:iTermOpenStyleTab
                                                window:nil];

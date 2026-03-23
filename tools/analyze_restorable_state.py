@@ -7,7 +7,7 @@ Usage:
     python3 tools/analyze_restorable_state.py [path_to_database]
 
 If no path is provided, uses the default location:
-    ~/Library/Application Support/iTerm2/SavedState/restorable-state.sqlite
+    ~/Library/Application Support/Tidey/SavedState/restorable-state.sqlite
 """
 
 import sqlite3
@@ -588,7 +588,7 @@ def main():
         'database',
         nargs='?',
         default=os.path.expanduser(
-            "~/Library/Application Support/iTerm2/SavedState/restorable-state.sqlite"
+            "~/Library/Application Support/Tidey/SavedState/restorable-state.sqlite"
         ),
         help="Path to the database file"
     )

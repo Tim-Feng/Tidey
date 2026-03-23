@@ -235,7 +235,7 @@
     [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[ [NSURL fileURLWithPath:fullPath] ]];
 }
 
-// Returns ~/Library/Application Support/iTerm2/DynamicProfiles
+// Returns ~/Library/Application Support/Tidey/DynamicProfiles
 - (NSString *)unresolvedDynamicProfilesPath {
     if ([[iTermAdvancedSettingsModel dynamicProfilesPath] length]) {
         return [[iTermAdvancedSettingsModel dynamicProfilesPath] stringByExpandingTildeInPath];

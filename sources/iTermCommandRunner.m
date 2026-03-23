@@ -19,7 +19,7 @@
 @property (atomic) BOOL terminateAfterLaunch;
 @end
 
-static NSString *const iTermCommandRunnerErrorDomain = @"com.iterm2.command-runner";
+static NSString *const iTermCommandRunnerErrorDomain = @"com.tidey.command-runner";
 
 @implementation iTermCommandRunner {
     NSTask *_task;

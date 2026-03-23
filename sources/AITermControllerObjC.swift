@@ -31,8 +31,8 @@ class AITermControllerObjC: NSObject, AITermControllerDelegate, iTermObject {
             }
             return apiKeyQueue.sync {
                 if !cachedKey.value.valid {
-                    let value = try? SSKeychain.password(forService: "iTerm2 API Keys",
-                                                         account: "OpenAI API Key for iTerm2")
+                    let value = try? SSKeychain.password(forService: "Tidey API Keys",
+                                                         account: "OpenAI API Key for Tidey")
                     cachedKey.set(CachedKey(valid: true, value: value))
                 }
                 return cachedKey.value.value
@@ -43,8 +43,8 @@ class AITermControllerObjC: NSObject, AITermControllerDelegate, iTermObject {
             apiKeyQueue.sync {
                 cachedKey.set(CachedKey(valid: true, value: newValue))
                 _ = SSKeychain.setPassword(newValue ?? "",
-                                           forService: "iTerm2 API Keys",
-                                           account: "OpenAI API Key for iTerm2")
+                                           forService: "Tidey API Keys",
+                                           account: "OpenAI API Key for Tidey")
             }
         }
     }
@@ -54,8 +54,8 @@ class AITermControllerObjC: NSObject, AITermControllerDelegate, iTermObject {
         apiKeyQueue.async {
             cachedKey.set(CachedKey(valid: true, value: key))
             _ = SSKeychain.setPassword(key ?? "",
-                                       forService: "iTerm2 API Keys",
-                                       account: "OpenAI API Key for iTerm2")
+                                       forService: "Tidey API Keys",
+                                       account: "OpenAI API Key for Tidey")
         }
     }
 

@@ -1230,8 +1230,8 @@ extension String {
 }
 
 extension NSAttributedString.Key {
-    static let suggestionKey = NSAttributedString.Key(rawValue: "com.googlecode.iterm2.ComposerTextView.suggestionKey")
-    static let promptKey = NSAttributedString.Key(rawValue: "com.googlecode.iterm2.ComposerTextView.promptKey")
+    static let suggestionKey = NSAttributedString.Key(rawValue: "com.tidey.ComposerTextView.suggestionKey")
+    static let promptKey = NSAttributedString.Key(rawValue: "com.tidey.ComposerTextView.promptKey")
 }
 
 extension NSAttributedString {

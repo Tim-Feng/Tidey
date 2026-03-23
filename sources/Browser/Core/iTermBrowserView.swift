@@ -15,7 +15,7 @@ class iTermBrowserView: NSView {
         // Register for the same drag types as SessionView to allow drag events to be forwarded
         registerForDraggedTypes([
             NSPasteboard.PasteboardType(iTermMovePaneDragType),
-            NSPasteboard.PasteboardType("com.iterm2.psm.controlitem")
+            NSPasteboard.PasteboardType("com.tidey.psm.controlitem")
         ])
     }
 
@@ -23,7 +23,7 @@ class iTermBrowserView: NSView {
         super.init(coder: coder)
         registerForDraggedTypes([
             NSPasteboard.PasteboardType(iTermMovePaneDragType),
-            NSPasteboard.PasteboardType("com.iterm2.psm.controlitem")
+            NSPasteboard.PasteboardType("com.tidey.psm.controlitem")
         ])
     }
 

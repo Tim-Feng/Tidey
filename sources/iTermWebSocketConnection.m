@@ -17,7 +17,7 @@
 
 #import <CommonCrypto/CommonDigest.h>
 
-static NSString *const kProtocolName = @"api.iterm2.com";
+static NSString *const kProtocolName = @"api.tidey.app";
 static const NSInteger kWebSocketVersion = 13;
 NSString *const iTermWebSocketConnectionLibraryVersionTooOldString = @"Library version too old";
 
@@ -134,7 +134,7 @@ typedef NS_ENUM(NSUInteger, iTermWebSocketConnectionState) {
         NSDecimalNumber *version = [NSDecimalNumber decimalNumberWithString:parts[1]];
         NSComparisonResult result = [min compare:version];
         if (result == NSOrderedDescending) {
-            *reason = [NSString stringWithFormat:@"%@. %@ library version reported as %@. Minimum supported by this version of iTerm2 is %@",
+            *reason = [NSString stringWithFormat:@"%@. %@ library version reported as %@. Minimum supported by this version of Tidey is %@",
                        iTermWebSocketConnectionLibraryVersionTooOldString, name, version, min];
             return nil;
         }

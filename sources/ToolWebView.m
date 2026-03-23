@@ -50,7 +50,7 @@ static NSString *const iTermToolWebViewLogger = @"logger";
             return nil;
         }
         if (configuration) {
-            configuration.applicationNameForUserAgent = @"iTerm2";
+            configuration.applicationNameForUserAgent = @"Tidey";
             WKPreferences *prefs = [[WKPreferences alloc] init];
             prefs.javaScriptCanOpenWindowsAutomatically = NO;
             configuration.preferences = prefs;

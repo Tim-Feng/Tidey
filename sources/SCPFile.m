@@ -31,7 +31,7 @@
 @property (atomic, readonly) void *agent;
 @end
 
-static NSString *const kSCPFileErrorDomain = @"com.googlecode.iterm2.SCPFile";
+static NSString *const kSCPFileErrorDomain = @"com.tidey.SCPFile";
 static NSString *const kSecureCopyConnectionFailedWarning = @"NoSyncSecureCopyConnectionFailedWarning";
 
 static NSError *SCPFileError(NSString *description) {
@@ -118,7 +118,7 @@ static NSError *SCPFileError(NSString *description) {
 - (instancetype)init {
     self = [super init];
     if (self) {
-        _queue = dispatch_queue_create("com.googlecode.iterm2.SCPFile", NULL);
+        _queue = dispatch_queue_create("com.tidey.SCPFile", NULL);
         _homeDirectory = [NSHomeDirectory() copy];
         _userName = [NSUserName() copy];
         _hostName = [[[NSHost currentHost] name] copy];
@@ -412,7 +412,7 @@ static NSError *SCPFileError(NSString *description) {
         if (!theError) {
             // If connection fails, there is no rawSession in NMSSHSession, so it can't return an
             // error. Should that ever change, this clause will not execute.
-            theError = [NSError errorWithDomain:@"com.googlecode.iterm2"
+            theError = [NSError errorWithDomain:@"com.tidey"
                                            code:-1
                                        userInfo:@{ NSLocalizedDescriptionKey: @"Could not connect." }];
         }
@@ -432,7 +432,7 @@ static NSError *SCPFileError(NSString *description) {
                                        cancelLabel:@"Help"
                                             window:nil];
             if (selection == kiTermWarningSelection1) {
-                [[NSWorkspace sharedWorkspace] it_openURL:[NSURL URLWithString:@"https://iterm2.com/troubleshoot-hostname"]
+                [[NSWorkspace sharedWorkspace] it_openURL:[NSURL URLWithString:@"https://tidey.app/tbd"]
                                                    target:nil
                                                     style:iTermOpenStyleTab
                                                    window:nil];
@@ -582,7 +582,7 @@ static NSError *SCPFileError(NSString *description) {
         __block NSError *error = [self lastError];
         [self performOnMainThread:^{
             if (!error) {
-                error = [NSError errorWithDomain:@"com.googlecode.iterm2.SCPFile"
+                error = [NSError errorWithDomain:@"com.tidey.SCPFile"
                                             code:0
                                         userInfo:@{ NSLocalizedDescriptionKey: @"Authentication failed." }];
             }
@@ -793,7 +793,7 @@ static NSError *SCPFileError(NSString *description) {
 }
 
 - (NSString *)tempFileName {
-    NSString *result = [NSString stringWithFormat:@".iTerm2.%@", [NSString uuid]];
+    NSString *result = [NSString stringWithFormat:@".Tidey.%@", [NSString uuid]];
 
     return result;
 }

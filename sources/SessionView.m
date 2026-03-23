@@ -183,7 +183,7 @@ NSString *const SessionViewWasSelectedForInspectionNotification = @"SessionViewW
 - (instancetype)initWithFrame:(NSRect)frame {
     self = [super initWithFrame:frame];
     if (self) {
-        [self registerForDraggedTypes:@[ iTermMovePaneDragType, @"com.iterm2.psm.controlitem" ]];
+        [self registerForDraggedTypes:@[ iTermMovePaneDragType, @"com.tidey.psm.controlitem" ]];
         lastResizeDate_ = [NSDate date];
         _announcements = [[NSMutableArray alloc] init];
 

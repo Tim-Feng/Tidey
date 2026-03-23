@@ -27,7 +27,7 @@
                     <textField focusRingType="none" verticalHuggingPriority="750" horizontalCompressionResistancePriority="250" fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="GaD-UM-uz4">
                         <rect key="frame" x="181" y="361" width="389" height="27"/>
                         <autoresizingMask key="autoresizingMask" widthSizable="YES" flexibleMinY="YES"/>
-                        <textFieldCell key="cell" sendsActionOnEndEditing="YES" alignment="center" title="iTerm2" id="U4n-GV-8aZ">
+                        <textFieldCell key="cell" sendsActionOnEndEditing="YES" alignment="center" title="Tidey" id="U4n-GV-8aZ">
                             <font key="font" metaFont="system" size="22"/>
                             <color key="textColor" name="controlTextColor" catalog="System" colorSpace="catalog"/>
                             <color key="backgroundColor" name="controlColor" catalog="System" colorSpace="catalog"/>
@@ -110,8 +110,8 @@
                         <rect key="frame" x="22" y="249" width="546" height="5"/>
                         <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMinY="YES"/>
                     </box>
-                    <scrollView borderType="none" horizontalLineScroll="10" horizontalPageScroll="10" verticalLineScroll="10" verticalPageScroll="10" hasHorizontalScroller="NO" id="wvf-9G-H1W">
-                        <rect key="frame" x="22" y="223" width="546" height="20"/>
+                    <scrollView borderType="none" horizontalLineScroll="10" horizontalPageScroll="10" verticalLineScroll="10" verticalPageScroll="10" hasHorizontalScroller="NO" id="wvf-9G-H1W" hidden="YES">
+                        <rect key="frame" x="22" y="223" width="546" height="0"/>
                         <autoresizingMask key="autoresizingMask" flexibleMinY="YES"/>
                         <clipView key="contentView" drawsBackground="NO" id="Y1k-vx-Mfh">
                             <rect key="frame" x="0.0" y="0.0" width="546" height="20"/>
@@ -126,18 +126,11 @@
                                     <size key="maxSize" width="553" height="10000000"/>
                                     <attributedString key="textStorage">
                                         <fragment>
-                                            <string key="content">iTerm2 is supported by these backers on &lt;a href="https://patreon.com/gnachman"&gt;Patreon&lt;/a&gt; and &lt;a href="https://github.com/sponsors/gnachman"&gt;GitHub Sponsors&lt;/a&gt;</string>
+                                            <string key="content"> </string>
                                             <attributes>
                                                 <color key="NSColor" name="textColor" catalog="System" colorSpace="catalog"/>
                                                 <font key="NSFont" metaFont="systemSemibold" size="13"/>
                                                 <font key="NSOriginalFont" size="12" name="Helvetica"/>
-                                                <paragraphStyle key="NSParagraphStyle" alignment="natural" lineBreakMode="wordWrapping" baseWritingDirection="natural" tighteningFactorForTruncation="0.0"/>
-                                            </attributes>
-                                        </fragment>
-                                        <fragment content=":">
-                                            <attributes>
-                                                <color key="NSColor" name="textColor" catalog="System" colorSpace="catalog"/>
-                                                <font key="NSFont" size="12" name="Helvetica"/>
                                                 <paragraphStyle key="NSParagraphStyle" alignment="natural" lineBreakMode="wordWrapping" baseWritingDirection="natural" tighteningFactorForTruncation="0.0"/>
                                             </attributes>
                                         </fragment>
@@ -155,24 +148,24 @@
                             <autoresizingMask key="autoresizingMask"/>
                         </scroller>
                     </scrollView>
-                    <imageView horizontalHuggingPriority="251" verticalHuggingPriority="251" fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="gnK-jE-EbY">
-                        <rect key="frame" x="157" y="174" width="200" height="48"/>
+                    <imageView horizontalHuggingPriority="251" verticalHuggingPriority="251" fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="gnK-jE-EbY" hidden="YES">
+                        <rect key="frame" x="157" y="174" width="0" height="0"/>
                         <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMinY="YES"/>
                         <imageCell key="cell" refusesFirstResponder="YES" alignment="left" imageScaling="proportionallyDown" image="coderabbitai" id="K26-aE-Qae"/>
                     </imageView>
-                    <customView fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="QLQ-ce-ZLX" userLabel="Whitebox">
-                        <rect key="frame" x="22" y="174" width="123" height="48"/>
+                    <customView fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="QLQ-ce-ZLX" userLabel="Whitebox" hidden="YES">
+                        <rect key="frame" x="22" y="174" width="0" height="0"/>
                         <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMinY="YES"/>
                         <subviews>
                             <imageView horizontalHuggingPriority="251" verticalHuggingPriority="251" fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="r4H-cK-fWg">
-                                <rect key="frame" x="0.0" y="0.0" width="48" height="48"/>
+                                <rect key="frame" x="0.0" y="0.0" width="0" height="0"/>
                                 <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMinY="YES"/>
                                 <imageCell key="cell" refusesFirstResponder="YES" alignment="left" imageScaling="proportionallyDown" image="whitebox_logo" id="Gkx-JC-hcS"/>
                             </imageView>
                             <textField focusRingType="none" horizontalHuggingPriority="251" verticalHuggingPriority="750" fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="Yn8-g8-sO4">
                                 <rect key="frame" x="56" y="12" width="62" height="16"/>
                                 <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMinY="YES"/>
-                                <textFieldCell key="cell" lineBreakMode="clipping" title="Whitebox" id="5go-AO-e2e">
+                                <textFieldCell key="cell" lineBreakMode="clipping" title="" id="5go-AO-e2e">
                                     <font key="font" metaFont="system"/>
                                     <color key="textColor" name="linkColor" catalog="System" colorSpace="catalog"/>
                                     <color key="backgroundColor" name="textBackgroundColor" catalog="System" colorSpace="catalog"/>
@@ -180,8 +173,8 @@
                             </textField>
                         </subviews>
                     </customView>
-                    <imageView horizontalHuggingPriority="251" verticalHuggingPriority="251" fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="8Uw-GU-xTT" userLabel="SerpApi">
-                        <rect key="frame" x="368" y="174" width="200" height="48"/>
+                    <imageView horizontalHuggingPriority="251" verticalHuggingPriority="251" fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="8Uw-GU-xTT" userLabel="SerpApi" hidden="YES">
+                        <rect key="frame" x="368" y="174" width="0" height="0"/>
                         <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMinY="YES"/>
                         <imageCell key="cell" refusesFirstResponder="YES" alignment="left" animates="YES" imageScaling="proportionallyDown" image="SerpApi" id="hZP-ku-ZlD"/>
                     </imageView>

@@ -275,7 +275,7 @@
 }
 
 - (IBAction)help:(id)sender {
-    [[NSWorkspace sharedWorkspace] it_openURL:[NSURL URLWithString:@"https://iterm2.com/automatic-profile-switching.html"]
+    [[NSWorkspace sharedWorkspace] it_openURL:[NSURL URLWithString:@"https://tidey.app/tbd"]
                                        target:nil
                                         style:iTermOpenStyleTab
                                        window:self.view.window];

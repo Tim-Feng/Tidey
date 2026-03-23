@@ -139,7 +139,7 @@
         NSString *errorString = [errorMessage stringWithEncoding:NSUTF8StringEncoding];
         if (errorString) {
             if (error) {
-                *error = [NSError errorWithDomain:@"com.googlecode.iterm2" code:1 userInfo:@{ @"errorMessage": errorString }];
+                *error = [NSError errorWithDomain:@"com.tidey" code:1 userInfo:@{ @"errorMessage": errorString }];
             }
         } else {
             XLog(@"Error %s", (const char *)errorMessage.bytes);
@@ -167,7 +167,7 @@
     if (!archiveData) {
         DLog(@"Failed to create tgz archive: %@", archiveError);
         if (error) {
-            *error = archiveError ?: [NSError errorWithDomain:@"com.googlecode.iterm2"
+            *error = archiveError ?: [NSError errorWithDomain:@"com.tidey"
                                                          code:-1
                                                      userInfo:@{ NSLocalizedDescriptionKey: @"Failed to create archive of folder." }];
         }
@@ -185,7 +185,7 @@
     if (![archiveData writeToFile:tempPath atomically:YES]) {
         DLog(@"Failed to write temp archive to %@", tempPath);
         if (error) {
-            *error = [NSError errorWithDomain:@"com.googlecode.iterm2"
+            *error = [NSError errorWithDomain:@"com.tidey"
                                          code:-1
                                      userInfo:@{ NSLocalizedDescriptionKey: @"Failed to write temporary archive file." }];
         }

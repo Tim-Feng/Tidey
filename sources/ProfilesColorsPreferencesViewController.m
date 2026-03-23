@@ -32,7 +32,7 @@
 NSString *const iTermColorPreferencesDidDisappear = @"iTermColorPreferencesDidDisappear";
 NSString *const iTermColorPreferencesDidAppear = @"iTermColorPreferencesDidAppear";
 
-static NSString * const kColorGalleryURL = @"https://www.iterm2.com/colorgallery";
+static NSString * const kColorGalleryURL = @"https://tidey.app/tbd";
 
 @interface ProfilesColorsPreferencesViewController()<iTermHueVisualizationViewDelegate, iTermSizeRememberingViewDelegate, NSMenuDelegate>
 @end

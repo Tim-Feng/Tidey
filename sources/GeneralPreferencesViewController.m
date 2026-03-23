@@ -453,7 +453,7 @@ enum {
         [[NSNotificationCenter defaultCenter] postNotificationName:iTermMetalSettingsDidChangeNotification object:nil];
     };
     info.onChange = ^{
-        [iTermWarning showWarningWithTitle:@"You must restart iTerm2 for this change to take effect."
+        [iTermWarning showWarningWithTitle:@"You must restart Tidey for this change to take effect."
                                    actions:@[ @"OK" ]
                                 identifier:nil
                                silenceable:kiTermWarningTypePersistent
@@ -1345,7 +1345,7 @@ enum {
 }
 
 - (IBAction)installPlugin:(id)sender {
-    [[NSWorkspace sharedWorkspace] it_openURL:[NSURL URLWithString:@"https://iterm2.com/ai-plugin.html"]
+    [[NSWorkspace sharedWorkspace] it_openURL:[NSURL URLWithString:@"https://tidey.app/tbd"]
                                        target:nil
                                 configuration:[NSWorkspaceOpenConfiguration configuration]
                                         style:iTermOpenStyleTab
@@ -1354,7 +1354,7 @@ enum {
 }
 
 - (void)revealPlugin:(id)sender {
-    NSURL *url = [[NSWorkspace sharedWorkspace] URLForApplicationWithBundleIdentifier:@"com.googlecode.iterm2.iTermAI"];
+    NSURL *url = [[NSWorkspace sharedWorkspace] URLForApplicationWithBundleIdentifier:@"com.tidey.iTermAI"];
     if (!url) {
         NSBeep();
         return;
@@ -1388,11 +1388,11 @@ enum {
     NSString *action;
     NSString *path;
     if (@available(macOS 13, *)) {
-        message = @"System window restoration has been disabled, which prevents iTerm2 from respecting this setting. Disable ”System Settings > Desktop & Dock > Close windows when quitting an application“ to enable window restoration.";
+        message = @"System window restoration has been disabled, which prevents Tidey from respecting this setting. Disable ”System Settings > Desktop & Dock > Close windows when quitting an application“ to enable window restoration.";
         action = @"Open System Settings";
         path = @"/System/Library/PreferencePanes/Dock.prefPane";
     } else {
-        message = @"System window restoration has been disabled, which prevents iTerm2 from respecting this setting. Disable System Settings > General > Close windows when quitting an app to enable window restoration.";
+        message = @"System window restoration has been disabled, which prevents Tidey from respecting this setting. Disable System Settings > General > Close windows when quitting an app to enable window restoration.";
         action = @"Open System Preferences";
         path = @"/System/Library/PreferencePanes/Appearance.prefPane";
     }
@@ -1431,7 +1431,7 @@ enum {
 }
 
 - (IBAction)pythonAPIAuthHelp:(id)sender {
-    [[NSWorkspace sharedWorkspace] it_openURL:[NSURL URLWithString:@"https://iterm2.com/python-api-auth.html"]
+    [[NSWorkspace sharedWorkspace] it_openURL:[NSURL URLWithString:@"https://tidey.app/tbd"]
                                        target:nil
                                         style:iTermOpenStyleTab
                                        window:self.view.window];

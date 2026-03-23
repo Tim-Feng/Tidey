@@ -121,7 +121,7 @@ struct Plugin {
         }
     }
 
-    private let bundleID = "com.googlecode.iterm2.iTermAI"
+    private let bundleID = "com.tidey.iTermAI"
     private let code: String
     init() throws {
         guard let bundleURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
@@ -148,7 +148,7 @@ struct Plugin {
     private static func checkSignature(message: Data, signature: Data) throws {
         let publicKey = try Curve25519.Signing.PublicKey(rawRepresentation: Data(base64Encoded: publicKeyB64)!)
         guard publicKey.isValidSignature(signature, for: message) else {
-            throw PluginError(reason: "The plugin's signature is invalid. Reinstall the plugin or upgrade iTerm2.")
+            throw PluginError(reason: "The plugin's signature is invalid. Reinstall the plugin or upgrade Tidey.")
         }
         DLog("Signature is good")
     }
@@ -180,8 +180,8 @@ struct Plugin {
 }
 
 class iTermAIClient {
-    private let executionQueue = DispatchQueue(label: "com.googlecode.iterm2.ai-execution")
-    private let outputQueue = DispatchQueue(label: "com.googlecode.iterm2.ai-output")
+    private let executionQueue = DispatchQueue(label: "com.tidey.ai-execution")
+    private let outputQueue = DispatchQueue(label: "com.tidey.ai-output")
     static let instance = iTermAIClient()
 
     var available: Bool {
@@ -209,11 +209,11 @@ class iTermAIClient {
         switch Plugin.instance() {
         case .success(let plugin):
             guard let pluginVersion = try? plugin.version() else {
-                throw PluginError(reason: "Unable to determine version of AI plugin. Reinstall it and upgrade iTerm2 if possible.")
+                throw PluginError(reason: "Unable to determine version of AI plugin. Reinstall it and upgrade Tidey if possible.")
             }
 
             guard pluginVersion == Decimal(string: requiredVersion) else {
-                throw PluginError(reason: "Plugin has version \(pluginVersion) but iTerm2 expects \(requiredVersion). Upgrade one or both.")
+                throw PluginError(reason: "Plugin has version \(pluginVersion) but Tidey expects \(requiredVersion). Upgrade one or both.")
             }
             return
         case .failure(let error):

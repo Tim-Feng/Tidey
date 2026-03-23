@@ -213,7 +213,7 @@ NSString *const kTerminalFileShouldStopNotification = @"kTerminalFileShouldStopN
 #pragma mark - Private
 
 - (NSError *)errorWithDescription:(NSString *)description {
-    return [NSError errorWithDomain:@"com.googlecode.iterm2.TerminalFile"
+    return [NSError errorWithDomain:@"com.tidey.TerminalFile"
                                code:1
                            userInfo:@{ NSLocalizedDescriptionKey:description }];
 }

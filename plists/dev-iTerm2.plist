@@ -228,7 +228,7 @@
         <key>CFBundleIconFile</key>
         <string>iTerm2.icns</string>
         <key>CFBundleIdentifier</key>
-        <string>com.googlecode.iterm2</string>
+        <string>com.tidey.app</string>
         <key>CFBundleInfoDictionaryVersion</key>
         <string>6.0</string>
         <key>CFBundleName</key>

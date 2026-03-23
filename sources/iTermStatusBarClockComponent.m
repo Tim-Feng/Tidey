@@ -116,7 +116,7 @@ static NSString *const iTermStatusBarClockComponentSSHSyncTimeZoneKey = @"ssh_tz
                                                    placeholder:@"Date Format (Unicode TR 35)"
                                                   defaultValue:self.class.statusBarComponentDefaultKnobs[iTermStatusBarClockComponentFormatKey]
                                                            key:iTermStatusBarClockComponentFormatKey];
-    formatKnob.helpURL = [NSURL URLWithString:@"https://iterm2.com/clock-status-bar-component-help"];
+    formatKnob.helpURL = [NSURL URLWithString:@"https://tidey.app/tbd"];
     iTermStatusBarComponentKnob *dateFormatIsTemplate =
         [[iTermStatusBarComponentKnob alloc] initWithLabelText:@"Localize Date Format"
                                                           type:iTermStatusBarComponentKnobTypeCheckbox

@@ -14,8 +14,8 @@
 
 if [[ -o interactive ]]; then
   # Don't run in IDE terminals. TERM_PROGRAM is set by the local terminal but not
-  # forwarded over SSH. LC_TERMINAL is set by iTerm2 and may be forwarded over SSH.
-  if [ \( -z "${TERM_PROGRAM-}" -o "${TERM_PROGRAM-}" = "iTerm.app" -o "${LC_TERMINAL-}" = "iTerm2" \) -a "${ITERM_ENABLE_SHELL_INTEGRATION_WITH_TMUX-}""$TERM" != "tmux-256color" -a "${ITERM_ENABLE_SHELL_INTEGRATION_WITH_TMUX-}""$TERM" != "screen" -a "${ITERM_SHELL_INTEGRATION_INSTALLED-}" = "" -a "$TERM" != linux -a "$TERM" != dumb ]; then
+  # forwarded over SSH. LC_TERMINAL is set by Tidey and may be forwarded over SSH.
+  if [ \( -z "${TERM_PROGRAM-}" -o "${TERM_PROGRAM-}" = "iTerm.app" -o "${LC_TERMINAL-}" = "Tidey" \) -a "${ITERM_ENABLE_SHELL_INTEGRATION_WITH_TMUX-}""$TERM" != "tmux-256color" -a "${ITERM_ENABLE_SHELL_INTEGRATION_WITH_TMUX-}""$TERM" != "screen" -a "${ITERM_SHELL_INTEGRATION_INSTALLED-}" = "" -a "$TERM" != linux -a "$TERM" != dumb ]; then
     ITERM_SHELL_INTEGRATION_INSTALLED=Yes
     ITERM2_SHOULD_DECORATE_PROMPT="1"
     # Indicates start of command output. Runs just before command executes.

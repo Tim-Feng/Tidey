@@ -241,7 +241,7 @@ static CVReturn DisplayLinkCallback(CVDisplayLinkRef displayLink,
 
     NSPasteboardItem *pbItem = [[[NSPasteboardItem alloc] init] autorelease];
     [pbItem setString:[@([[control cells] indexOfObject:cell]) stringValue]
-              forType:@"com.iterm2.psm.controlitem"];
+              forType:@"com.tidey.psm.controlitem"];
 
     NSImage *imageToDrag;
     NSRect draggingRect;

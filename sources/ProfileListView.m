@@ -45,7 +45,7 @@
 #import "NSWindow+iTerm.h"
 #import "NSWorkspace+iTerm.h"
 
-#define kProfileTableViewDataType @"com.googlecode.iterm2.iTerm2ProfileGuid"
+#define kProfileTableViewDataType @"com.tidey.ProfileGuid"
 
 // NSAttributedString attribute keys
 static NSString *const iTermProfileListViewRestorableStateTagsVisible = @"iTermProfileListViewRestorableStateTagsVisible";
@@ -432,7 +432,7 @@ const CGFloat kDefaultTagsWidth = 80;
 }
 
 - (void)openHowToSearchHelp:(id)sender {
-    [[NSWorkspace sharedWorkspace] it_openURL:[NSURL URLWithString:@"https://iterm2.com/search_syntax.html"]
+    [[NSWorkspace sharedWorkspace] it_openURL:[NSURL URLWithString:@"https://tidey.app/tbd"]
                                        target:nil
                                         style:iTermOpenStyleTab
                                        window:self.window];

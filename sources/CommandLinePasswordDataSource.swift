@@ -10,7 +10,7 @@ import OSLog
 
 /*
 @available(macOS 11.0, *)
-private let passwordLogger = Logger(subsystem: "com.googlecode.iterm2.PasswordManager", category: "default")
+private let passwordLogger = Logger(subsystem: "com.tidey.PasswordManager", category: "default")
 */
 
 class CommandLineProvidedAccount: NSObject, PasswordManagerAccount {

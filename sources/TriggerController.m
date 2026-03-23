@@ -998,7 +998,7 @@ NSString *const kTwoPraramValueColumnIdentifier = @"kTwoPraramValueColumnIdentif
 }
 
 - (IBAction)help:(id)sender {
-    [[NSWorkspace sharedWorkspace] it_openURL:[NSURL URLWithString:@"https://www.iterm2.com/triggers.html"]
+    [[NSWorkspace sharedWorkspace] it_openURL:[NSURL URLWithString:@"https://tidey.app/tbd"]
                                        target:nil
                                         style:iTermOpenStyleTab
                                        window:self.window];

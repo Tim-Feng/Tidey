@@ -48,13 +48,13 @@ static NSString *const iTermShellIntegrationInstallUtilitiesUserDefaultsKey = @"
     attributedString = [[self attributedStringWithFont:_descriptionLabel.font
                                                 string:_descriptionLabel.stringValue] mutableCopy];
     [self appendLearnMoreToAttributedString:attributedString
-                                        url:[NSURL URLWithString:@"https://iterm2.com/documentation-shell-integration.html"]];
+                                        url:[NSURL URLWithString:@"https://tidey.app/tbd"]];
     _descriptionLabel.attributedStringValue = attributedString;
     
     attributedString = [[self attributedStringWithFont:_utilitiesLabel.font
                                                 string:_utilitiesLabel.stringValue] mutableCopy];
     [self appendLearnMoreToAttributedString:attributedString
-                                        url:[NSURL URLWithString:@"https://www.iterm2.com/documentation-utilities.html"]];
+                                        url:[NSURL URLWithString:@"https://tidey.app/tbd"]];
     _utilitiesLabel.attributedStringValue = attributedString;
 }
 

@@ -200,7 +200,7 @@ const CGFloat sideMarginWidth = 40;
                 _parameterHidden = NO;
                 _parameterPlaceholder = @"Copy Mode Commands";
                 _applyHidden = NO;
-                _helpString = @"Enter copy mode commands to move cursor, toggle selection, and so on. This key binding enters Copy Mode and then acts as though you had pressed the keys listed here. [See a list of all the commands](https://iterm2.com/documentation-copymode.html). Use vim syntax for control, option, and function keys (e.g., `<C-x>` or `<Up>`.";
+                _helpString = @"Enter copy mode commands to move cursor, toggle selection, and so on. This key binding enters Copy Mode and then acts as though you had pressed the keys listed here. [See a list of all the commands](https://tidey.app/tbd). Use vim syntax for control, option, and function keys (e.g., `<C-x>` or `<Up>`.";
                 break;
 
             case KEY_ACTION_TOGGLE_SETTING:
@@ -255,7 +255,7 @@ const CGFloat sideMarginWidth = 40;
                                                                        passthrough:nil
                                                                      functionsOnly:NO];
                 }
-                _helpString = @"You can use this to copy information about the current session to the clipboard. [Learn more about interpolated strings](https://iterm2.com/documentation-scripting-fundamentals.html)";
+                _helpString = @"You can use this to copy information about the current session to the clipboard. [Learn more about interpolated strings](https://tidey.app/tbd)";
                 break;
 
             case KEY_ACTION_SCROLL_END:

@@ -295,7 +295,7 @@ static ContextMenuActionDeclaration ContextMenuActionDeclarationForTag(ContextMe
 }
 
 - (IBAction)help:(id)sender {
-    [[NSWorkspace sharedWorkspace] it_openURL:[NSURL URLWithString:@"https://iterm2.com/documentation-smart-selection.html"]
+    [[NSWorkspace sharedWorkspace] it_openURL:[NSURL URLWithString:@"https://tidey.app/tbd"]
                                        target:nil
                                         style:iTermOpenStyleTab
                                        window:self.window];
@@ -312,7 +312,7 @@ static ContextMenuActionDeclaration ContextMenuActionDeclarationForTag(ContextMe
 
 - (void)updateHelpText {
     if (_useInterpolatedStringsButton.state == NSControlStateValueOn) {
-        NSString *html = @"You can use captured strings from the Smart Selection's regular expression in the parameter. Use \\(matches[i]) where i=0 for the entire match and i>0 for capture groups. For other values, see <a href=\"https://iterm2.com/documentation-scripting-fundamentals.html\">Scripting Fundamentals</a> and <a href=\"https://iterm2.com/documentation-variables.html#session-context\">Variables Reference (Session Context)</a>.";
+        NSString *html = @"You can use captured strings from the Smart Selection's regular expression in the parameter. Use \\(matches[i]) where i=0 for the entire match and i>0 for capture groups. For other values, see <a href=\"https://tidey.app/tbd\">Scripting Fundamentals</a> and <a href=\"https://tidey.app/tbd\">Variables Reference (Session Context)</a>.";
         NSMutableParagraphStyle *paragraphStyle = [[NSMutableParagraphStyle alloc] init];
         paragraphStyle.lineBreakMode = NSLineBreakByWordWrapping;
         _parameterInfoTextField.attributedStringValue = [NSAttributedString attributedStringWithHTML:html

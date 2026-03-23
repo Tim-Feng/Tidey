@@ -9281,7 +9281,7 @@ static CGFloat iTermDimmingAmount(PSMTabBarControl *tabView) {
 
 - (void)turnOnMetalCaptureInInfoPlist {
     const iTermWarningSelection selection =
-    [iTermWarning showWarningWithTitle:@"You must restart iTerm2 to turn on this feature."
+    [iTermWarning showWarningWithTitle:@"You must restart Tidey to turn on this feature."
                                actions:@[ @"Restart Now", @"Cancel"]
                             identifier:@"RestartAfterMetalCaptureEnabled"
                            silenceable:kiTermWarningTypePersistent
@@ -9386,7 +9386,7 @@ static CGFloat iTermDimmingAmount(PSMTabBarControl *tabView) {
 }
 
 - (IBAction)copyModeShortcuts:(id)sender {
-    [[NSWorkspace sharedWorkspace] it_openURL:[NSURL URLWithString:@"https://iterm2.com/documentation-copymode.html"]
+    [[NSWorkspace sharedWorkspace] it_openURL:[NSURL URLWithString:@"https://tidey.app/tbd"]
                                        target:nil
                                         style:iTermOpenStyleTab
                                        window:self.window];
@@ -9535,7 +9535,7 @@ static CGFloat iTermDimmingAmount(PSMTabBarControl *tabView) {
 }
 
 - (IBAction)coprocessHelp:(id)sender {
-    [[NSWorkspace sharedWorkspace] it_openURL:[NSURL URLWithString:@"http://www.iterm2.com/coprocesses.html"]
+    [[NSWorkspace sharedWorkspace] it_openURL:[NSURL URLWithString:@"https://tidey.app/tbd"]
                                        target:nil
                                         style:iTermOpenStyleTab
                                        window:self.window];
@@ -9572,10 +9572,8 @@ static CGFloat iTermDimmingAmount(PSMTabBarControl *tabView) {
 }
 
 - (IBAction)openAIChat:(id)sender {
-    [[iTermChatWindowController instanceShowingErrors:YES] showChatWindow];
-    [[iTermChatWindowController instanceShowingErrors:NO] revealOrCreateChatAboutSessionGuid:self.currentSession.guid
-                                                                                        name:self.currentSession.name
-                                                                                  isTerminal:!self.currentSession.isBrowserSession];
+    // Tidey: AI Chat disabled.
+    return;
 }
 
 - (IBAction)openPasteHistory:(id)sender {
@@ -12497,7 +12495,7 @@ typedef NS_ENUM(NSUInteger, iTermBroadcastCommand) {
                                                                 locale:[NSLocale currentLocale]];
 
     NSDate *now = [NSDate date];
-    NSString *suggestedFilename = [NSString stringWithFormat:@"iTerm2 Session %@ at %@.txt",
+    NSString *suggestedFilename = [NSString stringWithFormat:@"Tidey Session %@ at %@.txt",
                                    [dateFormatter stringFromDate:now],
                                    [timeFormatter stringFromDate:now]];
 

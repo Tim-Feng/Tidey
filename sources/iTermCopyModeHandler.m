@@ -500,7 +500,7 @@ iTermCopyModeAction iTermCopyModeActionFromName(NSString *name, BOOL *ok) {
 - (void)educateAboutCopyMode {
     [[iTermNotificationController sharedInstance] postNotificationWithTitle:@"Copy Mode"
                                                                      detail:@"Copy Mode lets you make a selection with the keyboard. Click to view the manual."
-                                                                        URL:[NSURL URLWithString:@"https://iterm2.com/documentation-copymode.html"]];
+                                                                        URL:[NSURL URLWithString:@"https://tidey.app/tbd"]];
 }
 
 

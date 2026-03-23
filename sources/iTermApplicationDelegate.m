@@ -352,6 +352,9 @@ static BOOL hasBecomeActive = NO;
         [_showTipOfTheDay.menu removeItem:_showTipOfTheDay];
     }
 
+    // Tidey: Hide features we don't need.
+    [self tideyHideUnneededMenuItems];
+
     if ([iTermAdvancedSettingsModel showHintsInSplitPaneMenuItems]) {
         _splitHorizontally.title = [@"─⃞ " stringByAppendingString:_splitHorizontally.title];
         _splitHorizontallyWithCurrentProfile.title = [@"─⃞ " stringByAppendingString:_splitHorizontallyWithCurrentProfile.title];
@@ -682,7 +685,7 @@ static BOOL hasBecomeActive = NO;
  * window arrangements won't be restored, etc.)
  *
  * tell application "iTerm"
- *    open file "/com.googlecode.iterm2/commandmode"
+ *    open file "/com.tidey/commandmode"
  *    // create a terminal if needed, run commands, whatever.
  * end tell
  */
@@ -841,7 +844,7 @@ static BOOL hasBecomeActive = NO;
         DLog(@"applicationShouldTerminateAfterLastWindowClosed - user has not interacted with any session");
         if ([[NSDate date] timeIntervalSinceDate:launchTime_] < [iTermAdvancedSettingsModel minRunningTime]) {
             DLog(@"Returning NO");
-            NSLog(@"Not quitting iTerm2 because it ran very briefly and had no user interaction. Set the MinRunningTime float preference to 0 to turn this feature off.");
+            NSLog(@"Not quitting Tidey because it ran very briefly and had no user interaction. Set the MinRunningTime float preference to 0 to turn this feature off.");
             return NO;
         }
     }
@@ -945,13 +948,13 @@ static BOOL hasBecomeActive = NO;
         DLog(@"Showing quit alert");
         NSString *message;
         if ([[iTermController sharedInstance] shouldLeaveSessionsRunningOnQuit]) {
-            message = @"Sessions will be restored automatically when iTerm2 is relaunched.";
+            message = @"Sessions will be restored automatically when Tidey is relaunched.";
         } else {
             message = @"All sessions will be closed.";
         }
         [NSApp activateIgnoringOtherApps:YES];
         NSAlert *alert = [[[NSAlert alloc] init] autorelease];
-        alert.messageText = @"Quit iTerm2?";
+        alert.messageText = @"Quit Tidey?";
         alert.informativeText = message;
         [alert addButtonWithTitle:@"OK"];
         [alert addButtonWithTitle:@"Cancel"];
@@ -1274,17 +1277,10 @@ void TurnOnDebugLoggingAutomatically(void) {
     DLog(@"Make iTermFullScreenWindowManager");
     [iTermFullScreenWindowManager sharedInstance];
 
-    DLog(@"complainIfNightlyBuildIsTooOld");
-    [self complainIfNightlyBuildIsTooOld];
-
-    // Set the Appcast URL and when it changes update it.
-    DLog(@"refreshSoftwareUpdateUserDefaults");
-    [[iTermController sharedInstance] refreshSoftwareUpdateUserDefaults];
-    DLog(@"Add observers");
-    [iTermPreferences addObserverForKey:kPreferenceKeyCheckForTestReleases
-                                  block:^(id before, id after) {
-                                      [[iTermController sharedInstance] refreshSoftwareUpdateUserDefaults];
-                                  }];
+    // Tidey: Sparkle auto-update disabled. Skip nightly build check and appcast setup.
+    // [self complainIfNightlyBuildIsTooOld];
+    // [[iTermController sharedInstance] refreshSoftwareUpdateUserDefaults];
+    // [iTermPreferences addObserverForKey:kPreferenceKeyCheckForTestReleases ...];
     [iTermLoggingHelper observeNotificationsWithHandler:^(NSString * _Nonnull guid) {
         [[PreferencePanel sharedInstance] openToProfileWithGuid:guid
                                                             key:KEY_AUTOLOG];
@@ -1366,6 +1362,10 @@ void TurnOnDebugLoggingAutomatically(void) {
     }
     DLog(@"didFinishLaunching");
 
+    // Tidey: Fully disable Sparkle auto-update prompt and checks.
+    suUpdater.automaticallyChecksForUpdates = NO;
+    suUpdater.automaticallyDownloadsUpdates = NO;
+
     [iTermLaunchExperienceController applicationDidFinishLaunching];
     [[iTermLaunchServices sharedInstance] registerForiTerm2Scheme];
     if (IsTouchBarAvailable()) {
@@ -1443,10 +1443,11 @@ void TurnOnDebugLoggingAutomatically(void) {
                                                            selector:@selector(workspaceSessionDidResignActive:)
                                                                name:NSWorkspaceSessionDidResignActiveNotification
                                                              object:nil];
-    [[NSNotificationCenter defaultCenter] addObserver:self
-                                             selector:@selector(sparkleWillRestartApp:)
-                                                 name:SUUpdaterWillRestartNotification
-                                               object:nil];
+    // Tidey: Sparkle auto-update disabled. Skip SUUpdater notification observer.
+    // [[NSNotificationCenter defaultCenter] addObserver:self
+    //                                          selector:@selector(sparkleWillRestartApp:)
+    //                                              name:SUUpdaterWillRestartNotification
+    //                                            object:nil];
 
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(processTypeDidChange:)
@@ -1569,16 +1570,17 @@ static iTermKeyEventReplayer *gReplayer;
 
     [[iTermBuriedSessions sharedInstance] setMenus:[NSArray arrayWithObjects:_buriedSessions, _statusIconBuriedSessions, nil]];
 
-    item = [[[NSMenuItem alloc] initWithTitle:@"Check For Updates"
-                                       action:@selector(checkForUpdatesFromMenu:)
-                                keyEquivalent:@""] autorelease];
-    [menu addItem:item];
+    // Tidey: Sparkle auto-update disabled. Don't add "Check For Updates" to dock menu.
+    // item = [[[NSMenuItem alloc] initWithTitle:@"Check For Updates"
+    //                                    action:@selector(checkForUpdatesFromMenu:)
+    //                             keyEquivalent:@""] autorelease];
+    // [menu addItem:item];
 
     NSMenuItem *mainMenuItem = [[[NSMenuItem alloc] initWithTitle:@"Main Menu" action:nil keyEquivalent:@""] autorelease];
     mainMenuItem.submenu = [[NSApp mainMenu] it_deepCopy];
     [menu addItem:mainMenuItem];
     
-    item = [[[NSMenuItem alloc] initWithTitle:@"Quit iTerm2"
+    item = [[[NSMenuItem alloc] initWithTitle:@"Quit Tidey"
                                        action:@selector(terminate:)
                                 keyEquivalent:@""] autorelease];
     [menu addItem:item];
@@ -2068,21 +2070,8 @@ static iTermKeyEventReplayer *gReplayer;
 #pragma mark - Startup Helpers
 
 - (void)complainIfNightlyBuildIsTooOld {
-    if (![NSBundle it_isNightlyBuild]) {
-        return;
-    }
-    NSTimeInterval age = -[[NSBundle it_buildDate] timeIntervalSinceNow];
-    if (age > 30 * 24 * 60 * 60) {
-        iTermWarningSelection selection =
-        [iTermWarning showWarningWithTitle:@"This nightly build is over 30 days old. Consider updating soon: you may be suffering from awful bugs in blissful ignorance."
-                                   actions:@[ @"I’ll Take My Chances", @"Update Now" ]
-                                identifier:@"NoSyncVeryOldNightlyBuildWarning"
-                               silenceable:kiTermWarningTypeSilenceableForOneMonth
-                                    window:nil];
-        if (selection == kiTermWarningSelection1) {
-            [[SUUpdater sharedUpdater] checkForUpdates:nil];
-        }
-    }
+    // Tidey: Sparkle auto-update disabled. Skip nightly build age check.
+    return;
 }
 
 // This performs startup activities as long as they haven't been run before.
@@ -2221,7 +2210,47 @@ static iTermKeyEventReplayer *gReplayer;
 }
 
 - (IBAction)checkForUpdatesFromMenu:(id)sender {
-    [suUpdater checkForUpdates:(sender)];
+    // Tidey: Sparkle auto-update disabled. Do nothing.
+    return;
+    // [suUpdater checkForUpdates:(sender)];
+}
+
+#pragma mark - Tidey Feature Trim
+
+// Tidey: Hide menu items for features we don't expose.
+// Strategy: hide menu items at launch rather than deleting XIB entries.
+- (void)tideyHideUnneededMenuItems {
+    NSMenu *mainMenu = [NSApp mainMenu];
+    if (!mainMenu) return;
+
+    // Identifiers of menu items to hide.
+    NSArray<NSString *> *identifiersToHide = @[
+        // AI Chat
+        @"Engage Artificial Intelligence",
+        @"Explain Output with AI",
+        @"Open AI Chat",
+        @"AI Chats",
+        // Tip of the Day
+        @"Show Tip of the Day",
+        // Password Manager
+        @"Password Manager",
+        // Check for Updates (Sparkle)
+        @"Check For Updates\u2026",
+    ];
+
+    [self tideyHideMenuItemsWithIdentifiers:identifiersToHide inMenu:mainMenu];
+}
+
+- (void)tideyHideMenuItemsWithIdentifiers:(NSArray<NSString *> *)identifiers inMenu:(NSMenu *)menu {
+    for (NSMenuItem *item in menu.itemArray) {
+        NSString *ident = item.identifier;
+        if (ident && [identifiers containsObject:ident]) {
+            [item setHidden:YES];
+        }
+        if (item.hasSubmenu) {
+            [self tideyHideMenuItemsWithIdentifiers:identifiers inMenu:item.submenu];
+        }
+    }
 }
 
 #pragma mark - Main Menu
@@ -2423,14 +2452,13 @@ static iTermKeyEventReplayer *gReplayer;
 }
 
 - (IBAction)openPasswordManager:(id)sender {
-    DLog(@"Menu item selected");
-    NSString *name = [[[[iTermController sharedInstance] currentTerminal] currentSession] defaultAccountNameForPasswordManager];
-    [self openPasswordManagerToAccountName:name inSession:nil];
+    // Tidey: Password Manager menu entry disabled.
+    return;
 }
 
 - (IBAction)openAIChats:(id)sender {
-    [[iTermChatWindowController instanceShowingErrors:YES] showChatWindow];
-    [[iTermChatWindowController instanceShowingErrors:NO] createNewChatIfNeededWithCurrentSession:iTermController.sharedInstance.currentTerminal.currentSession];
+    // Tidey: AI Chats disabled.
+    return;
 }
 
 - (IBAction)toggleToolbeltTool:(NSMenuItem *)menuItem {
@@ -2834,7 +2862,7 @@ static iTermKeyEventReplayer *gReplayer;
 }
 
 - (IBAction)showHelp:(id)sender {
-    [[NSWorkspace sharedWorkspace] it_openURL:[NSURL URLWithString:@"https://www.iterm2.com/documentation.html"]
+    [[NSWorkspace sharedWorkspace] it_openURL:[NSURL URLWithString:@"https://tidey.app/tbd"]
                                        target:nil
                                         style:iTermOpenStyleTab
                                        window:nil];
@@ -3052,7 +3080,9 @@ static iTermKeyEventReplayer *gReplayer;
 }
 
 - (IBAction)showTipOfTheDay:(id)sender {
-    [[iTermTipController sharedInstance] showTip];
+    // Tidey: Tip of the Day disabled.
+    return;
+    // [[iTermTipController sharedInstance] showTip];
 }
 
 - (IBAction)openDashboard:(id)sender {

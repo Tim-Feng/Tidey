@@ -2667,7 +2667,7 @@ ITERM_WEAKLY_REFERENCEABLE
 }
 
 - (NSSet<NSString *> *)jobsToIgnore {
-    NSArray<NSString *> *builtInJobsToIgnore = @[ @"login", @"iTerm2", @"ShellLauncher" ];
+    NSArray<NSString *> *builtInJobsToIgnore = @[ @"login", @"Tidey", @"ShellLauncher" ];
     return [NSSet setWithArray:[[_profile objectForKey:KEY_JOBS] ?: @[] arrayByAddingObjectsFromArray:builtInJobsToIgnore]];
 }
 
@@ -2871,7 +2871,7 @@ ITERM_WEAKLY_REFERENCEABLE
         }
     }
     if ([iTermAdvancedSettingsModel shouldSetLCTerminal]) {
-        env[@"LC_TERMINAL"] = @"iTerm2";
+        env[@"LC_TERMINAL"] = @"Tidey";
         env[@"LC_TERMINAL_VERSION"] = [[[NSBundle mainBundle] infoDictionary] objectForKey:@"CFBundleShortVersionString"];
     }
     if (env[PWD_ENVNAME] == nil && _sshState == iTermSSHStateNone) {
@@ -3073,7 +3073,7 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
                 if (count > 0) {
                     return;
                 }
-                const iTermWarningSelection selection = [iTermWarning showWarningWithTitle:@"A browser session failed to start because the iTerm2 Browser Plugin couldn’t be found."
+                const iTermWarningSelection selection = [iTermWarning showWarningWithTitle:@"A browser session failed to start because the Tidey Browser Plugin couldn’t be found."
                                            actions:@[ @"Download", @"Cancel" ]
                                          accessory:nil
                                         identifier:nil
@@ -3081,7 +3081,7 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
                                            heading:@"Browser Plugin Missing"
                                             window:nil];
                 if (selection == kiTermWarningSelection0) {
-                    [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://iterm2.com/browser-plugin.html"]];
+                    [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://tidey.app/tbd"]];
                 }
             });
         }
@@ -9864,7 +9864,7 @@ typedef NS_ENUM(NSUInteger, PTYSessionTmuxReport) {
         actions = @[ @"OK" ];
     }
     const iTermWarningSelection selection =
-    [iTermWarning showWarningWithTitle:@"This instance of iTerm2 is already attached to this session"
+    [iTermWarning showWarningWithTitle:@"This instance of Tidey is already attached to this session"
                                actions:actions
                              accessory:nil
                             identifier:@"AlreadyAttachedToTmuxSession"
@@ -15035,7 +15035,7 @@ typedef NS_ENUM(NSUInteger, PTYSessionTmuxReport) {
         NSString *identifier = @"UploadInUnsupportedFormatRequested";
         if (![self announcementWithIdentifier:identifier]) {
             iTermAnnouncementViewController *announcement =
-            [iTermAnnouncementViewController announcementWithTitle:@"An upload with an unsupported archive format was requested. You may need a newer version of iTerm2."
+            [iTermAnnouncementViewController announcementWithTitle:@"An upload with an unsupported archive format was requested. You may need a newer version of Tidey."
                                                              style:kiTermAnnouncementViewStyleWarning
                                                        withActions:@[]
                                                         completion:^(int selection) {}];
@@ -18386,7 +18386,7 @@ static const NSTimeInterval PTYSessionFocusReportBellSquelchTimeIntervalThreshol
         return NSDragOperationNone;
     }
 
-    if (!([[[sender draggingPasteboard] types] indexOfObject:@"com.iterm2.psm.controlitem"] != NSNotFound)) {
+    if (!([[[sender draggingPasteboard] types] indexOfObject:@"com.tidey.psm.controlitem"] != NSNotFound)) {
         if ([[MovePaneController sharedInstance] isMovingSession:self]) {
             // Moving me onto myself
             DLog(@"sessionViewDraggingEntered: move onto self");

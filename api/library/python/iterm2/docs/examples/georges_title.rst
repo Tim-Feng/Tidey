@@ -21,7 +21,7 @@ First, you need to install Shell Integration. Add this to your .bashrc:
       iterm2_set_user_var home $(echo -n "$HOME")
     }
 
-Next, install this script in `~/Library/Application Support/iTerm2/Scripts/AutoLaunch`:
+Next, install this script in `~/Library/Application Support/Tidey/Scripts/AutoLaunch`:
 
 .. code-block:: python
 

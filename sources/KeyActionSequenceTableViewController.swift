@@ -18,7 +18,7 @@ protocol iTermKeyActionSequenceTableViewControllerDelegate: AnyObject {
 
 @objc(iTermKeyActionSequenceTableViewController)
 class KeyActionSequenceTableViewController: NSObject {
-    private static let pasteboardType = NSPasteboard.PasteboardType("com.googlecode.iterm2.key-action")
+    private static let pasteboardType = NSPasteboard.PasteboardType("com.tidey.key-action")
 
     @IBOutlet weak var tableView: BackspaceDeletingTableView?
     @IBOutlet weak var addRemoveControl: NSSegmentedControl?

@@ -91,7 +91,7 @@ static NSString *const iTermNaggingControllerArrangementSetProfileProperty = @"S
 
 - (void)offerToFixSessionWithBrokenArrangementProfileIn:(NSString *)arrangementName
                                                    guid:(NSString *)guid {
-    NSString *notice = @"This arrangement’s profile is missing. This could be due to a bug in iTerm2 version 3.5.7, which caused profiles to be corrupted in saved arrangements.";
+    NSString *notice = @"This arrangement’s profile is missing. This could be due to a bug in Tidey version 3.5.7, which caused profiles to be corrupted in saved arrangements.";
     [self.delegate naggingControllerShowMessage:notice
                                      isQuestion:NO
                                       important:YES
@@ -283,7 +283,7 @@ static NSString *const iTermNaggingControllerArrangementSetProfileProperty = @"S
                                      completion:^(int selection) {
         if (selection == 0) {
             // Why?
-            NSURL *whyUrl = [NSURL URLWithString:@"https://iterm2.com/why_no_content.html"];
+            NSURL *whyUrl = [NSURL URLWithString:@"https://tidey.app/tbd"];
             [[NSWorkspace sharedWorkspace] it_openURL:whyUrl
                                                target:nil
                                                 style:iTermOpenStyleTab
@@ -363,7 +363,7 @@ static NSString *const iTermNaggingControllerArrangementSetProfileProperty = @"S
 }
 
 - (void)showTmuxSupplementaryPlaneBugHelpPage {
-    NSURL *whyUrl = [NSURL URLWithString:@"https://iterm2.com//tmux22bug.html"];
+    NSURL *whyUrl = [NSURL URLWithString:@"https://tidey.app/tbd"];
     [[NSWorkspace sharedWorkspace] it_openURL:whyUrl
                                        target:nil
                                         style:iTermOpenStyleTab
@@ -535,7 +535,7 @@ static NSString *const iTermNaggingControllerArrangementSetProfileProperty = @"S
                 break;
 
             case 3: // Help
-                [[NSWorkspace sharedWorkspace] it_openURL:[NSURL URLWithString:@"https://iterm2.com/paste_bracketing"]
+                [[NSWorkspace sharedWorkspace] it_openURL:[NSURL URLWithString:@"https://tidey.app/tbd"]
                                                    target:nil
                                                     style:iTermOpenStyleTab
                                                    window:self.delegate.naggingControllerWindow];
@@ -670,7 +670,7 @@ static NSString *const iTermNaggingControllerArrangementSetProfileProperty = @"S
             }
 
             case 4: // Help
-                [[NSWorkspace sharedWorkspace] it_openURL:[NSURL URLWithString:@"https://iterm2.com/slow_triggers"]
+                [[NSWorkspace sharedWorkspace] it_openURL:[NSURL URLWithString:@"https://tidey.app/tbd"]
                                                    target:nil
                                                     style:iTermOpenStyleTab
                                                    window:self.delegate.naggingControllerWindow];
@@ -835,7 +835,7 @@ static NSString *const iTermNaggingControllerArrangementSetProfileProperty = @"S
 }
 
 - (void)showJSONPromotion {
-    [_delegate naggingControllerShowMessage:@"That's a gnarly JSON blob you've got there! iTerm2 can replace this hard-to-read selection with a pretty-printed value."
+    [_delegate naggingControllerShowMessage:@"That's a gnarly JSON blob you've got there! Tidey can replace this hard-to-read selection with a pretty-printed value."
                                  isQuestion:NO
                                   important:NO
                                  identifier:@"JSONPromotion"

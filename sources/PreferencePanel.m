@@ -626,12 +626,8 @@ static iTermPreferencesSearchEngine *gSearchEngine;
                                              selector:@selector(scrimMouseUp:)
                                                  name:iTermPrefsScrimMouseUpNotification
                                                object:nil];
-    BOOL addVC = YES;
-#if DEBUG
-    if (@available(macOS 26.1, *)) {} else if (@available(macOS 26, *)) {
-        addVC = NO;
-    }
-#endif
+    // Donate link removed for Tidey
+    BOOL addVC = NO;
     if (addVC) {
         iTermDonateViewController *vc = [[iTermDonateViewController alloc] init];
         [self.window addTitlebarAccessoryViewController:vc];

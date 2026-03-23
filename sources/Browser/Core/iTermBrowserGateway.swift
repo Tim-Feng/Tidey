@@ -40,7 +40,7 @@ struct ExpiringValue<T> {
 @objc
 class iTermBrowserGateway: NSObject {
     private static var cached = ExpiringValue<Bool>(value: nil, duration: 30)
-    private static let bundleID = "com.googlecode.iterm2.iTermBrowserPlugin"
+    private static let bundleID = "com.tidey.iTermBrowserPlugin"
     private static let teamID = "H7V7XYVQ7D"
     @objc static let didChange = Notification.Name(rawValue: "iTermBrowserGatewayDidChange")
 
@@ -103,7 +103,7 @@ class iTermBrowserGateway: NSObject {
                                           heading: "Plugin Required",
                                           window: nil)
         if selection == .kiTermWarningSelection0 {
-            NSWorkspace.shared.open(URL(string: "https://iterm2.com/browser-plugin.html")!)
+            NSWorkspace.shared.open(URL(string: "https://tidey.app/tbd")!)
         }
     }
 
@@ -126,7 +126,7 @@ class iTermBrowserGateway: NSObject {
         // would cause an infinite loop since the plugin would still not be installed.
         // Remembering "Cancel" is also not useful.
         let warning = iTermWarning()
-        warning.title = "iTerm2 can display web pages! But first you must download the Browser Plugin."
+        warning.title = "Tidey can display web pages! But first you must download the Browser Plugin."
         warning.actionLabels = ["Download", "Use System Browser", "Cancel"]
         warning.identifier = upsellWarningIdentifier
         warning.warningType = .kiTermWarningTypePermanentlySilenceable
@@ -149,7 +149,7 @@ class iTermBrowserGateway: NSObject {
 
     @objc
     static func openDownloadPage() {
-        NSWorkspace.shared.open(URL(string: "https://iterm2.com/browser-plugin.html")!)
+        NSWorkspace.shared.open(URL(string: "https://tidey.app/tbd")!)
         cached.expire()
     }
 

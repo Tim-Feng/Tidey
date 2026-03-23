@@ -396,7 +396,7 @@ static const CGFloat kHelpMargin = 5;
 }
 
 - (void)help:(id)sender {
-    [[NSWorkspace sharedWorkspace] it_openURL:[NSURL URLWithString:@"http://iterm2.com/shell_integration.html"]
+    [[NSWorkspace sharedWorkspace] it_openURL:[NSURL URLWithString:@"https://tidey.app/tbd"]
                                        target:nil
                                         style:iTermOpenStyleTab
                                        window:self.window];

@@ -30,7 +30,7 @@
 
 static const CGFloat kButtonHeight = 23;
 static const CGFloat kMargin = 4;
-static NSString *const iTermToolSnippetsPasteboardType = @"com.googlecode.iterm2.iTermToolSnippetsPasteboardType";
+static NSString *const iTermToolSnippetsPasteboardType = @"com.tidey.iTermToolSnippetsPasteboardType";
 static NSString *const iTermToolSnippetsUseOutlineViewModeUserDefaultsKey = @"NoSyncSnippetsToolUsesOutlineView";
 
 @interface iTermSnippetFolderItem: NSObject<iTermUniquelyIdentifiable>

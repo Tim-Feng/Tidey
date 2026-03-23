@@ -70,6 +70,9 @@ static NSString *const kPermissionToShowTip = @"NoSyncPermissionToShowTip";
 }
 
 - (void)startWithPermissionPromptAllowed:(BOOL)permissionPromptAllowed notBefore:(NSDate *)notBeforeDate {
+    // Tidey: Tip of the Day disabled at startup.
+    return;
+
     if (permissionPromptAllowed) {
         // This must be done before the delay. If it's called at the wrong time while a window is
         // becoming fullscreen, the app becomes unresponsive to mouse and keyboard events. Issue 4775.
@@ -123,7 +126,7 @@ static NSString *const kPermissionToShowTip = @"NoSyncPermissionToShowTip";
 - (void)askForPermission {
     NSAlert *alert = [[[NSAlert alloc] init] autorelease];
     alert.messageText = @"See Tips of the Day?";
-    alert.informativeText = @"iTerm2 can show you a Tip of the Day message to help you learn about its many features. Are you interested?";
+    alert.informativeText = @"Tidey can show you a Tip of the Day message to help you learn about its many features. Are you interested?";
     [alert addButtonWithTitle:@"Yes"];
     [alert addButtonWithTitle:@"No"];
     BOOL havePermission = ([alert runModal] == NSAlertFirstButtonReturn);
@@ -156,6 +159,9 @@ static NSString *const kPermissionToShowTip = @"NoSyncPermissionToShowTip";
 }
 
 - (void)showTip {
+    // Tidey: Tip of the Day disabled.
+    return;
+
     if (_showingTip) {
         return;
     }

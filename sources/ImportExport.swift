@@ -15,8 +15,8 @@ class ImportExport: NSObject {
         DLog("Begin")
         let savePanel = NSSavePanel()
         savePanel.allowedContentTypes = ["itermexport"].compactMap { UTType(filenameExtension: $0) }
-        savePanel.nameFieldStringValue = "iTerm2 State.itermexport"
-        savePanel.title = "Export iTerm2 Settings and Data"
+        savePanel.nameFieldStringValue = "Tidey State.itermexport"
+        savePanel.title = "Export Tidey Settings and Data"
 
         let response = savePanel.runModal()
         guard response == NSApplication.ModalResponse.OK else {
@@ -45,7 +45,7 @@ class ImportExport: NSObject {
             case ImportExportError.failedToSaveFile(let reason):
                 return "Failed to save file: \(reason)"
             case ImportExportError.bug(let reason):
-                return "A bug was encountered: \(reason). Please report this at https://iterm2.com/bugs"
+                return "A bug was encountered: \(reason). Please report this at https://tidey.app/tbd"
             case ImportExportError.failedToCreateArchive(let reason):
                 return "Failed to create archive: \(reason)"
             case ImportExportError.failedToLoadFile(let reason):
@@ -76,7 +76,7 @@ class ImportExport: NSObject {
 
         do {
             let selection = iTermWarning.show(
-                withTitle: "Any needed Python runtimes will be installed and secure settings will be updated, which may require you to enter your password. Then iTerm2 will restart and finish importing. This can take several minutes.",
+                withTitle: "Any needed Python runtimes will be installed and secure settings will be updated, which may require you to enter your password. Then Tidey will restart and finish importing. This can take several minutes.",
                 actions: ["OK", "Cancel"],
                 accessory: nil,
                 identifier: nil,

@@ -552,7 +552,7 @@ class LastPassUtils {
     private static func showCannotFindCLIMessage() -> Bool {
         let alert = NSAlert()
         alert.messageText = "Can’t Find LastPass CLI"
-        alert.informativeText = "In order to use the LastPass integration, iTerm2 needs to know where to find the CLI app named “lpass”. Select Locate to provide its location."
+        alert.informativeText = "In order to use the LastPass integration, Tidey needs to know where to find the CLI app named “lpass”. Select Locate to provide its location."
         alert.addButton(withTitle: "Locate")
         alert.addButton(withTitle: "Cancel")
         alert.addButton(withTitle: "Help")
@@ -562,7 +562,7 @@ class LastPassUtils {
         case .alertSecondButtonReturn:
             return false
         case .alertThirdButtonReturn:
-            NSWorkspace.shared.open(URL(string: "https://iterm2.com/lastpass-cli")!)
+            NSWorkspace.shared.open(URL(string: "https://tidey.app/tbd")!)
             return false
         default:
             return false

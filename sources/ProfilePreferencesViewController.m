@@ -1177,7 +1177,7 @@ andEditComponentWithIdentifier:(NSString *)identifier
         return;
     }
     NSString *profileName = [profile objectForKey:KEY_NAME] ?: @"(unknown name)";
-    NSString *message = [NSString stringWithFormat:@"The selected profile, “%@”, is a dynamic profile. These are generally only edited by hand.\n\niTerm2 is now able to write changes back to dynamic profiles when they are marked as “rewritable“. Rewriting can cause the order of values to change.", profileName];
+    NSString *message = [NSString stringWithFormat:@"The selected profile, “%@”, is a dynamic profile. These are generally only edited by hand.\n\nTidey is now able to write changes back to dynamic profiles when they are marked as “rewritable“. Rewriting can cause the order of values to change.", profileName];
     // "Reveal in Finder" is a one-time navigation action and shouldn't be remembered.
     iTermWarning *warning = [[iTermWarning alloc] init];
     warning.title = message;

@@ -167,7 +167,7 @@ extension PTYSession {
                                             sessionID: guid,
                                             baseOffset: screen.totalScrollbackOverflow()))
         guard let client = ChatClient.instance else {
-            iTermWarning.show(withTitle: "AI Chat could not be opened. Verify you only have one instance of iTerm2 running.",
+            iTermWarning.show(withTitle: "AI Chat could not be opened. Verify you only have one instance of Tidey running.",
                               actions: ["OK"],
                               accessory: nil,
                               identifier: nil,

@@ -3155,7 +3155,7 @@ static BOOL VT100TokenIsTmux(VT100Token *token) {
         return decoded ?: @"";
     }];
     NSError * (^error)(NSString *) = ^NSError *(NSString *key) {
-        return [NSError errorWithDomain:@"com.googlecode.iterm2.termcap-terminfo"
+        return [NSError errorWithDomain:@"com.tidey.termcap-terminfo"
                                    code:1
                                userInfo:@{ @"code": key }];
     };

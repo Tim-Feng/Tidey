@@ -12,7 +12,7 @@ special string is printed. Such a script lies dormant until it is needed, so it
 must run at all times.
 
 AutoLaunch scripts are launched at startup.  AutoLaunch scripts should be placed in
-`~/Library/Application Support/iTerm2/Scripts/AutoLaunch`. When you create a
+`~/Library/Application Support/Tidey/Scripts/AutoLaunch`. When you create a
 new one it does not get launched until iTerm2 is restarted, but you can always
 run it by selecting it from the **Scripts** menu.
 

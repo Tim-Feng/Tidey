@@ -7,7 +7,7 @@ Free Disk Space Status Bar Component
 
 This program defines a status bar component that shows the amount of free disk space. It demonstrates a status bar component that shows a possibly expensive-to-compute value that is the same across all instances. To minimize the cost, disk space is measured periodically and saved in an iTerm2 variable in the global scope.
 
-You'll need to place the script in `~/Library/Application Support/iTerm2/Scripts/AutoLaunch`. Then manually launch it or restart the app. Then, navigate to **Preferences > Profiles > Session**. Turn on **Status Bar Enabled** and select **Configure Status Bar**. Drag the **123 Fb 💾** component into the bottom section.
+You'll need to place the script in `~/Library/Application Support/Tidey/Scripts/AutoLaunch`. Then manually launch it or restart the app. Then, navigate to **Preferences > Profiles > Session**. Turn on **Status Bar Enabled** and select **Configure Status Bar**. Drag the **123 Fb 💾** component into the bottom section.
 
 .. code-block:: python
 

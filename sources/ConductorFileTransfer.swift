@@ -100,7 +100,7 @@ class ConductorFileTransfer: TransferrableFile {
         guard let downloads = FileManager.default.downloadsDirectory() else {
             throw ConductorFileTransferError("Unable to find Downloads folder")
         }
-        let tempFileName = ".iTerm2.\(UUID().uuidString)"
+        let tempFileName = ".Tidey.\(UUID().uuidString)"
         return downloads.appendingPathComponent(tempFileName)
     }
 

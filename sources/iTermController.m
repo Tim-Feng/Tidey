@@ -139,7 +139,7 @@ static iTermController *gSharedInstance;
     if (self) {
         UKCrashReporterCheckForCrash();
 
-        // create the "~/Library/Application Support/iTerm2" directory if it does not exist
+        // create the "~/Library/Application Support/Tidey" directory if it does not exist
         [[NSFileManager defaultManager] applicationSupportDirectory];
 
         _setCurrentTerminalHelper = [[iTermSetCurrentTerminalHelper alloc] init];
@@ -1217,7 +1217,7 @@ replaceInitialDirectoryForSessionWithGUID:(NSString *)guid
         return;
     }
     [[iTermNotificationController sharedInstance] postNotificationWithTitle:@"Creating a tab"
-                                                                     detail:@"The system preference to open a tab instead of a window is now respected in iTerm2."
+                                                                     detail:@"The system preference to open a tab instead of a window is now respected in Tidey."
                                                                         URL:[NSURL URLWithString:@"https://gitlab.com/gnachman/iterm2/wikis/Prefer-Tabs-When-Opening-Documents"]];
     iTermUserDefaults.haveBeenWarnedAboutTabDockSetting = YES;
 #endif

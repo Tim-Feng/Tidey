@@ -1337,9 +1337,9 @@ class iTermScreenshotPanel: NSPanel {
         // Generate filename
         let filename: String
         if totalParts == 1 {
-            filename = "iTerm2-Screenshot-\(state.timestamp).png"
+            filename = "Tidey-Screenshot-\(state.timestamp).png"
         } else {
-            filename = "iTerm2-Screenshot-\(state.timestamp)-part-\(partIndex + 1)-of-\(totalParts).png"
+            filename = "Tidey-Screenshot-\(state.timestamp)-part-\(partIndex + 1)-of-\(totalParts).png"
         }
         let destinationURL = state.desktopURL.appendingPathComponent(filename)
 

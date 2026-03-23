@@ -2191,7 +2191,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     }
 
     WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
-    configuration.applicationNameForUserAgent = @"iTerm2";
+    configuration.applicationNameForUserAgent = @"Tidey";
     configuration.websiteDataStore = [WKWebsiteDataStore defaultDataStore];
     WKPreferences *preferences = [[WKPreferences alloc] init];
     preferences.javaScriptCanOpenWindowsAutomatically = NO;

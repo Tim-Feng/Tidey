@@ -122,7 +122,7 @@ class NerdFontInstaller {
 
     private func askUserForPermissionToDownload() -> Bool {
         let selection = iTermWarning.show(
-            withTitle: "To install the Nerd Font Bundle iTerm2 must first download and install these fonts: \(neededFontPostscriptNames.joined(separator: ", ")).",
+            withTitle: "To install the Nerd Font Bundle Tidey must first download and install these fonts: \(neededFontPostscriptNames.joined(separator: ", ")).",
             actions: ["Download", "Cancel"],
             accessory: nil,
             identifier: "SpecialExceptionsMissingFontsForNerdBundle",
@@ -141,7 +141,7 @@ class NerdFontInstaller {
         }
 
         NSLog("Start download task")
-        let url = URL(string: "https://iterm2.com/downloads/assets/nerd-fonts-v2.zip")!
+        let url = URL(string: "https://tidey.app/tbd")!
         task = URLSession.shared.downloadTask(with: url) { [weak self] (location, response, error) in
             self?.downloadDidComplete(location: location, response: response, error: error)
             self?.task = nil

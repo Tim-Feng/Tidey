@@ -270,7 +270,7 @@ respectingTimeoutSetting:(BOOL)respectingTimeoutSetting
     DLog(@"saveLocalUserDefaultsToRemotePrefs\n%@", [NSThread callStackSymbols]);
     if ([self remotePrefsHaveChanged]) {
         NSString *theTitle =
-            [NSString stringWithFormat:@"Settings at %@ changed since iTerm2 started. "
+            [NSString stringWithFormat:@"Settings at %@ changed since Tidey started. "
                                        @"Overwrite it?",
                                        [self customFolderOrURL]];
         if ([iTermWarning showWarningWithTitle:theTitle actions:@[ @"Overwrite",
@@ -287,8 +287,8 @@ respectingTimeoutSetting:(BOOL)respectingTimeoutSetting
     NSString *folder = [self expandedCustomFolderOrURL];
     if ([folder stringIsUrlLike]) {
         NSString *informativeText =
-            @"To make it available, first quit iTerm2 and then manually "
-            @"copy ~/Library/Preferences/com.googlecode.iterm2.plist to "
+            @"To make it available, first quit Tidey and then manually "
+            @"copy ~/Library/Preferences/com.tidey.plist to "
             @"your hosting provider.";
         NSAlert *alert = [[NSAlert alloc] init];
         alert.messageText = @"Settings cannot be copied to a URL.";

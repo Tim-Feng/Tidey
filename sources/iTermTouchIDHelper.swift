@@ -59,7 +59,7 @@ class iTermTouchIDHelper: NSObject {
         let shellCommand = "test -f \(sudoLocalPath) || cp \(templatePath) \(sudoLocalPath); chmod u+w \(sudoLocalPath); sed -i '' 's/^#auth.*pam_tid.so/\(pamTidLine)/' \(sudoLocalPath); grep -q '^auth.*pam_tid.so' \(sudoLocalPath) || echo '\(pamTidLine)' >> \(sudoLocalPath); chmod u-w \(sudoLocalPath)"
 
         let code = """
-        do shell script "\(shellCommand)" with prompt "iTerm2 wants to enable Touch ID for sudo authentication." with administrator privileges
+        do shell script "\(shellCommand)" with prompt "Tidey wants to enable Touch ID for sudo authentication." with administrator privileges
         """
 
         DLog("Executing AppleScript to enable Touch ID for sudo")
