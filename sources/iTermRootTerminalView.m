@@ -2432,10 +2432,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         ? MIN(self.tideyEditorFileTreeWidth, MAX(0, NSWidth(bounds) - kTideyMinimumEditorContentWidth))
         : 0;
     const CGFloat editorWidth = MAX(0, NSWidth(bounds) - fileTreeWidth);
-    // Offset editor content to align with terminal content (below session title bar).
-    // Session title height = iTermGetStatusBarHeight() + 1 = 22pt.
-    const CGFloat sessionTitleOffset = 22;
-    _tideyEditorWebView.frame = NSMakeRect(0, 0, editorWidth, contentHeight - sessionTitleOffset);
+    _tideyEditorWebView.frame = NSMakeRect(0, 0, editorWidth, contentHeight);
     _tideyEditorFileTreeContainerView.hidden = !self.shouldShowTideyEditorFileTree;
     _tideyEditorFileTreeContainerView.frame = NSMakeRect(editorWidth, 0, fileTreeWidth, contentHeight);
     _tideyEditorFileTreeScrollView.frame = _tideyEditorFileTreeContainerView.bounds;
@@ -3189,23 +3186,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
     const CGFloat rightEdge = self.shouldShowToolbelt ? NSMinX(outputs.toolbeltFrame) : NSWidth(self.bounds);
     const CGFloat originX = MAX(0, rightEdge - width);
-    const CGFloat tabStripHeight = TideyEditorEffectiveTabStripHeight(_tabBarControl.height);
-    const CGFloat panelOriginY = outputs.tabViewFrame.origin.y;
-    // When the terminal tab bar is visible, align the editor panel top with
-    // the tab bar top so the editor tab strip sits at the same Y as the tab bar.
-    // When hidden, add the tab strip height but clamp to the content view.
-    CGFloat panelTop;
-    if (!CGRectIsEmpty(outputs.tabBarFrame)) {
-        // Align editor tab strip exactly with terminal tab bar (same maxY).
-        // The panel extends from tabViewFrame.origin.y to tabBarFrame.maxY,
-        // so the tab strip (tabStripHeight from the top) lands on tabBarFrame.origin.y.
-        panelTop = CGRectGetMaxY(outputs.tabBarFrame);
-    } else {
-        panelTop = MIN(CGRectGetMaxY(outputs.tabViewFrame) + tabStripHeight,
-                       NSHeight(self.bounds));
-    }
-    const CGFloat panelHeight = MAX(0, panelTop - panelOriginY);
-    _tideyEditorPanelView.frame = NSMakeRect(originX, panelOriginY, MIN(width, rightEdge), panelHeight);
+    _tideyEditorPanelView.frame = NSMakeRect(originX, 0, MIN(width, rightEdge), NSHeight(self.bounds));
 
     [self layoutTideyEditorContents];
     if (_tideyEditorReady) {
