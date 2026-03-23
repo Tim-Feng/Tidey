@@ -627,7 +627,6 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSView *_tideyEditorPanelView;
     NSTextField *_tideyEditorPanelLabel;
     NSView *_tideyEditorTabStripView;
-    NSVisualEffectView *_tideyEditorTabStripVisualEffectView;
 
     WKWebView *_tideyEditorWebView;
     NSView *_tideyEditorFileTreeContainerView;
@@ -816,20 +815,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _tideyEditorTabStripView = [[NSView alloc] initWithFrame:NSZeroRect];
         _tideyEditorTabStripView.autoresizingMask = NSViewWidthSizable;
         _tideyEditorTabStripView.wantsLayer = YES;
-        _tideyEditorTabStripView.layer.backgroundColor = [NSColor clearColor].CGColor;
-
-        _tideyEditorTabStripVisualEffectView = [[NSVisualEffectView alloc] initWithFrame:NSZeroRect];
-        _tideyEditorTabStripVisualEffectView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-        {
-            NSVisualEffectState vfxState = NSVisualEffectStateActive;
-            if (![iTermAdvancedSettingsModel allowTabbarInTitlebarAccessoryBigSur]) {
-                vfxState = NSVisualEffectStateFollowsWindowActiveState;
-            }
-            _tideyEditorTabStripVisualEffectView.state = vfxState;
-        }
-        _tideyEditorTabStripVisualEffectView.blendingMode = NSVisualEffectBlendingModeWithinWindow;
-        _tideyEditorTabStripVisualEffectView.material = NSVisualEffectMaterialTitlebar;
-        [_tideyEditorTabStripView addSubview:_tideyEditorTabStripVisualEffectView];
+        _tideyEditorTabStripView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.09
+                                                                           green:0.10
+                                                                            blue:0.13
+                                                                           alpha:1].CGColor;
 
         [_tideyEditorPanelView addSubview:_tideyEditorTabStripView];
 
@@ -1809,7 +1798,6 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 - (void)setCurrentSessionAlpha:(CGFloat)alpha {
     const BOOL hideVFX = PSMShouldExtendTransparencyIntoMinimalTabBar() && (alpha < 1);
     _tabBarBacking.visualEffectView.hidden = hideVFX;
-    _tideyEditorTabStripVisualEffectView.hidden = hideVFX;
 }
 
 #pragma mark - Division View
@@ -3206,13 +3194,11 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     // When the tab bar is hidden (CGRectZero), fall back to tabView maxY + editor tab strip height.
     const CGFloat tabStripHeight = TideyEditorEffectiveTabStripHeight(_tabBarControl.height);
     CGFloat panelHeight;
-    // The editor panel top is 2pt below the terminal tab bar top due to the
-    // NSVisualEffectView rendering offset in the tab bar backing.
-    const CGFloat kTideyEditorTabBarAlignmentOffset = 1;
+    // Extend editor panel 1pt above tab bar to cover the root view gap.
     if (!CGRectIsEmpty(outputs.tabBarFrame)) {
-        panelHeight = CGRectGetMaxY(outputs.tabBarFrame) - kTideyEditorTabBarAlignmentOffset;
+        panelHeight = CGRectGetMaxY(outputs.tabBarFrame) + 1;
     } else {
-        panelHeight = CGRectGetMaxY(outputs.tabViewFrame) + tabStripHeight - kTideyEditorTabBarAlignmentOffset;
+        panelHeight = CGRectGetMaxY(outputs.tabViewFrame) + tabStripHeight + 1;
     }
     _tideyEditorPanelView.frame = NSMakeRect(originX, 0, MIN(width, rightEdge), panelHeight);
 
