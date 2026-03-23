@@ -3208,7 +3208,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     CGFloat panelHeight;
     // The editor panel top is 2pt below the terminal tab bar top due to the
     // NSVisualEffectView rendering offset in the tab bar backing.
-    const CGFloat kTideyEditorTabBarAlignmentOffset = 2;
+    const CGFloat kTideyEditorTabBarAlignmentOffset = 1;
     if (!CGRectIsEmpty(outputs.tabBarFrame)) {
         panelHeight = CGRectGetMaxY(outputs.tabBarFrame) - kTideyEditorTabBarAlignmentOffset;
     } else {
