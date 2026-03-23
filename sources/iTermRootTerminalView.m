@@ -3388,6 +3388,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 - (void)setTabBarFrame:(NSRect)frame {
     assert(!_tabBarControlOnLoan);
+    // Extend tab bar backing 1pt taller to cover root view gap
+    frame.size.height += 1;
     _tabBarBacking.frame = frame;
     self.tabBarControl.frame = _tabBarBacking.bounds;
 }
