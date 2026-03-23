@@ -1717,6 +1717,12 @@ ITERM_WEAKLY_REFERENCEABLE
     [self notifyTmuxOfWindowResize];
 }
 
+- (IBAction)toggleTideyTerminal:(id)sender {
+    _contentView.shouldShowTideyTerminal = !_contentView.shouldShowTideyTerminal;
+    [self repositionWidgets];
+    [self notifyTmuxOfWindowResize];
+}
+
 - (IBAction)toggleTideyEditorFileTree:(id)sender {
     _contentView.shouldShowTideyEditorFileTree = !_contentView.shouldShowTideyEditorFileTree;
     [self repositionWidgets];

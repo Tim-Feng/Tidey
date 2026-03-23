@@ -118,6 +118,7 @@ static CGFloat TideyEditorEffectiveTabStripHeight(CGFloat terminalTabBarHeight) 
 @property(nonatomic, strong) iTermDragHandleView *tideyEditorDragHandle;
 @property(nonatomic, strong) iTermDragHandleView *tideyEditorFileTreeDragHandle;
 @property(nonatomic, strong) NSButton *tideySidebarToggleButton;
+@property(nonatomic, strong) NSButton *tideyTerminalToggleButton;
 @property(nonatomic, strong) NSButton *tideyEditorToggleButton;
 @property(nonatomic, strong) NSButton *tideyEditorFileTreeToggleButton;
 
@@ -533,6 +534,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     BOOL _tideyEditorIsRevealingSelection;
     CGFloat _tideySidebarPreferredWidth;
     CGFloat _tideyEditorPreferredWidth;
+    CGFloat _tideyEditorPreferredWidthBeforeTerminalCollapse;
     CGFloat _tideyEditorFileTreePreferredWidth;
 
     iTermLayerBackedSolidColorView *_titleBackgroundView NS_AVAILABLE_MAC(10_14);
@@ -583,6 +585,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     if (self) {
         _delegate = delegate;
         _shouldShowTideySidebar = YES;
+        _shouldShowTideyTerminal = YES;
         _shouldShowTideyEditorPanel = NO;
         _shouldShowTideyEditorFileTree = YES;
         _tideyEditorTabs = [[NSMutableArray alloc] init];
@@ -591,6 +594,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _tideyEditorFileTreePreferredWidth = kTideyEditorFileTreeWidth;
         _tideyEditorPreferredWidth = MAX(kTideyMinimumEditorPanelWidth,
                                          floor(NSWidth(frameRect) / 2.0));
+        _tideyEditorPreferredWidthBeforeTerminalCollapse = _tideyEditorPreferredWidth;
         [self tideyRestoreEditorStateFromDefaults];
 
         self.autoresizesSubviews = YES;
@@ -727,6 +731,13 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         self.tideySidebarToggleButton.bezelStyle = NSBezelStyleRegularSquare;
         [self addSubview:self.tideySidebarToggleButton];
 
+        self.tideyTerminalToggleButton = [self newTideyChromeToggleButtonWithAction:@selector(toggleTideyTerminal:)];
+        self.tideyTerminalToggleButton.font = [NSFont systemFontOfSize:9 weight:NSFontWeightSemibold];
+        self.tideyTerminalToggleButton.wantsLayer = NO;
+        self.tideyTerminalToggleButton.contentTintColor = [NSColor colorWithWhite:0.78 alpha:1];
+        self.tideyTerminalToggleButton.bezelStyle = NSBezelStyleRegularSquare;
+        [self addSubview:self.tideyTerminalToggleButton];
+
         self.tideyEditorToggleButton = [self newTideyChromeToggleButtonWithAction:@selector(toggleTideyEditorPanel:)];
         self.tideyEditorToggleButton.font = [NSFont systemFontOfSize:9 weight:NSFontWeightSemibold];
         self.tideyEditorToggleButton.wantsLayer = NO;
@@ -754,6 +765,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         [self addSubview:self.tideySidebarDragHandle positioned:NSWindowAbove relativeTo:_tabView];
         [self addSubview:self.tideyEditorDragHandle positioned:NSWindowAbove relativeTo:_tabView];
         [self addSubview:self.tideySidebarToggleButton positioned:NSWindowAbove relativeTo:_tabView];
+        [self addSubview:self.tideyTerminalToggleButton positioned:NSWindowAbove relativeTo:_tabView];
         [self addSubview:self.tideyEditorToggleButton positioned:NSWindowAbove relativeTo:_tabView];
         [_tideyEditorPanelView addSubview:self.tideyEditorFileTreeDragHandle positioned:NSWindowAbove relativeTo:nil];
         [_tideyEditorPanelView addSubview:self.tideyEditorFileTreeToggleButton positioned:NSWindowAbove relativeTo:nil];
@@ -1945,7 +1957,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     if (!self.shouldShowTideySidebar) {
         return 0;
     }
-    const CGFloat minimumTerminalWidth = 200;
+    const CGFloat minimumTerminalWidth = self.shouldShowTideyTerminal ? kTideyMinimumTerminalWidth : 0;
     const CGFloat availableWidth = MAX(0, NSWidth(self.bounds) - (self.shouldShowToolbelt ? floor(self.toolbeltWidth) : 0));
     const CGFloat reservedEditorWidth = self.shouldShowTideyEditorPanel ? _tideyEditorPreferredWidth : 0;
     const CGFloat maxWidth = MAX(0, availableWidth - reservedEditorWidth - minimumTerminalWidth);
@@ -1960,7 +1972,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     if (!self.shouldShowTideyEditorPanel) {
         return 0;
     }
-    const CGFloat minimumTerminalWidth = 200;
+    const CGFloat minimumTerminalWidth = self.shouldShowTideyTerminal ? kTideyMinimumTerminalWidth : 0;
     const CGFloat availableWidth = MAX(0, NSWidth(self.bounds) - (self.shouldShowToolbelt ? floor(self.toolbeltWidth) : 0));
     const CGFloat maxWidth = MAX(0, availableWidth - self.tideySidebarWidth - minimumTerminalWidth);
     if (maxWidth <= 0) {
@@ -1968,6 +1980,18 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     }
     const CGFloat minWidth = MIN(kTideyMinimumEditorPanelWidth, maxWidth);
     return MAX(minWidth, MIN(_tideyEditorPreferredWidth, maxWidth));
+}
+
+- (void)setShouldShowTideyTerminal:(BOOL)shouldShowTideyTerminal {
+    if (_shouldShowTideyTerminal == shouldShowTideyTerminal) {
+        return;
+    }
+    if (!shouldShowTideyTerminal) {
+        _tideyEditorPreferredWidthBeforeTerminalCollapse = MAX(kTideyMinimumEditorPanelWidth, self.tideyEditorPanelWidth);
+    } else if (_tideyEditorPreferredWidthBeforeTerminalCollapse > 0) {
+        _tideyEditorPreferredWidth = _tideyEditorPreferredWidthBeforeTerminalCollapse;
+    }
+    _shouldShowTideyTerminal = shouldShowTideyTerminal;
 }
 
 - (CGFloat)tideyEditorFileTreeWidth {
@@ -2929,8 +2953,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     }
 
     const CGFloat editorWidth = self.tideyEditorPanelWidth;
-    self.tideyEditorDragHandle.hidden = (editorWidth <= 0 || _tideyEditorPanelView.hidden);
-    if (editorWidth > 0 && !_tideyEditorPanelView.hidden) {
+    self.tideyEditorDragHandle.hidden = (editorWidth <= 0 || _tideyEditorPanelView.hidden || !self.shouldShowTideyTerminal);
+    if (editorWidth > 0 && !_tideyEditorPanelView.hidden && self.shouldShowTideyTerminal) {
         self.tideyEditorDragHandle.frame = NSMakeRect(MAX(0, NSMinX(_tideyEditorPanelView.frame) - kTideyDragHandleWidth / 2.0),
                                                       0,
                                                       kTideyDragHandleWidth,
@@ -2956,10 +2980,25 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                      kTideyChromeToggleButtonWidth,
                                                      kTideyChromeToggleButtonHeight);
 
+    const BOOL showTerminalToggle = self.shouldShowTideyEditorPanel;
+    self.tideyTerminalToggleButton.hidden = !showTerminalToggle;
+    if (showTerminalToggle) {
+        self.tideyTerminalToggleButton.title = self.shouldShowTideyTerminal ? @"◀" : @"▶";
+        const CGFloat terminalButtonX = self.shouldShowTideyTerminal
+            ? MAX(0, NSMinX(_tideyEditorPanelView.frame) - kTideyChromeToggleButtonWidth - 1)
+            : MAX(0, NSMinX(_tideyEditorPanelView.frame) + 1);
+        self.tideyTerminalToggleButton.frame = NSMakeRect(terminalButtonX,
+                                                          sidebarButtonY,
+                                                          kTideyChromeToggleButtonWidth,
+                                                          kTideyChromeToggleButtonHeight);
+    }
+
     self.tideyEditorToggleButton.hidden = NO;
     self.tideyEditorToggleButton.title = self.shouldShowTideyEditorPanel ? @"▶" : @"◀";
     const CGFloat editorButtonX = self.shouldShowTideyEditorPanel
-        ? MAX(0, NSWidth(self.bounds) - self.tideyEditorPanelWidth + 1)
+        ? (self.shouldShowTideyTerminal
+           ? MAX(0, NSWidth(self.bounds) - self.tideyEditorPanelWidth + 1)
+           : MAX(0, NSMinX(_tideyEditorPanelView.frame) + kTideyChromeToggleButtonWidth + 2))
         : MAX(0, NSWidth(self.bounds) - kTideyChromeToggleButtonWidth - 1);
     self.tideyEditorToggleButton.frame = NSMakeRect(editorButtonX,
                                                     sidebarButtonY,
