@@ -2236,19 +2236,74 @@ static iTermKeyEventReplayer *gReplayer;
         @"Password Manager",
         // Check for Updates (Sparkle)
         @"Check For Updates\u2026",
+        // Debug / developer items in app menu
+        @"Toggle Debug Logging",
+        @"Copy Performance Stats",
+        @"Capture Metal Frame",
+        // Security / integration items in app menu
+        @"Secure Keyboard Entry",
+        @"Make Tidey Default Term",
+        @"Make Terminal Default Term",
+        @"Install Shell Integration",
+        @"Remove Recent Profiles from Dock Menu",
     ];
 
-    [self tideyHideMenuItemsWithIdentifiers:identifiersToHide inMenu:mainMenu];
+    // Titles of dynamically-added items to hide (e.g. DEBUG-only items).
+    NSArray<NSString *> *titlesToHide = @[
+        @"Toggle Key Recording",
+        @"Replay Recorded Keys",
+    ];
+
+    [self tideyHideMenuItemsWithIdentifiers:identifiersToHide titles:titlesToHide inMenu:mainMenu];
+    [self tideyCleanUpSeparatorsInMenu:mainMenu];
 }
 
-- (void)tideyHideMenuItemsWithIdentifiers:(NSArray<NSString *> *)identifiers inMenu:(NSMenu *)menu {
+- (void)tideyHideMenuItemsWithIdentifiers:(NSArray<NSString *> *)identifiers
+                                   titles:(NSArray<NSString *> *)titles
+                                   inMenu:(NSMenu *)menu {
     for (NSMenuItem *item in menu.itemArray) {
         NSString *ident = item.identifier;
         if (ident && [identifiers containsObject:ident]) {
             [item setHidden:YES];
+        } else if (!item.isSeparatorItem && [titles containsObject:item.title]) {
+            [item setHidden:YES];
         }
         if (item.hasSubmenu) {
-            [self tideyHideMenuItemsWithIdentifiers:identifiers inMenu:item.submenu];
+            [self tideyHideMenuItemsWithIdentifiers:identifiers titles:titles inMenu:item.submenu];
+        }
+    }
+}
+
+// Remove separators that became leading, trailing, or consecutive after hiding items.
+- (void)tideyCleanUpSeparatorsInMenu:(NSMenu *)menu {
+    for (NSMenuItem *item in menu.itemArray) {
+        if (item.hasSubmenu) {
+            [self tideyCleanUpSeparatorsInMenu:item.submenu];
+        }
+    }
+
+    // Walk visible items and hide redundant separators.
+    BOOL previousWasSeparator = YES;  // Treat start-of-menu as a separator to hide leading ones.
+    for (NSMenuItem *item in menu.itemArray) {
+        if (item.isHidden) continue;
+        if (item.isSeparatorItem) {
+            if (previousWasSeparator) {
+                [item setHidden:YES];
+            } else {
+                previousWasSeparator = YES;
+            }
+        } else {
+            previousWasSeparator = NO;
+        }
+    }
+
+    // Hide trailing separator(s).
+    for (NSMenuItem *item in [menu.itemArray reverseObjectEnumerator]) {
+        if (item.isHidden) continue;
+        if (item.isSeparatorItem) {
+            [item setHidden:YES];
+        } else {
+            break;
         }
     }
 }
