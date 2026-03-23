@@ -3733,11 +3733,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         if (row < 0 || row >= strongSelf.numberOfTideySidebarWorkspaces) {
             return;
         }
-        NSTableCellView *cellView = [strongSelf->_tideySidebarTableView viewAtColumn:0 row:row makeIfNecessary:NO];
-        CGFloat previewWidth = NSWidth(cellView.bounds);
-        if (previewWidth <= 0) {
-            previewWidth = NSWidth([strongSelf->_tideySidebarTableView rectOfRow:row]);
-        }
+        CGFloat previewWidth = NSWidth([strongSelf->_tideySidebarTableView rectOfRow:row]);
         previewWidth = MAX(0, previewWidth);
         NSImage *image = [strongSelf tideySidebarDragPreviewImageForRow:row
                                                                   width:previewWidth];
