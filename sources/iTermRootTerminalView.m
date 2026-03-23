@@ -816,6 +816,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _tideyEditorTabStripView = [[NSView alloc] initWithFrame:NSZeroRect];
         _tideyEditorTabStripView.autoresizingMask = NSViewWidthSizable;
         _tideyEditorTabStripView.wantsLayer = YES;
+        _tideyEditorTabStripView.layer.backgroundColor = [NSColor clearColor].CGColor;
 
         _tideyEditorTabStripVisualEffectView = [[NSVisualEffectView alloc] initWithFrame:NSZeroRect];
         _tideyEditorTabStripVisualEffectView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
