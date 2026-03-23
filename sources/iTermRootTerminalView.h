@@ -98,7 +98,6 @@
 - (IBAction)toggleTideyTerminal:(id)sender;
 - (IBAction)toggleTideyEditorPanel:(id)sender;
 - (IBAction)toggleTideyEditorFileTree:(id)sender;
-- (CGFloat)rootTerminalViewSessionTitleBarHeight;
 @end
 
 extern const NSInteger iTermRootTerminalViewWindowNumberLabelMargin;

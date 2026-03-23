@@ -11738,13 +11738,7 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
     return size;
 }
 
-- (CGFloat)rootTerminalViewSessionTitleBarHeight {
-    PTYSession *session = self.currentSession;
-    if (session && session.view.showTitle) {
-        return [SessionView titleHeight];
-    }
-    return 0;
-}
+
 
 - (NSString *)rootTerminalViewWindowSizeViewDetailString {
     if (_sizeLocked && [self windowTypeSupportsSizeLock]) {
