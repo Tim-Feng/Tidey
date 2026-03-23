@@ -1168,7 +1168,8 @@ static void SetAgainstGrainDim(BOOL isVertical, NSSize *dest, CGFloat value) {
 }
 
 - (int)objectCount {
-    return [iTermPreferences boolForKey:kPreferenceKeyHideTabNumber] ? 0 : objectCount_;
+    // Tidey: always hide tab numbers — cmd+N switches workspace, not panel
+    return 0;
 }
 
 - (void)setObjectCount:(int)value {

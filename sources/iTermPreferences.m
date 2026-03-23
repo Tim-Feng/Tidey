@@ -610,7 +610,7 @@ static NSString *sPreviousVersion;
                   kPreferenceKeyRightCommandRemapping: @(kPreferencesModifierTagRightCommand),
                   kPreferenceKeyFunctionRemapping: @(kPreferenceModifierTagFunction),
                   kPreferenceKeySwitchPaneModifier: @(kPreferenceModifierTagNone),
-                  kPreferenceKeySwitchTabModifier: @(kPreferencesModifierTagEitherCommand),
+                  kPreferenceKeySwitchTabModifier: @(kPreferenceModifierTagNone),  // Tidey: cmd+N switches workspace, not tab
                   kPreferenceKeySwitchWindowModifier: @(kPreferencesModifierTagCommandAndOption),
                   kPreferenceKeyEmulateUSKeyboard: @NO,
                   kPreferenceKeyHotkeyEnabled: @NO,
