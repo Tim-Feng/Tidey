@@ -1,6 +1,7 @@
 #import "TideyNotificationStore.h"
 
 NSNotificationName const TideyNotificationStoreDidChangeNotification = @"TideyNotificationStoreDidChangeNotification";
+static NSString *const kTideyBroadcastWorkspaceIdentifier = @"*";
 
 @interface TideyNotificationItem ()
 @property(nonatomic, copy, readwrite) NSString *notificationID;
@@ -41,6 +42,11 @@ NSNotificationName const TideyNotificationStoreDidChangeNotification = @"TideyNo
 
 @implementation TideyNotificationStore
 
+- (BOOL)tideyNotificationItem:(TideyNotificationItem *)item matchesWorkspaceID:(NSString *)workspaceID {
+    return [item.workspaceID isEqualToString:workspaceID] ||
+           [item.workspaceID isEqualToString:kTideyBroadcastWorkspaceIdentifier];
+}
+
 + (instancetype)sharedStore {
     static TideyNotificationStore *store;
     static dispatch_once_t onceToken;
@@ -64,7 +70,7 @@ NSNotificationName const TideyNotificationStoreDidChangeNotification = @"TideyNo
 
 - (NSArray<TideyNotificationItem *> *)notificationsForWorkspaceID:(NSString *)workspaceID {
     NSPredicate *predicate = [NSPredicate predicateWithBlock:^BOOL(TideyNotificationItem *item, NSDictionary *bindings) {
-        return [item.workspaceID isEqualToString:workspaceID];
+        return [self tideyNotificationItem:item matchesWorkspaceID:workspaceID];
     }];
     return [self.notifications filteredArrayUsingPredicate:predicate];
 }
@@ -72,7 +78,7 @@ NSNotificationName const TideyNotificationStoreDidChangeNotification = @"TideyNo
 - (NSInteger)unreadCountForWorkspaceID:(NSString *)workspaceID {
     NSInteger count = 0;
     for (TideyNotificationItem *item in self.notifications) {
-        if (!item.isRead && [item.workspaceID isEqualToString:workspaceID]) {
+        if (!item.isRead && [self tideyNotificationItem:item matchesWorkspaceID:workspaceID]) {
             count++;
         }
     }
@@ -83,9 +89,10 @@ NSNotificationName const TideyNotificationStoreDidChangeNotification = @"TideyNo
                                                    title:(NSString *)title
                                                 subtitle:(NSString *)subtitle
                                                     body:(NSString *)body {
+    NSString *effectiveWorkspaceID = workspaceID.length > 0 ? workspaceID : kTideyBroadcastWorkspaceIdentifier;
     TideyNotificationItem *item =
         [[TideyNotificationItem alloc] initWithNotificationID:NSUUID.UUID.UUIDString
-                                                  workspaceID:workspaceID
+                                                  workspaceID:effectiveWorkspaceID
                                                         title:title
                                                      subtitle:subtitle
                                                          body:body
@@ -98,7 +105,7 @@ NSNotificationName const TideyNotificationStoreDidChangeNotification = @"TideyNo
 - (void)markReadForWorkspaceID:(NSString *)workspaceID {
     BOOL changed = NO;
     for (TideyNotificationItem *item in self.notifications) {
-        if (!item.isRead && [item.workspaceID isEqualToString:workspaceID]) {
+        if (!item.isRead && [self tideyNotificationItem:item matchesWorkspaceID:workspaceID]) {
             item.read = YES;
             changed = YES;
         }

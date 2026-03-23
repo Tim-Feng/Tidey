@@ -110,7 +110,11 @@
     NSString *title = [message[@"title"] isKindOfClass:[NSString class]] ? message[@"title"] : @"";
     NSString *subtitle = [message[@"subtitle"] isKindOfClass:[NSString class]] ? message[@"subtitle"] : nil;
     NSString *body = [message[@"body"] isKindOfClass:[NSString class]] ? message[@"body"] : @"";
-    if (workspaceID.length == 0 || title.length == 0) {
+    if ([action isEqualToString:@"notification.create_for_workspace"] && workspaceID.length == 0) {
+        DLog(@"Ignoring malformed Tidey workspace notification payload: %@", message);
+        return;
+    }
+    if (title.length == 0) {
         DLog(@"Ignoring malformed Tidey notification payload: %@", message);
         return;
     }
