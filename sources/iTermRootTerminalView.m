@@ -3052,6 +3052,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
             "    wordWrapColumn: 80,"
             "    minimap: { enabled: false },"
             "    scrollBeyondLastLine: false,"
+            "    renderLineHighlightOnlyWhenFocus: true,"
+            "    scrollbar: { vertical: 'auto', horizontal: 'auto', useShadows: false },"
             "    fontSize: 13"
             "  });"
             "  window.__tideyEditor.onDidChangeModelContent(function() {"
@@ -3177,7 +3179,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
     const CGFloat rightEdge = self.shouldShowToolbelt ? NSMinX(outputs.toolbeltFrame) : NSWidth(self.bounds);
     const CGFloat originX = MAX(0, rightEdge - width);
-    _tideyEditorPanelView.frame = NSMakeRect(originX, 0, MIN(width, rightEdge), NSHeight(self.bounds));
+    const CGFloat tabStripHeight = TideyEditorEffectiveTabStripHeight(_tabBarControl.height);
+    const CGFloat panelOriginY = outputs.tabViewFrame.origin.y;
+    const CGFloat panelHeight = outputs.tabViewFrame.size.height + tabStripHeight;
+    _tideyEditorPanelView.frame = NSMakeRect(originX, panelOriginY, MIN(width, rightEdge), panelHeight);
     [self layoutTideyEditorContents];
     if (_tideyEditorReady) {
         [_tideyEditorWebView evaluateJavaScript:@"window.__tideyEditor && window.__tideyEditor.layout();"
