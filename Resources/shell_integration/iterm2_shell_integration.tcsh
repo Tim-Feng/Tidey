@@ -97,6 +97,12 @@ if ( ! ($?iterm2_shell_integration_installed)) then
       # Combines all status update aliases
       alias _iterm2_update_current_state '_iterm2_remote_host; _iterm2_current_dir; _iterm2_user_defined_vars'
 
+      # When running inside Tidey, tell tmux to inherit Tidey environment variables
+      # into new sessions so notifications keep working.
+      if ($?TIDEY_SOCKET_PATH) then
+        tmux set-option -ga update-environment " TIDEY_SOCKET_PATH TIDEY_WORKSPACE_ID" >& /dev/null
+      endif
+
       # This is necessary so the first command line will have a hostname and current directory.
       _iterm2_update_current_state
       _iterm2_shell_integration_version

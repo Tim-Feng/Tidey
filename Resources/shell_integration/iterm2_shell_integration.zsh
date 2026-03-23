@@ -174,6 +174,12 @@ if [[ -o interactive ]]; then
     [[ -z ${preexec_functions-} ]] && preexec_functions=()
     preexec_functions=($preexec_functions iterm2_preexec)
 
+    # When running inside Tidey, tell tmux to inherit Tidey environment variables
+    # into new sessions so notifications keep working.
+    if [ -n "${TIDEY_SOCKET_PATH-}" ]; then
+      tmux set-option -ga update-environment " TIDEY_SOCKET_PATH TIDEY_WORKSPACE_ID" 2>/dev/null
+    fi
+
     iterm2_print_state_data
     printf "\033]1337;ShellIntegrationVersion=15;shell=zsh\007"
   fi

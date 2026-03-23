@@ -26,6 +26,7 @@ class _iTerm2Xonsh:
             self.add_iterm2_to_prompt_fields()
             self.add_iterm2_to_prompt()  # Wrap prompt immediately for first prompt
             self.add_iterm2_to_events()
+            self._setup_tmux_tidey_env()
             self.set_state()
             self.set_version()
             $ITERM2_INTEGRATION = True
@@ -135,6 +136,18 @@ class _iTerm2Xonsh:
 
     def write_return_code_osc(self, return_code):
         self.write_osc(f"133;D;{return_code}")
+
+    def _setup_tmux_tidey_env(self):
+        """When running inside Tidey, tell tmux to inherit Tidey environment variables
+        into new sessions so notifications keep working."""
+        if @.env.get('TIDEY_SOCKET_PATH', ''):
+            try:
+                import subprocess as _sp
+                _sp.run(['tmux', 'set-option', '-ga', 'update-environment',
+                         ' TIDEY_SOCKET_PATH TIDEY_WORKSPACE_ID'],
+                        capture_output=True)
+            except Exception:
+                pass
 
     # Integrations
 

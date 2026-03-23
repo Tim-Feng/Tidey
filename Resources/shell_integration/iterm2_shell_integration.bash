@@ -645,6 +645,12 @@ function __iterm2_prompt_command () {
 # Install my function
 preexec_functions+=(__iterm2_preexec)
 
+# When running inside Tidey, tell tmux to inherit Tidey environment variables
+# into new sessions so notifications keep working.
+if [ -n "${TIDEY_SOCKET_PATH-}" ]; then
+  tmux set-option -ga update-environment " TIDEY_SOCKET_PATH TIDEY_WORKSPACE_ID" 2>/dev/null
+fi
+
 iterm2_print_state_data
 iterm2_print_version_number
 fi
