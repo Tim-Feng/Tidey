@@ -4114,18 +4114,20 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         //   Notification title (blue accent)
         //   Status (if present)
         cellView.textField.stringValue = [self tideySidebarWorkspaceTitleAtIndex:row];
-        cellView.textField.frame = NSMakeRect(36, 60 + statusOffset, MAX(0, width - 88), 18);
+        CGFloat titleX = (unreadCount > 0) ? 36 : 12;
+        CGFloat titleMaxW = (unreadCount > 0) ? (width - 88) : (width - 64);
+        cellView.textField.frame = NSMakeRect(titleX, 60 + statusOffset, MAX(0, titleMaxW), 18);
 
         NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
         NSString *notifTitle = latestNotification ? latestNotification.title : (anyNotification.title ?: @"");
         subtitleField.stringValue = notifTitle;
         subtitleField.textColor = [NSColor controlAccentColor];
         subtitleField.font = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
-        subtitleField.frame = NSMakeRect(36, 2 + statusOffset, MAX(0, width - 48), 14);
+        subtitleField.frame = NSMakeRect(12, 2 + statusOffset, MAX(0, width - 24), 14);
 
         bodyField.stringValue = anyNotification.body;
         bodyField.hidden = NO;
-        bodyField.frame = NSMakeRect(36, 18 + statusOffset, MAX(0, width - 48), 40);
+        bodyField.frame = NSMakeRect(12, 18 + statusOffset, MAX(0, width - 24), 40);
 
         pinView.frame = NSMakeRect(MAX(0, width - 48), 62 + statusOffset, 12, 12);
         badgeView.frame = NSMakeRect(12, 52 + statusOffset, kTideySidebarBadgeSize, kTideySidebarBadgeSize);
@@ -4152,7 +4154,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
             subtitleField.stringValue = [self tideySidebarWorkspaceSubtitleAtIndex:row];
             subtitleField.textColor = [NSColor colorWithWhite:0.72 alpha:1];
         }
-        subtitleField.frame = NSMakeRect(textX, 12, MAX(0, width - (textX + 12)), 16);
+        subtitleField.frame = NSMakeRect(12, 12, MAX(0, width - 24), 16);
 
         bodyField.hidden = YES;
         bodyField.stringValue = @"";
@@ -4224,7 +4226,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         }
         statusField.attributedStringValue = statusAttr;
         statusField.hidden = NO;
-        statusField.frame = NSMakeRect(36, 2, MAX(0, width - 48), 14);
+        statusField.frame = NSMakeRect(12, 2, MAX(0, width - 24), 14);
         statusField.textColor = effectiveColor;
     } else {
         statusField.hidden = YES;
