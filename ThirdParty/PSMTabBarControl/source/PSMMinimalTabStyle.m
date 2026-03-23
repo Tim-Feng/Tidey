@@ -8,6 +8,10 @@
 #import "PSMMinimalTabStyle.h"
 #import "PSMOverflowPopUpButton.h"
 
+static NSColor *PSMTideyTabBarBackgroundColor(void) {
+    return [NSColor colorWithSRGBRed:0.102 green:0.108 blue:0.135 alpha:1];
+}
+
 @implementation NSColor(PSMMinimalTabStyle)
 
 - (NSColor *)psm_nonSelectedColorWithDifference:(double)difference {
@@ -61,16 +65,7 @@
 }
 
 - (NSColor *)tabBarColor {
-    NSColor *minimalStyleColor = [self.delegate minimalTabStyleBackgroundColor];
-    DLog(@"Computing tab bar color. delegate=%@ minimalStyleColor=%@", self.delegate, minimalStyleColor);
-    if (PSMShouldExtendTransparencyIntoMinimalTabBar()) {
-      const CGFloat alpha = [self alphaValue:[self backgroundAlphaValue:NO]
-                                 opacifiedBy:0.3];
-      NSColor *base = [self colorByDimmingColor:minimalStyleColor ?: [NSColor colorWithRed:0 green:0 blue:0 alpha:1]];
-      return [base colorWithAlphaComponent:alpha];
-  } else {
-      return [self colorByDimmingColor:minimalStyleColor ?: [NSColor colorWithRed:0 green:0 blue:0 alpha:1]];
-  }
+    return PSMTideyTabBarBackgroundColor();
 }
 
 - (BOOL)backgroundIsDark {
@@ -94,61 +89,7 @@ static CGFloat PSMWeightedAverage(CGFloat l, CGFloat u, CGFloat w) {
 - (NSColor *)textColorDefaultSelected:(BOOL)selected
                       backgroundColor:(NSColor *)backgroundColor
            windowIsMainAndAppIsActive:(BOOL)mainAndActive {
-    const CGFloat backgroundBrightness =
-    (backgroundColor ?
-     backgroundColor.it_hspBrightness :
-     [self backgroundColorSelected:selected highlightAmount:0].it_hspBrightness);
-
-    if (!backgroundColor) {
-        DLog(@"Choose background brightness from tab bar color of %@", self.tabBarColor);
-    }
-    const CGFloat delta = selected ? 0.85 : 0.5;
-    CGFloat value;
-    CGFloat extremity;
-    if (backgroundBrightness < 0.5) {
-        value = MIN(1, backgroundBrightness + delta);
-        extremity = MAX(value, selected ? 1 : 0.9);
-    } else {
-        value = MAX(0, backgroundBrightness - delta);
-        extremity = MIN(value, selected ? 0 : 0.3);
-    }
-
-    if (PSMShouldExtendTransparencyIntoMinimalTabBar()) {
-        // Push value toward an extreme (black or white) as transparency increases.
-        const CGFloat transparencyAlpha = [[self.tabBar.delegate tabView:self.tabBar
-                                                           valueOfOption:PSMTabBarControlOptionMinimalBackgroundAlphaValue] doubleValue];
-        if (transparencyAlpha == 1 && backgroundColor == nil) {
-            NSColor *color = [self.tabBar.delegate tabView:self.tabBar valueOfOption:PSMTabBarControlOptionTextColor];
-            if (selected) {
-                return color;
-            }
-            return [color colorWithAlphaComponent:0.5];
-        }
-        value = PSMWeightedAverage(value, extremity, pow(1 - transparencyAlpha, 0.5));
-
-        CGFloat minAlpha;  // For opaque windows
-        CGFloat maxAlpha;  // For transparent windows
-        if (mainAndActive) {
-            minAlpha = 0.75;
-            maxAlpha = 1.0;
-        } else {
-            minAlpha = 0.5;
-            maxAlpha = 0.75;
-        }
-        const CGFloat alpha = [self legibilityCorrectedAlpha:PSMWeightedAverage(minAlpha, maxAlpha, 1 - transparencyAlpha)];
-        DLog(@"selected=%@ backgroundColor=%@ backgroundBrightness=%@ delta=%@ value=%@", @(selected), backgroundColor, @(backgroundBrightness), @(delta), @(value));
-        return [NSColor colorWithWhite:value alpha:alpha];
-    } else {
-        CGFloat alpha = 1;
-        if (mainAndActive) {
-            alpha = 0.75;
-        } else {
-            alpha = 0.5;
-        }
-        alpha = [self legibilityCorrectedAlpha:alpha];
-        DLog(@"selected=%@ backgroundColor=%@ backgroundBrightness=%@ delta=%@ value=%@", @(selected), backgroundColor, @(backgroundBrightness), @(delta), @(value));
-        return [NSColor colorWithWhite:value alpha:alpha];
-    }
+    return selected ? NSColor.labelColor : NSColor.secondaryLabelColor;
 }
 
 - (NSColor *)horizontalLineColor {
@@ -164,15 +105,15 @@ static CGFloat PSMWeightedAverage(CGFloat l, CGFloat u, CGFloat w) {
 }
 
 - (NSColor *)topLineColorSelected:(BOOL)selected {
-    return [self horizontalLineColor];
+    return [NSColor clearColor];
 }
 
 - (NSColor *)bottomLineColorSelected:(BOOL)selected {
-    return [self horizontalLineColor];
+    return [NSColor clearColor];
 }
 
 - (NSColor *)verticalLineColorSelected:(BOOL)selected {
-    return [NSColor clearColor];
+    return [NSColor colorWithWhite:0.25 alpha:1];
 }
 
 - (CGFloat)alphaValue:(CGFloat)base opacifiedBy:(CGFloat)weight {
@@ -191,51 +132,14 @@ static CGFloat PSMWeightedAverage(CGFloat l, CGFloat u, CGFloat w) {
 }
 
 - (NSColor *)nonSelectedTabColor {
-    if (PSMShouldExtendTransparencyIntoMinimalTabBar()) {
-        const CGFloat transparencyAlpha = [[self.tabBar.delegate tabView:self.tabBar
-                                                           valueOfOption:PSMTabBarControlOptionMinimalBackgroundAlphaValue] doubleValue];
-
-        const double base = [[self.tabBar.delegate tabView:self.tabBar
-                                             valueOfOption:PSMTabBarControlOptionMinimalStyleBackgroundColorDifference] doubleValue];
-        const CGFloat difference = PSMWeightedAverage(0, base, pow(transparencyAlpha, 5));
-        NSColor *color = [self colorByDimmingColor:[self.tabBarColor psm_nonSelectedColorWithDifference:difference]];
-        const CGFloat alpha = [self backgroundAlphaValue:NO];
-        if (alpha != 1) {
-            color = [color colorWithAlphaComponent:alpha];
-        }
-        return color;
-    } else {
-        const double difference = [[self.tabBar.delegate tabView:self.tabBar
-                                                   valueOfOption:PSMTabBarControlOptionMinimalStyleBackgroundColorDifference] doubleValue];
-        return [self colorByDimmingColor:[self.tabBarColor psm_nonSelectedColorWithDifference:difference]];
-    }
+    return self.tabBarColor;
 }
 
 - (NSColor *)backgroundColorSelected:(BOOL)selected highlightAmount:(CGFloat)highlightAmount {
-    NSColor *color;
-    if (self.tabBar.cells.count > 1 && !selected) {
-        color = [self nonSelectedTabColor];
-    } else {
-        color = self.tabBarColor;
+    if (selected || highlightAmount <= 0) {
+        return self.tabBarColor;
     }
-    const CGFloat alpha = [self backgroundAlphaValue:selected];
-    if (PSMShouldExtendTransparencyIntoMinimalTabBar()) {
-        if (alpha != 1) {
-            color = [color colorWithAlphaComponent:alpha];
-        }
-    }
-    if (selected || highlightAmount == 0) {
-        return color;
-    }
-    color = [color psm_highlightedColor:highlightAmount];
-    if (PSMShouldExtendTransparencyIntoMinimalTabBar()) {
-        if (alpha != 1) {
-            color = [color colorWithAlphaComponent:alpha];
-        }
-    }
-
-
-    return color;
+    return [NSColor colorWithSRGBRed:0.14 green:0.15 blue:0.19 alpha:1];
 }
 
 - (NSColor *)colorByDimmingColor:(NSColor *)color {
@@ -273,50 +177,12 @@ static CGFloat PSMWeightedAverage(CGFloat l, CGFloat u, CGFloat w) {
 
 - (void)drawPostHocDecorationsOnSelectedCell:(PSMTabBarCell *)cell
                                tabBarControl:(PSMTabBarControl *)bar {
-    if (self.anyTabHasColor) {
-        const BOOL tabColorIsDark = ([self tabColorBrightness:cell] < 0.);
-        NSRect containingFrame = cell.frame;
-        const BOOL isHorizontal = bar.orientation == PSMTabBarHorizontalOrientation;
-        if (isHorizontal) {
-            if (bar.cells.firstObject == cell && self.treatLeftInsetAsPartOfFirstTab) {
-                containingFrame = NSMakeRect(0, 0, NSMaxX(containingFrame), NSHeight(containingFrame));
-            }
-            containingFrame.origin.x += 0.5;
-            containingFrame.size.width -= 0.5;
-        }
-        NSRect rect = NSInsetRect(containingFrame, 0, 0);
-        NSBezierPath *path;
-        
-        NSColor *outerColor;
-        NSColor *innerColor;
-        const BOOL keyMainAndActive = self.windowIsMainAndAppIsActive;
-        CGFloat prominence = [[self.tabBar.delegate tabView:self.tabBar valueOfOption:PSMTabBarControlOptionMinimalSelectedTabUnderlineProminence] doubleValue];
-        const CGFloat alpha = (keyMainAndActive ? 0.75 : 0.5) * prominence;
-        const BOOL tabBarColorIsDark = self.backgroundIsDark;
-        if (tabColorIsDark != tabBarColorIsDark) {
-            outerColor = [NSColor colorWithWhite:1 alpha:alpha];
-            innerColor = [NSColor colorWithWhite:0 alpha:sqrt(alpha)];
-        } else {
-            outerColor = [NSColor colorWithWhite:0 alpha:sqrt(alpha)];
-            innerColor = [NSColor colorWithWhite:1 alpha:alpha];
-        }
-
-        [outerColor set];
-        rect = NSInsetRect(rect, 0, 1);
-        path = [NSBezierPath bezierPath];
-        [path moveToPoint:NSMakePoint(NSMinX(rect), NSMaxY(rect))];
-        [path lineToPoint:NSMakePoint(NSMaxX(rect), NSMaxY(rect))];
-        [path setLineWidth:2];
-        [path stroke];
-
-        [innerColor set];
-        rect = NSInsetRect(rect, 0, 2);
-        path = [NSBezierPath bezierPath];
-        [path moveToPoint:NSMakePoint(NSMinX(rect), NSMaxY(rect))];
-        [path lineToPoint:NSMakePoint(NSMaxX(rect), NSMaxY(rect))];
-        [path setLineWidth:2];
-        [path stroke];
+    if (bar.orientation != PSMTabBarHorizontalOrientation) {
+        return;
     }
+    [[NSColor controlAccentColor] set];
+    NSRect lineRect = NSMakeRect(NSMinX(cell.frame), NSMinY(cell.frame), NSWidth(cell.frame), 2);
+    NSRectFillUsingOperation(lineRect, NSCompositingOperationSourceOver);
 }
 
 - (NSColor *)outlineColor {
@@ -339,6 +205,8 @@ static CGFloat PSMWeightedAverage(CGFloat l, CGFloat u, CGFloat w) {
 }
 
 - (void)drawVerticalLineInFrame:(NSRect)rect x:(CGFloat)x {
+    NSRectFillUsingOperation(NSMakeRect(x, NSMinY(rect) + 6, 1, MAX(0, NSHeight(rect) - 12)),
+                             NSCompositingOperationSourceOver);
 }
 
 - (void)drawHorizontalLineInFrame:(NSRect)rect y:(CGFloat)y {
@@ -355,32 +223,14 @@ static CGFloat PSMWeightedAverage(CGFloat l, CGFloat u, CGFloat w) {
                       withTabColor:(NSColor *)tabColor
                    highlightAmount:(CGFloat)highlightAmount
                         horizontal:(BOOL)horizontal {
-    const BOOL horizontalOrientation = self.tabBar.orientation == PSMTabBarHorizontalOrientation;
-    NSEdgeInsets insets = NSEdgeInsetsZero;
-    BOOL drawFrame = NO;
-    if (!horizontalOrientation) {
-        insets.right = 1;
-        insets.left = 1;
+    [[self backgroundColorSelected:selected highlightAmount:highlightAmount] set];
+    NSRectFillUsingOperation(cellFrame, NSCompositingOperationSourceOver);
+
+    if (tabColor) {
+        NSColor *color = [self cellBackgroundColorForTabColor:tabColor selected:selected];
+        [color set];
+        NSRectFillUsingOperation(cellFrame, NSCompositingOperationSourceOver);
     }
-    if (highlightAmount > 0 && !selected) {
-        if (horizontalOrientation) {
-            drawFrame = YES;
-            insets.left = 1.0;
-            insets.right = 0.5;
-            insets.bottom = 1.0;
-            insets.top = 0.5;
-        }
-    }
-    if (drawFrame) {
-        [[self backgroundColorSelected:NO highlightAmount:0] set];
-        NSFrameRect(cellFrame);
-    }
-    NSRect insetCellFrame = cellFrame;
-    insetCellFrame.origin.x += insets.left;
-    insetCellFrame.origin.y += insets.top;
-    insetCellFrame.size.width -= (insets.left + insets.right);
-    insetCellFrame.size.height -= (insets.top + insets.bottom);
-    [super drawCellBackgroundSelected:selected inRect:insetCellFrame withTabColor:tabColor highlightAmount:highlightAmount horizontal:horizontal];
 }
 
 - (NSEdgeInsets)backgroundInsetsWithHorizontalOrientation:(BOOL)horizontal {
@@ -393,10 +243,7 @@ static CGFloat PSMWeightedAverage(CGFloat l, CGFloat u, CGFloat w) {
     if (self.orientation == PSMTabBarVerticalOrientation && [self.tabBar frame].size.width < 2) {
         return;
     }
-
-    PSMTabBarCell *selectedCell = [self selectedCellInTabBarControl:self.tabBar];
-    const CGFloat highlightAmount = [selectedCell highlightAmount];
-    [[self backgroundColorSelected:YES highlightAmount:highlightAmount] set];
+    [self.tabBarColor set];
     NSRectFillUsingOperation(rect, NSCompositingOperationSourceOver);
 
     [self drawStartInset];
@@ -558,41 +405,6 @@ static CGFloat PSMWeightedAverage(CGFloat l, CGFloat u, CGFloat w) {
         horizontal:(BOOL)horizontal
       withOverflow:(BOOL)withOverflow {
     [super drawTabBar:bar inRect:rect clipRect:clipRect horizontal:horizontal withOverflow:withOverflow];
-
-    const BOOL horizontalOrientation = bar.orientation == PSMTabBarHorizontalOrientation;
-
-    const NSInteger selectedIndex = [self selectedIndex:bar];
-    const NSInteger numberOfVisibleCells = [self numberOfVisibleCells:bar];
-
-    if (!horizontalOrientation) {
-        if (bar.cells.count == 1) {
-            [self drawOutlineAroundVerticalTabBarWithOneTab:bar];
-        } else if (selectedIndex == 0) {
-            [self drawOutlineAroundVerticalTabBarWithFirstTabSelected:bar];
-        } else {
-            [self drawOutlineAroundVerticalTabBarWithInteriorTabSelected:bar];
-        }
-    } else if (bar.tabLocation == PSMTab_TopTab) {
-        if (bar.cells.count == 1) {
-            [self drawOutlineAroundTopTabBarWithOneTab:bar];
-        } else if (selectedIndex == 0) {
-            [self drawOutlineAroundTopTabBarWithFirstTabSelected:bar];
-        } else if (selectedIndex == numberOfVisibleCells - 1) {
-            [self drawOutlineAroundTopTabBarWithLastTabSelected:bar];
-        } else {
-            [self drawOutlineAroundTopTabBarWithInteriorTabSelected:bar];
-        }
-    } else {
-        if (bar.cells.count == 1) {
-            [self drawOutlineAroundBottomTabBarWithOneTab:bar];
-        } else if (selectedIndex == 0) {
-            [self drawOutlineAroundBottomTabBarWithFirstTabSelected:bar];
-        } else if (selectedIndex == numberOfVisibleCells - 1) {
-            [self drawOutlineAroundBottomTabBarWithLastTabSelected:bar];
-        } else {
-            [self drawOutlineAroundBottomTabBarWithInteriorTabSelected:bar];
-        }
-    }
 }
 
 - (void)drawDividerBetweenTabBarAndContent:(NSRect)rect bar:(PSMTabBarControl *)bar {
@@ -601,14 +413,7 @@ static CGFloat PSMWeightedAverage(CGFloat l, CGFloat u, CGFloat w) {
 - (BOOL)shouldDrawTopLineSelected:(BOOL)selected
                          attached:(BOOL)attached
                          position:(PSMTabPosition)position NS_AVAILABLE_MAC(10_16) {
-    switch (position) {
-        case PSMTab_BottomTab:
-            return NO;
-
-        case PSMTab_LeftTab:
-        case PSMTab_TopTab:
-            return [super shouldDrawTopLineSelected:selected attached:attached position:position];
-    }
+    return NO;
 }
 
 - (BOOL)willDrawSubtitle:(PSMCachedTitle *)subtitle {
