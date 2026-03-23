@@ -2913,6 +2913,9 @@ ITERM_WEAKLY_REFERENCEABLE
 - (IBAction)closeCurrentSession:(id)sender {
     iTermApplicationDelegate *appDelegate = [iTermApplication.sharedApplication delegate];
     [appDelegate userDidInteractWithASession];
+    if ([_contentView closeCurrentTideyEditorTab]) {
+        return;
+    }
     if ([[self window] isKeyWindow]) {
         PTYSession *aSession = [[[_contentView.tabView selectedTabViewItem] identifier] activeSession];
         if ([aSession closeComposer]) {

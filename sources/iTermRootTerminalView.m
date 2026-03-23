@@ -2640,6 +2640,18 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     return [(NSView *)responder isDescendantOf:_tideyEditorWebView];
 }
 
+- (BOOL)tideyEditorHasFocus {
+    return [self tideyEditorShouldHandleFindPanelAction];
+}
+
+- (BOOL)closeCurrentTideyEditorTab {
+    if (![self tideyEditorHasFocus] || _tideySelectedEditorTabIndex < 0) {
+        return NO;
+    }
+    [self closeTideyEditorTabAtIndex:_tideySelectedEditorTabIndex];
+    return YES;
+}
+
 - (IBAction)performFindPanelAction:(id)sender {
     if ([self tideyEditorShouldHandleFindPanelAction]) {
         NSInteger tag = [sender isKindOfClass:[NSMenuItem class]] ? ((NSMenuItem *)sender).tag : NSFindPanelActionShowFindPanel;

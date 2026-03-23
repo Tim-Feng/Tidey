@@ -198,5 +198,7 @@ extern const NSInteger iTermRootTerminalViewWindowNumberLabelWidth;
 - (void)openTideyEditorFileAtPath:(NSString *)path;
 - (BOOL)saveTideyEditorCurrentTab;
 - (BOOL)hasSaveableTideyEditorTab;
+- (BOOL)tideyEditorHasFocus;
+- (BOOL)closeCurrentTideyEditorTab;
 
 @end
