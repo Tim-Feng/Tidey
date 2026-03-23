@@ -100,6 +100,16 @@
 
 - (void)handleMessage:(NSDictionary *)message {
     NSString *action = [message[@"action"] isKindOfClass:[NSString class]] ? message[@"action"] : nil;
+
+    if ([action isEqualToString:@"set_status"]) {
+        [self handleSetStatus:message];
+        return;
+    }
+    if ([action isEqualToString:@"clear_status"]) {
+        [self handleClearStatus:message];
+        return;
+    }
+
     if (![action isEqualToString:@"notification.create"] &&
         ![action isEqualToString:@"notification.create_for_workspace"]) {
         DLog(@"Ignoring unsupported Tidey socket action: %@", action);
@@ -119,10 +129,49 @@
         return;
     }
 
-    [[TideyNotificationStore sharedStore] addNotificationForWorkspaceID:workspaceID
-                                                                  title:title
-                                                               subtitle:subtitle
-                                                                   body:body];
+    TideyNotificationItem *item =
+        [[TideyNotificationStore sharedStore] addNotificationForWorkspaceID:workspaceID
+                                                                      title:title
+                                                                   subtitle:subtitle
+                                                                       body:body];
+    [[TideyNotificationStore sharedStore] postSystemNotificationForItem:item];
+}
+
+- (void)handleSetStatus:(NSDictionary *)message {
+    NSString *workspaceID = [message[@"workspace_id"] isKindOfClass:[NSString class]] ? message[@"workspace_id"] : nil;
+    NSString *key = [message[@"key"] isKindOfClass:[NSString class]] ? message[@"key"] : nil;
+    NSString *value = [message[@"value"] isKindOfClass:[NSString class]] ? message[@"value"] : nil;
+    NSString *icon = [message[@"icon"] isKindOfClass:[NSString class]] ? message[@"icon"] : nil;
+    NSString *color = [message[@"color"] isKindOfClass:[NSString class]] ? message[@"color"] : nil;
+
+    if (key.length == 0 || value.length == 0) {
+        DLog(@"Ignoring malformed set_status: missing key or value: %@", message);
+        return;
+    }
+    if (workspaceID.length == 0) {
+        // Broadcast: set status for all known workspaces is not well-defined.
+        // For broadcast, the caller should specify workspace_id.
+        DLog(@"Ignoring set_status with empty workspace_id: %@", message);
+        return;
+    }
+
+    [[TideyStatusStore sharedStore] setStatusForWorkspaceID:workspaceID
+                                                        key:key
+                                                      value:value
+                                                       icon:icon
+                                                   colorHex:color];
+}
+
+- (void)handleClearStatus:(NSDictionary *)message {
+    NSString *workspaceID = [message[@"workspace_id"] isKindOfClass:[NSString class]] ? message[@"workspace_id"] : nil;
+    NSString *key = [message[@"key"] isKindOfClass:[NSString class]] ? message[@"key"] : nil;
+
+    if (workspaceID.length == 0 || key.length == 0) {
+        DLog(@"Ignoring malformed clear_status: missing workspace_id or key: %@", message);
+        return;
+    }
+
+    [[TideyStatusStore sharedStore] clearStatusForWorkspaceID:workspaceID key:key];
 }
 
 - (void)stop {

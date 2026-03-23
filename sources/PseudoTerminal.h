@@ -229,6 +229,12 @@ extern NSString *const iTermDidCreateTerminalWindowNotification;
 - (BOOL)isShowingTideyEditorPanel;
 - (void)performTideyWorkspaceMutationPreservingWindowFrame:(void (^)(void))block;
 
+// Returns the workspace identifier (UUID string) of the currently selected workspace, or nil.
+- (nullable NSString *)tideySelectedWorkspaceIdentifier;
+
+// Selects the workspace with the given identifier and marks it as read. Returns YES on success.
+- (BOOL)tideySelectWorkspaceWithIdentifier:(NSString *)workspaceIdentifier;
+
 // A unique number for this window assigned by finishInitializationWithSmartLayout.
 - (NSString *)terminalGuid;
 

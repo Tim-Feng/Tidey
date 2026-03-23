@@ -3,6 +3,9 @@
 NS_ASSUME_NONNULL_BEGIN
 
 extern NSNotificationName const TideyNotificationStoreDidChangeNotification;
+extern NSNotificationName const TideyStatusStoreDidChangeNotification;
+
+#pragma mark - TideyNotificationItem
 
 @interface TideyNotificationItem : NSObject
 
@@ -45,6 +48,46 @@ extern NSNotificationName const TideyNotificationStoreDidChangeNotification;
 - (BOOL)hasReadNotificationsForWorkspaceID:(NSString *)workspaceID;
 - (nullable TideyNotificationItem *)latestUnreadForWorkspaceID:(NSString *)workspaceID;
 - (nullable TideyNotificationItem *)latestNotificationForWorkspaceID:(NSString *)workspaceID;
+
+#pragma mark - System Notifications
+
+- (void)postSystemNotificationForItem:(TideyNotificationItem *)item;
+- (void)removeDeliveredSystemNotificationsForWorkspaceID:(NSString *)workspaceID;
+- (void)requestNotificationAuthorization;
+
+@end
+
+#pragma mark - TideyStatusEntry
+
+@interface TideyStatusEntry : NSObject
+
+@property(nonatomic, copy, readonly) NSString *key;
+@property(nonatomic, copy, readonly) NSString *value;
+@property(nonatomic, copy, readonly, nullable) NSString *icon;
+@property(nonatomic, copy, readonly, nullable) NSString *colorHex;
+
+- (instancetype)initWithKey:(NSString *)key
+                      value:(NSString *)value
+                       icon:(nullable NSString *)icon
+                   colorHex:(nullable NSString *)colorHex;
+- (instancetype)init NS_UNAVAILABLE;
+
+@end
+
+#pragma mark - TideyStatusStore
+
+@interface TideyStatusStore : NSObject
+
++ (instancetype)sharedStore;
+
+- (void)setStatusForWorkspaceID:(NSString *)workspaceID
+                            key:(NSString *)key
+                          value:(NSString *)value
+                           icon:(nullable NSString *)icon
+                       colorHex:(nullable NSString *)colorHex;
+- (void)clearStatusForWorkspaceID:(NSString *)workspaceID key:(NSString *)key;
+- (NSArray<TideyStatusEntry *> *)statusEntriesForWorkspaceID:(NSString *)workspaceID;
+- (BOOL)hasStatusForWorkspaceID:(NSString *)workspaceID;
 
 @end
 

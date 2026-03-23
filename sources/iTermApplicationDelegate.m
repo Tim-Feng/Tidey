@@ -130,7 +130,9 @@
 #import "iTermUserDefaults.h"
 #import "iTermWarning.h"
 #import "iTermWebSocketCookieJar.h"
+#import "TideyNotificationStore.h"
 #import <Quartz/Quartz.h>
+#import <UserNotifications/UserNotifications.h>
 #import <objc/runtime.h>
 
 #include "iTermFileDescriptorClient.h"
@@ -173,7 +175,8 @@ static BOOL hasBecomeActive = NO;
     iTermRestorableStateControllerDelegate,
     iTermUntitledWindowStateMachineDelegate,
     NSMenuDelegate,
-    NSMenuItemValidation>
+    NSMenuItemValidation,
+    UNUserNotificationCenterDelegate>
 
 @property(nonatomic, readwrite) BOOL workspaceSessionActive;
 
@@ -1379,6 +1382,10 @@ void TurnOnDebugLoggingAutomatically(void) {
     [self turnOffMetalCaptureEnabledIfNeeded];
     [iTermFontPanel makeDefault];
     [[TideySocketServer sharedServer] start];
+
+    // Set up macOS system notifications for Tidey workspace alerts.
+    [UNUserNotificationCenter currentNotificationCenter].delegate = self;
+    [[TideyNotificationStore sharedStore] requestNotificationAuthorization];
 
     finishedLaunching_ = YES;
     // Create the app support directory
@@ -3671,6 +3678,58 @@ static iTermKeyEventReplayer *gReplayer;
 
 - (void)toggleTriggerEnabled:(id)sender {
     [[self firstResponderForMenuItem:sender] it_performNonObjectReturningSelector:_cmd withObject:sender];
+}
+
+#pragma mark - UNUserNotificationCenterDelegate (Tidey System Notifications)
+
+// Called when a system notification is delivered while the app is in the foreground.
+// Suppress if the workspace is currently focused; otherwise show banner + sound.
+- (void)userNotificationCenter:(UNUserNotificationCenter *)center
+       willPresentNotification:(UNNotification *)notification
+         withCompletionHandler:(void (^)(UNNotificationPresentationOptions))completionHandler {
+    NSString *categoryID = notification.request.content.categoryIdentifier;
+    if (![categoryID isEqualToString:@"TIDEY_WORKSPACE_NOTIFICATION"]) {
+        completionHandler(UNNotificationPresentationOptionNone);
+        return;
+    }
+    NSString *workspaceID = notification.request.content.userInfo[@"workspaceID"];
+    if ([NSApp isActive] && workspaceID.length > 0) {
+        PseudoTerminal *keyWindow = [[iTermController sharedInstance] currentTerminal];
+        if (keyWindow && keyWindow.isShowingTideySidebar) {
+            NSString *selectedID = [keyWindow tideySelectedWorkspaceIdentifier];
+            if ([selectedID isEqualToString:workspaceID]) {
+                // This workspace is currently focused and the app is active - suppress.
+                completionHandler(UNNotificationPresentationOptionNone);
+                return;
+            }
+        }
+    }
+    completionHandler(UNNotificationPresentationOptionBanner | UNNotificationPresentationOptionSound);
+}
+
+// Called when the user clicks a delivered system notification.
+- (void)userNotificationCenter:(UNUserNotificationCenter *)center
+didReceiveNotificationResponse:(UNNotificationResponse *)response
+         withCompletionHandler:(void (^)(void))completionHandler {
+    NSDictionary *userInfo = response.notification.request.content.userInfo;
+    NSString *workspaceID = userInfo[@"workspaceID"];
+
+    if (workspaceID.length > 0) {
+        // Activate the app.
+        [NSApp activateIgnoringOtherApps:YES];
+
+        // Find the PseudoTerminal window containing this workspace and switch to it.
+        for (PseudoTerminal *term in [[iTermController sharedInstance] terminals]) {
+            if (!term.isShowingTideySidebar) {
+                continue;
+            }
+            if ([term tideySelectWorkspaceWithIdentifier:workspaceID]) {
+                [term.window makeKeyAndOrderFront:nil];
+                break;
+            }
+        }
+    }
+    completionHandler();
 }
 
 @end

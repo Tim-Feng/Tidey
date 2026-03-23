@@ -1205,6 +1205,31 @@ ITERM_WEAKLY_REFERENCEABLE
     [[TideyNotificationStore sharedStore] markUnreadForWorkspaceID:workspaceID];
 }
 
+- (NSString *)tideySelectedWorkspaceIdentifier {
+    [self ensureTideyWorkspacesInitialized];
+    Workspace *ws = [self selectedWorkspace];
+    if (!ws) {
+        return nil;
+    }
+    return [self tideyWorkspaceIdentifierForWorkspace:ws];
+}
+
+- (BOOL)tideySelectWorkspaceWithIdentifier:(NSString *)workspaceIdentifier {
+    if (workspaceIdentifier.length == 0) {
+        return NO;
+    }
+    [self ensureTideyWorkspacesInitialized];
+    for (NSInteger i = 0; i < (NSInteger)self.workspaces.count; i++) {
+        Workspace *ws = self.workspaces[i];
+        if ([[self tideyWorkspaceIdentifierForWorkspace:ws] isEqualToString:workspaceIdentifier]) {
+            [self selectWorkspaceAtIndex:i recordHistory:YES];
+            [self tideyMarkWorkspaceReadAtIndex:i];
+            return YES;
+        }
+    }
+    return NO;
+}
+
 - (void)tideyNotificationStoreDidChange:(NSNotification *)notification {
     NSString *workspaceID = notification.userInfo[@"workspaceID"];
     if (workspaceID.length == 0 || [workspaceID isEqualToString:@"*"]) {

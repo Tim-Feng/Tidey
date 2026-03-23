@@ -795,6 +795,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                  selector:@selector(tideyNotificationStoreDidChange:)
                                                      name:TideyNotificationStoreDidChangeNotification
                                                    object:[TideyNotificationStore sharedStore]];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(tideyStatusStoreDidChange:)
+                                                     name:TideyStatusStoreDidChangeNotification
+                                                   object:[TideyStatusStore sharedStore]];
 
         _tideyEditorPanelView = [[NSView alloc] initWithFrame:NSZeroRect];
         _tideyEditorPanelView.autoresizingMask = NSViewMinXMargin | NSViewHeightSizable;
@@ -1136,6 +1140,9 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     [[NSNotificationCenter defaultCenter] removeObserver:self
                                                     name:TideyNotificationStoreDidChangeNotification
                                                   object:[TideyNotificationStore sharedStore]];
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                    name:TideyStatusStoreDidChangeNotification
+                                                  object:[TideyStatusStore sharedStore]];
     _tabBarControl.itermTabBarDelegate = nil;
     _tabBarControl.delegate = nil;
     _leftTabBarDragHandle.delegate = nil;
@@ -3132,6 +3139,12 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     [self reloadTideySidebar];
 }
 
+- (void)tideyStatusStoreDidChange:(NSNotification *)notification {
+    (void)notification;
+    [self layoutTideySidebar];
+    [self reloadTideySidebar];
+}
+
 - (void)layoutTideySidebar {
     const CGFloat width = self.tideySidebarWidth;
     _tideySidebarView.hidden = (width <= 0);
@@ -3915,14 +3928,20 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         return 60;
     }
     NSString *workspaceID = [self tideySidebarWorkspaceIdentifierAtIndex:row];
+    CGFloat baseHeight = 60;
     TideyNotificationItem *notification = nil;
     if (workspaceID.length > 0) {
         notification = [[TideyNotificationStore sharedStore] latestNotificationForWorkspaceID:workspaceID];
     }
     if (notification && notification.body.length > 0) {
-        return 90;
+        baseHeight = 90;
     }
-    return 60;
+    BOOL hasStatus = (workspaceID.length > 0 &&
+                      [[TideyStatusStore sharedStore] hasStatusForWorkspaceID:workspaceID]);
+    if (hasStatus) {
+        baseHeight += 16;
+    }
+    return baseHeight;
 }
 
 - (NSTableRowView *)tableView:(NSTableView *)tableView rowViewForRow:(NSInteger)row {
@@ -4021,6 +4040,21 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     bodyField.hidden = YES;
     [cellView addSubview:bodyField];
 
+    NSTextField *statusField = [NSTextField newLabelStyledTextField];
+    statusField.tag = 1008;
+    statusField.frame = NSMakeRect(36, 2, 164, 14);
+    statusField.autoresizingMask = NSViewWidthSizable;
+    statusField.font = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
+    statusField.textColor = [NSColor secondaryLabelColor];
+    statusField.drawsBackground = NO;
+    statusField.backgroundColor = [NSColor clearColor];
+    statusField.bezeled = NO;
+    statusField.editable = NO;
+    statusField.selectable = NO;
+    statusField.lineBreakMode = NSLineBreakByTruncatingTail;
+    statusField.hidden = YES;
+    [cellView addSubview:statusField];
+
     NSView *closeView = [[NSView alloc] initWithFrame:NSMakeRect(176, 32, 16, 16)];
     closeView.identifier = kTideySidebarCloseViewIdentifier;
     closeView.autoresizingMask = NSViewMinXMargin;
@@ -4062,11 +4096,21 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     }
     BOOL hasBody = (anyNotification && anyNotification.body.length > 0);
 
+    // Determine status entries for this workspace.
+    NSArray<TideyStatusEntry *> *statusEntries = nil;
+    if (workspaceID.length > 0) {
+        statusEntries = [[TideyStatusStore sharedStore] statusEntriesForWorkspaceID:workspaceID];
+    }
+    BOOL hasStatus = (statusEntries.count > 0);
+    CGFloat statusOffset = hasStatus ? 16 : 0;
+
     NSTextField *bodyField = (NSTextField *)[cellView viewWithTag:1007];
+    NSTextField *statusField = (NSTextField *)[cellView viewWithTag:1008];
+
     if (hasBody) {
         // Expanded layout: title at top, subtitle (notification title) in middle, body at bottom.
         cellView.textField.stringValue = [self tideySidebarWorkspaceTitleAtIndex:row];
-        cellView.textField.frame = NSMakeRect(36, 60, MAX(0, width - 88), 20);
+        cellView.textField.frame = NSMakeRect(36, 60 + statusOffset, MAX(0, width - 88), 20);
 
         NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
         if (latestNotification) {
@@ -4076,23 +4120,23 @@ NS_CLASS_AVAILABLE_MAC(10_14)
             subtitleField.stringValue = anyNotification.title ?: @"";
             subtitleField.textColor = [NSColor colorWithWhite:0.72 alpha:1];
         }
-        subtitleField.frame = NSMakeRect(36, 42, MAX(0, width - 48), 16);
+        subtitleField.frame = NSMakeRect(36, 42 + statusOffset, MAX(0, width - 48), 16);
 
         bodyField.stringValue = anyNotification.body;
         bodyField.hidden = NO;
-        bodyField.frame = NSMakeRect(36, 4, MAX(0, width - 48), 36);
+        bodyField.frame = NSMakeRect(36, 4 + statusOffset, MAX(0, width - 48), 36);
 
-        pinView.frame = NSMakeRect(MAX(0, width - 48), 64, 12, 12);
-        badgeView.frame = NSMakeRect(12, 52, kTideySidebarBadgeSize, kTideySidebarBadgeSize);
+        pinView.frame = NSMakeRect(MAX(0, width - 48), 64 + statusOffset, 12, 12);
+        badgeView.frame = NSMakeRect(12, 52 + statusOffset, kTideySidebarBadgeSize, kTideySidebarBadgeSize);
 
         NSView *closeView = TideyFindCloseView(cellView);
-        closeView.frame = NSMakeRect(MAX(0, width - 28), 62, 16, 16);
+        closeView.frame = NSMakeRect(MAX(0, width - 28), 62 + statusOffset, 16, 16);
         closeView.hidden = YES;
         closeView.alphaValue = 0.0;
     } else {
         // Normal layout (60pt row).
         cellView.textField.stringValue = [self tideySidebarWorkspaceTitleAtIndex:row];
-        cellView.textField.frame = NSMakeRect(36, 30, MAX(0, width - 88), 20);
+        cellView.textField.frame = NSMakeRect(36, 30 + statusOffset, MAX(0, width - 88), 20);
 
         NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
         if (latestNotification) {
@@ -4102,23 +4146,74 @@ NS_CLASS_AVAILABLE_MAC(10_14)
             subtitleField.stringValue = [self tideySidebarWorkspaceSubtitleAtIndex:row];
             subtitleField.textColor = [NSColor colorWithWhite:0.72 alpha:1];
         }
-        subtitleField.frame = NSMakeRect(36, 12, MAX(0, width - 48), 16);
+        subtitleField.frame = NSMakeRect(36, 12 + statusOffset, MAX(0, width - 48), 16);
 
         bodyField.hidden = YES;
         bodyField.stringValue = @"";
 
-        pinView.frame = NSMakeRect(MAX(0, width - 48), 34, 12, 12);
-        badgeView.frame = NSMakeRect(12, 22, kTideySidebarBadgeSize, kTideySidebarBadgeSize);
+        pinView.frame = NSMakeRect(MAX(0, width - 48), 34 + statusOffset, 12, 12);
+        badgeView.frame = NSMakeRect(12, 22 + statusOffset, kTideySidebarBadgeSize, kTideySidebarBadgeSize);
 
         NSView *closeView = TideyFindCloseView(cellView);
-        closeView.frame = NSMakeRect(MAX(0, width - 28), 32, 16, 16);
+        closeView.frame = NSMakeRect(MAX(0, width - 28), 32 + statusOffset, 16, 16);
         closeView.hidden = YES;
         closeView.alphaValue = 0.0;
+    }
+
+    // Configure status field at the bottom of the cell.
+    if (hasStatus) {
+        NSMutableString *statusText = [NSMutableString string];
+        for (TideyStatusEntry *entry in statusEntries) {
+            if (statusText.length > 0) {
+                [statusText appendString:@"  "];
+            }
+            if (entry.icon.length > 0) {
+                // Try to use SF Symbol. If the icon name resolves, use it as text prefix.
+                // For simple display we show the icon name as a placeholder character if SF Symbol
+                // is not available via attributed string (handled below). For now, use a simple approach.
+                [statusText appendFormat:@"%@ ", entry.icon];
+            }
+            [statusText appendString:entry.value];
+        }
+        statusField.stringValue = statusText;
+        statusField.hidden = NO;
+        statusField.frame = NSMakeRect(36, 2, MAX(0, width - 48), 14);
+
+        // Apply color from the first entry that has one, or fall back to secondaryLabelColor.
+        NSColor *statusColor = nil;
+        for (TideyStatusEntry *entry in statusEntries) {
+            if (entry.colorHex.length > 0) {
+                statusColor = [self tideyColorFromHexString:entry.colorHex];
+                if (statusColor) break;
+            }
+        }
+        statusField.textColor = statusColor ?: [NSColor secondaryLabelColor];
+    } else {
+        statusField.hidden = YES;
+        statusField.stringValue = @"";
     }
 
     if ([_tideySidebarTableView isKindOfClass:[TideySidebarTableView class]]) {
         [(TideySidebarTableView *)_tideySidebarTableView updateTideyCloseButtonVisibility];
     }
+}
+
+- (NSColor *)tideyColorFromHexString:(NSString *)hexString {
+    if (hexString.length == 0) {
+        return nil;
+    }
+    NSString *hex = hexString;
+    if ([hex hasPrefix:@"#"]) {
+        hex = [hex substringFromIndex:1];
+    }
+    if (hex.length != 6) {
+        return nil;
+    }
+    unsigned int r = 0, g = 0, b = 0;
+    [[NSScanner scannerWithString:[hex substringWithRange:NSMakeRange(0, 2)]] scanHexInt:&r];
+    [[NSScanner scannerWithString:[hex substringWithRange:NSMakeRange(2, 2)]] scanHexInt:&g];
+    [[NSScanner scannerWithString:[hex substringWithRange:NSMakeRange(4, 2)]] scanHexInt:&b];
+    return [NSColor colorWithSRGBRed:r / 255.0 green:g / 255.0 blue:b / 255.0 alpha:1.0];
 }
 
 - (NSView *)tideySidebarDragPreviewForRow:(NSInteger)row width:(CGFloat)width height:(CGFloat)height {
