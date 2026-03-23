@@ -56,7 +56,6 @@ static const CGFloat kMinimumToolbeltSizeInPoints = 100;
 static const CGFloat kMinimumToolbeltSizeAsFractionOfWindow = 0.05;
 static const CGFloat kMaximumToolbeltSizeAsFractionOfWindow = 0.5;
 static const CGFloat kTideySidebarWidth = 200;
-static const CGFloat kTideyEditorPanelWidth = 400;
 static const CGFloat kTideyEditorFileTreeWidth = 200;
 static const CGFloat kTideyMinimumSidebarWidth = 160;
 static const CGFloat kTideyMinimumTerminalWidth = 200;
@@ -4353,6 +4352,22 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         dragHandle == self.tideyEditorFileTreeDragHandle) {
         [self tideyPersistLayoutState];
     }
+    [_delegate rootTerminalViewDidResizeContentArea];
+}
+
+- (void)dragHandleViewDidDoubleClick:(iTermDragHandleView *)dragHandle {
+    if (dragHandle == self.tideySidebarDragHandle ||
+        dragHandle == self.tideyEditorDragHandle ||
+        dragHandle == self.tideyEditorFileTreeDragHandle) {
+        // Reset all panels to default sizes
+        _tideySidebarPreferredWidth = kTideySidebarWidth;
+        _tideyEditorPreferredWidth = floor(NSWidth(self.bounds) / 2.0);
+        _tideyEditorFileTreePreferredWidth = kTideyEditorFileTreeWidth;
+    } else {
+        return;
+    }
+    [self tideyPersistLayoutState];
+    [self layoutSubviews];
     [_delegate rootTerminalViewDidResizeContentArea];
 }
 

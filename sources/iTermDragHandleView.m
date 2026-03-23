@@ -19,6 +19,12 @@
 }
 
 - (void)mouseDown:(NSEvent *)theEvent {
+    if (theEvent.clickCount == 2) {
+        if ([_delegate respondsToSelector:@selector(dragHandleViewDidDoubleClick:)]) {
+            [_delegate dragHandleViewDidDoubleClick:self];
+        }
+        return;
+    }
     const NSUInteger mask = (NSEventMaskLeftMouseDown |
                              NSEventMaskLeftMouseUp |
                              NSEventMaskLeftMouseDragged |

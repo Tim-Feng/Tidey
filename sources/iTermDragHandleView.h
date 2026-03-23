@@ -21,6 +21,9 @@
 // Called when dragging finishes.
 - (void)dragHandleViewDidFinishMoving:(iTermDragHandleView *)dragHandle;
 
+// Called on double-click to reset to default size.
+- (void)dragHandleViewDidDoubleClick:(iTermDragHandleView *)dragHandle;
+
 @end
 
 // An invisible vertical drag handle that reports horizontal drags to the delegate.
