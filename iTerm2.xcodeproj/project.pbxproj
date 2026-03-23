@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A56FADEEAA55EFB0B846D102 /* monaco-editor in Resources */ = {isa = PBXBuildFile; fileRef = A59DFDD38D8F83A4A94B3F51 /* monaco-editor */; };
 		06E0C88E1DF9695400AA061B /* iTermServiceProvider.h in Headers */ = {isa = PBXBuildFile; fileRef = 06E0C88C1DF9695400AA061B /* iTermServiceProvider.h */; };
 		084F626684E68821BAEC7D9B /* iTermNonTextPasteHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED49EE365D629DAE80503BFD /* iTermNonTextPasteHelper.swift */; };
 		0E917DB125F460B221026B56 /* iTermCharacterSourceTestHelper.h in Sources */ = {isa = PBXBuildFile; fileRef = 2491A846A993798FA4963536 /* iTermCharacterSourceTestHelper.h */; };
@@ -5474,6 +5475,7 @@
 		0464AB2F006CD2EC7F000001 /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = /System/Library/Frameworks/AppKit.framework; sourceTree = "<absolute>"; };
 		06E0C88C1DF9695400AA061B /* iTermServiceProvider.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = iTermServiceProvider.h; sourceTree = "<group>"; };
 		06E0C88D1DF9695400AA061B /* iTermServiceProvider.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = iTermServiceProvider.m; sourceTree = "<group>"; };
+		A59DFDD38D8F83A4A94B3F51 /* monaco-editor */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "monaco-editor"; sourceTree = "<group>"; };
 		110B6BC5FB568BC2E0CCADB2 /* IntervalTreeForwardLocationEnumeratorTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = IntervalTreeForwardLocationEnumeratorTests.swift; sourceTree = "<group>"; };
 		11C735CA9A1AF5E864EC718E /* iTermStreamingPNGWriter.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = iTermStreamingPNGWriter.m; sourceTree = "<group>"; };
 		19537E68A2ADEB03B3086882 /* iTermBlurRowBuffer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = iTermBlurRowBuffer.swift; sourceTree = "<group>"; };
@@ -11374,6 +11376,7 @@
 				A67A502726CCD3E200281693 /* terminfo */,
 				A629F57223AF2DD900C2F16B /* shell_integration */,
 				A629F57723AF2DD900C2F16B /* utilities */,
+				A59DFDD38D8F83A4A94B3F51 /* monaco-editor */,
 				A616D78F2EA86224000C0C18 /* iterm2-keepassxc-adapter */,
 				A616D7902EA86225000C0C18 /* iterm2-bitwarden-adapter */,
 			);
@@ -17634,6 +17637,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A56FADEEAA55EFB0B846D102 /* monaco-editor in Resources */,
 				A6109B612B969B4100D8E4E9 /* graphic_neovim.png in Resources */,
 				A65DF4A12849601A00AA29AB /* .zshenv in Resources */,
 				A6CC2D0A2E4A7FA600F8D620 /* ssh-page-no-conductor.html in Resources */,

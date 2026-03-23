@@ -67,6 +67,7 @@ static const CGFloat kTideyEditorTabStripHeight = 34;
 static const CGFloat kTideyDragHandleWidth = 4;
 static const CGFloat kTideyChromeToggleButtonWidth = 18;
 static const CGFloat kTideyChromeToggleButtonHeight = 34;
+static NSString *const kTideyBundledMonacoVersion = @"0.52.2";
 static NSString *const kTideyLastEditorFilePathDefaultsKey = @"TideyLastEditorFilePath";
 static NSString *const kTideyLastEditorFileTreeRootDefaultsKey = @"TideyLastEditorFileTreeRoot";
 static NSUserInterfaceItemIdentifier const kTideySidebarCloseViewIdentifier = @"TideySidebarCloseView";
@@ -2016,8 +2017,49 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         return;
     }
     _tideyEditorShellLoaded = YES;
+    NSURL *baseURL = [self tideyEditorMonacoBaseURL];
     [_tideyEditorWebView loadHTMLString:[self tideyEditorHTML]
-                                baseURL:[NSURL URLWithString:@"https://cdn.jsdelivr.net/"]];
+                                baseURL:baseURL];
+}
+
+- (NSURL *)tideyEditorMonacoBundleURL {
+    return [[NSBundle mainBundle] URLForResource:@"monaco-editor" withExtension:nil];
+}
+
+- (NSURL *)tideyEditorMonacoBaseURL {
+    NSURL *bundleURL = [self tideyEditorMonacoBundleURL];
+    if (bundleURL) {
+        return [bundleURL URLByAppendingPathComponent:@"min/" isDirectory:YES];
+    }
+    return [NSURL URLWithString:[NSString stringWithFormat:@"https://cdn.jsdelivr.net/npm/monaco-editor@%@/min/",
+                                 kTideyBundledMonacoVersion]];
+}
+
+- (NSURL *)tideyEditorMonacoVSURL {
+    NSURL *bundleURL = [self tideyEditorMonacoBundleURL];
+    if (bundleURL) {
+        return [bundleURL URLByAppendingPathComponent:@"min/vs" isDirectory:YES];
+    }
+    return [NSURL URLWithString:[NSString stringWithFormat:@"https://cdn.jsdelivr.net/npm/monaco-editor@%@/min/vs",
+                                 kTideyBundledMonacoVersion]];
+}
+
+- (NSURL *)tideyEditorMonacoLoaderURL {
+    NSURL *bundleURL = [self tideyEditorMonacoBundleURL];
+    if (bundleURL) {
+        return [bundleURL URLByAppendingPathComponent:@"min/vs/loader.js"];
+    }
+    return [NSURL URLWithString:[NSString stringWithFormat:@"https://cdn.jsdelivr.net/npm/monaco-editor@%@/min/vs/loader.js",
+                                 kTideyBundledMonacoVersion]];
+}
+
+- (NSURL *)tideyEditorMonacoWorkerURL {
+    NSURL *bundleURL = [self tideyEditorMonacoBundleURL];
+    if (bundleURL) {
+        return [bundleURL URLByAppendingPathComponent:@"min/vs/base/worker/workerMain.js"];
+    }
+    return [NSURL URLWithString:[NSString stringWithFormat:@"https://cdn.jsdelivr.net/npm/monaco-editor@%@/min/vs/base/worker/workerMain.js",
+                                 kTideyBundledMonacoVersion]];
 }
 
 - (NSString *)tideyEditorFileTreeRootPath {
@@ -2240,7 +2282,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         tabView.layer.borderWidth = selected ? 1 : 0;
         tabView.layer.borderColor = [NSColor colorWithWhite:0.28 alpha:1].CGColor;
 
-        NSButton *selectButton = [[NSButton alloc] initWithFrame:NSMakeRect(0, 0, tabWidth - 24, tabHeight)];
+        NSButton *selectButton = [[NSButton alloc] initWithFrame:NSMakeRect(8, 0, tabWidth - 32, tabHeight)];
         selectButton.bordered = NO;
         selectButton.buttonType = NSButtonTypeMomentaryChange;
         selectButton.alignment = NSTextAlignmentLeft;
@@ -2682,78 +2724,86 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 
 - (NSString *)tideyEditorHTML {
-    return @"<!doctype html>"
-    "<html><head><meta charset='utf-8'>"
-    "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-    "<style>"
-    "html, body, #editor { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#16181d; }"
-    "body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; }"
-    "</style>"
-    "<script>"
-    "window.MonacoEnvironment = {"
-    "  getWorkerUrl: function() {"
-    "    const worker = `self.MonacoEnvironment = { baseUrl: 'https://cdn.jsdelivr.net/npm/monaco-editor@latest/min/' };"
-    "importScripts('https://cdn.jsdelivr.net/npm/monaco-editor@latest/min/vs/base/worker/workerMain.js');`;"
-    "    return 'data:text/javascript;charset=utf-8,' + encodeURIComponent(worker);"
-    "  }"
-    "};"
-    "window.tideyNative = {"
-    "  setValue(value) {"
-    "    window.__tideyPendingValue = value || '';"
-    "    if (window.__tideyEditor) { window.__tideyApplyingNativeUpdate = true; window.__tideyEditor.setValue(window.__tideyPendingValue); window.__tideyApplyingNativeUpdate = false; }"
-    "  },"
-    "  setLanguage(language) {"
-    "    window.__tideyPendingLanguage = language || 'plaintext';"
-    "    if (window.__tideyEditor) {"
-    "      const model = window.__tideyEditor.getModel();"
-    "      if (model) { monaco.editor.setModelLanguage(model, window.__tideyPendingLanguage); }"
-    "    }"
-    "  },"
-    "  setEditable(editable) {"
-    "    window.__tideyPendingEditable = !!editable;"
-    "    if (window.__tideyEditor) { window.__tideyEditor.updateOptions({ readOnly: !window.__tideyPendingEditable }); }"
-    "  }"
-    "};"
-    "</script>"
-    "<script src='https://cdn.jsdelivr.net/npm/monaco-editor@latest/min/vs/loader.js'></script>"
-    "</head><body><div id='editor'></div>"
-    "<script>"
-    "require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@latest/min/vs' } });"
-    "require(['vs/editor/editor.main'], function() {"
-    "  window.__tideyEditor = monaco.editor.create(document.getElementById('editor'), {"
-    "    value: '',"
-    "    language: 'plaintext',"
-    "    theme: 'vs-dark',"
-    "    readOnly: false,"
-    "    automaticLayout: true,"
-    "    wordWrap: 'on',"
-    "    wordWrapColumn: 80,"
-    "    minimap: { enabled: false },"
-    "    scrollBeyondLastLine: false,"
-    "    fontSize: 13"
-    "  });"
-    "  window.__tideyEditor.onDidChangeModelContent(function() {"
-    "    if (window.__tideyApplyingNativeUpdate) { return; }"
-    "    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.tideyEditorChanged) {"
-    "      window.webkit.messageHandlers.tideyEditorChanged.postMessage({ value: window.__tideyEditor.getValue() });"
-    "    }"
-    "  });"
-    "  window.addEventListener('keydown', function(event) {"
-    "    if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && (event.key === 's' || event.key === 'S')) {"
-    "      event.preventDefault();"
-    "      if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.tideyEditorSaveRequested) {"
-    "        window.webkit.messageHandlers.tideyEditorSaveRequested.postMessage({});"
-    "      }"
-    "    }"
-    "  });"
-    "  if (window.__tideyPendingLanguage) { window.tideyNative.setLanguage(window.__tideyPendingLanguage); }"
-    "  if (window.__tideyPendingValue !== undefined) { window.tideyNative.setValue(window.__tideyPendingValue); }"
-    "  if (window.__tideyPendingEditable !== undefined) { window.tideyNative.setEditable(window.__tideyPendingEditable); }"
-    "  if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.tideyEditorReady) {"
-    "    window.webkit.messageHandlers.tideyEditorReady.postMessage({ ready: true });"
-    "  }"
-    "});"
-    "</script></body></html>";
+    NSString *baseURLString = [[self tideyEditorMonacoBaseURL] absoluteString];
+    NSString *vsURLString = [[self tideyEditorMonacoVSURL] absoluteString];
+    NSString *loaderURLString = [[self tideyEditorMonacoLoaderURL] absoluteString];
+    NSString *workerURLString = [[self tideyEditorMonacoWorkerURL] absoluteString];
+    return [NSString stringWithFormat:@"<!doctype html>"
+            "<html><head><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+            "<style>"
+            "html, body, #editor { margin:0; padding:0; width:100%%; height:100%%; overflow:hidden; background:#16181d; }"
+            "body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; }"
+            "</style>"
+            "<script>"
+            "window.MonacoEnvironment = {"
+            "  getWorkerUrl: function() {"
+            "    const worker = `self.MonacoEnvironment = { baseUrl: '%@' };"
+            "importScripts('%@');`;"
+            "    return 'data:text/javascript;charset=utf-8,' + encodeURIComponent(worker);"
+            "  }"
+            "};"
+            "window.tideyNative = {"
+            "  setValue(value) {"
+            "    window.__tideyPendingValue = value || '';"
+            "    if (window.__tideyEditor) { window.__tideyApplyingNativeUpdate = true; window.__tideyEditor.setValue(window.__tideyPendingValue); window.__tideyApplyingNativeUpdate = false; }"
+            "  },"
+            "  setLanguage(language) {"
+            "    window.__tideyPendingLanguage = language || 'plaintext';"
+            "    if (window.__tideyEditor) {"
+            "      const model = window.__tideyEditor.getModel();"
+            "      if (model) { monaco.editor.setModelLanguage(model, window.__tideyPendingLanguage); }"
+            "    }"
+            "  },"
+            "  setEditable(editable) {"
+            "    window.__tideyPendingEditable = !!editable;"
+            "    if (window.__tideyEditor) { window.__tideyEditor.updateOptions({ readOnly: !window.__tideyPendingEditable }); }"
+            "  }"
+            "};"
+            "</script>"
+            "<script src='%@'></script>"
+            "</head><body><div id='editor'></div>"
+            "<script>"
+            "require.config({ paths: { vs: '%@' } });"
+            "require(['vs/editor/editor.main'], function() {"
+            "  window.__tideyEditor = monaco.editor.create(document.getElementById('editor'), {"
+            "    value: '',"
+            "    language: 'plaintext',"
+            "    theme: 'vs-dark',"
+            "    readOnly: false,"
+            "    automaticLayout: true,"
+            "    wordWrap: 'on',"
+            "    wordWrapColumn: 80,"
+            "    minimap: { enabled: false },"
+            "    scrollBeyondLastLine: false,"
+            "    fontSize: 13"
+            "  });"
+            "  window.__tideyEditor.onDidChangeModelContent(function() {"
+            "    if (window.__tideyApplyingNativeUpdate) { return; }"
+            "    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.tideyEditorChanged) {"
+            "      window.webkit.messageHandlers.tideyEditorChanged.postMessage({ value: window.__tideyEditor.getValue() });"
+            "    }"
+            "  });"
+            "  window.addEventListener('keydown', function(event) {"
+            "    if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && (event.key === 's' || event.key === 'S')) {"
+            "      event.preventDefault();"
+            "      if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.tideyEditorSaveRequested) {"
+            "        window.webkit.messageHandlers.tideyEditorSaveRequested.postMessage({});"
+            "      }"
+            "    }"
+            "  });"
+            "  if (window.__tideyPendingLanguage) { window.tideyNative.setLanguage(window.__tideyPendingLanguage); }"
+            "  if (window.__tideyPendingValue !== undefined) { window.tideyNative.setValue(window.__tideyPendingValue); }"
+            "  if (window.__tideyPendingEditable !== undefined) { window.tideyNative.setEditable(window.__tideyPendingEditable); }"
+            "  if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.tideyEditorReady) {"
+            "    window.webkit.messageHandlers.tideyEditorReady.postMessage({ ready: true });"
+            "  }"
+            "});"
+            "</script></body></html>",
+            baseURLString,
+            workerURLString,
+            loaderURLString,
+            vsURLString];
 }
 
 - (NSString *)tideySidebarWorkspaceTitleAtIndex:(NSInteger)index {
