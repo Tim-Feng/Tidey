@@ -2432,7 +2432,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         ? MIN(self.tideyEditorFileTreeWidth, MAX(0, NSWidth(bounds) - kTideyMinimumEditorContentWidth))
         : 0;
     const CGFloat editorWidth = MAX(0, NSWidth(bounds) - fileTreeWidth);
-    _tideyEditorWebView.frame = NSMakeRect(0, 0, editorWidth, contentHeight);
+    // Offset editor content to align with terminal content (below session title bar).
+    // Session title height = iTermGetStatusBarHeight() + 1 = 22pt.
+    const CGFloat sessionTitleOffset = 22;
+    _tideyEditorWebView.frame = NSMakeRect(0, 0, editorWidth, contentHeight - sessionTitleOffset);
     _tideyEditorFileTreeContainerView.hidden = !self.shouldShowTideyEditorFileTree;
     _tideyEditorFileTreeContainerView.frame = NSMakeRect(editorWidth, 0, fileTreeWidth, contentHeight);
     _tideyEditorFileTreeScrollView.frame = _tideyEditorFileTreeContainerView.bounds;
@@ -3203,6 +3206,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     }
     const CGFloat panelHeight = MAX(0, panelTop - panelOriginY);
     _tideyEditorPanelView.frame = NSMakeRect(originX, panelOriginY, MIN(width, rightEdge), panelHeight);
+
     [self layoutTideyEditorContents];
     if (_tideyEditorReady) {
         [_tideyEditorWebView evaluateJavaScript:@"window.__tideyEditor && window.__tideyEditor.layout();"
