@@ -11738,8 +11738,6 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
     return size;
 }
 
-
-
 - (NSString *)rootTerminalViewWindowSizeViewDetailString {
     if (_sizeLocked && [self windowTypeSupportsSizeLock]) {
         return @"Window size locked";

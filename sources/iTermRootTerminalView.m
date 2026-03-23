@@ -107,11 +107,10 @@ static NSView *TideyFindSubviewWithIdentifier(NSView *container, NSUserInterface
 }
 
 static CGFloat TideyEditorEffectiveTabStripHeight(CGFloat terminalTabBarHeight) {
-    // Always match terminal tab bar height. Fallback 24 if not yet available.
     if (terminalTabBarHeight > 0) {
         return round(terminalTabBarHeight);
     }
-    return 24;
+    return kTideyEditorTabStripHeight;
 }
 
 @class TideyEditorFileNode;
@@ -1796,8 +1795,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 
 - (void)setCurrentSessionAlpha:(CGFloat)alpha {
-    const BOOL hideVFX = PSMShouldExtendTransparencyIntoMinimalTabBar() && (alpha < 1);
-    _tabBarBacking.visualEffectView.hidden = hideVFX;
+    _tabBarBacking.visualEffectView.hidden = PSMShouldExtendTransparencyIntoMinimalTabBar() && (alpha < 1);
 }
 
 #pragma mark - Division View
@@ -2432,9 +2430,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     const CGFloat tabStripHeight = TideyEditorEffectiveTabStripHeight(_tabBarControl.height);
     _tideyEditorTabStripView.frame = NSMakeRect(0, NSHeight(bounds) - tabStripHeight, NSWidth(bounds), tabStripHeight);
 
-    // Account for the terminal session title bar so editor content aligns with terminal content.
-    const CGFloat sessionTitleBarHeight = [_delegate rootTerminalViewSessionTitleBarHeight];
-    const CGFloat contentHeight = MAX(0, NSHeight(bounds) - tabStripHeight - sessionTitleBarHeight);
+    const CGFloat contentHeight = MAX(0, NSHeight(bounds) - tabStripHeight);
     const CGFloat fileTreeWidth = self.shouldShowTideyEditorFileTree
         ? MIN(self.tideyEditorFileTreeWidth, MAX(0, NSWidth(bounds) - kTideyMinimumEditorContentWidth))
         : 0;
@@ -2524,6 +2520,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         [subview removeFromSuperview];
     }
 
+    _tideyEditorTabStripView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.102
+                                                                         green:0.108
+                                                                          blue:0.135
+                                                                         alpha:1].CGColor;
     const CGFloat stripHeight = NSHeight(_tideyEditorTabStripView.bounds) > 0 ?
         NSHeight(_tideyEditorTabStripView.bounds) :
         TideyEditorEffectiveTabStripHeight(_tabBarControl.height);
