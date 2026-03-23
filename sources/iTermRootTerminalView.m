@@ -3189,12 +3189,14 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     const CGFloat tabStripHeight = TideyEditorEffectiveTabStripHeight(_tabBarControl.height);
     const CGFloat panelOriginY = outputs.tabViewFrame.origin.y;
     // When the terminal tab bar is visible, align the editor panel top with
-    // the tab bar top so the editor tab strip doesn't extend above it.
+    // the tab bar top so the editor tab strip sits at the same Y as the tab bar.
     // When hidden, add the tab strip height but clamp to the content view.
     CGFloat panelTop;
     if (!CGRectIsEmpty(outputs.tabBarFrame)) {
-        // Align exactly with terminal content top (tab bar top + 1pt for division line)
-        panelTop = CGRectGetMaxY(outputs.tabBarFrame) + 1;
+        // Align editor tab strip exactly with terminal tab bar (same maxY).
+        // The panel extends from tabViewFrame.origin.y to tabBarFrame.maxY,
+        // so the tab strip (tabStripHeight from the top) lands on tabBarFrame.origin.y.
+        panelTop = CGRectGetMaxY(outputs.tabBarFrame);
     } else {
         panelTop = MIN(CGRectGetMaxY(outputs.tabViewFrame) + tabStripHeight,
                        NSHeight(self.bounds));
