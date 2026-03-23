@@ -180,8 +180,8 @@ static CGFloat TideyEditorEffectiveTabStripHeight(CGFloat terminalTabBarHeight) 
 - (void)syncTideySidebarSelection;
 - (NSTableCellView *)newTideySidebarCellView;
 - (void)configureTideySidebarCellView:(NSTableCellView *)cellView row:(NSInteger)row;
-- (NSView *)tideySidebarDragPreviewForRow:(NSInteger)row width:(CGFloat)width;
-- (NSImage *)tideySidebarDragPreviewImageForRow:(NSInteger)row width:(CGFloat)width;
+- (NSView *)tideySidebarDragPreviewForRow:(NSInteger)row width:(CGFloat)width height:(CGFloat)height;
+- (NSImage *)tideySidebarDragPreviewImageForRow:(NSInteger)row width:(CGFloat)width height:(CGFloat)height;
 - (NSMenu *)tideySidebarMenuForRow:(NSInteger)row;
 - (NSMenuItem *)tideySidebarMenuItemWithTitle:(NSString *)title
                                        action:(SEL)action
@@ -3733,13 +3733,16 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         if (row < 0 || row >= strongSelf.numberOfTideySidebarWorkspaces) {
             return;
         }
-        CGFloat previewWidth = NSWidth([strongSelf->_tideySidebarTableView rectOfRow:row]);
-        previewWidth = MAX(0, previewWidth);
-        NSImage *image = [strongSelf tideySidebarDragPreviewImageForRow:row
-                                                                  width:previewWidth];
-        // Only replace the image, keep the system's default frame/position.
-        // This avoids coordinate system mismatches that cause the preview
-        // to jump from the wrong position.
+        // Capture the actual row view as the drag image for pixel-perfect match.
+        NSTableRowView *rowView = [strongSelf->_tideySidebarTableView rowViewAtRow:row makeIfNecessary:NO];
+        if (!rowView) {
+            return;
+        }
+        NSRect rowBounds = rowView.bounds;
+        NSBitmapImageRep *bitmap = [rowView bitmapImageRepForCachingDisplayInRect:rowBounds];
+        [rowView cacheDisplayInRect:rowBounds toBitmapImageRep:bitmap];
+        NSImage *image = [[NSImage alloc] initWithSize:rowBounds.size];
+        [image addRepresentation:bitmap];
         draggingItem.imageComponentsProvider = ^NSArray<NSDraggingImageComponent *> * {
             NSDraggingImageComponent *comp = [[NSDraggingImageComponent alloc]
                 initWithKey:NSDraggingImageComponentIconKey];
@@ -3850,8 +3853,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     }
 }
 
-- (NSView *)tideySidebarDragPreviewForRow:(NSInteger)row width:(CGFloat)width {
-    NSView *container = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, _tideySidebarTableView.rowHeight)];
+- (NSView *)tideySidebarDragPreviewForRow:(NSInteger)row width:(CGFloat)width height:(CGFloat)height {
+    NSView *container = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, height)];
     container.wantsLayer = YES;
     container.layer.backgroundColor = NSColor.clearColor.CGColor;
 
@@ -3870,8 +3873,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     return container;
 }
 
-- (NSImage *)tideySidebarDragPreviewImageForRow:(NSInteger)row width:(CGFloat)width {
-    NSView *preview = [self tideySidebarDragPreviewForRow:row width:width];
+- (NSImage *)tideySidebarDragPreviewImageForRow:(NSInteger)row width:(CGFloat)width height:(CGFloat)height {
+    NSView *preview = [self tideySidebarDragPreviewForRow:row width:width height:height];
     [preview layoutSubtreeIfNeeded];
     NSRect bounds = preview.bounds;
     NSBitmapImageRep *bitmap = [preview bitmapImageRepForCachingDisplayInRect:bounds];
