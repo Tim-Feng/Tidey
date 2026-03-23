@@ -2240,6 +2240,7 @@ static iTermKeyEventReplayer *gReplayer;
         @"Make Terminal Default Term",
         @"Install Shell Integration",
         @"Remove Recent Profiles from Dock Menu",
+        @"Services",
     ];
 
     // Titles of dynamically-added items to hide (e.g. DEBUG-only items).
