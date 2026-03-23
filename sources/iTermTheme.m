@@ -34,76 +34,12 @@
 
 - (id<PSMTabStyle>)tabStyleWithDelegate:(id<PSMMinimalTabStyleDelegate>)delegate
                     effectiveAppearance:(NSAppearance *)effectiveAppearance {
-    iTermPreferencesTabStyle preferredStyle = [iTermPreferences intForKey:kPreferenceKeyTabStyle];
-    if (preferredStyle == TAB_STYLE_MINIMAL) {
-        id<PSMTabStyle> style = [[PSMMinimalTabStyle alloc] init];
-        [(PSMMinimalTabStyle *)style setDelegate:delegate];
-        return style;
-    }
-    iTermPreferencesTabStyle tabStyle = preferredStyle;
-    switch (preferredStyle) {
-        case TAB_STYLE_AUTOMATIC:
-        case TAB_STYLE_COMPACT:
-        case TAB_STYLE_MINIMAL:
-            // 10.14 path
-            tabStyle = [effectiveAppearance it_tabStyle:preferredStyle];
-            break;
-
-        case TAB_STYLE_LIGHT:
-        case TAB_STYLE_DARK:
-        case TAB_STYLE_LIGHT_HIGH_CONTRAST:
-        case TAB_STYLE_DARK_HIGH_CONTRAST:
-            // Use the stated style. it_tabStyle assumes you want a style based on the current
-            // appearance but this is the one case where that is not true.
-            // If there is only one tab and it has a dark tab color the style will be adjusted
-            // later in the call to updateTabColors.
-            break;
-    }
-    // Note that it_tabStyle: maps preferredStyle, which comes from settings, onto dark/light/dark high contrast/light high contrast.
-    switch (tabStyle) {
-        case TAB_STYLE_AUTOMATIC:
-        case TAB_STYLE_COMPACT:
-        case TAB_STYLE_MINIMAL:
-            assert(NO);
-        case TAB_STYLE_LIGHT:
-            if (preferredStyle == TAB_STYLE_COMPACT) {
-                return [[PSMYosemiteTabStyle alloc] init];
-            }
-            if (@available(macOS 26, *)) {
-                if (![iTermAdvancedSettingsModel useSequoiaStyleTabs]) {
-                    return [[PSMTahoeTabStyle alloc] init];
-                }
-            }
-            return [[PSMYosemiteTabStyle alloc] init];
-        case TAB_STYLE_DARK:
-            if (preferredStyle == TAB_STYLE_COMPACT) {
-                return [[PSMDarkTabStyle alloc] init];
-            }
-            if (@available(macOS 26, *)) {
-                if (![iTermAdvancedSettingsModel useSequoiaStyleTabs]) {
-                    return [[PSMTahoeDarkTabStyle alloc] init];
-                }
-            }
-            return [[PSMDarkTabStyle alloc] init];
-        case TAB_STYLE_LIGHT_HIGH_CONTRAST:
-            if (@available(macOS 26, *)) {
-                if (![iTermAdvancedSettingsModel useSequoiaStyleTabs] &&
-                    preferredStyle != TAB_STYLE_COMPACT) {
-                    return [[PSMTahoeLightHighContrastTabStyle alloc] init];
-                }
-            }
-            return [[PSMLightHighContrastTabStyle alloc] init];
-        case TAB_STYLE_DARK_HIGH_CONTRAST:
-            if (@available(macOS 26, *)) {
-                if (![iTermAdvancedSettingsModel useSequoiaStyleTabs] &&
-                    preferredStyle != TAB_STYLE_COMPACT) {
-                    return [[PSMTahoeDarkHighContrastTabStyle alloc] init];
-                }
-            }
-            return [[PSMDarkHighContrastTabStyle alloc] init];
-    }
-    assert(NO);
-    return nil;
+    // Tidey always uses the customized minimal tab style so terminal tabs
+    // match the editor strip, regardless of the user's legacy iTerm tab style
+    // preference.
+    id<PSMTabStyle> style = [[PSMMinimalTabStyle alloc] init];
+    [(PSMMinimalTabStyle *)style setDelegate:delegate];
+    return style;
 }
 
 - (BOOL)useMinimalStyle {
