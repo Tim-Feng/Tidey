@@ -627,6 +627,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSView *_tideyEditorPanelView;
     NSTextField *_tideyEditorPanelLabel;
     NSView *_tideyEditorTabStripView;
+    NSView *_tideyEditorTitleBarSpacer;
     WKWebView *_tideyEditorWebView;
     NSView *_tideyEditorFileTreeContainerView;
     NSScrollView *_tideyEditorFileTreeScrollView;
@@ -819,6 +820,15 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                                               blue:0.13
                                                                              alpha:1].CGColor;
         [_tideyEditorPanelView addSubview:_tideyEditorTabStripView];
+
+        _tideyEditorTitleBarSpacer = [[NSView alloc] initWithFrame:NSZeroRect];
+        _tideyEditorTitleBarSpacer.wantsLayer = YES;
+        _tideyEditorTitleBarSpacer.layer.backgroundColor = [NSColor colorWithSRGBRed:0.09
+                                                                               green:0.10
+                                                                                blue:0.13
+                                                                               alpha:1].CGColor;
+        _tideyEditorTitleBarSpacer.hidden = YES;
+        [_tideyEditorPanelView addSubview:_tideyEditorTitleBarSpacer];
 
         _tideyEditorPanelLabel = [NSTextField labelWithString:@"Loading Editor…"];
         _tideyEditorPanelLabel.textColor = [NSColor colorWithWhite:0.92 alpha:1];
@@ -2428,8 +2438,19 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     const NSRect bounds = _tideyEditorPanelView.bounds;
     const CGFloat tabStripHeight = TideyEditorEffectiveTabStripHeight(_tabBarControl.height);
     _tideyEditorTabStripView.frame = NSMakeRect(0, NSHeight(bounds) - tabStripHeight, NSWidth(bounds), tabStripHeight);
+
+    // Show a spacer that matches the session title bar height so the editor
+    // content top aligns with the terminal content top (no visible "step").
+    const CGFloat titleBarSpacerHeight = [self.delegate rootTerminalViewSessionTitleBarHeight];
+    const BOOL showSpacer = (titleBarSpacerHeight > 0);
+    _tideyEditorTitleBarSpacer.hidden = !showSpacer;
+    const CGFloat spacerY = NSHeight(bounds) - tabStripHeight - titleBarSpacerHeight;
+    if (showSpacer) {
+        _tideyEditorTitleBarSpacer.frame = NSMakeRect(0, spacerY, NSWidth(bounds), titleBarSpacerHeight);
+    }
+
     // Offset to align editor content top with terminal content top (division view + border).
-    const CGFloat contentHeight = MAX(0, NSHeight(bounds) - tabStripHeight);
+    const CGFloat contentHeight = MAX(0, NSHeight(bounds) - tabStripHeight - titleBarSpacerHeight);
     const CGFloat fileTreeWidth = self.shouldShowTideyEditorFileTree
         ? MIN(self.tideyEditorFileTreeWidth, MAX(0, NSWidth(bounds) - kTideyMinimumEditorContentWidth))
         : 0;
