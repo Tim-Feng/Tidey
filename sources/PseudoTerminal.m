@@ -1335,15 +1335,15 @@ ITERM_WEAKLY_REFERENCEABLE
         if (panelIndex != NSNotFound) {
             [_contentView.tabView selectTabViewItemAtIndex:panelIndex];
             [_contentView selectTideySidebarWorkspaceAtIndex:index];
-            [self tideyMarkWorkspaceReadAtIndex:index];
             if (self.currentSession.mainResponder) {
                 [[self window] makeFirstResponder:self.currentSession.mainResponder];
             }
             return YES;
         }
     }
-    [self showWorkspaceAtIndex:index];
+    // Only mark read when actually switching to a different workspace
     [self tideyMarkWorkspaceReadAtIndex:index];
+    [self showWorkspaceAtIndex:index];
     return YES;
 }
 

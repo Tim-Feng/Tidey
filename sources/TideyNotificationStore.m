@@ -140,6 +140,15 @@ static NSString *const kTideyBroadcastWorkspaceIdentifier = @"*";
     [self postDidChangeWithNotification:nil];
 }
 
+- (TideyNotificationItem *)latestUnreadForWorkspaceID:(NSString *)workspaceID {
+    for (TideyNotificationItem *item in self.notifications) {
+        if (!item.isRead && [self tideyNotificationItem:item matchesWorkspaceID:workspaceID]) {
+            return item;
+        }
+    }
+    return nil;
+}
+
 - (void)clearAllNotifications {
     if (self.notifications.count == 0) {
         return;

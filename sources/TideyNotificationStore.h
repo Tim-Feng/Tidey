@@ -41,6 +41,8 @@ extern NSNotificationName const TideyNotificationStoreDidChangeNotification;
 - (void)removeNotificationWithID:(NSString *)notificationID;
 - (void)clearAllNotifications;
 
+- (nullable TideyNotificationItem *)latestUnreadForWorkspaceID:(NSString *)workspaceID;
+
 @end
 
 NS_ASSUME_NONNULL_END
