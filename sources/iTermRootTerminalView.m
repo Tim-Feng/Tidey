@@ -3363,14 +3363,11 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
     // Update the tab style.
     [self.tabBarControl setDisableTabClose:!iTermAdvancedSettingsModel.tabCloseButtonsAlwaysVisible];
-    if ([iTermPreferences boolForKey:kPreferenceKeyHideTabNumber]) {
-        [self.tabBarControl setCellMinWidth:[iTermAdvancedSettingsModel minCompactTabWidth]];
-    } else {
-        [self.tabBarControl setCellMinWidth:[iTermAdvancedSettingsModel minTabWidth]];
-    }
-    [self.tabBarControl setSizeCellsToFit:[iTermAdvancedSettingsModel useUnevenTabs]];
-    [self.tabBarControl setStretchCellsToFit:[iTermPreferences boolForKey:kPreferenceKeyStretchTabsToFillBar]];
-    [self.tabBarControl setCellOptimumWidth:[iTermAdvancedSettingsModel optimumTabWidth]];
+    // Tidey: match terminal tab sizing to editor tabs (min 112, max 240)
+    [self.tabBarControl setCellMinWidth:112];
+    [self.tabBarControl setSizeCellsToFit:YES];
+    [self.tabBarControl setStretchCellsToFit:NO];
+    [self.tabBarControl setCellOptimumWidth:240];
     [self.tabBarControl setPinnedTabWidth:[iTermAdvancedSettingsModel pinnedTabWidth]];
     self.tabBarControl.smartTruncation = [iTermAdvancedSettingsModel tabTitlesUseSmartTruncation];
 
