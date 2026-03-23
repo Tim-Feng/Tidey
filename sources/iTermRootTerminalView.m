@@ -4102,41 +4102,51 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         statusEntries = [[TideyStatusStore sharedStore] statusEntriesForWorkspaceID:workspaceID];
     }
     BOOL hasStatus = (statusEntries.count > 0);
-    CGFloat statusOffset = 0;
 
     NSTextField *bodyField = (NSTextField *)[cellView viewWithTag:1007];
     NSTextField *statusField = (NSTextField *)[cellView viewWithTag:1008];
 
     if (hasBody) {
-        // Expanded compact layout (cmux-style):
-        //   Title (badge + workspace name)      ✕
-        //   Notification body (up to 3 lines, gray)
-        //   Notification title (blue accent)
-        //   Status (if present)
+        // Expanded layout (cmux-style):
+        //   ① Badge + Workspace Title           ✕   (top row)
+        //   Notification body (up to 3 lines, gray)  (middle)
+        //   ⊕ Status (if present)                    (bottom, above cwd)
+        //   ~/cwd                                    (always at very bottom)
+        //
+        // Row height: 82 (no status) or 98 (with status).
+        // sOff shifts upper elements up when status adds 16pt to height.
+        const CGFloat sOff = hasStatus ? 16 : 0;
+
+        // --- Title row (top) ---
         cellView.textField.stringValue = [self tideySidebarWorkspaceTitleAtIndex:row];
         CGFloat titleX = (unreadCount > 0) ? 36 : 12;
         CGFloat titleMaxW = (unreadCount > 0) ? (width - 88) : (width - 64);
-        cellView.textField.frame = NSMakeRect(titleX, 60 + statusOffset, MAX(0, titleMaxW), 18);
+        cellView.textField.frame = NSMakeRect(titleX, 62 + sOff, MAX(0, titleMaxW), 16);
 
-        NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
-        NSString *notifTitle = latestNotification ? latestNotification.title : (anyNotification.title ?: @"");
-        subtitleField.stringValue = notifTitle;
-        subtitleField.textColor = selected ? [NSColor whiteColor] : [NSColor controlAccentColor];
-        subtitleField.font = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
-        subtitleField.frame = NSMakeRect(12, 2 + statusOffset, MAX(0, width - 24), 14);
-
-        bodyField.stringValue = anyNotification.body;
-        bodyField.textColor = selected ? [NSColor colorWithWhite:1 alpha:0.8] : [NSColor secondaryLabelColor];
-        bodyField.hidden = NO;
-        bodyField.frame = NSMakeRect(12, 18 + statusOffset, MAX(0, width - 24), 40);
-
-        pinView.frame = NSMakeRect(MAX(0, width - 48), 62 + statusOffset, 12, 12);
-        badgeView.frame = NSMakeRect(12, 52 + statusOffset, kTideySidebarBadgeSize, kTideySidebarBadgeSize);
+        badgeView.frame = NSMakeRect(12, 62 + sOff, kTideySidebarBadgeSize, kTideySidebarBadgeSize);
+        pinView.frame = NSMakeRect(MAX(0, width - 48), 64 + sOff, 12, 12);
 
         NSView *closeView = TideyFindCloseView(cellView);
-        closeView.frame = NSMakeRect(MAX(0, width - 28), 60 + statusOffset, 16, 16);
+        closeView.frame = NSMakeRect(MAX(0, width - 28), 62 + sOff, 16, 16);
         closeView.hidden = YES;
         closeView.alphaValue = 0.0;
+
+        // --- Notification body (middle, up to 3 lines) ---
+        NSString *bodyText = anyNotification.body;
+        if (bodyText.length == 0) {
+            bodyText = anyNotification.title ?: @"";
+        }
+        bodyField.stringValue = bodyText;
+        bodyField.textColor = selected ? [NSColor colorWithWhite:1 alpha:0.8] : [NSColor secondaryLabelColor];
+        bodyField.hidden = NO;
+        bodyField.frame = NSMakeRect(12, 22 + sOff, MAX(0, width - 24), 38);
+
+        // --- Bottom: cwd (subtitle field, always visible) ---
+        NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
+        subtitleField.stringValue = [self tideySidebarWorkspaceSubtitleAtIndex:row];
+        subtitleField.textColor = selected ? [NSColor colorWithWhite:1 alpha:0.8] : [NSColor secondaryLabelColor];
+        subtitleField.font = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
+        subtitleField.frame = NSMakeRect(12, 2, MAX(0, width - 24), 14);
     } else {
         // Normal layout (60pt row).
         // Only indent for badge when there are unread notifications.
@@ -4164,7 +4174,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         badgeView.frame = NSMakeRect(12, 22, kTideySidebarBadgeSize, kTideySidebarBadgeSize);
 
         NSView *closeView = TideyFindCloseView(cellView);
-        closeView.frame = NSMakeRect(MAX(0, width - 28), 32 + statusOffset, 16, 16);
+        closeView.frame = NSMakeRect(MAX(0, width - 28), 32, 16, 16);
         closeView.hidden = YES;
         closeView.alphaValue = 0.0;
     }
@@ -4227,7 +4237,9 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         }
         statusField.attributedStringValue = statusAttr;
         statusField.hidden = NO;
-        statusField.frame = NSMakeRect(12, 2, MAX(0, width - 24), 14);
+        // In expanded layout, status sits above cwd (y=18); otherwise at the bottom (y=2).
+        CGFloat statusY = hasBody ? 18 : 2;
+        statusField.frame = NSMakeRect(12, statusY, MAX(0, width - 24), 14);
         statusField.textColor = effectiveColor;
     } else {
         statusField.hidden = YES;
