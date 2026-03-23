@@ -4042,7 +4042,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
     NSTextField *statusField = [NSTextField newLabelStyledTextField];
     statusField.tag = 1008;
-    statusField.frame = NSMakeRect(36, 2, 164, 14);
+    statusField.frame = NSMakeRect(12, 2, 164, 12);
     statusField.autoresizingMask = NSViewWidthSizable;
     statusField.font = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
     statusField.textColor = [NSColor secondaryLabelColor];
@@ -4154,8 +4154,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         CGFloat textMaxW = (unreadCount > 0) ? (width - 88) : (width - 64);
 
         cellView.textField.stringValue = [self tideySidebarWorkspaceTitleAtIndex:row];
-        CGFloat titleY = hasStatus ? 36 : 30;
-        cellView.textField.frame = NSMakeRect(textX, titleY, MAX(0, textMaxW), 20);
+        CGFloat titleY = hasStatus ? 38 : 30;
+        cellView.textField.frame = NSMakeRect(textX, titleY, MAX(0, textMaxW), 18);
 
         NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
         subtitleField.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
@@ -4166,8 +4166,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
             subtitleField.stringValue = [self tideySidebarWorkspaceSubtitleAtIndex:row];
             subtitleField.textColor = selected ? [NSColor colorWithWhite:1 alpha:0.8] : [NSColor colorWithWhite:0.72 alpha:1];
         }
-        CGFloat subtitleY = hasStatus ? 20 : 12;
-        subtitleField.frame = NSMakeRect(12, subtitleY, MAX(0, width - 24), 16);
+        CGFloat subtitleY = hasStatus ? 22 : 12;
+        subtitleField.frame = NSMakeRect(12, subtitleY, MAX(0, width - 24), 14);
 
         bodyField.hidden = YES;
         bodyField.stringValue = @"";
@@ -4204,32 +4204,19 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                                                   attributes:textAttrs]];
             }
             if (entry.icon.length > 0) {
-                NSImage *symbolImage = [NSImage imageWithSystemSymbolName:entry.icon
-                                              accessibilityDescription:entry.icon];
-                if (symbolImage) {
-                    NSImageSymbolConfiguration *config =
-                        [NSImageSymbolConfiguration configurationWithPointSize:8
-                                                                       weight:NSFontWeightRegular];
-                    symbolImage = [symbolImage imageWithSymbolConfiguration:config];
-
+                // Use SF Symbol circle.fill as icon (matching cmux approach).
+                // Rendered via NSTextAttachment for precise vertical centering with text.
+                NSImage *circleImage = [NSImage imageWithSystemSymbolName:@"circle.fill"
+                                                accessibilityDescription:nil];
+                if (circleImage) {
+                    NSFont *textFont = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
+                    CGFloat iconSize = 6.0;
+                    // Center the icon vertically relative to the text cap height.
+                    CGFloat yOffset = (textFont.capHeight - iconSize) / 2.0;
                     NSTextAttachment *attachment = [[NSTextAttachment alloc] init];
-                    attachment.image = symbolImage;
-                    // Size the symbol to match the 10pt font metrics.
-                    CGFloat lineHeight = 10.0;
-                    CGFloat aspectRatio = symbolImage.size.width / MAX(symbolImage.size.height, 1);
-                    CGFloat attachmentHeight = lineHeight;
-                    CGFloat attachmentWidth = attachmentHeight * aspectRatio;
-                    attachment.bounds = NSMakeRect(0,
-                                                  (statusField.font.descender),
-                                                  attachmentWidth,
-                                                  attachmentHeight);
-
-                    NSMutableAttributedString *iconStr =
-                        [[NSAttributedString attributedStringWithAttachment:attachment] mutableCopy];
-                    [iconStr addAttribute:NSForegroundColorAttributeName
-                                    value:effectiveColor
-                                    range:NSMakeRange(0, iconStr.length)];
-                    [statusAttr appendAttributedString:iconStr];
+                    attachment.image = [circleImage it_imageWithTintColor:effectiveColor];
+                    attachment.bounds = NSMakeRect(0, yOffset, iconSize, iconSize);
+                    [statusAttr appendAttributedString:[NSAttributedString attributedStringWithAttachment:attachment]];
                     [statusAttr appendAttributedString:[[NSAttributedString alloc] initWithString:@" "
                                                                                       attributes:textAttrs]];
                 }
@@ -4240,7 +4227,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         statusField.attributedStringValue = statusAttr;
         statusField.hidden = NO;
         // In expanded layout, status sits above cwd (y=16); otherwise at the bottom (y=2).
-        CGFloat statusY = hasBody ? 16 : 2;
+        CGFloat statusY = hasBody ? 16 : 6;
         statusField.frame = NSMakeRect(12, statusY, MAX(0, width - 24), 12);
         statusField.textColor = effectiveColor;
     } else {
