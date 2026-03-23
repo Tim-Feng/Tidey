@@ -3010,6 +3010,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
             "<style>"
             "html, body, #editor { margin:0; padding:0; width:100%%; height:100%%; overflow:hidden; background:#16181d; }"
             "body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; }"
+            "::-webkit-scrollbar { display: none; }"
+            ".monaco-editor .scrollbar .slider { opacity: 0; transition: opacity 0.3s; }"
+            ".monaco-editor .scrollbar:hover .slider { opacity: 0.5; }"
+            ".monaco-editor .scrollbar .slider.active { opacity: 0.5; }"
             "</style>"
             "<script>"
             "window.MonacoEnvironment = {"
@@ -3053,7 +3057,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
             "    minimap: { enabled: false },"
             "    scrollBeyondLastLine: false,"
             "    renderLineHighlightOnlyWhenFocus: true,"
-            "    scrollbar: { vertical: 'auto', horizontal: 'auto', useShadows: false },"
+            "    scrollbar: { vertical: 'visible', horizontal: 'visible', verticalScrollbarSize: 6, horizontalScrollbarSize: 6, verticalSliderSize: 6, horizontalSliderSize: 6, useShadows: false, alwaysConsumeMouseWheel: false },"
+            "    overviewRulerLanes: 0,"
+            "    hideCursorInOverviewRuler: true,"
+            "    overviewRulerBorder: false,"
             "    fontSize: 13"
             "  });"
             "  window.__tideyEditor.onDidChangeModelContent(function() {"
@@ -3181,7 +3188,17 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     const CGFloat originX = MAX(0, rightEdge - width);
     const CGFloat tabStripHeight = TideyEditorEffectiveTabStripHeight(_tabBarControl.height);
     const CGFloat panelOriginY = outputs.tabViewFrame.origin.y;
-    const CGFloat panelHeight = outputs.tabViewFrame.size.height + tabStripHeight;
+    // When the terminal tab bar is visible, align the editor panel top with
+    // the tab bar top so the editor tab strip doesn't extend above it.
+    // When hidden, add the tab strip height but clamp to the content view.
+    CGFloat panelTop;
+    if (!CGRectIsEmpty(outputs.tabBarFrame)) {
+        panelTop = CGRectGetMaxY(outputs.tabBarFrame);
+    } else {
+        panelTop = MIN(CGRectGetMaxY(outputs.tabViewFrame) + tabStripHeight,
+                       NSHeight(self.bounds));
+    }
+    const CGFloat panelHeight = MAX(0, panelTop - panelOriginY);
     _tideyEditorPanelView.frame = NSMakeRect(originX, panelOriginY, MIN(width, rightEdge), panelHeight);
     [self layoutTideyEditorContents];
     if (_tideyEditorReady) {
