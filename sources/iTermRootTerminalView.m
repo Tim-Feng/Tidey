@@ -3934,12 +3934,12 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         notification = [[TideyNotificationStore sharedStore] latestNotificationForWorkspaceID:workspaceID];
     }
     if (notification && notification.body.length > 0) {
-        baseHeight = 82;
+        baseHeight = 68;
     }
     BOOL hasStatus = (workspaceID.length > 0 &&
                       [[TideyStatusStore sharedStore] hasStatusForWorkspaceID:workspaceID]);
     if (hasStatus) {
-        baseHeight += 16;
+        baseHeight += 14;
     }
     return baseHeight;
 }
@@ -4113,25 +4113,25 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         //   ⊕ Status (if present)                    (bottom, above cwd)
         //   ~/cwd                                    (always at very bottom)
         //
-        // Row height: 82 (no status) or 98 (with status).
-        // sOff shifts upper elements up when status adds 16pt to height.
-        const CGFloat sOff = hasStatus ? 16 : 0;
+        // Row height: 68 (no status) or 82 (with status).
+        // sOff shifts upper elements up when status adds 14pt to height.
+        const CGFloat sOff = hasStatus ? 14 : 0;
 
         // --- Title row (top) ---
         cellView.textField.stringValue = [self tideySidebarWorkspaceTitleAtIndex:row];
         CGFloat titleX = (unreadCount > 0) ? 36 : 12;
         CGFloat titleMaxW = (unreadCount > 0) ? (width - 88) : (width - 64);
-        cellView.textField.frame = NSMakeRect(titleX, 62 + sOff, MAX(0, titleMaxW), 16);
+        cellView.textField.frame = NSMakeRect(titleX, 46 + sOff, MAX(0, titleMaxW), 14);
 
-        badgeView.frame = NSMakeRect(12, 62 + sOff, kTideySidebarBadgeSize, kTideySidebarBadgeSize);
-        pinView.frame = NSMakeRect(MAX(0, width - 48), 64 + sOff, 12, 12);
+        badgeView.frame = NSMakeRect(12, 46 + sOff, kTideySidebarBadgeSize, kTideySidebarBadgeSize);
+        pinView.frame = NSMakeRect(MAX(0, width - 48), 48 + sOff, 12, 12);
 
         NSView *closeView = TideyFindCloseView(cellView);
-        closeView.frame = NSMakeRect(MAX(0, width - 28), 62 + sOff, 16, 16);
+        closeView.frame = NSMakeRect(MAX(0, width - 28), 46 + sOff, 16, 16);
         closeView.hidden = YES;
         closeView.alphaValue = 0.0;
 
-        // --- Notification body (middle, up to 3 lines) ---
+        // --- Notification body (middle, up to 2 lines) ---
         NSString *bodyText = anyNotification.body;
         if (bodyText.length == 0) {
             bodyText = anyNotification.title ?: @"";
@@ -4139,7 +4139,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         bodyField.stringValue = bodyText;
         bodyField.textColor = selected ? [NSColor colorWithWhite:1 alpha:0.8] : [NSColor secondaryLabelColor];
         bodyField.hidden = NO;
-        bodyField.frame = NSMakeRect(12, 22 + sOff, MAX(0, width - 24), 38);
+        bodyField.frame = NSMakeRect(12, 16 + sOff, MAX(0, width - 24), 28);
 
         // --- Bottom: cwd (subtitle field, always visible) ---
         NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
@@ -4206,14 +4206,14 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                               accessibilityDescription:entry.icon];
                 if (symbolImage) {
                     NSImageSymbolConfiguration *config =
-                        [NSImageSymbolConfiguration configurationWithPointSize:10
+                        [NSImageSymbolConfiguration configurationWithPointSize:8
                                                                        weight:NSFontWeightRegular];
                     symbolImage = [symbolImage imageWithSymbolConfiguration:config];
 
                     NSTextAttachment *attachment = [[NSTextAttachment alloc] init];
                     attachment.image = symbolImage;
                     // Size the symbol to match the 10pt font metrics.
-                    CGFloat lineHeight = 12.0;
+                    CGFloat lineHeight = 10.0;
                     CGFloat aspectRatio = symbolImage.size.width / MAX(symbolImage.size.height, 1);
                     CGFloat attachmentHeight = lineHeight;
                     CGFloat attachmentWidth = attachmentHeight * aspectRatio;
@@ -4237,9 +4237,9 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         }
         statusField.attributedStringValue = statusAttr;
         statusField.hidden = NO;
-        // In expanded layout, status sits above cwd (y=18); otherwise at the bottom (y=2).
-        CGFloat statusY = hasBody ? 18 : 2;
-        statusField.frame = NSMakeRect(12, statusY, MAX(0, width - 24), 14);
+        // In expanded layout, status sits above cwd (y=16); otherwise at the bottom (y=2).
+        CGFloat statusY = hasBody ? 16 : 2;
+        statusField.frame = NSMakeRect(12, statusY, MAX(0, width - 24), 12);
         statusField.textColor = effectiveColor;
     } else {
         statusField.hidden = YES;
