@@ -79,6 +79,7 @@
 #import "iTermFullScreenWindowManager.h"
 #import "iTermGlobalScopeController.h"
 #import "iTermGlobalSearchWindowController.h"
+#import "TideySocketServer.h"
 #import "iTermHotKeyController.h"
 #import "iTermHotKeyProfileBindingController.h"
 #import "iTermIntegerNumberFormatter.h"
@@ -1003,6 +1004,7 @@ static BOOL hasBecomeActive = NO;
 
 - (void)applicationWillTerminate:(NSNotification *)aNotification {
     DLog(@"applicationWillTerminate called");
+    [[TideySocketServer sharedServer] stop];
     [iTermController releaseSharedInstance];
     [[iTermModifierRemapper sharedInstance] setRemapModifiers:NO];
     DLog(@"applicationWillTerminate returning");
@@ -1376,6 +1378,7 @@ void TurnOnDebugLoggingAutomatically(void) {
     }
     [self turnOffMetalCaptureEnabledIfNeeded];
     [iTermFontPanel makeDefault];
+    [[TideySocketServer sharedServer] start];
 
     finishedLaunching_ = YES;
     // Create the app support directory

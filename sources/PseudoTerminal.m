@@ -142,6 +142,7 @@
 #import "iTermWindowHacks.h"
 #import "iTermWindowOcclusionChangeMonitor.h"
 #import "iTermWindowShortcutLabelTitlebarAccessoryViewController.h"
+#import "TideyNotificationStore.h"
 #include "iTermFileDescriptorClient.h"
 #import <QuartzCore/QuartzCore.h>
 #include <unistd.h>
@@ -240,6 +241,7 @@ typedef NS_ENUM(int, iTermShouldHaveTitleSeparator) {
 @property(nonatomic) NSInteger selectedPanelIndex;
 @property(nonatomic) NSTimeInterval creationTime;
 @property(nonatomic, copy) NSString *customTitle;
+@property(nonatomic, retain) NSUUID *identifier;
 @property(nonatomic) BOOL pinned;
 
 - (instancetype)initWithPanel:(PTYTab *)panel;
@@ -253,6 +255,7 @@ typedef NS_ENUM(int, iTermShouldHaveTitleSeparator) {
     self = [super init];
     if (self) {
         _panels = [[NSMutableArray alloc] init];
+        _identifier = [[NSUUID UUID] retain];
         if (panel) {
             [_panels addObject:panel];
         }
@@ -265,6 +268,7 @@ typedef NS_ENUM(int, iTermShouldHaveTitleSeparator) {
 - (void)dealloc {
     [_panels release];
     [_customTitle release];
+    [_identifier release];
     [super dealloc];
 }
 
@@ -329,6 +333,8 @@ typedef NS_ENUM(int, iTermShouldHaveTitleSeparator) {
 - (void)setPinned:(BOOL)pinned forWorkspaceAtIndex:(NSInteger)index;
 - (void)setCustomTitle:(NSString *)title forWorkspaceAtIndex:(NSInteger)index;
 - (void)clearCustomTitleForWorkspaceAtIndex:(NSInteger)index;
+- (NSString *)tideyWorkspaceIdentifierForWorkspace:(Workspace *)workspace;
+- (void)tideyMarkWorkspaceReadAtIndex:(NSInteger)index;
 - (void)renameWorkspaceAtIndex:(NSInteger)index;
 - (void)closeWorkspacesAtIndexes:(NSIndexSet *)indexes;
 @end
@@ -1171,6 +1177,19 @@ ITERM_WEAKLY_REFERENCEABLE
     return [self workspaceAtIndex:self.selectedWorkspaceIndex];
 }
 
+- (NSString *)tideyWorkspaceIdentifierForWorkspace:(Workspace *)workspace {
+    return workspace.identifier.UUIDString;
+}
+
+- (void)tideyMarkWorkspaceReadAtIndex:(NSInteger)index {
+    Workspace *workspace = [self workspaceAtIndex:index];
+    NSString *workspaceID = [self tideyWorkspaceIdentifierForWorkspace:workspace];
+    if (workspaceID.length == 0) {
+        return;
+    }
+    [[TideyNotificationStore sharedStore] markReadForWorkspaceID:workspaceID];
+}
+
 - (BOOL)tideyWorkspaceIsInStartupGracePeriod:(Workspace *)workspace {
     if (!workspace) {
         return NO;
@@ -1316,6 +1335,7 @@ ITERM_WEAKLY_REFERENCEABLE
         if (panelIndex != NSNotFound) {
             [_contentView.tabView selectTabViewItemAtIndex:panelIndex];
             [_contentView selectTideySidebarWorkspaceAtIndex:index];
+            [self tideyMarkWorkspaceReadAtIndex:index];
             if (self.currentSession.mainResponder) {
                 [[self window] makeFirstResponder:self.currentSession.mainResponder];
             }
@@ -1323,6 +1343,7 @@ ITERM_WEAKLY_REFERENCEABLE
         }
     }
     [self showWorkspaceAtIndex:index];
+    [self tideyMarkWorkspaceReadAtIndex:index];
     return YES;
 }
 
@@ -2156,6 +2177,16 @@ ITERM_WEAKLY_REFERENCEABLE
     // This is kind of cheating; we shouldn't assume that a session's delegate
     // is a tab. But it always is, and it would be slow to search.
     return (PTYTab *)session.delegate;
+}
+
+- (NSString *)tideyWorkspaceIdentifierForSession:(PTYSession *)session {
+    PTYTab *tab = [self tabForSession:session];
+    NSInteger index = [self indexOfWorkspaceContainingPanel:tab];
+    Workspace *workspace = [self workspaceAtIndex:index];
+    if (!workspace) {
+        workspace = self.selectedWorkspace;
+    }
+    return [self tideyWorkspaceIdentifierForWorkspace:workspace];
 }
 
 - (void)tabTitleDidChange:(PTYTab *)tab {
@@ -11328,6 +11359,12 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
     return [self tideySidebarDisplaySubtitleForSession:session panel:panel];
 }
 
+- (NSString *)rootTerminalViewTideySidebarWorkspaceIdentifierAtIndex:(NSInteger)index {
+    [self ensureTideyWorkspacesInitialized];
+    Workspace *workspace = [self workspaceAtIndex:index];
+    return [self tideyWorkspaceIdentifierForWorkspace:workspace];
+}
+
 - (BOOL)rootTerminalViewTideySidebarWorkspaceIsPinnedAtIndex:(NSInteger)index {
     return [self workspaceIsPinnedAtIndex:index];
 }
@@ -11405,6 +11442,10 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
         return;
     }
     [self closeWorkspacesAtIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(start, self.workspaces.count - start)]];
+}
+
+- (void)rootTerminalViewMarkTideySidebarWorkspaceReadAtIndex:(NSInteger)index {
+    [self tideyMarkWorkspaceReadAtIndex:index];
 }
 
 #pragma mark - PSMPUAFontProvider

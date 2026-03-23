@@ -4918,6 +4918,9 @@
 		A6F718D42266FDEB0053488E /* iTermSemanticHistoryController.m in Sources */ = {isa = PBXBuildFile; fileRef = 1D06A04F134CDBED00C414EF /* iTermSemanticHistoryController.m */; };
 		A6F718D7226704920053488E /* PTYSession+ARC.h in Headers */ = {isa = PBXBuildFile; fileRef = A6F718D5226704920053488E /* PTYSession+ARC.h */; };
 		A6F718D8226704920053488E /* PTYSession+ARC.m in Sources */ = {isa = PBXBuildFile; fileRef = A6F718D6226704920053488E /* PTYSession+ARC.m */; };
+		A7B100112F0A000100000001 /* TideyNotificationStore.m in Sources */ = {isa = PBXBuildFile; fileRef = A7B100022F0A000100000001 /* TideyNotificationStore.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		A7B100122F0A000100000001 /* TideySocketConnection.m in Sources */ = {isa = PBXBuildFile; fileRef = A7B100042F0A000100000001 /* TideySocketConnection.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		A7B100132F0A000100000001 /* TideySocketServer.m in Sources */ = {isa = PBXBuildFile; fileRef = A7B100062F0A000100000001 /* TideySocketServer.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
 		A6F7A707213CB143004DE961 /* StatusBarIconUser.png in Resources */ = {isa = PBXBuildFile; fileRef = A6F7A6EF213CB13D004DE961 /* StatusBarIconUser.png */; };
 		A6F7A708213CB143004DE961 /* StatusBarIconUser.png in Resources */ = {isa = PBXBuildFile; fileRef = A6F7A6EF213CB13D004DE961 /* StatusBarIconUser.png */; };
 		A6F7A709213CB143004DE961 /* StatusBarIconUser.png in Resources */ = {isa = PBXBuildFile; fileRef = A6F7A6EF213CB13D004DE961 /* StatusBarIconUser.png */; };
@@ -9025,6 +9028,12 @@
 		A6F718CD2266E71E0053488E /* iTermUserDefaults.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = iTermUserDefaults.m; sourceTree = "<group>"; };
 		A6F718D5226704920053488E /* PTYSession+ARC.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "PTYSession+ARC.h"; sourceTree = "<group>"; };
 		A6F718D6226704920053488E /* PTYSession+ARC.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "PTYSession+ARC.m"; sourceTree = "<group>"; };
+		A7B100012F0A000100000001 /* TideyNotificationStore.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyNotificationStore.h; sourceTree = "<group>"; };
+		A7B100022F0A000100000001 /* TideyNotificationStore.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyNotificationStore.m; sourceTree = "<group>"; };
+		A7B100032F0A000100000001 /* TideySocketConnection.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideySocketConnection.h; sourceTree = "<group>"; };
+		A7B100042F0A000100000001 /* TideySocketConnection.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySocketConnection.m; sourceTree = "<group>"; };
+		A7B100052F0A000100000001 /* TideySocketServer.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideySocketServer.h; sourceTree = "<group>"; };
+		A7B100062F0A000100000001 /* TideySocketServer.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySocketServer.m; sourceTree = "<group>"; };
 		A6F7A6EF213CB13D004DE961 /* StatusBarIconUser.png */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; name = StatusBarIconUser.png; path = images/StatusBarIcons/StatusBarIconUser.png; sourceTree = "<group>"; };
 		A6F7A6F0213CB13E004DE961 /* StatusBarIconNetwork.png */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; name = StatusBarIconNetwork.png; path = images/StatusBarIcons/StatusBarIconNetwork.png; sourceTree = "<group>"; };
 		A6F7A6F1213CB13E004DE961 /* StatusBarIconJobs.png */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; name = StatusBarIconJobs.png; path = images/StatusBarIcons/StatusBarIconJobs.png; sourceTree = "<group>"; };
@@ -11782,6 +11791,12 @@
 				1D2E813012A18F7500F3D71E /* SessionView.m */,
 				A6D24D3C26BC5FA600CCE211 /* SwiftDebugLogging.swift */,
 				A67E0ACF186E4B71009B2B68 /* TaskNotifier.m */,
+				A7B100012F0A000100000001 /* TideyNotificationStore.h */,
+				A7B100022F0A000100000001 /* TideyNotificationStore.m */,
+				A7B100032F0A000100000001 /* TideySocketConnection.h */,
+				A7B100042F0A000100000001 /* TideySocketConnection.m */,
+				A7B100052F0A000100000001 /* TideySocketServer.h */,
+				A7B100062F0A000100000001 /* TideySocketServer.m */,
 				1D44218B1290B34500891504 /* TextViewWrapper.m */,
 				A62132D227862A4800B80724 /* TokenExecutor.swift */,
 				1D8B8A121806038F00C2DC25 /* VT100Grid.h */,
@@ -19216,6 +19231,9 @@
 				A6725AD723D63B7A001CA48A /* iTermProfileModelJournal.m in Sources */,
 				A6B41406211A579300D28207 /* iTermStoplightHotbox.m in Sources */,
 				A691693B2813458F00083F99 /* PortholeFactory.swift in Sources */,
+				A7B100112F0A000100000001 /* TideyNotificationStore.m in Sources */,
+				A7B100122F0A000100000001 /* TideySocketConnection.m in Sources */,
+				A7B100132F0A000100000001 /* TideySocketServer.m in Sources */,
 				A62C8FC3248033C000E22E95 /* iTermTmuxJobManager.m in Sources */,
 				A65B1BD52D1E3CC800F5A740 /* iTermMTKView.swift in Sources */,
 				A63011B220E7EE62008114B7 /* iTermStatusBarKnobNumericViewController.m in Sources */,

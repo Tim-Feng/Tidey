@@ -75,6 +75,7 @@
 - (NSInteger)rootTerminalViewNumberOfTideySidebarWorkspaces;
 - (NSString *)rootTerminalViewTideySidebarWorkspaceTitleAtIndex:(NSInteger)index;
 - (NSString *)rootTerminalViewTideySidebarWorkspaceSubtitleAtIndex:(NSInteger)index;
+- (NSString *)rootTerminalViewTideySidebarWorkspaceIdentifierAtIndex:(NSInteger)index;
 - (BOOL)rootTerminalViewTideySidebarWorkspaceIsPinnedAtIndex:(NSInteger)index;
 - (NSInteger)rootTerminalViewSelectedTideySidebarWorkspaceIndex;
 - (BOOL)rootTerminalViewSelectTideySidebarWorkspaceAtIndex:(NSInteger)index;
@@ -91,6 +92,7 @@
 - (void)rootTerminalViewCloseOtherTideySidebarWorkspacesExceptIndex:(NSInteger)index;
 - (void)rootTerminalViewCloseTideySidebarWorkspacesAboveIndex:(NSInteger)index;
 - (void)rootTerminalViewCloseTideySidebarWorkspacesBelowIndex:(NSInteger)index;
+- (void)rootTerminalViewMarkTideySidebarWorkspaceReadAtIndex:(NSInteger)index;
 - (IBAction)toggleTideySidebar:(id)sender;
 - (IBAction)toggleTideyTerminal:(id)sender;
 - (IBAction)toggleTideyEditorPanel:(id)sender;

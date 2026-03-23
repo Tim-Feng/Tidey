@@ -78,6 +78,7 @@
 #import "VT100Token.h"
 #import "WindowArrangements.h"
 #import "WindowControllerInterface.h"
+#import "TideySocketServer.h"
 #import "iTerm.h"
 #import "iTerm2SharedARC-Swift.h"
 #import "iTermAPIHelper.h"
@@ -2893,6 +2894,15 @@ ITERM_WEAKLY_REFERENCEABLE
         env[@"TERM_FEATURES"] = [VT100Output encodedTermFeaturesForCapabilities:[self capabilities]];
     }
     env[@"ITERM_SESSION_ID"] = itermId;
+    NSString *tideySocketPath = [TideySocketServer socketPath];
+    if (tideySocketPath.length > 0) {
+        env[@"TIDEY_SOCKET_PATH"] = tideySocketPath;
+    }
+    PseudoTerminal *terminal = [PseudoTerminal castFrom:self.delegate.realParentWindow];
+    NSString *workspaceID = [terminal tideyWorkspaceIdentifierForSession:self];
+    if (workspaceID.length > 0) {
+        env[@"TIDEY_WORKSPACE_ID"] = workspaceID;
+    }
     env[@"TERM_PROGRAM_VERSION"] = [[[NSBundle mainBundle] infoDictionary] objectForKey:@"CFBundleShortVersionString"];
     env[@"TERM_SESSION_ID"] = itermId;
     env[@"TERM_PROGRAM"] = @"iTerm.app";
