@@ -107,10 +107,11 @@ static NSView *TideyFindSubviewWithIdentifier(NSView *container, NSUserInterface
 }
 
 static CGFloat TideyEditorEffectiveTabStripHeight(CGFloat terminalTabBarHeight) {
+    // Always match terminal tab bar height. Fallback 24 if not yet available.
     if (terminalTabBarHeight > 0) {
         return round(terminalTabBarHeight);
     }
-    return kTideyEditorTabStripHeight;
+    return 24;
 }
 
 @class TideyEditorFileNode;
