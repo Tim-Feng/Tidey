@@ -70,6 +70,13 @@ static const CGFloat kTideyChromeToggleButtonHeight = 34;
 static NSString *const kTideyBundledMonacoVersion = @"0.52.2";
 static NSString *const kTideyLastEditorFilePathDefaultsKey = @"TideyLastEditorFilePath";
 static NSString *const kTideyLastEditorFileTreeRootDefaultsKey = @"TideyLastEditorFileTreeRoot";
+static NSString *const kTideySidebarWidthDefaultsKey = @"TideySidebarWidth";
+static NSString *const kTideyEditorPanelWidthDefaultsKey = @"TideyEditorPanelWidth";
+static NSString *const kTideyEditorFileTreeWidthDefaultsKey = @"TideyEditorFileTreeWidth";
+static NSString *const kTideySidebarVisibleDefaultsKey = @"TideySidebarVisible";
+static NSString *const kTideyEditorPanelVisibleDefaultsKey = @"TideyEditorPanelVisible";
+static NSString *const kTideyEditorFileTreeVisibleDefaultsKey = @"TideyEditorFileTreeVisible";
+static NSString *const kTideyTerminalVisibleDefaultsKey = @"TideyTerminalVisible";
 static NSUserInterfaceItemIdentifier const kTideySidebarCloseViewIdentifier = @"TideySidebarCloseView";
 static NSPasteboardType const iTermRootTerminalViewTideySidebarWorkspacePasteboardType =
     @"com.tidey.workspace-row";
@@ -140,6 +147,8 @@ static CGFloat TideyEditorEffectiveTabStripHeight(CGFloat terminalTabBarHeight) 
 - (void)tideyOpenOrSelectEditorTabAtPath:(NSString *)path;
 - (void)tideyRestoreEditorStateFromDefaults;
 - (void)tideyPersistEditorState;
+- (void)tideyRestoreLayoutStateFromDefaults;
+- (void)tideyPersistLayoutState;
 - (NSString *)tideyEditorLanguageForPath:(NSString *)path;
 - (NSString *)tideyEditorPreferredRootPathForFileAtPath:(NSString *)path;
 - (void)tideyEditorRevealFileAtPath:(NSString *)path;
@@ -711,6 +720,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                          floor(NSWidth(frameRect) / 2.0));
         _tideyEditorPreferredWidthBeforeTerminalCollapse = _tideyEditorPreferredWidth;
         [self tideyRestoreEditorStateFromDefaults];
+        [self tideyRestoreLayoutStateFromDefaults];
 
         self.autoresizesSubviews = YES;
         _leftTabBarPreferredWidth = round([iTermPreferences doubleForKey:kPreferenceKeyLeftTabBarWidth]);
@@ -2067,6 +2077,14 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     return MAX(minWidth, MIN(_tideySidebarPreferredWidth, maxWidth));
 }
 
+- (void)setShouldShowTideySidebar:(BOOL)shouldShowTideySidebar {
+    if (_shouldShowTideySidebar == shouldShowTideySidebar) {
+        return;
+    }
+    _shouldShowTideySidebar = shouldShowTideySidebar;
+    [self tideyPersistLayoutState];
+}
+
 - (CGFloat)tideyEditorPanelWidth {
     if (!self.shouldShowTideyEditorPanel) {
         return 0;
@@ -2085,6 +2103,14 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     return MAX(minWidth, MIN(_tideyEditorPreferredWidth, maxWidth));
 }
 
+- (void)setShouldShowTideyEditorPanel:(BOOL)shouldShowTideyEditorPanel {
+    if (_shouldShowTideyEditorPanel == shouldShowTideyEditorPanel) {
+        return;
+    }
+    _shouldShowTideyEditorPanel = shouldShowTideyEditorPanel;
+    [self tideyPersistLayoutState];
+}
+
 - (void)setShouldShowTideyTerminal:(BOOL)shouldShowTideyTerminal {
     if (_shouldShowTideyTerminal == shouldShowTideyTerminal) {
         return;
@@ -2095,6 +2121,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _tideyEditorPreferredWidth = _tideyEditorPreferredWidthBeforeTerminalCollapse;
     }
     _shouldShowTideyTerminal = shouldShowTideyTerminal;
+    [self tideyPersistLayoutState];
 }
 
 - (CGFloat)tideyEditorFileTreeWidth {
@@ -2108,6 +2135,14 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     }
     const CGFloat minWidth = MIN(kTideyMinimumFileTreeWidth, maxWidth);
     return MAX(minWidth, MIN(_tideyEditorFileTreePreferredWidth, maxWidth));
+}
+
+- (void)setShouldShowTideyEditorFileTree:(BOOL)shouldShowTideyEditorFileTree {
+    if (_shouldShowTideyEditorFileTree == shouldShowTideyEditorFileTree) {
+        return;
+    }
+    _shouldShowTideyEditorFileTree = shouldShowTideyEditorFileTree;
+    [self tideyPersistLayoutState];
 }
 
 - (void)ensureTideyEditorWebView {
@@ -2282,6 +2317,45 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     } else {
         [defaults removeObjectForKey:kTideyLastEditorFileTreeRootDefaultsKey];
     }
+}
+
+- (void)tideyRestoreLayoutStateFromDefaults {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+
+    if ([defaults objectForKey:kTideySidebarWidthDefaultsKey] != nil) {
+        _tideySidebarPreferredWidth = [defaults doubleForKey:kTideySidebarWidthDefaultsKey];
+    }
+    if ([defaults objectForKey:kTideyEditorPanelWidthDefaultsKey] != nil) {
+        _tideyEditorPreferredWidth = [defaults doubleForKey:kTideyEditorPanelWidthDefaultsKey];
+        _tideyEditorPreferredWidthBeforeTerminalCollapse = _tideyEditorPreferredWidth;
+    }
+    if ([defaults objectForKey:kTideyEditorFileTreeWidthDefaultsKey] != nil) {
+        _tideyEditorFileTreePreferredWidth = [defaults doubleForKey:kTideyEditorFileTreeWidthDefaultsKey];
+    }
+
+    if ([defaults objectForKey:kTideySidebarVisibleDefaultsKey] != nil) {
+        _shouldShowTideySidebar = [defaults boolForKey:kTideySidebarVisibleDefaultsKey];
+    }
+    if ([defaults objectForKey:kTideyEditorPanelVisibleDefaultsKey] != nil) {
+        _shouldShowTideyEditorPanel = [defaults boolForKey:kTideyEditorPanelVisibleDefaultsKey];
+    }
+    if ([defaults objectForKey:kTideyEditorFileTreeVisibleDefaultsKey] != nil) {
+        _shouldShowTideyEditorFileTree = [defaults boolForKey:kTideyEditorFileTreeVisibleDefaultsKey];
+    }
+    if ([defaults objectForKey:kTideyTerminalVisibleDefaultsKey] != nil) {
+        _shouldShowTideyTerminal = [defaults boolForKey:kTideyTerminalVisibleDefaultsKey];
+    }
+}
+
+- (void)tideyPersistLayoutState {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    [defaults setDouble:_tideySidebarPreferredWidth forKey:kTideySidebarWidthDefaultsKey];
+    [defaults setDouble:_tideyEditorPreferredWidth forKey:kTideyEditorPanelWidthDefaultsKey];
+    [defaults setDouble:_tideyEditorFileTreePreferredWidth forKey:kTideyEditorFileTreeWidthDefaultsKey];
+    [defaults setBool:_shouldShowTideySidebar forKey:kTideySidebarVisibleDefaultsKey];
+    [defaults setBool:_shouldShowTideyEditorPanel forKey:kTideyEditorPanelVisibleDefaultsKey];
+    [defaults setBool:_shouldShowTideyEditorFileTree forKey:kTideyEditorFileTreeVisibleDefaultsKey];
+    [defaults setBool:_shouldShowTideyTerminal forKey:kTideyTerminalVisibleDefaultsKey];
 }
 
 - (void)reloadTideyEditorFileTree {
@@ -4274,6 +4348,11 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 
 - (void)dragHandleViewDidFinishMoving:(iTermDragHandleView *)dragHandle {
+    if (dragHandle == self.tideySidebarDragHandle ||
+        dragHandle == self.tideyEditorDragHandle ||
+        dragHandle == self.tideyEditorFileTreeDragHandle) {
+        [self tideyPersistLayoutState];
+    }
     [_delegate rootTerminalViewDidResizeContentArea];
 }
 
