@@ -729,6 +729,9 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                      delegate:(id<iTermRootTerminalViewDelegate, iTermToolbeltViewDelegate>)delegate {
     self = [super initWithFrame:frameRect color:color];
     if (self) {
+        // Match root view background to tab bar area so the 1pt gap above tab bars is invisible.
+        self.wantsLayer = YES;
+        self.layer.backgroundColor = [NSColor colorWithSRGBRed:0.09 green:0.10 blue:0.13 alpha:1].CGColor;
         _delegate = delegate;
         _shouldShowTideySidebar = YES;
         _shouldShowTideyTerminal = YES;
@@ -3194,11 +3197,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     // When the tab bar is hidden (CGRectZero), fall back to tabView maxY + editor tab strip height.
     const CGFloat tabStripHeight = TideyEditorEffectiveTabStripHeight(_tabBarControl.height);
     CGFloat panelHeight;
-    // Extend editor panel 1pt above tab bar to cover the root view gap.
     if (!CGRectIsEmpty(outputs.tabBarFrame)) {
-        panelHeight = CGRectGetMaxY(outputs.tabBarFrame) + 1;
+        panelHeight = CGRectGetMaxY(outputs.tabBarFrame);
     } else {
-        panelHeight = CGRectGetMaxY(outputs.tabViewFrame) + tabStripHeight + 1;
+        panelHeight = CGRectGetMaxY(outputs.tabViewFrame) + tabStripHeight;
     }
     _tideyEditorPanelView.frame = NSMakeRect(originX, 0, MIN(width, rightEdge), panelHeight);
 
