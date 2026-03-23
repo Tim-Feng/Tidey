@@ -1972,6 +1972,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     if (!self.shouldShowTideyEditorPanel) {
         return 0;
     }
+    if (!self.shouldShowTideyTerminal) {
+        const CGFloat availableWidth = MAX(0, NSWidth(self.bounds) - (self.shouldShowToolbelt ? floor(self.toolbeltWidth) : 0));
+        return MAX(0, availableWidth - self.tideySidebarWidth);
+    }
     const CGFloat minimumTerminalWidth = self.shouldShowTideyTerminal ? kTideyMinimumTerminalWidth : 0;
     const CGFloat availableWidth = MAX(0, NSWidth(self.bounds) - (self.shouldShowToolbelt ? floor(self.toolbeltWidth) : 0));
     const CGFloat maxWidth = MAX(0, availableWidth - self.tideySidebarWidth - minimumTerminalWidth);
@@ -2939,6 +2943,12 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         outputs.tabBarFrame.size.width = MAX(0, outputs.tabBarFrame.size.width - editorWidth);
     }
 
+    if (!self.shouldShowTideyTerminal) {
+        outputs.tabViewFrame.size.width = 0;
+        outputs.statusBarFrame.size.width = 0;
+        outputs.tabBarFrame.size.width = 0;
+    }
+
     return outputs;
 }
 
@@ -2993,17 +3003,18 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                           kTideyChromeToggleButtonHeight);
     }
 
-    self.tideyEditorToggleButton.hidden = NO;
-    self.tideyEditorToggleButton.title = self.shouldShowTideyEditorPanel ? @"▶" : @"◀";
-    const CGFloat editorButtonX = self.shouldShowTideyEditorPanel
-        ? (self.shouldShowTideyTerminal
-           ? MAX(0, NSWidth(self.bounds) - self.tideyEditorPanelWidth + 1)
-           : MAX(0, NSMinX(_tideyEditorPanelView.frame) + kTideyChromeToggleButtonWidth + 2))
-        : MAX(0, NSWidth(self.bounds) - kTideyChromeToggleButtonWidth - 1);
-    self.tideyEditorToggleButton.frame = NSMakeRect(editorButtonX,
-                                                    sidebarButtonY,
-                                                    kTideyChromeToggleButtonWidth,
-                                                    kTideyChromeToggleButtonHeight);
+    const BOOL showEditorToggle = !self.shouldShowTideyEditorPanel || self.shouldShowTideyTerminal;
+    self.tideyEditorToggleButton.hidden = !showEditorToggle;
+    if (showEditorToggle) {
+        self.tideyEditorToggleButton.title = self.shouldShowTideyEditorPanel ? @"▶" : @"◀";
+        const CGFloat editorButtonX = self.shouldShowTideyEditorPanel
+            ? MAX(0, NSWidth(self.bounds) - self.tideyEditorPanelWidth + 1)
+            : MAX(0, NSWidth(self.bounds) - kTideyChromeToggleButtonWidth - 1);
+        self.tideyEditorToggleButton.frame = NSMakeRect(editorButtonX,
+                                                        sidebarButtonY,
+                                                        kTideyChromeToggleButtonWidth,
+                                                        kTideyChromeToggleButtonHeight);
+    }
 
     const BOOL showFileTreeToggle = self.shouldShowTideyEditorPanel;
     self.tideyEditorFileTreeToggleButton.hidden = !showFileTreeToggle;
@@ -3266,6 +3277,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     if (showToolbeltInline) {
         [self updateToolbeltFrameForWindow:thisWindow];
     }
+
+    self.tabView.hidden = !self.shouldShowTideyTerminal;
 
     [self updateTideyChromeDragHandles];
 
