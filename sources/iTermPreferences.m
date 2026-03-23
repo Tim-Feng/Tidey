@@ -472,8 +472,8 @@ static NSString *sPreviousVersion;
                   kPreferenceKeyRestoreWindowsToSameSpaces: @NO,
                   kPreferenceKeyOpenNoWindowsAtStartup: @NO,
                   kPreferenceKeyQuitWhenAllWindowsClosed: @NO,
-                  kPreferenceKeyConfirmClosingMultipleTabs: @YES,
-                  kPreferenceKeyPromptOnQuit: @YES,
+                  kPreferenceKeyConfirmClosingMultipleTabs: @NO,   // Tidey: don't prompt
+                  kPreferenceKeyPromptOnQuit: @NO,              // Tidey: don't prompt
                   kPreferenceKeyPromptOnQuitEvenIfThereAreNoWindows: @NO,
                   kPreferenceKeyInstantReplayMemoryMegabytes: @4,
                   kPreferenceKeyAITimeout: @30,
