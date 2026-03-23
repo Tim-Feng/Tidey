@@ -2395,29 +2395,43 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         }
     }
 
-    TideyEditorTab *currentTab = [self tideyCurrentEditorTab];
-    if (preview && currentTab.preview) {
-        if (currentTab.dirty) {
-            currentTab.preview = NO;
-        } else {
-            NSError *replaceError = nil;
-            NSString *replacementContents = [NSString stringWithContentsOfFile:normalizedPath
-                                                                      encoding:NSUTF8StringEncoding
-                                                                         error:&replaceError];
-            if (replacementContents == nil) {
-                replacementContents = [NSString stringWithFormat:@"Unable to load %@\n\n%@",
-                                       normalizedPath.lastPathComponent,
-                                       replaceError.localizedDescription ?: @"Unknown error"];
+    TideyEditorTab *previewTab = nil;
+    NSInteger previewIndex = NSNotFound;
+    if (preview) {
+        for (NSInteger i = 0; i < (NSInteger)_tideyEditorTabs.count; i++) {
+            TideyEditorTab *candidate = _tideyEditorTabs[i];
+            if (candidate.preview) {
+                previewTab = candidate;
+                previewIndex = i;
+                break;
             }
-            currentTab.path = normalizedPath;
-            currentTab.displayName = [self tideyEditorDisplayNameForPath:normalizedPath];
-            currentTab.language = [self tideyEditorLanguageForPath:normalizedPath];
-            currentTab.content = replacementContents ?: @"";
-            currentTab.dirty = NO;
-            currentTab.preview = YES;
-            [self selectTideyEditorTabAtIndex:_tideySelectedEditorTabIndex];
-            return;
         }
+        if (previewTab.dirty) {
+            previewTab.preview = NO;
+            [self reloadTideyEditorTabs];
+            previewTab = nil;
+            previewIndex = NSNotFound;
+        }
+    }
+
+    if (preview && previewTab != nil) {
+        NSError *replaceError = nil;
+        NSString *replacementContents = [NSString stringWithContentsOfFile:normalizedPath
+                                                                  encoding:NSUTF8StringEncoding
+                                                                     error:&replaceError];
+        if (replacementContents == nil) {
+            replacementContents = [NSString stringWithFormat:@"Unable to load %@\n\n%@",
+                                   normalizedPath.lastPathComponent,
+                                   replaceError.localizedDescription ?: @"Unknown error"];
+        }
+        previewTab.path = normalizedPath;
+        previewTab.displayName = [self tideyEditorDisplayNameForPath:normalizedPath];
+        previewTab.language = [self tideyEditorLanguageForPath:normalizedPath];
+        previewTab.content = replacementContents ?: @"";
+        previewTab.dirty = NO;
+        previewTab.preview = YES;
+        [self selectTideyEditorTabAtIndex:previewIndex];
+        return;
     }
 
     NSError *error = nil;
