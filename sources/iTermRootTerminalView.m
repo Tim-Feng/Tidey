@@ -654,11 +654,42 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     button.alignment = NSTextAlignmentCenter;
     button.wantsLayer = YES;
     button.layer.cornerRadius = 7;
-    button.layer.backgroundColor = [NSColor colorWithWhite:0.20 alpha:0.92].CGColor;
-    button.contentTintColor = [NSColor colorWithWhite:0.92 alpha:1];
+    button.layer.backgroundColor = NSColor.clearColor.CGColor;
+    button.contentTintColor = [NSColor colorWithWhite:0.50 alpha:0.25];
+    button.alphaValue = 1.0;
     button.target = _delegate;
     button.action = action;
+    NSTrackingArea *trackingArea = [[NSTrackingArea alloc]
+        initWithRect:NSZeroRect
+             options:(NSTrackingMouseEnteredAndExited | NSTrackingActiveAlways | NSTrackingInVisibleRect)
+               owner:self
+            userInfo:@{@"tideyToggleButton": button}];
+    [button addTrackingArea:trackingArea];
     return button;
+}
+
+- (void)mouseEntered:(NSEvent *)event {
+    NSButton *button = event.trackingArea.userInfo[@"tideyToggleButton"];
+    if (button) {
+        [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
+            context.duration = 0.15;
+            button.animator.contentTintColor = [NSColor colorWithWhite:0.92 alpha:1.0];
+        }];
+        return;
+    }
+    [super mouseEntered:event];
+}
+
+- (void)mouseExited:(NSEvent *)event {
+    NSButton *button = event.trackingArea.userInfo[@"tideyToggleButton"];
+    if (button) {
+        [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
+            context.duration = 0.3;
+            button.animator.contentTintColor = [NSColor colorWithWhite:0.50 alpha:0.25];
+        }];
+        return;
+    }
+    [super mouseExited:event];
 }
 
 - (instancetype)initWithFrame:(NSRect)frameRect
@@ -809,31 +840,15 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         [_tideyEditorPanelView addSubview:self.tideyEditorFileTreeDragHandle];
 
         self.tideySidebarToggleButton = [self newTideyChromeToggleButtonWithAction:@selector(toggleTideySidebar:)];
-        self.tideySidebarToggleButton.font = [NSFont systemFontOfSize:9 weight:NSFontWeightSemibold];
-        self.tideySidebarToggleButton.wantsLayer = NO;
-        self.tideySidebarToggleButton.contentTintColor = [NSColor colorWithWhite:0.78 alpha:1];
-        self.tideySidebarToggleButton.bezelStyle = NSBezelStyleRegularSquare;
         [self addSubview:self.tideySidebarToggleButton];
 
         self.tideyTerminalToggleButton = [self newTideyChromeToggleButtonWithAction:@selector(toggleTideyTerminal:)];
-        self.tideyTerminalToggleButton.font = [NSFont systemFontOfSize:9 weight:NSFontWeightSemibold];
-        self.tideyTerminalToggleButton.wantsLayer = NO;
-        self.tideyTerminalToggleButton.contentTintColor = [NSColor colorWithWhite:0.78 alpha:1];
-        self.tideyTerminalToggleButton.bezelStyle = NSBezelStyleRegularSquare;
         [self addSubview:self.tideyTerminalToggleButton];
 
         self.tideyEditorToggleButton = [self newTideyChromeToggleButtonWithAction:@selector(toggleTideyEditorPanel:)];
-        self.tideyEditorToggleButton.font = [NSFont systemFontOfSize:9 weight:NSFontWeightSemibold];
-        self.tideyEditorToggleButton.wantsLayer = NO;
-        self.tideyEditorToggleButton.contentTintColor = [NSColor colorWithWhite:0.78 alpha:1];
-        self.tideyEditorToggleButton.bezelStyle = NSBezelStyleRegularSquare;
         [self addSubview:self.tideyEditorToggleButton];
 
         self.tideyEditorFileTreeToggleButton = [self newTideyChromeToggleButtonWithAction:@selector(toggleTideyEditorFileTree:)];
-        self.tideyEditorFileTreeToggleButton.font = [NSFont systemFontOfSize:9 weight:NSFontWeightSemibold];
-        self.tideyEditorFileTreeToggleButton.wantsLayer = NO;
-        self.tideyEditorFileTreeToggleButton.contentTintColor = [NSColor colorWithWhite:0.78 alpha:1];
-        self.tideyEditorFileTreeToggleButton.bezelStyle = NSBezelStyleRegularSquare;
         [_tideyEditorPanelView addSubview:self.tideyEditorFileTreeToggleButton];
 
         // Create the tab view.
