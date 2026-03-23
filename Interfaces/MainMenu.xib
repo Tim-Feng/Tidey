@@ -111,12 +111,6 @@
                                     <action selector="unmakeDefaultTerminal:" target="201" id="1475"/>
                                 </connections>
                             </menuItem>
-                            <menuItem title="Install Shell Integration" alternate="YES" identifier="Install Shell Integration" id="rHN-nq-xah">
-                                <modifierMask key="keyEquivalentModifierMask"/>
-                                <connections>
-                                    <action selector="installShellIntegration:" target="-1" id="QBH-7C-wWV"/>
-                                </connections>
-                            </menuItem>
                             <menuItem title="Remove Recent Profiles from Dock Menu" identifier="Remove Recent Profiles from Dock Menu" id="WcV-7l-ycc">
                                 <modifierMask key="keyEquivalentModifierMask"/>
                                 <connections>
