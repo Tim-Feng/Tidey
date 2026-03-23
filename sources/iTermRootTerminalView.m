@@ -3057,7 +3057,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
             "    minimap: { enabled: false },"
             "    scrollBeyondLastLine: false,"
             "    renderLineHighlightOnlyWhenFocus: true,"
-            "    scrollbar: { vertical: 'visible', horizontal: 'visible', verticalScrollbarSize: 6, horizontalScrollbarSize: 6, verticalSliderSize: 6, horizontalSliderSize: 6, useShadows: false, alwaysConsumeMouseWheel: false },"
+            "    scrollbar: { vertical: 'visible', horizontal: 'visible', verticalScrollbarSize: 14, horizontalScrollbarSize: 14, useShadows: false, alwaysConsumeMouseWheel: false },"
             "    overviewRulerLanes: 0,"
             "    hideCursorInOverviewRuler: true,"
             "    overviewRulerBorder: false,"
@@ -3193,7 +3193,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     // When hidden, add the tab strip height but clamp to the content view.
     CGFloat panelTop;
     if (!CGRectIsEmpty(outputs.tabBarFrame)) {
-        panelTop = CGRectGetMaxY(outputs.tabBarFrame);
+        // Align exactly with terminal content top (tab bar top + 1pt for division line)
+        panelTop = CGRectGetMaxY(outputs.tabBarFrame) + 1;
     } else {
         panelTop = MIN(CGRectGetMaxY(outputs.tabViewFrame) + tabStripHeight,
                        NSHeight(self.bounds));
