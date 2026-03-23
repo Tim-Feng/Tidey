@@ -1064,7 +1064,7 @@ typedef struct {
                   KEY_RESTRICT_MOUSE_REPORTING_TO_ALTERNATE_SCREEN_MODE: @NO,
                   KEY_ALLOW_TITLE_SETTING: @YES,
                   KEY_COMPOSER_TOP_OFFSET: @0,
-                  KEY_LOAD_SHELL_INTEGRATION_AUTOMATICALLY: @NO,
+                  KEY_LOAD_SHELL_INTEGRATION_AUTOMATICALLY: @YES,  // Tidey: auto-inject shell integration
                   KEY_DISABLE_PRINTING: @NO,
                   KEY_DISABLE_SMCUP_RMCUP: @NO,
                   KEY_SILENCE_BELL: @NO,

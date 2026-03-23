@@ -2903,6 +2903,23 @@ ITERM_WEAKLY_REFERENCEABLE
     if (workspaceID.length > 0) {
         env[@"TIDEY_WORKSPACE_ID"] = workspaceID;
     }
+    // Set tmux update-environment so tmux sessions inherit Tidey vars.
+    // Runs on every new session so it succeeds once tmux server is available.
+    if (tideySocketPath.length > 0 || workspaceID.length > 0) {
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
+            @autoreleasepool {
+                NSTask *task = [[[NSTask alloc] init] autorelease];
+                task.launchPath = @"/bin/sh";
+                task.arguments = @[@"-c", @"tmux set-option -ga update-environment ' TIDEY_SOCKET_PATH TIDEY_WORKSPACE_ID' 2>/dev/null"];
+                @try {
+                    [task launch];
+                    [task waitUntilExit];
+                } @catch (id e) {
+                    // tmux not installed or not running — ignore.
+                }
+            }
+        });
+    }
     env[@"TERM_PROGRAM_VERSION"] = [[[NSBundle mainBundle] infoDictionary] objectForKey:@"CFBundleShortVersionString"];
     env[@"TERM_SESSION_ID"] = itermId;
     env[@"TERM_PROGRAM"] = @"iTerm.app";
