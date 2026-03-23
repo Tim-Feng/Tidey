@@ -4162,23 +4162,6 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
     // Configure status field at the bottom of the cell.
     if (hasStatus) {
-        NSMutableString *statusText = [NSMutableString string];
-        for (TideyStatusEntry *entry in statusEntries) {
-            if (statusText.length > 0) {
-                [statusText appendString:@"  "];
-            }
-            if (entry.icon.length > 0) {
-                // Try to use SF Symbol. If the icon name resolves, use it as text prefix.
-                // For simple display we show the icon name as a placeholder character if SF Symbol
-                // is not available via attributed string (handled below). For now, use a simple approach.
-                [statusText appendFormat:@"%@ ", entry.icon];
-            }
-            [statusText appendString:entry.value];
-        }
-        statusField.stringValue = statusText;
-        statusField.hidden = NO;
-        statusField.frame = NSMakeRect(36, 2, MAX(0, width - 48), 14);
-
         // Apply color from the first entry that has one, or fall back to secondaryLabelColor.
         NSColor *statusColor = nil;
         for (TideyStatusEntry *entry in statusEntries) {
@@ -4187,7 +4170,56 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                 if (statusColor) break;
             }
         }
-        statusField.textColor = statusColor ?: [NSColor secondaryLabelColor];
+        NSColor *effectiveColor = statusColor ?: [NSColor secondaryLabelColor];
+
+        NSMutableAttributedString *statusAttr = [[NSMutableAttributedString alloc] init];
+        NSDictionary *textAttrs = @{
+            NSFontAttributeName: [NSFont systemFontOfSize:10 weight:NSFontWeightRegular],
+            NSForegroundColorAttributeName: effectiveColor,
+        };
+        for (TideyStatusEntry *entry in statusEntries) {
+            if (statusAttr.length > 0) {
+                [statusAttr appendAttributedString:[[NSAttributedString alloc] initWithString:@"  "
+                                                                                  attributes:textAttrs]];
+            }
+            if (entry.icon.length > 0) {
+                NSImage *symbolImage = [NSImage imageWithSystemSymbolName:entry.icon
+                                              accessibilityDescription:entry.icon];
+                if (symbolImage) {
+                    NSImageSymbolConfiguration *config =
+                        [NSImageSymbolConfiguration configurationWithPointSize:10
+                                                                       weight:NSFontWeightRegular];
+                    symbolImage = [symbolImage imageWithSymbolConfiguration:config];
+
+                    NSTextAttachment *attachment = [[NSTextAttachment alloc] init];
+                    attachment.image = symbolImage;
+                    // Size the symbol to match the 10pt font metrics.
+                    CGFloat lineHeight = 12.0;
+                    CGFloat aspectRatio = symbolImage.size.width / MAX(symbolImage.size.height, 1);
+                    CGFloat attachmentHeight = lineHeight;
+                    CGFloat attachmentWidth = attachmentHeight * aspectRatio;
+                    attachment.bounds = NSMakeRect(0,
+                                                  (statusField.font.descender),
+                                                  attachmentWidth,
+                                                  attachmentHeight);
+
+                    NSMutableAttributedString *iconStr =
+                        [[NSAttributedString attributedStringWithAttachment:attachment] mutableCopy];
+                    [iconStr addAttribute:NSForegroundColorAttributeName
+                                    value:effectiveColor
+                                    range:NSMakeRange(0, iconStr.length)];
+                    [statusAttr appendAttributedString:iconStr];
+                    [statusAttr appendAttributedString:[[NSAttributedString alloc] initWithString:@" "
+                                                                                      attributes:textAttrs]];
+                }
+            }
+            [statusAttr appendAttributedString:[[NSAttributedString alloc] initWithString:entry.value
+                                                                              attributes:textAttrs]];
+        }
+        statusField.attributedStringValue = statusAttr;
+        statusField.hidden = NO;
+        statusField.frame = NSMakeRect(36, 2, MAX(0, width - 48), 14);
+        statusField.textColor = effectiveColor;
     } else {
         statusField.hidden = YES;
         statusField.stringValue = @"";
