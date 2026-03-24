@@ -4238,7 +4238,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
             if (entry.icon.length > 0) {
                 // Use SF Symbol circle.fill as icon (matching cmux approach).
                 // Rendered via NSTextAttachment for precise vertical centering with text.
-                NSImage *circleImage = [NSImage imageWithSystemSymbolName:@"circle.fill"
+                NSImage *circleImage = [NSImage imageWithSystemSymbolName:entry.icon
                                                 accessibilityDescription:nil];
                 if (circleImage) {
                     NSFont *textFont = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
