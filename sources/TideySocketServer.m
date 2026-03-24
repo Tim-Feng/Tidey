@@ -186,14 +186,12 @@
             [store setStatusForWorkspaceID:workspaceID key:key value:value icon:icon colorHex:colorHex];
         }
     } else {
-        // Broadcast: apply to every workspace that currently has status entries.
-        NSArray<NSString *> *workspaceIDs = [store allWorkspaceIDs];
-        for (NSString *wid in workspaceIDs) {
-            if (shouldClear) {
-                [store clearStatusForWorkspaceID:wid key:key];
-            } else {
-                [store setStatusForWorkspaceID:wid key:key value:value icon:icon colorHex:colorHex];
-            }
+        // No workspace_id: use broadcast identifier so all workspaces show status.
+        NSString *broadcastID = @"*";
+        if (shouldClear) {
+            [store clearStatusForWorkspaceID:broadcastID key:key];
+        } else {
+            [store setStatusForWorkspaceID:broadcastID key:key value:value icon:icon colorHex:colorHex];
         }
     }
 }

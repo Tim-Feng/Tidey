@@ -380,12 +380,20 @@ static NSString *const kTideySystemNotificationCategoryIdentifier = @"TIDEY_WORK
     if (workspaceID.length == 0) {
         return @[];
     }
+    // Merge workspace-specific entries with broadcast ("*") entries.
+    NSMutableDictionary<NSString *, TideyStatusEntry *> *merged = [NSMutableDictionary dictionary];
+    NSDictionary<NSString *, TideyStatusEntry *> *broadcastEntries = self.statusMap[@"*"];
+    if (broadcastEntries) {
+        [merged addEntriesFromDictionary:broadcastEntries];
+    }
     NSDictionary<NSString *, TideyStatusEntry *> *entries = self.statusMap[workspaceID];
-    if (!entries) {
+    if (entries) {
+        [merged addEntriesFromDictionary:entries];  // workspace-specific overrides broadcast
+    }
+    if (merged.count == 0) {
         return @[];
     }
-    // Return entries sorted by key for deterministic display order.
-    return [[entries allValues] sortedArrayUsingComparator:^NSComparisonResult(TideyStatusEntry *a, TideyStatusEntry *b) {
+    return [[merged allValues] sortedArrayUsingComparator:^NSComparisonResult(TideyStatusEntry *a, TideyStatusEntry *b) {
         return [a.key compare:b.key];
     }];
 }
@@ -394,7 +402,7 @@ static NSString *const kTideySystemNotificationCategoryIdentifier = @"TIDEY_WORK
     if (workspaceID.length == 0) {
         return NO;
     }
-    return self.statusMap[workspaceID].count > 0;
+    return self.statusMap[workspaceID].count > 0 || self.statusMap[@"*"].count > 0;
 }
 
 - (NSArray<NSString *> *)allWorkspaceIDs {
