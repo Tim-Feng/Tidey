@@ -180,22 +180,22 @@ if [[ -o interactive ]]; then
       tmux set-option -ga update-environment " TIDEY_SOCKET_PATH TIDEY_WORKSPACE_ID" 2>/dev/null
     fi
 
-    # When running inside Tidey, wrap AI agent commands (claude, codex) to
-    # send workspace status notifications via the Tidey socket.
+    # When running inside Tidey, report shell state via precmd/preexec hooks.
     if [ -n "${TIDEY_SOCKET_PATH-}" ] && [ -S "${TIDEY_SOCKET_PATH-}" ]; then
-      _tidey_agent_wrapper() {
-        local _agent_cmd="$1"
-        shift
-        printf '{"action":"set_status","workspace_id":"%s","key":"agent","value":"Running","icon":"bolt.fill","color":"#007AFF"}\n' \
-          "$TIDEY_WORKSPACE_ID" | nc -U "$TIDEY_SOCKET_PATH" 2>/dev/null
-        command "$_agent_cmd" "$@"
-        local _exit_code=$?
-        printf '{"action":"set_status","workspace_id":"%s","key":"agent","value":"Idle","icon":"circle.fill","color":"#8E8E93"}\n' \
-          "$TIDEY_WORKSPACE_ID" | nc -U "$TIDEY_SOCKET_PATH" 2>/dev/null
-        return $_exit_code
+      _tidey_report_shell_state() {
+        printf '%s\n' "$1" | nc -U "$TIDEY_SOCKET_PATH" 2>/dev/null &!
       }
-      claude() { _tidey_agent_wrapper claude "$@"; }
-      codex() { _tidey_agent_wrapper codex "$@"; }
+
+      _tidey_preexec() {
+        _tidey_report_shell_state "report_shell_state running"
+      }
+
+      _tidey_precmd() {
+        _tidey_report_shell_state "report_shell_state prompt"
+      }
+
+      add-zsh-hook preexec _tidey_preexec
+      add-zsh-hook precmd _tidey_precmd
     fi
 
     iterm2_print_state_data
