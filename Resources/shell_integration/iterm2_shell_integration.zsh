@@ -180,6 +180,24 @@ if [[ -o interactive ]]; then
       tmux set-option -ga update-environment " TIDEY_SOCKET_PATH TIDEY_WORKSPACE_ID" 2>/dev/null
     fi
 
+    # When running inside Tidey, wrap AI agent commands (claude, codex) to
+    # send workspace status notifications via the Tidey socket.
+    if [ -n "${TIDEY_SOCKET_PATH-}" ] && [ -S "${TIDEY_SOCKET_PATH-}" ]; then
+      _tidey_agent_wrapper() {
+        local _agent_cmd="$1"
+        shift
+        printf '{"action":"set_status","workspace_id":"%s","key":"agent","value":"Running","icon":"bolt.fill","color":"#007AFF"}\n' \
+          "$TIDEY_WORKSPACE_ID" | nc -U "$TIDEY_SOCKET_PATH" 2>/dev/null
+        command "$_agent_cmd" "$@"
+        local _exit_code=$?
+        printf '{"action":"clear_status","workspace_id":"%s","key":"agent"}\n' \
+          "$TIDEY_WORKSPACE_ID" | nc -U "$TIDEY_SOCKET_PATH" 2>/dev/null
+        return $_exit_code
+      }
+      claude() { _tidey_agent_wrapper claude "$@"; }
+      codex() { _tidey_agent_wrapper codex "$@"; }
+    fi
+
     iterm2_print_state_data
     printf "\033]1337;ShellIntegrationVersion=15;shell=zsh\007"
   fi
