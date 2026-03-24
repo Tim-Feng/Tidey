@@ -194,6 +194,7 @@ if [[ -o interactive ]]; then
         _tidey_report_shell_state "report_shell_state prompt"
       }
 
+      autoload -Uz add-zsh-hook
       add-zsh-hook preexec _tidey_preexec
       add-zsh-hook precmd _tidey_precmd
     fi
