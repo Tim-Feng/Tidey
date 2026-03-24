@@ -18708,13 +18708,13 @@
 			inputFileListPaths = (
 			);
 			inputPaths = (
-				"$(DERIVED_SOURCES_DIR)/iTerm2-Swift.h",
+				"$(DERIVED_SOURCES_DIR)/Tidey-Swift.h",
 			);
 			name = "Make symlink to iTerm";
 			outputFileListPaths = (
 			);
 			outputPaths = (
-				"$(PROJECT_DERIVED_FILE_DIR)/iTerm2-Swift.h",
+				"$(PROJECT_DERIVED_FILE_DIR)/Tidey-Swift.h",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -20807,7 +20807,7 @@
 					"-lc++",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.tidey.app;
-				PRODUCT_NAME = iTerm2;
+				PRODUCT_NAME = Tidey;
 				SDKROOT = macosx;
 				SWIFT_OBJC_BRIDGING_HEADER = "";
 				SWIFT_VERSION = 5.0;
@@ -22080,7 +22080,7 @@
 					"-lc++",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.tidey.app;
-				PRODUCT_NAME = iTerm2;
+				PRODUCT_NAME = Tidey;
 				SDKROOT = macosx;
 				SWIFT_OBJC_BRIDGING_HEADER = "";
 				SWIFT_VERSION = 5.0;
@@ -24784,7 +24784,7 @@
 					"-lc++",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.tidey.app;
-				PRODUCT_NAME = iTerm2;
+				PRODUCT_NAME = Tidey;
 				SDKROOT = macosx;
 				SECTORDER_FLAGS = "";
 				SWIFT_OBJC_BRIDGING_HEADER = "";
@@ -24875,7 +24875,7 @@
 					"-lc++",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.tidey.app;
-				PRODUCT_NAME = iTerm2;
+				PRODUCT_NAME = Tidey;
 				SDKROOT = macosx;
 				SWIFT_OBJC_BRIDGING_HEADER = "";
 				SWIFT_VERSION = 5.0;
