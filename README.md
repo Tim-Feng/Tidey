@@ -1,4 +1,4 @@
-# Tidey — the Terminal IDE
+# 🌊 Tidey — the Terminal IDE
 
 > Where agents flow between CLI and code, like the tide.
 
