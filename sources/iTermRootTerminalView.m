@@ -4242,7 +4242,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                 accessibilityDescription:nil];
                 if (circleImage) {
                     NSFont *textFont = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
-                    CGFloat iconSize = 6.0;
+                    CGFloat iconSize = 9.0;
                     // Center the icon vertically relative to the text cap height.
                     CGFloat yOffset = (textFont.capHeight - iconSize) / 2.0;
                     NSTextAttachment *attachment = [[NSTextAttachment alloc] init];
