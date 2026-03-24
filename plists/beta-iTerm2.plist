@@ -230,7 +230,7 @@
                 </dict>
         </array>
         <key>CFBundleExecutable</key>
-        <string>Tidey</string>
+        <string>iTerm2</string>
         <key>CFBundleGetInfoString</key>
         <string>unknown</string>
         <key>CFBundleHelpBookFolder</key>
@@ -244,7 +244,7 @@
         <key>CFBundleInfoDictionaryVersion</key>
         <string>6.0</string>
         <key>CFBundleName</key>
-        <string>Tidey</string>
+        <string>iTerm2</string>
         <key>CFBundlePackageType</key>
         <string>APPL</string>
         <key>CFBundleShortVersionString</key>
@@ -362,7 +362,7 @@
                 </dict>
                 <dict>
                         <key>CFBundleURLName</key>
-                        <string>Tidey</string>
+                        <string>iTerm2</string>
                         <key>CFBundleURLSchemes</key>
                         <array>
                                 <string>iterm2</string>
