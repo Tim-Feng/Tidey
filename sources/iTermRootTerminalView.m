@@ -4218,7 +4218,12 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                 if (statusColor) break;
             }
         }
-        NSColor *effectiveColor = statusColor ?: [NSColor secondaryLabelColor];
+        NSColor *effectiveColor;
+        if (selected) {
+            effectiveColor = [NSColor colorWithWhite:1 alpha:0.8];
+        } else {
+            effectiveColor = statusColor ?: [NSColor secondaryLabelColor];
+        }
 
         NSMutableAttributedString *statusAttr = [[NSMutableAttributedString alloc] init];
         NSDictionary *textAttrs = @{

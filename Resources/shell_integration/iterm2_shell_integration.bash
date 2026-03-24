@@ -661,7 +661,7 @@ if [ -n "${TIDEY_SOCKET_PATH-}" ] && [ -S "${TIDEY_SOCKET_PATH-}" ]; then
       "$TIDEY_WORKSPACE_ID" | nc -U "$TIDEY_SOCKET_PATH" 2>/dev/null
     command "$_agent_cmd" "$@"
     local _exit_code=$?
-    printf '{"action":"clear_status","workspace_id":"%s","key":"agent"}\n' \
+    printf '{"action":"set_status","workspace_id":"%s","key":"agent","value":"Idle","icon":"circle.fill","color":"#8E8E93"}\n' \
       "$TIDEY_WORKSPACE_ID" | nc -U "$TIDEY_SOCKET_PATH" 2>/dev/null
     return $_exit_code
   }
