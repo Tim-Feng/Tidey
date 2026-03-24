@@ -3418,8 +3418,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 - (void)setTabBarControlAutoresizingMask:(NSAutoresizingMaskOptions)mask {
     if (_tabBarBacking) {
         _tabBarBacking.autoresizingMask = mask;
-        // Width only — height is managed by setTabBarFrame: (backing is 1pt taller than control)
-        _tabBarControl.autoresizingMask = NSViewWidthSizable;
+        _tabBarControl.autoresizingMask = (NSViewWidthSizable | NSViewHeightSizable);
         return;
     }
 
