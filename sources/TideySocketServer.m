@@ -109,6 +109,10 @@
         [self handleClearStatus:message];
         return;
     }
+    if ([action isEqualToString:@"report_shell_state"]) {
+        [self handleReportShellState:message];
+        return;
+    }
 
     if (![action isEqualToString:@"notification.create"] &&
         ![action isEqualToString:@"notification.create_for_workspace"]) {
@@ -135,6 +139,63 @@
                                                                    subtitle:subtitle
                                                                        body:body];
     [[TideyNotificationStore sharedStore] postSystemNotificationForItem:item];
+}
+
+- (void)handleReportShellState:(NSDictionary *)message {
+    NSString *state = [message[@"state"] isKindOfClass:[NSString class]] ? message[@"state"] : nil;
+    if (state.length == 0) {
+        DLog(@"Ignoring report_shell_state with empty state: %@", message);
+        return;
+    }
+
+    // workspace_id is optional. When absent, broadcast to all known workspaces
+    // (same pattern as notification.create).
+    NSString *workspaceID = [message[@"workspace_id"] isKindOfClass:[NSString class]] ? message[@"workspace_id"] : nil;
+
+    NSString *value = nil;
+    NSString *icon = nil;
+    NSString *colorHex = nil;
+    BOOL shouldClear = NO;
+
+    if ([state isEqualToString:@"running"] ||
+        [state isEqualToString:@"busy"] ||
+        [state isEqualToString:@"command"]) {
+        value = @"Running";
+        icon = @"bolt.fill";
+        colorHex = @"#007AFF";
+    } else if ([state isEqualToString:@"prompt"] ||
+               [state isEqualToString:@"idle"]) {
+        value = @"Idle";
+        icon = @"circle.fill";
+        colorHex = @"#8E8E93";
+    } else if ([state isEqualToString:@"unknown"] ||
+               [state isEqualToString:@"clear"]) {
+        shouldClear = YES;
+    } else {
+        DLog(@"Ignoring report_shell_state with unknown state '%@': %@", state, message);
+        return;
+    }
+
+    NSString *const key = @"shell_state";
+    TideyStatusStore *store = [TideyStatusStore sharedStore];
+
+    if (workspaceID.length > 0) {
+        if (shouldClear) {
+            [store clearStatusForWorkspaceID:workspaceID key:key];
+        } else {
+            [store setStatusForWorkspaceID:workspaceID key:key value:value icon:icon colorHex:colorHex];
+        }
+    } else {
+        // Broadcast: apply to every workspace that currently has status entries.
+        NSArray<NSString *> *workspaceIDs = [store allWorkspaceIDs];
+        for (NSString *wid in workspaceIDs) {
+            if (shouldClear) {
+                [store clearStatusForWorkspaceID:wid key:key];
+            } else {
+                [store setStatusForWorkspaceID:wid key:key value:value icon:icon colorHex:colorHex];
+            }
+        }
+    }
 }
 
 - (void)handleSetStatus:(NSDictionary *)message {

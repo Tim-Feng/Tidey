@@ -68,14 +68,55 @@
     id object = [NSJSONSerialization JSONObjectWithData:lineData options:0 error:&error];
     NSDictionary *dict = [object isKindOfClass:[NSDictionary class]] ? object : nil;
     if (!dict) {
-        DLog(@"Ignoring invalid Tidey socket payload: %@", error.localizedDescription);
-        return;
+        // Try space-delimited plaintext format used by cmux:
+        //   <action> <state> [--key=value ...]
+        dict = [self parsePlaintextLineData:lineData];
+        if (!dict) {
+            DLog(@"Ignoring invalid Tidey socket payload: %@", error.localizedDescription);
+            return;
+        }
     }
     if (self.messageHandler) {
         dispatch_async(dispatch_get_main_queue(), ^{
             self.messageHandler(dict);
         });
     }
+}
+
+- (NSDictionary *)parsePlaintextLineData:(NSData *)lineData {
+    NSString *line = [[NSString alloc] initWithData:lineData encoding:NSUTF8StringEncoding];
+    if (line.length == 0) {
+        return nil;
+    }
+    NSArray<NSString *> *parts = [line componentsSeparatedByString:@" "];
+    parts = [parts filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(NSString *s, NSDictionary *bindings) {
+        return s.length > 0;
+    }]];
+    if (parts.count < 2) {
+        return nil;
+    }
+
+    NSMutableDictionary *dict = [NSMutableDictionary dictionary];
+    dict[@"action"] = parts[0];
+    dict[@"state"] = parts[1];
+
+    // Parse optional --key=value pairs.
+    for (NSUInteger i = 2; i < parts.count; i++) {
+        NSString *part = parts[i];
+        if ([part hasPrefix:@"--"] && part.length > 2) {
+            NSString *kvString = [part substringFromIndex:2];
+            NSRange eqRange = [kvString rangeOfString:@"="];
+            if (eqRange.location != NSNotFound) {
+                NSString *key = [kvString substringToIndex:eqRange.location];
+                NSString *value = [kvString substringFromIndex:eqRange.location + 1];
+                if (key.length > 0) {
+                    dict[key] = value;
+                }
+            }
+        }
+    }
+
+    return dict;
 }
 
 - (void)close {

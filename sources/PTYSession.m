@@ -2897,6 +2897,7 @@ ITERM_WEAKLY_REFERENCEABLE
     NSString *tideySocketPath = [TideySocketServer socketPath];
     if (tideySocketPath.length > 0) {
         env[@"TIDEY_SOCKET_PATH"] = tideySocketPath;
+        env[@"CMUX_SOCKET_PATH"] = tideySocketPath;
     }
     PseudoTerminal *terminal = [PseudoTerminal castFrom:self.delegate.realParentWindow];
     NSString *workspaceID = [terminal tideyWorkspaceIdentifierForSession:self];
@@ -2910,7 +2911,7 @@ ITERM_WEAKLY_REFERENCEABLE
             @autoreleasepool {
                 NSTask *task = [[[NSTask alloc] init] autorelease];
                 task.launchPath = @"/bin/sh";
-                task.arguments = @[@"-c", @"tmux set-option -ga update-environment ' TIDEY_SOCKET_PATH TIDEY_WORKSPACE_ID' 2>/dev/null"];
+                task.arguments = @[@"-c", @"tmux set-option -ga update-environment ' TIDEY_SOCKET_PATH TIDEY_WORKSPACE_ID CMUX_SOCKET_PATH' 2>/dev/null"];
                 @try {
                     [task launch];
                     [task waitUntilExit];

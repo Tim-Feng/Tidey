@@ -397,6 +397,10 @@ static NSString *const kTideySystemNotificationCategoryIdentifier = @"TIDEY_WORK
     return self.statusMap[workspaceID].count > 0;
 }
 
+- (NSArray<NSString *> *)allWorkspaceIDs {
+    return [self.statusMap allKeys];
+}
+
 - (void)postDidChange {
     [[NSNotificationCenter defaultCenter] postNotificationName:TideyStatusStoreDidChangeNotification
                                                         object:self

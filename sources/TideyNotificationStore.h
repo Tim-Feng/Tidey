@@ -88,6 +88,7 @@ extern NSNotificationName const TideyStatusStoreDidChangeNotification;
 - (void)clearStatusForWorkspaceID:(NSString *)workspaceID key:(NSString *)key;
 - (NSArray<TideyStatusEntry *> *)statusEntriesForWorkspaceID:(NSString *)workspaceID;
 - (BOOL)hasStatusForWorkspaceID:(NSString *)workspaceID;
+- (NSArray<NSString *> *)allWorkspaceIDs;
 
 @end
 
