@@ -1,171 +1,88 @@
-<div align="center">
+# Tidey — the Terminal IDE
 
-# iTerm2
+> Where agents flow between CLI and code, like the tide.
 
-### macOS Terminal Replacement
+Traditional IDEs start from files. Tidey starts from the terminal. In the age of agentic coding, your CLI *is* your IDE — agents run commands, edit files, and ask for your input in a continuous cycle. Tidey is built for this flow.
 
-![Version](https://img.shields.io/badge/version-3.6-blue.svg)
-![Platform](https://img.shields.io/badge/platform-macOS-lightgrey.svg)
+<!-- TODO: hero screenshot -->
 
-**[Website](https://iterm2.com)** • **[Downloads](https://iterm2.com/downloads.html)** • **[Documentation](https://iterm2.com/documentation.html)** • **[Features](https://iterm2.com/features.html)**
+## Why Tidey
 
-</div>
+Every AI coding tool bolts a chat panel onto a file editor:
 
----
-
-## About
-
-iTerm2 is a powerful terminal emulator for macOS that brings the terminal into the modern age with features you never knew you always wanted.
-
-### Key Features
-
-- **tmux Integration** - Native iTerm2 windows/tabs replace tmux's text-based interface. Run tmux -CC and tmux windows become real macOS windows. Sessions persist through crashes, SSH disconnects, and even app upgrades. Collaborate by having two people attach to the same session.
-- **Shell Integration** - Deep shell awareness that tracks commands, directories, hostnames, and usernames. Enables click-to-download files via SCP, drag-and-drop uploads, command history per host, recent directories by "frecency," and marks at each prompt.
-- **AI Chat** - Built-in LLM chat window that can optionally interact with terminal contents. Link sessions to get context-aware help, run commands on your behalf, or explain output with annotations.
-- **Inline Images** - Display images (including animated GIFs) directly in the terminal. Use imgcat to view photos, charts, or visual output without leaving your workflow.
-- **Automatic Profile Switching** - Terminal appearance changes automatically based on hostname, username, directory, or running command. SSH to production? Background turns red. Different environments get different visual contexts.
-- **Dedicated Hotkey Windows** - System-wide hotkey summons a terminal that slides down from the top of the screen (or any edge), even over fullscreen apps. Pin it or let it auto-hide.
-- **Session Restoration** - Sessions run in long-lived server processes. If iTerm2 crashes or upgrades, your shells keep running. When iTerm2 restarts, it reconnects to your sessions exactly where you left off.
-- **Built-in Web Browser** - Browser profiles integrate web browsing into iTerm2's window/tab/pane hierarchy. Copy mode, triggers, AI chat, and other terminal features work in browser sessions.
-- **Configurable Status Bar** - Per-session status bar showing git branch, CPU/memory graphs, current directory, hostname, custom interpolated strings, or Python API components.
-- **Triggers** - Regex patterns that fire actions when matched: highlight text, run commands, send notifications, open password manager, set marks, or invoke Python scripts.
-- **Smart Selection** - Quad-click selects semantic objects (URLs, file paths, email addresses, quoted strings). Right-click for context actions. Cmd-click to open.
-- **Copy Mode** - Vim-like keyboard selection. Navigate and select text without touching the mouse. Works with marks to jump between command prompts.
-- **Instant Replay** - Scrub backward through terminal history to see exactly what was on screen at any moment, with timestamps. Perfect for catching fleeting errors.
-- **Python Scripting API** - Full automation and customization via Python. Create custom status bar components, triggers, menu items, or entirely new features.
-- **Open Quickly** - Cmd-Shift-O opens a search across all sessions by tab title, command, hostname, directory, or badge. Navigate large session collections instantly.
-
----
-
-## Installation
-
-### Download
-
-Get the latest version from [iterm2.com/downloads](https://iterm2.com/downloads.html)
-
-For the bleeding edge without building, try the [nightly build](https://iterm2.com/nightly/latest).
-
-### Build from Source
-
-> **Note:** Development builds may be less stable than official releases.
-
-#### Prerequisites
-
-- The most recent version of Xcode (with Command Line Tools). You can minimize suffering by using the same Xcode that is in the file `last-xcode-version`.
-- [Homebrew](https://brew.sh/)
-- [Rustup](https://rustup.rs)
-
-#### Clone
-
-```bash
-git clone https://github.com/gnachman/iTerm2.git
+```
+Traditional:   [File Tree] → [Editor] → [Agent Chat]
+Tidey:         [Workspaces] → [Terminal] → [Editor]
 ```
 
-#### Setup (first time)
+The terminal is the center. The editor opens when you need it, closes when you don't.
+
+Agents run in workspaces you can see, switch between, and monitor — not in a hidden sidebar.
+
+## Features
+
+**Workspace Sidebar**
+- Each workspace is an agent session — Claude Code, Codex, or plain shell
+- Notification badges when an agent needs your input
+- Agent status (Running / Idle) displayed inline
+- Drag to reorder, pin, rename, right-click context menu
+
+**Editor Panel**
+- Monaco editor with syntax highlighting, search (cmd+F)
+- Opens on cmd+click from terminal — file tree auto-reveals
+- Preview tabs replaced on browse, double-click to pin
+- Offline — Monaco bundled locally, no CDN
+
+**Agent Integration**
+- Unix socket API for agent-to-IDE communication
+- Notifications — agents send alerts with title + body
+- Status — shell hooks auto-detect Running / Idle via precmd/preexec
+- Works transparently inside tmux
+
+**Terminal**
+- Built on iTerm2's terminal emulation
+- tmux -CC control mode support
+- Collapsible terminal, editor, sidebar, file tree — all independently resizable
+- Double-click divider to reset layout
+
+## Install
+
+<!-- TODO: DMG download link -->
+
+**Build from source:**
 
 ```bash
+git clone https://github.com/Tim-Feng/Tidey.git
+cd Tidey
 make setup
-```
-
-This installs Homebrew dependencies (cmake, pkg-config, python3, etc.), SF Symbols, Rust cross-compilation support, downloads the Metal Toolchain, initializes submodules, and compiles third-party libraries (OpenSSL, libsixel, libgit2, Sparkle, etc.) inside a sandbox.
-
-Re-run `make paranoid-deps` whenever your active Xcode version changes — the file `last-xcode-version` tracks which version was last used.
-
-#### Build
-
-```bash
 make Development
 ```
 
-#### Run
+Requires Xcode and [rustup](https://rustup.rs).
 
-```bash
-make run
-```
+## Keyboard Shortcuts
 
-#### Architecture
+| Action | Shortcut |
+|--------|----------|
+| New Workspace | cmd+N |
+| New Panel | cmd+T |
+| Close | cmd+W |
+| Switch Workspace 1/2/3 | cmd+1/2/3 |
+| Next/Previous Workspace | ctrl+cmd+] / [ |
+| Toggle Sidebar | cmd+B |
+| Toggle Editor | cmd+shift+E |
+| Toggle File Tree | ctrl+cmd+F |
+| Find in Editor | cmd+F |
+| Reset Layout | double-click divider |
 
-Builds target your native architecture by default. To produce a universal (arm64 + x86_64) binary:
+## For Agent Developers
 
-```bash
-UNIVERSAL=1 make Development
-```
+Tidey exposes a Unix socket API for agent-to-IDE communication — notifications, status updates, and more. See [docs/socket-api.md](docs/socket-api.md).
 
-#### Code signing
+## Built on iTerm2
 
-Code signing is disabled by default to keep contributor builds simple. To enable it with the project's signing identity:
-
-```bash
-SIGNED=1 make Development
-```
-
-#### Building in Xcode
-
-If you prefer building from Xcode instead of the command line:
-
-1. Complete the **Clone** and **Setup** steps above.
-2. Configure code signing with your team ID:
-   ```bash
-   tools/set_team_id.sh YOUR_TEAM_ID
-   ```
-   This script updates `DEVELOPMENT_TEAM` in all Xcode project files (iTerm2 and its dependencies like Sparkle, SwiftyMarkdown, etc.) so code signing works with your identity.
-
-   **To find your team ID:** Open Keychain Access, find your "Apple Development" or "Developer ID" certificate, and look for the 10-character string in parentheses (e.g., "H7V7XYVQ7D").
-
-   **No Developer account?** Skip this step and select "Sign to Run Locally" in Xcode's Signing & Capabilities tab.
-
-3. Open `iTerm2.xcodeproj` in Xcode.
-4. Edit Scheme (Cmd-<) and set Build Configuration to **Development**.
-5. Press Cmd-R to build and run.
-
----
-
-## Development
-
-### Contributing
-
-We welcome contributions! Please read our [contribution guide](https://gitlab.com/gnachman/iterm2/-/wikis/How-to-Contribute) before submitting pull requests.
-
----
-
-## Bug Reports & Issues
-
-- **File bugs:** [iterm2.com/bugs](https://iterm2.com/bugs)
-- **Issue tracker:** [GitLab Issues](https://gitlab.com/gnachman/iterm2/issues)
-
-> **Note:** We use GitLab for issues because it provides better support for attachments.
-
----
-
-## Resources
-
-| Resource         | Link                                                              |
-| ---------------- | ----------------------------------------------------------------- |
-| Official Website | [iterm2.com](https://iterm2.com)                                  |
-| Documentation    | [iterm2.com/documentation](https://iterm2.com/documentation.html) |
-| Community        | [iTerm2 Discussions](https://gitlab.com/gnachman/iterm2/-/issues) |
-| Downloads        | [iterm2.com/downloads](https://iterm2.com/downloads.html)         |
-
----
+Tidey is a fork of [iTerm2](https://iterm2.com) by George Nachman. The terminal emulation, PTY management, and tmux integration come from iTerm2. The workspace model, editor panel, notification system, and socket API are Tidey originals.
 
 ## License
 
-iTerm2 is distributed under the [GPLv3](LICENSE) license.
-
----
-
-## Support
-
-If you love iTerm2, consider:
-
-- Starring this repository
-- Spreading the word
-- [Sponsoring development](https://iterm2.com/donate.html)
-
----
-
-<div align="center">
-
-**Made by [George Nachman](https://github.com/gnachman) and [contributors](https://github.com/gnachman/iTerm2/graphs/contributors)**
-
-</div>
+GPL v2-or-later — same as iTerm2.
