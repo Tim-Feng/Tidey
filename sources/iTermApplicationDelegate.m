@@ -2971,13 +2971,77 @@ static iTermKeyEventReplayer *gReplayer;
 }
 
 - (IBAction)showPrefWindow:(id)sender {
-    [[PreferencePanel sharedInstance] run];
-    [[[PreferencePanel sharedInstance] window] makeKeyAndOrderFront:self];
+    [self showTideyShortcutsPanel];
 }
 
 - (IBAction)showAndOrderFrontRegardlessPrefWindow:(id)sender {
-    [self showPrefWindow:sender];
-    [[[PreferencePanel sharedInstance] window] orderFrontRegardless];
+    [self showTideyShortcutsPanel];
+}
+
+- (void)showTideyShortcutsPanel {
+    static NSPanel *panel = nil;
+    if (panel) {
+        [panel makeKeyAndOrderFront:nil];
+        return;
+    }
+
+    NSArray<NSArray<NSString *> *> *shortcuts = @[
+        @[@"New Workspace",          @"\u2318N"],
+        @[@"New Panel",              @"\u2318T"],
+        @[@"Close",                  @"\u2318W"],
+        @[@"Switch Workspace 1/2/3", @"\u23181/2/3"],
+        @[@"Next Workspace",         @"\u2303\u2318]"],
+        @[@"Previous Workspace",     @"\u2303\u2318["],
+        @[@"Toggle Sidebar",         @"\u2318B"],
+        @[@"Toggle Editor",          @"\u21e7\u2318E"],
+        @[@"Toggle File Tree",       @"\u2303\u2318F"],
+        @[@"Find in Editor",         @"\u2318F"],
+        @[@"Reset Layout",           @"double-click divider"],
+    ];
+
+    CGFloat panelWidth = 340;
+    CGFloat rowHeight = 24;
+    CGFloat topPadding = 12;
+    CGFloat bottomPadding = 16;
+    CGFloat titleHeight = 30;
+    CGFloat contentHeight = titleHeight + topPadding + shortcuts.count * rowHeight + bottomPadding;
+
+    panel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, panelWidth, contentHeight)
+                                       styleMask:(NSWindowStyleMaskTitled |
+                                                  NSWindowStyleMaskClosable |
+                                                  NSWindowStyleMaskUtilityWindow)
+                                         backing:NSBackingStoreBuffered
+                                           defer:NO];
+    panel.title = @"Tidey Shortcuts";
+    [panel setReleasedWhenClosed:NO];
+    panel.level = NSFloatingWindowLevel;
+
+    NSView *contentView = panel.contentView;
+
+    CGFloat y = contentHeight - titleHeight;
+    NSTextField *title = [NSTextField labelWithString:@"Keyboard Shortcuts"];
+    title.font = [NSFont boldSystemFontOfSize:14];
+    title.frame = NSMakeRect(20, y, panelWidth - 40, 20);
+    [contentView addSubview:title];
+
+    y -= topPadding;
+
+    for (NSArray<NSString *> *row in shortcuts) {
+        y -= rowHeight;
+        NSTextField *action = [NSTextField labelWithString:row[0]];
+        action.font = [NSFont systemFontOfSize:12];
+        action.frame = NSMakeRect(20, y, 190, 18);
+        [contentView addSubview:action];
+
+        NSTextField *key = [NSTextField labelWithString:row[1]];
+        key.font = [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightMedium];
+        key.alignment = NSTextAlignmentRight;
+        key.frame = NSMakeRect(210, y, panelWidth - 230, 18);
+        [contentView addSubview:key];
+    }
+
+    [panel center];
+    [panel makeKeyAndOrderFront:nil];
 }
 
 - (IBAction)showBookmarkWindow:(id)sender {
