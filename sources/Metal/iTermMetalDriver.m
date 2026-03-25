@@ -1641,36 +1641,6 @@ legacyScrollbarWidth:(unsigned int)legacyScrollbarWidth
             }
         }];
     }
-
-    // Extend the last row's dominant background color into the bottom margin/excess
-    // area. This prevents a visible gap below full-screen apps like tmux whose
-    // status bar sits on the last row.
-    if (frameData.rows.count > 0) {
-        iTermMetalRowData *lastRow = frameData.rows.lastObject;
-        const iTermMetalBackgroundColorRLE *rles = (const iTermMetalBackgroundColorRLE *)lastRow.backgroundColorRLEData.bytes;
-        const NSInteger count = lastRow.numberOfBackgroundRLEs;
-        if (count > 0) {
-            // Find the RLE entry that covers the most columns (dominant color).
-            unsigned short maxCount = 0;
-            vector_float4 dominantColor = rles[0].color;
-            for (NSInteger i = 0; i < count; i++) {
-                if (rles[i].count > maxCount) {
-                    maxCount = rles[i].count;
-                    dominantColor = rles[i].color;
-                }
-            }
-            // Only set if the dominant color differs from the regular margin color
-            // to avoid unnecessary extra draw calls.
-            if (dominantColor.x != tState.regularHorizontalColor.x ||
-                dominantColor.y != tState.regularHorizontalColor.y ||
-                dominantColor.z != tState.regularHorizontalColor.z ||
-                dominantColor.w != tState.regularHorizontalColor.w) {
-                tState.bottomExtensionColor = dominantColor;
-                tState.hasBottomExtensionColor = YES;
-            }
-        }
-    }
-
     tState.suppressedTopHeight = [self offscreenCommandLineHeight:frameData];
 }
 
