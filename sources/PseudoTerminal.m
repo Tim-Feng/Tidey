@@ -11342,8 +11342,10 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
 }
 
 - (NSString *)tideySidebarDisplayTitleForSession:(PTYSession *)session {
-    if ([self tideyWorkspaceIsInStartupGracePeriod:[self selectedWorkspace]]) {
-        return @"~";
+    // Use OSC 0/2 window title whenever available (works for shells, cmux, Claude Code, etc.)
+    NSString *windowName = session.variablesScope.windowName;
+    if (windowName.length > 0) {
+        return windowName;
     }
 
     NSString *path = [self tideySidebarDisplayPathForSession:session];

@@ -2899,6 +2899,11 @@ ITERM_WEAKLY_REFERENCEABLE
         env[@"TIDEY_SOCKET_PATH"] = tideySocketPath;
         env[@"CMUX_SOCKET_PATH"] = tideySocketPath;
     }
+    // Export Tidey's bin/ directory path so shell integration can prepend it to PATH.
+    NSString *tideyBinDir = [[[NSBundle mainBundle] resourcePath] stringByAppendingPathComponent:@"bin"];
+    if ([[NSFileManager defaultManager] fileExistsAtPath:tideyBinDir]) {
+        env[@"TIDEY_BIN_DIR"] = tideyBinDir;
+    }
     PseudoTerminal *terminal = [PseudoTerminal castFrom:self.delegate.realParentWindow];
     NSString *workspaceID = [terminal tideyWorkspaceIdentifierForSession:self];
     if (workspaceID.length > 0) {
@@ -17632,6 +17637,12 @@ static const NSTimeInterval PTYSessionFocusReportBellSquelchTimeIntervalThreshol
 }
 
 - (void)screenPostUserNotification:(NSString * _Nonnull)message rich:(BOOL)rich {
+    // Suppress OSC 9 notifications when Claude Code is active — the hook system handles notifications.
+    NSString *foregroundJob = self.variablesScope.jobName;
+    if ([foregroundJob isEqualToString:@"claude"]) {
+        DLog(@"Suppressing OSC 9 notification while Claude Code is active: %@", message);
+        return;
+    }
     if (![self shouldPostTerminalGeneratedAlert]) {
         DLog(@"Declining to allow terminal to post user notification %@", message);
         return;

@@ -651,6 +651,15 @@ if [ -n "${TIDEY_SOCKET_PATH-}" ]; then
   tmux set-option -ga update-environment " TIDEY_SOCKET_PATH TIDEY_WORKSPACE_ID" 2>/dev/null
 fi
 
+# Prepend Tidey's bin/ to PATH. Bash shell integration runs after .bashrc,
+# so direct prepend is safe here.
+if [ -n "${TIDEY_BIN_DIR-}" ] && [ -d "${TIDEY_BIN_DIR-}" ]; then
+  case ":${PATH}:" in
+    *":${TIDEY_BIN_DIR}:"*) ;;
+    *) export PATH="${TIDEY_BIN_DIR}:${PATH}" ;;
+  esac
+fi
+
 # When running inside Tidey, report shell state via precmd/preexec hooks.
 if [ -n "${TIDEY_SOCKET_PATH-}" ] && [ -S "${TIDEY_SOCKET_PATH-}" ]; then
   _tidey_report_shell_state() {
@@ -658,7 +667,7 @@ if [ -n "${TIDEY_SOCKET_PATH-}" ] && [ -S "${TIDEY_SOCKET_PATH-}" ]; then
     if [ -n "${TIDEY_WORKSPACE_ID-}" ]; then
       msg="$msg --workspace_id=$TIDEY_WORKSPACE_ID"
     fi
-    printf '%s\n' "$msg" | nc -U "$TIDEY_SOCKET_PATH" 2>/dev/null &
+    "${TIDEY_BIN_DIR}/tidey" send "$msg" &
     disown 2>/dev/null
   }
 

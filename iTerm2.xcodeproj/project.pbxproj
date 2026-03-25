@@ -5144,6 +5144,8 @@
 		EEBDD6CF78595292D0CF8977 /* PrivateIPCheckerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86F85D24451C27760B7C75BC /* PrivateIPCheckerTests.swift */; };
 		F7C626F9C65F19A1BEE800DA /* iTermWordExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BF1E9C79C30008CC546F987 /* iTermWordExtractor.swift */; };
 		FB4CEC973C7E9235362E3F26 /* iTermRemotePreferences.h in Headers */ = {isa = PBXBuildFile; fileRef = FB4CECF4AC4392B21E87A07B /* iTermRemotePreferences.h */; };
+		T1DEY00001BIN0CLAUDE0002 /* claude in CopyFiles */ = {isa = PBXBuildFile; fileRef = T1DEY00001BIN0CLAUDE0001 /* claude */; };
+
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -5415,6 +5417,16 @@
 				A67A515126CCD56100281693 /* xterm-256color in CopyFiles */,
 				A67A515226CCD56100281693 /* xterm in CopyFiles */,
 				A67A515326CCD56100281693 /* xterm-new in CopyFiles */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		T1DEY00004BIN0COPYPHASE0 /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = bin;
+			dstSubfolderSpec = 7;
+			files = (
+				T1DEY00001BIN0CLAUDE0002 /* claude in CopyFiles */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -9207,6 +9219,8 @@
 		FB896717038D935801F955DB /* newwin.png */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; name = newwin.png; path = images/newwin.png; sourceTree = "<group>"; };
 		FBB2EBCD040AC7C201F955DB /* important.png */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; name = important.png; path = images/important.png; sourceTree = "<group>"; };
 		FBD0AD0A0337A5B701F955DB /* PseudoTerminal.m */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 4; lastKnownFileType = sourcecode.c.objc; lineEnding = 0; path = PseudoTerminal.m; sourceTree = "<group>"; tabWidth = 4; xcLanguageSpecificationIdentifier = xcode.lang.objc; };
+		T1DEY00001BIN0CLAUDE0001 /* claude */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = claude; sourceTree = "<group>"; };
+
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -11335,6 +11349,7 @@
 				A59DFDD38D8F83A4A94B3F51 /* monaco-editor */,
 				A616D78F2EA86224000C0C18 /* iterm2-keepassxc-adapter */,
 				A616D7902EA86225000C0C18 /* iterm2-bitwarden-adapter */,
+				T1DEY00003BIN0GROUP00001 /* bin */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -11358,6 +11373,14 @@
 				A629F57823AF2DD900C2F16B /* utilities.tgz */,
 			);
 			path = utilities;
+			sourceTree = "<group>";
+		};
+		T1DEY00003BIN0GROUP00001 /* bin */ = {
+			isa = PBXGroup;
+			children = (
+				T1DEY00001BIN0CLAUDE0001 /* claude */,
+			);
+			path = bin;
 			sourceTree = "<group>";
 		};
 		A629F59423AFF47300C2F16B /* Shell Integration Installer */ = {
@@ -16151,6 +16174,8 @@
 				A6866B7823CAA10A00ACD94C /* Embed XPC Services */,
 				A6725AD923D64A57001CA48A /* CopyFiles */,
 				A67A515026CCD54000281693 /* CopyFiles */,
+				T1DEY00005CLI0BUILDPHASE /* Build Tidey CLI */,
+				T1DEY00004BIN0COPYPHASE0 /* CopyFiles */,
 				A65DF4AC2849F2E700AA29AB /* CopyFiles */,
 				A69FF3DC2E14A06D00AFF7A8 /* Make symlink to iTerm */,
 				A6C1FE6E284C1BF200EA8A3B /* Embed Foundation Extensions */,
@@ -18656,6 +18681,26 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "#!/bin/bash\nset -euo pipefail\n\nversion_file=\"${SRCROOT}/last-xcode-version\"\ncurrent=\"$(xcodebuild -version)\"\nlast=\"$(< \"$version_file\")\"\nif [[ \"$current\" == \"$last\" ]]; then\n    # versions match → OK\n    exit 0\nfi\n\n# versions differ → block\necho 'You must run `make paranoid-deps` before you can build because your xcode version is out of sync with the prebuild dependencies in the repo'\necho \"Your version is:\"\nprintf '%s\\n' \"$current\"\necho \"The last-built-for version is:\"\nprintf '%s\\n' \"$last\"\nexit 1\n";
+		};
+		T1DEY00005CLI0BUILDPHASE /* Build Tidey CLI */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/sources/TideyCLI/main.swift",
+			);
+			name = "Build Tidey CLI";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/bin/tidey",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\nTIDEY_CLI_SRC=\"${SRCROOT}/sources/TideyCLI/main.swift\"\nTIDEY_CLI_DST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/bin/tidey\"\nmkdir -p \"$(dirname \"$TIDEY_CLI_DST\")\"\nswiftc -O -target ${NATIVE_ARCH_ACTUAL}-apple-macos${MACOSX_DEPLOYMENT_TARGET} -o \"$TIDEY_CLI_DST\" \"$TIDEY_CLI_SRC\" -framework Foundation\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

@@ -166,7 +166,7 @@
     } else if ([state isEqualToString:@"prompt"] ||
                [state isEqualToString:@"idle"]) {
         value = @"Idle";
-        icon = @"circle.fill";
+        icon = @"pause.circle.fill";
         colorHex = @"#8E8E93";
     } else if ([state isEqualToString:@"unknown"] ||
                [state isEqualToString:@"clear"]) {

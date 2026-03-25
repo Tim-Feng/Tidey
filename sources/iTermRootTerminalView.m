@@ -833,6 +833,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                  selector:@selector(tideyStatusStoreDidChange:)
                                                      name:TideyStatusStoreDidChangeNotification
                                                    object:[TideyStatusStore sharedStore]];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(tideyApplicationDidBecomeActive:)
+                                                     name:NSApplicationDidBecomeActiveNotification
+                                                   object:nil];
 
         _tideyModifierMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskFlagsChanged
                                                                       handler:^NSEvent *(NSEvent *event) {
@@ -1210,6 +1214,9 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     [[NSNotificationCenter defaultCenter] removeObserver:self
                                                     name:TideyStatusStoreDidChangeNotification
                                                   object:[TideyStatusStore sharedStore]];
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                    name:NSApplicationDidBecomeActiveNotification
+                                                  object:nil];
     _tabBarControl.itermTabBarDelegate = nil;
     _tabBarControl.delegate = nil;
     _leftTabBarDragHandle.delegate = nil;
@@ -4083,7 +4090,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     badgeView.hidden = YES;
     NSTextField *badgeLabel = [NSTextField labelWithString:@""];
     badgeLabel.tag = 1006;
-    badgeLabel.frame = NSMakeRect(0, 1, kTideySidebarBadgeSize, 14);
+    badgeLabel.frame = NSMakeRect(0, 2, kTideySidebarBadgeSize, 12);
     badgeLabel.font = [NSFont systemFontOfSize:9 weight:NSFontWeightSemibold];
     badgeLabel.textColor = [NSColor whiteColor];
     badgeLabel.alignment = NSTextAlignmentCenter;
@@ -4107,7 +4114,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     titleField.tag = 1001;
     titleField.frame = NSMakeRect(36, 30, 140, 20);
     titleField.autoresizingMask = NSViewWidthSizable;
-    titleField.font = [NSFont systemFontOfSize:14 weight:NSFontWeightSemibold];
+    titleField.font = [NSFont systemFontOfSize:12.5 weight:NSFontWeightSemibold];
     titleField.textColor = [NSColor whiteColor];
     titleField.drawsBackground = NO;
     titleField.backgroundColor = [NSColor clearColor];
@@ -4141,8 +4148,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     bodyField.bezeled = NO;
     bodyField.editable = NO;
     bodyField.selectable = NO;
-    bodyField.maximumNumberOfLines = 3;
-    bodyField.lineBreakMode = NSLineBreakByTruncatingTail;
+    bodyField.maximumNumberOfLines = 2;
+    bodyField.lineBreakMode = NSLineBreakByWordWrapping;
+    bodyField.cell.wraps = YES;
+    bodyField.cell.truncatesLastVisibleLine = YES;
     bodyField.hidden = YES;
     [cellView addSubview:bodyField];
 
@@ -4245,13 +4254,13 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         cellView.textField.stringValue = [self tideySidebarWorkspaceTitleAtIndex:row];
         CGFloat titleX = (unreadCount > 0) ? 32 : 8;
         CGFloat titleMaxW = (unreadCount > 0) ? (width - 80) : (width - 56);
-        cellView.textField.frame = NSMakeRect(titleX, 46 + sOff, MAX(0, titleMaxW), 14);
+        cellView.textField.frame = NSMakeRect(titleX, 51 + sOff, MAX(0, titleMaxW), 14);
 
-        badgeView.frame = NSMakeRect(8, 46 + sOff, kTideySidebarBadgeSize, kTideySidebarBadgeSize);
-        pinView.frame = NSMakeRect(MAX(0, width - 42), 48 + sOff, 12, 12);
+        badgeView.frame = NSMakeRect(8, 49 + sOff, kTideySidebarBadgeSize, kTideySidebarBadgeSize);
+        pinView.frame = NSMakeRect(MAX(0, width - 42), 51 + sOff, 12, 12);
 
         NSView *closeView = TideyFindCloseView(cellView);
-        closeView.frame = NSMakeRect(MAX(0, width - 20), 44 + sOff, 16, 16);
+        closeView.frame = NSMakeRect(MAX(0, width - 20), 49 + sOff, 16, 16);
         closeView.hidden = YES;
         closeView.alphaValue = 0.0;
 
@@ -4265,12 +4274,13 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         bodyField.hidden = NO;
         bodyField.frame = NSMakeRect(8, 16 + sOff, MAX(0, width - 16), 28);
 
-        // --- Bottom: cwd (subtitle field, always visible) ---
+        // --- Bottom: cwd above status ---
         NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
         subtitleField.stringValue = [self tideySidebarWorkspaceSubtitleAtIndex:row];
         subtitleField.textColor = selected ? [NSColor colorWithWhite:1 alpha:0.8] : [NSColor secondaryLabelColor];
         subtitleField.font = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
-        subtitleField.frame = NSMakeRect(8, 2, MAX(0, width - 16), 14);
+        CGFloat cwdY = hasStatus ? 16 : 2;
+        subtitleField.frame = NSMakeRect(8, cwdY, MAX(0, width - 16), 14);
     } else {
         // Normal layout (60pt row).
         // Only indent for badge when there are unread notifications.
@@ -4279,7 +4289,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
         cellView.textField.stringValue = [self tideySidebarWorkspaceTitleAtIndex:row];
         CGFloat titleY = hasStatus ? 38 : 30;
-        cellView.textField.frame = NSMakeRect(textX, titleY, MAX(0, textMaxW), 18);
+        cellView.textField.frame = NSMakeRect(textX, titleY, MAX(0, textMaxW), 14);
 
         NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
         subtitleField.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
@@ -4297,10 +4307,11 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         bodyField.stringValue = @"";
 
         pinView.frame = NSMakeRect(MAX(0, width - 42), 34, 12, 12);
-        badgeView.frame = NSMakeRect(8, 22, kTideySidebarBadgeSize, kTideySidebarBadgeSize);
+        CGFloat badgeY = titleY + 1;  // vertically center badge (16pt) with title (14pt text in 18pt frame)
+        badgeView.frame = NSMakeRect(8, badgeY, kTideySidebarBadgeSize, kTideySidebarBadgeSize);
 
         NSView *closeView = TideyFindCloseView(cellView);
-        CGFloat closeY = titleY - 1;  // align with title, nudged down 2px
+        CGFloat closeY = titleY + 1;  // align with title center
         closeView.frame = NSMakeRect(MAX(0, width - 20), closeY, 16, 16);
         closeView.hidden = YES;
         closeView.alphaValue = 0.0;
@@ -4334,17 +4345,22 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                                                   attributes:textAttrs]];
             }
             if (entry.icon.length > 0) {
-                // Use SF Symbol circle.fill as icon (matching cmux approach).
+                // Use SF Symbol as icon (matching cmux approach).
                 // Rendered via NSTextAttachment for precise vertical centering with text.
-                NSImage *circleImage = [NSImage imageWithSystemSymbolName:entry.icon
-                                                accessibilityDescription:nil];
-                if (circleImage) {
+                // Use hierarchical color config so multi-layer symbols (e.g. pause.circle.fill)
+                // render distinct layers instead of a flat silhouette.
+                NSImage *symbolImage = [NSImage imageWithSystemSymbolName:entry.icon
+                                                 accessibilityDescription:nil];
+                if (symbolImage) {
+                    NSImageSymbolConfiguration *symbolConfig =
+                        [NSImageSymbolConfiguration configurationWithHierarchicalColor:effectiveColor];
+                    symbolImage = [symbolImage imageWithSymbolConfiguration:symbolConfig];
                     NSFont *textFont = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
                     CGFloat iconSize = 9.0;
                     // Center the icon vertically relative to the text cap height.
                     CGFloat yOffset = (textFont.capHeight - iconSize) / 2.0;
                     NSTextAttachment *attachment = [[NSTextAttachment alloc] init];
-                    attachment.image = [circleImage it_imageWithTintColor:effectiveColor];
+                    attachment.image = symbolImage;
                     attachment.bounds = NSMakeRect(0, yOffset, iconSize, iconSize);
                     [statusAttr appendAttributedString:[NSAttributedString attributedStringWithAttachment:attachment]];
                     [statusAttr appendAttributedString:[[NSAttributedString alloc] initWithString:@" "
@@ -4356,8 +4372,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         }
         statusField.attributedStringValue = statusAttr;
         statusField.hidden = NO;
-        // In expanded layout, status sits above cwd (y=16); otherwise at the bottom (y=2).
-        CGFloat statusY = hasBody ? 16 : 6;
+        // Status always at the bottom (below cwd).
+        CGFloat statusY = hasBody ? 2 : 6;
         statusField.frame = NSMakeRect(8, statusY, MAX(0, width - 16), 12);
         statusField.textColor = effectiveColor;
     } else {
@@ -4681,6 +4697,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     } else {
         [self tideyDismissShortcutHints];
     }
+}
+
+- (void)tideyApplicationDidBecomeActive:(NSNotification *)notification {
+    [self tideyDismissShortcutHints];
 }
 
 - (void)tideyScheduleShowShortcutHints {

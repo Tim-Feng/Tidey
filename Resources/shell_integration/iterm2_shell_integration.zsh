@@ -180,6 +180,19 @@ if [[ -o interactive ]]; then
       tmux set-option -ga update-environment " TIDEY_SOCKET_PATH TIDEY_WORKSPACE_ID" 2>/dev/null
     fi
 
+    # Prepend Tidey's bin/ to PATH after all startup files have loaded.
+    # Uses a one-shot precmd hook because .zshrc rebuilds PATH after shell integration.
+    if [ -n "${TIDEY_BIN_DIR-}" ] && [ -d "${TIDEY_BIN_DIR-}" ]; then
+      _tidey_inject_path() {
+        if [[ ":${PATH}:" != *":${TIDEY_BIN_DIR}:"* ]]; then
+          export PATH="${TIDEY_BIN_DIR}:${PATH}"
+        fi
+        add-zsh-hook -d precmd _tidey_inject_path
+      }
+      autoload -Uz add-zsh-hook
+      add-zsh-hook precmd _tidey_inject_path
+    fi
+
     # When running inside Tidey, report shell state via precmd/preexec hooks.
     if [ -n "${TIDEY_SOCKET_PATH-}" ] && [ -S "${TIDEY_SOCKET_PATH-}" ]; then
       _tidey_report_shell_state() {
@@ -187,7 +200,7 @@ if [[ -o interactive ]]; then
         if [ -n "${TIDEY_WORKSPACE_ID-}" ]; then
           msg="$msg --workspace_id=$TIDEY_WORKSPACE_ID"
         fi
-        printf '%s\n' "$msg" | nc -U "$TIDEY_SOCKET_PATH" 2>/dev/null &!
+        "${TIDEY_BIN_DIR}/tidey" send "$msg" &!
       }
 
       _tidey_preexec() {
