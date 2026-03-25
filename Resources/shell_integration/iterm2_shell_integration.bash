@@ -668,8 +668,6 @@ if [ -n "${TIDEY_SOCKET_PATH-}" ] && [ -S "${TIDEY_SOCKET_PATH-}" ]; then
 
   preexec_functions+=(_tidey_preexec)
   precmd_functions+=(_tidey_precmd)
-  # Report initial idle state so sidebar doesn't stay "Running"
-  _tidey_precmd
 fi
 
 iterm2_print_state_data
