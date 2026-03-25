@@ -183,7 +183,11 @@ if [[ -o interactive ]]; then
     # When running inside Tidey, report shell state via precmd/preexec hooks.
     if [ -n "${TIDEY_SOCKET_PATH-}" ] && [ -S "${TIDEY_SOCKET_PATH-}" ]; then
       _tidey_report_shell_state() {
-        printf '%s\n' "$1" | nc -U "$TIDEY_SOCKET_PATH" 2>/dev/null &!
+        local msg="$1"
+        if [ -n "${TIDEY_WORKSPACE_ID-}" ]; then
+          msg="$msg --workspace_id=$TIDEY_WORKSPACE_ID"
+        fi
+        printf '%s\n' "$msg" | nc -U "$TIDEY_SOCKET_PATH" 2>/dev/null &!
       }
 
       _tidey_preexec() {
