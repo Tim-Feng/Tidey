@@ -5,6 +5,11 @@ import AppKit
 class iTermMarginRendererTransientState: iTermMetalCellRendererTransientState {
     @objc var regularVerticalColor = vector_float4(0, 0, 0, 0)
     @objc var regularHorizontalColor = vector_float4(0, 0, 0, 0)
+    // When set, the bottom margin uses this color instead of regularHorizontalColor.
+    // This extends the last row's background into the bottom excess/margin area so
+    // that apps like tmux don't show a gap below their status bar.
+    @objc var bottomExtensionColor: vector_float4 = vector_float4(0, 0, 0, 0)
+    @objc var hasBottomExtensionColor: Bool = false
     struct ColorExtension {
         var color: vector_float4
         var left: Bool
@@ -127,7 +132,15 @@ final class iTermMarginRenderer: NSObject, iTermMetalCellRendererProtocol {
         let transientState = genericState as! iTermMarginRendererTransientState
         if transientState.extensions.isEmpty {
             drawNoExtensions(with: frameData, transientState: transientState, draw: .leftAndRight)
-            drawNoExtensions(with: frameData, transientState: transientState, draw: .topAndBottom)
+            if transientState.hasBottomExtensionColor {
+                // Draw top margin (screen-top = Metal-bottom) with regular color
+                drawNoExtensions(with: frameData, transientState: transientState, draw: .screenTop)
+                // Draw bottom margin (screen-bottom = Metal-top, the excess area)
+                // with the last row's background color
+                drawNoExtensions(with: frameData, transientState: transientState, draw: .screenBottom)
+            } else {
+                drawNoExtensions(with: frameData, transientState: transientState, draw: .topAndBottom)
+            }
         } else {
             drawWithExtensions(with: frameData, transientState: transientState)
         }
@@ -138,7 +151,12 @@ final class iTermMarginRenderer: NSObject, iTermMetalCellRendererProtocol {
         guard let renderEncoder = frameData.renderEncoder else {
             return
         }
-        drawNoExtensions(with: frameData, transientState: transientState, draw: .topAndBottom)
+        if transientState.hasBottomExtensionColor {
+            drawNoExtensions(with: frameData, transientState: transientState, draw: .screenTop)
+            drawNoExtensions(with: frameData, transientState: transientState, draw: .screenBottom)
+        } else {
+            drawNoExtensions(with: frameData, transientState: transientState, draw: .topAndBottom)
+        }
         if transientState.configuration.viewportSize.x > transientState.configuration.viewportSizeExcludingLegacyScrollbars.x {
             drawNoExtensions(with: frameData, transientState: transientState, draw: .underLegacyScrollbar)
         }
@@ -236,7 +254,13 @@ final class iTermMarginRenderer: NSObject, iTermMetalCellRendererProtocol {
             return
         }
         initializeRegularVertexBuffer(tState: transientState, draw: draw)
-        var color = transientState.regularHorizontalColor
+        var color: vector_float4
+        switch draw {
+        case .screenBottom:
+            color = transientState.bottomExtensionColor
+        default:
+            color = transientState.regularHorizontalColor
+        }
         if iTermTextIsMonochrome() {
             color.x *= color.w
             color.y *= color.w
@@ -248,10 +272,17 @@ final class iTermMarginRenderer: NSObject, iTermMetalCellRendererProtocol {
             checkIfChanged: true)
         let cellRenderer = renderer(for: transientState.cellConfiguration, forPIUs: false)
         transientState.pipelineState = cellRenderer.pipelineState()
+        let vertexCount: Int
+        switch draw {
+        case .screenTop, .screenBottom:
+            vertexCount = 6  // Single quad
+        default:
+            vertexCount = 6 * 4  // Two quads (with room for degenerate extras)
+        }
         cellRenderer.draw(
             with: transientState,
             renderEncoder: renderEncoder,
-            numberOfVertices: 6 * 4,
+            numberOfVertices: vertexCount,
             numberOfPIUs: 0,
             vertexBuffers: [ NSNumber(value: iTermVertexInputIndexVertices.rawValue): transientState.vertexBuffer ],
             fragmentBuffers: [ NSNumber(value: iTermFragmentBufferIndexMarginColor.rawValue): colorBuffer ],
@@ -330,6 +361,8 @@ final class iTermMarginRenderer: NSObject, iTermMetalCellRendererProtocol {
         case topAndBottom
         case leftAndRight
         case underLegacyScrollbar
+        case screenTop   // The top margin in screen coords (Metal bottom)
+        case screenBottom // The bottom/excess margin in screen coords (Metal top)
     }
     private func initializeRegularVertexBuffer(tState: iTermMarginRendererTransientState,
                                                draw: Draw) {
@@ -382,12 +415,37 @@ final class iTermMarginRenderer: NSObject, iTermMetalCellRendererProtocol {
                            width: CGFloat(tState.configuration.viewportSize.x - tState.configuration.viewportSizeExcludingLegacyScrollbars.x),
                            height: innerHeight),
                     to: v)
+            case .screenTop:
+                // Screen-top margin = Metal-bottom (y near size.height)
+                v = appendVerticesForQuad(
+                    CGRect(x: 0,
+                           y: size.height - margins.bottom,
+                           width: size.width,
+                           height: margins.bottom),
+                    to: v)
+            case .screenBottom:
+                // Screen-bottom margin (excess area) = Metal-top (y near 0)
+                v = appendVerticesForQuad(
+                    CGRect(x: 0,
+                           y: 0,
+                           width: size.width,
+                           height: margins.top),
+                    to: v)
             }
         }
-        tState.vertexBuffer = twoQuadVerticesPool.requestBuffer(
-            from: tState.poolContext,
-            withBytes: vertices,
-            checkIfChanged: true)
+        switch draw {
+        case .screenTop, .screenBottom:
+            let singleQuad = Array(vertices.prefix(6))
+            tState.vertexBuffer = oneQuadVerticesPool.requestBuffer(
+                from: tState.poolContext,
+                withBytes: singleQuad,
+                checkIfChanged: true)
+        default:
+            tState.vertexBuffer = twoQuadVerticesPool.requestBuffer(
+                from: tState.poolContext,
+                withBytes: vertices,
+                checkIfChanged: true)
+        }
     }
 
     @discardableResult

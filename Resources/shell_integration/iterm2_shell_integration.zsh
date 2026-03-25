@@ -187,6 +187,14 @@ if [[ -o interactive ]]; then
       }
 
       _tidey_preexec() {
+        # Don't report "running" for terminal multiplexers. They take over the
+        # terminal and never return to a prompt, so the outer shell would be
+        # stuck in "Running" state forever.
+        local cmd="${1%% *}"
+        cmd="${cmd##*/}"
+        case "$cmd" in
+          tmux|screen) return ;;
+        esac
         _tidey_report_shell_state "report_shell_state running"
       }
 
