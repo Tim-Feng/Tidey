@@ -4148,7 +4148,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
     NSTextField *statusField = [NSTextField newLabelStyledTextField];
     statusField.tag = 1008;
-    statusField.frame = NSMakeRect(12, 2, 164, 12);
+    statusField.frame = NSMakeRect(8, 2, 164, 12);
     statusField.autoresizingMask = NSViewWidthSizable;
     statusField.font = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
     statusField.textColor = [NSColor secondaryLabelColor];
@@ -4243,15 +4243,15 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
         // --- Title row (top) ---
         cellView.textField.stringValue = [self tideySidebarWorkspaceTitleAtIndex:row];
-        CGFloat titleX = (unreadCount > 0) ? 36 : 12;
-        CGFloat titleMaxW = (unreadCount > 0) ? (width - 88) : (width - 64);
+        CGFloat titleX = (unreadCount > 0) ? 32 : 8;
+        CGFloat titleMaxW = (unreadCount > 0) ? (width - 80) : (width - 56);
         cellView.textField.frame = NSMakeRect(titleX, 46 + sOff, MAX(0, titleMaxW), 14);
 
-        badgeView.frame = NSMakeRect(12, 46 + sOff, kTideySidebarBadgeSize, kTideySidebarBadgeSize);
-        pinView.frame = NSMakeRect(MAX(0, width - 48), 48 + sOff, 12, 12);
+        badgeView.frame = NSMakeRect(8, 46 + sOff, kTideySidebarBadgeSize, kTideySidebarBadgeSize);
+        pinView.frame = NSMakeRect(MAX(0, width - 42), 48 + sOff, 12, 12);
 
         NSView *closeView = TideyFindCloseView(cellView);
-        closeView.frame = NSMakeRect(MAX(0, width - 28), 46 + sOff, 16, 16);
+        closeView.frame = NSMakeRect(MAX(0, width - 20), 44 + sOff, 16, 16);
         closeView.hidden = YES;
         closeView.alphaValue = 0.0;
 
@@ -4263,19 +4263,19 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         bodyField.stringValue = bodyText;
         bodyField.textColor = selected ? [NSColor colorWithWhite:1 alpha:0.8] : [NSColor secondaryLabelColor];
         bodyField.hidden = NO;
-        bodyField.frame = NSMakeRect(12, 16 + sOff, MAX(0, width - 24), 28);
+        bodyField.frame = NSMakeRect(8, 16 + sOff, MAX(0, width - 16), 28);
 
         // --- Bottom: cwd (subtitle field, always visible) ---
         NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
         subtitleField.stringValue = [self tideySidebarWorkspaceSubtitleAtIndex:row];
         subtitleField.textColor = selected ? [NSColor colorWithWhite:1 alpha:0.8] : [NSColor secondaryLabelColor];
         subtitleField.font = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
-        subtitleField.frame = NSMakeRect(12, 2, MAX(0, width - 24), 14);
+        subtitleField.frame = NSMakeRect(8, 2, MAX(0, width - 16), 14);
     } else {
         // Normal layout (60pt row).
         // Only indent for badge when there are unread notifications.
-        CGFloat textX = (unreadCount > 0) ? 36 : 12;
-        CGFloat textMaxW = (unreadCount > 0) ? (width - 88) : (width - 64);
+        CGFloat textX = (unreadCount > 0) ? 32 : 8;
+        CGFloat textMaxW = (unreadCount > 0) ? (width - 80) : (width - 56);
 
         cellView.textField.stringValue = [self tideySidebarWorkspaceTitleAtIndex:row];
         CGFloat titleY = hasStatus ? 38 : 30;
@@ -4291,16 +4291,17 @@ NS_CLASS_AVAILABLE_MAC(10_14)
             subtitleField.textColor = selected ? [NSColor colorWithWhite:1 alpha:0.8] : [NSColor colorWithWhite:0.72 alpha:1];
         }
         CGFloat subtitleY = hasStatus ? 22 : 12;
-        subtitleField.frame = NSMakeRect(12, subtitleY, MAX(0, width - 24), 14);
+        subtitleField.frame = NSMakeRect(8, subtitleY, MAX(0, width - 16), 14);
 
         bodyField.hidden = YES;
         bodyField.stringValue = @"";
 
-        pinView.frame = NSMakeRect(MAX(0, width - 48), 34, 12, 12);
-        badgeView.frame = NSMakeRect(12, 22, kTideySidebarBadgeSize, kTideySidebarBadgeSize);
+        pinView.frame = NSMakeRect(MAX(0, width - 42), 34, 12, 12);
+        badgeView.frame = NSMakeRect(8, 22, kTideySidebarBadgeSize, kTideySidebarBadgeSize);
 
         NSView *closeView = TideyFindCloseView(cellView);
-        closeView.frame = NSMakeRect(MAX(0, width - 28), 32, 16, 16);
+        CGFloat closeY = titleY - 1;  // align with title, nudged down 2px
+        closeView.frame = NSMakeRect(MAX(0, width - 20), closeY, 16, 16);
         closeView.hidden = YES;
         closeView.alphaValue = 0.0;
     }
@@ -4357,7 +4358,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         statusField.hidden = NO;
         // In expanded layout, status sits above cwd (y=16); otherwise at the bottom (y=2).
         CGFloat statusY = hasBody ? 16 : 6;
-        statusField.frame = NSMakeRect(12, statusY, MAX(0, width - 24), 12);
+        statusField.frame = NSMakeRect(8, statusY, MAX(0, width - 16), 12);
         statusField.textColor = effectiveColor;
     } else {
         statusField.hidden = YES;
