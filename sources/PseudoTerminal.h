@@ -227,6 +227,8 @@ extern NSString *const iTermDidCreateTerminalWindowNotification;
 - (void)createTideyPanelPossiblyTmux:(BOOL)possiblyTmux;
 - (BOOL)isShowingTideySidebar;
 - (BOOL)isShowingTideyEditorPanel;
+- (BOOL)tideyEditorHasFocus;
+- (void)createNewUntitledEditorTab;
 - (void)performTideyWorkspaceMutationPreservingWindowFrame:(void (^)(void))block;
 
 // Returns the workspace identifier (UUID string) of the currently selected workspace, or nil.

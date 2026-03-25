@@ -206,6 +206,7 @@ extern const NSInteger iTermRootTerminalViewWindowNumberLabelWidth;
 - (BOOL)saveTideyEditorCurrentTab;
 - (BOOL)hasSaveableTideyEditorTab;
 - (BOOL)tideyEditorHasFocus;
+- (void)createNewUntitledEditorTab;
 - (BOOL)closeCurrentTideyEditorTab;
 
 @end

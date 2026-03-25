@@ -1875,6 +1875,19 @@ ITERM_WEAKLY_REFERENCEABLE
     return _contentView.shouldShowTideyEditorPanel;
 }
 
+- (BOOL)tideyEditorHasFocus {
+    return [_contentView tideyEditorHasFocus];
+}
+
+- (void)createNewUntitledEditorTab {
+    if (!_contentView.shouldShowTideyEditorPanel) {
+        _contentView.shouldShowTideyEditorPanel = YES;
+        [self repositionWidgets];
+        [self notifyTmuxOfWindowResize];
+    }
+    [_contentView createNewUntitledEditorTab];
+}
+
 - (void)toggleToolbeltVisibilityWithSideEffects:(BOOL)sideEffects {
     _contentView.shouldShowToolbelt = !_contentView.shouldShowToolbelt;
     BOOL didResizeWindow = NO;

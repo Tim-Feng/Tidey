@@ -2965,6 +2965,19 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     return [self tideyEditorShouldHandleFindPanelAction];
 }
 
+- (void)createNewUntitledEditorTab {
+    if (_tideyEditorPanelView.hidden) {
+        self.shouldShowTideyEditorPanel = YES;
+        [self layoutSubviews];
+    }
+    TideyEditorTab *tab = [TideyEditorTab tabWithPath:@""
+                                          displayName:@"Untitled"
+                                             language:@"plaintext"
+                                              content:@""];
+    [_tideyEditorTabs addObject:tab];
+    [self selectTideyEditorTabAtIndex:_tideyEditorTabs.count - 1];
+}
+
 - (BOOL)closeCurrentTideyEditorTab {
     if (![self tideyEditorHasFocus] || _tideySelectedEditorTabIndex < 0) {
         return NO;

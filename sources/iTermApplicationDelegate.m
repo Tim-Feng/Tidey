@@ -2793,6 +2793,10 @@ static iTermKeyEventReplayer *gReplayer;
     DLog(@"newWindow: invoked");
     PseudoTerminal *currentTerminal = [[iTermController sharedInstance] currentTerminal];
     if (currentTerminal.isShowingTideySidebar) {
+        if ([currentTerminal tideyEditorHasFocus]) {
+            [currentTerminal createNewUntitledEditorTab];
+            return;
+        }
         BOOL cancel;
         BOOL tmux = [self possiblyTmuxValueForWindow:NO cancel:&cancel];
         if (!cancel) {
