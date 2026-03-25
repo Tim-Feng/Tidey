@@ -1,6 +1,6 @@
 ORIG_PATH := $(PATH)
 PATH := /usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
-ITERM_PID=$(shell pgrep "iTerm2")
+ITERM_PID=$(shell pgrep "Tidey")
 APPS := /Applications
 ITERM_CONF_PLIST = $(HOME)/Library/Preferences/com.googlecode.iterm2.plist
 COMPACTDATE=$(shell date +"%Y%m%d")
@@ -102,7 +102,7 @@ TAGS:
 	find . -name "*.[mhMH]" -exec etags -o ./TAGS -a '{}' +
 
 install: | Deployment backup-old-iterm
-	cp -R $(BUILD_DIR)/Deployment/iTerm2.app $(APPS)
+	cp -R $(BUILD_DIR)/Deployment/Tidey.app $(APPS)
 
 Development:
 	echo "Using PATH for build: $(PATH)"
@@ -124,15 +124,15 @@ Nightly: force
 	chmod -R go+rX $(BUILD_DIR)/Nightly
 
 run: Development
-	$(BUILD_DIR)/Development/iTerm2.app/Contents/MacOS/iTerm2 -suite iterm2-dev
+	$(BUILD_DIR)/Development/Tidey.app/Contents/MacOS/Tidey -suite iterm2-dev
 
 devzip: Development
 	cd $(BUILD_DIR)/Development && \
-	zip -r iTerm2-$(NAME).zip iTerm2.app
+	zip -r iTerm2-$(NAME).zip Tidey.app
 
 zip: Deployment
 	cd $(BUILD_DIR)/Deployment && \
-	zip -r iTerm2-$(NAME).zip iTerm2.app
+	zip -r iTerm2-$(NAME).zip Tidey.app
 
 clean:
 	rm -rf "$(BUILD_DIR)"
@@ -150,14 +150,14 @@ clean:
 	git checkout last-xcode-version
 
 backup-old-iterm:
-	if [[ -d $(APPS)/iTerm2.app.bak ]] ; then rm -fr $(APPS)/iTerm2.app.bak ; fi
-	if [[ -d $(APPS)/iTerm2.app ]] ; then \
-	/bin/mv $(APPS)/iTerm2.app $(APPS)/iTerm2.app.bak ;\
-	 cp $(ITERM_CONF_PLIST) $(APPS)/iTerm2.app.bak/Contents/ ; \
+	if [[ -d $(APPS)/Tidey.app.bak ]] ; then rm -fr $(APPS)/Tidey.app.bak ; fi
+	if [[ -d $(APPS)/Tidey.app ]] ; then \
+	/bin/mv $(APPS)/Tidey.app $(APPS)/Tidey.app.bak ;\
+	 cp $(ITERM_CONF_PLIST) $(APPS)/Tidey.app.bak/Contents/ ; \
 	fi
 
 restart:
-	PATH=$(ORIG_PATH) /usr/bin/open /Applications/iTerm2.app &
+	PATH=$(ORIG_PATH) /usr/bin/open /Applications/Tidey.app &
 	/bin/kill -TERM $(ITERM_PID)
 
 release:
