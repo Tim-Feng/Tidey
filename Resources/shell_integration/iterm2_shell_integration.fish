@@ -151,7 +151,7 @@ if begin; status --is-interactive; and not functions -q -- iterm2_status; and te
     # When running inside Tidey, tell tmux to inherit Tidey environment variables
     # into new sessions so notifications keep working.
     if set -q TIDEY_SOCKET_PATH
-      tmux set-option -ga update-environment " TIDEY_SOCKET_PATH TIDEY_WORKSPACE_ID" 2>/dev/null
+      tmux set-option -ga update-environment " TIDEY_SOCKET_PATH TIDEY_WORKSPACE_ID TIDEY_BIN_DIR" 2>/dev/null
     end
 
     iterm2_write_remotehost_currentdir_uservars

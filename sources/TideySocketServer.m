@@ -1,8 +1,10 @@
 #import "TideySocketServer.h"
 
 #import "DebugLogging.h"
+#import "PseudoTerminal.h"
 #import "TideyNotificationStore.h"
 #import "TideySocketConnection.h"
+#import "iTermController.h"
 #import "iTermSocket.h"
 #import "iTermSocketAddress.h"
 
@@ -111,6 +113,10 @@
     }
     if ([action isEqualToString:@"report_shell_state"]) {
         [self handleReportShellState:message];
+        return;
+    }
+    if ([action isEqualToString:@"set_title"]) {
+        [self handleSetTitle:message];
         return;
     }
 
@@ -231,6 +237,22 @@
     }
 
     [[TideyStatusStore sharedStore] clearStatusForWorkspaceID:workspaceID key:key];
+}
+
+- (void)handleSetTitle:(NSDictionary *)message {
+    NSString *workspaceID = [message[@"workspace_id"] isKindOfClass:[NSString class]] ? message[@"workspace_id"] : nil;
+    NSString *title = [message[@"title"] isKindOfClass:[NSString class]] ? message[@"title"] : nil;
+    if (workspaceID.length == 0) return;
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        for (PseudoTerminal *term in [[iTermController sharedInstance] terminals]) {
+            if (title.length == 0) {
+                [term tideyClearWorkspaceTitleForWorkspaceID:workspaceID];
+            } else {
+                [term tideySetWorkspaceTitle:title forWorkspaceID:workspaceID];
+            }
+        }
+    });
 }
 
 - (void)stop {

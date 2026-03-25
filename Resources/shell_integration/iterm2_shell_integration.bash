@@ -648,16 +648,17 @@ preexec_functions+=(__iterm2_preexec)
 # When running inside Tidey, tell tmux to inherit Tidey environment variables
 # into new sessions so notifications keep working.
 if [ -n "${TIDEY_SOCKET_PATH-}" ]; then
-  tmux set-option -ga update-environment " TIDEY_SOCKET_PATH TIDEY_WORKSPACE_ID" 2>/dev/null
+  tmux set-option -ga update-environment " TIDEY_SOCKET_PATH TIDEY_WORKSPACE_ID TIDEY_BIN_DIR LC_TERMINAL" 2>/dev/null
 fi
 
 # Prepend Tidey's bin/ to PATH. Bash shell integration runs after .bashrc,
 # so direct prepend is safe here.
 if [ -n "${TIDEY_BIN_DIR-}" ] && [ -d "${TIDEY_BIN_DIR-}" ]; then
-  case ":${PATH}:" in
-    *":${TIDEY_BIN_DIR}:"*) ;;
-    *) export PATH="${TIDEY_BIN_DIR}:${PATH}" ;;
-  esac
+  # Remove existing entry (if inherited from outer shell) and prepend
+  local_cleaned="${PATH//$TIDEY_BIN_DIR:/}"
+  local_cleaned="${local_cleaned//:$TIDEY_BIN_DIR/}"
+  export PATH="${TIDEY_BIN_DIR}:${local_cleaned}"
+  unset local_cleaned
 fi
 
 # When running inside Tidey, report shell state via precmd/preexec hooks.

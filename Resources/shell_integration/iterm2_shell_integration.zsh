@@ -177,16 +177,17 @@ if [[ -o interactive ]]; then
     # When running inside Tidey, tell tmux to inherit Tidey environment variables
     # into new sessions so notifications keep working.
     if [ -n "${TIDEY_SOCKET_PATH-}" ]; then
-      tmux set-option -ga update-environment " TIDEY_SOCKET_PATH TIDEY_WORKSPACE_ID" 2>/dev/null
+      tmux set-option -ga update-environment " TIDEY_SOCKET_PATH TIDEY_WORKSPACE_ID TIDEY_BIN_DIR LC_TERMINAL" 2>/dev/null
     fi
 
     # Prepend Tidey's bin/ to PATH after all startup files have loaded.
     # Uses a one-shot precmd hook because .zshrc rebuilds PATH after shell integration.
     if [ -n "${TIDEY_BIN_DIR-}" ] && [ -d "${TIDEY_BIN_DIR-}" ]; then
       _tidey_inject_path() {
-        if [[ ":${PATH}:" != *":${TIDEY_BIN_DIR}:"* ]]; then
-          export PATH="${TIDEY_BIN_DIR}:${PATH}"
-        fi
+        # Remove existing entry (if inherited from outer shell) and prepend
+        local cleaned="${PATH//$TIDEY_BIN_DIR:/}"
+        cleaned="${cleaned//:$TIDEY_BIN_DIR/}"
+        export PATH="${TIDEY_BIN_DIR}:${cleaned}"
         add-zsh-hook -d precmd _tidey_inject_path
       }
       autoload -Uz add-zsh-hook

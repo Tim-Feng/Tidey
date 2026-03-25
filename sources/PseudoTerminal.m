@@ -514,6 +514,8 @@ typedef NS_ENUM(int, iTermShouldHaveTitleSeparator) {
     iTermIdempotentOperationJoiner *_rightExtraJoiner;
     BOOL _excursionPrevented;
 
+    // Socket-driven title overrides keyed by workspace UUID string.
+    NSMutableDictionary<NSString *, NSString *> *_tideyWorkspaceTitleOverrides;
 }
 
 @synthesize scope = _scope;
@@ -1163,6 +1165,7 @@ ITERM_WEAKLY_REFERENCEABLE
     [_windowSizeHelper release];
     [_titlebarAccessoryNanny release];
     [_workspaces release];
+    [_tideyWorkspaceTitleOverrides release];
 
     [super dealloc];
 }
@@ -1203,6 +1206,41 @@ ITERM_WEAKLY_REFERENCEABLE
         return;
     }
     [[TideyNotificationStore sharedStore] markUnreadForWorkspaceID:workspaceID];
+}
+
+- (void)tideySetWorkspaceTitle:(NSString *)title forWorkspaceID:(NSString *)workspaceID {
+    if (workspaceID.length == 0) {
+        return;
+    }
+    [self ensureTideyWorkspacesInitialized];
+    // Verify this window actually owns the workspace.
+    BOOL found = NO;
+    for (NSInteger i = 0; i < (NSInteger)self.workspaces.count; i++) {
+        Workspace *ws = self.workspaces[i];
+        if ([[self tideyWorkspaceIdentifierForWorkspace:ws] isEqualToString:workspaceID]) {
+            found = YES;
+            break;
+        }
+    }
+    if (!found) {
+        return;
+    }
+    if (!_tideyWorkspaceTitleOverrides) {
+        _tideyWorkspaceTitleOverrides = [[NSMutableDictionary alloc] init];
+    }
+    [_tideyWorkspaceTitleOverrides setObject:title forKey:workspaceID];
+    [_contentView reloadTideySidebar];
+}
+
+- (void)tideyClearWorkspaceTitleForWorkspaceID:(NSString *)workspaceID {
+    if (workspaceID.length == 0) {
+        return;
+    }
+    if (_tideyWorkspaceTitleOverrides[workspaceID] == nil) {
+        return;
+    }
+    [_tideyWorkspaceTitleOverrides removeObjectForKey:workspaceID];
+    [_contentView reloadTideySidebar];
 }
 
 - (NSString *)tideySelectedWorkspaceIdentifier {
@@ -11342,9 +11380,26 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
 }
 
 - (NSString *)tideySidebarDisplayTitleForSession:(PTYSession *)session {
+    // Check socket-driven title override before anything else.
+    {
+        PTYTab *panel = (PTYTab *)session.delegate;
+        NSInteger wsIndex = [self indexOfWorkspaceContainingPanel:panel];
+        Workspace *ws = [self workspaceAtIndex:wsIndex];
+        if (ws) {
+            NSString *wsID = [self tideyWorkspaceIdentifierForWorkspace:ws];
+            NSString *override = _tideyWorkspaceTitleOverrides[wsID];
+            if (override.length > 0) {
+                return override;
+            }
+        }
+    }
+
     // Use OSC 0/2 window title whenever available (works for shells, cmux, Claude Code, etc.)
+    // Skip window names that contain "tmux" (e.g. "tmux attach -t ...") since they are
+    // not useful — fall through to cwd instead.
     NSString *windowName = session.variablesScope.windowName;
-    if (windowName.length > 0) {
+    if (windowName.length > 0 &&
+        [windowName rangeOfString:@"tmux" options:NSCaseInsensitiveSearch].location == NSNotFound) {
         return windowName;
     }
 

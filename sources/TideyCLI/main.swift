@@ -144,6 +144,8 @@ private func handleClaudeHook(event: String, socketPath: String, workspaceID: St
     case "session-start":
         sendToSocket(path: socketPath,
                      message: "report_shell_state prompt --workspace_id=\(workspaceID)")
+        let titleJSON = "{\"action\":\"set_title\",\"workspace_id\":\"\(jsonEscape(workspaceID))\",\"title\":\"Claude Code\"}"
+        sendToSocket(path: socketPath, message: titleJSON)
 
     case "notification":
         let json = "{\"action\":\"set_status\",\"workspace_id\":\"\(jsonEscape(workspaceID))\",\"key\":\"shell_state\",\"value\":\"Needs input\",\"icon\":\"bell.fill\",\"color\":\"#4C8DFF\"}"
@@ -175,6 +177,8 @@ private func handleClaudeHook(event: String, socketPath: String, workspaceID: St
     case "session-end":
         let json = "{\"action\":\"clear_status\",\"workspace_id\":\"\(jsonEscape(workspaceID))\",\"key\":\"shell_state\"}"
         sendToSocket(path: socketPath, message: json)
+        let clearTitleJSON = "{\"action\":\"set_title\",\"workspace_id\":\"\(jsonEscape(workspaceID))\",\"title\":\"\"}"
+        sendToSocket(path: socketPath, message: clearTitleJSON)
 
     case "prompt-submit":
         sendToSocket(path: socketPath,

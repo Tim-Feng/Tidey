@@ -2894,6 +2894,10 @@ ITERM_WEAKLY_REFERENCEABLE
         env[@"TERM_FEATURES"] = [VT100Output encodedTermFeaturesForCapabilities:[self capabilities]];
     }
     env[@"ITERM_SESSION_ID"] = itermId;
+    // Always enable shell integration inside tmux for Tidey so that
+    // precmd/preexec hooks and PATH injection work in tmux sessions.
+    env[@"ITERM_ENABLE_SHELL_INTEGRATION_WITH_TMUX"] = @"Yes";
+    env[@"LC_TERMINAL"] = @"Tidey";
     NSString *tideySocketPath = [TideySocketServer socketPath];
     if (tideySocketPath.length > 0) {
         env[@"TIDEY_SOCKET_PATH"] = tideySocketPath;
@@ -2916,7 +2920,7 @@ ITERM_WEAKLY_REFERENCEABLE
             @autoreleasepool {
                 NSTask *task = [[[NSTask alloc] init] autorelease];
                 task.launchPath = @"/bin/sh";
-                task.arguments = @[@"-c", @"tmux set-option -ga update-environment ' TIDEY_SOCKET_PATH TIDEY_WORKSPACE_ID CMUX_SOCKET_PATH' 2>/dev/null"];
+                task.arguments = @[@"-c", @"tmux set-option -ga update-environment ' TIDEY_SOCKET_PATH TIDEY_WORKSPACE_ID TIDEY_BIN_DIR CMUX_SOCKET_PATH ITERM_ENABLE_SHELL_INTEGRATION_WITH_TMUX LC_TERMINAL' 2>/dev/null"];
                 @try {
                     [task launch];
                     [task waitUntilExit];

@@ -237,6 +237,12 @@ extern NSString *const iTermDidCreateTerminalWindowNotification;
 // Selects the workspace with the given identifier and marks it as read. Returns YES on success.
 - (BOOL)tideySelectWorkspaceWithIdentifier:(NSString *)workspaceIdentifier;
 
+// Set a socket-driven title override for a workspace. Reloads the sidebar.
+- (void)tideySetWorkspaceTitle:(NSString *)title forWorkspaceID:(NSString *)workspaceID;
+
+// Clear the socket-driven title override so the workspace falls back to defaults.
+- (void)tideyClearWorkspaceTitleForWorkspaceID:(NSString *)workspaceID;
+
 // A unique number for this window assigned by finishInitializationWithSmartLayout.
 - (NSString *)terminalGuid;
 
