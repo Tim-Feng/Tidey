@@ -2502,12 +2502,12 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     TideyEditorTab *tab = [self tideyCurrentEditorTab];
     BOOL hasCurrentTab = (tab != nil);
     if (!_tideyEditorReady) {
-        _tideyEditorPanelLabel.hidden = NO;
-        _tideyEditorPanelLabel.stringValue = @"Loading Editor…";
+        _tideyEditorPanelLabel.hidden = YES;
+        _tideyEditorWebView.hidden = YES;
         return;
     }
-    _tideyEditorPanelLabel.stringValue = hasCurrentTab ? @"" : @"Open a file";
-    _tideyEditorPanelLabel.hidden = hasCurrentTab;
+    _tideyEditorPanelLabel.hidden = YES;
+    _tideyEditorWebView.hidden = !hasCurrentTab;
     if (!hasCurrentTab) {
         [self tideyEditorSetLanguage:@"plaintext"];
         [self tideyEditorSetEditable:NO];

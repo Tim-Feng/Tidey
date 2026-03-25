@@ -197,6 +197,8 @@ if [[ -o interactive ]]; then
       autoload -Uz add-zsh-hook
       add-zsh-hook preexec _tidey_preexec
       add-zsh-hook precmd _tidey_precmd
+      # Report initial idle state so sidebar doesn't stay "Running"
+      _tidey_precmd
     fi
 
     iterm2_print_state_data
