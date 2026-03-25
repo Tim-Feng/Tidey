@@ -80,6 +80,7 @@ static NSString *const kTideyEditorFileTreeVisibleDefaultsKey = @"TideyEditorFil
 static NSString *const kTideyTerminalVisibleDefaultsKey = @"TideyTerminalVisible";
 static NSUserInterfaceItemIdentifier const kTideySidebarCloseViewIdentifier = @"TideySidebarCloseView";
 static NSUserInterfaceItemIdentifier const kTideySidebarBadgeViewIdentifier = @"TideySidebarBadgeView";
+static NSUserInterfaceItemIdentifier const kTideySidebarHintViewIdentifier = @"TideySidebarHintView";
 static NSPasteboardType const iTermRootTerminalViewTideySidebarWorkspacePasteboardType =
     @"com.tidey.workspace-row";
 
@@ -646,6 +647,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSInteger _tideySelectedEditorTabIndex;
     BOOL _tideyEditorIsRevealingSelection;
     BOOL _tideyIgnoreNextSidebarSelection;
+    id _tideyModifierMonitor;
+    id _tideyKeyDownMonitor;
+    dispatch_block_t _tideyShortcutHintWorkItem;
+    BOOL _tideyShowingShortcutHints;
     CGFloat _tideySidebarPreferredWidth;
     CGFloat _tideyEditorPreferredWidth;
     CGFloat _tideyEditorPreferredWidthBeforeTerminalCollapse;
@@ -800,6 +805,17 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                  selector:@selector(tideyStatusStoreDidChange:)
                                                      name:TideyStatusStoreDidChangeNotification
                                                    object:[TideyStatusStore sharedStore]];
+
+        _tideyModifierMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskFlagsChanged
+                                                                      handler:^NSEvent *(NSEvent *event) {
+            [self tideyHandleModifierFlagsChanged:event];
+            return event;
+        }];
+        _tideyKeyDownMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
+                                                                     handler:^NSEvent *(NSEvent *event) {
+            [self tideyDismissShortcutHints];
+            return event;
+        }];
 
         _tideyEditorPanelView = [[NSView alloc] initWithFrame:NSZeroRect];
         _tideyEditorPanelView.autoresizingMask = NSViewMinXMargin | NSViewHeightSizable;
@@ -1139,6 +1155,18 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 
 - (void)dealloc {
+    if (_tideyModifierMonitor) {
+        [NSEvent removeMonitor:_tideyModifierMonitor];
+        _tideyModifierMonitor = nil;
+    }
+    if (_tideyKeyDownMonitor) {
+        [NSEvent removeMonitor:_tideyKeyDownMonitor];
+        _tideyKeyDownMonitor = nil;
+    }
+    if (_tideyShortcutHintWorkItem) {
+        dispatch_block_cancel(_tideyShortcutHintWorkItem);
+        _tideyShortcutHintWorkItem = nil;
+    }
     [[NSNotificationCenter defaultCenter] removeObserver:self
                                                     name:TideyNotificationStoreDidChangeNotification
                                                   object:[TideyNotificationStore sharedStore]];
@@ -4096,6 +4124,24 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     statusField.hidden = YES;
     [cellView addSubview:statusField];
 
+    // Shortcut hint view (e.g. "⌘1") — shown when user holds Cmd.
+    NSView *hintView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 28, 18)];
+    hintView.identifier = kTideySidebarHintViewIdentifier;
+    hintView.autoresizingMask = NSViewMinXMargin;
+    hintView.wantsLayer = YES;
+    hintView.layer.cornerRadius = 4;
+    hintView.layer.backgroundColor = [NSColor colorWithWhite:1.0 alpha:0.12].CGColor;
+    hintView.hidden = YES;
+    hintView.alphaValue = 0.0;
+    NSTextField *hintLabel = [NSTextField labelWithString:@""];
+    hintLabel.tag = 1009;
+    hintLabel.font = [NSFont monospacedSystemFontOfSize:10 weight:NSFontWeightSemibold];
+    hintLabel.textColor = [NSColor colorWithWhite:1.0 alpha:0.9];
+    hintLabel.alignment = NSTextAlignmentCenter;
+    hintLabel.frame = NSMakeRect(0, 1, 28, 14);
+    [hintView addSubview:hintLabel];
+    [cellView addSubview:hintView];
+
     NSView *closeView = [[NSView alloc] initWithFrame:NSMakeRect(176, 32, 16, 16)];
     closeView.identifier = kTideySidebarCloseViewIdentifier;
     closeView.autoresizingMask = NSViewMinXMargin;
@@ -4279,6 +4325,35 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     } else {
         statusField.hidden = YES;
         statusField.stringValue = @"";
+    }
+
+    // Configure shortcut hint overlay (⌘1 .. ⌘9).
+    NSView *hintView = TideyFindSubviewWithIdentifier(cellView, kTideySidebarHintViewIdentifier);
+    if (hintView) {
+        NSTextField *hintLabel = (NSTextField *)[hintView viewWithTag:1009];
+        if (_tideyShowingShortcutHints && row < 9) {
+            hintLabel.stringValue = [NSString stringWithFormat:@"\u2318%ld", (long)(row + 1)];
+            CGFloat hintX = MAX(0, width - 40);
+            CGFloat hintY = hasBody ? 46 : 32;
+            hintView.frame = NSMakeRect(hintX, hintY, 28, 18);
+            hintView.hidden = NO;
+            [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
+                context.duration = 0.15;
+                hintView.animator.alphaValue = 1.0;
+            }];
+        } else {
+            if (hintView.alphaValue > 0) {
+                [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
+                    context.duration = 0.15;
+                    hintView.animator.alphaValue = 0.0;
+                } completionHandler:^{
+                    hintView.hidden = YES;
+                }];
+            } else {
+                hintView.hidden = YES;
+                hintView.alphaValue = 0.0;
+            }
+        }
     }
 
     if ([_tideySidebarTableView isKindOfClass:[TideySidebarTableView class]]) {
@@ -4559,6 +4634,40 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     [_tideySidebarTableView selectRowIndexes:indexSet byExtendingSelection:NO];
     [_tideySidebarTableView scrollRowToVisible:index];
     return YES;
+}
+
+- (void)tideyHandleModifierFlagsChanged:(NSEvent *)event {
+    NSEventModifierFlags flags = event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
+    if (flags == NSEventModifierFlagCommand) {
+        [self tideyScheduleShowShortcutHints];
+    } else {
+        [self tideyDismissShortcutHints];
+    }
+}
+
+- (void)tideyScheduleShowShortcutHints {
+    [self tideyDismissShortcutHints];
+    _tideyShortcutHintWorkItem = dispatch_block_create(0, ^{
+        if (!self.shouldShowTideySidebar) {
+            return;
+        }
+        self->_tideyShowingShortcutHints = YES;
+        [self reloadTideySidebar];
+    });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(),
+                   _tideyShortcutHintWorkItem);
+}
+
+- (void)tideyDismissShortcutHints {
+    if (_tideyShortcutHintWorkItem) {
+        dispatch_block_cancel(_tideyShortcutHintWorkItem);
+        _tideyShortcutHintWorkItem = nil;
+    }
+    if (_tideyShowingShortcutHints) {
+        _tideyShowingShortcutHints = NO;
+        [self reloadTideySidebar];
+    }
 }
 
 - (void)reloadTideySidebar {
