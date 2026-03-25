@@ -85,9 +85,9 @@ maximumExtendedDynamicRangeColorComponentValue:maximumExtendedDynamicRangeColorC
     const CGSize usableSize =
     CGSizeMake(self.cellConfiguration.viewportSizeExcludingLegacyScrollbars.x - marginSize.width * 2 - extraMargins.left - extraMargins.right,
                self.cellConfiguration.viewportSizeExcludingLegacyScrollbars.y - marginSize.height * 2 - extraMargins.top - extraMargins.bottom);
-    return NSEdgeInsetsMake(fmod(usableSize.height, self.cellConfiguration.cellSize.height) + marginSize.height + extraMargins.bottom,
+    return NSEdgeInsetsMake(marginSize.height + extraMargins.bottom,
                             marginSize.width,
-                            marginSize.height + extraMargins.top,
+                            fmod(usableSize.height, self.cellConfiguration.cellSize.height) + marginSize.height + extraMargins.top,
                             fmod(usableSize.width, self.cellConfiguration.cellSize.width) + marginSize.width);
 }
 

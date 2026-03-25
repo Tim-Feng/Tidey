@@ -2213,7 +2213,7 @@ typedef NS_ENUM(NSInteger, SessionViewTrackingMode) {
                                      self.frame.size.height - titleHeight - reservedSpaceOnBottom);
     NSSize size = [_delegate sessionViewScrollViewWillResize:proposedSize];
     NSRect rect = NSMakeRect(0,
-                             reservedSpaceOnBottom,
+                             reservedSpaceOnBottom + proposedSize.height - size.height,
                              size.width,
                              size.height);
     DLog(@"titleHeight=%@ bottomStatusBarHeight=%@ proposedSize=%@ size=%@ rect=%@",
