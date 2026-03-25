@@ -916,20 +916,17 @@ DQ
                                                 <action selector="toggleToolbeltVisibility:" target="-1" id="v3c-uP-c8Q"/>
                                             </connections>
                                         </menuItem>
-                                        <menuItem title="Show Tidey Sidebar" keyEquivalent="b" identifier="Show Tidey Sidebar" id="X4e-3V-NmJ">
-                                            <modifierMask key="keyEquivalentModifierMask" command="YES"/>
+                                        <menuItem title="Show Tidey Sidebar" keyEquivalent="" identifier="Show Tidey Sidebar" id="X4e-3V-NmJ">
                                             <connections>
                                                 <action selector="toggleTideySidebar:" target="-1" id="H2r-gf-vzh"/>
                                             </connections>
                                         </menuItem>
-                                        <menuItem title="Show Tidey Editor" keyEquivalent="E" identifier="Show Tidey Editor" id="6D0-Fj-SjN">
-                                            <modifierMask key="keyEquivalentModifierMask" command="YES" shift="YES"/>
+                                        <menuItem title="Show Tidey Editor" keyEquivalent="" identifier="Show Tidey Editor" id="6D0-Fj-SjN">
                                             <connections>
                                                 <action selector="toggleTideyEditorPanel:" target="-1" id="M8w-Kc-3oW"/>
                                             </connections>
                                         </menuItem>
-                                        <menuItem title="Show Tidey File Tree" keyEquivalent="f" identifier="Show Tidey File Tree" id="9dH-Ef-8jJ">
-                                            <modifierMask key="keyEquivalentModifierMask" command="YES" control="YES"/>
+                                        <menuItem title="Show Tidey File Tree" keyEquivalent="" identifier="Show Tidey File Tree" id="9dH-Ef-8jJ">
                                             <connections>
                                                 <action selector="toggleTideyEditorFileTree:" target="-1" id="pJ7-3w-LgR"/>
                                             </connections>

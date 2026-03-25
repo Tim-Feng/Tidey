@@ -651,6 +651,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     id _tideyKeyDownMonitor;
     dispatch_block_t _tideyShortcutHintWorkItem;
     BOOL _tideyShowingShortcutHints;
+    NSView *_tideySidebarToggleHint;
+    NSView *_tideyEditorToggleHint;
+    NSView *_tideyTerminalToggleHint;
+    NSView *_tideyFileTreeToggleHint;
     CGFloat _tideySidebarPreferredWidth;
     CGFloat _tideyEditorPreferredWidth;
     CGFloat _tideyEditorPreferredWidthBeforeTerminalCollapse;
@@ -701,6 +705,30 @@ NS_CLASS_AVAILABLE_MAC(10_14)
             userInfo:@{@"tideyToggleButton": button}];
     [button addTrackingArea:trackingArea];
     return button;
+}
+
+- (NSView *)newTideyChromeToggleHintWithText:(NSString *)text {
+    NSTextField *label = [NSTextField labelWithString:text];
+    label.font = [NSFont monospacedSystemFontOfSize:10 weight:NSFontWeightSemibold];
+    label.textColor = [NSColor colorWithWhite:1.0 alpha:0.9];
+    label.alignment = NSTextAlignmentCenter;
+    [label sizeToFit];
+
+    const CGFloat hPad = 6;
+    const CGFloat vPad = 2;
+    NSSize labelSize = label.fittingSize;
+    NSSize viewSize = NSMakeSize(ceil(labelSize.width + hPad * 2),
+                                 ceil(labelSize.height + vPad * 2));
+    NSView *container = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, viewSize.width, viewSize.height)];
+    container.wantsLayer = YES;
+    container.layer.cornerRadius = 4;
+    container.layer.backgroundColor = [NSColor colorWithWhite:1.0 alpha:0.12].CGColor;
+    container.hidden = YES;
+    container.alphaValue = 0.0;
+
+    label.frame = NSMakeRect(hPad, vPad, labelSize.width, labelSize.height);
+    [container addSubview:label];
+    return container;
 }
 
 - (void)mouseEntered:(NSEvent *)event {
@@ -925,6 +953,15 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         [self addSubview:self.tideyEditorToggleButton positioned:NSWindowAbove relativeTo:_tabView];
         [_tideyEditorPanelView addSubview:self.tideyEditorFileTreeDragHandle positioned:NSWindowAbove relativeTo:nil];
         [_tideyEditorPanelView addSubview:self.tideyEditorFileTreeToggleButton positioned:NSWindowAbove relativeTo:nil];
+
+        _tideySidebarToggleHint = [self newTideyChromeToggleHintWithText:@"⌘B"];
+        [self addSubview:_tideySidebarToggleHint positioned:NSWindowAbove relativeTo:nil];
+        _tideyEditorToggleHint = [self newTideyChromeToggleHintWithText:@"⌘⇧E"];
+        [self addSubview:_tideyEditorToggleHint positioned:NSWindowAbove relativeTo:nil];
+        _tideyTerminalToggleHint = [self newTideyChromeToggleHintWithText:@"⌘⇧T"];
+        [self addSubview:_tideyTerminalToggleHint positioned:NSWindowAbove relativeTo:nil];
+        _tideyFileTreeToggleHint = [self newTideyChromeToggleHintWithText:@"⌃⌘F"];
+        [_tideyEditorPanelView addSubview:_tideyFileTreeToggleHint positioned:NSWindowAbove relativeTo:nil];
 
         // Create the tab bar.
         NSRect tabBarFrame = self.bounds;
@@ -4648,11 +4685,11 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 - (void)tideyScheduleShowShortcutHints {
     [self tideyDismissShortcutHints];
     _tideyShortcutHintWorkItem = dispatch_block_create(0, ^{
-        if (!self.shouldShowTideySidebar) {
-            return;
-        }
         self->_tideyShowingShortcutHints = YES;
-        [self reloadTideySidebar];
+        if (self.shouldShowTideySidebar) {
+            [self reloadTideySidebar];
+        }
+        [self tideyShowToggleButtonHints];
     });
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(),
@@ -4667,7 +4704,73 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     if (_tideyShowingShortcutHints) {
         _tideyShowingShortcutHints = NO;
         [self reloadTideySidebar];
+        [self tideyHideToggleButtonHints];
     }
+}
+
+- (void)tideyShowHint:(NSView *)hint atX:(CGFloat)x y:(CGFloat)y {
+    if (!hint) return;
+    hint.frame = NSMakeRect(round(x), round(y), NSWidth(hint.bounds), NSHeight(hint.bounds));
+    hint.hidden = NO;
+    [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
+        context.duration = 0.15;
+        hint.animator.alphaValue = 1.0;
+    }];
+}
+
+- (void)tideyHideHint:(NSView *)hint {
+    if (!hint || hint.hidden) return;
+    [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
+        context.duration = 0.15;
+        hint.animator.alphaValue = 0.0;
+    } completionHandler:^{
+        hint.hidden = YES;
+    }];
+}
+
+- (void)tideyShowHintOverButton:(NSView *)hint button:(NSButton *)button {
+    if (!hint || button.hidden) return;
+    CGFloat hx = NSMidX(button.frame) - NSWidth(hint.bounds) / 2.0;
+    CGFloat hy = NSMidY(button.frame) - NSHeight(hint.bounds) / 2.0;
+    [self tideyShowHint:hint atX:hx y:hy];
+}
+
+- (void)tideyShowToggleButtonHints {
+    [self tideyShowHintOverButton:_tideySidebarToggleHint button:self.tideySidebarToggleButton];
+
+    // ⌘⇧T: nudged up + slightly left (flipped: up = larger Y)
+    if (!self.tideyTerminalToggleButton.hidden && _tideyTerminalToggleHint) {
+        CGFloat hh = NSHeight(_tideyTerminalToggleHint.bounds);
+        CGFloat hw = NSWidth(_tideyTerminalToggleHint.bounds);
+        CGFloat hx = NSMidX(self.tideyTerminalToggleButton.frame) - hw / 2.0 + 1;
+        CGFloat hy = NSMidY(self.tideyTerminalToggleButton.frame) - hh / 2.0 + hh / 2.0 + 4;
+        [self tideyShowHint:_tideyTerminalToggleHint atX:hx y:hy];
+    }
+    // ⌘⇧E: nudged down + slightly right (flipped: down = smaller Y)
+    if (!self.tideyEditorToggleButton.hidden && _tideyEditorToggleHint) {
+        CGFloat hh = NSHeight(_tideyEditorToggleHint.bounds);
+        CGFloat hw = NSWidth(_tideyEditorToggleHint.bounds);
+        CGFloat hx = NSMidX(self.tideyEditorToggleButton.frame) - hw / 2.0;
+        CGFloat hy = NSMidY(self.tideyEditorToggleButton.frame) - hh / 2.0 - hh / 2.0 - 4;
+        [self tideyShowHint:_tideyEditorToggleHint atX:hx y:hy];
+    }
+
+    if (!self.tideyEditorFileTreeToggleButton.hidden) {
+        if (_tideyFileTreeToggleHint.superview != _tideyEditorPanelView) {
+            [_tideyFileTreeToggleHint removeFromSuperview];
+            [_tideyEditorPanelView addSubview:_tideyFileTreeToggleHint positioned:NSWindowAbove relativeTo:nil];
+        }
+        CGFloat hx = NSMidX(self.tideyEditorFileTreeToggleButton.frame) - NSWidth(_tideyFileTreeToggleHint.bounds) / 2.0;
+        CGFloat hy = NSMidY(self.tideyEditorFileTreeToggleButton.frame) - NSHeight(_tideyFileTreeToggleHint.bounds) / 2.0;
+        [self tideyShowHint:_tideyFileTreeToggleHint atX:hx y:hy];
+    }
+}
+
+- (void)tideyHideToggleButtonHints {
+    [self tideyHideHint:_tideySidebarToggleHint];
+    [self tideyHideHint:_tideyEditorToggleHint];
+    [self tideyHideHint:_tideyTerminalToggleHint];
+    [self tideyHideHint:_tideyFileTreeToggleHint];
 }
 
 - (void)reloadTideySidebar {

@@ -692,6 +692,45 @@ ITERM_WEAKLY_REFERENCEABLE
     return _validatingMenuItems || [super isMovable];
 }
 
+#pragma mark - Tidey Shortcut Intercept
+
+- (BOOL)performKeyEquivalent:(NSEvent *)event {
+    // Intercept Tidey shortcuts before the menu system to avoid View menu flash.
+    NSEventModifierFlags flags = event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
+    NSString *chars = event.charactersIgnoringModifiers.lowercaseString;
+    id controller = self.windowController;
+
+    // ⌘B → toggleTideySidebar:
+    if (flags == NSEventModifierFlagCommand && [chars isEqualToString:@"b"]) {
+        if ([controller respondsToSelector:@selector(toggleTideySidebar:)]) {
+            [controller toggleTideySidebar:nil];
+            return YES;
+        }
+    }
+    // ⌘⇧E → toggleTideyEditorPanel:
+    if (flags == (NSEventModifierFlagCommand | NSEventModifierFlagShift) && [chars isEqualToString:@"e"]) {
+        if ([controller respondsToSelector:@selector(toggleTideyEditorPanel:)]) {
+            [controller toggleTideyEditorPanel:nil];
+            return YES;
+        }
+    }
+    // ⌘⇧T → toggleTideyTerminal:
+    if (flags == (NSEventModifierFlagCommand | NSEventModifierFlagShift) && [chars isEqualToString:@"t"]) {
+        if ([controller respondsToSelector:@selector(toggleTideyTerminal:)]) {
+            [controller toggleTideyTerminal:nil];
+            return YES;
+        }
+    }
+    // ⌃⌘F → toggleTideyEditorFileTree:
+    if (flags == (NSEventModifierFlagCommand | NSEventModifierFlagControl) && [chars isEqualToString:@"f"]) {
+        if ([controller respondsToSelector:@selector(toggleTideyEditorFileTree:)]) {
+            [controller toggleTideyEditorFileTree:nil];
+            return YES;
+        }
+    }
+    return [super performKeyEquivalent:event];
+}
+
 NS_ASSUME_NONNULL_END
 
 @end

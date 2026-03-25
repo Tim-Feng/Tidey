@@ -2994,6 +2994,7 @@ static iTermKeyEventReplayer *gReplayer;
         @[@"Previous Workspace",     @"\u2303\u2318["],
         @[@"Toggle Sidebar",         @"\u2318B"],
         @[@"Toggle Editor",          @"\u21e7\u2318E"],
+        @[@"Toggle Terminal",        @"\u21e7\u2318T"],
         @[@"Toggle File Tree",       @"\u2303\u2318F"],
         @[@"Find in Editor",         @"\u2318F"],
         @[@"Reset Layout",           @"double-click divider"],
