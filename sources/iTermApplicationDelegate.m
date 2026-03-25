@@ -2999,7 +2999,7 @@ static iTermKeyEventReplayer *gReplayer;
         @[@"Reset Layout",           @"double-click divider"],
     ];
 
-    CGFloat panelWidth = 340;
+    CGFloat panelWidth = 420;
     CGFloat rowHeight = 24;
     CGFloat topPadding = 12;
     CGFloat bottomPadding = 16;
