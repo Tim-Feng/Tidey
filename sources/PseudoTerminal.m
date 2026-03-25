@@ -5886,10 +5886,8 @@ hidingToolbeltShouldResizeWindow:(BOOL)hidingToolbeltShouldResizeWindow
 }
 
 - (BOOL)tabBarAlwaysVisible {
-    if (self.isShowingTideySidebar) {
-        return YES;
-    }
-    return ![iTermPreferences boolForKey:kPreferenceKeyHideTabBar];
+    // Tidey: always show tab bar to prevent 24px height flicker on sidebar toggle.
+    return YES;
 }
 
 - (BOOL)anyFullScreen {
