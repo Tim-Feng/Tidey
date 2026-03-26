@@ -2950,7 +2950,6 @@ NS_CLASS_AVAILABLE_MAC(10_14)
             self.shouldShowTideyEditorPanel = YES;
             [self layoutSubviews];
         }
-        [self tideyOpenOrSelectEditorTabAtPath:normalizedPath];
         [self tideyEditorRevealFileAtPath:normalizedPath];
         return;
     }
