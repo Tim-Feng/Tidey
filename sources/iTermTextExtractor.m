@@ -1664,11 +1664,21 @@ trimTrailingWhitespace:(BOOL)trimSelectionTrailingSpaces
     if (respectHardNewlines) {
         range = [self rangeForWrappedLineEncompassing:coord respectContinuations:YES maxChars:maxChars];
     } else {
+        // Find the logical line boundaries so soft-wrapped paths are fully covered.
+        int logicalStart = [self lineNumberWithStartOfWholeLineIncludingLine:coord.y
+                                                       respectContinuations:YES
+                                                                   maxChars:maxChars];
+        int logicalEnd = [self lineNumberWithEndOfWholeLineIncludingLine:coord.y
+                                                   respectContinuations:YES
+                                                               maxChars:maxChars];
+        // Extend slightly beyond the logical line for context, but ensure we cover it fully.
+        int rangeStart = MAX(0, MIN(logicalStart, coord.y - 10));
+        int rangeEnd = MIN([_dataSource numberOfLines] - 1, MAX(logicalEnd, coord.y + 10));
         VT100GridCoordRange coordRange =
             VT100GridCoordRangeMake(_logicalWindow.location,
-                                    MAX(0, coord.y - 10),
+                                    rangeStart,
                                     [self xLimit],
-                                    MIN([_dataSource numberOfLines] - 1, coord.y + 10));
+                                    rangeEnd);
         range = [self windowedRangeWithRange:coordRange];
     }
     iTermTextExtractorNullPolicy nullPolicy;
