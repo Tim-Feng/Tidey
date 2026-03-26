@@ -98,7 +98,7 @@
 ## Review Findings（2026-03-26 Codex 審查結果）
 
 ### Finding 1 — HIGH: Shell state broadcast 污染
-**狀態**：待修
+**狀態**：已修（`d19daae29`）
 **問題**：`TIDEY_WORKSPACE_ID` 缺失時，TideyCLI 送空的 `--workspace_id=`，server 的 `handleReportShellState:` 把空 workspace_id 視為 broadcast `*`。一個沒注入 workspace ID 的 Claude session 的 Running/Idle 會污染所有 sidebar row。
 **檔案**：
 - `sources/TideyCLI/main.swift:145,196` — workspaceID 可能為空字串
@@ -106,21 +106,21 @@
 **修法**：CLI 在 workspaceID 為空時不送 `--workspace_id=` 參數，或 server 端拒絕空字串（不 fallback 到 broadcast）。
 
 ### Finding 2 — MEDIUM: Broadcast notification unread 全域共享
-**狀態**：待修
+**狀態**：已修（`a7cc890fa`）
 **問題**：`notification.create` 不帶 workspace_id 時，store 只存一筆 `workspaceID == "*"` 的 item。`markReadForWorkspaceID:` 會把這筆 broadcast item 一起設成 read。切到任一 workspace 就清掉所有 workspace 的 badge。
 **檔案**：
 - `sources/TideyNotificationStore.m:55,123`
 **修法**：broadcast notification 應 fan-out 成每個 workspace 各一筆，或 read 狀態改為 per-workspace tracking。
 
 ### Finding 3 — MEDIUM: Claude wrapper 路徑未 escape
-**狀態**：待修
+**狀態**：已修（`688be0294`）
 **問題**：`Resources/bin/claude` 把 `HOOK_DIR` 直接拼進 JSON hook command string，沒有 shell/JSON escape。App bundle 路徑含空白或特殊字元（如 `Tidey Beta.app`）時 hook 會壞掉。
 **檔案**：
 - `Resources/bin/claude:49`
 **修法**：對 `HOOK_DIR` 做 shell quoting（用雙引號包裹）+ JSON string escape。
 
 ### Finding 4 — LOW: Socket unlink 單例問題
-**狀態**：待修
+**狀態**：已修（`16f3b32df`）
 **問題**：socket server 啟動時無條件 `unlink()` socket 路徑。第二個 Tidey 實例會搶走 socket，第一個實例的 shell 內 `TIDEY_SOCKET_PATH` 靜默失效。
 **檔案**：
 - `sources/TideySocketServer.m:51,56`
