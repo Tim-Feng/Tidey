@@ -1270,6 +1270,15 @@ ITERM_WEAKLY_REFERENCEABLE
 
 - (void)tideyNotificationStoreDidChange:(NSNotification *)notification {
     NSString *workspaceID = notification.userInfo[@"workspaceID"];
+    NSString *selectedWorkspaceID = [self tideySelectedWorkspaceIdentifier];
+    if (selectedWorkspaceID.length > 0 &&
+        (workspaceID.length == 0 ||
+         [workspaceID isEqualToString:@"*"] ||
+         [workspaceID isEqualToString:selectedWorkspaceID])) {
+        [[TideyNotificationStore sharedStore] markReadForWorkspaceID:selectedWorkspaceID];
+        return;
+    }
+
     if (workspaceID.length == 0 || [workspaceID isEqualToString:@"*"]) {
         return;
     }
