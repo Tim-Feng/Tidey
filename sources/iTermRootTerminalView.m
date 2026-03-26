@@ -150,6 +150,7 @@ static CGFloat TideyEditorEffectiveTabStripHeight(CGFloat terminalTabBarHeight) 
 - (void)updateTideyChromeDragHandles;
 - (void)updateTideyChromeToggleButtons;
 - (void)syncTideyEditorFileTreeRootIfNeeded;
+- (void)constrainTideyEditorFileTreeToVisibleWidth;
 - (void)ensureTideyEditorWebView;
 - (void)loadTideyEditorShellIfNeeded;
 - (void)tideyEditorLoadDemoFileIfNeeded;
@@ -2504,6 +2505,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                            directory:isDirectory];
     _tideyEditorCurrentRootPath = [rootPath copy];
     [_tideyEditorFileTreeView reloadData];
+    [self constrainTideyEditorFileTreeToVisibleWidth];
     [self tideyPersistEditorState];
 }
 
@@ -2514,6 +2516,23 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         return;
     }
     [self reloadTideyEditorFileTree];
+}
+
+- (void)constrainTideyEditorFileTreeToVisibleWidth {
+    if (!_tideyEditorFileTreeView || !_tideyEditorFileTreeScrollView) {
+        return;
+    }
+    CGFloat contentWidth = NSWidth(_tideyEditorFileTreeScrollView.contentView.bounds);
+    if (contentWidth <= 0) {
+        return;
+    }
+    NSRect outlineFrame = _tideyEditorFileTreeView.frame;
+    outlineFrame.size.width = contentWidth;
+    _tideyEditorFileTreeView.frame = outlineFrame;
+    NSTableColumn *fileTreeCol = _tideyEditorFileTreeView.tableColumns.firstObject;
+    if (fileTreeCol) {
+        fileTreeCol.width = contentWidth;
+    }
 }
 
 - (void)layoutTideyEditorContents {
@@ -2534,16 +2553,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     _tideyEditorFileTreeContainerView.hidden = !self.shouldShowTideyEditorFileTree;
     _tideyEditorFileTreeContainerView.frame = NSMakeRect(editorWidth, 0, fileTreeWidth, contentHeight);
     _tideyEditorFileTreeScrollView.frame = _tideyEditorFileTreeContainerView.bounds;
-    // Keep the outline view's frame and column width in sync with the scroll view's
-    // visible area to prevent horizontal scrolling in the file tree.
-    CGFloat contentWidth = _tideyEditorFileTreeScrollView.contentSize.width;
-    NSRect outlineFrame = _tideyEditorFileTreeView.frame;
-    outlineFrame.size.width = contentWidth;
-    _tideyEditorFileTreeView.frame = outlineFrame;
-    NSTableColumn *fileTreeCol = _tideyEditorFileTreeView.tableColumns.firstObject;
-    if (fileTreeCol) {
-        fileTreeCol.width = contentWidth;
-    }
+    [self constrainTideyEditorFileTreeToVisibleWidth];
     self.tideyEditorFileTreeDragHandle.frame = NSMakeRect(MAX(0, editorWidth - kTideyDragHandleWidth / 2.0),
                                                           0,
                                                           kTideyDragHandleWidth,
@@ -2873,6 +2883,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         currentNode = nextNode;
         if (nextNode.directory) {
             [_tideyEditorFileTreeView expandItem:nextNode];
+            [self constrainTideyEditorFileTreeToVisibleWidth];
         }
     }
 
@@ -2886,6 +2897,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         [_tideyEditorFileTreeView selectRowIndexes:indexSet byExtendingSelection:NO];
         [_tideyEditorFileTreeView scrollRowToVisible:row];
         _tideyEditorIsRevealingSelection = NO;
+        [self constrainTideyEditorFileTreeToVisibleWidth];
     }
 }
 
@@ -2921,6 +2933,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     parent.children = children;
     parent.childrenLoaded = YES;
     [_tideyEditorFileTreeView reloadItem:parent reloadChildren:YES];
+    [self constrainTideyEditorFileTreeToVisibleWidth];
     return child;
 }
 
