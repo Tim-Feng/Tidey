@@ -896,8 +896,6 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _tideyEditorFileTreeScrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         _tideyEditorFileTreeScrollView.drawsBackground = NO;
         _tideyEditorFileTreeScrollView.hasVerticalScroller = YES;
-        _tideyEditorFileTreeScrollView.hasHorizontalScroller = NO;
-        _tideyEditorFileTreeScrollView.horizontalScrollElasticity = NSScrollElasticityNone;
         _tideyEditorFileTreeScrollView.borderType = NSNoBorder;
         [_tideyEditorFileTreeContainerView addSubview:_tideyEditorFileTreeScrollView];
 
@@ -915,7 +913,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _tideyEditorFileTreeView.target = self;
         _tideyEditorFileTreeView.doubleAction = @selector(tideyEditorOpenSelectedFilePermanently:);
         NSTableColumn *fileTreeColumn = [[NSTableColumn alloc] initWithIdentifier:@"TideyEditorFileTreeColumn"];
-        fileTreeColumn.resizingMask = NSTableColumnNoResizing;
+        fileTreeColumn.resizingMask = NSTableColumnAutoresizingMask;
         [_tideyEditorFileTreeView addTableColumn:fileTreeColumn];
         _tideyEditorFileTreeView.outlineTableColumn = fileTreeColumn;
         _tideyEditorFileTreeScrollView.documentView = _tideyEditorFileTreeView;
@@ -2516,14 +2514,6 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     _tideyEditorFileTreeContainerView.hidden = !self.shouldShowTideyEditorFileTree;
     _tideyEditorFileTreeContainerView.frame = NSMakeRect(editorWidth, 0, fileTreeWidth, contentHeight);
     _tideyEditorFileTreeScrollView.frame = _tideyEditorFileTreeContainerView.bounds;
-    NSTableColumn *fileTreeColumn = _tideyEditorFileTreeView.outlineTableColumn;
-    if (fileTreeColumn) {
-        CGFloat contentWidth = MAX(0, NSWidth(_tideyEditorFileTreeScrollView.contentView.bounds));
-        fileTreeColumn.minWidth = contentWidth;
-        fileTreeColumn.maxWidth = contentWidth;
-        fileTreeColumn.width = contentWidth;
-        _tideyEditorFileTreeView.frame = NSMakeRect(0, 0, contentWidth, NSHeight(_tideyEditorFileTreeView.frame));
-    }
     self.tideyEditorFileTreeDragHandle.frame = NSMakeRect(MAX(0, editorWidth - kTideyDragHandleWidth / 2.0),
                                                           0,
                                                           kTideyDragHandleWidth,
@@ -3861,11 +3851,6 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     titleField.bezeled = NO;
     titleField.editable = NO;
     titleField.selectable = NO;
-    titleField.lineBreakMode = NSLineBreakByTruncatingTail;
-    titleField.usesSingleLineMode = YES;
-    titleField.cell.wraps = NO;
-    titleField.cell.scrollable = NO;
-    titleField.cell.truncatesLastVisibleLine = YES;
     cellView.textField = titleField;
     [cellView addSubview:titleField];
 
