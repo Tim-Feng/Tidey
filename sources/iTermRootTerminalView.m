@@ -3865,6 +3865,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     titleField.usesSingleLineMode = YES;
     titleField.cell.wraps = NO;
     titleField.cell.scrollable = NO;
+    titleField.cell.truncatesLastVisibleLine = YES;
     cellView.textField = titleField;
     [cellView addSubview:titleField];
 
