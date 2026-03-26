@@ -177,7 +177,6 @@ static CGFloat TideyEditorEffectiveTabStripHeight(CGFloat terminalTabBarHeight) 
 - (void)reloadTideyEditorFileTree;
 - (NSString *)tideyEditorFileTreeRootPath;
 - (void)layoutTideyEditorContents;
-- (void)tideyConstrainEditorFileTreeWidth;
 - (NSTableCellView *)newTideyEditorFileTreeCellView;
 - (NSMenu *)tideyEditorFileTreeMenuForNode:(TideyEditorFileNode *)node;
 - (NSMenuItem *)tideyEditorFileTreeMenuItemWithTitle:(NSString *)title
@@ -897,7 +896,6 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _tideyEditorFileTreeScrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         _tideyEditorFileTreeScrollView.drawsBackground = NO;
         _tideyEditorFileTreeScrollView.hasVerticalScroller = YES;
-        _tideyEditorFileTreeScrollView.hasHorizontalScroller = NO;
         _tideyEditorFileTreeScrollView.borderType = NSNoBorder;
         [_tideyEditorFileTreeContainerView addSubview:_tideyEditorFileTreeScrollView];
 
@@ -911,8 +909,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         }
         _tideyEditorFileTreeView.rowHeight = 22;
         _tideyEditorFileTreeView.indentationPerLevel = 12;
-        _tideyEditorFileTreeView.autoresizesOutlineColumn = NO;
-        _tideyEditorFileTreeView.columnAutoresizingStyle = NSTableViewLastColumnOnlyAutoresizingStyle;
+        _tideyEditorFileTreeView.autoresizesOutlineColumn = YES;
         _tideyEditorFileTreeView.target = self;
         _tideyEditorFileTreeView.doubleAction = @selector(tideyEditorOpenSelectedFilePermanently:);
         NSTableColumn *fileTreeColumn = [[NSTableColumn alloc] initWithIdentifier:@"TideyEditorFileTreeColumn"];
@@ -2517,7 +2514,6 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     _tideyEditorFileTreeContainerView.hidden = !self.shouldShowTideyEditorFileTree;
     _tideyEditorFileTreeContainerView.frame = NSMakeRect(editorWidth, 0, fileTreeWidth, contentHeight);
     _tideyEditorFileTreeScrollView.frame = _tideyEditorFileTreeContainerView.bounds;
-    [self tideyConstrainEditorFileTreeWidth];
     self.tideyEditorFileTreeDragHandle.frame = NSMakeRect(MAX(0, editorWidth - kTideyDragHandleWidth / 2.0),
                                                           0,
                                                           kTideyDragHandleWidth,
@@ -3824,13 +3820,6 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         cellView = [self newTideyEditorFileTreeCellView];
     }
     TideyEditorFileNode *node = item;
-    NSInteger level = [outlineView levelForItem:item];
-    CGFloat leading = 8 + level * outlineView.indentationPerLevel + 14;
-    CGFloat iconX = floor(leading);
-    CGFloat titleX = floor(iconX + 20);
-    CGFloat titleWidth = MAX(40, NSWidth(outlineView.bounds) - titleX - 8);
-    cellView.imageView.frame = NSMakeRect(iconX, 2, 16, 16);
-    cellView.textField.frame = NSMakeRect(titleX, 2, titleWidth, 18);
     cellView.textField.stringValue = node.displayName ?: node.path.lastPathComponent;
     if (@available(macOS 11.0, *)) {
         NSString *symbolName = node.directory ? @"folder.fill" : @"doc.text";
@@ -3862,29 +3851,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     titleField.bezeled = NO;
     titleField.editable = NO;
     titleField.selectable = NO;
-    titleField.lineBreakMode = NSLineBreakByTruncatingTail;
-    titleField.usesSingleLineMode = YES;
-    titleField.cell.wraps = NO;
-    titleField.cell.scrollable = NO;
     cellView.textField = titleField;
     [cellView addSubview:titleField];
 
     return cellView;
-}
-
-- (void)tideyConstrainEditorFileTreeWidth {
-    if (!_tideyEditorFileTreeView || !_tideyEditorFileTreeScrollView) {
-        return;
-    }
-    NSRect contentBounds = _tideyEditorFileTreeScrollView.contentView.bounds;
-    CGFloat width = MAX(0, NSWidth(contentBounds));
-    _tideyEditorFileTreeView.frame = NSMakeRect(0, 0, width, NSHeight(_tideyEditorFileTreeView.frame));
-    NSTableColumn *column = _tideyEditorFileTreeView.outlineTableColumn;
-    if (column) {
-        column.minWidth = width;
-        column.maxWidth = width;
-        column.width = width;
-    }
 }
 
 - (NSMenu *)tideyEditorFileTreeMenuForNode:(TideyEditorFileNode *)node {
