@@ -2928,6 +2928,19 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     if (path.length == 0) {
         return;
     }
+    NSString *normalizedPath = [path stringByStandardizingPath];
+    NSString *currentEditorPath = [_tideyEditorLoadedPath stringByStandardizingPath];
+    if (normalizedPath.length > 0 &&
+        currentEditorPath.length > 0 &&
+        [normalizedPath isEqualToString:currentEditorPath]) {
+        if (_tideyEditorPanelView.hidden) {
+            self.shouldShowTideyEditorPanel = YES;
+            [self layoutSubviews];
+        }
+        [self tideyOpenOrSelectEditorTabAtPath:normalizedPath];
+        [self tideyEditorRevealFileAtPath:normalizedPath];
+        return;
+    }
     _tideyEditorRootOverridePath = [[self tideyEditorPreferredRootPathForFileAtPath:path] copy];
     if (_tideyEditorPanelView.hidden) {
         self.shouldShowTideyEditorPanel = YES;
