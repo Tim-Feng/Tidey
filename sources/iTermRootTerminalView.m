@@ -164,6 +164,9 @@ static CGFloat TideyEditorEffectiveTabStripHeight(CGFloat terminalTabBarHeight) 
 - (NSString *)tideyEditorLanguageForPath:(NSString *)path;
 - (NSString *)tideyEditorPreferredRootPathForFileAtPath:(NSString *)path;
 - (void)tideyEditorRevealFileAtPath:(NSString *)path;
+- (TideyEditorFileNode *)tideyEditorChildNodeAtPath:(NSString *)path
+                                           named:(NSString *)displayName
+                                       inParent:(TideyEditorFileNode *)parent;
 - (void)tideyEditorSetValue:(NSString *)content;
 - (void)tideyEditorSetLanguage:(NSString *)language;
 - (void)tideyEditorSetEditable:(BOOL)editable;
@@ -2830,13 +2833,9 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSString *currentPath = rootPath;
     for (NSString *component in components) {
         NSString *nextPath = [currentPath stringByAppendingPathComponent:component];
-        TideyEditorFileNode *nextNode = nil;
-        for (TideyEditorFileNode *child in [currentNode loadChildren]) {
-            if ([[child.path stringByStandardizingPath] isEqualToString:nextPath]) {
-                nextNode = child;
-                break;
-            }
-        }
+        TideyEditorFileNode *nextNode = [self tideyEditorChildNodeAtPath:nextPath
+                                                                   named:component
+                                                               inParent:currentNode];
         if (!nextNode) {
             return;
         }
@@ -2859,6 +2858,41 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         [_tideyEditorFileTreeView scrollRowToVisible:row];
         _tideyEditorIsRevealingSelection = NO;
     }
+}
+
+- (TideyEditorFileNode *)tideyEditorChildNodeAtPath:(NSString *)path
+                                              named:(NSString *)displayName
+                                          inParent:(TideyEditorFileNode *)parent {
+    NSString *normalizedPath = [path stringByStandardizingPath];
+    for (TideyEditorFileNode *child in [parent loadChildren]) {
+        if ([[child.path stringByStandardizingPath] isEqualToString:normalizedPath]) {
+            return child;
+        }
+    }
+
+    BOOL isDirectory = NO;
+    if (![[NSFileManager defaultManager] fileExistsAtPath:normalizedPath isDirectory:&isDirectory]) {
+        return nil;
+    }
+
+    TideyEditorFileNode *child = [TideyEditorFileNode nodeWithPath:normalizedPath
+                                                       displayName:displayName
+                                                         directory:isDirectory];
+    NSMutableArray<TideyEditorFileNode *> *children = [parent.children mutableCopy];
+    if (!children) {
+        children = [NSMutableArray array];
+    }
+    [children addObject:child];
+    [children sortUsingComparator:^NSComparisonResult(TideyEditorFileNode *lhs, TideyEditorFileNode *rhs) {
+        if (lhs.directory != rhs.directory) {
+            return lhs.directory ? NSOrderedAscending : NSOrderedDescending;
+        }
+        return [lhs.displayName localizedCaseInsensitiveCompare:rhs.displayName];
+    }];
+    parent.children = children;
+    parent.childrenLoaded = YES;
+    [_tideyEditorFileTreeView reloadItem:parent reloadChildren:YES];
+    return child;
 }
 
 - (void)openTideyEditorFileAtPath:(NSString *)path {
