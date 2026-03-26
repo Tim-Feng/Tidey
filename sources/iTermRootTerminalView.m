@@ -3820,6 +3820,11 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     }
     TideyEditorFileNode *node = item;
     cellView.textField.stringValue = node.displayName ?: node.path.lastPathComponent;
+    cellView.textField.lineBreakMode = NSLineBreakByTruncatingTail;
+    cellView.textField.usesSingleLineMode = YES;
+    cellView.textField.cell.wraps = NO;
+    cellView.textField.cell.scrollable = NO;
+    cellView.textField.cell.truncatesLastVisibleLine = YES;
     if (@available(macOS 11.0, *)) {
         NSString *symbolName = node.directory ? @"folder.fill" : @"doc.text";
         NSImage *image = [NSImage imageWithSystemSymbolName:symbolName accessibilityDescription:nil];
@@ -3835,14 +3840,14 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     cellView.identifier = @"TideyEditorFileTreeCell";
 
     NSImageView *iconView = [[NSImageView alloc] initWithFrame:NSMakeRect(4, 2, 16, 16)];
+    iconView.translatesAutoresizingMaskIntoConstraints = NO;
     iconView.imageScaling = NSImageScaleProportionallyDown;
-    iconView.autoresizingMask = NSViewMaxXMargin;
     cellView.imageView = iconView;
     [cellView addSubview:iconView];
 
     NSTextField *titleField = [NSTextField newLabelStyledTextField];
     titleField.frame = NSMakeRect(24, 2, 168, 18);
-    titleField.autoresizingMask = NSViewWidthSizable;
+    titleField.translatesAutoresizingMaskIntoConstraints = NO;
     titleField.font = [NSFont systemFontOfSize:12 weight:NSFontWeightRegular];
     titleField.textColor = [NSColor colorWithWhite:0.92 alpha:1];
     titleField.drawsBackground = NO;
@@ -3850,8 +3855,27 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     titleField.bezeled = NO;
     titleField.editable = NO;
     titleField.selectable = NO;
+    titleField.lineBreakMode = NSLineBreakByTruncatingTail;
+    titleField.usesSingleLineMode = YES;
+    titleField.cell.wraps = NO;
+    titleField.cell.scrollable = NO;
+    titleField.cell.truncatesLastVisibleLine = YES;
+    [titleField setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                         forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [titleField setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                           forOrientation:NSLayoutConstraintOrientationHorizontal];
     cellView.textField = titleField;
     [cellView addSubview:titleField];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [iconView.leadingAnchor constraintEqualToAnchor:cellView.leadingAnchor constant:4],
+        [iconView.centerYAnchor constraintEqualToAnchor:cellView.centerYAnchor],
+        [iconView.widthAnchor constraintEqualToConstant:16],
+        [iconView.heightAnchor constraintEqualToConstant:16],
+        [titleField.leadingAnchor constraintEqualToAnchor:cellView.leadingAnchor constant:24],
+        [titleField.trailingAnchor constraintEqualToAnchor:cellView.trailingAnchor constant:-6],
+        [titleField.centerYAnchor constraintEqualToAnchor:cellView.centerYAnchor],
+    ]];
 
     return cellView;
 }
