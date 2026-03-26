@@ -2923,15 +2923,6 @@
 		A69D6AE527B649B5006E3991 /* RunLengthEncoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A69D6AE427B649B5006E3991 /* RunLengthEncoder.swift */; };
 		A69D721B264716FC009D6EAC /* UnselectedTabShadow.png in Resources */ = {isa = PBXBuildFile; fileRef = A69D721A264716FC009D6EAC /* UnselectedTabShadow.png */; };
 		A69D721C264716FC009D6EAC /* UnselectedTabShadow.png in Resources */ = {isa = PBXBuildFile; fileRef = A69D721A264716FC009D6EAC /* UnselectedTabShadow.png */; };
-		A69EB7292E68CE0C00BD3181 /* iTerm2 App Icon for Beta.icon in Resources */ = {isa = PBXBuildFile; fileRef = A69EB7262E68CE0C00BD3181 /* iTerm2 App Icon for Beta.icon */; };
-		A69EB72A2E68CE0C00BD3181 /* iTerm2 App Icon for Nightly.icon in Resources */ = {isa = PBXBuildFile; fileRef = A69EB7272E68CE0C00BD3181 /* iTerm2 App Icon for Nightly.icon */; };
-		A69EB72B2E68CE0C00BD3181 /* iTerm2 App Icon for Release.icon in Resources */ = {isa = PBXBuildFile; fileRef = A69EB7282E68CE0C00BD3181 /* iTerm2 App Icon for Release.icon */; };
-		A69EB72C2E68CE0C00BD3181 /* iTerm2 App Icon for Beta.icon in Resources */ = {isa = PBXBuildFile; fileRef = A69EB7262E68CE0C00BD3181 /* iTerm2 App Icon for Beta.icon */; };
-		A69EB72D2E68CE0C00BD3181 /* iTerm2 App Icon for Nightly.icon in Resources */ = {isa = PBXBuildFile; fileRef = A69EB7272E68CE0C00BD3181 /* iTerm2 App Icon for Nightly.icon */; };
-		A69EB72E2E68CE0C00BD3181 /* iTerm2 App Icon for Release.icon in Resources */ = {isa = PBXBuildFile; fileRef = A69EB7282E68CE0C00BD3181 /* iTerm2 App Icon for Release.icon */; };
-		A69EB72F2E68CE0C00BD3181 /* iTerm2 App Icon for Beta.icon in Resources */ = {isa = PBXBuildFile; fileRef = A69EB7262E68CE0C00BD3181 /* iTerm2 App Icon for Beta.icon */; };
-		A69EB7302E68CE0C00BD3181 /* iTerm2 App Icon for Nightly.icon in Resources */ = {isa = PBXBuildFile; fileRef = A69EB7272E68CE0C00BD3181 /* iTerm2 App Icon for Nightly.icon */; };
-		A69EB7312E68CE0C00BD3181 /* iTerm2 App Icon for Release.icon in Resources */ = {isa = PBXBuildFile; fileRef = A69EB7282E68CE0C00BD3181 /* iTerm2 App Icon for Release.icon */; };
 		A69F59382E21C2C500B96E1B /* BrowserKeyValueStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A69F59372E21C2C200B96E1B /* BrowserKeyValueStore.swift */; };
 		A69F593E2E21CBF900B96E1B /* iTermBrowserStorageProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A69F593A2E21CB9B00B96E1B /* iTermBrowserStorageProvider.swift */; };
 		A69FEECD2E123B8700AFF7A8 /* iTermSwiftPackages.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A69FEEBA2E123B8700AFF7A8 /* iTermSwiftPackages.framework */; };
@@ -3052,6 +3043,9 @@
 		A6A479B72E6E58C000DCF16F /* AppIcon.png in Resources */ = {isa = PBXBuildFile; fileRef = A6A479B62E6E58C000DCF16F /* AppIcon.png */; };
 		A6A479B82E6E58C000DCF16F /* AppIcon.png in Resources */ = {isa = PBXBuildFile; fileRef = A6A479B62E6E58C000DCF16F /* AppIcon.png */; };
 		A6A479B92E6E58C000DCF16F /* AppIcon.png in Resources */ = {isa = PBXBuildFile; fileRef = A6A479B62E6E58C000DCF16F /* AppIcon.png */; };
+		6F477E041A6FFFE517F2A304 /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 00213A5956211FBDEDEAEF96 /* AppIcon.icns */; };
+		BB6261274C73ED1AAACA751C /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 00213A5956211FBDEDEAEF96 /* AppIcon.icns */; };
+		6B0AA05F4218D8AEC31BCB30 /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 00213A5956211FBDEDEAEF96 /* AppIcon.icns */; };
 		A6A4865D20B6706700493302 /* ProfilesKeysPreferencesViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = A6A269961902FA6800437DA9 /* ProfilesKeysPreferencesViewController.m */; };
 		A6A4865E20B6758D00493302 /* iTermPreferencesBaseViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = A6E7138818F26445008D94DD /* iTermPreferencesBaseViewController.m */; };
 		A6A4865F20B675DE00493302 /* AdvancedWorkingDirectoryWindowController.m in Sources */ = {isa = PBXBuildFile; fileRef = A6E713B118FCB559008D94DD /* AdvancedWorkingDirectoryWindowController.m */; };
@@ -7965,6 +7959,7 @@
 		A6A3EDEB2E0DC6A400D711DA /* iTermBrowserMetadata.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iTermBrowserMetadata.swift; sourceTree = "<group>"; };
 		A6A453921FF318D8009FD3B7 /* iTermTexturePageCollection.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; name = iTermTexturePageCollection.mm; path = Metal/Renderers/iTermTexturePageCollection.mm; sourceTree = "<group>"; };
 		A6A479B62E6E58C000DCF16F /* AppIcon.png */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; name = AppIcon.png; path = images/AppIcon.png; sourceTree = "<group>"; };
+		00213A5956211FBDEDEAEF96 /* AppIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; name = AppIcon.icns; path = images/AppIcon.icns; sourceTree = "<group>"; };
 		A6A4B29F240B67A400184EAC /* PTYMouseHandler.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = PTYMouseHandler.h; sourceTree = "<group>"; };
 		A6A4B2A0240B67A400184EAC /* PTYMouseHandler.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = PTYMouseHandler.m; sourceTree = "<group>"; };
 		A6A4B2A42425D18D00184EAC /* iTermKeystroke.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = iTermKeystroke.h; sourceTree = "<group>"; };
@@ -10015,6 +10010,7 @@
 			children = (
 				A6976AED2F47EFD3002875A1 /* SerpApi.png */,
 				A6A479B62E6E58C000DCF16F /* AppIcon.png */,
+				00213A5956211FBDEDEAEF96 /* AppIcon.icns */,
 				A69EB7262E68CE0C00BD3181 /* iTerm2 App Icon for Beta.icon */,
 				A69EB7272E68CE0C00BD3181 /* iTerm2 App Icon for Nightly.icon */,
 				A69EB7282E68CE0C00BD3181 /* iTerm2 App Icon for Release.icon */,
@@ -16519,6 +16515,7 @@
 				A67D0D731A2EE12A003A8B35 /* MainMenu.xib in Resources */,
 				A6B4833229D73DA10055E24A /* text.redaction.png in Resources */,
 				A6A479B72E6E58C000DCF16F /* AppIcon.png in Resources */,
+				6F477E041A6FFFE517F2A304 /* AppIcon.icns in Resources */,
 				A636C3BA22891BD900A83E2F /* StatusBarIconNoBattery@2x.png in Resources */,
 				A67F6136214395570093940A /* graphic_gulp.png in Resources */,
 				A69A2FBF2E5D3BEC00803E66 /* TahoeDarkMidTab.png in Resources */,
@@ -16695,9 +16692,6 @@
 				A697CEBD2D987C5A0031583F /* OpenQuicklyNamedMark@2x.png in Resources */,
 				A65B72B31B33C07D00F947A7 /* NextTip.png in Resources */,
 				A67F6189214395A70093940A /* graphic_perl@2x.png in Resources */,
-				A69EB72F2E68CE0C00BD3181 /* iTerm2 App Icon for Beta.icon in Resources */,
-				A69EB7302E68CE0C00BD3181 /* iTerm2 App Icon for Nightly.icon in Resources */,
-				A69EB7312E68CE0C00BD3181 /* iTerm2 App Icon for Release.icon in Resources */,
 				A6EC0B082C87DF5E00598D20 /* uniE0D7_Powerline_normal-left-inverse-cutout.pdf in Resources */,
 				A65B725F1B1A630100F947A7 /* CheckMark@2x.png in Resources */,
 				A67F61CF214395C60093940A /* graphic_read@2x.png in Resources */,
@@ -17334,6 +17328,7 @@
 				A66351472B659309009B93F7 /* PinnedIndicator@2x.png in Resources */,
 				A686C1991ADF62F200906FAE /* Zoomed@2x.png in Resources */,
 				A6A479B92E6E58C000DCF16F /* AppIcon.png in Resources */,
+				BB6261274C73ED1AAACA751C /* AppIcon.icns in Resources */,
 				A6D693E02E405AB8005E9AFE /* trigger-make-hyperlink.js in Resources */,
 				A6A832352E67ADBE00157F82 /* onboarding-profile.html in Resources */,
 				A65E6F592547F1D5008A4866 /* WindowCornerFull_Square.png in Resources */,
@@ -17481,9 +17476,6 @@
 				A6D3205829C492410088BBE1 /* nerd.itse in Resources */,
 				A6109B652B969B4100D8E4E9 /* graphic_neovim@2x.png in Resources */,
 				A69A2FB92E5D3BEC00803E66 /* TahoeDarkMidTab.png in Resources */,
-				A69EB72C2E68CE0C00BD3181 /* iTerm2 App Icon for Beta.icon in Resources */,
-				A69EB72D2E68CE0C00BD3181 /* iTerm2 App Icon for Nightly.icon in Resources */,
-				A69EB72E2E68CE0C00BD3181 /* iTerm2 App Icon for Release.icon in Resources */,
 				A69A2FBA2E5D3BEC00803E66 /* TahoeDarkRightTab.png in Resources */,
 				A69A2FBB2E5D3BEC00803E66 /* TahoeDarkLeftTab.png in Resources */,
 				A6A64E6D2508C5B50040490B /* OpenQuicklySnippetIcon@2x.png in Resources */,
@@ -17814,6 +17806,7 @@
 				A67F614D214395870093940A /* graphic_java@2x.png in Resources */,
 				1DCF3EC61224D03D00AD56F1 /* DefaultBookmark.plist in Resources */,
 				A6A479B82E6E58C000DCF16F /* AppIcon.png in Resources */,
+				6B0AA05F4218D8AEC31BCB30 /* AppIcon.icns in Resources */,
 				1D8BBA731B30F7FB0005A852 /* Dismiss.png in Resources */,
 				A6F1B3BF2693B82C00546767 /* DebugLogging@2x.png in Resources */,
 				A6AF79CC2E065AA5008D77BA /* bookmarks-page.html in Resources */,
@@ -17852,9 +17845,6 @@
 				A61220EC2E106F9800F48E64 /* adblock-css-injection.js in Resources */,
 				A686C1951ADF62F200906FAE /* Zoomed.png in Resources */,
 				A6FE7A832E0E188F00BEBCE4 /* dragdrop-demo.html in Resources */,
-				A69EB7292E68CE0C00BD3181 /* iTerm2 App Icon for Beta.icon in Resources */,
-				A69EB72A2E68CE0C00BD3181 /* iTerm2 App Icon for Nightly.icon in Resources */,
-				A69EB72B2E68CE0C00BD3181 /* iTerm2 App Icon for Release.icon in Resources */,
 				1D94EAAD12D64022008225A9 /* UKCrashReporter Readme.txt in Resources */,
 				A6E16C5F24A85D5F00C6DB06 /* BigSurAddTab@2x.png in Resources */,
 				A6F7A737213CB143004DE961 /* StatusBarIconGitBranch@2x.png in Resources */,
