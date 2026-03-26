@@ -1466,6 +1466,7 @@ ITERM_WEAKLY_REFERENCEABLE
         PTYTab *panel = workspace.selectedPanel;
         NSInteger panelIndex = [self indexOfTab:panel];
         if (panelIndex != NSNotFound) {
+            [self tideyMarkWorkspaceReadAtIndex:index];
             [_contentView.tabView selectTabViewItemAtIndex:panelIndex];
             [_contentView selectTideySidebarWorkspaceAtIndex:index];
             if (self.currentSession.mainResponder) {
@@ -1474,9 +1475,8 @@ ITERM_WEAKLY_REFERENCEABLE
             return YES;
         }
     }
-    // Only mark read when actually switching to a different workspace
-    [self tideyMarkWorkspaceReadAtIndex:index];
     [self showWorkspaceAtIndex:index];
+    [self tideyMarkWorkspaceReadAtIndex:index];
     return YES;
 }
 
