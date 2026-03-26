@@ -140,6 +140,11 @@ private func handleSend(args: ArraySlice<String>, socketPath: String) {
 }
 
 private func handleClaudeHook(event: String, socketPath: String, workspaceID: String) {
+    // Claude hooks are workspace-scoped. If the session did not inherit a
+    // workspace identifier, fail closed rather than accidentally broadcasting
+    // state/notifications to every workspace.
+    guard !workspaceID.isEmpty else { return }
+
     switch event {
     case "session-start":
         sendToSocket(path: socketPath,
