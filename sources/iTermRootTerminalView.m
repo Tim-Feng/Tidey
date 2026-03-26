@@ -3851,6 +3851,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     titleField.bezeled = NO;
     titleField.editable = NO;
     titleField.selectable = NO;
+    titleField.lineBreakMode = NSLineBreakByTruncatingTail;
+    titleField.usesSingleLineMode = YES;
+    titleField.cell.wraps = NO;
+    titleField.cell.scrollable = NO;
     cellView.textField = titleField;
     [cellView addSubview:titleField];
 
