@@ -9,7 +9,49 @@
 #import "iTermSocketAddress.h"
 
 #include <sys/stat.h>
+#include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/un.h>
+#include <unistd.h>
+
+static NSString *gTideyActiveSocketPath = nil;
+
+static NSString *TideyDefaultSocketPath(void) {
+    return [[TideySocketServer socketDirectory] stringByAppendingPathComponent:@"tidey.sock"];
+}
+
+static NSString *TideyAlternateSocketPath(void) {
+    return [[TideySocketServer socketDirectory] stringByAppendingPathComponent:[NSString stringWithFormat:@"tidey-%d.sock", getpid()]];
+}
+
+static BOOL TideySocketPathHasLiveListener(NSString *path) {
+    if (path.length == 0 || ![[NSFileManager defaultManager] fileExistsAtPath:path]) {
+        return NO;
+    }
+
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) {
+        return NO;
+    }
+
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+
+    NSData *pathData = [path dataUsingEncoding:NSUTF8StringEncoding];
+    if (pathData.length == 0 || pathData.length >= sizeof(addr.sun_path)) {
+        close(fd);
+        return NO;
+    }
+    memcpy(addr.sun_path, pathData.bytes, pathData.length);
+    addr.sun_path[pathData.length] = '\0';
+
+    const socklen_t len = (socklen_t)sizeof(addr);
+    const BOOL connected =
+        (connect(fd, (const struct sockaddr *)&addr, len) == 0);
+    close(fd);
+    return connected;
+}
 
 @interface TideySocketServer ()
 @property(nonatomic, strong) iTermSocket *socket;
@@ -33,7 +75,7 @@
 }
 
 + (NSString *)socketPath {
-    return [[self socketDirectory] stringByAppendingPathComponent:@"tidey.sock"];
+    return gTideyActiveSocketPath ?: TideyDefaultSocketPath();
 }
 
 - (instancetype)init {
@@ -53,11 +95,23 @@
                               withIntermediateDirectories:YES
                                                attributes:@{ NSFilePosixPermissions: @(0700) }
                                                     error:nil];
-    unlink(TideySocketServer.socketPath.UTF8String);
+    NSString *defaultPath = TideyDefaultSocketPath();
+    NSString *chosenPath = defaultPath;
+    if (TideySocketPathHasLiveListener(defaultPath)) {
+        chosenPath = TideyAlternateSocketPath();
+    } else {
+        unlink(defaultPath.UTF8String);
+    }
+
+    if (![chosenPath isEqualToString:defaultPath]) {
+        unlink(chosenPath.UTF8String);
+    }
+    gTideyActiveSocketPath = [chosenPath copy];
 
     self.socket = [iTermSocket unixDomainSocket];
     if (!self.socket) {
         XLog(@"Failed to create Tidey unix socket");
+        gTideyActiveSocketPath = nil;
         return NO;
     }
 
@@ -65,6 +119,7 @@
     if (![self.socket bindToAddress:address]) {
         XLog(@"Failed to bind Tidey unix socket");
         self.socket = nil;
+        gTideyActiveSocketPath = nil;
         return NO;
     }
     chmod(TideySocketServer.socketPath.UTF8String, (S_IRUSR | S_IWUSR));
@@ -78,6 +133,8 @@
         XLog(@"Failed to listen on Tidey unix socket");
         [self.socket close];
         self.socket = nil;
+        unlink(TideySocketServer.socketPath.UTF8String);
+        gTideyActiveSocketPath = nil;
         return NO;
     }
 
@@ -266,6 +323,7 @@
     [self.socket close];
     self.socket = nil;
     unlink(TideySocketServer.socketPath.UTF8String);
+    gTideyActiveSocketPath = nil;
     self.started = NO;
 }
 
