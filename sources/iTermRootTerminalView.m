@@ -3824,6 +3824,13 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         cellView = [self newTideyEditorFileTreeCellView];
     }
     TideyEditorFileNode *node = item;
+    NSInteger level = [outlineView levelForItem:item];
+    CGFloat leading = 8 + level * outlineView.indentationPerLevel + 14;
+    CGFloat iconX = floor(leading);
+    CGFloat titleX = floor(iconX + 20);
+    CGFloat titleWidth = MAX(40, NSWidth(outlineView.bounds) - titleX - 8);
+    cellView.imageView.frame = NSMakeRect(iconX, 2, 16, 16);
+    cellView.textField.frame = NSMakeRect(titleX, 2, titleWidth, 18);
     cellView.textField.stringValue = node.displayName ?: node.path.lastPathComponent;
     if (@available(macOS 11.0, *)) {
         NSString *symbolName = node.directory ? @"folder.fill" : @"doc.text";
