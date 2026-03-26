@@ -1,6 +1,6 @@
 # 🌊 Tidey — the Terminal IDE
 
-> Where agents flow between CLI and code, like the tide.
+> Where context flows between agent and code, like the tide.
 
 Traditional IDEs start from files. Tidey starts from the terminal. In the age of agentic coding, your CLI *is* your IDE — agents run commands, edit files, and ask for your input in a continuous cycle. Tidey is built for this flow.
 
