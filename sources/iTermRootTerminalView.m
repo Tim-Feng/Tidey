@@ -896,6 +896,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _tideyEditorFileTreeScrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         _tideyEditorFileTreeScrollView.drawsBackground = NO;
         _tideyEditorFileTreeScrollView.hasVerticalScroller = YES;
+        _tideyEditorFileTreeScrollView.hasHorizontalScroller = NO;
         _tideyEditorFileTreeScrollView.borderType = NSNoBorder;
         [_tideyEditorFileTreeContainerView addSubview:_tideyEditorFileTreeScrollView];
 
