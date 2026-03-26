@@ -3928,7 +3928,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         [iconView.widthAnchor constraintEqualToConstant:16],
         [iconView.heightAnchor constraintEqualToConstant:16],
         [titleField.leadingAnchor constraintEqualToAnchor:cellView.leadingAnchor constant:24],
-        [titleField.trailingAnchor constraintEqualToAnchor:cellView.trailingAnchor constant:-6],
+        [titleField.trailingAnchor constraintEqualToAnchor:cellView.trailingAnchor constant:-14],
         [titleField.centerYAnchor constraintEqualToAnchor:cellView.centerYAnchor],
     ]];
 
