@@ -610,6 +610,22 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 @end
 
+@interface TideyVerticalOnlyScrollView : NSScrollView
+@end
+
+@implementation TideyVerticalOnlyScrollView
+- (void)scrollWheel:(NSEvent *)event {
+    // Strip the horizontal component from scroll events to prevent horizontal
+    // bounce animation in the file tree.
+    CGEventRef cgEvent = CGEventCreateCopy(event.CGEvent);
+    CGEventSetIntegerValueField(cgEvent, kCGScrollWheelEventDeltaAxis2, 0);
+    CGEventSetDoubleValueField(cgEvent, kCGScrollWheelEventFixedPtDeltaAxis2, 0);
+    NSEvent *verticalOnly = [NSEvent eventWithCGEvent:cgEvent];
+    CFRelease(cgEvent);
+    [super scrollWheel:verticalOnly];
+}
+@end
+
 @implementation iTermRootTerminalView {
     BOOL _tabViewFrameReduced;
     BOOL _haveShownToolbelt;
@@ -892,7 +908,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                                                       alpha:1].CGColor;
         [_tideyEditorPanelView addSubview:_tideyEditorFileTreeContainerView];
 
-        _tideyEditorFileTreeScrollView = [[NSScrollView alloc] initWithFrame:NSZeroRect];
+        _tideyEditorFileTreeScrollView = [[TideyVerticalOnlyScrollView alloc] initWithFrame:NSZeroRect];
         _tideyEditorFileTreeScrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         _tideyEditorFileTreeScrollView.drawsBackground = NO;
         _tideyEditorFileTreeScrollView.hasVerticalScroller = YES;
@@ -902,6 +918,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         [_tideyEditorFileTreeContainerView addSubview:_tideyEditorFileTreeScrollView];
 
         _tideyEditorFileTreeView = [[NSOutlineView alloc] initWithFrame:NSZeroRect];
+        _tideyEditorFileTreeView.autoresizingMask = NSViewHeightSizable;
         _tideyEditorFileTreeView.delegate = self;
         _tideyEditorFileTreeView.dataSource = self;
         _tideyEditorFileTreeView.headerView = nil;
@@ -911,6 +928,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         }
         _tideyEditorFileTreeView.rowHeight = 22;
         _tideyEditorFileTreeView.indentationPerLevel = 12;
+        _tideyEditorFileTreeView.columnAutoresizingStyle = NSTableViewUniformColumnAutoresizingStyle;
         _tideyEditorFileTreeView.autoresizesOutlineColumn = YES;
         _tideyEditorFileTreeView.target = self;
         _tideyEditorFileTreeView.doubleAction = @selector(tideyEditorOpenSelectedFilePermanently:);
@@ -2516,6 +2534,16 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     _tideyEditorFileTreeContainerView.hidden = !self.shouldShowTideyEditorFileTree;
     _tideyEditorFileTreeContainerView.frame = NSMakeRect(editorWidth, 0, fileTreeWidth, contentHeight);
     _tideyEditorFileTreeScrollView.frame = _tideyEditorFileTreeContainerView.bounds;
+    // Keep the outline view's frame and column width in sync with the scroll view's
+    // visible area to prevent horizontal scrolling in the file tree.
+    CGFloat contentWidth = _tideyEditorFileTreeScrollView.contentSize.width;
+    NSRect outlineFrame = _tideyEditorFileTreeView.frame;
+    outlineFrame.size.width = contentWidth;
+    _tideyEditorFileTreeView.frame = outlineFrame;
+    NSTableColumn *fileTreeCol = _tideyEditorFileTreeView.tableColumns.firstObject;
+    if (fileTreeCol) {
+        fileTreeCol.width = contentWidth;
+    }
     self.tideyEditorFileTreeDragHandle.frame = NSMakeRect(MAX(0, editorWidth - kTideyDragHandleWidth / 2.0),
                                                           0,
                                                           kTideyDragHandleWidth,
