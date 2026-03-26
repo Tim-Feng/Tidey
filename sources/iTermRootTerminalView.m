@@ -2659,9 +2659,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     _tideySelectedEditorTabIndex = index;
     TideyEditorTab *tab = _tideyEditorTabs[index];
     _tideyEditorLoadedPath = [tab.path copy];
-    _tideyEditorRootOverridePath = [[self tideyEditorPreferredRootPathForFileAtPath:tab.path] copy];
     [self reloadTideyEditorTabs];
-    [self reloadTideyEditorFileTree];
+    [self syncTideyEditorFileTreeRootIfNeeded];
     [self tideyEditorSetLanguage:tab.language ?: @"plaintext"];
     [self tideyEditorSetEditable:YES];
     [self tideyEditorSetValue:tab.content ?: @""];
