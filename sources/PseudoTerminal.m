@@ -1910,6 +1910,23 @@ ITERM_WEAKLY_REFERENCEABLE
     [self rootTerminalViewSelectTideySidebarWorkspaceAtIndex:index];
 }
 
+- (void)selectTideyWorkspaceByNumber:(NSInteger)number {
+    [self ensureTideyWorkspacesInitialized];
+    if (!self.isShowingTideySidebar || self.workspaces.count == 0 || number < 1 || number > 9) {
+        return;
+    }
+
+    NSInteger index = number - 1;
+    if (number == 9 && self.workspaces.count < 9) {
+        index = self.workspaces.count - 1;
+    }
+    if (index < 0 || index >= self.workspaces.count) {
+        return;
+    }
+
+    [self selectWorkspaceAtIndex:index recordHistory:YES];
+}
+
 - (IBAction)selectTideySidebarSessionAtIndexAction:(id)sender {
     [self selectTideySidebarWorkspaceAtIndexAction:sender];
 }

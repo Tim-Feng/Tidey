@@ -707,6 +707,19 @@ ITERM_WEAKLY_REFERENCEABLE
             return YES;
         }
     }
+    // ⌘1…⌘9 → Tidey workspace selection
+    if (flags == NSEventModifierFlagCommand &&
+        chars.length == 1 &&
+        [chars characterAtIndex:0] >= '1' &&
+        [chars characterAtIndex:0] <= '9') {
+        if ([controller respondsToSelector:@selector(isShowingTideySidebar)] &&
+            [controller isShowingTideySidebar] &&
+            [controller respondsToSelector:@selector(selectTideyWorkspaceByNumber:)]) {
+            NSInteger number = [chars integerValue];
+            [controller selectTideyWorkspaceByNumber:number];
+            return YES;
+        }
+    }
     // ⌘⇧E → toggleTideyEditorPanel:
     if (flags == (NSEventModifierFlagCommand | NSEventModifierFlagShift) && [chars isEqualToString:@"e"]) {
         if ([controller respondsToSelector:@selector(toggleTideyEditorPanel:)]) {

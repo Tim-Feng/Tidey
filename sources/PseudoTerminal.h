@@ -220,6 +220,7 @@ extern NSString *const iTermDidCreateTerminalWindowNotification;
 - (void)tideyOpenFileInEditor:(NSString *)path;
 - (NSString *)tideyWorkspaceIdentifierForSession:(PTYSession *)session;
 - (IBAction)selectTideySidebarWorkspaceAtIndexAction:(id)sender;
+- (void)selectTideyWorkspaceByNumber:(NSInteger)number;
 - (IBAction)selectNextWorkspace:(id)sender;
 - (IBAction)selectPreviousWorkspace:(id)sender;
 - (IBAction)toggleLastWorkspace:(id)sender;
