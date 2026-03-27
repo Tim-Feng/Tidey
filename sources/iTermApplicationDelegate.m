@@ -2996,7 +2996,7 @@ static iTermKeyEventReplayer *gReplayer;
         @[@"New Workspace",          @"\u2318N"],
         @[@"New Panel",              @"\u2318T"],
         @[@"Close",                  @"\u2318W"],
-        @[@"Switch Workspace 1/2/3", @"\u23181/2/3"],
+        @[@"Switch Workspace",       @"\u23181\u2013\u0039"],
         @[@"Next Workspace",         @"\u2303\u2318]"],
         @[@"Previous Workspace",     @"\u2303\u2318["],
         @[@"Toggle Sidebar",         @"\u2318B"],
