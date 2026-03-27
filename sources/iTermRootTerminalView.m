@@ -3459,6 +3459,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                           sidebarButtonY,
                                                           kTideyChromeToggleButtonWidth,
                                                           kTideyChromeToggleButtonHeight);
+    } else {
+        self.tideyTerminalToggleButton.frame = NSZeroRect;
     }
 
     const BOOL showEditorToggle = !self.shouldShowTideyEditorPanel || self.shouldShowTideyTerminal;
@@ -3472,6 +3474,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                         sidebarButtonY,
                                                         kTideyChromeToggleButtonWidth,
                                                         kTideyChromeToggleButtonHeight);
+    } else {
+        self.tideyEditorToggleButton.frame = NSZeroRect;
     }
 
     const BOOL showFileTreeToggle = self.shouldShowTideyEditorPanel;
