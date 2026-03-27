@@ -2031,6 +2031,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 
 - (BOOL)tabBarShouldBeVisibleEvenWhenOnLoan {
+    if (!self.shouldShowTideyTerminal) {
+        DLog(@"Tabbar should not be visible because Tidey terminal is hidden");
+        return NO;
+    }
     if (self.tabBarControl.flashing) {
         DLog(@"Tabbar should be visible because it is flashing");
         return YES;
