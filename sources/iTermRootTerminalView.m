@@ -2083,6 +2083,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     assert(!_tabBarControlOnLoan);
     // The tabBar control is visible.
     DLog(@"repositionWidgets - tabs are visible. Adjusting window size...");
+    _tabBarBacking.hidden = NO;
     self.tabBarControl.hidden = NO;
     [self.tabBarControl setTabLocation:[iTermPreferences intForKey:kPreferenceKeyTabPosition]];
 
@@ -3501,6 +3502,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 - (void)layoutSubviewsWithHiddenTabBarForWindow:(NSWindow *)thisWindow {
     if (!_tabBarControlOnLoan) {
+        _tabBarBacking.hidden = YES;
         self.tabBarControl.hidden = YES;
     }
     if ([self.delegate rootTerminalViewShouldDrawWindowTitleInPlaceOfTabBar]) {
