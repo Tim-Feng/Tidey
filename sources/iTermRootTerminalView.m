@@ -3767,6 +3767,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     if (!_tabBarControlOnLoan) {
         [self.tabBarControl updateFlashing];
     }
+    self.tabBarControl.overflowPopUpButton.hidden = !self.shouldShowTideyTerminal;
     DLog(@"After:\n%@", [self iterm_recursiveDescription]);
     [self.delegate rootTerminalViewDidLayoutSubviews];
 }
