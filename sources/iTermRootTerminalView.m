@@ -3768,8 +3768,11 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     DLog(@"repositionWidgets - update tab bar");
     if (!_tabBarControlOnLoan) {
         [self.tabBarControl updateFlashing];
+        if (!self.shouldShowTideyTerminal) {
+            self.tabBarControl.hidden = YES;
+            _tabBarBacking.hidden = YES;
+        }
     }
-    self.tabBarControl.overflowPopUpButton.hidden = !self.shouldShowTideyTerminal;
     DLog(@"After:\n%@", [self iterm_recursiveDescription]);
     [self.delegate rootTerminalViewDidLayoutSubviews];
 }
