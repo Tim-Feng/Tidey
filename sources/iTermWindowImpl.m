@@ -720,6 +720,18 @@ ITERM_WEAKLY_REFERENCEABLE
             return YES;
         }
     }
+    // ⌃1…⌃9 → Tidey panel/editor tab selection based on focus
+    if (flags == NSEventModifierFlagControl &&
+        chars.length == 1 &&
+        [chars characterAtIndex:0] >= '1' &&
+        [chars characterAtIndex:0] <= '9') {
+        if ([controller respondsToSelector:@selector(selectTideyPanelOrEditorTabByNumber:)]) {
+            NSInteger number = [chars integerValue];
+            if ([controller selectTideyPanelOrEditorTabByNumber:number]) {
+                return YES;
+            }
+        }
+    }
     // ⌘⇧E → toggleTideyEditorPanel:
     if (flags == (NSEventModifierFlagCommand | NSEventModifierFlagShift) && [chars isEqualToString:@"e"]) {
         if ([controller respondsToSelector:@selector(toggleTideyEditorPanel:)]) {

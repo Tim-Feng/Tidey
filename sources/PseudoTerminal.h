@@ -221,6 +221,7 @@ extern NSString *const iTermDidCreateTerminalWindowNotification;
 - (NSString *)tideyWorkspaceIdentifierForSession:(PTYSession *)session;
 - (IBAction)selectTideySidebarWorkspaceAtIndexAction:(id)sender;
 - (void)selectTideyWorkspaceByNumber:(NSInteger)number;
+- (BOOL)selectTideyPanelOrEditorTabByNumber:(NSInteger)number;
 - (IBAction)selectNextWorkspace:(id)sender;
 - (IBAction)selectPreviousWorkspace:(id)sender;
 - (IBAction)toggleLastWorkspace:(id)sender;

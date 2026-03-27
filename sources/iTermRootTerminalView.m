@@ -3138,6 +3138,21 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     [self selectTideyEditorTabAtIndex:_tideyEditorTabs.count - 1];
 }
 
+- (BOOL)selectTideyEditorTabByNumber:(NSInteger)number {
+    if (number < 1 || number > 9 || _tideyEditorTabs.count == 0) {
+        return NO;
+    }
+    NSInteger index = number - 1;
+    if (number == 9 && _tideyEditorTabs.count < 9) {
+        index = _tideyEditorTabs.count - 1;
+    }
+    if (index < 0 || index >= (NSInteger)_tideyEditorTabs.count) {
+        return NO;
+    }
+    [self selectTideyEditorTabAtIndex:index];
+    return YES;
+}
+
 - (BOOL)closeCurrentTideyEditorTab {
     if (![self tideyEditorHasFocus] || _tideySelectedEditorTabIndex < 0) {
         return NO;

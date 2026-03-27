@@ -208,5 +208,6 @@ extern const NSInteger iTermRootTerminalViewWindowNumberLabelWidth;
 - (BOOL)tideyEditorHasFocus;
 - (void)createNewUntitledEditorTab;
 - (BOOL)closeCurrentTideyEditorTab;
+- (BOOL)selectTideyEditorTabByNumber:(NSInteger)number;
 
 @end

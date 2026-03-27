@@ -1927,6 +1927,45 @@ ITERM_WEAKLY_REFERENCEABLE
     [self selectWorkspaceAtIndex:index recordHistory:YES];
 }
 
+- (BOOL)selectTideyPanelOrEditorTabByNumber:(NSInteger)number {
+    if (number < 1 || number > 9) {
+        return NO;
+    }
+
+    if ([_contentView tideyEditorHasFocus]) {
+        return [_contentView selectTideyEditorTabByNumber:number];
+    }
+
+    if (!self.isShowingTideySidebar) {
+        return NO;
+    }
+
+    [self ensureTideyWorkspacesInitialized];
+    [self updateSelectedPanelIndexFromVisibleTabSelection];
+    Workspace *workspace = self.selectedWorkspace;
+    if (!workspace || workspace.panels.count == 0) {
+        return NO;
+    }
+
+    NSInteger index = number - 1;
+    if (number == 9 && workspace.panels.count < 9) {
+        index = workspace.panels.count - 1;
+    }
+    if (index < 0 || index >= workspace.panels.count) {
+        return NO;
+    }
+
+    PTYTab *panel = workspace.panels[index];
+    NSInteger visibleIndex = [self indexOfTab:panel];
+    if (visibleIndex == NSNotFound) {
+        return NO;
+    }
+
+    workspace.selectedPanelIndex = index;
+    [_contentView.tabView selectTabViewItemAtIndex:visibleIndex];
+    return YES;
+}
+
 - (IBAction)selectTideySidebarSessionAtIndexAction:(id)sender {
     [self selectTideySidebarWorkspaceAtIndexAction:sender];
 }
