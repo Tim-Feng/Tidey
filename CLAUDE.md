@@ -19,3 +19,4 @@
 - Don't include AI-generated markdown files (summaries, plans, etc.) in commits — only ship code.
 - Avoid duplicate expressions; hoist shared computations into a named `const` before branching.
 - Don't change defaults silently.
+- Before changing UI/layout code, read `docs/debug-lessons.md` — it covers layout pitfalls, PSMTabBarControl quirks, icon cache, and shell integration issues we've already solved.
