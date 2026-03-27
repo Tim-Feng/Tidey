@@ -1766,6 +1766,9 @@ ITERM_WEAKLY_REFERENCEABLE
     if (togglingLionFullScreen_) {
         return NO;
     }
+    if (!_contentView.shouldShowTideyTerminal) {
+        return NO;
+    }
     if (self.anyFullScreen) {
         return NO;
     }

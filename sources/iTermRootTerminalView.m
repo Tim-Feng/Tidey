@@ -3455,11 +3455,15 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                      kTideyChromeToggleButtonWidth,
                                                      kTideyChromeToggleButtonHeight);
 
-    const BOOL showTerminalToggle = self.shouldShowTideyEditorPanel && self.shouldShowTideyTerminal;
+    const BOOL showTerminalToggle = self.shouldShowTideyEditorPanel || !self.shouldShowTideyTerminal;
     self.tideyTerminalToggleButton.hidden = !showTerminalToggle;
     if (showTerminalToggle) {
         self.tideyTerminalToggleButton.title = self.shouldShowTideyTerminal ? @"◀" : @"▶";
-        const CGFloat terminalButtonX = MAX(0, NSMinX(_tideyEditorPanelView.frame) - kTideyChromeToggleButtonWidth - 1);
+        const CGFloat terminalButtonX = self.shouldShowTideyTerminal
+            ? MAX(0, NSMinX(_tideyEditorPanelView.frame) - kTideyChromeToggleButtonWidth - 1)
+            : (_tideyEditorPanelView.hidden
+               ? MAX(0, self.tideySidebarWidth + 1)
+               : MAX(0, NSMinX(_tideyEditorPanelView.frame) + 1));
         self.tideyTerminalToggleButton.frame = NSMakeRect(terminalButtonX,
                                                           sidebarButtonY,
                                                           kTideyChromeToggleButtonWidth,
