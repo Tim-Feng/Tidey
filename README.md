@@ -1,55 +1,21 @@
-# 🌊 Tidey — the Terminal IDE
+# 🌊 Tidey
 
 > Where context flows between agent and code, like the tide.
 
-Traditional IDEs start from files. Tidey starts from the terminal. In the age of agentic coding, your CLI *is* your IDE — agents run commands, edit files, and ask for your input in a continuous cycle. Tidey is built for this flow.
+A terminal-first IDE for AI agents. Run agents in workspaces, edit code side by side, see what each agent is doing — all in one window.
 
 <!-- TODO: hero screenshot -->
 
-## Why Tidey
-
-Every AI coding tool bolts a chat panel onto a file editor:
-
-```
-Traditional:   [File Tree] → [Editor] → [Agent Chat]
-Tidey:         [Workspaces] → [Terminal] → [Editor]
-```
-
-The terminal is the center. The editor opens when you need it, closes when you don't.
-
-Agents run in workspaces you can see, switch between, and monitor — not in a hidden sidebar.
-
-## Features
-
-**Workspace Sidebar**
-- Each workspace is an agent session — Claude Code, Codex, or plain shell
-- Notification badges when an agent needs your input
-- Agent status (Running / Idle) displayed inline
-- Drag to reorder, pin, rename, right-click context menu
-
-**Editor Panel**
-- Monaco editor with syntax highlighting, search (cmd+F)
-- Opens on cmd+click from terminal — file tree auto-reveals
-- Preview tabs replaced on browse, double-click to pin
-- Offline — Monaco bundled locally, no CDN
-
-**Agent Integration**
-- Unix socket API for agent-to-IDE communication
-- Notifications — agents send alerts with title + body
-- Status — shell hooks auto-detect Running / Idle via precmd/preexec
-- Works transparently inside tmux
-
-**Terminal**
-- Built on iTerm2's terminal emulation
-- tmux -CC control mode support
-- Collapsible terminal, editor, sidebar, file tree — all independently resizable
-- Double-click divider to reset layout
-
 ## Install
 
-<!-- TODO: DMG download link -->
+**Download:** [Tidey-1.0.0.dmg](https://github.com/Tim-Feng/Tidey/releases/latest) (macOS 12+, Apple Silicon & Intel)
 
-**Build from source:**
+1. Open the DMG, drag Tidey to Applications
+2. First launch: right-click → Open
+3. Tidey may ask to install shell integration — click "Install"
+
+<details>
+<summary>Build from source</summary>
 
 ```bash
 git clone https://github.com/Tim-Feng/Tidey.git
@@ -58,31 +24,49 @@ make setup
 make Development
 ```
 
-Requires Xcode and [rustup](https://rustup.rs).
+Requires Xcode, [rustup](https://rustup.rs), and Homebrew.
+
+</details>
+
+## How It Works
+
+**Workspaces** — each workspace is an agent session with its own terminal, status, and notifications. ⌘1–⌘9 to switch.
+
+**Editor** — ⌘-click any file path in the terminal to open it. Syntax highlighting, search, save. Works offline.
+
+**Claude Code** — just type `claude`. Tidey automatically tracks status (Running / Idle / Needs input), shows notifications when Claude finishes or needs your attention, and sets the workspace title. Works in tmux too.
+
+**Layout** — sidebar, terminal, editor, and file tree are all independently collapsible and resizable. Built on iTerm2's terminal emulation.
 
 ## Keyboard Shortcuts
 
 | Action | Shortcut |
 |--------|----------|
-| New Workspace | cmd+N |
-| New Panel | cmd+T |
-| Close | cmd+W |
-| Switch Workspace 1/2/3 | cmd+1/2/3 |
-| Next/Previous Workspace | ctrl+cmd+] / [ |
-| Toggle Sidebar | cmd+B |
-| Toggle Editor | cmd+shift+E |
-| Toggle File Tree | ctrl+cmd+F |
-| Find in Editor | cmd+F |
-| Reset Layout | double-click divider |
+| New Workspace | ⌘N |
+| New Panel | ⌘T |
+| Close | ⌘W |
+| Switch Workspace | ⌘1–⌘9 (⌘9 = last) |
+| Next / Previous Workspace | ⌃⌘] / ⌃⌘[ |
+| Last Workspace | ⌃⌘\ |
+| Show/Hide Sidebar | ⌘B |
+| Show/Hide Editor | ⇧⌘E |
+| Show/Hide Terminal | ⇧⌘T |
+| Show/Hide File Tree | ⌃⌘F |
+| Find in Editor | ⌘F |
+| Save | ⌘S |
+| Reset Layout | double-click any divider |
 
-## For Agent Developers
+Hold ⌘ for a moment to see shortcut hints on toggle buttons.
 
-Tidey exposes a Unix socket API for agent-to-IDE communication — notifications, status updates, and more. See [docs/socket-api.md](docs/socket-api.md).
+## Documentation
 
-## Built on iTerm2
+- [Socket API](docs/socket-api.md) — for agent developers integrating with Tidey
+- [Known Limitations](docs/known-limitations.md)
 
-Tidey is a fork of [iTerm2](https://iterm2.com) by George Nachman. The terminal emulation, PTY management, and tmux integration come from iTerm2. The workspace model, editor panel, notification system, and socket API are Tidey originals.
+## Credits
+
+Tidey is inspired by [cmux](https://cmux.com), built on [iTerm2](https://iterm2.com), and integrates the [Monaco](https://microsoft.github.io/monaco-editor/) editor — combining all three into a terminal-first agent IDE.
 
 ## License
 
-GPL v2-or-later — same as iTerm2.
+GPLv2+ — see [LICENSE](LICENSE) and [COPYING](COPYING) for details.
