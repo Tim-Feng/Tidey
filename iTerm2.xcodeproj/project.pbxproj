@@ -1006,6 +1006,8 @@
 		A603A96829B12CEA000E9E98 /* SearchTests.m in Sources */ = {isa = PBXBuildFile; fileRef = A603A96729B12CEA000E9E98 /* SearchTests.m */; };
 		F0A10D1E3A28000100000004 /* TideyStatusStoreTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000003 /* TideyStatusStoreTests.m */; };
 		F0A10D1E3A28000100000002 /* TideyNotificationStoreTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000001 /* TideyNotificationStoreTests.m */; };
+		F0A10D1E3A28000100000006 /* TideyCLICommandFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000005 /* TideyCLICommandFormatter.swift */; };
+		F0A10D1E3A28000100000008 /* TideyCLICommandFormatterTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000007 /* TideyCLICommandFormatterTests.m */; };
 		A603E9FB283EE53C0028B648 /* SecretServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A603E9FA283EE53C0028B648 /* SecretServer.swift */; };
 		A603E9FE283EE9BD0028B648 /* ObjCExceptions.h in Headers */ = {isa = PBXBuildFile; fileRef = A603E9FC283EE9BD0028B648 /* ObjCExceptions.h */; };
 		A603E9FF283EE9BD0028B648 /* ObjCExceptions.m in Sources */ = {isa = PBXBuildFile; fileRef = A603E9FD283EE9BD0028B648 /* ObjCExceptions.m */; };
@@ -6387,6 +6389,8 @@
 		A603A96729B12CEA000E9E98 /* SearchTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SearchTests.m; sourceTree = "<group>"; };
 		F0A10D1E3A28000100000003 /* TideyStatusStoreTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyStatusStoreTests.m; sourceTree = "<group>"; };
 		F0A10D1E3A28000100000001 /* TideyNotificationStoreTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyNotificationStoreTests.m; sourceTree = "<group>"; };
+		F0A10D1E3A28000100000005 /* TideyCLICommandFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TideyCLICommandFormatter.swift; path = sources/TideyCLICommandFormatter.swift; sourceTree = SOURCE_ROOT; };
+		F0A10D1E3A28000100000007 /* TideyCLICommandFormatterTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyCLICommandFormatterTests.m; sourceTree = "<group>"; };
 		A603E9FA283EE53C0028B648 /* SecretServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecretServer.swift; sourceTree = "<group>"; };
 		A603E9FC283EE9BD0028B648 /* ObjCExceptions.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ObjCExceptions.h; sourceTree = "<group>"; };
 		A603E9FD283EE9BD0028B648 /* ObjCExceptions.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = ObjCExceptions.m; sourceTree = "<group>"; };
@@ -12594,6 +12598,7 @@
 				A6A3EDE52E0D26E100D711DA /* MimeTypeUtilities.swift */,
 				A6A3EDC12E0CA95E00D711DA /* print.swift */,
 				A6F7D51B2E0613920065D09C /* MainMenuMangler.swift */,
+				F0A10D1E3A28000100000005 /* TideyCLICommandFormatter.swift */,
 				A6F7D4EF2E0532C60065D09C /* DatabaseBackedArray.swift */,
 				A6F7D4ED2E0532B00065D09C /* Database.swift */,
 				A6069F3D2DF88C7100EE6CC7 /* PerformanceCounter.swift */,
@@ -13597,6 +13602,7 @@
 				A603A96729B12CEA000E9E98 /* SearchTests.m */,
 				F0A10D1E3A28000100000003 /* TideyStatusStoreTests.m */,
 				F0A10D1E3A28000100000001 /* TideyNotificationStoreTests.m */,
+				F0A10D1E3A28000100000007 /* TideyCLICommandFormatterTests.m */,
 			);
 			path = iTerm2XCTests;
 			sourceTree = "<group>";
@@ -18686,6 +18692,7 @@
 			inputFileListPaths = (
 			);
 			inputPaths = (
+				"$(SRCROOT)/sources/TideyCLICommandFormatter.swift",
 				"$(SRCROOT)/sources/TideyCLI/main.swift",
 			);
 			name = "Build Tidey CLI";
@@ -18696,7 +18703,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\nTIDEY_CLI_SRC=\"${SRCROOT}/sources/TideyCLI/main.swift\"\nTIDEY_CLI_DST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/bin/tidey\"\nmkdir -p \"$(dirname \"$TIDEY_CLI_DST\")\"\nswiftc -O -target ${NATIVE_ARCH_ACTUAL}-apple-macos${MACOSX_DEPLOYMENT_TARGET} -o \"$TIDEY_CLI_DST\" \"$TIDEY_CLI_SRC\" -framework Foundation\n";
+			shellScript = "set -e\nTIDEY_CLI_HELPER=\"${SRCROOT}/sources/TideyCLICommandFormatter.swift\"\nTIDEY_CLI_MAIN=\"${SRCROOT}/sources/TideyCLI/main.swift\"\nTIDEY_CLI_DST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/bin/tidey\"\nmkdir -p \"$(dirname \"$TIDEY_CLI_DST\")\"\nswiftc -O -target ${NATIVE_ARCH_ACTUAL}-apple-macos${MACOSX_DEPLOYMENT_TARGET} -o \"$TIDEY_CLI_DST\" \"$TIDEY_CLI_HELPER\" \"$TIDEY_CLI_MAIN\" -framework Foundation\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -19279,6 +19286,7 @@
 				A670F0C42A1FDA6100C740AC /* iTermChangeTrackingDictionary.m in Sources */,
 				A6EB64342D5D2E7100481D33 /* ChatBroker.swift in Sources */,
 				A6F7D51C2E0613970065D09C /* MainMenuMangler.swift in Sources */,
+				F0A10D1E3A28000100000006 /* TideyCLICommandFormatter.swift in Sources */,
 				A63B92482F05C75200591B9E /* ExpressionBindingIconView.swift in Sources */,
 				A6AF79D62E06776C008D77BA /* iTermDatabase.swift in Sources */,
 				A68400A71FF82424008D3EE2 /* iTermIndicatorRenderer.m in Sources */,
@@ -20400,6 +20408,7 @@
 				A603A96829B12CEA000E9E98 /* SearchTests.m in Sources */,
 				F0A10D1E3A28000100000004 /* TideyStatusStoreTests.m in Sources */,
 				F0A10D1E3A28000100000002 /* TideyNotificationStoreTests.m in Sources */,
+				F0A10D1E3A28000100000008 /* TideyCLICommandFormatterTests.m in Sources */,
 				A608CD08214DE7C1007A7B87 /* iTermTextExtractorTest.m in Sources */,
 				A608CD0D214DE7C1007A7B87 /* iTermFunctionCallSuggesterTest.m in Sources */,
 				A6F22AC22396374500C5D1A9 /* iTermSyntheticConfParserTests.m in Sources */,
