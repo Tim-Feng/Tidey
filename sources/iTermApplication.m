@@ -813,6 +813,46 @@ static const char *iTermApplicationKVOKey = "iTermApplicationKVOKey";
     }
 }
 
+- (void)ensureStatusBarItem {
+    if (_statusBarItem != nil) {
+        return;
+    }
+
+    NSImage *image = [NSImage it_imageNamed:@"StatusItem" forClass:self.class];
+    image.template = YES;
+    self.statusBarItem = [[NSStatusBar systemStatusBar] statusItemWithLength:image.size.width];
+    _statusBarItem.button.title = @"";
+    _statusBarItem.button.image = image;
+    _statusBarItem.button.target = self;
+    _statusBarItem.button.action = @selector(statusBarItemWasClicked:);
+    ((NSButtonCell *)_statusBarItem.button.cell).highlightsBy = NSChangeBackgroundCellMask;
+}
+
+- (void)statusBarItemWasClicked:(id)sender {
+    [self activateAppWithCompletion:^{
+        iTermController *controller = [iTermController sharedInstance];
+        NSWindow *window = controller.currentTerminal.window;
+        if (window == nil) {
+            for (PseudoTerminal *terminal in [[controller terminals] reverseObjectEnumerator]) {
+                if (terminal.window != nil) {
+                    window = terminal.window;
+                    break;
+                }
+            }
+        }
+        if (window == nil) {
+            window = self.orderedWindowsPlusVisibleHotkeyPanels.lastObject;
+        }
+        if (window == nil) {
+            return;
+        }
+        if (window.miniaturized) {
+            [window deminiaturize:nil];
+        }
+        [window makeKeyAndOrderFront:nil];
+    }];
+}
+
 - (NSArray<iTermScriptingWindow *> *)orderedScriptingWindows {
     return [self.orderedWindows mapWithBlock:^id(NSWindow *window) {
         if ([window conformsToProtocol:@protocol(PTYWindow)]) {
@@ -824,6 +864,7 @@ static const char *iTermApplicationKVOKey = "iTermApplicationKVOKey";
 }
 
 - (void)setIsUIElement:(BOOL)uiElement {
+    [self ensureStatusBarItem];
     if (uiElement == _isUIElement) {
         return;
     }
@@ -840,20 +881,6 @@ static const char *iTermApplicationKVOKey = "iTermApplicationKVOKey";
             DLog(@"uiElement=%@", @(uiElement));
             [[NSApplication sharedApplication] activateIgnoringOtherApps:YES];
         });
-
-        if ([iTermAdvancedSettingsModel statusBarIcon]) {
-            NSImage *image = [NSImage it_imageNamed:@"StatusItem" forClass:self.class];
-            image.template = YES;
-            self.statusBarItem = [[NSStatusBar systemStatusBar] statusItemWithLength:image.size.width];
-            _statusBarItem.button.title = @"";
-            _statusBarItem.button.image = image;
-            ((NSButtonCell *)_statusBarItem.button.cell).highlightsBy = NSChangeBackgroundCellMask;
-
-            _statusBarItem.menu = [(id<iTermApplicationDelegate>)[self delegate] statusBarMenu];
-        }
-    } else if (_statusBarItem != nil) {
-        [[NSStatusBar systemStatusBar] removeStatusItem:_statusBarItem];
-        self.statusBarItem = nil;
     }
 }
 
@@ -1153,4 +1180,3 @@ static const char *iTermApplicationKVOKey = "iTermApplicationKVOKey";
 }
 
 @end
-
