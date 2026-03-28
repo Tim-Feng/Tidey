@@ -1004,6 +1004,7 @@
 		A6038322294D062A00FE11C2 /* iTermCopyModeKeyBindings.dict in Resources */ = {isa = PBXBuildFile; fileRef = A603831F294D062A00FE11C2 /* iTermCopyModeKeyBindings.dict */; };
 		A6038323294D062A00FE11C2 /* iTermCopyModeKeyBindings.dict in Resources */ = {isa = PBXBuildFile; fileRef = A603831F294D062A00FE11C2 /* iTermCopyModeKeyBindings.dict */; };
 		A603A96829B12CEA000E9E98 /* SearchTests.m in Sources */ = {isa = PBXBuildFile; fileRef = A603A96729B12CEA000E9E98 /* SearchTests.m */; };
+		F0A10D1E3A28000100000004 /* TideyStatusStoreTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000003 /* TideyStatusStoreTests.m */; };
 		F0A10D1E3A28000100000002 /* TideyNotificationStoreTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000001 /* TideyNotificationStoreTests.m */; };
 		A603E9FB283EE53C0028B648 /* SecretServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A603E9FA283EE53C0028B648 /* SecretServer.swift */; };
 		A603E9FE283EE9BD0028B648 /* ObjCExceptions.h in Headers */ = {isa = PBXBuildFile; fileRef = A603E9FC283EE9BD0028B648 /* ObjCExceptions.h */; };
@@ -6384,6 +6385,7 @@
 		A60383162943AF1500FE11C2 /* iTerm2SandboxedWorker-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "iTerm2SandboxedWorker-Bridging-Header.h"; sourceTree = "<group>"; };
 		A603831F294D062A00FE11C2 /* iTermCopyModeKeyBindings.dict */ = {isa = PBXFileReference; lastKnownFileType = text.plist; name = iTermCopyModeKeyBindings.dict; path = OtherResources/iTermCopyModeKeyBindings.dict; sourceTree = SOURCE_ROOT; };
 		A603A96729B12CEA000E9E98 /* SearchTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SearchTests.m; sourceTree = "<group>"; };
+		F0A10D1E3A28000100000003 /* TideyStatusStoreTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyStatusStoreTests.m; sourceTree = "<group>"; };
 		F0A10D1E3A28000100000001 /* TideyNotificationStoreTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyNotificationStoreTests.m; sourceTree = "<group>"; };
 		A603E9FA283EE53C0028B648 /* SecretServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecretServer.swift; sourceTree = "<group>"; };
 		A603E9FC283EE9BD0028B648 /* ObjCExceptions.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ObjCExceptions.h; sourceTree = "<group>"; };
@@ -13593,6 +13595,7 @@
 				A6024B8A254DDFEE0036D6CF /* iTermNSColorCategoryTests.m */,
 				A60F6FEA270B7F1D0017A003 /* iTermModifyOtherKeys1Test.m */,
 				A603A96729B12CEA000E9E98 /* SearchTests.m */,
+				F0A10D1E3A28000100000003 /* TideyStatusStoreTests.m */,
 				F0A10D1E3A28000100000001 /* TideyNotificationStoreTests.m */,
 			);
 			path = iTerm2XCTests;
@@ -20395,6 +20398,7 @@
 				A608CCFD214DE7C1007A7B87 /* iTermSemanticHistoryTest.m in Sources */,
 				A608CD03214DE7C1007A7B87 /* VT100GridTest.m in Sources */,
 				A603A96829B12CEA000E9E98 /* SearchTests.m in Sources */,
+				F0A10D1E3A28000100000004 /* TideyStatusStoreTests.m in Sources */,
 				F0A10D1E3A28000100000002 /* TideyNotificationStoreTests.m in Sources */,
 				A608CD08214DE7C1007A7B87 /* iTermTextExtractorTest.m in Sources */,
 				A608CD0D214DE7C1007A7B87 /* iTermFunctionCallSuggesterTest.m in Sources */,
