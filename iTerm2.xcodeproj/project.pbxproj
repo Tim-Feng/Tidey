@@ -2933,6 +2933,7 @@
 		A69D721C264716FC009D6EAC /* UnselectedTabShadow.png in Resources */ = {isa = PBXBuildFile; fileRef = A69D721A264716FC009D6EAC /* UnselectedTabShadow.png */; };
 		A69F59382E21C2C500B96E1B /* BrowserKeyValueStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A69F59372E21C2C200B96E1B /* BrowserKeyValueStore.swift */; };
 		A69F593E2E21CBF900B96E1B /* iTermBrowserStorageProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A69F593A2E21CB9B00B96E1B /* iTermBrowserStorageProvider.swift */; };
+		A69FEECA2E123B8700AFF7A8 /* iTermSwiftPackages.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A69FEEBA2E123B8700AFF7A8 /* iTermSwiftPackages.framework */; };
 		A69FEECD2E123B8700AFF7A8 /* iTermSwiftPackages.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A69FEEBA2E123B8700AFF7A8 /* iTermSwiftPackages.framework */; };
 		A69FEECE2E123B8700AFF7A8 /* iTermSwiftPackages.framework in CopyFiles */ = {isa = PBXBuildFile; fileRef = A69FEEBA2E123B8700AFF7A8 /* iTermSwiftPackages.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		A69FEF272E12417B00AFF7A8 /* iTermSwiftPackages.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A69FEEBA2E123B8700AFF7A8 /* iTermSwiftPackages.framework */; };
@@ -9269,6 +9270,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A69FEECA2E123B8700AFF7A8 /* iTermSwiftPackages.framework in Frameworks */,
 				A667196A1DCE396A000CE608 /* libiTerm2SharedARC.a in Frameworks */,
 				A6661311225CFF7A00840E89 /* BetterFontPicker.framework in Frameworks */,
 				A690F7041B424EF8009F76D8 /* OpenDirectory.framework in Frameworks */,
@@ -16105,6 +16107,7 @@
 			dependencies = (
 				A6C763D71B45C5C500E3C992 /* PBXTargetDependency */,
 				1D6ED85319AEA20D005A7799 /* PBXTargetDependency */,
+				A69FEECC2E123B8700AFF7A8 /* PBXTargetDependency */,
 			);
 			name = iTerm2ForApplescriptTesting;
 			productName = "JTerminal (Application)";
