@@ -7,6 +7,48 @@
 
 import Cocoa
 
+@objc(iTermMainMenuIconValidator)
+final class MainMenuIconValidator: NSObject {
+    private static let ignoredMissingIconIdentifiers: Set<String> = ["bogus", "sendSnippet:"]
+
+    @objc(leafIdentifiersInMenu:)
+    static func leafIdentifiers(in menu: NSMenu) -> [String] {
+        Array(leafIdentifierSet(in: menu)).sorted()
+    }
+
+    @objc(iconMapIdentifiersMissingFromMenu:iconMap:)
+    static func iconMapIdentifiersMissing(from menu: NSMenu, iconMap: NSDictionary) -> [String] {
+        let iconIdentifiers = Set(iconMap.allKeys.compactMap { $0 as? String })
+        let menuIdentifiers = leafIdentifierSet(in: menu)
+        return Array(iconIdentifiers.subtracting(menuIdentifiers)).sorted()
+    }
+
+    @objc(menuIdentifiersMissingIconsFromMenu:iconMap:)
+    static func menuIdentifiersMissingIcons(from menu: NSMenu, iconMap: NSDictionary) -> [String] {
+        let iconIdentifiers = Set(iconMap.allKeys.compactMap { $0 as? String })
+        let filtered = Set(leafIdentifierSet(in: menu).filter {
+            !$0.hasPrefix("_NS") && !ignoredMissingIconIdentifiers.contains($0)
+        })
+        return Array(filtered.subtracting(iconIdentifiers)).sorted()
+    }
+
+    private static func leafIdentifierSet(in menu: NSMenu) -> Set<String> {
+        var result = Set<String>()
+        for item in menu.items {
+            if item.isSeparatorItem {
+                continue
+            }
+            if !item.hasSubmenu, let identifier = item.identifier?.rawValue {
+                result.insert(identifier)
+            }
+            if item.hasSubmenu, let submenu = item.submenu {
+                result.formUnion(leafIdentifierSet(in: submenu))
+            }
+        }
+        return result
+    }
+}
+
 /// Observes key-window and firstResponder changes and calls `updateMainMenu()` when either happens.
 @objc(iTermMainMenuMangler)
 class MainMenuMangler: NSObject {
@@ -96,32 +138,15 @@ class MainMenuMangler: NSObject {
     }
 
     private func checkIcons(map iconMap: [String: String], in menu: NSMenu) {
-        let keys = Set(iconMap.keys)
-        let identifiers = allIdentifiers(in: NSApp.mainMenu!)
-        if !keys.isSubset(of: identifiers) {
-            NSFuckingLog("%@", "Some keys have wrong identifiers: \(keys.subtracting(identifiers))")
+        let missingFromMenu = MainMenuIconValidator.iconMapIdentifiersMissing(from: menu, iconMap: iconMap as NSDictionary)
+        if !missingFromMenu.isEmpty {
+            NSFuckingLog("%@", "Some keys have wrong identifiers: \(missingFromMenu)")
             it_fatalError()
         }
-        let bad = identifiers.subtracting(keys).filter { !$0.hasPrefix("_NS") }.subtracting(Set(["bogus", "sendSnippet:"]))
-        if !bad.isEmpty {
-            NSFuckingLog("%@", "These identifiers lack icons: \(bad)")
+        let missingIcons = MainMenuIconValidator.menuIdentifiersMissingIcons(from: menu, iconMap: iconMap as NSDictionary)
+        if !missingIcons.isEmpty {
+            NSFuckingLog("%@", "These identifiers lack icons: \(missingIcons)")
         }
-    }
-
-    private func allIdentifiers(in menu: NSMenu) -> Set<String> {
-        var result = Set<String>()
-        for item in menu.items {
-            if item.isSeparatorItem {
-                continue
-            }
-            if !item.hasSubmenu, let identifier = item.identifier?.rawValue {
-                result.insert(identifier)
-            }
-            if item.hasSubmenu, let submenu = item.submenu {
-                result.formUnion(allIdentifiers(in: submenu))
-            }
-        }
-        return result
     }
 
     private func setIcons(map iconMap: [String: String], in menu: NSMenu) {

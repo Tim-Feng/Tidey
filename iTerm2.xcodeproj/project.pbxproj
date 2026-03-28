@@ -1010,6 +1010,7 @@
 		F0A10D1E3A28000100000008 /* TideyCLICommandFormatterTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000007 /* TideyCLICommandFormatterTests.m */; };
 		F0A10D1E3A2800010000000A /* TideyShellIntegrationConfigWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000009 /* TideyShellIntegrationConfigWriter.swift */; };
 		F0A10D1E3A2800010000000C /* TideyShellIntegrationConfigWriterTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A2800010000000B /* TideyShellIntegrationConfigWriterTests.m */; };
+		F0A10D1E3A28000100000013 /* MainMenuManglerTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000012 /* MainMenuManglerTests.m */; };
 		A603E9FB283EE53C0028B648 /* SecretServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A603E9FA283EE53C0028B648 /* SecretServer.swift */; };
 		A603E9FE283EE9BD0028B648 /* ObjCExceptions.h in Headers */ = {isa = PBXBuildFile; fileRef = A603E9FC283EE9BD0028B648 /* ObjCExceptions.h */; };
 		A603E9FF283EE9BD0028B648 /* ObjCExceptions.m in Sources */ = {isa = PBXBuildFile; fileRef = A603E9FD283EE9BD0028B648 /* ObjCExceptions.m */; };
@@ -6397,6 +6398,7 @@
 		F0A10D1E3A28000100000007 /* TideyCLICommandFormatterTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyCLICommandFormatterTests.m; sourceTree = "<group>"; };
 		F0A10D1E3A2800010000000B /* TideyShellIntegrationConfigWriterTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyShellIntegrationConfigWriterTests.m; sourceTree = "<group>"; };
 		F0A10D1E3A28000100000010 /* TideySocketCommandDecoderTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySocketCommandDecoderTests.m; sourceTree = "<group>"; };
+		F0A10D1E3A28000100000012 /* MainMenuManglerTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MainMenuManglerTests.m; sourceTree = "<group>"; };
 		A603E9FA283EE53C0028B648 /* SecretServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecretServer.swift; sourceTree = "<group>"; };
 		A603E9FC283EE9BD0028B648 /* ObjCExceptions.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ObjCExceptions.h; sourceTree = "<group>"; };
 		A603E9FD283EE9BD0028B648 /* ObjCExceptions.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = ObjCExceptions.m; sourceTree = "<group>"; };
@@ -13616,6 +13618,7 @@
 				F0A10D1E3A28000100000001 /* TideyNotificationStoreTests.m */,
 				F0A10D1E3A28000100000007 /* TideyCLICommandFormatterTests.m */,
 				F0A10D1E3A2800010000000B /* TideyShellIntegrationConfigWriterTests.m */,
+				F0A10D1E3A28000100000012 /* MainMenuManglerTests.m */,
 				F0A10D1E3A28000100000010 /* TideySocketCommandDecoderTests.m */,
 			);
 			path = iTerm2XCTests;
@@ -20426,6 +20429,7 @@
 				F0A10D1E3A28000100000002 /* TideyNotificationStoreTests.m in Sources */,
 				F0A10D1E3A28000100000008 /* TideyCLICommandFormatterTests.m in Sources */,
 				F0A10D1E3A2800010000000C /* TideyShellIntegrationConfigWriterTests.m in Sources */,
+				F0A10D1E3A28000100000013 /* MainMenuManglerTests.m in Sources */,
 				F0A10D1E3A28000100000011 /* TideySocketCommandDecoderTests.m in Sources */,
 				A608CD08214DE7C1007A7B87 /* iTermTextExtractorTest.m in Sources */,
 				A608CD0D214DE7C1007A7B87 /* iTermFunctionCallSuggesterTest.m in Sources */,
