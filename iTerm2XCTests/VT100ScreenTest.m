@@ -474,7 +474,8 @@ NSLog(@"Known bug: %s should be true, but %s is.", #expressionThatShouldBeTrue, 
                         NULL,
                         NO,
                         kUnicodeVersion,
-                        NO);
+                        NO,
+                        NULL);
     return data;
 }
 
