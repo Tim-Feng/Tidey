@@ -22,7 +22,7 @@ static inline BOOL ForegroundAttributesEqual(const screen_char_t a,
         a.blink != b.blink ||
         a.invisible != b.invisible ||
         a.underline != b.underline ||
-        a.underlineStyle != b.underlineStyle ||
+        ScreenCharGetUnderlineStyle(a) != ScreenCharGetUnderlineStyle(b) ||
         a.strikethrough != b.strikethrough) {
         return NO;
     }
@@ -2932,4 +2932,3 @@ do { \
 }
 
 @end
-
