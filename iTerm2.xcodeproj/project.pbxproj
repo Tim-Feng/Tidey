@@ -5161,13 +5161,6 @@
 			remoteGlobalIDString = 1DFA7C661923E83500DF1410;
 			remoteInfo = SSKeychain;
 		};
-		1D6EDB0C19AEA276005A7799 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 0464AB0C006CD2EC7F000001 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 1D6ED85219AEA20D005A7799;
-			remoteInfo = iTerm2ForApplescriptTesting;
-		};
 		69021A922344313A00FDA6CA /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 0464AB0C006CD2EC7F000001 /* Project object */;
@@ -16128,7 +16121,6 @@
 			dependencies = (
 				A62B04A829B429A70077B955 /* PBXTargetDependency */,
 				A6C763D51B45C5BE00E3C992 /* PBXTargetDependency */,
-				1D6EDB0D19AEA276005A7799 /* PBXTargetDependency */,
 			);
 			name = iTerm2Tests;
 			productName = iTermTests;
@@ -20473,11 +20465,6 @@
 			isa = PBXTargetDependency;
 			target = 1DFA7C661923E83500DF1410 /* SSKeychain */;
 			targetProxy = 1D6ED85419AEA20D005A7799 /* PBXContainerItemProxy */;
-		};
-		1D6EDB0D19AEA276005A7799 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = 1D6ED85219AEA20D005A7799 /* iTerm2ForApplescriptTesting */;
-			targetProxy = 1D6EDB0C19AEA276005A7799 /* PBXContainerItemProxy */;
 		};
 		69021A932344313A00FDA6CA /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
