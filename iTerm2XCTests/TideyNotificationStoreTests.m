@@ -20,6 +20,11 @@
 @interface TideyNotificationStoreTests : XCTestCase
 @end
 
+// These tests compile under MRC while TideyNotificationStore compiles under ARC.
+static id TideyRetainedObject(id object) {
+    return [[object retain] autorelease];
+}
+
 @implementation TideyNotificationStoreTests {
     NSMutableArray *_changeUserInfos;
 }
@@ -51,10 +56,11 @@
 - (void)testAddNotificationPostsCreatedNotificationMetadata {
     TestableTideyNotificationStore *store = [self freshStore];
 
-    TideyNotificationItem *item = [store addNotificationForWorkspaceID:@"workspace-1"
-                                                                 title:@"Build finished"
-                                                              subtitle:@"main"
-                                                                  body:@"Done"];
+    TideyNotificationItem *item =
+        TideyRetainedObject([store addNotificationForWorkspaceID:@"workspace-1"
+                                                           title:@"Build finished"
+                                                        subtitle:@"main"
+                                                            body:@"Done"]);
 
     XCTAssertEqual(_changeUserInfos.count, 1);
 
@@ -79,16 +85,18 @@
                                 subtitle:nil
                                     body:@"Second"];
 
-    NSArray *allNotifications = [store allNotifications];
+    NSArray *allNotifications = TideyRetainedObject([store allNotifications]);
     XCTAssertEqual(allNotifications.count, 2);
     XCTAssertEqualObjects([allNotifications valueForKey:@"title"], (@[ @"New", @"Broadcast" ]));
 
-    NSArray *workspaceNotifications = [store notificationsForWorkspaceID:@"workspace-1"];
+    NSArray *workspaceNotifications = TideyRetainedObject([store notificationsForWorkspaceID:@"workspace-1"]);
     XCTAssertEqual(workspaceNotifications.count, 2);
     XCTAssertEqualObjects([workspaceNotifications valueForKey:@"title"], (@[ @"New", @"Broadcast" ]));
 
-    TideyNotificationItem *latestWorkspaceItem = [store latestNotificationForWorkspaceID:@"workspace-1"];
-    TideyNotificationItem *latestOtherWorkspaceItem = [store latestNotificationForWorkspaceID:@"workspace-2"];
+    TideyNotificationItem *latestWorkspaceItem =
+        TideyRetainedObject([store latestNotificationForWorkspaceID:@"workspace-1"]);
+    TideyNotificationItem *latestOtherWorkspaceItem =
+        TideyRetainedObject([store latestNotificationForWorkspaceID:@"workspace-2"]);
     XCTAssertEqualObjects(latestWorkspaceItem.title, @"New");
     XCTAssertEqualObjects(latestOtherWorkspaceItem.title, @"Broadcast");
 }
@@ -96,10 +104,11 @@
 - (void)testMarkReadForWorkspaceOnlyConsumesBroadcastForThatWorkspace {
     TestableTideyNotificationStore *store = [self freshStore];
 
-    TideyNotificationItem *broadcast = [store addNotificationForWorkspaceID:nil
-                                                                      title:@"Broadcast"
-                                                                   subtitle:nil
-                                                                       body:@"Shared"];
+    TideyNotificationItem *broadcast =
+        TideyRetainedObject([store addNotificationForWorkspaceID:nil
+                                                           title:@"Broadcast"
+                                                        subtitle:nil
+                                                            body:@"Shared"]);
     [store addNotificationForWorkspaceID:@"workspace-1"
                                    title:@"Workspace"
                                 subtitle:nil
@@ -114,7 +123,9 @@
     XCTAssertEqual([store unreadCountForWorkspaceID:@"workspace-2"], 1);
     XCTAssertTrue([store hasReadNotificationsForWorkspaceID:@"workspace-1"]);
     XCTAssertNil([store latestUnreadForWorkspaceID:@"workspace-1"]);
-    XCTAssertEqualObjects([store latestUnreadForWorkspaceID:@"workspace-2"].notificationID, broadcast.notificationID);
+    TideyNotificationItem *latestUnreadOtherWorkspaceItem =
+        TideyRetainedObject([store latestUnreadForWorkspaceID:@"workspace-2"]);
+    XCTAssertEqualObjects(latestUnreadOtherWorkspaceItem.notificationID, broadcast.notificationID);
 
     id lastUserInfo = [_changeUserInfos lastObject];
     XCTAssertEqualObjects(lastUserInfo, (id)NSNull.null);
@@ -138,16 +149,19 @@
     XCTAssertEqual([store unreadCountForWorkspaceID:@"workspace-1"], 2);
     XCTAssertEqual([store unreadCountForWorkspaceID:@"workspace-2"], 1);
     XCTAssertFalse([store hasReadNotificationsForWorkspaceID:@"workspace-1"]);
-    XCTAssertEqualObjects([store latestUnreadForWorkspaceID:@"workspace-1"].title, @"Workspace");
+    TideyNotificationItem *latestUnreadWorkspaceItem =
+        TideyRetainedObject([store latestUnreadForWorkspaceID:@"workspace-1"]);
+    XCTAssertEqualObjects(latestUnreadWorkspaceItem.title, @"Workspace");
 }
 
 - (void)testRemoveNotificationAndClearAllNotifications {
     TestableTideyNotificationStore *store = [self freshStore];
 
-    TideyNotificationItem *first = [store addNotificationForWorkspaceID:@"workspace-1"
-                                                                  title:@"One"
-                                                               subtitle:nil
-                                                                   body:@"1"];
+    TideyNotificationItem *first =
+        TideyRetainedObject([store addNotificationForWorkspaceID:@"workspace-1"
+                                                           title:@"One"
+                                                        subtitle:nil
+                                                            body:@"1"]);
     [store addNotificationForWorkspaceID:@"workspace-2"
                                    title:@"Two"
                                 subtitle:nil
@@ -155,13 +169,13 @@
 
     [store removeNotificationWithID:first.notificationID];
 
-    NSArray *remaining = [store allNotifications];
+    NSArray *remaining = TideyRetainedObject([store allNotifications]);
     XCTAssertEqual(remaining.count, 1);
     XCTAssertEqualObjects(((TideyNotificationItem *)remaining.firstObject).title, @"Two");
 
     [store clearAllNotifications];
 
-    NSArray *empty = [store allNotifications];
+    NSArray *empty = TideyRetainedObject([store allNotifications]);
     XCTAssertEqual(empty.count, 0);
     XCTAssertEqual([store unreadCountForWorkspaceID:@"workspace-1"], 0);
     XCTAssertEqual([store unreadCountForWorkspaceID:@"workspace-2"], 0);
