@@ -65,6 +65,8 @@ candidate view 各染一個 debug 顏色。frame / hidden / selected state 寫 l
 
 `it_imageWithTintColor:` 用 `NSCompositingOperationSourceIn` 會把多層 SF Symbol 全染成同色（`pause.circle.fill` 變扁平）。要保層次就用 `NSImageSymbolConfiguration` 的 hierarchical color。
 
+**非 live resize 不要切回 legacy renderer。** sidebar toggle / panel 切換時 terminal flicker，不一定是 layout 多跑一次；如果 `SessionView` 的 frame 更新也走 `temporarilyDisableMetal -> async draw -> show metal`，畫面會在 frame 已經正確之後還閃一拍。這條 fallback 是拿來扛 live resize 的，不要套到一般 panel/sidebar layout。→ `sources/PTYSession.m:sessionViewNeedsMetalFrameUpdate`
+
 ### Branding
 
 **Icon cache。** 改了 app icon 但 Finder / Dock 還是舊圖，多半是 macOS Launch Services cache。build 問題跟 cache 問題要分開排查。

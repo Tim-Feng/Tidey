@@ -19403,6 +19403,10 @@ static const NSTimeInterval PTYSessionFocusReportBellSquelchTimeIntervalThreshol
     }];
 }
 
+- (BOOL)shouldTemporarilyDisableMetalForSessionViewFrameChange {
+    NSWindow *window = self.textview.window ?: _view.window;
+    return _inLiveResize || window.inLiveResize;
+}
 
 - (void)sessionViewNeedsMetalFrameUpdate {
     DLog(@"sessionViewNeedsMetalFrameUpdate %@", self);
@@ -19412,14 +19416,22 @@ static const NSTimeInterval PTYSessionFocusReportBellSquelchTimeIntervalThreshol
     }
 
     _metalFrameChangePending = YES;
-    id token = [self temporarilyDisableMetal];
-    [self.textview requestDelegateRedraw];
+    const BOOL shouldTemporarilyDisableMetal = [self shouldTemporarilyDisableMetalForSessionViewFrameChange];
+    id token = nil;
+    if (shouldTemporarilyDisableMetal) {
+        token = [self temporarilyDisableMetal];
+        [self.textview requestDelegateRedraw];
+    }
     dispatch_async(dispatch_get_main_queue(), ^{
         DLog(@"sessionViewNeedsMetalFrameUpdate %@ in dispatch_async", self);
         _metalFrameChangePending = NO;
         [_view reallyUpdateMetalViewFrame];
-        DLog(@"sessionViewNeedsMetalFrameUpdate will draw farme and remove disablement");
-        [self drawFrameAndRemoveTemporarilyDisablementOfMetalForToken:token];
+        if (shouldTemporarilyDisableMetal) {
+            DLog(@"sessionViewNeedsMetalFrameUpdate will draw frame and remove disablement");
+            [self drawFrameAndRemoveTemporarilyDisablementOfMetalForToken:token];
+        } else {
+            [self.textview requestDelegateRedraw];
+        }
     });
 }
 
