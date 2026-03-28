@@ -8,15 +8,15 @@
       <BuildActionEntries>
          <BuildActionEntry
             buildForTesting = "YES"
-            buildForRunning = "YES"
-            buildForProfiling = "YES"
-            buildForArchiving = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "1DD39AD3180B8117004E56D5"
-               BuildableName = "iTerm2Tests.app"
-               BlueprintName = "iTerm2Tests"
+               BlueprintIdentifier = "A6C7641B1B45CB2800E3C992"
+               BuildableName = "iTerm2XCTests.xctest"
+               BlueprintName = "iTerm2XCTests"
                ReferencedContainer = "container:iTerm2.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
