@@ -3563,6 +3563,9 @@
 		A6C7642B1B45CBA800E3C992 /* libSSKeychain.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 1DFA7C671923E83500DF1410 /* libSSKeychain.a */; };
 		A6C7C96B2E172F3E00AA7668 /* WebExtensionsFramework in Frameworks */ = {isa = PBXBuildFile; productRef = A6C7C96C2E172F3E00AA7668 /* WebExtensionsFramework */; };
 		A6C7C96D2E172F3E00AA7668 /* WebExtensionsFramework in Frameworks */ = {isa = PBXBuildFile; productRef = A6C7C96C2E172F3E00AA7668 /* WebExtensionsFramework */; };
+		A7B1001A2F0A000100000001 /* WebExtensionsFramework in Frameworks */ = {isa = PBXBuildFile; productRef = A6C7C96C2E172F3E00AA7668 /* WebExtensionsFramework */; };
+		A7B1001B2F0A000100000001 /* WebExtensionsFramework in Frameworks */ = {isa = PBXBuildFile; productRef = A6C7C96C2E172F3E00AA7668 /* WebExtensionsFramework */; };
+		A7B1001C2F0A000100000001 /* WebExtensionsFramework in Frameworks */ = {isa = PBXBuildFile; productRef = A6C7C96C2E172F3E00AA7668 /* WebExtensionsFramework */; };
 		A6C7C96F2E1730AA00AA7668 /* iTermBrowserUserState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6C7C96E2E1730A400AA7668 /* iTermBrowserUserState.swift */; };
 		A6C7C9712E18F27800AA7668 /* iTermBrowserWebViewHandlerProxy.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6C7C9702E18F26E00AA7668 /* iTermBrowserWebViewHandlerProxy.swift */; };
 		A6C7DE52199F3087001E5C75 /* PTYWindow+Scripting.h in Headers */ = {isa = PBXBuildFile; fileRef = A6C7DE51199F3087001E5C75 /* PTYWindow+Scripting.h */; };
@@ -9264,6 +9267,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A7B1001A2F0A000100000001 /* WebExtensionsFramework in Frameworks */,
 				A69FEECA2E123B8700AFF7A8 /* iTermSwiftPackages.framework in Frameworks */,
 				A667196A1DCE396A000CE608 /* libiTerm2SharedARC.a in Frameworks */,
 				A6661311225CFF7A00840E89 /* BetterFontPicker.framework in Frameworks */,
@@ -9287,6 +9291,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A7B1001B2F0A000100000001 /* WebExtensionsFramework in Frameworks */,
 				A62B04A529B428B60077B955 /* Highlightr.framework in Frameworks */,
 				A67D19502237045C00BD0D4D /* libsixel.a in Frameworks */,
 				A66719691DCE3965000CE608 /* libiTerm2SharedARC.a in Frameworks */,
@@ -9419,6 +9424,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A7B1001C2F0A000100000001 /* WebExtensionsFramework in Frameworks */,
 				A667196B1DCE3970000CE608 /* libiTerm2SharedARC.a in Frameworks */,
 				A667F3881B48671B00705186 /* libiTerm2Shared.a in Frameworks */,
 				A6C7642B1B45CBA800E3C992 /* libSSKeychain.a in Frameworks */,
@@ -16105,6 +16111,9 @@
 				A69FEECC2E123B8700AFF7A8 /* PBXTargetDependency */,
 			);
 			name = iTerm2ForApplescriptTesting;
+			packageProductDependencies = (
+				A6C7C96C2E172F3E00AA7668 /* WebExtensionsFramework */,
+			);
 			productName = "JTerminal (Application)";
 			productReference = 1D6EDB0A19AEA20D005A7799 /* iTerm2ForApplescriptTesting.app */;
 			productType = "com.apple.product-type.application";
@@ -16125,6 +16134,9 @@
 				A6C763D51B45C5BE00E3C992 /* PBXTargetDependency */,
 			);
 			name = iTerm2Tests;
+			packageProductDependencies = (
+				A6C7C96C2E172F3E00AA7668 /* WebExtensionsFramework */,
+			);
 			productName = iTermTests;
 			productReference = 1DD39AD4180B8117004E56D5 /* iTerm2Tests.app */;
 			productType = "com.apple.product-type.application";
@@ -16388,6 +16400,9 @@
 				A6E1524F27614A2D00D0F41C /* PBXTargetDependency */,
 			);
 			name = iTerm2XCTests;
+			packageProductDependencies = (
+				A6C7C96C2E172F3E00AA7668 /* WebExtensionsFramework */,
+			);
 			productName = iTerm2XCTests;
 			productReference = A6C7641C1B45CB2800E3C992 /* iTerm2XCTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
