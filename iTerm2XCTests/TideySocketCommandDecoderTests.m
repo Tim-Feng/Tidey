@@ -51,10 +51,12 @@
     XCTAssertEqualObjects(command.icon, @"bolt.fill");
     XCTAssertEqualObjects(command.colorHex, @"#007AFF");
 
-    XCTAssertNil([TideySocketCommandDecoder setStatusCommandFromMessage:@{
+    TideySocketCommand *invalidCommand =
+        [TideySocketCommandDecoder setStatusCommandFromMessage:@{
         @"key": @"shell_state",
         @"value": @"Running"
-    }]);
+    }];
+    XCTAssertNil(invalidCommand);
 }
 
 - (void)testClearStatusCommandRequiresWorkspaceAndKey {
@@ -69,9 +71,11 @@
     XCTAssertEqualObjects(command.workspaceID, @"ws-1");
     XCTAssertEqualObjects(command.key, @"shell_state");
 
-    XCTAssertNil([TideySocketCommandDecoder clearStatusCommandFromMessage:@{
+    TideySocketCommand *invalidCommand =
+        [TideySocketCommandDecoder clearStatusCommandFromMessage:@{
         @"workspace_id": @"ws-1"
-    }]);
+    }];
+    XCTAssertNil(invalidCommand);
 }
 
 - (void)testReportShellStateCommandNormalizesRunningToBroadcastStatus {
@@ -122,9 +126,11 @@
     XCTAssertEqualObjects(command.workspaceID, @"ws-3");
     XCTAssertEqualObjects(command.title, @"");
 
-    XCTAssertNil([TideySocketCommandDecoder setTitleCommandFromMessage:@{
+    TideySocketCommand *invalidCommand =
+        [TideySocketCommandDecoder setTitleCommandFromMessage:@{
         @"title": @"Claude Code"
-    }]);
+    }];
+    XCTAssertNil(invalidCommand);
 }
 
 @end
