@@ -366,7 +366,8 @@ do { \
                                useScrollbackWithRegion:NO
                                             willScroll:^{
                                                 XCTAssert(false);
-                                            }];
+                                            }
+                                      sentToLineBuffer:nil];
     XCTAssert([[grid compactLineDump] isEqualToString:@"abcd\nefgh\nijkl\nmnop"]);
     XCTAssert([[lineBuffer debugString] isEqualToString:@""]);
     XCTAssert(grid.cursorX == 0);
@@ -381,7 +382,8 @@ do { \
     [grid moveCursorDownOneLineScrollingIntoLineBuffer:lineBuffer
                                    unlimitedScrollback:NO
                                useScrollbackWithRegion:NO
-                                            willScroll:nil];
+                                            willScroll:nil
+                                      sentToLineBuffer:nil];
     XCTAssert([[grid compactLineDump] isEqualToString:@"abcd\nefgh\nijkl\nmnop"]);
     XCTAssert(grid.cursorX == 0);
     XCTAssert(grid.cursorY == 2);
@@ -397,7 +399,8 @@ do { \
                                useScrollbackWithRegion:NO
                                             willScroll:^{
                                                 scrolled = YES;
-                                            }];
+                                            }
+                                      sentToLineBuffer:nil];
     XCTAssert(scrolled);
     XCTAssert([[grid compactLineDump] isEqualToString:@"efgh\nijkl\nmnop\n...."]);
     XCTAssert([[lineBuffer debugString] isEqualToString:@"abcd!"]);
@@ -412,7 +415,8 @@ do { \
     [grid moveCursorDownOneLineScrollingIntoLineBuffer:lineBuffer
                                    unlimitedScrollback:NO
                                useScrollbackWithRegion:NO
-                                            willScroll:nil];
+                                            willScroll:nil
+                                      sentToLineBuffer:nil];
     XCTAssert([[grid compactLineDump] isEqualToString:@"efgh\nijkl\nmnop\n...."]);
     XCTAssert([[lineBuffer debugString] isEqualToString:@"abcd+"]);
     XCTAssert(grid.cursorX == 0);
@@ -427,7 +431,8 @@ do { \
     [grid moveCursorDownOneLineScrollingIntoLineBuffer:lineBuffer
                                    unlimitedScrollback:NO
                                useScrollbackWithRegion:YES
-                                            willScroll:nil];
+                                            willScroll:nil
+                                      sentToLineBuffer:nil];
     XCTAssert([[grid compactLineDump] isEqualToString:@"efgh\n....\nijkl\nmnop"]);
     XCTAssert([[lineBuffer debugString] isEqualToString:@"abcd!"]);
     XCTAssert(grid.cursorX == 0);
@@ -442,7 +447,8 @@ do { \
     [grid moveCursorDownOneLineScrollingIntoLineBuffer:lineBuffer
                                    unlimitedScrollback:NO
                                useScrollbackWithRegion:NO
-                                            willScroll:nil];
+                                            willScroll:nil
+                                      sentToLineBuffer:nil];
     XCTAssert([[grid compactLineDump] isEqualToString:@"efgh\n....\nijkl\nmnop"]);
     XCTAssert([[lineBuffer debugString] isEqualToString:@""]);
     XCTAssert(grid.cursorX == 0);
@@ -459,7 +465,8 @@ do { \
         dropped += [grid moveCursorDownOneLineScrollingIntoLineBuffer:lineBuffer
                                                   unlimitedScrollback:NO
                                               useScrollbackWithRegion:NO
-                                                           willScroll:nil];
+                                                           willScroll:nil
+                                                     sentToLineBuffer:nil];
     }
     XCTAssert(dropped == 2);
     XCTAssert([[grid compactLineDump] isEqualToString:@"mnop\n....\n....\n...."]);
@@ -478,7 +485,8 @@ do { \
     [grid moveCursorDownOneLineScrollingIntoLineBuffer:lineBuffer
                                    unlimitedScrollback:NO
                                useScrollbackWithRegion:YES
-                                            willScroll:nil];
+                                            willScroll:nil
+                                      sentToLineBuffer:nil];
     XCTAssert([[grid compactLineDump] isEqualToString:@"abcd\nejkh\ni..l\nmnop"]);
     XCTAssert([[lineBuffer debugString] isEqualToString:@""]);
     XCTAssert(grid.cursorX == 1);
@@ -586,7 +594,8 @@ do { \
     [grid moveCursorDownOneLineScrollingIntoLineBuffer:lineBuffer
                                    unlimitedScrollback:YES
                                useScrollbackWithRegion:NO
-                                            willScroll:nil];
+                                            willScroll:nil
+                                      sentToLineBuffer:nil];
     grid.cursorX = 0;
 
     string = @"d";
