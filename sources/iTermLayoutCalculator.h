@@ -110,6 +110,14 @@ typedef struct {
 /// Calculate layout for visible left tab bar.
 + (iTermLayoutOutputs)calculateLayoutWithVisibleLeftTabBarInputs:(iTermLayoutInputs)inputs;
 
+/// Apply Tidey chrome offsets to calculator outputs.
+/// Sidebar shifts all visible content right; editor shrinks terminal-facing frames;
+/// hidden terminal collapses terminal-facing widths to zero.
++ (iTermLayoutOutputs)layoutOutputs:(iTermLayoutOutputs)outputs
+    byApplyingTideySidebarWidth:(CGFloat)sidebarWidth
+                    editorWidth:(CGFloat)editorWidth
+                terminalVisible:(BOOL)terminalVisible;
+
 @end
 
 // Tab position constants (matching PSMTabBarControl)

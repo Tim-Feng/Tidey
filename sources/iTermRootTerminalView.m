@@ -3388,28 +3388,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 
 - (iTermLayoutOutputs)layoutOutputsByApplyingTideyChromeOffsets:(iTermLayoutOutputs)outputs {
-    const CGFloat sidebarWidth = self.tideySidebarWidth;
-    if (sidebarWidth > 0) {
-        outputs.tabViewFrame.origin.x += sidebarWidth;
-        outputs.statusBarFrame.origin.x += sidebarWidth;
-        outputs.toolbeltFrame.origin.x += sidebarWidth;
-        outputs.tabBarFrame.origin.x += sidebarWidth;
-    }
-
-    const CGFloat editorWidth = self.tideyEditorPanelWidth;
-    if (editorWidth > 0) {
-        outputs.tabViewFrame.size.width = MAX(0, outputs.tabViewFrame.size.width - editorWidth);
-        outputs.statusBarFrame.size.width = MAX(0, outputs.statusBarFrame.size.width - editorWidth);
-        outputs.tabBarFrame.size.width = MAX(0, outputs.tabBarFrame.size.width - editorWidth);
-    }
-
-    if (!self.shouldShowTideyTerminal) {
-        outputs.tabViewFrame.size.width = 0;
-        outputs.statusBarFrame.size.width = 0;
-        outputs.tabBarFrame.size.width = 0;
-    }
-
-    return outputs;
+    return [iTermLayoutCalculator layoutOutputs:outputs
+                    byApplyingTideySidebarWidth:self.tideySidebarWidth
+                                    editorWidth:self.tideyEditorPanelWidth
+                                terminalVisible:self.shouldShowTideyTerminal];
 }
 
 - (void)updateTideyChromeDragHandles {
