@@ -3,6 +3,7 @@
 #import "DebugLogging.h"
 #import "PseudoTerminal.h"
 #import "TideyNotificationStore.h"
+#import "TideySocketCommandDecoder.h"
 #import "TideySocketConnection.h"
 #import "iTermController.h"
 #import "iTermSocket.h"
@@ -183,130 +184,76 @@ static BOOL TideySocketPathHasLiveListener(NSString *path) {
         return;
     }
 
-    NSString *workspaceID = [message[@"workspace_id"] isKindOfClass:[NSString class]] ? message[@"workspace_id"] : nil;
-    NSString *title = [message[@"title"] isKindOfClass:[NSString class]] ? message[@"title"] : @"";
-    NSString *subtitle = [message[@"subtitle"] isKindOfClass:[NSString class]] ? message[@"subtitle"] : nil;
-    NSString *body = [message[@"body"] isKindOfClass:[NSString class]] ? message[@"body"] : @"";
-    if ([action isEqualToString:@"notification.create_for_workspace"] && workspaceID.length == 0) {
-        DLog(@"Ignoring malformed Tidey workspace notification payload: %@", message);
-        return;
-    }
-    if (title.length == 0) {
+    TideySocketCommand *command = [TideySocketCommandDecoder notificationCommandFromMessage:message];
+    if (!command) {
         DLog(@"Ignoring malformed Tidey notification payload: %@", message);
         return;
     }
 
     TideyNotificationItem *item =
-        [[TideyNotificationStore sharedStore] addNotificationForWorkspaceID:workspaceID
-                                                                      title:title
-                                                                   subtitle:subtitle
-                                                                       body:body];
+        [[TideyNotificationStore sharedStore] addNotificationForWorkspaceID:command.workspaceID
+                                                                      title:command.title
+                                                                   subtitle:command.subtitle
+                                                                       body:command.body];
     [[TideyNotificationStore sharedStore] postSystemNotificationForItem:item];
 }
 
 - (void)handleReportShellState:(NSDictionary *)message {
-    NSString *state = [message[@"state"] isKindOfClass:[NSString class]] ? message[@"state"] : nil;
-    if (state.length == 0) {
-        DLog(@"Ignoring report_shell_state with empty state: %@", message);
+    TideySocketCommand *command = [TideySocketCommandDecoder reportShellStateCommandFromMessage:message];
+    if (!command) {
+        DLog(@"Ignoring malformed report_shell_state payload: %@", message);
         return;
     }
 
-    // workspace_id is optional. When absent, broadcast to all known workspaces
-    // (same pattern as notification.create).
-    NSString *workspaceID = [message[@"workspace_id"] isKindOfClass:[NSString class]] ? message[@"workspace_id"] : nil;
-
-    NSString *value = nil;
-    NSString *icon = nil;
-    NSString *colorHex = nil;
-    BOOL shouldClear = NO;
-
-    if ([state isEqualToString:@"running"] ||
-        [state isEqualToString:@"busy"] ||
-        [state isEqualToString:@"command"]) {
-        value = @"Running";
-        icon = @"bolt.fill";
-        colorHex = @"#007AFF";
-    } else if ([state isEqualToString:@"prompt"] ||
-               [state isEqualToString:@"idle"]) {
-        value = @"Idle";
-        icon = @"pause.circle.fill";
-        colorHex = @"#8E8E93";
-    } else if ([state isEqualToString:@"unknown"] ||
-               [state isEqualToString:@"clear"]) {
-        shouldClear = YES;
-    } else {
-        DLog(@"Ignoring report_shell_state with unknown state '%@': %@", state, message);
-        return;
-    }
-
-    NSString *const key = @"shell_state";
     TideyStatusStore *store = [TideyStatusStore sharedStore];
-
-    if (workspaceID.length > 0) {
-        if (shouldClear) {
-            [store clearStatusForWorkspaceID:workspaceID key:key];
-        } else {
-            [store setStatusForWorkspaceID:workspaceID key:key value:value icon:icon colorHex:colorHex];
-        }
+    if (command.kind == TideySocketCommandKindClearStatus) {
+        [store clearStatusForWorkspaceID:command.workspaceID key:command.key];
     } else {
-        // No workspace_id: use broadcast identifier so all workspaces show status.
-        NSString *broadcastID = @"*";
-        if (shouldClear) {
-            [store clearStatusForWorkspaceID:broadcastID key:key];
-        } else {
-            [store setStatusForWorkspaceID:broadcastID key:key value:value icon:icon colorHex:colorHex];
-        }
+        [store setStatusForWorkspaceID:command.workspaceID
+                                   key:command.key
+                                 value:command.value
+                                  icon:command.icon
+                              colorHex:command.colorHex];
     }
 }
 
 - (void)handleSetStatus:(NSDictionary *)message {
-    NSString *workspaceID = [message[@"workspace_id"] isKindOfClass:[NSString class]] ? message[@"workspace_id"] : nil;
-    NSString *key = [message[@"key"] isKindOfClass:[NSString class]] ? message[@"key"] : nil;
-    NSString *value = [message[@"value"] isKindOfClass:[NSString class]] ? message[@"value"] : nil;
-    NSString *icon = [message[@"icon"] isKindOfClass:[NSString class]] ? message[@"icon"] : nil;
-    NSString *color = [message[@"color"] isKindOfClass:[NSString class]] ? message[@"color"] : nil;
-
-    if (key.length == 0 || value.length == 0) {
-        DLog(@"Ignoring malformed set_status: missing key or value: %@", message);
-        return;
-    }
-    if (workspaceID.length == 0) {
-        // Broadcast: set status for all known workspaces is not well-defined.
-        // For broadcast, the caller should specify workspace_id.
-        DLog(@"Ignoring set_status with empty workspace_id: %@", message);
+    TideySocketCommand *command = [TideySocketCommandDecoder setStatusCommandFromMessage:message];
+    if (!command) {
+        DLog(@"Ignoring malformed set_status payload: %@", message);
         return;
     }
 
-    [[TideyStatusStore sharedStore] setStatusForWorkspaceID:workspaceID
-                                                        key:key
-                                                      value:value
-                                                       icon:icon
-                                                   colorHex:color];
+    [[TideyStatusStore sharedStore] setStatusForWorkspaceID:command.workspaceID
+                                                        key:command.key
+                                                      value:command.value
+                                                       icon:command.icon
+                                                   colorHex:command.colorHex];
 }
 
 - (void)handleClearStatus:(NSDictionary *)message {
-    NSString *workspaceID = [message[@"workspace_id"] isKindOfClass:[NSString class]] ? message[@"workspace_id"] : nil;
-    NSString *key = [message[@"key"] isKindOfClass:[NSString class]] ? message[@"key"] : nil;
-
-    if (workspaceID.length == 0 || key.length == 0) {
-        DLog(@"Ignoring malformed clear_status: missing workspace_id or key: %@", message);
+    TideySocketCommand *command = [TideySocketCommandDecoder clearStatusCommandFromMessage:message];
+    if (!command) {
+        DLog(@"Ignoring malformed clear_status payload: %@", message);
         return;
     }
 
-    [[TideyStatusStore sharedStore] clearStatusForWorkspaceID:workspaceID key:key];
+    [[TideyStatusStore sharedStore] clearStatusForWorkspaceID:command.workspaceID key:command.key];
 }
 
 - (void)handleSetTitle:(NSDictionary *)message {
-    NSString *workspaceID = [message[@"workspace_id"] isKindOfClass:[NSString class]] ? message[@"workspace_id"] : nil;
-    NSString *title = [message[@"title"] isKindOfClass:[NSString class]] ? message[@"title"] : nil;
-    if (workspaceID.length == 0) return;
+    TideySocketCommand *command = [TideySocketCommandDecoder setTitleCommandFromMessage:message];
+    if (!command) {
+        DLog(@"Ignoring malformed set_title payload: %@", message);
+        return;
+    }
 
     dispatch_async(dispatch_get_main_queue(), ^{
         for (PseudoTerminal *term in [[iTermController sharedInstance] terminals]) {
-            if (title.length == 0) {
-                [term tideyClearWorkspaceTitleForWorkspaceID:workspaceID];
+            if (command.title.length == 0) {
+                [term tideyClearWorkspaceTitleForWorkspaceID:command.workspaceID];
             } else {
-                [term tideySetWorkspaceTitle:title forWorkspaceID:workspaceID];
+                [term tideySetWorkspaceTitle:command.title forWorkspaceID:command.workspaceID];
             }
         }
     });
