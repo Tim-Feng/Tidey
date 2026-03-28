@@ -1008,6 +1008,8 @@
 		F0A10D1E3A28000100000002 /* TideyNotificationStoreTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000001 /* TideyNotificationStoreTests.m */; };
 		F0A10D1E3A28000100000006 /* TideyCLICommandFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000005 /* TideyCLICommandFormatter.swift */; };
 		F0A10D1E3A28000100000008 /* TideyCLICommandFormatterTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000007 /* TideyCLICommandFormatterTests.m */; };
+		F0A10D1E3A2800010000000A /* TideyShellIntegrationConfigWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000009 /* TideyShellIntegrationConfigWriter.swift */; };
+		F0A10D1E3A2800010000000C /* TideyShellIntegrationConfigWriterTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A2800010000000B /* TideyShellIntegrationConfigWriterTests.m */; };
 		A603E9FB283EE53C0028B648 /* SecretServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A603E9FA283EE53C0028B648 /* SecretServer.swift */; };
 		A603E9FE283EE9BD0028B648 /* ObjCExceptions.h in Headers */ = {isa = PBXBuildFile; fileRef = A603E9FC283EE9BD0028B648 /* ObjCExceptions.h */; };
 		A603E9FF283EE9BD0028B648 /* ObjCExceptions.m in Sources */ = {isa = PBXBuildFile; fileRef = A603E9FD283EE9BD0028B648 /* ObjCExceptions.m */; };
@@ -6391,6 +6393,7 @@
 		F0A10D1E3A28000100000001 /* TideyNotificationStoreTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyNotificationStoreTests.m; sourceTree = "<group>"; };
 		F0A10D1E3A28000100000005 /* TideyCLICommandFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TideyCLICommandFormatter.swift; path = sources/TideyCLICommandFormatter.swift; sourceTree = SOURCE_ROOT; };
 		F0A10D1E3A28000100000007 /* TideyCLICommandFormatterTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyCLICommandFormatterTests.m; sourceTree = "<group>"; };
+		F0A10D1E3A2800010000000B /* TideyShellIntegrationConfigWriterTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyShellIntegrationConfigWriterTests.m; sourceTree = "<group>"; };
 		A603E9FA283EE53C0028B648 /* SecretServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecretServer.swift; sourceTree = "<group>"; };
 		A603E9FC283EE9BD0028B648 /* ObjCExceptions.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ObjCExceptions.h; sourceTree = "<group>"; };
 		A603E9FD283EE9BD0028B648 /* ObjCExceptions.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = ObjCExceptions.m; sourceTree = "<group>"; };
@@ -7164,6 +7167,7 @@
 		A65B72AF1B33C07D00F947A7 /* NextTip.png */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; name = NextTip.png; path = images/NextTip.png; sourceTree = "<group>"; };
 		A65B72B01B33C07D00F947A7 /* NextTip@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; name = "NextTip@2x.png"; path = "images/NextTip@2x.png"; sourceTree = "<group>"; };
 		A65DF49A28491E5300AA29AB /* ShellIntegrationInjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellIntegrationInjection.swift; sourceTree = "<group>"; };
+		F0A10D1E3A28000100000009 /* TideyShellIntegrationConfigWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TideyShellIntegrationConfigWriter.swift; sourceTree = "<group>"; };
 		A65DF4A02849601A00AA29AB /* .zshenv */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; name = .zshenv; path = OtherResources/.zshenv; sourceTree = "<group>"; };
 		A65DF4A42849C11D00AA29AB /* bash-si-loader */ = {isa = PBXFileReference; lastKnownFileType = text; name = "bash-si-loader"; path = "OtherResources/bash-si-loader"; sourceTree = "<group>"; };
 		A65DF4A82849F2AA00AA29AB /* iterm2-shell-integration-loader.fish */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; name = "iterm2-shell-integration-loader.fish"; path = "OtherResources/vendor_conf.d/iterm2-shell-integration-loader.fish"; sourceTree = "<group>"; };
@@ -13222,6 +13226,7 @@
 				A62C3B331BCC265F00B5629D /* iTermHostRecordMO+Additions.h */,
 				A62C3B341BCC265F00B5629D /* iTermHostRecordMO+Additions.m */,
 				A65DF49A28491E5300AA29AB /* ShellIntegrationInjection.swift */,
+				F0A10D1E3A28000100000009 /* TideyShellIntegrationConfigWriter.swift */,
 				A65DF4AE284ACBE200AA29AB /* Bundle+ShellIntegration.swift */,
 			);
 			name = "Shell Integration";
@@ -13603,6 +13608,7 @@
 				F0A10D1E3A28000100000003 /* TideyStatusStoreTests.m */,
 				F0A10D1E3A28000100000001 /* TideyNotificationStoreTests.m */,
 				F0A10D1E3A28000100000007 /* TideyCLICommandFormatterTests.m */,
+				F0A10D1E3A2800010000000B /* TideyShellIntegrationConfigWriterTests.m */,
 			);
 			path = iTerm2XCTests;
 			sourceTree = "<group>";
@@ -16383,14 +16389,14 @@
 				LastUpgradeCheck = 2620;
 				TargetAttributes = {
 					1D6ED85219AEA20D005A7799 = {
-						DevelopmentTeam = H7V7XYVQ7D;
+						DevelopmentTeam = 4T64VW5B7M;
 						ProvisioningStyle = Automatic;
 					};
 					1DD39AD3180B8117004E56D5 = {
 						ProvisioningStyle = Automatic;
 					};
 					1DFA7C661923E83500DF1410 = {
-						DevelopmentTeam = H7V7XYVQ7D;
+						DevelopmentTeam = 4T64VW5B7M;
 					};
 					2549E8A336D6EEDF5F73151F = {
 						CreatedOnToolsVersion = 16.1;
@@ -16398,7 +16404,7 @@
 					};
 					759637992593AE0700E278CC = {
 						CreatedOnToolsVersion = 12.3;
-						DevelopmentTeam = H7V7XYVQ7D;
+						DevelopmentTeam = 4T64VW5B7M;
 						LastSwiftMigration = 1410;
 						ProvisioningStyle = Automatic;
 					};
@@ -16413,21 +16419,21 @@
 					};
 					A60593B1257DF9A500CACEE6 = {
 						CreatedOnToolsVersion = 12.2;
-						DevelopmentTeam = H7V7XYVQ7D;
+						DevelopmentTeam = 4T64VW5B7M;
 						ProvisioningStyle = Automatic;
 					};
 					A663197722FF349700C502BD = {
 						CreatedOnToolsVersion = 10.2;
-						DevelopmentTeam = H7V7XYVQ7D;
+						DevelopmentTeam = 4T64VW5B7M;
 						ProvisioningStyle = Automatic;
 					};
 					A66717851DCE36C3000CE608 = {
-						DevelopmentTeam = H7V7XYVQ7D;
+						DevelopmentTeam = 4T64VW5B7M;
 						LastSwiftMigration = 1250;
 					};
 					A6866B6623CAA10A00ACD94C = {
 						CreatedOnToolsVersion = 11.3;
-						DevelopmentTeam = H7V7XYVQ7D;
+						DevelopmentTeam = 4T64VW5B7M;
 						ProvisioningStyle = Automatic;
 					};
 					A69FEEB92E123B8700AFF7A8 = {
@@ -16441,12 +16447,12 @@
 						TestTargetID = 874206460564169600CFC3F1;
 					};
 					A6C7603F1B45C4CF00E3C992 = {
-						DevelopmentTeam = H7V7XYVQ7D;
+						DevelopmentTeam = 4T64VW5B7M;
 						LastSwiftMigration = 2600;
 					};
 					A6C7641B1B45CB2800E3C992 = {
 						CreatedOnToolsVersion = 6.3;
-						DevelopmentTeam = H7V7XYVQ7D;
+						DevelopmentTeam = 4T64VW5B7M;
 						ProvisioningStyle = Automatic;
 						TestTargetID = 874206460564169600CFC3F1;
 					};
@@ -19287,6 +19293,7 @@
 				A6EB64342D5D2E7100481D33 /* ChatBroker.swift in Sources */,
 				A6F7D51C2E0613970065D09C /* MainMenuMangler.swift in Sources */,
 				F0A10D1E3A28000100000006 /* TideyCLICommandFormatter.swift in Sources */,
+				F0A10D1E3A2800010000000A /* TideyShellIntegrationConfigWriter.swift in Sources */,
 				A63B92482F05C75200591B9E /* ExpressionBindingIconView.swift in Sources */,
 				A6AF79D62E06776C008D77BA /* iTermDatabase.swift in Sources */,
 				A68400A71FF82424008D3EE2 /* iTermIndicatorRenderer.m in Sources */,
@@ -20409,6 +20416,7 @@
 				F0A10D1E3A28000100000004 /* TideyStatusStoreTests.m in Sources */,
 				F0A10D1E3A28000100000002 /* TideyNotificationStoreTests.m in Sources */,
 				F0A10D1E3A28000100000008 /* TideyCLICommandFormatterTests.m in Sources */,
+				F0A10D1E3A2800010000000C /* TideyShellIntegrationConfigWriterTests.m in Sources */,
 				A608CD08214DE7C1007A7B87 /* iTermTextExtractorTest.m in Sources */,
 				A608CD0D214DE7C1007A7B87 /* iTermFunctionCallSuggesterTest.m in Sources */,
 				A6F22AC22396374500C5D1A9 /* iTermSyntheticConfParserTests.m in Sources */,
@@ -20595,7 +20603,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = H7V7XYVQ7D;
+				DEVELOPMENT_TEAM = 4T64VW5B7M;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)/build/Development",
@@ -20628,7 +20636,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = H7V7XYVQ7D;
+				DEVELOPMENT_TEAM = 4T64VW5B7M;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)/build/Development",
@@ -20676,11 +20684,11 @@
 				CLANG_WARN_SUSPICIOUS_MOVE = YES;
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
-				CODE_SIGN_IDENTITY = "Developer ID Application: GEORGE NACHMAN (H7V7XYVQ7D)";
+				CODE_SIGN_IDENTITY = "Developer ID Application";
 				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				CODE_SIGN_STYLE = Manual;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = H7V7XYVQ7D;
+				DEVELOPMENT_TEAM = 4T64VW5B7M;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				FRAMEWORK_SEARCH_PATHS = "$(SRCROOT)";
@@ -20719,7 +20727,7 @@
 				COPY_PHASE_STRIP = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
-				"DEVELOPMENT_TEAM[sdk=macosx*]" = H7V7XYVQ7D;
+				"DEVELOPMENT_TEAM[sdk=macosx*]" = 4T64VW5B7M;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -21035,7 +21043,7 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				COPY_PHASE_STRIP = NO;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = H7V7XYVQ7D;
+				DEVELOPMENT_TEAM = 4T64VW5B7M;
 				ENABLE_HARDENED_RUNTIME = YES;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
@@ -21123,7 +21131,7 @@
 				COPY_PHASE_STRIP = YES;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = H7V7XYVQ7D;
+				DEVELOPMENT_TEAM = 4T64VW5B7M;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_NS_ASSERTIONS = NO;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -21204,7 +21212,7 @@
 				COPY_PHASE_STRIP = YES;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = H7V7XYVQ7D;
+				DEVELOPMENT_TEAM = 4T64VW5B7M;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_NS_ASSERTIONS = NO;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -21727,6 +21735,8 @@
 				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
 				COPY_PHASE_STRIP = NO;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
@@ -21792,6 +21802,8 @@
 				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
 				COPY_PHASE_STRIP = NO;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
@@ -21849,6 +21861,8 @@
 				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
 				COPY_PHASE_STRIP = NO;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
@@ -21906,6 +21920,8 @@
 				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
 				COPY_PHASE_STRIP = NO;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
@@ -21953,11 +21969,11 @@
 				CLANG_WARN_SUSPICIOUS_MOVE = YES;
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
-				CODE_SIGN_IDENTITY = "Developer ID Application: GEORGE NACHMAN (H7V7XYVQ7D)";
+				CODE_SIGN_IDENTITY = "Developer ID Application";
 				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				CODE_SIGN_STYLE = Manual;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = H7V7XYVQ7D;
+				DEVELOPMENT_TEAM = 4T64VW5B7M;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				FRAMEWORK_SEARCH_PATHS = "$(SRCROOT)";
@@ -21996,7 +22012,7 @@
 				COPY_PHASE_STRIP = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
-				"DEVELOPMENT_TEAM[sdk=macosx*]" = H7V7XYVQ7D;
+				"DEVELOPMENT_TEAM[sdk=macosx*]" = 4T64VW5B7M;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -22092,7 +22108,7 @@
 				COPY_PHASE_STRIP = YES;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = H7V7XYVQ7D;
+				DEVELOPMENT_TEAM = 4T64VW5B7M;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_NS_ASSERTIONS = NO;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -23981,7 +23997,7 @@
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = H7V7XYVQ7D;
+				DEVELOPMENT_TEAM = 4T64VW5B7M;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -24069,7 +24085,7 @@
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = H7V7XYVQ7D;
+				DEVELOPMENT_TEAM = 4T64VW5B7M;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -24149,7 +24165,7 @@
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = H7V7XYVQ7D;
+				DEVELOPMENT_TEAM = 4T64VW5B7M;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -24229,7 +24245,7 @@
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = H7V7XYVQ7D;
+				DEVELOPMENT_TEAM = 4T64VW5B7M;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -24694,7 +24710,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = H7V7XYVQ7D;
+				DEVELOPMENT_TEAM = 4T64VW5B7M;
 				ENABLE_HARDENED_RUNTIME = NO;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -24791,7 +24807,7 @@
 				COPY_PHASE_STRIP = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
-				"DEVELOPMENT_TEAM[sdk=macosx*]" = H7V7XYVQ7D;
+				"DEVELOPMENT_TEAM[sdk=macosx*]" = 4T64VW5B7M;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -24890,7 +24906,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = YES;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = H7V7XYVQ7D;
+				DEVELOPMENT_TEAM = 4T64VW5B7M;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -24944,11 +24960,11 @@
 				CLANG_WARN_SUSPICIOUS_MOVE = YES;
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
-				CODE_SIGN_IDENTITY = "Developer ID Application: GEORGE NACHMAN (H7V7XYVQ7D)";
+				CODE_SIGN_IDENTITY = "Developer ID Application";
 				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				CODE_SIGN_STYLE = Manual;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = H7V7XYVQ7D;
+				DEVELOPMENT_TEAM = 4T64VW5B7M;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				FRAMEWORK_SEARCH_PATHS = "$(SRCROOT)";
@@ -24980,7 +24996,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = H7V7XYVQ7D;
+				DEVELOPMENT_TEAM = 4T64VW5B7M;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)/build/Development",
@@ -25013,7 +25029,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = H7V7XYVQ7D;
+				DEVELOPMENT_TEAM = 4T64VW5B7M;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)/build/Development",

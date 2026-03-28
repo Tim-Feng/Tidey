@@ -4171,51 +4171,33 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
         DLog(@"Tidey: Could not determine user shell, skipping shell integration check");
         return;
     }
-    NSString *shellName = [shell lastPathComponent];
-
-    // Determine the shell config file and the shell integration script extension.
     NSString *homeDir = NSHomeDirectory();
-    NSString *configFile = nil;
-    NSString *shellExtension = nil;
-
-    if ([shellName isEqualToString:@"zsh"]) {
-        // Respect ZDOTDIR if set.
-        NSString *zdotdir = [NSProcessInfo processInfo].environment[@"ZDOTDIR"];
-        NSString *baseDir = zdotdir.length > 0 ? zdotdir : homeDir;
-        configFile = [baseDir stringByAppendingPathComponent:@".zshrc"];
-        shellExtension = @"zsh";
-    } else if ([shellName isEqualToString:@"bash"]) {
-        // macOS default: .bash_profile; fall back to .profile.
-        NSString *bashProfile = [homeDir stringByAppendingPathComponent:@".bash_profile"];
-        if ([[NSFileManager defaultManager] fileExistsAtPath:bashProfile]) {
-            configFile = bashProfile;
-        } else {
-            configFile = [homeDir stringByAppendingPathComponent:@".profile"];
-        }
-        shellExtension = @"bash";
-    } else if ([shellName isEqualToString:@"fish"]) {
-        configFile = [homeDir stringByAppendingPathComponent:@".config/fish/config.fish"];
-        shellExtension = @"fish";
-    } else {
-        DLog(@"Tidey: Unsupported shell '%@' for auto shell integration install", shellName);
+    NSString *bashProfile = [homeDir stringByAppendingPathComponent:@".bash_profile"];
+    TideyShellIntegrationInstallPlan *plan =
+        [TideyShellIntegrationConfigWriter installPlanForShell:shell
+                                                  environment:[NSProcessInfo processInfo].environment
+                                                homeDirectory:homeDir
+                                             bashProfileExists:[[NSFileManager defaultManager] fileExistsAtPath:bashProfile]];
+    if (!plan) {
+        DLog(@"Tidey: Unsupported shell '%@' for auto shell integration install", [shell lastPathComponent]);
         return;
     }
 
     // Check if the config file already contains the shell integration source line.
-    if ([[NSFileManager defaultManager] fileExistsAtPath:configFile]) {
-        NSString *contents = [NSString stringWithContentsOfFile:configFile
+    if ([[NSFileManager defaultManager] fileExistsAtPath:plan.configFile]) {
+        NSString *contents = [NSString stringWithContentsOfFile:plan.configFile
                                                        encoding:NSUTF8StringEncoding
                                                           error:nil];
-        if (contents && [contents containsString:@"iterm2_shell_integration"]) {
+        if (contents && [TideyShellIntegrationConfigWriter configContainsInstallationMarkerInContents:contents]) {
             // Already installed — remember and don't ask again.
             [defaults setBool:YES forKey:@"TideyShellIntegrationPrompted"];
-            DLog(@"Tidey: Shell integration already present in %@", configFile);
+            DLog(@"Tidey: Shell integration already present in %@", plan.configFile);
             return;
         }
     }
 
     // Show the prompt.
-    NSString *configFileName = [configFile stringByAbbreviatingWithTildeInPath];
+    NSString *configFileName = [plan.configFile stringByAbbreviatingWithTildeInPath];
     NSAlert *alert = [[[NSAlert alloc] init] autorelease];
     alert.messageText = @"Install Shell Integration?";
     alert.informativeText = [NSString stringWithFormat:
@@ -4232,8 +4214,7 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
 
     if (response == NSAlertFirstButtonReturn) {
         // "Install"
-        [self tideyInstallShellIntegrationForShell:shellExtension
-                                        configFile:configFile];
+        [self tideyInstallShellIntegrationWithPlan:plan];
         [defaults setBool:YES forKey:@"TideyShellIntegrationPrompted"];
     } else if (response == NSAlertThirdButtonReturn) {
         // "Don't Ask Again"
@@ -4242,19 +4223,16 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
     // "Not Now" — do nothing; will ask again next launch.
 }
 
-- (void)tideyInstallShellIntegrationForShell:(NSString *)shellExtension
-                                  configFile:(NSString *)configFile {
+- (void)tideyInstallShellIntegrationWithPlan:(TideyShellIntegrationInstallPlan *)plan {
     // Step 1: Copy the bundled shell integration script to ~/.iterm2_shell_integration.{ext}
-    NSString *destPath = [NSHomeDirectory() stringByAppendingPathComponent:
-                          [NSString stringWithFormat:@".iterm2_shell_integration.%@", shellExtension]];
     NSURL *bundledURL = [[NSBundle mainBundle] URLForResource:@"iterm2_shell_integration"
-                                                withExtension:shellExtension];
+                                                withExtension:plan.shellExtension];
     if (!bundledURL) {
-        DLog(@"Tidey: Could not find bundled iterm2_shell_integration.%@", shellExtension);
+        DLog(@"Tidey: Could not find bundled iterm2_shell_integration.%@", plan.shellExtension);
         NSAlert *errAlert = [[[NSAlert alloc] init] autorelease];
         errAlert.messageText = @"Installation Failed";
         errAlert.informativeText = [NSString stringWithFormat:
-            @"Could not find the bundled shell integration script for %@.", shellExtension];
+            @"Could not find the bundled shell integration script for %@.", plan.shellExtension];
         [errAlert addButtonWithTitle:@"OK"];
         [errAlert runModal];
         return;
@@ -4264,11 +4242,11 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
     NSFileManager *fm = [NSFileManager defaultManager];
 
     // Remove existing file if present, then copy fresh.
-    if ([fm fileExistsAtPath:destPath]) {
-        [fm removeItemAtPath:destPath error:nil];
+    if ([fm fileExistsAtPath:plan.destinationPath]) {
+        [fm removeItemAtPath:plan.destinationPath error:nil];
     }
     BOOL copied = [fm copyItemAtURL:bundledURL
-                              toURL:[NSURL fileURLWithPath:destPath]
+                              toURL:[NSURL fileURLWithPath:plan.destinationPath]
                               error:&error];
     if (!copied) {
         DLog(@"Tidey: Failed to copy shell integration script: %@", error);
@@ -4276,60 +4254,28 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
         errAlert.messageText = @"Installation Failed";
         errAlert.informativeText = [NSString stringWithFormat:
             @"Could not copy shell integration script to %@:\n%@",
-            destPath, error.localizedDescription];
+            plan.destinationPath, error.localizedDescription];
         [errAlert addButtonWithTitle:@"OK"];
         [errAlert runModal];
         return;
     }
 
-    // Step 2: Append the source line to the shell config file.
-    // Use ${HOME} (or $HOME for fish) so the line is portable and matches iTerm2's convention.
-    NSString *sourceLine = nil;
-    if ([shellExtension isEqualToString:@"fish"]) {
-        // fish uses $HOME without braces.
-        NSString *fishPath = [NSString stringWithFormat:@"$HOME/.iterm2_shell_integration.%@", shellExtension];
-        sourceLine = [NSString stringWithFormat:
-            @"\n# Tidey shell integration\n"
-            @"test -e %@; and source %@; or true\n",
-            fishPath, fishPath];
-    } else {
-        NSString *shPath = [NSString stringWithFormat:@"\"${HOME}/.iterm2_shell_integration.%@\"", shellExtension];
-        sourceLine = [NSString stringWithFormat:
-            @"\n# Tidey shell integration\n"
-            @"test -e %@ && source %@\n",
-            shPath, shPath];
-    }
-
-    // Create the config file's parent directory if needed (relevant for fish).
-    NSString *configDir = [configFile stringByDeletingLastPathComponent];
-    if (![fm fileExistsAtPath:configDir]) {
-        [fm createDirectoryAtPath:configDir
-      withIntermediateDirectories:YES
-                       attributes:nil
-                            error:nil];
-    }
-
-    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:configFile];
-    if (!fh) {
-        // Config file doesn't exist yet — create it.
-        [fm createFileAtPath:configFile contents:nil attributes:nil];
-        fh = [NSFileHandle fileHandleForWritingAtPath:configFile];
-    }
-    if (!fh) {
-        DLog(@"Tidey: Failed to open %@ for writing", configFile);
+    NSError *appendError = nil;
+    if (![TideyShellIntegrationConfigWriter appendSourceLineForPlan:plan error:&appendError]) {
+        DLog(@"Tidey: Failed to append shell integration source line: %@", appendError);
         NSAlert *errAlert = [[[NSAlert alloc] init] autorelease];
         errAlert.messageText = @"Installation Failed";
         errAlert.informativeText = [NSString stringWithFormat:
-            @"Could not open %@ for writing.", configFile];
+            @"Could not update %@:\n%@",
+            plan.configFile, appendError.localizedDescription];
         [errAlert addButtonWithTitle:@"OK"];
         [errAlert runModal];
         return;
     }
-    [fh seekToEndOfFile];
-    [fh writeData:[sourceLine dataUsingEncoding:NSUTF8StringEncoding]];
-    [fh closeFile];
 
-    DLog(@"Tidey: Shell integration installed — script at %@, source line in %@", destPath, configFile);
+    DLog(@"Tidey: Shell integration installed — script at %@, source line in %@",
+         plan.destinationPath,
+         plan.configFile);
 }
 
 @end
