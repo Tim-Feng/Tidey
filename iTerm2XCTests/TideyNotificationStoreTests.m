@@ -79,7 +79,7 @@
                                 subtitle:nil
                                     body:@"Second"];
 
-    NSArray *allNotifications = [[store allNotifications] autorelease];
+    NSArray *allNotifications = [store allNotifications];
     XCTAssertEqual(allNotifications.count, 2);
     XCTAssertEqualObjects([allNotifications valueForKey:@"title"], (@[ @"New", @"Broadcast" ]));
 
@@ -155,13 +155,13 @@
 
     [store removeNotificationWithID:first.notificationID];
 
-    NSArray *remaining = [[store allNotifications] autorelease];
+    NSArray *remaining = [store allNotifications];
     XCTAssertEqual(remaining.count, 1);
     XCTAssertEqualObjects(((TideyNotificationItem *)remaining.firstObject).title, @"Two");
 
     [store clearAllNotifications];
 
-    NSArray *empty = [[store allNotifications] autorelease];
+    NSArray *empty = [store allNotifications];
     XCTAssertEqual(empty.count, 0);
     XCTAssertEqual([store unreadCountForWorkspaceID:@"workspace-1"], 0);
     XCTAssertEqual([store unreadCountForWorkspaceID:@"workspace-2"], 0);
