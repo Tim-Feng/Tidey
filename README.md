@@ -32,11 +32,11 @@ Requires Xcode, [rustup](https://rustup.rs), and Homebrew.
 
 **Workspaces** — each workspace is an agent session with its own terminal, status, and notifications. ⌘1–⌘9 to switch.
 
-**Editor** — ⌘-click any file path in the terminal to open it. Syntax highlighting, search, save. Works offline.
+**Editor** — ⌘-click any file path in the terminal to open it. Syntax highlighting, search, save. Auto-refreshes when files change externally. Works offline.
 
 **Claude Code** — just type `claude`. Tidey automatically tracks status (Running / Idle / Needs input), shows notifications when Claude finishes or needs your attention, and sets the workspace title. Works in tmux too.
 
-**Layout** — sidebar, terminal, editor, and file tree are all independently collapsible and resizable. Built on iTerm2's terminal emulation.
+**Layout** — sidebar, terminal, editor, and file tree are all independently collapsible and resizable. File tree auto-updates on changes. Built on iTerm2's terminal emulation.
 
 ## Keyboard Shortcuts
 
@@ -53,15 +53,16 @@ Requires Xcode, [rustup](https://rustup.rs), and Homebrew.
 | Show/Hide Terminal | ⇧⌘T |
 | Show/Hide File Tree | ⌃⌘F |
 | Find in Editor | ⌘F |
+| Switch Panel / Editor Tab | ⌃1–⌃9 |
 | Save | ⌘S |
 | Reset Layout | double-click any divider |
 
-Hold ⌘ for a moment to see shortcut hints on toggle buttons.
+Hold ⌘ for a moment to see shortcut hints on toggle buttons and panel tabs.
 
 ## Documentation
 
 - [Socket API](docs/socket-api.md) — for agent developers integrating with Tidey
-- [Known Limitations](docs/known-limitations.md)
+- [Debug Lessons](docs/debug-lessons.md) — pitfalls and solutions discovered during development
 
 ## Credits
 
