@@ -2992,6 +2992,7 @@ static iTermKeyEventReplayer *gReplayer;
         return;
     }
 
+    // Keep this list in sync with README.md's Tidey keyboard shortcuts table.
     NSArray<NSArray<NSString *> *> *shortcuts = @[
         @[@"New Workspace",          @"\u2318N"],
         @[@"New Panel",              @"\u2318T"],
