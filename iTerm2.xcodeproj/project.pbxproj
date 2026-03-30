@@ -1014,6 +1014,7 @@
 		F0A10D1E3A28000100000015 /* iTermLayoutCalculatorTideyTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000014 /* iTermLayoutCalculatorTideyTests.m */; };
 		F0A10D1E3A30000100000001 /* TideyCmdLongPressPanelHintsTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A30000100000000 /* TideyCmdLongPressPanelHintsTests.m */; };
 		F0A10D1E3A31000100000001 /* TideyEditorFileTreeWatcherTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A31000100000000 /* TideyEditorFileTreeWatcherTests.m */; };
+		F0A10D1E3A32000100000001 /* TideyEditorExternalChangeTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A32000100000000 /* TideyEditorExternalChangeTests.m */; };
 		A603E9FB283EE53C0028B648 /* SecretServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A603E9FA283EE53C0028B648 /* SecretServer.swift */; };
 		A603E9FE283EE9BD0028B648 /* ObjCExceptions.h in Headers */ = {isa = PBXBuildFile; fileRef = A603E9FC283EE9BD0028B648 /* ObjCExceptions.h */; };
 		A603E9FF283EE9BD0028B648 /* ObjCExceptions.m in Sources */ = {isa = PBXBuildFile; fileRef = A603E9FD283EE9BD0028B648 /* ObjCExceptions.m */; };
@@ -4899,6 +4900,8 @@
 		A7B100112F0A000100000001 /* TideyNotificationStore.m in Sources */ = {isa = PBXBuildFile; fileRef = A7B100022F0A000100000001 /* TideyNotificationStore.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
 		A7B100122F0A000100000001 /* TideySocketConnection.m in Sources */ = {isa = PBXBuildFile; fileRef = A7B100042F0A000100000001 /* TideySocketConnection.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
 		A7B100132F0A000100000001 /* TideySocketServer.m in Sources */ = {isa = PBXBuildFile; fileRef = A7B100062F0A000100000001 /* TideySocketServer.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		A7B100142F0A000100000001 /* TideyEditorExternalChangeWatcher.h in Headers */ = {isa = PBXBuildFile; fileRef = A7B100072F0A000100000001 /* TideyEditorExternalChangeWatcher.h */; };
+		A7B100152F0A000100000001 /* TideyEditorExternalChangeWatcher.m in Sources */ = {isa = PBXBuildFile; fileRef = A7B100082F0A000100000001 /* TideyEditorExternalChangeWatcher.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
 		F0A10D1E3A2800010000000F /* TideySocketCommandDecoder.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A2800010000000E /* TideySocketCommandDecoder.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
 		F0A10D1E3A28000100000011 /* TideySocketCommandDecoderTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000010 /* TideySocketCommandDecoderTests.m */; };
 		A6F7A707213CB143004DE961 /* StatusBarIconUser.png in Resources */ = {isa = PBXBuildFile; fileRef = A6F7A6EF213CB13D004DE961 /* StatusBarIconUser.png */; };
@@ -6403,6 +6406,7 @@
 		F0A10D1E3A28000100000014 /* iTermLayoutCalculatorTideyTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = iTermLayoutCalculatorTideyTests.m; sourceTree = "<group>"; };
 		F0A10D1E3A30000100000000 /* TideyCmdLongPressPanelHintsTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyCmdLongPressPanelHintsTests.m; sourceTree = "<group>"; };
 		F0A10D1E3A31000100000000 /* TideyEditorFileTreeWatcherTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyEditorFileTreeWatcherTests.m; sourceTree = "<group>"; };
+		F0A10D1E3A32000100000000 /* TideyEditorExternalChangeTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyEditorExternalChangeTests.m; sourceTree = "<group>"; };
 		A603E9FA283EE53C0028B648 /* SecretServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecretServer.swift; sourceTree = "<group>"; };
 		A603E9FC283EE9BD0028B648 /* ObjCExceptions.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ObjCExceptions.h; sourceTree = "<group>"; };
 		A603E9FD283EE9BD0028B648 /* ObjCExceptions.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = ObjCExceptions.m; sourceTree = "<group>"; };
@@ -9020,6 +9024,8 @@
 		A7B100042F0A000100000001 /* TideySocketConnection.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySocketConnection.m; sourceTree = "<group>"; };
 		A7B100052F0A000100000001 /* TideySocketServer.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideySocketServer.h; sourceTree = "<group>"; };
 		A7B100062F0A000100000001 /* TideySocketServer.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySocketServer.m; sourceTree = "<group>"; };
+		A7B100072F0A000100000001 /* TideyEditorExternalChangeWatcher.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyEditorExternalChangeWatcher.h; sourceTree = "<group>"; };
+		A7B100082F0A000100000001 /* TideyEditorExternalChangeWatcher.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyEditorExternalChangeWatcher.m; sourceTree = "<group>"; };
 		F0A10D1E3A2800010000000D /* TideySocketCommandDecoder.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideySocketCommandDecoder.h; sourceTree = "<group>"; };
 		F0A10D1E3A2800010000000E /* TideySocketCommandDecoder.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySocketCommandDecoder.m; sourceTree = "<group>"; };
 		A6F7A6EF213CB13D004DE961 /* StatusBarIconUser.png */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; name = StatusBarIconUser.png; path = images/StatusBarIcons/StatusBarIconUser.png; sourceTree = "<group>"; };
@@ -11789,6 +11795,8 @@
 				A7B100022F0A000100000001 /* TideyNotificationStore.m */,
 				A7B100032F0A000100000001 /* TideySocketConnection.h */,
 				A7B100042F0A000100000001 /* TideySocketConnection.m */,
+				A7B100072F0A000100000001 /* TideyEditorExternalChangeWatcher.h */,
+				A7B100082F0A000100000001 /* TideyEditorExternalChangeWatcher.m */,
 				F0A10D1E3A2800010000000D /* TideySocketCommandDecoder.h */,
 				F0A10D1E3A2800010000000E /* TideySocketCommandDecoder.m */,
 				A7B100052F0A000100000001 /* TideySocketServer.h */,
@@ -13632,6 +13640,7 @@
 				F0A10D1E3A28000100000010 /* TideySocketCommandDecoderTests.m */,
 				F0A10D1E3A30000100000000 /* TideyCmdLongPressPanelHintsTests.m */,
 				F0A10D1E3A31000100000000 /* TideyEditorFileTreeWatcherTests.m */,
+				F0A10D1E3A32000100000000 /* TideyEditorExternalChangeTests.m */,
 			);
 			path = iTerm2XCTests;
 			sourceTree = "<group>";
@@ -15404,6 +15413,7 @@
 			files = (
 				A626DF0B217D3034005600F9 /* iTermTabBarAccessoryViewController.h in Headers */,
 				A667190A1DCE36C3000CE608 /* iTermRootTerminalView.h in Headers */,
+				A7B100142F0A000100000001 /* TideyEditorExternalChangeWatcher.h in Headers */,
 				D5EF7F4036204859817200E0 /* iTermLayoutCalculator.h in Headers */,
 				A667190B1DCE36C3000CE608 /* iTermCarbonHotKeyController.h in Headers */,
 				A6E7352A20EBF3270034FCFD /* iTermSetCurrentTerminalHelper.h in Headers */,
@@ -19239,6 +19249,7 @@
 				A691693B2813458F00083F99 /* PortholeFactory.swift in Sources */,
 				A7B100112F0A000100000001 /* TideyNotificationStore.m in Sources */,
 				A7B100122F0A000100000001 /* TideySocketConnection.m in Sources */,
+				A7B100152F0A000100000001 /* TideyEditorExternalChangeWatcher.m in Sources */,
 				F0A10D1E3A2800010000000F /* TideySocketCommandDecoder.m in Sources */,
 				A7B100132F0A000100000001 /* TideySocketServer.m in Sources */,
 				A62C8FC3248033C000E22E95 /* iTermTmuxJobManager.m in Sources */,
@@ -20458,6 +20469,7 @@
 				F0A10D1E3A28000100000011 /* TideySocketCommandDecoderTests.m in Sources */,
 				F0A10D1E3A30000100000001 /* TideyCmdLongPressPanelHintsTests.m in Sources */,
 				F0A10D1E3A31000100000001 /* TideyEditorFileTreeWatcherTests.m in Sources */,
+				F0A10D1E3A32000100000001 /* TideyEditorExternalChangeTests.m in Sources */,
 				A608CD08214DE7C1007A7B87 /* iTermTextExtractorTest.m in Sources */,
 				A608CD0D214DE7C1007A7B87 /* iTermFunctionCallSuggesterTest.m in Sources */,
 				A6F22AC22396374500C5D1A9 /* iTermSyntheticConfParserTests.m in Sources */,

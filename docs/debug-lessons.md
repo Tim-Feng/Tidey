@@ -97,6 +97,8 @@ candidate view 各染一個 debug 顏色。frame / hidden / selected state 寫 l
 
 **file tree 的寬度修法很容易把 indentation 和 disclosure 一起打壞。** 這題先後出過「把 column 鎖死」和「直接改 outline 寬度」兩種修法，結果縮排消失、箭頭疊字，後來還得整包 revert。安全邊界比較小的做法是：保留 outline 自己的層級與 disclosure 行為，處理 label truncation 和 horizontal scroll，不要第一刀就改 column geometry。→ `sources/iTermRootTerminalView.m:newTideyEditorFileTreeCellView / layoutTideyEditorContents`
 
+**不要在 test host 直接初始化 `iTermRootTerminalView`。** 這次 external change detection 一開始的 tests 直接 new `iTermRootTerminalView`，結果 designated init 途中會載入 app bundle 內的 image resource；在 test host 下 image 是 `nil`，最後炸 `NSInternalInconsistencyException: Invalid parameter not satisfying: image != nil`。例外有時被測試框架吞掉，表面上只看到後續 method 全部回 `nil`。這類邏輯不要硬測整個 root view，先抽成 standalone helper class；如果真的要留在 view 上，test subclass 也只能 override feature 相關 seam，不能依賴完整 view init。→ `sources/iTermRootTerminalView.m`、`sources/TideyEditorExternalChangeWatcher.m`
+
 ### Socket API / Notifications
 
 **`workspace_id` 缺失時，state update 要 fail closed。** notification 可以選擇 broadcast，但 shell state / Claude 狀態如果在 `workspace_id` 空白時落到 broadcast，所有 workspace 都會被一起污染。這題後來明確切開：`notification.create` 可以 broadcast；`report_shell_state` / `set_status` 這類狀態更新沒有 workspace id 就直接丟掉。→ `sources/TideySocketServer.m`、`sources/TideyCLI/main.swift`

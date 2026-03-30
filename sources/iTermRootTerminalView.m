@@ -14,6 +14,7 @@
 
 #import "NSAppearance+iTerm.h"
 #import "NSEvent+iTerm.h"
+#import "NSFileManager+iTerm.h"
 #import "NSImage+iTerm.h"
 #import "NSObject+iTerm.h"
 #import "NSTextField+iTerm.h"
@@ -26,6 +27,7 @@
 #import "iTermAdvancedSettingsModel.h"
 #import "iTermApplication.h"
 #import "iTermDragHandleView.h"
+#import "TideyEditorExternalChangeWatcher.h"
 #import "iTermFakeWindowTitleLabel.h"
 #import "iTermGenericStatusBarContainer.h"
 #import "iTermImageView.h"
@@ -223,6 +225,13 @@ static NSRect TideyPanelShortcutHintFrameForAnchorRect(NSRect anchorRect) {
 - (void)tideyEditorSetValue:(NSString *)content;
 - (void)tideyEditorSetLanguage:(NSString *)language;
 - (void)tideyEditorSetEditable:(BOOL)editable;
+- (TideyEditorExternalChangeWatcher *)tideyEditorExternalChangeWatcher;
+- (NSString *)tideyCurrentEditorWatchablePath;
+- (id)tideyStartWatchingEditorFileAtPath:(NSString *)path;
+- (void)tideyStopWatchingEditorFileWithToken:(id)token;
+- (void)tideyStopWatchingCurrentEditorFile;
+- (void)tideySyncCurrentEditorFileWatcher;
+- (void)tideyHandleCurrentEditorFileDidChange;
 - (void)tideyEditorApplyPendingStateIfReady;
 - (void)tideyEditorDidBecomeReady;
 - (void)tideyEditorDidReceiveScriptMessage:(WKScriptMessage *)message;
@@ -739,6 +748,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSString *_tideyEditorPendingLanguage;
     NSNumber *_tideyEditorPendingEditable;
     NSString *_tideyEditorLoadedPath;
+    TideyEditorExternalChangeWatcher *_tideyEditorExternalChangeWatcher;
     NSString *_tideyEditorCurrentRootPath;
     SCEvents *_tideyEditorFileTreeWatcher;
     NSString *_tideyEditorFileTreeWatchedRootPath;
@@ -1472,6 +1482,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     [[NSNotificationCenter defaultCenter] removeObserver:self
                                                     name:NSApplicationDidBecomeActiveNotification
                                                   object:nil];
+    [self tideyStopWatchingCurrentEditorFile];
     [self tideyStopWatchingEditorFileTree];
     _tabBarControl.itermTabBarDelegate = nil;
     _tabBarControl.delegate = nil;
@@ -2954,6 +2965,65 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     return _tideyEditorTabs[_tideySelectedEditorTabIndex];
 }
 
+- (NSString *)tideyCurrentEditorWatchablePath {
+    TideyEditorTab *tab = [self tideyCurrentEditorTab];
+    NSString *path = [[tab.path ?: @"" stringByStandardizingPath] copy];
+    if (path.length == 0) {
+        return nil;
+    }
+    BOOL isDirectory = NO;
+    if (![[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&isDirectory] || isDirectory) {
+        return nil;
+    }
+    return path;
+}
+
+- (TideyEditorExternalChangeWatcher *)tideyEditorExternalChangeWatcher {
+    if (!_tideyEditorExternalChangeWatcher) {
+        _tideyEditorExternalChangeWatcher = [[TideyEditorExternalChangeWatcher alloc] init];
+        __weak __typeof(self) weakSelf = self;
+        _tideyEditorExternalChangeWatcher.startWatching = ^id(NSString *path) {
+            return [weakSelf tideyStartWatchingEditorFileAtPath:path];
+        };
+        _tideyEditorExternalChangeWatcher.stopWatching = ^(id token) {
+            [weakSelf tideyStopWatchingEditorFileWithToken:token];
+        };
+    }
+    return _tideyEditorExternalChangeWatcher;
+}
+
+- (id)tideyStartWatchingEditorFileAtPath:(NSString *)path {
+    __weak __typeof(self) weakSelf = self;
+    return [[NSFileManager defaultManager] monitorFile:path block:^(long flags) {
+        [weakSelf tideyHandleCurrentEditorFileDidChange];
+    }];
+}
+
+- (void)tideyStopWatchingEditorFileWithToken:(id)token {
+    [[NSFileManager defaultManager] stopMonitoringFileWithToken:token];
+}
+
+- (void)tideyStopWatchingCurrentEditorFile {
+    [[self tideyEditorExternalChangeWatcher] stopWatchingCurrentPath];
+}
+
+- (void)tideySyncCurrentEditorFileWatcher {
+    [[self tideyEditorExternalChangeWatcher] syncToPath:[self tideyCurrentEditorWatchablePath]];
+}
+
+- (void)tideyHandleCurrentEditorFileDidChange {
+    TideyEditorTab *tab = [self tideyCurrentEditorTab];
+    NSString *path = [self tideyCurrentEditorWatchablePath];
+    [[self tideyEditorExternalChangeWatcher] handleExternalChangeForPath:path
+                                                                   dirty:tab.dirty
+                                                          currentContent:tab.content
+                                                               didReload:^(NSString *contents) {
+        tab.content = contents;
+        [self tideyEditorSetValue:contents];
+        [self tideyPersistEditorState];
+    }];
+}
+
 - (NSString *)tideyEditorDisplayNameForPath:(NSString *)path {
     NSString *name = path.lastPathComponent;
     return name.length > 0 ? name : @"Untitled";
@@ -3050,6 +3120,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     _tideySelectedEditorTabIndex = index;
     TideyEditorTab *tab = _tideyEditorTabs[index];
     _tideyEditorLoadedPath = [tab.path copy];
+    [self tideySyncCurrentEditorFileWatcher];
     [self reloadTideyEditorTabs];
     [self syncTideyEditorFileTreeRootIfNeeded];
     [self tideyEditorSetLanguage:tab.language ?: @"plaintext"];
@@ -3069,6 +3140,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _tideySelectedEditorTabIndex = -1;
         _tideyEditorLoadedPath = nil;
         _tideyEditorRootOverridePath = nil;
+        [self tideyStopWatchingCurrentEditorFile];
         [self reloadTideyEditorFileTree];
         [self reloadTideyEditorTabs];
         [self tideyUpdateEditorPlaceholder];
@@ -3456,6 +3528,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         return NO;
     }
     tab.dirty = NO;
+    [self tideySyncCurrentEditorFileWatcher];
     [self reloadTideyEditorTabs];
     [self tideyPersistEditorState];
     return YES;
