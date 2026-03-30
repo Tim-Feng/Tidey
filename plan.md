@@ -1,0 +1,6 @@
+| type | test | seam | minimal change | commit kind | status |
+| --- | --- | --- | --- | --- | --- |
+| structural | `CmdLongPressPanelHints/*` | terminal panel tabs are rendered through `PSMTabBarControl` drawing, with no stable testable hint hook yet | introduce a stable hint seam for panel tabs that tests can inspect without depending on AppKit's draw-only tab styling internals | STRUCTURAL | pass |
+| behavior | `TideyCmdLongPressPanelHintsTests/testUpdatePanelShortcutHintsShowsCtrlNumberHintsOnVisibleEditorTabs` | existing Tidey editor tab strip in `iTermRootTerminalView` | when `_tideyShowingShortcutHints` is true, show `⌃1..⌃9` hint views on visible editor tabs and hide them otherwise | BEHAVIORAL | pass |
+| behavior | `TideyCmdLongPressPanelHintsTests/testUpdatePanelShortcutHintsShowsCtrlNumberHintsOnVisibleTerminalPanels` | terminal workspace panels after structural hint seam exists | when `_tideyShowingShortcutHints` is true, show `⌃1..⌃9` hint views on visible terminal panel tabs and hide them otherwise | BEHAVIORAL | pass |
+| behavior | `TideyCmdLongPressPanelHintsTests/testDismissShortcutHintsHidesPanelHintViews` | shared show/dismiss path already exists in `tideyScheduleShowShortcutHints` / `tideyDismissShortcutHints` | panel hints follow the same delayed show and dismiss lifecycle as existing sidebar/chrome hints | BEHAVIORAL | pass |
