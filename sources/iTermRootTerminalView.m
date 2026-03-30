@@ -39,6 +39,9 @@
 #import "iTermWindowShortcutLabelTitlebarAccessoryViewController.h"
 #import "iTermWindowSizeView.h"
 #import "NSJSONSerialization+iTerm.h"
+#import "SCEvent.h"
+#import "SCEventListenerProtocol.h"
+#import "SCEvents.h"
 #import "TideyNotificationStore.h"
 
 #import <WebKit/WebKit.h>
@@ -174,6 +177,7 @@ static NSRect TideyPanelShortcutHintFrameForAnchorRect(NSRect anchorRect) {
     NSTableViewDelegate,
     NSOutlineViewDataSource,
     NSOutlineViewDelegate,
+    SCEventListenerProtocol,
     WKNavigationDelegate>
 
 @property(nonatomic, strong) PTYTabView *tabView;
@@ -224,6 +228,12 @@ static NSRect TideyPanelShortcutHintFrameForAnchorRect(NSRect anchorRect) {
 - (void)tideyEditorDidReceiveScriptMessage:(WKScriptMessage *)message;
 - (NSString *)tideyEditorHTML;
 - (void)reloadTideyEditorFileTree;
+- (NSString *)tideyEditorFileTreeWatchRootPath;
+- (void)tideySyncEditorFileTreeWatcher;
+- (void)tideyStopWatchingEditorFileTree;
+- (void)tideyHandleEditorFileTreeRootDidChange;
+- (NSArray<NSString *> *)tideyEditorFileTreeExpandedPaths;
+- (void)tideyRestoreEditorFileTreeExpandedPaths:(NSArray<NSString *> *)expandedPaths;
 - (NSString *)tideyEditorFileTreeRootPath;
 - (void)layoutTideyEditorContents;
 - (NSTableCellView *)newTideyEditorFileTreeCellView;
@@ -730,6 +740,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSNumber *_tideyEditorPendingEditable;
     NSString *_tideyEditorLoadedPath;
     NSString *_tideyEditorCurrentRootPath;
+    SCEvents *_tideyEditorFileTreeWatcher;
+    NSString *_tideyEditorFileTreeWatchedRootPath;
     NSString *_tideyEditorRootOverridePath;
     NSMutableArray<TideyEditorTab *> *_tideyEditorTabs;
     NSInteger _tideySelectedEditorTabIndex;
@@ -1460,6 +1472,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     [[NSNotificationCenter defaultCenter] removeObserver:self
                                                     name:NSApplicationDidBecomeActiveNotification
                                                   object:nil];
+    [self tideyStopWatchingEditorFileTree];
     _tabBarControl.itermTabBarDelegate = nil;
     _tabBarControl.delegate = nil;
     _leftTabBarDragHandle.delegate = nil;
@@ -1468,6 +1481,15 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     _tideyEditorFileTreeDragHandle.delegate = nil;
     [_tideyEditorWebView.configuration.userContentController removeScriptMessageHandlerForName:@"tideyEditorReady"];
     _tideyEditorWebView.navigationDelegate = nil;
+}
+
+- (void)pathWatcher:(SCEvents *)pathWatcher eventOccurred:(SCEvent *)event {
+    if (pathWatcher != _tideyEditorFileTreeWatcher) {
+        return;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self tideyHandleEditorFileTreeRootDidChange];
+    });
 }
 
 - (void)setDelegate:(id<iTermRootTerminalViewDelegate>)delegate {
@@ -2715,6 +2737,108 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     [defaults setBool:_shouldShowTideyTerminal forKey:kTideyTerminalVisibleDefaultsKey];
 }
 
+- (NSString *)tideyEditorFileTreeWatchRootPath {
+    if (!_shouldShowTideyEditorPanel || !_shouldShowTideyEditorFileTree) {
+        return nil;
+    }
+    NSString *rootPath = [[self tideyEditorFileTreeRootPath] stringByStandardizingPath];
+    BOOL isDirectory = NO;
+    if (rootPath.length == 0 ||
+        ![[NSFileManager defaultManager] fileExistsAtPath:rootPath isDirectory:&isDirectory] ||
+        !isDirectory) {
+        return nil;
+    }
+    return rootPath;
+}
+
+- (void)tideyStopWatchingEditorFileTree {
+    if (_tideyEditorFileTreeWatcher && _tideyEditorFileTreeWatchedRootPath.length > 0) {
+        [_tideyEditorFileTreeWatcher stopWatchingPaths];
+        _tideyEditorFileTreeWatcher.delegate = nil;
+    }
+    _tideyEditorFileTreeWatchedRootPath = nil;
+}
+
+- (void)tideySyncEditorFileTreeWatcher {
+    NSString *rootPath = [self tideyEditorFileTreeWatchRootPath];
+    if (rootPath.length == 0) {
+        [self tideyStopWatchingEditorFileTree];
+        return;
+    }
+    if ([_tideyEditorFileTreeWatchedRootPath isEqualToString:rootPath]) {
+        return;
+    }
+    if (!_tideyEditorFileTreeWatcher) {
+        _tideyEditorFileTreeWatcher = [[SCEvents alloc] init];
+        _tideyEditorFileTreeWatcher.notificationLatency = 0.2;
+    } else if (_tideyEditorFileTreeWatchedRootPath.length > 0) {
+        [_tideyEditorFileTreeWatcher stopWatchingPaths];
+    }
+    _tideyEditorFileTreeWatcher.delegate = (id<NSObject, SCEventListenerProtocol>)self;
+    [_tideyEditorFileTreeWatcher startWatchingPaths:@[ rootPath ]];
+    _tideyEditorFileTreeWatchedRootPath = [rootPath copy];
+}
+
+- (NSArray<NSString *> *)tideyEditorFileTreeExpandedPaths {
+    if (!_tideyEditorFileTreeView) {
+        return @[];
+    }
+    NSMutableArray<NSString *> *expandedPaths = [NSMutableArray array];
+    for (NSInteger row = 0; row < _tideyEditorFileTreeView.numberOfRows; row++) {
+        TideyEditorFileNode *node = [_tideyEditorFileTreeView itemAtRow:row];
+        if (![node isKindOfClass:[TideyEditorFileNode class]]) {
+            continue;
+        }
+        if (node.directory && [_tideyEditorFileTreeView isItemExpanded:node]) {
+            [expandedPaths addObject:node.path];
+        }
+    }
+    return expandedPaths;
+}
+
+- (void)tideyRestoreEditorFileTreeExpandedPaths:(NSArray<NSString *> *)expandedPaths {
+    NSString *rootPath = [[self tideyEditorFileTreeRootPath] stringByStandardizingPath];
+    if (rootPath.length == 0 || !_tideyEditorFileTreeRootNode) {
+        return;
+    }
+    for (NSString *path in expandedPaths) {
+        NSString *normalizedPath = [path stringByStandardizingPath];
+        if (![normalizedPath hasPrefix:[rootPath stringByAppendingString:@"/"]]) {
+            continue;
+        }
+        NSString *relativePath = [normalizedPath substringFromIndex:[rootPath stringByAppendingString:@"/"].length];
+        NSArray<NSString *> *components = relativePath.length > 0 ? [relativePath pathComponents] : @[];
+        TideyEditorFileNode *currentNode = _tideyEditorFileTreeRootNode;
+        NSString *currentPath = rootPath;
+        for (NSString *component in components) {
+            NSString *nextPath = [currentPath stringByAppendingPathComponent:component];
+            TideyEditorFileNode *nextNode = [self tideyEditorChildNodeAtPath:nextPath
+                                                                       named:component
+                                                                   inParent:currentNode];
+            if (!nextNode || !nextNode.directory) {
+                break;
+            }
+            [_tideyEditorFileTreeView expandItem:nextNode];
+            currentNode = nextNode;
+            currentPath = nextPath;
+        }
+    }
+}
+
+- (void)tideyHandleEditorFileTreeRootDidChange {
+    NSArray<NSString *> *expandedPaths = [self tideyEditorFileTreeExpandedPaths];
+    NSString *selectedPath = nil;
+    if (_tideyEditorFileTreeView.selectedRow >= 0) {
+        TideyEditorFileNode *selectedNode = [_tideyEditorFileTreeView itemAtRow:_tideyEditorFileTreeView.selectedRow];
+        selectedPath = selectedNode.path;
+    }
+    [self reloadTideyEditorFileTree];
+    [self tideyRestoreEditorFileTreeExpandedPaths:expandedPaths];
+    if (selectedPath.length > 0) {
+        [self tideyEditorRevealFileAtPath:selectedPath];
+    }
+}
+
 - (void)reloadTideyEditorFileTree {
     NSString *rootPath = [self tideyEditorFileTreeRootPath];
     BOOL isDirectory = NO;
@@ -2723,6 +2847,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                          displayName:rootPath.lastPathComponent
                                                            directory:isDirectory];
     _tideyEditorCurrentRootPath = [rootPath copy];
+    [self tideySyncEditorFileTreeWatcher];
     [_tideyEditorFileTreeView reloadData];
     [self constrainTideyEditorFileTreeToVisibleWidth];
     [self tideyPersistEditorState];
@@ -2756,6 +2881,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 - (void)layoutTideyEditorContents {
     if (_tideyEditorPanelView.hidden) {
+        [self tideySyncEditorFileTreeWatcher];
         [self updateTideyChromeToggleButtons];
         return;
     }
@@ -2772,6 +2898,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     _tideyEditorFileTreeContainerView.hidden = !self.shouldShowTideyEditorFileTree;
     _tideyEditorFileTreeContainerView.frame = NSMakeRect(editorWidth, 0, fileTreeWidth, contentHeight);
     _tideyEditorFileTreeScrollView.frame = _tideyEditorFileTreeContainerView.bounds;
+    [self tideySyncEditorFileTreeWatcher];
     [self constrainTideyEditorFileTreeToVisibleWidth];
     self.tideyEditorFileTreeDragHandle.frame = NSMakeRect(MAX(0, editorWidth - kTideyDragHandleWidth / 2.0),
                                                           0,
