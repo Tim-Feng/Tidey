@@ -378,6 +378,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSInteger _tideyHoveredRow;
 }
 @property(nonatomic, weak) id<TideySidebarCloseAction> tideyCloseActionTarget;
+- (BOOL)tideyShouldShowCloseButtonForRow:(NSInteger)row;
 - (void)updateTideyCloseButtonVisibility;
 @end
 
@@ -446,6 +447,23 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     }
 }
 
+- (NSInteger)tideyHoveredRowForCurrentMouseLocation {
+    if (!self.window) {
+        return -1;
+    }
+    NSPoint point = [self convertPoint:self.window.mouseLocationOutsideOfEventStream fromView:nil];
+    if (!NSPointInRect(point, self.bounds)) {
+        return -1;
+    }
+    NSInteger row = [self rowAtPoint:point];
+    return (row >= 0) ? row : -1;
+}
+
+- (BOOL)tideyShouldShowCloseButtonForRow:(NSInteger)row {
+    _tideyHoveredRow = [self tideyHoveredRowForCurrentMouseLocation];
+    return (row >= 0 && row == _tideyHoveredRow);
+}
+
 - (NSRect)tideyCloseRectForRow:(NSInteger)row {
     NSTableCellView *cellView = [self viewAtColumn:0 row:row makeIfNecessary:NO];
     NSView *closeView = TideyFindCloseView(cellView);
@@ -460,6 +478,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 
 - (void)updateTideyCloseButtonVisibility {
+    _tideyHoveredRow = [self tideyHoveredRowForCurrentMouseLocation];
     NSRange rows = [self rowsInRect:self.visibleRect];
     NSInteger limit = NSMaxRange(rows);
     for (NSInteger row = rows.location; row < limit; row++) {
@@ -4872,8 +4891,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
         NSView *closeView = TideyFindCloseView(cellView);
         closeView.frame = NSMakeRect(MAX(0, width - 20), 49 + sOff, 16, 16);
-        closeView.hidden = YES;
-        closeView.alphaValue = 0.0;
+        BOOL showClose = ([_tideySidebarTableView isKindOfClass:[TideySidebarTableView class]] &&
+                          [(TideySidebarTableView *)_tideySidebarTableView tideyShouldShowCloseButtonForRow:row]);
+        closeView.hidden = !showClose;
+        closeView.alphaValue = showClose ? 1.0 : 0.0;
 
         // --- Notification body (middle, up to 2 lines) ---
         NSString *bodyText = anyNotification.body;
@@ -4924,8 +4945,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         NSView *closeView = TideyFindCloseView(cellView);
         CGFloat closeY = titleY + 1;  // align with title center
         closeView.frame = NSMakeRect(MAX(0, width - 20), closeY, 16, 16);
-        closeView.hidden = YES;
-        closeView.alphaValue = 0.0;
+        BOOL showClose = ([_tideySidebarTableView isKindOfClass:[TideySidebarTableView class]] &&
+                          [(TideySidebarTableView *)_tideySidebarTableView tideyShouldShowCloseButtonForRow:row]);
+        closeView.hidden = !showClose;
+        closeView.alphaValue = showClose ? 1.0 : 0.0;
     }
 
     // Configure status field at the bottom of the cell.
@@ -5411,6 +5434,11 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     [_tideySidebarTableView reloadData];
     [self syncTideySidebarSelection];
     [self layoutTideySidebar];
+    if ([_tideySidebarTableView isKindOfClass:[TideySidebarTableView class]]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [(TideySidebarTableView *)self->_tideySidebarTableView updateTideyCloseButtonVisibility];
+        });
+    }
 }
 
 - (void)tableViewSelectionDidChange:(NSNotification *)notification {
@@ -5428,6 +5456,11 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     }
     [self.delegate rootTerminalViewSelectTideySidebarWorkspaceAtIndex:selectedRow];
     [_tideySidebarTableView setNeedsDisplay:YES];
+    if ([_tideySidebarTableView isKindOfClass:[TideySidebarTableView class]]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [(TideySidebarTableView *)self->_tideySidebarTableView updateTideyCloseButtonVisibility];
+        });
+    }
 }
 
 - (void)layoutIfStatusBarChanged {
