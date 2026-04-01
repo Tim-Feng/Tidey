@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tidey — Terminal-First IDE for AI Agents</title>
+  <meta name="description" content="A terminal-first IDE for AI agents on macOS. Run agents in workspaces, edit code side by side, see what each agent is doing.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;1,6..72,300;1,6..72,400&family=DM+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0c1117;
+      --bg-surface: #111920;
+      --accent: #3A8FD6;
+      --accent-dim: rgba(58, 143, 214, 0.08);
+      --accent-glow: rgba(58, 143, 214, 0.15);
+      --text: #d8e0ea;
+      --text-muted: #7b8a9c;
+      --text-faint: #4a5568;
+      --border: rgba(255, 255, 255, 0.06);
+      --serif: 'Newsreader', 'Georgia', serif;
+      --sans: 'DM Sans', -apple-system, sans-serif;
+      --mono: 'JetBrains Mono', 'SF Mono', monospace;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: var(--sans);
+      color: var(--text);
+      background: var(--bg);
+      line-height: 1.65;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* Subtle depth — a single soft glow behind the hero */
+    body::before {
+      content: '';
+      position: fixed;
+      top: -20vh;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 800px;
+      height: 600px;
+      background: radial-gradient(ellipse, var(--accent-glow), transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .page {
+      position: relative;
+      z-index: 1;
+      max-width: 640px;
+      margin: 0 auto;
+      padding: 0 28px;
+    }
+
+    /* ─── Hero ─── */
+    .hero {
+      padding: 96px 0 56px;
+      text-align: center;
+    }
+
+    .hero-icon {
+      width: 88px;
+      height: 88px;
+      margin: 0 auto 28px;
+      filter: drop-shadow(0 4px 24px rgba(58, 143, 214, 0.2));
+      animation: float 6s ease-in-out infinite;
+    }
+
+    @keyframes float {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-6px); }
+    }
+
+    .hero h1 {
+      font-family: var(--serif);
+      font-size: 3rem;
+      font-weight: 300;
+      letter-spacing: -0.03em;
+      margin-bottom: 16px;
+      color: #fff;
+    }
+
+    .hero .tagline {
+      font-family: var(--serif);
+      font-size: 1.15rem;
+      font-weight: 300;
+      font-style: italic;
+      color: var(--text-muted);
+      max-width: 420px;
+      margin: 0 auto 40px;
+      line-height: 1.5;
+    }
+
+    .cta {
+      display: inline-block;
+      background: var(--accent);
+      color: #fff;
+      padding: 13px 36px;
+      border-radius: 8px;
+      font-family: var(--sans);
+      font-size: 0.9rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      text-decoration: none;
+      transition: all 0.2s ease;
+      box-shadow: 0 2px 16px rgba(58, 143, 214, 0.25);
+    }
+    .cta:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 24px rgba(58, 143, 214, 0.35);
+    }
+
+    .cta-note {
+      display: block;
+      margin-top: 12px;
+      font-size: 0.75rem;
+      color: var(--text-faint);
+      letter-spacing: 0.04em;
+    }
+
+    /* ─── Screenshot ─── */
+    .screenshot {
+      padding: 0 0 72px;
+    }
+    .screenshot-frame {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 80px 24px;
+      text-align: center;
+      color: var(--text-faint);
+      font-size: 0.85rem;
+      font-style: italic;
+    }
+
+    /* ─── Divider ─── */
+    .divider {
+      height: 1px;
+      background: var(--border);
+      margin: 0;
+    }
+
+    /* ─── Features ─── */
+    .features {
+      padding: 64px 0;
+    }
+
+    .features-label {
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      color: var(--accent);
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      margin-bottom: 40px;
+    }
+
+    .feature {
+      margin-bottom: 48px;
+      padding-left: 20px;
+      border-left: 2px solid var(--accent-dim);
+      transition: border-color 0.3s ease;
+    }
+    .feature:hover {
+      border-left-color: var(--accent);
+    }
+    .feature:last-child { margin-bottom: 0; }
+
+    .feature h3 {
+      font-family: var(--serif);
+      font-size: 1.25rem;
+      font-weight: 400;
+      color: #fff;
+      margin-bottom: 8px;
+    }
+
+    .feature p {
+      font-size: 0.92rem;
+      color: var(--text-muted);
+      line-height: 1.7;
+    }
+
+    /* ─── Shortcuts ─── */
+    .shortcuts {
+      padding: 64px 0;
+    }
+
+    .shortcuts-label {
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      color: var(--accent);
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      margin-bottom: 28px;
+    }
+
+    .shortcuts-grid {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 0;
+      font-size: 0.88rem;
+    }
+
+    .shortcuts-grid .action,
+    .shortcuts-grid .key {
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .shortcuts-grid .action {
+      color: var(--text-muted);
+    }
+
+    .shortcuts-grid .key {
+      text-align: right;
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      color: var(--text-faint);
+    }
+
+    .shortcuts-hint {
+      margin-top: 20px;
+      font-size: 0.78rem;
+      color: var(--text-faint);
+      font-style: italic;
+    }
+
+    /* ─── Footer ─── */
+    .footer {
+      padding: 56px 0 64px;
+      text-align: center;
+      font-size: 0.8rem;
+      color: var(--text-faint);
+      line-height: 1.8;
+    }
+    .footer a {
+      color: var(--text-muted);
+      text-decoration: none;
+      border-bottom: 1px solid var(--border);
+      transition: color 0.2s, border-color 0.2s;
+    }
+    .footer a:hover {
+      color: var(--text);
+      border-bottom-color: var(--text-muted);
+    }
+    .footer .credits {
+      margin-bottom: 8px;
+    }
+
+    /* ─── Scroll reveal ─── */
+    .reveal {
+      opacity: 0;
+      transform: translateY(16px);
+      transition: opacity 0.6s ease, transform 0.6s ease;
+    }
+    .reveal.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    /* ─── Mobile ─── */
+    @media (max-width: 520px) {
+      .hero { padding: 64px 0 40px; }
+      .hero h1 { font-size: 2.2rem; }
+      .hero .tagline { font-size: 1rem; }
+      .feature { padding-left: 16px; }
+      .features, .shortcuts { padding: 48px 0; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="page">
+
+  <section class="hero">
+    <img class="hero-icon" src="../../images/TideyAppIcon_nobg.png" alt="Tidey" width="88" height="88">
+    <h1>Tidey</h1>
+    <p class="tagline">Where context flows between agent and code, like the tide.</p>
+    <a class="cta" href="https://github.com/Tim-Feng/Tidey/releases/latest">Download for macOS</a>
+    <span class="cta-note">macOS 12+ · Apple Silicon & Intel · Free & Open Source</span>
+  </section>
+
+  <section class="screenshot">
+    <!-- screenshot -->
+    <div class="screenshot-frame">Screenshot coming soon</div>
+  </section>
+
+  <hr class="divider">
+
+  <section class="features reveal">
+    <p class="features-label">Why Tidey</p>
+
+    <div class="feature">
+      <h3>Agent-Aware Workspaces</h3>
+      <p>Each workspace is an agent session with its own terminal, status, and notifications. Tidey tracks what your agent is doing — Running, Idle, or Needs Input — so you always know at a glance. ⌘1–⌘9 to switch instantly.</p>
+    </div>
+
+    <div class="feature">
+      <h3>Code Editor, Built In</h3>
+      <p>⌘-click any file path in your terminal to open it. Syntax highlighting, search, save. Auto-refreshes when files change externally — you always see the latest version of what your agent wrote. Powered by Monaco.</p>
+    </div>
+
+    <div class="feature">
+      <h3>Terminal-First, Not IDE-First</h3>
+      <p>Built on iTerm2's battle-tested terminal emulation. Sidebar, editor, and file tree are all independently collapsible. Show what you need, hide what you don't. Works with tmux. Your terminal is the center.</p>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <section class="shortcuts reveal">
+    <p class="shortcuts-label">Keyboard-Driven</p>
+    <div class="shortcuts-grid">
+      <span class="action">New Workspace</span><span class="key">⌘N</span>
+      <span class="action">Switch Workspace</span><span class="key">⌘1–⌘9</span>
+      <span class="action">Switch Panel</span><span class="key">⌃1–⌃9</span>
+      <span class="action">Toggle Sidebar</span><span class="key">⌘B</span>
+      <span class="action">Toggle Editor</span><span class="key">⇧⌘E</span>
+      <span class="action">Toggle Terminal</span><span class="key">⇧⌘T</span>
+      <span class="action">Toggle File Tree</span><span class="key">⌃⌘F</span>
+      <span class="action">Find in Editor</span><span class="key">⌘F</span>
+      <span class="action">Save</span><span class="key">⌘S</span>
+    </div>
+    <p class="shortcuts-hint">Hold ⌘ for a moment to see shortcut hints on every panel.</p>
+  </section>
+
+  <hr class="divider">
+
+  <footer class="footer reveal">
+    <p class="credits">Built on <a href="https://iterm2.com">iTerm2</a> · Integrates <a href="https://microsoft.github.io/monaco-editor/">Monaco</a> · Inspired by <a href="https://cmux.com">cmux</a></p>
+    <p><a href="https://github.com/Tim-Feng/Tidey">GitHub</a> · <a href="https://github.com/Tim-Feng/Tidey/blob/master/docs/socket-api.md">Socket API</a> · GPLv2+</p>
+  </footer>
+
+</div>
+
+<script>
+  // Minimal scroll reveal
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('visible'); });
+  }, { threshold: 0.15 });
+  document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+</script>
+
+</body>
+</html>
