@@ -311,6 +311,7 @@ static NSRect TideyPanelShortcutHintFrameForAnchorRect(NSRect anchorRect) {
 + (NSView *)tideyNewPanelShortcutHintView;
 + (NSArray<TideyShortcutHintDescriptor *> *)tideyShortcutHintDescriptorsForEditorTabViews:(NSArray<NSView *> *)tabViews;
 + (NSArray<TideyShortcutHintDescriptor *> *)tideyShortcutHintDescriptorsForTabBarCells:(NSArray<PSMTabBarCell *> *)cells;
++ (NSArray<NSArray<TideyEditorTab *> *> *)tideyRightPanelTabsGroupedByKind:(NSArray<TideyEditorTab *> *)tabs;
 + (void)tideySyncShortcutHintDescriptors:(NSArray<TideyShortcutHintDescriptor *> *)descriptors
                          inContainerView:(NSView *)containerView
                                hintViews:(NSMutableArray<NSView *> *)hintViews;
@@ -614,6 +615,11 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 @end
 
+typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
+    TideyRightPanelTabKindEditor = 0,
+    TideyRightPanelTabKindBrowser = 1,
+};
+
 @interface TideyPassthroughView : NSView
 @end
 
@@ -703,6 +709,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 @property(nonatomic, copy) NSString *content;
 @property(nonatomic) BOOL dirty;
 @property(nonatomic) BOOL preview;
+@property(nonatomic) TideyRightPanelTabKind kind;
 + (instancetype)tabWithPath:(NSString *)path
                 displayName:(NSString *)displayName
                    language:(NSString *)language
@@ -721,6 +728,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     tab.language = language ?: @"plaintext";
     tab.content = content ?: @"";
     tab.dirty = NO;
+    tab.kind = TideyRightPanelTabKindEditor;
     return tab;
 }
 
@@ -929,6 +937,27 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                                          frame:TideyPanelShortcutHintFrameForAnchorRect(cell.frame)]];
     }
     return descriptors;
+}
+
++ (NSArray<NSArray<TideyEditorTab *> *> *)tideyRightPanelTabsGroupedByKind:(NSArray<TideyEditorTab *> *)tabs {
+    NSMutableArray<TideyEditorTab *> *editorTabs = [NSMutableArray array];
+    NSMutableArray<TideyEditorTab *> *browserTabs = [NSMutableArray array];
+    for (TideyEditorTab *tab in tabs) {
+        if (tab.kind == TideyRightPanelTabKindBrowser) {
+            [browserTabs addObject:tab];
+        } else {
+            [editorTabs addObject:tab];
+        }
+    }
+
+    NSMutableArray<NSArray<TideyEditorTab *> *> *groups = [NSMutableArray array];
+    if (editorTabs.count > 0) {
+        [groups addObject:[editorTabs copy]];
+    }
+    if (browserTabs.count > 0) {
+        [groups addObject:[browserTabs copy]];
+    }
+    return groups;
 }
 
 + (void)tideySyncShortcutHintDescriptors:(NSArray<TideyShortcutHintDescriptor *> *)descriptors
@@ -3156,51 +3185,62 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         TideyEditorEffectiveTabStripHeight(_tabBarControl.height);
     const CGFloat insetX = 0;
     const CGFloat tabHeight = MAX(22, stripHeight);
+    const CGFloat groupGap = 10.0;
     CGFloat x = insetX;
     NSDictionary<NSAttributedStringKey, id> *attributes = @{
         NSFontAttributeName: [NSFont systemFontOfSize:11 weight:NSFontWeightMedium]
     };
-    for (NSInteger i = 0; i < (NSInteger)_tideyEditorTabs.count; i++) {
-        TideyEditorTab *tab = _tideyEditorTabs[i];
-        NSString *title = tab.dirty ? [NSString stringWithFormat:@"● %@", tab.displayName ?: @"Untitled"] : (tab.displayName ?: @"Untitled");
-        CGFloat textWidth = ceil([title sizeWithAttributes:attributes].width);
-        CGFloat tabWidth = MIN(MAX(112, textWidth + 38), 240);
+    NSArray<NSArray<TideyEditorTab *> *> *groupedTabs = [[self class] tideyRightPanelTabsGroupedByKind:_tideyEditorTabs];
+    BOOL isFirstGroup = YES;
+    for (NSArray<TideyEditorTab *> *group in groupedTabs) {
+        if (!isFirstGroup) {
+            x += groupGap;
+        }
+        isFirstGroup = NO;
+        for (NSInteger groupIndex = 0; groupIndex < (NSInteger)group.count; groupIndex++) {
+            TideyEditorTab *tab = group[groupIndex];
+            NSString *title = tab.dirty ? [NSString stringWithFormat:@"● %@", tab.displayName ?: @"Untitled"] : (tab.displayName ?: @"Untitled");
+            CGFloat textWidth = ceil([title sizeWithAttributes:attributes].width);
+            CGFloat tabWidth = MIN(MAX(112, textWidth + 38), 240);
+            NSInteger originalIndex = [_tideyEditorTabs indexOfObjectIdenticalTo:tab];
 
-        TideyEditorTabItemView *tabView = [[TideyEditorTabItemView alloc] initWithFrame:NSMakeRect(x, 0, tabWidth, tabHeight)];
-        BOOL selected = (i == _tideySelectedEditorTabIndex);
-        tabView.tideySelected = selected;
-        tabView.tideyHovered = NO;
-        [tabView tideyUpdateAppearance];
+            TideyEditorTabItemView *tabView = [[TideyEditorTabItemView alloc] initWithFrame:NSMakeRect(x, 0, tabWidth, tabHeight)];
+            BOOL selected = (originalIndex == _tideySelectedEditorTabIndex);
+            tabView.tideySelected = selected;
+            tabView.tideyHovered = NO;
+            [tabView tideyUpdateAppearance];
 
-        NSButton *selectButton = [[NSButton alloc] initWithFrame:NSMakeRect(10, 2, tabWidth - 34, tabHeight - 2)];
-        selectButton.bordered = NO;
-        selectButton.buttonType = NSButtonTypeMomentaryChange;
-        selectButton.alignment = NSTextAlignmentLeft;
-        NSFont *baseFont = [NSFont systemFontOfSize:11 weight:selected ? NSFontWeightSemibold : NSFontWeightMedium];
-        selectButton.font = tab.preview ? [[NSFontManager sharedFontManager] convertFont:baseFont toHaveTrait:NSItalicFontMask] : baseFont;
-        selectButton.contentTintColor = selected ? NSColor.labelColor : NSColor.secondaryLabelColor;
-        selectButton.title = title;
-        selectButton.imagePosition = NSNoImage;
-        selectButton.tag = i;
-        selectButton.target = self;
-        selectButton.action = @selector(tideyEditorSelectTab:);
-        [tabView addSubview:selectButton];
+            NSButton *selectButton = [[NSButton alloc] initWithFrame:NSMakeRect(10, 2, tabWidth - 34, tabHeight - 2)];
+            selectButton.bordered = NO;
+            selectButton.buttonType = NSButtonTypeMomentaryChange;
+            selectButton.alignment = NSTextAlignmentLeft;
+            NSFont *baseFont = [NSFont systemFontOfSize:11 weight:selected ? NSFontWeightSemibold : NSFontWeightMedium];
+            selectButton.font = tab.preview ? [[NSFontManager sharedFontManager] convertFont:baseFont toHaveTrait:NSItalicFontMask] : baseFont;
+            selectButton.contentTintColor = selected ? NSColor.labelColor : NSColor.secondaryLabelColor;
+            selectButton.title = title;
+            selectButton.imagePosition = NSNoImage;
+            selectButton.tag = originalIndex;
+            selectButton.target = self;
+            selectButton.action = @selector(tideyEditorSelectTab:);
+            [tabView addSubview:selectButton];
 
-        NSButton *closeButton = [[NSButton alloc] initWithFrame:NSMakeRect(tabWidth - 22, 2, 20, tabHeight - 2)];
-        closeButton.bordered = NO;
-        closeButton.buttonType = NSButtonTypeMomentaryChange;
-        closeButton.font = [NSFont systemFontOfSize:10 weight:NSFontWeightSemibold];
-        closeButton.contentTintColor = selected ? NSColor.labelColor : NSColor.secondaryLabelColor;
-        closeButton.title = @"✕";
-        closeButton.tag = i;
-        closeButton.target = self;
-        closeButton.action = @selector(tideyEditorCloseTab:);
-        [tabView addSubview:closeButton];
+            NSButton *closeButton = [[NSButton alloc] initWithFrame:NSMakeRect(tabWidth - 22, 2, 20, tabHeight - 2)];
+            closeButton.bordered = NO;
+            closeButton.buttonType = NSButtonTypeMomentaryChange;
+            closeButton.font = [NSFont systemFontOfSize:10 weight:NSFontWeightSemibold];
+            closeButton.contentTintColor = selected ? NSColor.labelColor : NSColor.secondaryLabelColor;
+            closeButton.title = @"✕";
+            closeButton.tag = originalIndex;
+            closeButton.target = self;
+            closeButton.action = @selector(tideyEditorCloseTab:);
+            [tabView addSubview:closeButton];
 
-        tabView.tideySeparatorView.hidden = (i == (NSInteger)_tideyEditorTabs.count - 1);
+            BOOL isLastInGroup = (groupIndex == (NSInteger)group.count - 1);
+            tabView.tideySeparatorView.hidden = isLastInGroup;
 
-        [_tideyEditorTabStripView addSubview:tabView];
-        x += tabWidth;
+            [_tideyEditorTabStripView addSubview:tabView];
+            x += tabWidth;
+        }
     }
     [_tideyEditorTabStripView addSubview:_tideyEditorPanelHintOverlayView positioned:NSWindowAbove relativeTo:nil];
     [self tideyUpdatePanelShortcutHints];
