@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tidey — Terminal-First IDE for AI Agents</title>
+  <meta name="description" content="A terminal-first IDE for AI agents on macOS. Run agents in workspaces, edit code side by side, see what each agent is doing.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0a0e17;
+      --surface: #0f1520;
+      --accent: #3A8FD6;
+      --accent-soft: rgba(58, 143, 214, 0.1);
+      --text: #e4e9f0;
+      --text-2: #8893a4;
+      --text-3: #475264;
+      --line: rgba(255, 255, 255, 0.05);
+      --sans: 'IBM Plex Sans', sans-serif;
+      --mono: 'JetBrains Mono', monospace;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: var(--sans);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.65;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .page {
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* ── Hero ── */
+    .hero {
+      padding: 120px 0 64px;
+      text-align: center;
+    }
+
+    .hero-icon {
+      width: 80px;
+      height: 80px;
+      margin: 0 auto 32px;
+      animation: drift 8s ease-in-out infinite;
+    }
+
+    @keyframes drift {
+      0%, 100% { transform: translateY(0) rotate(0deg); }
+      25% { transform: translateY(-4px) rotate(0.5deg); }
+      75% { transform: translateY(2px) rotate(-0.3deg); }
+    }
+
+    .hero h1 {
+      font-family: var(--mono);
+      font-size: 2rem;
+      font-weight: 500;
+      letter-spacing: -0.04em;
+      color: #fff;
+      margin-bottom: 16px;
+    }
+
+    .hero p {
+      font-size: 1.05rem;
+      font-weight: 300;
+      color: var(--text-2);
+      max-width: 400px;
+      margin: 0 auto 40px;
+    }
+
+    .dl-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 28px;
+      background: transparent;
+      color: var(--accent);
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      font-family: var(--mono);
+      font-size: 0.82rem;
+      font-weight: 500;
+      text-decoration: none;
+      letter-spacing: 0.02em;
+      transition: all 0.2s;
+    }
+    .dl-btn:hover {
+      background: var(--accent-soft);
+    }
+    .dl-btn::before {
+      content: '↓';
+      font-size: 1rem;
+    }
+
+    .dl-meta {
+      display: block;
+      margin-top: 10px;
+      font-family: var(--mono);
+      font-size: 0.65rem;
+      color: var(--text-3);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    /* ── Screenshot ── */
+    .shot {
+      margin: 0 -24px 80px;
+      padding: 48px 24px;
+      text-align: center;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--text-3);
+      font-size: 0.8rem;
+      font-family: var(--mono);
+    }
+
+    /* ── Features ── */
+    .features { padding: 0 0 64px; }
+
+    .feat {
+      padding: 32px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .feat:last-child { border-bottom: none; }
+
+    .feat-num {
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      color: var(--accent);
+      letter-spacing: 0.1em;
+      margin-bottom: 12px;
+    }
+
+    .feat h3 {
+      font-size: 1.1rem;
+      font-weight: 500;
+      color: #fff;
+      margin-bottom: 8px;
+    }
+
+    .feat p {
+      font-size: 0.9rem;
+      font-weight: 300;
+      color: var(--text-2);
+      line-height: 1.75;
+    }
+
+    /* ── Shortcuts ── */
+    .keys {
+      padding: 48px 0 64px;
+      border-top: 1px solid var(--line);
+    }
+
+    .keys-title {
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      color: var(--accent);
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-bottom: 24px;
+    }
+
+    .key-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 9px 0;
+      border-bottom: 1px solid var(--line);
+      font-size: 0.85rem;
+    }
+    .key-row span:first-child { color: var(--text-2); font-weight: 300; }
+    .key-row span:last-child { font-family: var(--mono); font-size: 0.78rem; color: var(--text-3); }
+
+    .keys-note {
+      margin-top: 16px;
+      font-size: 0.75rem;
+      color: var(--text-3);
+    }
+
+    /* ── Footer ── */
+    footer {
+      padding: 48px 0 56px;
+      border-top: 1px solid var(--line);
+      text-align: center;
+      font-size: 0.78rem;
+      color: var(--text-3);
+      line-height: 2;
+    }
+    footer a {
+      color: var(--text-2);
+      text-decoration: none;
+    }
+    footer a:hover { color: var(--text); }
+
+    /* ── Reveal ── */
+    .rv { opacity: 0; transform: translateY(12px); transition: opacity 0.5s, transform 0.5s; }
+    .rv.on { opacity: 1; transform: none; }
+
+    /* ── Mobile ── */
+    @media (max-width: 480px) {
+      .hero { padding: 80px 0 48px; }
+      .hero h1 { font-size: 1.6rem; }
+      .shot { margin: 0 -24px 56px; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="page">
+
+  <section class="hero">
+    <img class="hero-icon" src="../../images/TideyAppIcon_nobg.png" alt="Tidey" width="80" height="80">
+    <h1>tidey</h1>
+    <p>Terminal-first IDE for AI agents. One window, every context.</p>
+    <a class="dl-btn" href="https://github.com/Tim-Feng/Tidey/releases/latest">Download for macOS</a>
+    <span class="dl-meta">macOS 12+ · Apple Silicon & Intel · GPLv2+</span>
+  </section>
+
+  <div class="shot">
+    <!-- screenshot -->
+    [ screenshot ]
+  </div>
+
+  <section class="features">
+    <div class="feat rv">
+      <div class="feat-num">01</div>
+      <h3>Agent-Aware Workspaces</h3>
+      <p>Each workspace is an agent session with its own terminal, status, and notifications. Tidey tracks Running, Idle, and Needs Input automatically. ⌘1–⌘9 to switch.</p>
+    </div>
+    <div class="feat rv">
+      <div class="feat-num">02</div>
+      <h3>Code Editor, Built In</h3>
+      <p>⌘-click any file path in your terminal to open it — right next to where your agent is working. Syntax highlighting, search, save. Powered by Monaco.</p>
+    </div>
+    <div class="feat rv">
+      <div class="feat-num">03</div>
+      <h3>Terminal-First</h3>
+      <p>Built on iTerm2. Sidebar, editor, file tree — all collapsible. Your terminal is the center. Everything else supports it. Works with tmux.</p>
+    </div>
+  </section>
+
+  <section class="keys rv">
+    <div class="keys-title">Keyboard-Driven</div>
+    <div class="key-row"><span>New Workspace</span><span>⌘N</span></div>
+    <div class="key-row"><span>Switch Workspace</span><span>⌘1–⌘9</span></div>
+    <div class="key-row"><span>Switch Panel</span><span>⌃1–⌃9</span></div>
+    <div class="key-row"><span>Toggle Sidebar</span><span>⌘B</span></div>
+    <div class="key-row"><span>Toggle Editor</span><span>⇧⌘E</span></div>
+    <div class="key-row"><span>Toggle Terminal</span><span>⇧⌘T</span></div>
+    <div class="key-row"><span>Toggle File Tree</span><span>⌃⌘F</span></div>
+    <div class="key-row"><span>Find in Editor</span><span>⌘F</span></div>
+    <div class="key-row"><span>Save</span><span>⌘S</span></div>
+    <p class="keys-note">Hold ⌘ to reveal shortcut hints on every panel.</p>
+  </section>
+
+  <footer class="rv">
+    <p>Built on <a href="https://iterm2.com">iTerm2</a> · <a href="https://microsoft.github.io/monaco-editor/">Monaco</a> · Inspired by <a href="https://cmux.com">cmux</a></p>
+    <p><a href="https://github.com/Tim-Feng/Tidey">GitHub</a> · <a href="https://github.com/Tim-Feng/Tidey/blob/master/docs/socket-api.md">Socket API</a></p>
+  </footer>
+
+</div>
+
+<script>
+const o = new IntersectionObserver(e => e.forEach(x => { if (x.isIntersecting) x.target.classList.add('on'); }), { threshold: 0.1 });
+document.querySelectorAll('.rv').forEach(el => o.observe(el));
+</script>
+
+</body>
+</html>
