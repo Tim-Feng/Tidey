@@ -78,6 +78,9 @@ static const CGFloat kTideySidebarCloseButtonTopInset = 10;
 static const CGFloat kTideyPanelShortcutHintWidth = 28;
 static const CGFloat kTideyPanelShortcutHintHeight = 18;
 static const CGFloat kTideyPanelShortcutHintTrailingInset = 8;
+static const CGFloat kTideyRightPanelGroupLabelHorizontalPadding = 10;
+static const CGFloat kTideyRightPanelGroupLabelGap = 6;
+static const CGFloat kTideyRightPanelGroupTabsGap = 8;
 static NSString *const kTideyBundledMonacoVersion = @"0.52.2";
 static NSString *const kTideyLastEditorFilePathDefaultsKey = @"TideyLastEditorFilePath";
 static NSString *const kTideyLastEditorFileTreeRootDefaultsKey = @"TideyLastEditorFileTreeRoot";
@@ -95,6 +98,7 @@ static NSUserInterfaceItemIdentifier const kTideyPanelHintViewIdentifier = @"Tid
 static NSPasteboardType const iTermRootTerminalViewTideySidebarWorkspacePasteboardType =
     @"com.tidey.workspace-row";
 static const NSInteger kTideyPanelHintLabelTag = 1010;
+static const NSInteger kTideyRightPanelGroupButtonTagBase = 4200;
 
 typedef struct {
     CGFloat top;
@@ -174,6 +178,11 @@ static NSRect TideyPanelShortcutHintFrameForAnchorRect(NSRect anchorRect) {
 }
 
 @end
+
+typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
+    TideyRightPanelTabKindEditor = 0,
+    TideyRightPanelTabKindBrowser = 1,
+};
 
 @interface iTermRootTerminalView()<
     iTermTabBarControlViewDelegate,
@@ -265,11 +274,18 @@ static NSRect TideyPanelShortcutHintFrameForAnchorRect(NSRect anchorRect) {
 - (void)tideyEditorOpenFileTreeItemInExternalEditor:(id)sender;
 - (void)tideyEditorRevealFileTreeItemInFinder:(id)sender;
 - (TideyEditorTab *)tideyCurrentEditorTab;
-- (void)reloadTideyEditorTabs;
-- (void)selectTideyEditorTabAtIndex:(NSInteger)index;
-- (void)closeTideyEditorTabAtIndex:(NSInteger)index;
-- (void)tideyEditorSelectTab:(id)sender;
-- (void)tideyEditorCloseTab:(id)sender;
+- (void)reloadTideyRightPanelTabs;
+- (void)selectTideyRightPanelTabAtIndex:(NSInteger)index;
+- (void)closeTideyRightPanelTabAtIndex:(NSInteger)index;
+- (void)tideyRightPanelSelectTab:(id)sender;
+- (void)tideyRightPanelCloseTab:(id)sender;
+- (void)tideyRightPanelSelectGroup:(id)sender;
+- (void)tideyRememberLastActiveRightPanelTab:(TideyEditorTab *)tab;
+- (NSInteger)tideyIndexOfRightPanelTabWithIdentifier:(NSString *)identifier;
+- (NSString *)tideyCurrentRightPanelTabIdentifier;
+- (void)tideyApplyRightPanelSelectionState:(id)selectionState;
+- (NSString *)tideyLastActiveTabIdentifierForKind:(TideyRightPanelTabKind)kind;
+- (NSString *)tideyRightPanelGroupLabelForKind:(TideyRightPanelTabKind)kind;
 - (void)tideyEditorOpenSelectedFilePermanently:(id)sender;
 - (void)tideyUpdateEditorPlaceholder;
 - (void)tideyEditorDidChangeValue:(NSString *)value;
@@ -311,7 +327,13 @@ static NSRect TideyPanelShortcutHintFrameForAnchorRect(NSRect anchorRect) {
 + (NSView *)tideyNewPanelShortcutHintView;
 + (NSArray<TideyShortcutHintDescriptor *> *)tideyShortcutHintDescriptorsForEditorTabViews:(NSArray<NSView *> *)tabViews;
 + (NSArray<TideyShortcutHintDescriptor *> *)tideyShortcutHintDescriptorsForTabBarCells:(NSArray<PSMTabBarCell *> *)cells;
-+ (NSArray<NSArray<TideyEditorTab *> *> *)tideyRightPanelTabsGroupedByKind:(NSArray<TideyEditorTab *> *)tabs;
++ (NSArray *)tideyRightPanelGroupStatesForTabs:(NSArray<TideyEditorTab *> *)tabs
+                                  expandedKind:(TideyRightPanelTabKind)expandedKind;
++ (id)tideyRightPanelSelectionStateForTabs:(NSArray<TideyEditorTab *> *)tabs
+                      preferredExpandedKind:(TideyRightPanelTabKind)preferredExpandedKind
+                  currentSelectedTabIdentifier:(NSString *)currentSelectedTabIdentifier
+                   lastActiveEditorTabIdentifier:(NSString *)lastActiveEditorTabIdentifier
+                  lastActiveBrowserTabIdentifier:(NSString *)lastActiveBrowserTabIdentifier;
 + (void)tideySyncShortcutHintDescriptors:(NSArray<TideyShortcutHintDescriptor *> *)descriptors
                          inContainerView:(NSView *)containerView
                                hintViews:(NSMutableArray<NSView *> *)hintViews;
@@ -615,10 +637,25 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 @end
 
-typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
-    TideyRightPanelTabKindEditor = 0,
-    TideyRightPanelTabKindBrowser = 1,
-};
+@class TideyEditorTab;
+
+@interface TideyRightPanelTabGroupState : NSObject
+@property(nonatomic) TideyRightPanelTabKind kind;
+@property(nonatomic, copy) NSString *label;
+@property(nonatomic) BOOL expanded;
+@property(nonatomic, strong) NSArray<TideyEditorTab *> *visibleTabs;
+@end
+
+@implementation TideyRightPanelTabGroupState
+@end
+
+@interface TideyRightPanelSelectionState : NSObject
+@property(nonatomic) TideyRightPanelTabKind expandedKind;
+@property(nonatomic, copy) NSString *selectedTabIdentifier;
+@end
+
+@implementation TideyRightPanelSelectionState
+@end
 
 @interface TideyPassthroughView : NSView
 @end
@@ -703,6 +740,7 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
 @end
 
 @interface TideyEditorTab : NSObject
+@property(nonatomic, copy) NSString *identifier;
 @property(nonatomic, copy) NSString *path;
 @property(nonatomic, copy) NSString *displayName;
 @property(nonatomic, copy) NSString *language;
@@ -723,6 +761,7 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
                    language:(NSString *)language
                     content:(NSString *)content {
     TideyEditorTab *tab = [[self alloc] init];
+    tab.identifier = [NSUUID UUID].UUIDString;
     tab.path = path;
     tab.displayName = displayName;
     tab.language = language ?: @"plaintext";
@@ -791,6 +830,9 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
     NSString *_tideyEditorRootOverridePath;
     NSMutableArray<TideyEditorTab *> *_tideyEditorTabs;
     NSInteger _tideySelectedEditorTabIndex;
+    TideyRightPanelTabKind _tideyExpandedRightPanelTabKind;
+    NSString *_tideyLastActiveEditorTabIdentifier;
+    NSString *_tideyLastActiveBrowserTabIdentifier;
     BOOL _tideyEditorIsRevealingSelection;
     BOOL _tideyIgnoreNextSidebarSelection;
     id _tideyModifierMonitor;
@@ -939,25 +981,95 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
     return descriptors;
 }
 
-+ (NSArray<NSArray<TideyEditorTab *> *> *)tideyRightPanelTabsGroupedByKind:(NSArray<TideyEditorTab *> *)tabs {
-    NSMutableArray<TideyEditorTab *> *editorTabs = [NSMutableArray array];
-    NSMutableArray<TideyEditorTab *> *browserTabs = [NSMutableArray array];
++ (NSArray<TideyEditorTab *> *)tideyRightPanelTabsOfKind:(TideyRightPanelTabKind)kind
+                                                  inTabs:(NSArray<TideyEditorTab *> *)tabs {
+    NSMutableArray<TideyEditorTab *> *matches = [NSMutableArray array];
     for (TideyEditorTab *tab in tabs) {
-        if (tab.kind == TideyRightPanelTabKindBrowser) {
-            [browserTabs addObject:tab];
-        } else {
-            [editorTabs addObject:tab];
+        if (tab.kind == kind) {
+            [matches addObject:tab];
         }
     }
+    return matches;
+}
 
-    NSMutableArray<NSArray<TideyEditorTab *> *> *groups = [NSMutableArray array];
-    if (editorTabs.count > 0) {
-        [groups addObject:[editorTabs copy]];
++ (NSString *)tideyRightPanelGroupLabelForKind:(TideyRightPanelTabKind)kind {
+    return kind == TideyRightPanelTabKindBrowser ? @"Web" : @"Code";
+}
+
++ (TideyRightPanelTabKind)tideyResolvedExpandedKindForTabs:(NSArray<TideyEditorTab *> *)tabs
+                                             expandedKind:(TideyRightPanelTabKind)expandedKind {
+    BOOL hasEditors = ([self tideyRightPanelTabsOfKind:TideyRightPanelTabKindEditor inTabs:tabs].count > 0);
+    BOOL hasBrowsers = ([self tideyRightPanelTabsOfKind:TideyRightPanelTabKindBrowser inTabs:tabs].count > 0);
+    if (expandedKind == TideyRightPanelTabKindBrowser && hasBrowsers) {
+        return TideyRightPanelTabKindBrowser;
     }
-    if (browserTabs.count > 0) {
-        [groups addObject:[browserTabs copy]];
+    if (expandedKind == TideyRightPanelTabKindEditor && hasEditors) {
+        return TideyRightPanelTabKindEditor;
+    }
+    if (hasEditors) {
+        return TideyRightPanelTabKindEditor;
+    }
+    return TideyRightPanelTabKindBrowser;
+}
+
++ (TideyEditorTab *)tideyRightPanelPreferredTabForKind:(TideyRightPanelTabKind)kind
+                                                 inTabs:(NSArray<TideyEditorTab *> *)tabs
+                                 selectedTabIdentifier:(NSString *)selectedTabIdentifier
+                             rememberedTabIdentifier:(NSString *)rememberedTabIdentifier {
+    NSArray<TideyEditorTab *> *tabsOfKind = [self tideyRightPanelTabsOfKind:kind inTabs:tabs];
+    if (tabsOfKind.count == 0) {
+        return nil;
+    }
+    for (TideyEditorTab *tab in tabsOfKind) {
+        if ([tab.identifier isEqualToString:selectedTabIdentifier]) {
+            return tab;
+        }
+    }
+    for (TideyEditorTab *tab in tabsOfKind) {
+        if ([tab.identifier isEqualToString:rememberedTabIdentifier]) {
+            return tab;
+        }
+    }
+    return tabsOfKind.firstObject;
+}
+
++ (NSArray<TideyRightPanelTabGroupState *> *)tideyRightPanelGroupStatesForTabs:(NSArray<TideyEditorTab *> *)tabs
+                                                                  expandedKind:(TideyRightPanelTabKind)expandedKind {
+    TideyRightPanelTabKind resolvedExpandedKind = [self tideyResolvedExpandedKindForTabs:tabs expandedKind:expandedKind];
+    NSMutableArray<TideyRightPanelTabGroupState *> *groups = [NSMutableArray array];
+    NSArray<NSNumber *> *orderedKinds = @[ @(TideyRightPanelTabKindEditor), @(TideyRightPanelTabKindBrowser) ];
+    for (NSNumber *kindNumber in orderedKinds) {
+        TideyRightPanelTabKind kind = kindNumber.integerValue;
+        NSArray<TideyEditorTab *> *tabsOfKind = [self tideyRightPanelTabsOfKind:kind inTabs:tabs];
+        if (tabsOfKind.count == 0) {
+            continue;
+        }
+        TideyRightPanelTabGroupState *group = [[TideyRightPanelTabGroupState alloc] init];
+        group.kind = kind;
+        group.label = [self tideyRightPanelGroupLabelForKind:kind];
+        group.expanded = (kind == resolvedExpandedKind);
+        group.visibleTabs = group.expanded ? tabsOfKind : @[];
+        [groups addObject:group];
     }
     return groups;
+}
+
++ (TideyRightPanelSelectionState *)tideyRightPanelSelectionStateForTabs:(NSArray<TideyEditorTab *> *)tabs
+                                                   preferredExpandedKind:(TideyRightPanelTabKind)preferredExpandedKind
+                                               currentSelectedTabIdentifier:(NSString *)currentSelectedTabIdentifier
+                                                lastActiveEditorTabIdentifier:(NSString *)lastActiveEditorTabIdentifier
+                                               lastActiveBrowserTabIdentifier:(NSString *)lastActiveBrowserTabIdentifier {
+    TideyRightPanelSelectionState *state = [[TideyRightPanelSelectionState alloc] init];
+    state.expandedKind = [self tideyResolvedExpandedKindForTabs:tabs expandedKind:preferredExpandedKind];
+    NSString *rememberedIdentifier = state.expandedKind == TideyRightPanelTabKindBrowser
+        ? lastActiveBrowserTabIdentifier
+        : lastActiveEditorTabIdentifier;
+    TideyEditorTab *tab = [self tideyRightPanelPreferredTabForKind:state.expandedKind
+                                                            inTabs:tabs
+                                            selectedTabIdentifier:currentSelectedTabIdentifier
+                                        rememberedTabIdentifier:rememberedIdentifier];
+    state.selectedTabIdentifier = tab.identifier;
+    return state;
 }
 
 + (void)tideySyncShortcutHintDescriptors:(NSArray<TideyShortcutHintDescriptor *> *)descriptors
@@ -1078,6 +1190,7 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
         _shouldShowTideyEditorFileTree = YES;
         _tideyEditorTabs = [[NSMutableArray alloc] init];
         _tideySelectedEditorTabIndex = -1;
+        _tideyExpandedRightPanelTabKind = TideyRightPanelTabKindEditor;
         _tideySidebarPreferredWidth = kTideySidebarWidth;
         _tideyEditorFileTreePreferredWidth = kTideyEditorFileTreeWidth;
         _tideyEditorPreferredWidth = MAX(kTideyMinimumEditorPanelWidth,
@@ -3168,7 +3281,42 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
     }
 }
 
-- (void)reloadTideyEditorTabs {
+- (NSString *)tideyCurrentRightPanelTabIdentifier {
+    return [self tideyCurrentEditorTab].identifier;
+}
+
+- (NSInteger)tideyIndexOfRightPanelTabWithIdentifier:(NSString *)identifier {
+    if (identifier.length == 0) {
+        return NSNotFound;
+    }
+    for (NSInteger i = 0; i < (NSInteger)_tideyEditorTabs.count; i++) {
+        if ([_tideyEditorTabs[i].identifier isEqualToString:identifier]) {
+            return i;
+        }
+    }
+    return NSNotFound;
+}
+
+- (void)tideyRememberLastActiveRightPanelTab:(TideyEditorTab *)tab {
+    if (!tab) {
+        return;
+    }
+    if (tab.kind == TideyRightPanelTabKindBrowser) {
+        _tideyLastActiveBrowserTabIdentifier = [tab.identifier copy];
+    } else {
+        _tideyLastActiveEditorTabIdentifier = [tab.identifier copy];
+    }
+}
+
+- (NSString *)tideyLastActiveTabIdentifierForKind:(TideyRightPanelTabKind)kind {
+    return kind == TideyRightPanelTabKindBrowser ? _tideyLastActiveBrowserTabIdentifier : _tideyLastActiveEditorTabIdentifier;
+}
+
+- (NSString *)tideyRightPanelGroupLabelForKind:(TideyRightPanelTabKind)kind {
+    return [[self class] tideyRightPanelGroupLabelForKind:kind];
+}
+
+- (void)reloadTideyRightPanelTabs {
     for (NSView *subview in [_tideyEditorTabStripView.subviews copy]) {
         if (subview == _tideyEditorPanelHintOverlayView) {
             continue;
@@ -3185,22 +3333,56 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
         TideyEditorEffectiveTabStripHeight(_tabBarControl.height);
     const CGFloat insetX = 0;
     const CGFloat tabHeight = MAX(22, stripHeight);
-    const CGFloat groupGap = 10.0;
     CGFloat x = insetX;
-    NSDictionary<NSAttributedStringKey, id> *attributes = @{
+    NSDictionary<NSAttributedStringKey, id> *tabAttributes = @{
         NSFontAttributeName: [NSFont systemFontOfSize:11 weight:NSFontWeightMedium]
     };
-    NSArray<NSArray<TideyEditorTab *> *> *groupedTabs = [[self class] tideyRightPanelTabsGroupedByKind:_tideyEditorTabs];
+    NSDictionary<NSAttributedStringKey, id> *groupLabelAttributes = @{
+        NSFontAttributeName: [NSFont systemFontOfSize:10 weight:NSFontWeightSemibold]
+    };
+    NSArray<TideyRightPanelTabGroupState *> *groups = [[self class] tideyRightPanelGroupStatesForTabs:_tideyEditorTabs
+                                                                                           expandedKind:_tideyExpandedRightPanelTabKind];
     BOOL isFirstGroup = YES;
-    for (NSArray<TideyEditorTab *> *group in groupedTabs) {
+    for (TideyRightPanelTabGroupState *group in groups) {
         if (!isFirstGroup) {
-            x += groupGap;
+            x += kTideyRightPanelGroupLabelGap;
         }
         isFirstGroup = NO;
-        for (NSInteger groupIndex = 0; groupIndex < (NSInteger)group.count; groupIndex++) {
-            TideyEditorTab *tab = group[groupIndex];
+
+        NSString *groupLabel = group.label ?: [self tideyRightPanelGroupLabelForKind:group.kind];
+        CGFloat labelTextWidth = ceil([groupLabel sizeWithAttributes:groupLabelAttributes].width);
+        CGFloat labelWidth = labelTextWidth + kTideyRightPanelGroupLabelHorizontalPadding * 2;
+        NSButton *groupButton = [[NSButton alloc] initWithFrame:NSMakeRect(x, 4, labelWidth, MAX(22, tabHeight - 8))];
+        groupButton.bordered = NO;
+        groupButton.buttonType = NSButtonTypeMomentaryChange;
+        groupButton.title = groupLabel;
+        groupButton.font = groupLabelAttributes[NSFontAttributeName];
+        groupButton.alignment = NSTextAlignmentCenter;
+        groupButton.tag = kTideyRightPanelGroupButtonTagBase + group.kind;
+        groupButton.target = self;
+        groupButton.action = @selector(tideyRightPanelSelectGroup:);
+        groupButton.wantsLayer = YES;
+        groupButton.layer.cornerRadius = 5;
+        groupButton.layer.backgroundColor = group.expanded
+            ? [NSColor colorWithWhite:1 alpha:0.08].CGColor
+            : NSColor.clearColor.CGColor;
+        groupButton.attributedTitle = [[NSAttributedString alloc] initWithString:groupLabel
+                                                                      attributes:@{
+            NSFontAttributeName: groupLabelAttributes[NSFontAttributeName],
+            NSForegroundColorAttributeName: group.expanded ? NSColor.labelColor : NSColor.secondaryLabelColor,
+        }];
+        [_tideyEditorTabStripView addSubview:groupButton];
+        x += labelWidth;
+
+        if (!group.expanded || group.visibleTabs.count == 0) {
+            continue;
+        }
+
+        x += kTideyRightPanelGroupTabsGap;
+        for (NSInteger groupIndex = 0; groupIndex < (NSInteger)group.visibleTabs.count; groupIndex++) {
+            TideyEditorTab *tab = group.visibleTabs[groupIndex];
             NSString *title = tab.dirty ? [NSString stringWithFormat:@"● %@", tab.displayName ?: @"Untitled"] : (tab.displayName ?: @"Untitled");
-            CGFloat textWidth = ceil([title sizeWithAttributes:attributes].width);
+            CGFloat textWidth = ceil([title sizeWithAttributes:tabAttributes].width);
             CGFloat tabWidth = MIN(MAX(112, textWidth + 38), 240);
             NSInteger originalIndex = [_tideyEditorTabs indexOfObjectIdenticalTo:tab];
 
@@ -3221,7 +3403,7 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
             selectButton.imagePosition = NSNoImage;
             selectButton.tag = originalIndex;
             selectButton.target = self;
-            selectButton.action = @selector(tideyEditorSelectTab:);
+            selectButton.action = @selector(tideyRightPanelSelectTab:);
             [tabView addSubview:selectButton];
 
             NSButton *closeButton = [[NSButton alloc] initWithFrame:NSMakeRect(tabWidth - 22, 2, 20, tabHeight - 2)];
@@ -3232,10 +3414,10 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
             closeButton.title = @"✕";
             closeButton.tag = originalIndex;
             closeButton.target = self;
-            closeButton.action = @selector(tideyEditorCloseTab:);
+            closeButton.action = @selector(tideyRightPanelCloseTab:);
             [tabView addSubview:closeButton];
 
-            BOOL isLastInGroup = (groupIndex == (NSInteger)group.count - 1);
+            BOOL isLastInGroup = (groupIndex == (NSInteger)group.visibleTabs.count - 1);
             tabView.tideySeparatorView.hidden = isLastInGroup;
 
             [_tideyEditorTabStripView addSubview:tabView];
@@ -3246,15 +3428,17 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
     [self tideyUpdatePanelShortcutHints];
 }
 
-- (void)selectTideyEditorTabAtIndex:(NSInteger)index {
+- (void)selectTideyRightPanelTabAtIndex:(NSInteger)index {
     if (index < 0 || index >= (NSInteger)_tideyEditorTabs.count) {
         return;
     }
     _tideySelectedEditorTabIndex = index;
     TideyEditorTab *tab = _tideyEditorTabs[index];
+    _tideyExpandedRightPanelTabKind = tab.kind;
+    [self tideyRememberLastActiveRightPanelTab:tab];
     _tideyEditorLoadedPath = [tab.path copy];
     [self tideySyncCurrentEditorFileWatcher];
-    [self reloadTideyEditorTabs];
+    [self reloadTideyRightPanelTabs];
     [self syncTideyEditorFileTreeRootIfNeeded];
     [self tideyEditorSetLanguage:tab.language ?: @"plaintext"];
     [self tideyEditorSetEditable:YES];
@@ -3264,10 +3448,26 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
     [self tideyUpdateEditorPlaceholder];
 }
 
-- (void)closeTideyEditorTabAtIndex:(NSInteger)index {
+- (void)tideyApplyRightPanelSelectionState:(TideyRightPanelSelectionState *)selectionState {
+    if (!selectionState) {
+        return;
+    }
+    _tideyExpandedRightPanelTabKind = selectionState.expandedKind;
+    NSInteger index = [self tideyIndexOfRightPanelTabWithIdentifier:selectionState.selectedTabIdentifier];
+    if (index == NSNotFound) {
+        [self reloadTideyRightPanelTabs];
+        [self tideyUpdateEditorPlaceholder];
+        return;
+    }
+    [self selectTideyRightPanelTabAtIndex:index];
+}
+
+- (void)closeTideyRightPanelTabAtIndex:(NSInteger)index {
     if (index < 0 || index >= (NSInteger)_tideyEditorTabs.count) {
         return;
     }
+    TideyEditorTab *closingTab = _tideyEditorTabs[index];
+    NSString *currentSelectedIdentifier = [self tideyCurrentRightPanelTabIdentifier];
     [_tideyEditorTabs removeObjectAtIndex:index];
     if (_tideyEditorTabs.count == 0) {
         _tideySelectedEditorTabIndex = -1;
@@ -3275,21 +3475,60 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
         _tideyEditorRootOverridePath = nil;
         [self tideyStopWatchingCurrentEditorFile];
         [self reloadTideyEditorFileTree];
-        [self reloadTideyEditorTabs];
+        [self reloadTideyRightPanelTabs];
         [self tideyUpdateEditorPlaceholder];
         [self tideyPersistEditorState];
         return;
     }
-    NSInteger newIndex = MIN(index, (NSInteger)_tideyEditorTabs.count - 1);
-    [self selectTideyEditorTabAtIndex:newIndex];
+    if ([currentSelectedIdentifier isEqualToString:closingTab.identifier]) {
+        currentSelectedIdentifier = nil;
+    }
+    TideyRightPanelSelectionState *state =
+        [[self class] tideyRightPanelSelectionStateForTabs:_tideyEditorTabs
+                                      preferredExpandedKind:_tideyExpandedRightPanelTabKind
+                                  currentSelectedTabIdentifier:currentSelectedIdentifier
+                                   lastActiveEditorTabIdentifier:_tideyLastActiveEditorTabIdentifier
+                                  lastActiveBrowserTabIdentifier:_tideyLastActiveBrowserTabIdentifier];
+    [self tideyApplyRightPanelSelectionState:state];
+}
+
+- (void)tideyRightPanelSelectTab:(id)sender {
+    [self selectTideyRightPanelTabAtIndex:[sender tag]];
+}
+
+- (void)tideyRightPanelCloseTab:(id)sender {
+    [self closeTideyRightPanelTabAtIndex:[sender tag]];
+}
+
+- (void)tideyRightPanelSelectGroup:(id)sender {
+    TideyRightPanelTabKind kind = (TideyRightPanelTabKind)([sender tag] - kTideyRightPanelGroupButtonTagBase);
+    TideyRightPanelSelectionState *state =
+        [[self class] tideyRightPanelSelectionStateForTabs:_tideyEditorTabs
+                                      preferredExpandedKind:kind
+                                  currentSelectedTabIdentifier:[self tideyCurrentRightPanelTabIdentifier]
+                                   lastActiveEditorTabIdentifier:_tideyLastActiveEditorTabIdentifier
+                                  lastActiveBrowserTabIdentifier:_tideyLastActiveBrowserTabIdentifier];
+    [self tideyApplyRightPanelSelectionState:state];
+}
+
+- (void)reloadTideyEditorTabs {
+    [self reloadTideyRightPanelTabs];
+}
+
+- (void)selectTideyEditorTabAtIndex:(NSInteger)index {
+    [self selectTideyRightPanelTabAtIndex:index];
+}
+
+- (void)closeTideyEditorTabAtIndex:(NSInteger)index {
+    [self closeTideyRightPanelTabAtIndex:index];
 }
 
 - (void)tideyEditorSelectTab:(id)sender {
-    [self selectTideyEditorTabAtIndex:[sender tag]];
+    [self tideyRightPanelSelectTab:sender];
 }
 
 - (void)tideyEditorCloseTab:(id)sender {
-    [self closeTideyEditorTabAtIndex:[sender tag]];
+    [self tideyRightPanelCloseTab:sender];
 }
 
 - (void)tideyOpenOrSelectEditorTabAtPath:(NSString *)path {
