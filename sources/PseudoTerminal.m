@@ -1905,6 +1905,14 @@ ITERM_WEAKLY_REFERENCEABLE
     [_contentView openTideyEditorFileAtPath:path];
 }
 
+- (BOOL)tideyOpenURLInBrowser:(NSURL *)url {
+    if (!url || !_contentView.shouldShowTideyEditorPanel) {
+        return NO;
+    }
+    [_contentView tideyOpenBrowserTabWithURL:url];
+    return YES;
+}
+
 - (IBAction)selectTideySidebarWorkspaceAtIndexAction:(id)sender {
     const NSInteger index = [sender tag];
     [self rootTerminalViewSelectTideySidebarWorkspaceAtIndex:index];

@@ -61,6 +61,7 @@ NSString *const kSemanticHistoryColumnNumberKey = @"semanticHistory.columnNumber
 
 @interface NSWindowController (TideySemanticHistory)
 - (void)tideyOpenFileInEditor:(NSString *)path;
+- (BOOL)tideyOpenURLInBrowser:(NSURL *)url;
 @end
 
 @implementation iTermSemanticHistoryController {
@@ -751,6 +752,11 @@ NSString *const kSemanticHistoryColumnNumberKey = @"semanticHistory.columnNumber
                                   configuration:[NSWorkspaceOpenConfiguration configuration]
                               completionHandler:nil];
     } else {
+        NSWindowController *windowController = NSApp.keyWindow.windowController;
+        if ([windowController respondsToSelector:@selector(tideyOpenURLInBrowser:)] &&
+            [windowController tideyOpenURLInBrowser:url]) {
+            return;
+        }
         [[NSWorkspace sharedWorkspace] it_openURL:url
                                            target:nil
                                             style:iTermOpenStyleTab

@@ -218,6 +218,7 @@ extern NSString *const iTermDidCreateTerminalWindowNotification;
 - (IBAction)toggleTideyEditorFileTree:(id)sender;
 - (IBAction)saveDocument:(id)sender;
 - (void)tideyOpenFileInEditor:(NSString *)path;
+- (BOOL)tideyOpenURLInBrowser:(NSURL *)url;
 - (NSString *)tideyWorkspaceIdentifierForSession:(PTYSession *)session;
 - (IBAction)selectTideySidebarWorkspaceAtIndexAction:(id)sender;
 - (void)selectTideyWorkspaceByNumber:(NSInteger)number;

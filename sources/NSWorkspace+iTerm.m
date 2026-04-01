@@ -9,6 +9,7 @@
 #import "NSWorkspace+iTerm.h"
 
 #import "DebugLogging.h"
+#import "iTermRootTerminalView.h"
 #import "iTerm2SharedARC-Swift.h"
 #import "iTermAdvancedSettingsModel.h"
 #import "iTermMalloc.h"
@@ -230,6 +231,17 @@ completionHandler:^(NSRunningApplication *app, NSError *error) {
     DLog(@"%@", url);
     if (!url) {
         return;
+    }
+    // Intercept http/https URLs for Tidey in-app browser
+    if ([url.scheme isEqualToString:@"http"] || [url.scheme isEqualToString:@"https"]) {
+        iTermRootTerminalView *rootView = nil;
+        if ([window.contentView isKindOfClass:[iTermRootTerminalView class]]) {
+            rootView = (iTermRootTerminalView *)window.contentView;
+        }
+        if (rootView) {
+            [rootView tideyOpenBrowserTabWithURL:url];
+            return;
+        }
     }
     if ([self it_openIfNonWebURL:url configuration:configuration style:style upsell:upsell window:window completion:nil]) {
         return;

@@ -8,6 +8,7 @@
 #import "iTermURLActionHelper.h"
 
 #import "DebugLogging.h"
+#import "iTermRootTerminalView.h"
 #import "FileTransferManager.h"
 #import "NSEvent+iTerm.h"
 #import "NSHost+iTerm.h"
@@ -295,6 +296,18 @@ workingDirectory:(NSString *)workingDirectory
             [[[iTermApplication sharedApplication] delegate] handleInternalURL:url];
         });
         return;
+    }
+    // Try opening web URLs in the in-app browser panel
+    if ([url.scheme isEqualToString:@"http"] || [url.scheme isEqualToString:@"https"]) {
+        NSWindow *window = self.delegate.urlActionHelperWindow;
+        iTermRootTerminalView *rootView = nil;
+        if ([window.contentView isKindOfClass:[iTermRootTerminalView class]]) {
+            rootView = (iTermRootTerminalView *)window.contentView;
+        }
+        if (rootView) {
+            [rootView tideyOpenBrowserTabWithURL:url];
+            return;
+        }
     }
     if (background) {
         NSWorkspaceOpenConfiguration *config = [NSWorkspaceOpenConfiguration configuration];
