@@ -2063,8 +2063,15 @@ ITERM_WEAKLY_REFERENCEABLE
             if (haveSavedProgramData) {
                 // This is the normal case; the else clause is for legacy saved arrangements.
                 environmentArg = aSession.environment ?: @{};
-                commandArg = [ITAddressBookMgr tideyLaunchCommandForCommand:aSession.program
-                                                                 customShell:aSession.customShell];
+                commandArg = aSession.program;
+                if (oldCWD &&
+                    ([aSession.program isEqualToString:[ITAddressBookMgr standardLoginCommand]] ||
+                     [aSession.program isEqualToString:[ITAddressBookMgr legacyStandardLoginCommand]])) {
+                    // Create a login session that drops you in the old directory instead of
+                    // using login -fp "$USER". This lets saved arrangements properly restore
+                    // the working directory when the profile specifies the home directory.
+                    commandArg = [ITAddressBookMgr shellLauncherCommandWithCustomShell:aSession.customShell];
+                }
                 isUTF8Arg = @(aSession.isUTF8);
                 substitutionsArg = aSession.substitutions;
                 customShell = aSession.customShell;

@@ -146,8 +146,7 @@ NS_ASSUME_NONNULL_BEGIN
                                     objectType:self.objectType
                                          scope:self.session.variablesScope
                                     completion:^(NSString *command, BOOL ssh) {
-        self->_computedCommand = [ITAddressBookMgr tideyLaunchCommandForCommand:command
-                                                                    customShell:self.customShell];
+        self->_computedCommand = command;
         self->_ssh = ssh;
         completion();
     }];
