@@ -74,6 +74,7 @@ static const CGFloat kTideyDragHandleWidth = 4;
 static const CGFloat kTideyChromeToggleButtonWidth = 18;
 static const CGFloat kTideyChromeToggleButtonHeight = 34;
 static const CGFloat kTideySidebarBadgeSize = 16;
+static const CGFloat kTideySidebarCloseButtonTopInset = 10;
 static const CGFloat kTideyPanelShortcutHintWidth = 28;
 static const CGFloat kTideyPanelShortcutHintHeight = 18;
 static const CGFloat kTideyPanelShortcutHintTrailingInset = 8;
@@ -107,6 +108,10 @@ static NSView *TideyFindCloseView(NSView *container) {
         }
     }
     return nil;
+}
+
+static CGFloat TideySidebarCloseButtonYForCellHeight(CGFloat cellHeight) {
+    return MAX(0, cellHeight - kTideySidebarCloseButtonTopInset - 16.0);
 }
 
 static NSView *TideyFindSubviewWithIdentifier(NSView *container, NSUserInterfaceItemIdentifier identifier) {
@@ -4890,7 +4895,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         pinView.frame = NSMakeRect(MAX(0, width - 42), 51 + sOff, 12, 12);
 
         NSView *closeView = TideyFindCloseView(cellView);
-        closeView.frame = NSMakeRect(MAX(0, width - 20), 49 + sOff, 16, 16);
+        closeView.frame = NSMakeRect(MAX(0, width - 20),
+                                     TideySidebarCloseButtonYForCellHeight(NSHeight(cellView.bounds)),
+                                     16,
+                                     16);
         BOOL showClose = ([_tideySidebarTableView isKindOfClass:[TideySidebarTableView class]] &&
                           [(TideySidebarTableView *)_tideySidebarTableView tideyShouldShowCloseButtonForRow:row]);
         closeView.hidden = !showClose;
@@ -4943,8 +4951,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         badgeView.frame = NSMakeRect(8, badgeY, kTideySidebarBadgeSize, kTideySidebarBadgeSize);
 
         NSView *closeView = TideyFindCloseView(cellView);
-        CGFloat closeY = titleY + 1;  // align with title center
-        closeView.frame = NSMakeRect(MAX(0, width - 20), closeY, 16, 16);
+        closeView.frame = NSMakeRect(MAX(0, width - 20),
+                                     TideySidebarCloseButtonYForCellHeight(NSHeight(cellView.bounds)),
+                                     16,
+                                     16);
         BOOL showClose = ([_tideySidebarTableView isKindOfClass:[TideySidebarTableView class]] &&
                           [(TideySidebarTableView *)_tideySidebarTableView tideyShouldShowCloseButtonForRow:row]);
         closeView.hidden = !showClose;
