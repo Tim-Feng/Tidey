@@ -677,37 +677,14 @@ iTermPercentage iTermPercentageFromProfile(Profile *profile) {
 
 + (NSString*)loginShellCommandForBookmark:(Profile*)profile
                             forObjectType:(iTermObjectType)objectType {
-    NSString *customDirectoryString;
-    if ([profile[KEY_CUSTOM_DIRECTORY] isEqualToString:kProfilePreferenceInitialDirectoryAdvancedValue]) {
-        switch (objectType) {
-            case iTermWindowObject:
-                customDirectoryString = profile[KEY_AWDS_WIN_OPTION];
-                break;
-            case iTermTabObject:
-                customDirectoryString = profile[KEY_AWDS_TAB_OPTION];
-                break;
-            case iTermPaneObject:
-                customDirectoryString = profile[KEY_AWDS_PANE_OPTION];
-                break;
-            default:
-                NSLog(@"Bogus object type %d", (int)objectType);
-                customDirectoryString = kProfilePreferenceInitialDirectoryHomeValue;
-        }
-    } else {
-        customDirectoryString = profile[KEY_CUSTOM_DIRECTORY];
-    }
+    (void)objectType;
 
-    if ([customDirectoryString isEqualToString:kProfilePreferenceInitialDirectoryHomeValue] &&
-        [[self customShellForProfile:profile] length] == 0) {
-        // Run login without -l argument: this is a login session and will use the home dir.
-        return [self standardLoginCommand];
-    } else {
-        // Not using the home directory/default shell. This requires some trickery.
-        // Run iTerm2's executable with a special flag that makes it run the shell as a login shell
-        // (with "-" inserted at the start of argv[0]). See shell_launcher.c for more details.
-        NSString *launchShellCommand = [self shellLauncherCommandWithCustomShell:[self customShellForProfile:profile]];
-        return launchShellCommand;
-    }
+    // Tidey exports session-specific env vars such as TIDEY_SOCKET_PATH and
+    // TIDEY_BIN_DIR. Apple's standard `login -fp user` path drops those vars
+    // for the default home-directory/default-shell case, so all Tidey login
+    // shells must go through ShellLauncher.
+    NSString *launchShellCommand = [self shellLauncherCommandWithCustomShell:[self customShellForProfile:profile]];
+    return launchShellCommand;
 }
 
 // See issue 4425 for why we do this.
