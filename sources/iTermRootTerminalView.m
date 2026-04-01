@@ -243,6 +243,10 @@ static NSRect TideyPanelShortcutHintFrameForAnchorRect(NSRect anchorRect) {
 - (void)tideyHandleEditorFileTreeRootDidChange;
 - (NSArray<NSString *> *)tideyEditorFileTreeExpandedPaths;
 - (void)tideyRestoreEditorFileTreeExpandedPaths:(NSArray<NSString *> *)expandedPaths;
+- (TideyEditorFileNode *)tideyEditorFileTreeNodeAtPath:(NSString *)path;
+- (void)tideySelectEditorFileTreeItemAtPath:(NSString *)path;
+- (NSPoint)tideyEditorFileTreeScrollPoint;
+- (void)tideyRestoreEditorFileTreeScrollPoint:(NSPoint)scrollPoint;
 - (NSString *)tideyEditorFileTreeRootPath;
 - (void)layoutTideyEditorContents;
 - (NSTableCellView *)newTideyEditorFileTreeCellView;
@@ -2836,8 +2840,72 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     }
 }
 
+- (TideyEditorFileNode *)tideyEditorFileTreeNodeAtPath:(NSString *)path {
+    NSString *targetPath = [path stringByStandardizingPath];
+    NSString *rootPath = [[self tideyEditorFileTreeRootPath] stringByStandardizingPath];
+    if (targetPath.length == 0 || rootPath.length == 0 || !_tideyEditorFileTreeRootNode) {
+        return nil;
+    }
+    if ([targetPath isEqualToString:rootPath]) {
+        return _tideyEditorFileTreeRootNode;
+    }
+    if (![targetPath hasPrefix:[rootPath stringByAppendingString:@"/"]]) {
+        return nil;
+    }
+
+    NSString *relativePath = [targetPath substringFromIndex:[rootPath stringByAppendingString:@"/"].length];
+    NSArray<NSString *> *components = relativePath.length > 0 ? [relativePath pathComponents] : @[];
+    TideyEditorFileNode *currentNode = _tideyEditorFileTreeRootNode;
+    NSString *currentPath = rootPath;
+    for (NSString *component in components) {
+        NSString *nextPath = [currentPath stringByAppendingPathComponent:component];
+        TideyEditorFileNode *nextNode = [self tideyEditorChildNodeAtPath:nextPath
+                                                                   named:component
+                                                               inParent:currentNode];
+        if (!nextNode) {
+            return nil;
+        }
+        currentNode = nextNode;
+        currentPath = nextPath;
+    }
+    return currentNode;
+}
+
+- (void)tideySelectEditorFileTreeItemAtPath:(NSString *)path {
+    TideyEditorFileNode *node = [self tideyEditorFileTreeNodeAtPath:path];
+    if (!node) {
+        return;
+    }
+    NSInteger row = [_tideyEditorFileTreeView rowForItem:node];
+    if (row == -1) {
+        return;
+    }
+    _tideyEditorIsRevealingSelection = YES;
+    [_tideyEditorFileTreeView selectRowIndexes:[NSIndexSet indexSetWithIndex:row] byExtendingSelection:NO];
+    _tideyEditorIsRevealingSelection = NO;
+}
+
+- (NSPoint)tideyEditorFileTreeScrollPoint {
+    if (!_tideyEditorFileTreeScrollView) {
+        return NSZeroPoint;
+    }
+    return _tideyEditorFileTreeScrollView.contentView.bounds.origin;
+}
+
+- (void)tideyRestoreEditorFileTreeScrollPoint:(NSPoint)scrollPoint {
+    if (!_tideyEditorFileTreeScrollView) {
+        return;
+    }
+    NSClipView *clipView = _tideyEditorFileTreeScrollView.contentView;
+    CGFloat maxY = MAX(0, NSHeight(_tideyEditorFileTreeView.bounds) - NSHeight(clipView.bounds));
+    NSPoint clampedPoint = NSMakePoint(0, MIN(MAX(0, scrollPoint.y), maxY));
+    [clipView scrollToPoint:clampedPoint];
+    [_tideyEditorFileTreeScrollView reflectScrolledClipView:clipView];
+}
+
 - (void)tideyHandleEditorFileTreeRootDidChange {
     NSArray<NSString *> *expandedPaths = [self tideyEditorFileTreeExpandedPaths];
+    NSPoint scrollPoint = [self tideyEditorFileTreeScrollPoint];
     NSString *selectedPath = nil;
     if (_tideyEditorFileTreeView.selectedRow >= 0) {
         TideyEditorFileNode *selectedNode = [_tideyEditorFileTreeView itemAtRow:_tideyEditorFileTreeView.selectedRow];
@@ -2846,8 +2914,9 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     [self reloadTideyEditorFileTree];
     [self tideyRestoreEditorFileTreeExpandedPaths:expandedPaths];
     if (selectedPath.length > 0) {
-        [self tideyEditorRevealFileAtPath:selectedPath];
+        [self tideySelectEditorFileTreeItemAtPath:selectedPath];
     }
+    [self tideyRestoreEditorFileTreeScrollPoint:scrollPoint];
 }
 
 - (void)reloadTideyEditorFileTree {

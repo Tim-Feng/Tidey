@@ -71,6 +71,50 @@ static NSArray<NSString *> *TideyChildDisplayNames(iTermRootTerminalView *view) 
 @interface TideyEditorFileTreeWatcherTests : XCTestCase
 @end
 
+@interface TideyReloadResettingRootView : iTermRootTerminalView
+@end
+
+@implementation TideyReloadResettingRootView
+
+- (void)reloadTideyEditorFileTree {
+    [super reloadTideyEditorFileTree];
+    NSScrollView *scrollView = [self valueForKey:@"tideyEditorFileTreeScrollView"];
+    [[scrollView contentView] scrollToPoint:NSZeroPoint];
+    [scrollView reflectScrolledClipView:[scrollView contentView]];
+}
+
+@end
+
+static TideyReloadResettingRootView *TideyNewResettingFileTreeRootView(void) {
+    return [[[TideyReloadResettingRootView alloc] initWithFrame:NSZeroRect
+                                                         color:[NSColor blackColor]] autorelease];
+}
+
+static NSOutlineView *TideyFileTreeView(iTermRootTerminalView *view) {
+    return [view valueForKey:@"tideyEditorFileTreeView"];
+}
+
+static NSScrollView *TideyFileTreeScrollView(iTermRootTerminalView *view) {
+    return [view valueForKey:@"tideyEditorFileTreeScrollView"];
+}
+
+static TideyEditorFileNode *TideyTopLevelNodeNamed(iTermRootTerminalView *view, NSString *name) {
+    TideyEditorFileNode *rootNode = [view valueForKey:@"tideyEditorFileTreeRootNode"];
+    for (TideyEditorFileNode *child in [rootNode loadChildren]) {
+        if ([child.displayName isEqualToString:name]) {
+            return child;
+        }
+    }
+    return nil;
+}
+
+static void TideyConfigureFileTreeScrollGeometry(iTermRootTerminalView *view) {
+    NSScrollView *scrollView = TideyFileTreeScrollView(view);
+    NSOutlineView *outlineView = TideyFileTreeView(view);
+    scrollView.frame = NSMakeRect(0, 0, 240, 80);
+    outlineView.frame = NSMakeRect(0, 0, 240, MAX(400, outlineView.rowHeight * MAX(1, outlineView.numberOfRows)));
+}
+
 @implementation TideyEditorFileTreeWatcherTests
 
 - (void)testSyncEditorFileTreeWatcherStartsWatchingCurrentRootPath {
@@ -153,6 +197,65 @@ static NSArray<NSString *> *TideyChildDisplayNames(iTermRootTerminalView *view) 
 
     [[NSFileManager defaultManager] removeItemAtPath:firstRoot error:nil];
     [[NSFileManager defaultManager] removeItemAtPath:secondRoot error:nil];
+}
+
+- (void)testFileTreeReloadPreservesScrollPosition {
+    TideyReloadResettingRootView *view = TideyNewResettingFileTreeRootView();
+    NSString *rootPath = TideyMakeTemporaryDirectory();
+    for (NSInteger i = 0; i < 40; i++) {
+        TideyCreateFile(rootPath, [NSString stringWithFormat:@"file-%02ld.txt", (long)i]);
+    }
+    [view setValue:rootPath forKey:@"tideyEditorRootOverridePath"];
+    [view reloadTideyEditorFileTree];
+    TideyConfigureFileTreeScrollGeometry(view);
+
+    NSScrollView *scrollView = TideyFileTreeScrollView(view);
+    CGFloat expectedY = 120;
+    [[scrollView contentView] scrollToPoint:NSMakePoint(0, expectedY)];
+    [scrollView reflectScrolledClipView:[scrollView contentView]];
+
+    TideyCreateFile(rootPath, @"new.txt");
+    [view tideyHandleEditorFileTreeRootDidChange];
+
+    CGFloat actualY = NSMinY([[scrollView contentView] bounds]);
+    XCTAssertEqualWithAccuracy(actualY, expectedY, 0.5);
+
+    [[NSFileManager defaultManager] removeItemAtPath:rootPath error:nil];
+}
+
+- (void)testFileTreeReloadDoesNotReexpandSelectedCollapsedFolder {
+    iTermRootTerminalView *view = TideyNewFileTreeRootView();
+    NSString *rootPath = TideyMakeTemporaryDirectory();
+    NSString *folderPath = [rootPath stringByAppendingPathComponent:@"Folder"];
+    BOOL created = [[NSFileManager defaultManager] createDirectoryAtPath:folderPath
+                                             withIntermediateDirectories:YES
+                                                              attributes:nil
+                                                                   error:nil];
+    XCTAssertTrue(created);
+    TideyCreateFile(folderPath, @"child.txt");
+    [view setValue:rootPath forKey:@"tideyEditorRootOverridePath"];
+    [view reloadTideyEditorFileTree];
+
+    NSOutlineView *outlineView = TideyFileTreeView(view);
+    TideyEditorFileNode *folderNode = TideyTopLevelNodeNamed(view, @"Folder");
+    XCTAssertNotNil(folderNode);
+    [outlineView expandItem:folderNode];
+    NSInteger folderRow = [outlineView rowForItem:folderNode];
+    XCTAssertNotEqual(folderRow, -1);
+    [outlineView selectRowIndexes:[NSIndexSet indexSetWithIndex:folderRow] byExtendingSelection:NO];
+    [outlineView collapseItem:folderNode];
+    XCTAssertFalse([outlineView isItemExpanded:folderNode]);
+
+    TideyCreateFile(rootPath, @"peer.txt");
+    [view tideyHandleEditorFileTreeRootDidChange];
+
+    folderNode = TideyTopLevelNodeNamed(view, @"Folder");
+    XCTAssertNotNil(folderNode);
+    XCTAssertFalse([outlineView isItemExpanded:folderNode]);
+    TideyEditorFileNode *selectedNode = [outlineView itemAtRow:outlineView.selectedRow];
+    XCTAssertEqualObjects(selectedNode.path, folderNode.path);
+
+    [[NSFileManager defaultManager] removeItemAtPath:rootPath error:nil];
 }
 
 @end
