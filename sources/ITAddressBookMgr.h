@@ -589,6 +589,7 @@ NSString *iTermPathToSSH(void);
 + (NSColor*)decodeColor:(NSDictionary*)plist;
 + (void)setDefaultsInBookmark:(NSMutableDictionary*)aDict;
 + (NSString *)shellLauncherCommandWithCustomShell:(NSString *)customShell;
++ (NSString *)tideyLaunchCommandForCommand:(NSString *)command customShell:(NSString *)customShell;
 // Login command that leaves you in your home directory.
 + (NSString *)standardLoginCommand;
 + (NSString *)legacyStandardLoginCommand;

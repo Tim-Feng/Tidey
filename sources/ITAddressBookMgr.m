@@ -675,6 +675,14 @@ iTermPercentage iTermPercentageFromProfile(Profile *profile) {
             customShellArg];
 }
 
++ (NSString *)tideyLaunchCommandForCommand:(NSString *)command customShell:(NSString *)customShell {
+    if ([command isEqualToString:[self standardLoginCommand]] ||
+        [command isEqualToString:[self legacyStandardLoginCommand]]) {
+        return [self shellLauncherCommandWithCustomShell:customShell];
+    }
+    return command;
+}
+
 + (NSString*)loginShellCommandForBookmark:(Profile*)profile
                             forObjectType:(iTermObjectType)objectType {
     (void)objectType;
