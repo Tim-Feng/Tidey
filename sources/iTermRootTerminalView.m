@@ -184,6 +184,8 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
     TideyRightPanelTabKindBrowser = 1,
 };
 
+@class TideyBrowserOpenResult;
+
 @interface iTermRootTerminalView()<
     iTermTabBarControlViewDelegate,
     iTermDragHandleViewDelegate,
@@ -335,6 +337,11 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
                   currentSelectedTabIdentifier:(NSString *)currentSelectedTabIdentifier
                    lastActiveEditorTabIdentifier:(NSString *)lastActiveEditorTabIdentifier
                   lastActiveBrowserTabIdentifier:(NSString *)lastActiveBrowserTabIdentifier;
++ (NSArray<TideyEditorTab *> *)tideyVisibleRightPanelTabsForTabs:(NSArray<TideyEditorTab *> *)tabs
+                                                     expandedKind:(TideyRightPanelTabKind)expandedKind;
++ (TideyEditorTab *)tideyRightPanelTabForShortcutNumber:(NSInteger)number
+                                                   tabs:(NSArray<TideyEditorTab *> *)tabs
+                                           expandedKind:(TideyRightPanelTabKind)expandedKind;
 + (void)tideySyncShortcutHintDescriptors:(NSArray<TideyShortcutHintDescriptor *> *)descriptors
                          inContainerView:(NSView *)containerView
                                hintViews:(NSMutableArray<NSView *> *)hintViews;
@@ -342,6 +349,9 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
 + (NSString *)tideyBrowserDisplayNameForURL:(NSURL *)url pageTitle:(NSString *)pageTitle;
 + (NSInteger)tideyIndexOfExistingBrowserTabForURL:(NSString *)urlString
                                            inTabs:(NSArray<TideyEditorTab *> *)tabs;
++ (TideyBrowserOpenResult *)tideyBrowserOpenResultForURLString:(NSString *)input
+                                                        inTabs:(NSArray<TideyEditorTab *> *)tabs;
++ (BOOL)tideyResponder:(NSResponder *)responder isDescendantOfView:(NSView *)view;
 - (NSArray<TideyShortcutHintDescriptor *> *)tideyEditorPanelShortcutHintDescriptors;
 - (NSArray<TideyShortcutHintDescriptor *> *)tideyTerminalPanelShortcutHintDescriptors;
 - (void)tideyUpdatePanelShortcutHints;
@@ -663,6 +673,16 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 @end
 
 @implementation TideyRightPanelSelectionState
+@end
+
+@interface TideyBrowserOpenResult : NSObject
+@property(nonatomic, copy) NSString *normalizedURLString;
+@property(nonatomic) NSInteger existingTabIndex;
+@property(nonatomic, copy) NSString *displayName;
+@property(nonatomic) BOOL shouldCreateTab;
+@end
+
+@implementation TideyBrowserOpenResult
 @end
 
 @interface TideyPassthroughView : NSView
@@ -1071,6 +1091,24 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     return NSNotFound;
 }
 
++ (TideyBrowserOpenResult *)tideyBrowserOpenResultForURLString:(NSString *)input
+                                                        inTabs:(NSArray<TideyEditorTab *> *)tabs {
+    NSString *normalizedURLString = [self tideyNormalizedBrowserURLString:input];
+    if (normalizedURLString.length == 0) {
+        return nil;
+    }
+    NSURL *url = [NSURL URLWithString:normalizedURLString];
+    if (!url) {
+        return nil;
+    }
+    TideyBrowserOpenResult *result = [[TideyBrowserOpenResult alloc] init];
+    result.normalizedURLString = normalizedURLString;
+    result.existingTabIndex = [self tideyIndexOfExistingBrowserTabForURL:normalizedURLString inTabs:tabs];
+    result.displayName = [self tideyBrowserDisplayNameForURL:url pageTitle:nil];
+    result.shouldCreateTab = (result.existingTabIndex == NSNotFound);
+    return result;
+}
+
 + (TideyRightPanelTabKind)tideyResolvedExpandedKindForTabs:(NSArray<TideyEditorTab *> *)tabs
                                              expandedKind:(TideyRightPanelTabKind)expandedKind {
     BOOL hasEditors = ([self tideyRightPanelTabsOfKind:TideyRightPanelTabKindEditor inTabs:tabs].count > 0);
@@ -1085,6 +1123,44 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         return TideyRightPanelTabKindEditor;
     }
     return TideyRightPanelTabKindBrowser;
+}
+
++ (NSArray<TideyEditorTab *> *)tideyVisibleRightPanelTabsForTabs:(NSArray<TideyEditorTab *> *)tabs
+                                                     expandedKind:(TideyRightPanelTabKind)expandedKind {
+    TideyRightPanelTabKind resolvedExpandedKind = [self tideyResolvedExpandedKindForTabs:tabs expandedKind:expandedKind];
+    return [self tideyRightPanelTabsOfKind:resolvedExpandedKind inTabs:tabs];
+}
+
++ (TideyEditorTab *)tideyRightPanelTabForShortcutNumber:(NSInteger)number
+                                                   tabs:(NSArray<TideyEditorTab *> *)tabs
+                                           expandedKind:(TideyRightPanelTabKind)expandedKind {
+    if (number < 1 || number > 9) {
+        return nil;
+    }
+    NSArray<TideyEditorTab *> *visibleTabs = [self tideyVisibleRightPanelTabsForTabs:tabs expandedKind:expandedKind];
+    if (visibleTabs.count == 0) {
+        return nil;
+    }
+    NSInteger index = number - 1;
+    if (number == 9 && visibleTabs.count < 9) {
+        index = visibleTabs.count - 1;
+    }
+    if (index < 0 || index >= (NSInteger)visibleTabs.count) {
+        return nil;
+    }
+    return visibleTabs[index];
+}
+
++ (BOOL)tideyResponder:(NSResponder *)responder isDescendantOfView:(NSView *)view {
+    if (!view) {
+        return NO;
+    }
+    for (NSResponder *current = responder; current != nil; current = current.nextResponder) {
+        if ([current isKindOfClass:[NSView class]] && [(NSView *)current isDescendantOf:view]) {
+            return YES;
+        }
+    }
+    return NO;
 }
 
 + (TideyEditorTab *)tideyRightPanelPreferredTabForKind:(TideyRightPanelTabKind)kind
@@ -4256,11 +4332,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 32;
     if (_tideyEditorPanelView.hidden || !_tideyEditorWebView) {
         return NO;
     }
-    id responder = self.window.firstResponder;
-    if (![responder isKindOfClass:[NSView class]]) {
-        return NO;
-    }
-    return [(NSView *)responder isDescendantOf:_tideyEditorWebView];
+    return [[self class] tideyResponder:self.window.firstResponder isDescendantOfView:_tideyEditorWebView];
 }
 
 - (BOOL)tideyEditorHasFocus {
@@ -4271,11 +4343,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 32;
     if (_tideyEditorPanelView.hidden) {
         return NO;
     }
-    id responder = self.window.firstResponder;
-    if (![responder isKindOfClass:[NSView class]]) {
-        return NO;
-    }
-    return [(NSView *)responder isDescendantOf:_tideyEditorPanelView];
+    return [[self class] tideyResponder:self.window.firstResponder isDescendantOfView:_tideyEditorPanelView];
 }
 
 - (void)createNewUntitledEditorTab {
@@ -4292,14 +4360,17 @@ static const CGFloat kTideyBrowserToolbarHeight = 32;
 }
 
 - (BOOL)selectTideyEditorTabByNumber:(NSInteger)number {
-    if (number < 1 || number > 9 || _tideyEditorTabs.count == 0) {
+    if (_tideyEditorTabs.count == 0) {
         return NO;
     }
-    NSInteger index = number - 1;
-    if (number == 9 && _tideyEditorTabs.count < 9) {
-        index = _tideyEditorTabs.count - 1;
+    TideyEditorTab *tab = [[self class] tideyRightPanelTabForShortcutNumber:number
+                                                                        tabs:_tideyEditorTabs
+                                                                expandedKind:_tideyExpandedRightPanelTabKind];
+    if (!tab) {
+        return NO;
     }
-    if (index < 0 || index >= (NSInteger)_tideyEditorTabs.count) {
+    NSInteger index = [_tideyEditorTabs indexOfObjectIdenticalTo:tab];
+    if (index == NSNotFound) {
         return NO;
     }
     [self selectTideyEditorTabAtIndex:index];
