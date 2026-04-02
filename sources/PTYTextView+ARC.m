@@ -287,6 +287,34 @@ iTermCommandInfoViewControllerDelegate>
     return NSMakePoint(coord.x, coord.y);
 }
 
+- (VT100GridCoord)tideyURLCoordForPoint:(NSPoint)locationInTextView
+                allowRightMarginOverflow:(BOOL)allowRightMarginOverflow {
+    const CGFloat lowerEdgeBias = MIN(14.0, floor(self.lineHeight / 2.0));
+    NSPoint biasedPoint = locationInTextView;
+    biasedPoint.y = MAX(0, biasedPoint.y - lowerEdgeBias);
+    return [self coordForPoint:biasedPoint allowRightMarginOverflow:allowRightMarginOverflow];
+}
+
+- (VT100GridCoord)tideyURLCoordForEvent:(NSEvent *)event
+               allowRightMarginOverflow:(BOOL)allowRightMarginOverflow {
+    NSPoint locationInWindow = [event locationInWindow];
+    NSPoint locationInTextView = [self convertPoint:locationInWindow fromView:nil];
+    return [self tideyURLCoordForPoint:locationInTextView
+              allowRightMarginOverflow:allowRightMarginOverflow];
+}
+
+- (VT100GridCoord)tideyURLCoordForMouseLocation:(NSPoint)screenPoint {
+    const NSRect windowRect = [[self window] convertRectFromScreen:NSMakeRect(screenPoint.x,
+                                                                              screenPoint.y,
+                                                                              0,
+                                                                              0)];
+    const NSPoint locationInTextView = [self convertPoint:windowRect.origin fromView:nil];
+    if (!NSPointInRect(locationInTextView, [self bounds])) {
+        return VT100GridCoordInvalid;
+    }
+    return [self tideyURLCoordForPoint:locationInTextView allowRightMarginOverflow:NO];
+}
+
 - (VT100GridCoord)coordForPoint:(NSPoint)locationInTextView
        allowRightMarginOverflow:(BOOL)allowRightMarginOverflow {
     int x, y;
@@ -305,9 +333,7 @@ iTermCommandInfoViewControllerDelegate>
     const NSRect scrollviewVisibleRect = [self.enclosingScrollView documentVisibleRect];
     const CGFloat relativeY = locationInTextView.y - NSMinY(scrollviewVisibleRect);
     const CGFloat correctedY = NSMinY(adjustedVisibleRect) + relativeY;
-    const CGFloat lowerEdgeBias = MIN(14.0, floor(self.lineHeight / 2.0));
-
-    y = MAX(0, correctedY - lowerEdgeBias) / self.lineHeight;
+    y = correctedY / self.lineHeight;
 
     int limit;
     if (allowRightMarginOverflow) {
@@ -428,7 +454,7 @@ iTermCommandInfoViewControllerDelegate>
     if (!commandPressed) {
         return NO;
     }
-    const VT100GridCoord coord = [self coordForEvent:event];
+    const VT100GridCoord coord = [self tideyURLCoordForEvent:event allowRightMarginOverflow:NO];
     const BOOL semanticHistoryAllowed = (self.window.isKeyWindow ||
                                          [iTermAdvancedSettingsModel cmdClickWhenInactiveInvokesSemanticHistory]);
     if (!semanticHistoryAllowed) {
@@ -469,7 +495,7 @@ iTermCommandInfoViewControllerDelegate>
 
 - (void)updateCursorAndUnderlinedRange:(NSEvent *)event {
     DLog(@"updateCursorAndUnderlinedRange:%@", event);
-    const VT100GridCoord coord = [self coordForEvent:event];
+    const VT100GridCoord coord = [self tideyURLCoordForEvent:event allowRightMarginOverflow:NO];
     __weak __typeof(self) weakSelf = self;
     DLog(@"updateUnderlinedURLs in screen:\n%@", [self.dataSource compactLineDumpWithContinuationMarks]);
     [self.lastUrlActionCanceler cancelOperation];
@@ -497,7 +523,7 @@ iTermCommandInfoViewControllerDelegate>
         return;
     }
     DLog(@"There is an action");
-    const VT100GridCoord visualCoord = [self coordForMouseLocation:[NSEvent mouseLocation]];
+    const VT100GridCoord visualCoord = [self tideyURLCoordForMouseLocation:[NSEvent mouseLocation]];
     if (!VT100GridWindowedRangeContainsCoord(action.visualRange, visualCoord)) {
         DLog(@"Mouse not in action's range");
         return;
@@ -1397,9 +1423,7 @@ iTermCommandInfoViewControllerDelegate>
 }
 
 - (VT100GridCoord)urlActionHelper:(iTermURLActionHelper *)helper coordForEvent:(NSEvent *)event allowRightMarginOverflow:(BOOL)allowRightMarginOverflow {
-    const NSPoint clickPoint = [self clickPoint:event allowRightMarginOverflow:allowRightMarginOverflow];
-    const VT100GridCoord coord = VT100GridCoordMake(clickPoint.x, clickPoint.y);
-    return coord;
+    return [self tideyURLCoordForEvent:event allowRightMarginOverflow:allowRightMarginOverflow];
 }
 
 - (VT100GridAbsCoord)urlActionHelper:(iTermURLActionHelper *)helper
