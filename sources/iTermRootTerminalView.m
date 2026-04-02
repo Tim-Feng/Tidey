@@ -982,19 +982,13 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     hint.identifier = kTideyPanelHintViewIdentifier;
     hint.wantsLayer = YES;
     hint.layer.cornerRadius = 4;
-    hint.layer.backgroundColor = [NSColor colorWithSRGBRed:0.129
-                                                     green:0.169
-                                                      blue:0.216
-                                                     alpha:0.90].CGColor;
+    hint.layer.backgroundColor = [NSColor colorWithWhite:1.0 alpha:0.12].CGColor;
     hint.hidden = YES;
 
     NSTextField *label = [NSTextField labelWithString:@""];
     label.tag = kTideyPanelHintLabelTag;
     label.font = [NSFont monospacedSystemFontOfSize:10 weight:NSFontWeightSemibold];
-    label.textColor = [NSColor colorWithSRGBRed:0.882
-                                          green:0.906
-                                           blue:0.937
-                                          alpha:1.0];
+    label.textColor = [NSColor colorWithWhite:1.0 alpha:0.9];
     label.alignment = NSTextAlignmentCenter;
     label.frame = NSMakeRect(0, 1, kTideyPanelShortcutHintWidth, 14);
     [hint addSubview:label];
@@ -1276,23 +1270,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
             [tabViews addObject:subview];
         }
     }
-    NSMutableArray<TideyShortcutHintDescriptor *> *descriptors = [NSMutableArray array];
-    NSInteger visibleIndex = 0;
-    for (NSView *tabView in tabViews) {
-        if (visibleIndex >= 9) {
-            break;
-        }
-        if (tabView.hidden || NSIsEmptyRect(tabView.frame)) {
-            continue;
-        }
-        visibleIndex++;
-        NSString *text = [NSString stringWithFormat:@"\u2303%ld", (long)visibleIndex];
-        NSRect frameInPanel = [_tideyEditorPanelView convertRect:tabView.frame
-                                                        fromView:_tideyEditorTabStripView];
-        [descriptors addObject:[TideyShortcutHintDescriptor descriptorWithText:text
-                                                                         frame:TideyPanelShortcutHintFrameForAnchorRect(frameInPanel)]];
-    }
-    return descriptors;
+    return [[self class] tideyShortcutHintDescriptorsForEditorTabViews:tabViews];
 }
 
 - (NSArray<TideyShortcutHintDescriptor *> *)tideyTerminalPanelShortcutHintDescriptors {
@@ -1307,19 +1285,17 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 
 - (void)tideyUpdatePanelShortcutHints {
-    if (_tideyEditorPanelHintOverlayView.superview == _tideyEditorPanelView) {
-        [_tideyEditorPanelView addSubview:_tideyEditorPanelHintOverlayView
-                                positioned:NSWindowAbove
-                                relativeTo:nil];
+    if (_tideyEditorPanelHintOverlayView.superview == _tideyEditorTabStripView) {
+        [_tideyEditorTabStripView addSubview:_tideyEditorPanelHintOverlayView
+                                   positioned:NSWindowAbove
+                                   relativeTo:nil];
     }
     if (_tideyTerminalPanelHintOverlayView.superview == _tabBarControl) {
         [_tabBarControl addSubview:_tideyTerminalPanelHintOverlayView
                          positioned:NSWindowAbove
                          relativeTo:nil];
     }
-    _tideyEditorPanelHintOverlayView.wantsLayer = YES;
-    _tideyEditorPanelHintOverlayView.layer.zPosition = 1000;
-    _tideyEditorPanelHintOverlayView.frame = _tideyEditorPanelView.bounds;
+    _tideyEditorPanelHintOverlayView.frame = _tideyEditorTabStripView.bounds;
     _tideyTerminalPanelHintOverlayView.frame = _tabBarControl.bounds;
 
     NSArray<TideyShortcutHintDescriptor *> *editorDescriptors = @[];
@@ -1479,9 +1455,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         [_tideyEditorPanelView addSubview:_tideyEditorTabStripView];
         _tideyEditorPanelHintOverlayView = [[TideyPassthroughView alloc] initWithFrame:NSZeroRect];
         _tideyEditorPanelHintOverlayView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-        _tideyEditorPanelHintOverlayView.wantsLayer = YES;
-        _tideyEditorPanelHintOverlayView.layer.zPosition = 1000;
-        [_tideyEditorPanelView addSubview:_tideyEditorPanelHintOverlayView positioned:NSWindowAbove relativeTo:nil];
+        [_tideyEditorTabStripView addSubview:_tideyEditorPanelHintOverlayView];
         _tideyEditorPanelHintViews = [[NSMutableArray alloc] init];
 
         _tideyEditorPanelLabel = [NSTextField labelWithString:@"Loading Editor…"];
@@ -3857,7 +3831,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
             x += tabWidth;
         }
     }
-    [_tideyEditorPanelView addSubview:_tideyEditorPanelHintOverlayView positioned:NSWindowAbove relativeTo:nil];
+    [_tideyEditorTabStripView addSubview:_tideyEditorPanelHintOverlayView positioned:NSWindowAbove relativeTo:nil];
     [self tideyUpdatePanelShortcutHints];
     [self updateTideyChromeToggleButtons];
 }
