@@ -305,7 +305,7 @@ iTermCommandInfoViewControllerDelegate>
     const NSRect scrollviewVisibleRect = [self.enclosingScrollView documentVisibleRect];
     const CGFloat relativeY = locationInTextView.y - NSMinY(scrollviewVisibleRect);
     const CGFloat correctedY = NSMinY(adjustedVisibleRect) + relativeY;
-    const CGFloat lowerEdgeBias = MIN(3.0, floor(self.lineHeight / 5.0));
+    const CGFloat lowerEdgeBias = MIN(5.0, floor(self.lineHeight / 4.0));
 
     y = MAX(0, correctedY - lowerEdgeBias) / self.lineHeight;
 
