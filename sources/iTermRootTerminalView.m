@@ -3889,6 +3889,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         [self tideyEditorRevealFileAtPath:tab.path];
     }
     [self tideyUpdateBrowserContentVisibility];
+    [self layoutTideyEditorContents];
     [self updateTideyChromeToggleButtons];
     [self tideyPersistEditorState];
     [self tideyUpdateEditorPlaceholder];
@@ -3922,6 +3923,9 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         [self tideyStopWatchingCurrentEditorFile];
         [self reloadTideyEditorFileTree];
         [self reloadTideyRightPanelTabs];
+        [self tideyUpdateBrowserContentVisibility];
+        [self layoutTideyEditorContents];
+        [self updateTideyChromeToggleButtons];
         [self tideyUpdateEditorPlaceholder];
         [self tideyPersistEditorState];
         return;
@@ -4756,9 +4760,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 
     TideyEditorTab *currentRightPanelTab = [self tideyCurrentRightPanelTab];
     const BOOL rightPanelShowsBrowser = (currentRightPanelTab.kind == TideyRightPanelTabKindBrowser);
-    const BOOL showFileTreeToggle = self.shouldShowTideyEditorPanel &&
-                                    self.shouldShowTideyEditorFileTree &&
-                                    !rightPanelShowsBrowser;
+    const BOOL showFileTreeToggle = self.shouldShowTideyEditorPanel && !rightPanelShowsBrowser;
     self.tideyEditorFileTreeToggleButton.hidden = !showFileTreeToggle;
     if (!showFileTreeToggle) {
         return;
