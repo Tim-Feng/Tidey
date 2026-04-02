@@ -305,9 +305,7 @@ iTermCommandInfoViewControllerDelegate>
     const NSRect scrollviewVisibleRect = [self.enclosingScrollView documentVisibleRect];
     const CGFloat relativeY = locationInTextView.y - NSMinY(scrollviewVisibleRect);
     const CGFloat correctedY = NSMinY(adjustedVisibleRect) + relativeY;
-    const CGFloat lowerEdgeBias = MIN(14.0, floor(self.lineHeight / 2.0));
-
-    y = MAX(0, correctedY - lowerEdgeBias) / self.lineHeight;
+    y = correctedY / self.lineHeight;
 
     int limit;
     if (allowRightMarginOverflow) {
@@ -469,7 +467,14 @@ iTermCommandInfoViewControllerDelegate>
 
 - (void)updateCursorAndUnderlinedRange:(NSEvent *)event {
     DLog(@"updateCursorAndUnderlinedRange:%@", event);
-    const VT100GridCoord coord = [self coordForEvent:event];
+    // Use a biased coordinate for URL detection — shift up so the bottom
+    // edge of a line is easier to hover.  This only affects underline/cursor
+    // detection, not text selection.
+    const NSPoint screenPoint = [NSEvent mouseLocation];
+    const NSRect windowRect = [[self window] convertRectFromScreen:NSMakeRect(screenPoint.x, screenPoint.y, 0, 0)];
+    NSPoint biasedPoint = windowRect.origin;
+    biasedPoint.y += MIN(14.0, floor(self.lineHeight / 2.0));
+    const VT100GridCoord coord = [self coordForPointInWindow:biasedPoint];
     __weak __typeof(self) weakSelf = self;
     DLog(@"updateUnderlinedURLs in screen:\n%@", [self.dataSource compactLineDumpWithContinuationMarks]);
     [self.lastUrlActionCanceler cancelOperation];
@@ -1397,8 +1402,11 @@ iTermCommandInfoViewControllerDelegate>
 }
 
 - (VT100GridCoord)urlActionHelper:(iTermURLActionHelper *)helper coordForEvent:(NSEvent *)event allowRightMarginOverflow:(BOOL)allowRightMarginOverflow {
-    const NSPoint clickPoint = [self clickPoint:event allowRightMarginOverflow:allowRightMarginOverflow];
-    const VT100GridCoord coord = VT100GridCoordMake(clickPoint.x, clickPoint.y);
+    NSPoint clickPoint = [self clickPoint:event allowRightMarginOverflow:allowRightMarginOverflow];
+    // Bias y up so the bottom edge of a line is easier to click for URLs.
+    const CGFloat bias = MIN(14.0, floor(self.lineHeight / 2.0)) / self.lineHeight;
+    clickPoint.y = MAX(0, clickPoint.y - bias);
+    const VT100GridCoord coord = VT100GridCoordMake(clickPoint.x, (int)clickPoint.y);
     return coord;
 }
 
