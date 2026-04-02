@@ -331,7 +331,8 @@ iTermCommandInfoViewControllerDelegate>
     // (which corresponds to what the thinks they clicked on).
     const NSRect adjustedVisibleRect = [self adjustedDocumentVisibleRect];
     const NSRect scrollviewVisibleRect = [self.enclosingScrollView documentVisibleRect];
-    const CGFloat relativeY = locationInTextView.y - NSMinY(scrollviewVisibleRect);
+    const CGFloat locationInScrollViewY = locationInTextView.y + NSMinY(self.frame);
+    const CGFloat relativeY = locationInScrollViewY - NSMinY(scrollviewVisibleRect);
     const CGFloat correctedY = NSMinY(adjustedVisibleRect) + relativeY;
     y = correctedY / self.lineHeight;
 
