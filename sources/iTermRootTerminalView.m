@@ -697,54 +697,6 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 @end
 
-@interface TideyCenteredTextFieldCell : NSTextFieldCell
-@end
-
-@implementation TideyCenteredTextFieldCell
-
-- (NSRect)tideyCenteredTextRectForBounds:(NSRect)rect {
-    NSRect textRect = [super titleRectForBounds:rect];
-    CGFloat inset = floor((NSHeight(rect) - NSHeight(textRect)) / 2.0) - 1;
-    textRect.origin.y = NSMinY(rect) + MAX(0, inset);
-    return textRect;
-}
-
-- (NSRect)titleRectForBounds:(NSRect)rect {
-    return [self tideyCenteredTextRectForBounds:rect];
-}
-
-- (NSRect)editingRectForBounds:(NSRect)rect {
-    return [self tideyCenteredTextRectForBounds:rect];
-}
-
-- (void)selectWithFrame:(NSRect)aRect
-                 inView:(NSView *)controlView
-                 editor:(NSText *)textObj
-               delegate:(id)anObject
-                  start:(NSInteger)selStart
-                 length:(NSInteger)selLength {
-    [super selectWithFrame:[self tideyCenteredTextRectForBounds:aRect]
-                    inView:controlView
-                    editor:textObj
-                  delegate:anObject
-                     start:selStart
-                    length:selLength];
-}
-
-- (void)editWithFrame:(NSRect)aRect
-               inView:(NSView *)controlView
-               editor:(NSText *)textObj
-             delegate:(id)anObject
-                event:(NSEvent *)theEvent {
-    [super editWithFrame:[self tideyCenteredTextRectForBounds:aRect]
-                  inView:controlView
-                  editor:textObj
-                delegate:anObject
-                   event:theEvent];
-}
-
-@end
-
 @class iTermRootTerminalView;
 
 @interface TideyEditorScriptMessageHandler : NSObject<WKScriptMessageHandler>
@@ -3042,7 +2994,6 @@ static const CGFloat kTideyBrowserToolbarHeight = 32;
     // URL field
     _tideyBrowserURLField = [[NSTextField alloc] initWithFrame:NSMakeRect(92, 4, 100, 24)];
     _tideyBrowserURLField.autoresizingMask = NSViewWidthSizable;
-    _tideyBrowserURLField.cell = [[TideyCenteredTextFieldCell alloc] initTextCell:@""];
     _tideyBrowserURLField.placeholderString = @"Enter URL";
     _tideyBrowserURLField.font = [NSFont systemFontOfSize:12];
     _tideyBrowserURLField.textColor = [NSColor labelColor];
@@ -3134,7 +3085,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 32;
     // URL field fills remaining width after buttons
     const CGFloat urlFieldX = 92;
     const CGFloat urlFieldRight = 28;
-    const CGFloat urlFieldHeight = 24;
+    const CGFloat urlFieldHeight = 22;
     const CGFloat urlFieldY = floor((kTideyBrowserToolbarHeight - urlFieldHeight) / 2.0);
     _tideyBrowserURLField.frame = NSMakeRect(urlFieldX,
                                              urlFieldY,
