@@ -2242,7 +2242,7 @@ static NSString *iTermStringForEventPhase(NSEventPhase eventPhase) {
     NSPoint locationInWindow = [event locationInWindow];
     NSPoint locationInTextView = [self convertPoint:locationInWindow fromView:nil];
     locationInTextView.x = ceil(locationInTextView.x);
-    locationInTextView.y = ceil(locationInTextView.y);
+    locationInTextView.y = floor(locationInTextView.y);
     // Clamp the y position to be within the view. Sometimes we get events we probably shouldn't.
     locationInTextView.y = MIN(self.frame.size.height - 1,
                                MAX(0, locationInTextView.y));
@@ -7143,8 +7143,11 @@ static NSString *iTermStringFromRange(NSRange range) {
 
 - (VT100GridCoord)mouseHandlerCoordForPointInView:(NSPoint)point {
     NSRect liveRect = [self liveRect];
-    VT100GridCoord coord = VT100GridCoordMake((point.x - liveRect.origin.x) / _charWidth,
-                                              (point.y - liveRect.origin.y) / _lineHeight);
+    const CGFloat topOffset = [iTermPreferences topBottomMargins];
+    const CGFloat adjustedY = point.y - liveRect.origin.y - topOffset;
+    const CGFloat rowF = adjustedY / _lineHeight;
+    const int row = (adjustedY > 0 && fmod(adjustedY, _lineHeight) < 0.01) ? (int)rowF - 1 : (int)rowF;
+    VT100GridCoord coord = VT100GridCoordMake((point.x - liveRect.origin.x) / _charWidth, row);
     coord.x = MAX(0, coord.x);
     coord.y = MAX(0, coord.y);
     return coord;
