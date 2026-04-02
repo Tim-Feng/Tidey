@@ -3739,6 +3739,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 32;
     if (index < 0 || index >= (NSInteger)_tideyEditorTabs.count) {
         return;
     }
+    BOOL sameTab = (_tideySelectedEditorTabIndex == index);
     _tideySelectedEditorTabIndex = index;
     TideyEditorTab *tab = _tideyEditorTabs[index];
     _tideyExpandedRightPanelTabKind = tab.kind;
@@ -3750,9 +3751,11 @@ static const CGFloat kTideyBrowserToolbarHeight = 32;
         [self tideyStopWatchingCurrentEditorFile];
         [self tideyEnsureBrowserWebView];
         [self tideyLayoutBrowserContainer];
-        NSURL *url = [NSURL URLWithString:tab.path];
-        if (url) {
-            [self tideyLoadBrowserURL:url];
+        if (!sameTab) {
+            NSURL *url = [NSURL URLWithString:tab.path];
+            if (url) {
+                [self tideyLoadBrowserURL:url];
+            }
         }
     } else {
         [self tideySyncCurrentEditorFileWatcher];
@@ -4261,7 +4264,18 @@ static const CGFloat kTideyBrowserToolbarHeight = 32;
 }
 
 - (BOOL)tideyEditorHasFocus {
-    return [self tideyEditorShouldHandleFindPanelAction];
+    return [self tideyRightPanelHasFocus];
+}
+
+- (BOOL)tideyRightPanelHasFocus {
+    if (_tideyEditorPanelView.hidden) {
+        return NO;
+    }
+    id responder = self.window.firstResponder;
+    if (![responder isKindOfClass:[NSView class]]) {
+        return NO;
+    }
+    return [(NSView *)responder isDescendantOf:_tideyEditorPanelView];
 }
 
 - (void)createNewUntitledEditorTab {
