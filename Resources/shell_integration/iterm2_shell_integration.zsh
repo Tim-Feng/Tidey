@@ -245,7 +245,6 @@ if [[ -o interactive ]]; then
           PROMPT="%(?:%{$fg[green]%}%1{➜%} :%{$fg[red]%}%1{➜%} ) %{$fg[blue]%}%c%{$reset_color%}"
           PROMPT+=' $(git_prompt_info)'
         fi
-        add-zsh-hook -d precmd _tidey_override_prompt
       }
       autoload -Uz add-zsh-hook
       add-zsh-hook precmd _tidey_override_prompt
