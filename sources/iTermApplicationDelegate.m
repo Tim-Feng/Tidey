@@ -2799,12 +2799,12 @@ static iTermKeyEventReplayer *gReplayer;
 - (IBAction)newWindow:(id)sender {
     DLog(@"newWindow: invoked");
     PseudoTerminal *currentTerminal = [[iTermController sharedInstance] currentTerminal];
+    if ([currentTerminal tideyBrowserHasFocus]) {
+        [currentTerminal createNewBlankBrowserTab];
+        return;
+    }
     if (currentTerminal.isShowingTideySidebar) {
         if ([currentTerminal tideyEditorHasFocus]) {
-            if ([currentTerminal tideyBrowserHasFocus]) {
-                [currentTerminal createNewBlankBrowserTab];
-                return;
-            }
             [currentTerminal createNewUntitledEditorTab];
             return;
         }
