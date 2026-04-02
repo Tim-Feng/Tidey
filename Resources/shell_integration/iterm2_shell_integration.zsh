@@ -225,6 +225,11 @@ if [[ -o interactive ]]; then
       add-zsh-hook precmd _tidey_precmd
     fi
 
+    if [ "${LC_TERMINAL-}" = "Tidey" ] && [ "${ZSH_THEME-}" = "robbyrussell" ]; then
+      PROMPT="%(?:%{$fg[green]%}%1{➜%} :%{$fg[red]%}%1{➜%} ) %{$fg[cyan]%}%c%{$reset_color%}"
+      PROMPT+=' $(git_prompt_info)'
+    fi
+
     iterm2_print_state_data
     printf "\033]1337;ShellIntegrationVersion=15;shell=zsh\007"
   fi
