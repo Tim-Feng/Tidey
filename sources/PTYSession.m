@@ -5115,84 +5115,84 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
 - (NSColor *)defaultANSIColor:(int)i darkMode:(BOOL)darkMode {
     switch (i) {
         case 0:  // Black
-            return [NSColor colorWithSRGBRed:0.078431375
-                                       green:0.098039217
-                                        blue:0.117647059
+            return [NSColor colorWithSRGBRed:0.1019607843
+                                       green:0.1372549020
+                                        blue:0.1764705882
                                        alpha:1.0];
         case 1:  // Red
-            return [NSColor colorWithSRGBRed:0.707443237
-                                       green:0.236600697
-                                        blue:0.163000375
+            return [NSColor colorWithSRGBRed:0.7803921569
+                                       green:0.3529411765
+                                        blue:0.3529411765
                                        alpha:1.0];
         case 2:  // Green
-            return [NSColor colorWithSRGBRed:0.0
-                                       green:0.760784328
-                                        blue:0.0
+            return [NSColor colorWithSRGBRed:0.3529411765
+                                       green:0.6196078431
+                                        blue:0.5607843137
                                        alpha:1.0];
         case 3:  // Yellow
-            return [NSColor colorWithSRGBRed:0.780586481
-                                       green:0.769594848
-                                        blue:0.0
+            return [NSColor colorWithSRGBRed:0.7882352941
+                                       green:0.6352941176
+                                        blue:0.3019607843
                                        alpha:1.0];
         case 4:  // Blue
-            return [NSColor colorWithSRGBRed:0.154043003
-                                       green:0.264743567
-                                        blue:0.782161772
+            return [NSColor colorWithSRGBRed:0.3568627451
+                                       green:0.5098039216
+                                        blue:0.6588235294
                                        alpha:1.0];
         case 5:  // Magenta
-            return [NSColor colorWithSRGBRed:0.752197266
-                                       green:0.249316841
-                                        blue:0.744943619
+            return [NSColor colorWithSRGBRed:0.5450980392
+                                       green:0.4784313725
+                                        blue:0.6705882353
                                        alpha:1.0];
         case 6:  // Cyan
-            return [NSColor colorWithSRGBRed:0.0
-                                       green:0.774259031
-                                        blue:0.781662047
+            return [NSColor colorWithSRGBRed:0.1882352941
+                                       green:0.8352941176
+                                        blue:0.7843137255
                                        alpha:1.0];
         case 7:  // White
-            return [NSColor colorWithSRGBRed:0.781039774
-                                       green:0.781058252
-                                        blue:0.781048298
+            return [NSColor colorWithSRGBRed:0.5333333333
+                                       green:0.5686274510
+                                        blue:0.6274509804
                                        alpha:1.0];
         case 8:  // Bright Black
-            return [NSColor colorWithSRGBRed:0.407817602
-                                       green:0.407827884
-                                        blue:0.407822371
+            return [NSColor colorWithSRGBRed:0.3019607843
+                                       green:0.3372549020
+                                        blue:0.4000000000
                                        alpha:1.0];
         case 9:  // Bright Red
-            return [NSColor colorWithSRGBRed:0.865951538
-                                       green:0.475240767
-                                        blue:0.458332241
+            return [NSColor colorWithSRGBRed:0.9725490196
+                                       green:0.4431372549
+                                        blue:0.4431372549
                                        alpha:1.0];
         case 10:  // Bright Green
-            return [NSColor colorWithSRGBRed:0.345007032
-                                       green:0.904281616
-                                        blue:0.565419376
+            return [NSColor colorWithSRGBRed:0.2039215686
+                                       green:0.8274509804
+                                        blue:0.6000000000
                                        alpha:1.0];
         case 11:  // Bright Yellow
-            return [NSColor colorWithSRGBRed:0.92590332
-                                       green:0.883377552
-                                        blue:0.0
+            return [NSColor colorWithSRGBRed:0.9843137255
+                                       green:0.7490196078
+                                        blue:0.1411764706
                                        alpha:1.0];
         case 12:  // Bright Blue
-            return [NSColor colorWithSRGBRed:0.653490782
-                                       green:0.670447171
-                                        blue:0.948532105
+            return [NSColor colorWithSRGBRed:0.4784313725
+                                       green:0.6823529412
+                                        blue:0.8313725490
                                        alpha:1.0];
         case 13:  // Bright Magenta
-            return [NSColor colorWithSRGBRed:0.882156372
-                                       green:0.492726654
-                                        blue:0.882156372
+            return [NSColor colorWithSRGBRed:0.6901960784
+                                       green:0.6274509804
+                                        blue:0.8156862745
                                        alpha:1.0];
         case 14:  // Bright Cyan
-            return [NSColor colorWithSRGBRed:0.375975311
-                                       green:0.992632926
-                                        blue:1.0
+            return [NSColor colorWithSRGBRed:0.4313725490
+                                       green:0.9176470588
+                                        blue:0.8784313725
                                        alpha:1.0];
         case 15:  // Bright White
-            return [NSColor colorWithSRGBRed:0.999996006
-                                       green:1.0
-                                        blue:1.0
+            return [NSColor colorWithSRGBRed:0.8823529412
+                                       green:0.9058823529
+                                        blue:0.9372549020
                                        alpha:1.0];
         default:
             return [NSColor colorWithSRGBRed:1.0
@@ -20210,9 +20210,9 @@ static const NSTimeInterval PTYSessionFocusReportBellSquelchTimeIntervalThreshol
 
 - (NSColor *)textColorForStatusBar {
     if (self.isTmuxClient) {
-        return [NSColor colorWithSRGBRed:(35.0 / 255.0)
-                                  green:(39.0 / 255.0)
-                                   blue:(45.0 / 255.0)
+        return [NSColor colorWithSRGBRed:(12.0 / 255.0)
+                                  green:(17.0 / 255.0)
+                                   blue:(23.0 / 255.0)
                                   alpha:1.0];
     }
     return [[iTermTheme sharedInstance] statusBarTextColorForEffectiveAppearance:_view.effectiveAppearance
@@ -20289,9 +20289,9 @@ static const NSTimeInterval PTYSessionFocusReportBellSquelchTimeIntervalThreshol
 
 - (NSColor *)statusBarBackgroundColor {
     if (self.isTmuxClient) {
-        return [NSColor colorWithSRGBRed:(173.0 / 255.0)
-                                  green:(179.0 / 255.0)
-                                   blue:(101.0 / 255.0)
+        return [NSColor colorWithSRGBRed:(90.0 / 255.0)
+                                  green:(158.0 / 255.0)
+                                   blue:(143.0 / 255.0)
                                   alpha:1.0];
     }
     return _statusBarViewController.layout.advancedConfiguration.backgroundColor;
