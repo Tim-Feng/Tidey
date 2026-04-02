@@ -3086,7 +3086,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 32;
     const CGFloat urlFieldX = 92;
     const CGFloat urlFieldRight = 28;
     const CGFloat urlFieldHeight = 22;
-    const CGFloat urlFieldY = floor((kTideyBrowserToolbarHeight - urlFieldHeight) / 2.0);
+    const CGFloat urlFieldY = floor((kTideyBrowserToolbarHeight - urlFieldHeight) / 2.0) - 2;
     _tideyBrowserURLField.frame = NSMakeRect(urlFieldX,
                                              urlFieldY,
                                              MAX(50, contentWidth - urlFieldX - urlFieldRight),
