@@ -20209,6 +20209,12 @@ static const NSTimeInterval PTYSessionFocusReportBellSquelchTimeIntervalThreshol
 #pragma mark - iTermStatusBarViewControllerDelegate
 
 - (NSColor *)textColorForStatusBar {
+    if (self.isTmuxClient) {
+        return [NSColor colorWithSRGBRed:(35.0 / 255.0)
+                                  green:(39.0 / 255.0)
+                                   blue:(45.0 / 255.0)
+                                  alpha:1.0];
+    }
     return [[iTermTheme sharedInstance] statusBarTextColorForEffectiveAppearance:_view.effectiveAppearance
                                                                      marginColor:_textview.colorForMargins
                                                                         colorMap:_screen.colorMap
@@ -20282,6 +20288,12 @@ static const NSTimeInterval PTYSessionFocusReportBellSquelchTimeIntervalThreshol
 }
 
 - (NSColor *)statusBarBackgroundColor {
+    if (self.isTmuxClient) {
+        return [NSColor colorWithSRGBRed:(173.0 / 255.0)
+                                  green:(179.0 / 255.0)
+                                   blue:(101.0 / 255.0)
+                                  alpha:1.0];
+    }
     return _statusBarViewController.layout.advancedConfiguration.backgroundColor;
 }
 
