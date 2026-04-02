@@ -225,10 +225,24 @@ if [[ -o interactive ]]; then
       add-zsh-hook precmd _tidey_precmd
     fi
 
-    if [ "${LC_TERMINAL-}" = "Tidey" ]; then
+    _tidey_is_tidey_terminal() {
+      if [ "${LC_TERMINAL-}" = "Tidey" ]; then
+        return 0
+      fi
+      if [ -n "${TMUX-}" ] && command -v tmux >/dev/null 2>&1; then
+        local tmux_lc_terminal
+        tmux_lc_terminal="$(tmux show-environment LC_TERMINAL 2>/dev/null || tmux show-environment -g LC_TERMINAL 2>/dev/null)"
+        if [ "${tmux_lc_terminal#LC_TERMINAL=}" = "Tidey" ]; then
+          return 0
+        fi
+      fi
+      return 1
+    }
+
+    if _tidey_is_tidey_terminal; then
       _tidey_override_prompt() {
         if [ "${ZSH_THEME-}" = "robbyrussell" ]; then
-          PROMPT="%(?:%{$fg[green]%}%1{➜%} :%{$fg[red]%}%1{➜%} ) %{$fg[cyan]%}%c%{$reset_color%}"
+          PROMPT="%(?:%{$fg[green]%}%1{➜%} :%{$fg[red]%}%1{➜%} ) %{$fg[blue]%}%c%{$reset_color%}"
           PROMPT+=' $(git_prompt_info)'
         fi
         add-zsh-hook -d precmd _tidey_override_prompt
