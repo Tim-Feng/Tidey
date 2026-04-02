@@ -154,15 +154,6 @@ if begin; status --is-interactive; and not functions -q -- iterm2_status; and te
       tmux set-option -ga update-environment " TIDEY_SOCKET_PATH TIDEY_WORKSPACE_ID TIDEY_BIN_DIR LC_TERMINAL" 2>/dev/null
     end
 
-    if set -q TMUX; and set -q LC_TERMINAL; and test "$LC_TERMINAL" = "Tidey"
-      tmux set-option -q status-style "bg=#1b2128,fg=#8a96a3" 2>/dev/null
-      tmux set-option -q window-status-style "bg=#1b2128,fg=#6f7b86" 2>/dev/null
-      tmux set-option -q window-status-current-style "bg=#1b2128,fg=#dbe4ec" 2>/dev/null
-      tmux set-option -q message-style "bg=#222a33,fg=#dbe4ec" 2>/dev/null
-      tmux set-option -q mode-style "bg=#2a3440,fg=#dbe4ec" 2>/dev/null
-      tmux set-option -q pane-active-border-style "fg=#44515d" 2>/dev/null
-    end
-
     iterm2_write_remotehost_currentdir_uservars
   end
   printf "\033]1337;ShellIntegrationVersion=21;shell=fish\007"

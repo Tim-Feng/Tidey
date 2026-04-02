@@ -146,19 +146,6 @@ class _iTerm2Xonsh:
                 _sp.run(['tmux', 'set-option', '-ga', 'update-environment',
                          ' TIDEY_SOCKET_PATH TIDEY_WORKSPACE_ID TIDEY_BIN_DIR LC_TERMINAL'],
                         capture_output=True)
-                if @.env.get('TMUX', '') and @.env.get('LC_TERMINAL', '') == 'Tidey':
-                    _sp.run(['tmux', 'set-option', '-q', 'status-style',
-                             'bg=#1b2128,fg=#8a96a3'], capture_output=True)
-                    _sp.run(['tmux', 'set-option', '-q', 'window-status-style',
-                             'bg=#1b2128,fg=#6f7b86'], capture_output=True)
-                    _sp.run(['tmux', 'set-option', '-q', 'window-status-current-style',
-                             'bg=#1b2128,fg=#dbe4ec'], capture_output=True)
-                    _sp.run(['tmux', 'set-option', '-q', 'message-style',
-                             'bg=#222a33,fg=#dbe4ec'], capture_output=True)
-                    _sp.run(['tmux', 'set-option', '-q', 'mode-style',
-                             'bg=#2a3440,fg=#dbe4ec'], capture_output=True)
-                    _sp.run(['tmux', 'set-option', '-q', 'pane-active-border-style',
-                             'fg=#44515d'], capture_output=True)
             except Exception:
                 pass
 

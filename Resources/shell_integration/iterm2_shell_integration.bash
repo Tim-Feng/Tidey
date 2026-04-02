@@ -651,15 +651,6 @@ if [ -n "${TIDEY_SOCKET_PATH-}" ]; then
   tmux set-option -ga update-environment " TIDEY_SOCKET_PATH TIDEY_WORKSPACE_ID TIDEY_BIN_DIR LC_TERMINAL" 2>/dev/null
 fi
 
-if [ -n "${TMUX-}" ] && [ "${LC_TERMINAL-}" = "Tidey" ]; then
-  tmux set-option -q status-style "bg=#1b2128,fg=#8a96a3" 2>/dev/null
-  tmux set-option -q window-status-style "bg=#1b2128,fg=#6f7b86" 2>/dev/null
-  tmux set-option -q window-status-current-style "bg=#1b2128,fg=#dbe4ec" 2>/dev/null
-  tmux set-option -q message-style "bg=#222a33,fg=#dbe4ec" 2>/dev/null
-  tmux set-option -q mode-style "bg=#2a3440,fg=#dbe4ec" 2>/dev/null
-  tmux set-option -q pane-active-border-style "fg=#44515d" 2>/dev/null
-fi
-
 # Prepend Tidey's bin/ to PATH. Bash shell integration runs after .bashrc,
 # so direct prepend is safe here.
 if [ -n "${TIDEY_BIN_DIR-}" ] && [ -d "${TIDEY_BIN_DIR-}" ]; then
@@ -706,4 +697,3 @@ iterm2_print_version_number
 fi
 
 # -- END ITERM2 CUSTOMIZATIONS --
-

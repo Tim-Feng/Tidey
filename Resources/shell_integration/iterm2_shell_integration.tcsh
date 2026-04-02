@@ -103,15 +103,6 @@ if ( ! ($?iterm2_shell_integration_installed)) then
         tmux set-option -ga update-environment " TIDEY_SOCKET_PATH TIDEY_WORKSPACE_ID TIDEY_BIN_DIR LC_TERMINAL" >& /dev/null
       endif
 
-      if ($?TMUX && $?LC_TERMINAL && "$LC_TERMINAL" == "Tidey") then
-        tmux set-option -q status-style "bg=#1b2128,fg=#8a96a3" >& /dev/null
-        tmux set-option -q window-status-style "bg=#1b2128,fg=#6f7b86" >& /dev/null
-        tmux set-option -q window-status-current-style "bg=#1b2128,fg=#dbe4ec" >& /dev/null
-        tmux set-option -q message-style "bg=#222a33,fg=#dbe4ec" >& /dev/null
-        tmux set-option -q mode-style "bg=#2a3440,fg=#dbe4ec" >& /dev/null
-        tmux set-option -q pane-active-border-style "fg=#44515d" >& /dev/null
-      endif
-
       # This is necessary so the first command line will have a hostname and current directory.
       _iterm2_update_current_state
       _iterm2_shell_integration_version

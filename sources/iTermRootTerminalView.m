@@ -2947,7 +2947,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     [self layoutTideyEditorContents];
 }
 
-static const CGFloat kTideyBrowserToolbarHeight = 32;
+static const CGFloat kTideyBrowserToolbarHeight = 28;
 
 - (void)tideyEnsureBrowserWebView {
     if (_tideyBrowserWebView != nil) {
@@ -2992,8 +2992,9 @@ static const CGFloat kTideyBrowserToolbarHeight = 32;
     [toolbar addSubview:_tideyBrowserReloadButton];
 
     // URL field
-    _tideyBrowserURLField = [[NSTextField alloc] initWithFrame:NSMakeRect(92, 4, 100, 24)];
+    _tideyBrowserURLField = [[NSTextField alloc] initWithFrame:NSMakeRect(92, 3, 100, 22)];
     _tideyBrowserURLField.autoresizingMask = NSViewWidthSizable;
+    _tideyBrowserURLField.usesSingleLineMode = YES;
     _tideyBrowserURLField.placeholderString = @"Enter URL";
     _tideyBrowserURLField.font = [NSFont systemFontOfSize:12];
     _tideyBrowserURLField.textColor = [NSColor labelColor];
@@ -3086,7 +3087,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 32;
     const CGFloat urlFieldX = 92;
     const CGFloat urlFieldRight = 28;
     const CGFloat urlFieldHeight = 22;
-    const CGFloat urlFieldY = floor((kTideyBrowserToolbarHeight - urlFieldHeight) / 2.0) - 2;
+    const CGFloat urlFieldY = floor((kTideyBrowserToolbarHeight - urlFieldHeight) / 2.0);
     _tideyBrowserURLField.frame = NSMakeRect(urlFieldX,
                                              urlFieldY,
                                              MAX(50, contentWidth - urlFieldX - urlFieldRight),
