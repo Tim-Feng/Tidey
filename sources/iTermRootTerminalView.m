@@ -965,7 +965,9 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSView *container = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, viewSize.width, viewSize.height)];
     container.wantsLayer = YES;
     container.layer.cornerRadius = 4;
-    container.layer.backgroundColor = [NSColor colorWithWhite:1.0 alpha:0.12].CGColor;
+    container.layer.backgroundColor = [NSColor colorWithSRGBRed:0.075 green:0.102 blue:0.129 alpha:1.0].CGColor;
+    container.layer.borderColor = [NSColor colorWithWhite:1.0 alpha:0.25].CGColor;
+    container.layer.borderWidth = 1.0;
     container.hidden = YES;
     container.alphaValue = 0.0;
 
@@ -982,7 +984,9 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     hint.identifier = kTideyPanelHintViewIdentifier;
     hint.wantsLayer = YES;
     hint.layer.cornerRadius = 4;
-    hint.layer.backgroundColor = [NSColor colorWithWhite:1.0 alpha:0.12].CGColor;
+    hint.layer.backgroundColor = [NSColor colorWithSRGBRed:0.075 green:0.102 blue:0.129 alpha:1.0].CGColor;
+    hint.layer.borderColor = [NSColor colorWithWhite:1.0 alpha:0.25].CGColor;
+    hint.layer.borderWidth = 1.0;
     hint.hidden = YES;
 
     NSTextField *label = [NSTextField labelWithString:@""];
