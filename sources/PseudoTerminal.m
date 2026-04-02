@@ -1990,6 +1990,10 @@ ITERM_WEAKLY_REFERENCEABLE
     return [_contentView tideyEditorHasFocus];
 }
 
+- (BOOL)tideyBrowserHasFocus {
+    return [_contentView tideyBrowserHasFocus];
+}
+
 - (void)createNewUntitledEditorTab {
     if (!_contentView.shouldShowTideyEditorPanel) {
         _contentView.shouldShowTideyEditorPanel = YES;
@@ -1997,6 +2001,15 @@ ITERM_WEAKLY_REFERENCEABLE
         [self notifyTmuxOfWindowResize];
     }
     [_contentView createNewUntitledEditorTab];
+}
+
+- (void)createNewBlankBrowserTab {
+    if (!_contentView.shouldShowTideyEditorPanel) {
+        _contentView.shouldShowTideyEditorPanel = YES;
+        [self repositionWidgets];
+        [self notifyTmuxOfWindowResize];
+    }
+    [_contentView createNewBlankBrowserTab];
 }
 
 - (void)toggleToolbeltVisibilityWithSideEffects:(BOOL)sideEffects {

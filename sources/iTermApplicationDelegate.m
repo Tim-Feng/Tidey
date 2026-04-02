@@ -2801,6 +2801,10 @@ static iTermKeyEventReplayer *gReplayer;
     PseudoTerminal *currentTerminal = [[iTermController sharedInstance] currentTerminal];
     if (currentTerminal.isShowingTideySidebar) {
         if ([currentTerminal tideyEditorHasFocus]) {
+            if ([currentTerminal tideyBrowserHasFocus]) {
+                [currentTerminal createNewBlankBrowserTab];
+                return;
+            }
             [currentTerminal createNewUntitledEditorTab];
             return;
         }

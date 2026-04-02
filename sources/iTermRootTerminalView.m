@@ -4015,17 +4015,6 @@ static const CGFloat kTideyBrowserToolbarHeight = 32;
     if (!url) {
         return;
     }
-    NSString *urlString = url.absoluteString;
-    NSInteger existingIndex = [[self class] tideyIndexOfExistingBrowserTabForURL:urlString
-                                                                         inTabs:_tideyEditorTabs];
-    if (existingIndex != NSNotFound) {
-        if (!_shouldShowTideyEditorPanel) {
-            [self setShouldShowTideyEditorPanel:YES];
-            [self.delegate repositionWidgets];
-        }
-        [self selectTideyRightPanelTabAtIndex:existingIndex];
-        return;
-    }
     TideyEditorTab *tab = [TideyEditorTab browserTabWithURL:url];
     [_tideyEditorTabs addObject:tab];
     if (!_shouldShowTideyEditorPanel) {
@@ -4359,6 +4348,26 @@ static const CGFloat kTideyBrowserToolbarHeight = 32;
     [self selectTideyEditorTabAtIndex:_tideyEditorTabs.count - 1];
 }
 
+- (BOOL)tideyBrowserHasFocus {
+    if (!self.tideyRightPanelHasFocus) {
+        return NO;
+    }
+    TideyEditorTab *tab = [self tideyCurrentRightPanelTab];
+    return tab != nil && tab.kind == TideyRightPanelTabKindBrowser;
+}
+
+- (void)createNewBlankBrowserTab {
+    if (_tideyEditorPanelView.hidden) {
+        self.shouldShowTideyEditorPanel = YES;
+        [self layoutSubviews];
+    }
+    NSURL *blankURL = [NSURL URLWithString:@"about:blank"];
+    TideyEditorTab *tab = [TideyEditorTab browserTabWithURL:blankURL];
+    tab.displayName = @"New Tab";
+    [_tideyEditorTabs addObject:tab];
+    [self selectTideyRightPanelTabAtIndex:_tideyEditorTabs.count - 1];
+}
+
 - (BOOL)selectTideyEditorTabByNumber:(NSInteger)number {
     if (_tideyEditorTabs.count == 0) {
         return NO;
@@ -4686,7 +4695,9 @@ static const CGFloat kTideyBrowserToolbarHeight = 32;
         self.tideyEditorToggleButton.frame = NSZeroRect;
     }
 
-    const BOOL showFileTreeToggle = self.shouldShowTideyEditorPanel;
+    TideyEditorTab *currentRightPanelTab = [self tideyCurrentRightPanelTab];
+    const BOOL rightPanelShowsBrowser = (currentRightPanelTab.kind == TideyRightPanelTabKindBrowser);
+    const BOOL showFileTreeToggle = self.shouldShowTideyEditorPanel && !rightPanelShowsBrowser;
     self.tideyEditorFileTreeToggleButton.hidden = !showFileTreeToggle;
     if (!showFileTreeToggle) {
         return;

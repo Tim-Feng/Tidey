@@ -231,7 +231,9 @@ extern NSString *const iTermDidCreateTerminalWindowNotification;
 - (BOOL)isShowingTideySidebar;
 - (BOOL)isShowingTideyEditorPanel;
 - (BOOL)tideyEditorHasFocus;
+- (BOOL)tideyBrowserHasFocus;
 - (void)createNewUntitledEditorTab;
+- (void)createNewBlankBrowserTab;
 - (void)performTideyWorkspaceMutationPreservingWindowFrame:(void (^)(void))block;
 
 // Returns the workspace identifier (UUID string) of the currently selected workspace, or nil.
