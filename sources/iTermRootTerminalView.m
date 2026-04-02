@@ -1317,6 +1317,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                          positioned:NSWindowAbove
                          relativeTo:nil];
     }
+    _tideyEditorPanelHintOverlayView.wantsLayer = YES;
+    _tideyEditorPanelHintOverlayView.layer.zPosition = 1000;
     _tideyEditorPanelHintOverlayView.frame = _tideyEditorPanelView.bounds;
     _tideyTerminalPanelHintOverlayView.frame = _tabBarControl.bounds;
 
@@ -1477,6 +1479,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         [_tideyEditorPanelView addSubview:_tideyEditorTabStripView];
         _tideyEditorPanelHintOverlayView = [[TideyPassthroughView alloc] initWithFrame:NSZeroRect];
         _tideyEditorPanelHintOverlayView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        _tideyEditorPanelHintOverlayView.wantsLayer = YES;
+        _tideyEditorPanelHintOverlayView.layer.zPosition = 1000;
         [_tideyEditorPanelView addSubview:_tideyEditorPanelHintOverlayView positioned:NSWindowAbove relativeTo:nil];
         _tideyEditorPanelHintViews = [[NSMutableArray alloc] init];
 
