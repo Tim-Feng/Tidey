@@ -3936,6 +3936,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
                                    lastActiveEditorTabIdentifier:_tideyLastActiveEditorTabIdentifier
                                   lastActiveBrowserTabIdentifier:_tideyLastActiveBrowserTabIdentifier];
     [self tideyApplyRightPanelSelectionState:state];
+    [self layoutTideyEditorContents];
     [self tideyUpdateBrowserContentVisibility];
     [self updateTideyChromeToggleButtons];
 }
