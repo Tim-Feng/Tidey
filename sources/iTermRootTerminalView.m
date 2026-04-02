@@ -697,6 +697,48 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 @end
 
+@interface TideyCenteredTextFieldCell : NSTextFieldCell
+@end
+
+@implementation TideyCenteredTextFieldCell
+
+- (NSRect)adjustedFrameToVerticallyCenterText:(NSRect)frame {
+    NSInteger offset = floor((NSHeight(frame) - (self.font.ascender - self.font.descender)) / 2);
+    return NSInsetRect(frame, 0, offset);
+}
+
+- (void)drawInteriorWithFrame:(NSRect)cellFrame inView:(NSView *)controlView {
+    [super drawInteriorWithFrame:[self adjustedFrameToVerticallyCenterText:cellFrame] inView:controlView];
+}
+
+- (void)editWithFrame:(NSRect)rect
+               inView:(NSView *)controlView
+               editor:(NSText *)textObj
+             delegate:(id)delegate
+                event:(NSEvent *)event {
+    [super editWithFrame:[self adjustedFrameToVerticallyCenterText:rect]
+                  inView:controlView
+                  editor:textObj
+                delegate:delegate
+                   event:event];
+}
+
+- (void)selectWithFrame:(NSRect)rect
+                 inView:(NSView *)controlView
+                 editor:(NSText *)textObj
+               delegate:(id)delegate
+                  start:(NSInteger)selStart
+                 length:(NSInteger)selLength {
+    [super selectWithFrame:[self adjustedFrameToVerticallyCenterText:rect]
+                    inView:controlView
+                    editor:textObj
+                  delegate:delegate
+                     start:selStart
+                    length:selLength];
+}
+
+@end
+
 @class iTermRootTerminalView;
 
 @interface TideyEditorScriptMessageHandler : NSObject<WKScriptMessageHandler>
@@ -2994,6 +3036,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 32;
     // URL field
     _tideyBrowserURLField = [[NSTextField alloc] initWithFrame:NSMakeRect(92, 4, 100, 24)];
     _tideyBrowserURLField.autoresizingMask = NSViewWidthSizable;
+    _tideyBrowserURLField.cell = [[TideyCenteredTextFieldCell alloc] initTextCell:@""];
     _tideyBrowserURLField.placeholderString = @"Enter URL";
     _tideyBrowserURLField.font = [NSFont systemFontOfSize:12];
     _tideyBrowserURLField.textColor = [NSColor labelColor];
