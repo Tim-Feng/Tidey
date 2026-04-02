@@ -41,6 +41,10 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
                                                 currentSelectedTabIdentifier:(NSString *)currentSelectedTabIdentifier
                                                  lastActiveEditorTabIdentifier:(NSString *)lastActiveEditorTabIdentifier
                                                 lastActiveBrowserTabIdentifier:(NSString *)lastActiveBrowserTabIdentifier;
++ (TideyEditorTab *)tideyRightPanelTabForShortcutNumber:(NSInteger)number
+                                                   tabs:(NSArray<TideyEditorTab *> *)tabs
+                                           expandedKind:(TideyRightPanelTabKind)expandedKind;
++ (BOOL)tideyResponder:(NSResponder *)responder isDescendantOfView:(NSView *)view;
 @end
 
 @interface TideyRightPanelTabGroupingTests : XCTestCase
@@ -127,6 +131,42 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
 
     XCTAssertEqual(state.expandedKind, TideyRightPanelTabKindEditor);
     XCTAssertEqualObjects(state.selectedTabIdentifier, editorB.identifier);
+}
+
+- (void)testShortcutSelectionUsesExpandedGroupTabsOnly {
+    TideyEditorTab *editorA = [self tabNamed:@"Editor A" kind:TideyRightPanelTabKindEditor];
+    TideyEditorTab *browserA = [self tabNamed:@"Browser A" kind:TideyRightPanelTabKindBrowser];
+    TideyEditorTab *editorB = [self tabNamed:@"Editor B" kind:TideyRightPanelTabKindEditor];
+    TideyEditorTab *browserB = [self tabNamed:@"Browser B" kind:TideyRightPanelTabKindBrowser];
+
+    TideyEditorTab *selected =
+        [iTermRootTerminalView tideyRightPanelTabForShortcutNumber:1
+                                                              tabs:@[ editorA, browserA, editorB, browserB ]
+                                                      expandedKind:TideyRightPanelTabKindBrowser];
+
+    XCTAssertEqualObjects(selected.identifier, browserA.identifier);
+}
+
+- (void)testShortcutSelectionUsesLastVisibleTabForControlNine {
+    TideyEditorTab *browserA = [self tabNamed:@"Browser A" kind:TideyRightPanelTabKindBrowser];
+    TideyEditorTab *browserB = [self tabNamed:@"Browser B" kind:TideyRightPanelTabKindBrowser];
+
+    TideyEditorTab *selected =
+        [iTermRootTerminalView tideyRightPanelTabForShortcutNumber:9
+                                                              tabs:@[ browserA, browserB ]
+                                                      expandedKind:TideyRightPanelTabKindBrowser];
+
+    XCTAssertEqualObjects(selected.identifier, browserB.identifier);
+}
+
+- (void)testResponderChainDescendantMatchesAncestorView {
+    NSView *panelView = [[NSView alloc] initWithFrame:NSZeroRect];
+    NSView *browserView = [[NSView alloc] initWithFrame:NSZeroRect];
+    NSResponder *proxyResponder = [[NSResponder alloc] init];
+    [panelView addSubview:browserView];
+    proxyResponder.nextResponder = browserView;
+
+    XCTAssertTrue([iTermRootTerminalView tideyResponder:proxyResponder isDescendantOfView:panelView]);
 }
 
 @end
