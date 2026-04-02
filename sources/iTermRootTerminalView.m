@@ -3936,6 +3936,8 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
                                    lastActiveEditorTabIdentifier:_tideyLastActiveEditorTabIdentifier
                                   lastActiveBrowserTabIdentifier:_tideyLastActiveBrowserTabIdentifier];
     [self tideyApplyRightPanelSelectionState:state];
+    [self tideyUpdateBrowserContentVisibility];
+    [self updateTideyChromeToggleButtons];
 }
 
 - (void)tideyRightPanelSelectTab:(id)sender {
@@ -4753,7 +4755,9 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 
     TideyEditorTab *currentRightPanelTab = [self tideyCurrentRightPanelTab];
     const BOOL rightPanelShowsBrowser = (currentRightPanelTab.kind == TideyRightPanelTabKindBrowser);
-    const BOOL showFileTreeToggle = self.shouldShowTideyEditorPanel && !rightPanelShowsBrowser;
+    const BOOL showFileTreeToggle = self.shouldShowTideyEditorPanel &&
+                                    self.shouldShowTideyEditorFileTree &&
+                                    !rightPanelShowsBrowser;
     self.tideyEditorFileTreeToggleButton.hidden = !showFileTreeToggle;
     if (!showFileTreeToggle) {
         return;
