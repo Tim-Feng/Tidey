@@ -3744,6 +3744,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         TideyEditorEffectiveTabStripHeight(_tabBarControl.height);
     const CGFloat insetX = 0;
     const CGFloat tabHeight = MAX(22, stripHeight);
+    const CGFloat addButtonSize = 22;
     CGFloat x = insetX;
     NSDictionary<NSAttributedStringKey, id> *tabAttributes = @{
         NSFontAttributeName: [NSFont systemFontOfSize:11 weight:NSFontWeightMedium]
@@ -3833,6 +3834,23 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 
             [_tideyEditorTabStripView addSubview:tabView];
             x += tabWidth;
+        }
+
+        if (group.kind == TideyRightPanelTabKindBrowser) {
+            NSButton *addButton = [[NSButton alloc] initWithFrame:NSMakeRect(x + 4,
+                                                                             floor((tabHeight - addButtonSize) / 2.0),
+                                                                             addButtonSize,
+                                                                             addButtonSize)];
+            addButton.bordered = NO;
+            addButton.buttonType = NSButtonTypeMomentaryChange;
+            addButton.font = [NSFont systemFontOfSize:14 weight:NSFontWeightMedium];
+            addButton.contentTintColor = NSColor.secondaryLabelColor;
+            addButton.title = @"+";
+            addButton.alignment = NSTextAlignmentCenter;
+            addButton.target = self;
+            addButton.action = @selector(createNewBlankBrowserTab);
+            [_tideyEditorTabStripView addSubview:addButton];
+            x += addButtonSize + 4;
         }
     }
     [_tideyEditorTabStripView addSubview:_tideyEditorPanelHintOverlayView positioned:NSWindowAbove relativeTo:nil];
