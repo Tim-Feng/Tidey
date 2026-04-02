@@ -289,6 +289,12 @@ static double EuclideanDistance(NSPoint p1, NSPoint p2) {
                                                                  firstMouse:_mouseDownWasFirstMouse];
     const int x = clickPointCoord.x;
     const int y = clickPointCoord.y;
+    const NSPoint locationInTextView =
+    [self.mouseDelegate mouseHandler:self viewCoordForEvent:event clipped:YES];
+    const VT100GridCoord selectionAnchorCoord =
+    [self.mouseDelegate mouseHandlerCoordForPointInView:locationInTextView];
+    const int selectionX = selectionAnchorCoord.x;
+    const int selectionY = selectionAnchorCoord.y;
     if ([self.mouseDelegate mouseHandler:self coordIsMutable:VT100GridCoordMake(x, y)] &&
         [self reportMouseDrags]) {
         [_selectionScrollHelper disableUntilMouseUp];
@@ -313,7 +319,7 @@ static double EuclideanDistance(NSPoint p1, NSPoint p2) {
     id<iTermImageInfoReading> const imageBeingClickedOn = [self.mouseDelegate mouseHandler:self imageAt:VT100GridCoordMake(x, y)];
     const long long overflow = [_mouseDelegate mouseHandlerTotalScrollbackOverflow:self];
     const BOOL mouseDownOnSelection =
-        [self.selection containsAbsCoord:VT100GridAbsCoordMake(x, y + overflow)];
+        [self.selection containsAbsCoord:VT100GridAbsCoordMake(selectionX, selectionY + overflow)];
     _lastMouseDownOnSelectedText = mouseDownOnSelection;
 
     if (!_mouseDownWasFirstMouse) {
@@ -338,7 +344,7 @@ static double EuclideanDistance(NSPoint p1, NSPoint p2) {
     const BOOL isExtension = ([self.selection hasSelection] && shiftPressed);
     if (isExtension && [self.selection hasSelection]) {
         if (!self.selection.live) {
-            [self.selection beginExtendingSelectionAt:VT100GridAbsCoordMake(x, y + overflow)];
+            [self.selection beginExtendingSelectionAt:VT100GridAbsCoordMake(selectionX, selectionY + overflow)];
             *sideEffects |= iTermClickSideEffectsModifySelection;
         }
     } else if (clickCount < 2) {
@@ -363,14 +369,14 @@ static double EuclideanDistance(NSPoint p1, NSPoint p2) {
             return YES;
         } else {
             // start a new selection
-            [self.selection beginSelectionAtAbsCoord:VT100GridAbsCoordMake(x, y + overflow)
+            [self.selection beginSelectionAtAbsCoord:VT100GridAbsCoordMake(selectionX, selectionY + overflow)
                                                 mode:mode
                                               resume:NO
                                               append:(cmdPressed && !altPressed)];
             self.selection.resumable = YES;
         }
     } else if ([self shouldSelectWordWithClicks:clickCount]) {
-        [self.selection beginSelectionAtAbsCoord:VT100GridAbsCoordMake(x, y + overflow)
+        [self.selection beginSelectionAtAbsCoord:VT100GridAbsCoordMake(selectionX, selectionY + overflow)
                                             mode:kiTermSelectionModeWord
                                           resume:YES
                                           append:self.selection.appending];
@@ -381,13 +387,13 @@ static double EuclideanDistance(NSPoint p1, NSPoint p2) {
         iTermSelectionMode mode =
         wholeLines ? kiTermSelectionModeWholeLine : kiTermSelectionModeLine;
 
-        [self.selection beginSelectionAtAbsCoord:VT100GridAbsCoordMake(x, y + overflow)
+        [self.selection beginSelectionAtAbsCoord:VT100GridAbsCoordMake(selectionX, selectionY + overflow)
                                             mode:mode
                                           resume:YES
                                           append:self.selection.appending];
         *sideEffects |= iTermClickSideEffectsModifySelection;
     } else if ([self shouldSmartSelectWithClicks:clickCount]) {
-        [self.selection beginSelectionAtAbsCoord:VT100GridAbsCoordMake(x, y + overflow)
+        [self.selection beginSelectionAtAbsCoord:VT100GridAbsCoordMake(selectionX, selectionY + overflow)
                                             mode:kiTermSelectionModeSmart
                                           resume:YES
                                           append:self.selection.appending];
