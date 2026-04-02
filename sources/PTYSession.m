@@ -2264,7 +2264,7 @@ ITERM_WEAKLY_REFERENCEABLE
     _wrapper = [[TextViewWrapper alloc] initWithFrame:NSMakeRect(0, 0, aSize.width, aSize.height)];
 
     _textview = [[PTYTextView alloc] initWithFrame:NSMakeRect(0,
-                                                              [iTermPreferences intForKey:kPreferenceKeyTopBottomMargins],
+                                                              0,
                                                               aSize.width,
                                                               aSize.height)];
     _textview.colorMap = _screen.colorMap;
@@ -2291,7 +2291,7 @@ ITERM_WEAKLY_REFERENCEABLE
     [self setTransparencyAffectsOnlyDefaultBackgroundColor:[[_profile objectForKey:KEY_TRANSPARENCY_AFFECTS_ONLY_DEFAULT_BACKGROUND_COLOR] boolValue]];
 
     [_wrapper addSubview:_textview];
-    [_textview setFrame:NSMakeRect(0, [iTermPreferences intForKey:kPreferenceKeyTopBottomMargins], aSize.width, aSize.height - [iTermPreferences intForKey:kPreferenceKeyTopBottomMargins])];
+    [_textview setFrame:NSMakeRect(0, 0, aSize.width, aSize.height - [iTermPreferences intForKey:kPreferenceKeyTopBottomMargins])];
 
     // assign terminal and task objects
     // Pause token execution in case the caller needs to modify terminal state before it starts running.
