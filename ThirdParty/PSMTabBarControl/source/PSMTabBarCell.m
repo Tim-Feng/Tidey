@@ -655,7 +655,7 @@ static NSRect PSMConvertAccessibilityFrameToScreen(NSView *view, NSRect frame) {
              operation:NSCompositingOperationSourceOver
               fraction:1.0];
     [returnImage unlockFocus];
-    if (![[self indicator] isHidden]) {
+    if (![[self indicator] isHidden] && !self.closeButtonVisible) {
         // TODO: This image is missing!
         NSImage *piImage = [[NSImage alloc] initByReferencingFile:[[PSMTabBarControl bundle] pathForImageResource:@"pi"]];
         [returnImage lockFocus];
