@@ -564,7 +564,9 @@ static NSRect PSMConvertAccessibilityFrameToScreen(NSView *view, NSRect frame) {
 - (void)mouseEntered:(NSEvent *)theEvent {
     // check for which tag
     if (theEvent.trackingArea == _closeButtonTrackingArea) {
-        _closeButtonOver = YES;
+        self.closeButtonOver = YES;
+        self.indicator.hidden = YES;
+        self.indicator.animate = NO;
     }
     if (theEvent.trackingArea == _cellTrackingArea) {
         [self setHighlighted:YES];
@@ -579,7 +581,8 @@ static NSRect PSMConvertAccessibilityFrameToScreen(NSView *view, NSRect frame) {
 - (void)mouseExited:(NSEvent *)theEvent {
     // check for which tag
     if (theEvent.trackingArea == _closeButtonTrackingArea) {
-        _closeButtonOver = NO;
+        self.closeButtonOver = NO;
+        [self updateIndicators];
     }
 
     if (theEvent.trackingArea == _cellTrackingArea) {
