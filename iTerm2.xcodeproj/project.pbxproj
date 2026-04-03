@@ -4908,6 +4908,18 @@
 		A7B100132F0A000100000001 /* TideySocketServer.m in Sources */ = {isa = PBXBuildFile; fileRef = A7B100062F0A000100000001 /* TideySocketServer.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
 		A7B100142F0A000100000001 /* TideyEditorExternalChangeWatcher.h in Headers */ = {isa = PBXBuildFile; fileRef = A7B100072F0A000100000001 /* TideyEditorExternalChangeWatcher.h */; };
 		A7B100152F0A000100000001 /* TideyEditorExternalChangeWatcher.m in Sources */ = {isa = PBXBuildFile; fileRef = A7B100082F0A000100000001 /* TideyEditorExternalChangeWatcher.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		TIDE7C000020000000000010 /* TideyPalette.h in Headers */ = {isa = PBXBuildFile; fileRef = TIDE7C000020000000000000 /* TideyPalette.h */; };
+		TIDE7C000020000000000011 /* TideyPalette.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDE7C000020000000000001 /* TideyPalette.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		TIDE7C000020000000000012 /* TideyPaletteOkaRanman.h in Headers */ = {isa = PBXBuildFile; fileRef = TIDE7C000020000000000002 /* TideyPaletteOkaRanman.h */; };
+		TIDE7C000020000000000013 /* TideyPaletteOkaRanman.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDE7C000020000000000003 /* TideyPaletteOkaRanman.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		TIDE7C000020000000000014 /* TideyTheme.h in Headers */ = {isa = PBXBuildFile; fileRef = TIDE7C000020000000000004 /* TideyTheme.h */; };
+		TIDE7C000020000000000015 /* TideyTheme.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDE7C000020000000000005 /* TideyTheme.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		TIDE7C000020000000000016 /* TideyThemeStillWater.h in Headers */ = {isa = PBXBuildFile; fileRef = TIDE7C000020000000000006 /* TideyThemeStillWater.h */; };
+		TIDE7C000020000000000017 /* TideyThemeStillWater.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDE7C000020000000000007 /* TideyThemeStillWater.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		TIDE7C000020000000000018 /* TideyThemeOkaRanman.h in Headers */ = {isa = PBXBuildFile; fileRef = TIDE7C000020000000000008 /* TideyThemeOkaRanman.h */; };
+		TIDE7C000020000000000019 /* TideyThemeOkaRanman.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDE7C000020000000000009 /* TideyThemeOkaRanman.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		TIDE7C00002000000000001A /* TideyThemeManager.h in Headers */ = {isa = PBXBuildFile; fileRef = TIDE7C00002000000000000A /* TideyThemeManager.h */; };
+		TIDE7C00002000000000001B /* TideyThemeManager.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDE7C00002000000000000B /* TideyThemeManager.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
 		F0A10D1E3A2800010000000F /* TideySocketCommandDecoder.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A2800010000000E /* TideySocketCommandDecoder.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
 		F0A10D1E3A28000100000011 /* TideySocketCommandDecoderTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000010 /* TideySocketCommandDecoderTests.m */; };
 		A6F7A707213CB143004DE961 /* StatusBarIconUser.png in Resources */ = {isa = PBXBuildFile; fileRef = A6F7A6EF213CB13D004DE961 /* StatusBarIconUser.png */; };
@@ -9038,6 +9050,18 @@
 		A7B100062F0A000100000001 /* TideySocketServer.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySocketServer.m; sourceTree = "<group>"; };
 		A7B100072F0A000100000001 /* TideyEditorExternalChangeWatcher.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyEditorExternalChangeWatcher.h; sourceTree = "<group>"; };
 		A7B100082F0A000100000001 /* TideyEditorExternalChangeWatcher.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyEditorExternalChangeWatcher.m; sourceTree = "<group>"; };
+		TIDE7C000020000000000000 /* TideyPalette.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyPalette.h; sourceTree = "<group>"; };
+		TIDE7C000020000000000001 /* TideyPalette.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyPalette.m; sourceTree = "<group>"; };
+		TIDE7C000020000000000002 /* TideyPaletteOkaRanman.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyPaletteOkaRanman.h; sourceTree = "<group>"; };
+		TIDE7C000020000000000003 /* TideyPaletteOkaRanman.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyPaletteOkaRanman.m; sourceTree = "<group>"; };
+		TIDE7C000020000000000004 /* TideyTheme.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyTheme.h; sourceTree = "<group>"; };
+		TIDE7C000020000000000005 /* TideyTheme.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyTheme.m; sourceTree = "<group>"; };
+		TIDE7C000020000000000006 /* TideyThemeStillWater.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyThemeStillWater.h; sourceTree = "<group>"; };
+		TIDE7C000020000000000007 /* TideyThemeStillWater.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyThemeStillWater.m; sourceTree = "<group>"; };
+		TIDE7C000020000000000008 /* TideyThemeOkaRanman.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyThemeOkaRanman.h; sourceTree = "<group>"; };
+		TIDE7C000020000000000009 /* TideyThemeOkaRanman.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyThemeOkaRanman.m; sourceTree = "<group>"; };
+		TIDE7C00002000000000000A /* TideyThemeManager.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyThemeManager.h; sourceTree = "<group>"; };
+		TIDE7C00002000000000000B /* TideyThemeManager.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyThemeManager.m; sourceTree = "<group>"; };
 		F0A10D1E3A2800010000000D /* TideySocketCommandDecoder.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideySocketCommandDecoder.h; sourceTree = "<group>"; };
 		F0A10D1E3A2800010000000E /* TideySocketCommandDecoder.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySocketCommandDecoder.m; sourceTree = "<group>"; };
 		A6F7A6EF213CB13D004DE961 /* StatusBarIconUser.png */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; name = StatusBarIconUser.png; path = images/StatusBarIcons/StatusBarIconUser.png; sourceTree = "<group>"; };
@@ -11803,6 +11827,18 @@
 				1D2E813012A18F7500F3D71E /* SessionView.m */,
 				A6D24D3C26BC5FA600CCE211 /* SwiftDebugLogging.swift */,
 				A67E0ACF186E4B71009B2B68 /* TaskNotifier.m */,
+				TIDE7C000020000000000000 /* TideyPalette.h */,
+				TIDE7C000020000000000001 /* TideyPalette.m */,
+				TIDE7C000020000000000002 /* TideyPaletteOkaRanman.h */,
+				TIDE7C000020000000000003 /* TideyPaletteOkaRanman.m */,
+				TIDE7C000020000000000004 /* TideyTheme.h */,
+				TIDE7C000020000000000005 /* TideyTheme.m */,
+				TIDE7C000020000000000008 /* TideyThemeOkaRanman.h */,
+				TIDE7C000020000000000009 /* TideyThemeOkaRanman.m */,
+				TIDE7C00002000000000000A /* TideyThemeManager.h */,
+				TIDE7C00002000000000000B /* TideyThemeManager.m */,
+				TIDE7C000020000000000006 /* TideyThemeStillWater.h */,
+				TIDE7C000020000000000007 /* TideyThemeStillWater.m */,
 				A7B100012F0A000100000001 /* TideyNotificationStore.h */,
 				A7B100022F0A000100000001 /* TideyNotificationStore.m */,
 				A7B100032F0A000100000001 /* TideySocketConnection.h */,
@@ -15431,6 +15467,12 @@
 			files = (
 				A626DF0B217D3034005600F9 /* iTermTabBarAccessoryViewController.h in Headers */,
 				A667190A1DCE36C3000CE608 /* iTermRootTerminalView.h in Headers */,
+				TIDE7C000020000000000010 /* TideyPalette.h in Headers */,
+				TIDE7C000020000000000012 /* TideyPaletteOkaRanman.h in Headers */,
+				TIDE7C000020000000000014 /* TideyTheme.h in Headers */,
+				TIDE7C000020000000000018 /* TideyThemeOkaRanman.h in Headers */,
+				TIDE7C00002000000000001A /* TideyThemeManager.h in Headers */,
+				TIDE7C000020000000000016 /* TideyThemeStillWater.h in Headers */,
 				A7B100142F0A000100000001 /* TideyEditorExternalChangeWatcher.h in Headers */,
 				D5EF7F4036204859817200E0 /* iTermLayoutCalculator.h in Headers */,
 				A667190B1DCE36C3000CE608 /* iTermCarbonHotKeyController.h in Headers */,
@@ -19267,6 +19309,12 @@
 				A691693B2813458F00083F99 /* PortholeFactory.swift in Sources */,
 				A7B100112F0A000100000001 /* TideyNotificationStore.m in Sources */,
 				A7B100122F0A000100000001 /* TideySocketConnection.m in Sources */,
+				TIDE7C000020000000000011 /* TideyPalette.m in Sources */,
+				TIDE7C000020000000000013 /* TideyPaletteOkaRanman.m in Sources */,
+				TIDE7C000020000000000015 /* TideyTheme.m in Sources */,
+				TIDE7C000020000000000019 /* TideyThemeOkaRanman.m in Sources */,
+				TIDE7C00002000000000001B /* TideyThemeManager.m in Sources */,
+				TIDE7C000020000000000017 /* TideyThemeStillWater.m in Sources */,
 				A7B100152F0A000100000001 /* TideyEditorExternalChangeWatcher.m in Sources */,
 				F0A10D1E3A2800010000000F /* TideySocketCommandDecoder.m in Sources */,
 				A7B100132F0A000100000001 /* TideySocketServer.m in Sources */,

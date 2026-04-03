@@ -79,6 +79,7 @@
 #import "iTermFullScreenWindowManager.h"
 #import "iTermGlobalScopeController.h"
 #import "iTermGlobalSearchWindowController.h"
+#import "TideyThemeManager.h"
 #import "TideySocketServer.h"
 #import "iTermHotKeyController.h"
 #import "iTermHotKeyProfileBindingController.h"
@@ -2989,9 +2990,18 @@ static iTermKeyEventReplayer *gReplayer;
     [self showTideyShortcutsPanel];
 }
 
+- (void)tideyThemePopupChanged:(NSPopUpButton *)sender {
+    const TideyThemeStyle style = (TideyThemeStyle)sender.selectedTag;
+    TideyTheme *theme = [TideyThemeManager themeForStyle:style];
+    [[TideyThemeManager shared] setTheme:theme];
+}
+
 - (void)showTideyShortcutsPanel {
     static NSPanel *panel = nil;
+    static NSInteger const kTideyThemePopupTag = 91042;
     if (panel) {
+        NSPopUpButton *popup = [panel.contentView viewWithTag:kTideyThemePopupTag];
+        [popup selectItemWithTag:[iTermPreferences integerForKey:kPreferenceKeyTideyTheme]];
         [panel makeKeyAndOrderFront:nil];
         return;
     }
@@ -3019,7 +3029,11 @@ static iTermKeyEventReplayer *gReplayer;
     CGFloat topPadding = 12;
     CGFloat bottomPadding = 16;
     CGFloat titleHeight = 30;
-    CGFloat contentHeight = titleHeight + topPadding + shortcuts.count * rowHeight + bottomPadding;
+    CGFloat themeRowHeight = 28;
+    CGFloat themeBottomSpacing = 8;
+    CGFloat dividerHeight = 1;
+    CGFloat dividerBottomSpacing = 12;
+    CGFloat contentHeight = titleHeight + themeRowHeight + themeBottomSpacing + dividerHeight + dividerBottomSpacing + 20 + topPadding + shortcuts.count * rowHeight + bottomPadding;
 
     panel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, panelWidth, contentHeight)
                                        styleMask:(NSWindowStyleMaskTitled |
@@ -3027,13 +3041,42 @@ static iTermKeyEventReplayer *gReplayer;
                                                   NSWindowStyleMaskUtilityWindow)
                                          backing:NSBackingStoreBuffered
                                            defer:NO];
-    panel.title = @"Tidey Shortcuts";
+    panel.title = @"Tidey Settings";
     [panel setReleasedWhenClosed:NO];
     panel.level = NSFloatingWindowLevel;
 
     NSView *contentView = panel.contentView;
 
     CGFloat y = contentHeight - titleHeight;
+    y -= themeRowHeight;
+
+    NSTextField *themeLabel = [NSTextField labelWithString:@"Theme"];
+    themeLabel.font = [NSFont systemFontOfSize:12];
+    themeLabel.frame = NSMakeRect(20, y + 4, 190, 18);
+    [contentView addSubview:themeLabel];
+
+    NSPopUpButton *themePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(210, y, panelWidth - 230, 26) pullsDown:NO];
+    themePopup.tag = kTideyThemePopupTag;
+    [themePopup addItemWithTitle:@"靜水深流"];
+    themePopup.lastItem.tag = TideyThemeStyleStillWater;
+    [themePopup addItemWithTitle:@"櫻花爛漫"];
+    themePopup.lastItem.tag = TideyThemeStyleOkaRanman;
+    [themePopup selectItemWithTag:[iTermPreferences integerForKey:kPreferenceKeyTideyTheme]];
+    themePopup.target = self;
+    themePopup.action = @selector(tideyThemePopupChanged:);
+    [contentView addSubview:themePopup];
+
+    y -= themeBottomSpacing;
+
+    NSBox *divider = [[NSBox alloc] initWithFrame:NSMakeRect(20, y, panelWidth - 40, 1)];
+    divider.boxType = NSBoxCustom;
+    divider.borderType = NSLineBorder;
+    divider.fillColor = [NSColor clearColor];
+    divider.borderColor = [NSColor colorWithWhite:1 alpha:0.12];
+    [contentView addSubview:divider];
+
+    y -= dividerBottomSpacing + 20;
+
     NSTextField *title = [NSTextField labelWithString:@"Keyboard Shortcuts"];
     title.font = [NSFont boldSystemFontOfSize:14];
     title.frame = NSMakeRect(20, y, panelWidth - 40, 20);

@@ -136,6 +136,7 @@ NSString *const kPreferenceKeyEnableDivisionView = @"EnableDivisionView";
 NSString *const kPreferenceKeyEnableProxyIcon = @"EnableProxyIcon";
 NSString *const kPreferenceKeyDimBackgroundWindows = @"DimBackgroundWindows";
 NSString *const kPreferenceKeySeparateStatusBarsPerPane = @"SeparateStatusBarsPerPane";
+NSString *const kPreferenceKeyTideyTheme = @"TideyTheme";
 
 NSString *const kPreferenceKeyControlRemapping_Deprecated = @"Control"; // deprecated
 NSString *const kPreferenceKeyLeftControlRemapping = @"LeftControl";
@@ -598,6 +599,7 @@ static NSString *sPreviousVersion;
                   kPreferenceKeyEnableProxyIcon: @NO,
                   kPreferenceKeyDimBackgroundWindows: @NO,
                   kPreferenceKeySeparateStatusBarsPerPane: @NO,
+                  kPreferenceKeyTideyTheme: @(TideyThemeStyleStillWater),
 
                   kPreferenceKeyControlRemapping_Deprecated: @(kPreferencesModifierTagLegacyRightControl),
                   kPreferenceKeyLeftControlRemapping: @(kPreferencesModifierTagLeftControl),

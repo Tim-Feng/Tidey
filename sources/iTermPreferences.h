@@ -112,6 +112,11 @@ typedef NS_ENUM(NSUInteger, iTermWindowPlacement) {
     iTermWindowPlacementPosition,
 };
 
+typedef NS_ENUM(NSInteger, TideyThemeStyle) {
+    TideyThemeStyleStillWater = 0,
+    TideyThemeStyleOkaRanman = 1,
+};
+
 typedef NS_ENUM(NSUInteger, iTermSelectionWordMode) {
     iTermSelectionWordModeCharacterList,
     iTermSelectionWordModeRegularExpression
@@ -251,6 +256,7 @@ extern NSString *const kPreferenceKeyEnableDivisionView;
 extern NSString *const kPreferenceKeyEnableProxyIcon;
 extern NSString *const kPreferenceKeyDimBackgroundWindows;
 extern NSString *const kPreferenceKeySeparateStatusBarsPerPane;
+extern NSString *const kPreferenceKeyTideyTheme;
 extern NSString *const kPreferenceKeyHTMLTabTitles;
 extern NSString *const kPreferenceKeySideMargins;
 extern NSString *const kPreferenceKeyTopBottomMargins;
