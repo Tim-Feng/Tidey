@@ -162,6 +162,7 @@ static NSString *const kPortholeRestorableStateKey = @"kPortholeRestorableStateK
 
 static NSString *const kRestoreDefaultWindowArrangementShortcut = @"R";
 NSString *const iTermApplicationWillTerminate = @"iTermApplicationWillTerminate";
+static const NSTimeInterval kTideyQuitConfirmationInterval = 3.0;
 
 static BOOL gStartupActivitiesPerformed = NO;
 // Prior to 8/7/11, there was only one window arrangement, always called Default.
@@ -252,6 +253,7 @@ static BOOL hasBecomeActive = NO;
     iTermRestorableStateController *_restorableStateController;
     iTermUntitledWindowStateMachine *_untitledWindowStateMachine;
     iTermGlobalSearchWindowController *_globalSearchWindowController;
+    NSDate *_tideyLastQuitConfirmationDate;
 }
 
 - (instancetype)init {
@@ -908,6 +910,17 @@ static BOOL hasBecomeActive = NO;
     NSArray *terminals;
     if (_disableTermination) {
         return NSTerminateCancel;
+    }
+    if (![self systemIsShuttingDown] && !self.sparkleRestarting) {
+        NSDate *now = [NSDate date];
+        if (_tideyLastQuitConfirmationDate == nil ||
+            [now timeIntervalSinceDate:_tideyLastQuitConfirmationDate] > kTideyQuitConfirmationInterval) {
+            _tideyLastQuitConfirmationDate = now;
+            [ToastWindowController showToastWithMessage:@"再按一次 ⌘Q 退出"
+                                               duration:(NSInteger)ceil(kTideyQuitConfirmationInterval)];
+            return NSTerminateCancel;
+        }
+        _tideyLastQuitConfirmationDate = nil;
     }
     
     terminals = [[iTermController sharedInstance] terminals];
