@@ -664,6 +664,12 @@ iTermPercentage iTermPercentageFromProfile(Profile *profile) {
 
 + (NSString *)shellLauncherCommandWithCustomShell:(NSString *)customShell {
     NSString *sanitizedCustomShell = [self sanitizedCustomShell:customShell];
+    if (!sanitizedCustomShell.length) {
+        NSString *userShell = [[iTermOpenDirectory userShell] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (userShell.length) {
+            sanitizedCustomShell = userShell;
+        }
+    }
     NSString *customShellArg = sanitizedCustomShell ? [@" SHELL=" stringByAppendingString:sanitizedCustomShell] : @"";
     NSString *shellLauncher = [[NSBundle bundleForClass:self.class] pathForAuxiliaryExecutable:@"ShellLauncher"];
 
