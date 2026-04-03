@@ -989,12 +989,14 @@ const void *PSMTabStyleDarkColorKey = "dark";
                 iconRect.origin.y -= (kPSMTabBarIconWidth - [icon size].height)/2.0;
             }
 
-            [icon drawInRect:iconRect
-                    fromRect:NSZeroRect
-                   operation:NSCompositingOperationSourceOver
-                    fraction:1.0
-              respectFlipped:YES
-                       hints:nil];
+            if (!cell.closeButtonVisible) {
+                [icon drawInRect:iconRect
+                        fromRect:NSZeroRect
+                       operation:NSCompositingOperationSourceOver
+                        fraction:1.0
+                  respectFlipped:YES
+                           hints:nil];
+            }
         }
     }
 
