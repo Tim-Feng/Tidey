@@ -331,7 +331,8 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
 + (NSArray<TideyShortcutHintDescriptor *> *)tideyShortcutHintDescriptorsForEditorTabViews:(NSArray<NSView *> *)tabViews;
 + (NSArray<TideyShortcutHintDescriptor *> *)tideyShortcutHintDescriptorsForTabBarCells:(NSArray<PSMTabBarCell *> *)cells;
 + (NSArray *)tideyRightPanelGroupStatesForTabs:(NSArray<TideyEditorTab *> *)tabs
-                                  expandedKind:(TideyRightPanelTabKind)expandedKind;
+                                 editorExpanded:(BOOL)editorExpanded
+                                browserExpanded:(BOOL)browserExpanded;
 + (id)tideyRightPanelSelectionStateForTabs:(NSArray<TideyEditorTab *> *)tabs
                       preferredExpandedKind:(TideyRightPanelTabKind)preferredExpandedKind
                   currentSelectedTabIdentifier:(NSString *)currentSelectedTabIdentifier
@@ -873,6 +874,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSMutableArray<TideyEditorTab *> *_tideyEditorTabs;
     NSInteger _tideySelectedEditorTabIndex;
     TideyRightPanelTabKind _tideyExpandedRightPanelTabKind;
+    BOOL _tideyEditorGroupExpanded;
+    BOOL _tideyBrowserGroupExpanded;
     NSString *_tideyLastActiveEditorTabIdentifier;
     NSString *_tideyLastActiveBrowserTabIdentifier;
 
@@ -1200,8 +1203,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 
 + (NSArray<TideyRightPanelTabGroupState *> *)tideyRightPanelGroupStatesForTabs:(NSArray<TideyEditorTab *> *)tabs
-                                                                  expandedKind:(TideyRightPanelTabKind)expandedKind {
-    TideyRightPanelTabKind resolvedExpandedKind = [self tideyResolvedExpandedKindForTabs:tabs expandedKind:expandedKind];
+                                                                 editorExpanded:(BOOL)editorExpanded
+                                                                browserExpanded:(BOOL)browserExpanded {
     NSMutableArray<TideyRightPanelTabGroupState *> *groups = [NSMutableArray array];
     NSArray<NSNumber *> *orderedKinds = @[ @(TideyRightPanelTabKindEditor), @(TideyRightPanelTabKindBrowser) ];
     for (NSNumber *kindNumber in orderedKinds) {
@@ -1213,7 +1216,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         TideyRightPanelTabGroupState *group = [[TideyRightPanelTabGroupState alloc] init];
         group.kind = kind;
         group.label = [self tideyRightPanelGroupLabelForKind:kind];
-        group.expanded = (kind == resolvedExpandedKind);
+        group.expanded = (kind == TideyRightPanelTabKindEditor) ? editorExpanded : browserExpanded;
         group.visibleTabs = group.expanded ? tabsOfKind : @[];
         [groups addObject:group];
     }
@@ -1357,6 +1360,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _tideyEditorTabs = [[NSMutableArray alloc] init];
         _tideySelectedEditorTabIndex = -1;
         _tideyExpandedRightPanelTabKind = TideyRightPanelTabKindEditor;
+        _tideyEditorGroupExpanded = YES;
+        _tideyBrowserGroupExpanded = NO;
         _tideySidebarPreferredWidth = kTideySidebarWidth;
         _tideyEditorFileTreePreferredWidth = kTideyEditorFileTreeWidth;
         _tideyEditorPreferredWidth = MAX(kTideyMinimumEditorPanelWidth,
@@ -3756,7 +3761,8 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         NSFontAttributeName: [NSFont systemFontOfSize:9 weight:NSFontWeightSemibold]
     };
     NSArray<TideyRightPanelTabGroupState *> *groups = [[self class] tideyRightPanelGroupStatesForTabs:_tideyEditorTabs
-                                                                                           expandedKind:_tideyExpandedRightPanelTabKind];
+                                                                                        editorExpanded:_tideyEditorGroupExpanded
+                                                                                       browserExpanded:_tideyBrowserGroupExpanded];
     BOOL isFirstGroup = YES;
     for (TideyRightPanelTabGroupState *group in groups) {
         if (!isFirstGroup) {
@@ -3885,6 +3891,11 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     _tideySelectedEditorTabIndex = index;
     TideyEditorTab *tab = _tideyEditorTabs[index];
     _tideyExpandedRightPanelTabKind = tab.kind;
+    if (tab.kind == TideyRightPanelTabKindBrowser) {
+        _tideyBrowserGroupExpanded = YES;
+    } else {
+        _tideyEditorGroupExpanded = YES;
+    }
     [self tideyRememberLastActiveRightPanelTab:tab];
     _tideyEditorLoadedPath = [tab.path copy];
     [self reloadTideyRightPanelTabs];
@@ -3935,6 +3946,12 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     TideyEditorTab *closingTab = _tideyEditorTabs[index];
     NSString *currentSelectedIdentifier = [self tideyCurrentRightPanelTabIdentifier];
     [_tideyEditorTabs removeObjectAtIndex:index];
+    if ([[[self class] tideyRightPanelTabsOfKind:TideyRightPanelTabKindEditor inTabs:_tideyEditorTabs] count] == 0) {
+        _tideyEditorGroupExpanded = NO;
+    }
+    if ([[[self class] tideyRightPanelTabsOfKind:TideyRightPanelTabKindBrowser inTabs:_tideyEditorTabs] count] == 0) {
+        _tideyBrowserGroupExpanded = NO;
+    }
     if (_tideyEditorTabs.count == 0) {
         _tideySelectedEditorTabIndex = -1;
         _tideyEditorLoadedPath = nil;
@@ -3974,13 +3991,10 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 
 - (void)tideyRightPanelSelectGroup:(id)sender {
     TideyRightPanelTabKind kind = (TideyRightPanelTabKind)([sender tag] - kTideyRightPanelGroupButtonTagBase);
-    TideyRightPanelSelectionState *state =
-        [[self class] tideyRightPanelSelectionStateForTabs:_tideyEditorTabs
-                                      preferredExpandedKind:kind
-                                  currentSelectedTabIdentifier:[self tideyCurrentRightPanelTabIdentifier]
-                                   lastActiveEditorTabIdentifier:_tideyLastActiveEditorTabIdentifier
-                                  lastActiveBrowserTabIdentifier:_tideyLastActiveBrowserTabIdentifier];
-    [self tideyApplyRightPanelSelectionState:state];
+    BOOL *expandedFlag = (kind == TideyRightPanelTabKindBrowser) ? &_tideyBrowserGroupExpanded : &_tideyEditorGroupExpanded;
+    *expandedFlag = !*expandedFlag;
+    _tideyExpandedRightPanelTabKind = kind;
+    [self reloadTideyRightPanelTabs];
 }
 
 - (void)reloadTideyEditorTabs {
