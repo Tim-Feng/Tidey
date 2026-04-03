@@ -7,9 +7,10 @@
 
 #import "PSMMinimalTabStyle.h"
 #import "PSMOverflowPopUpButton.h"
+#import "TideyThemeManager.h"
 
 static NSColor *PSMTideyTabBarBackgroundColor(void) {
-    return [NSColor colorWithSRGBRed:0.102 green:0.108 blue:0.135 alpha:1];
+    return [TideyThemeManager shared].currentTheme.bgSurface;
 }
 
 @implementation NSColor(PSMMinimalTabStyle)
@@ -47,6 +48,28 @@ static NSColor *PSMTideyTabBarBackgroundColor(void) {
 @end
 
 @implementation PSMMinimalTabStyle
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(tideyThemeDidChange:)
+                                                     name:TideyThemeDidChangeNotification
+                                                   object:[TideyThemeManager shared]];
+    }
+    return self;
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                    name:TideyThemeDidChangeNotification
+                                                  object:[TideyThemeManager shared]];
+}
+
+- (void)tideyThemeDidChange:(NSNotification *)notification {
+    (void)notification;
+    [self.tabBar setNeedsDisplay:YES];
+}
 
 - (NSString *)name {
     return @"Minimal";
@@ -193,7 +216,7 @@ static CGFloat PSMWeightedAverage(CGFloat l, CGFloat u, CGFloat w) {
     if (bar.orientation != PSMTabBarHorizontalOrientation) {
         return;
     }
-    [[NSColor controlAccentColor] set];
+    [[[TideyThemeManager shared] currentTheme].accentIndicator set];
     NSRect lineRect = NSMakeRect(NSMinX(cell.frame), NSMinY(cell.frame), NSWidth(cell.frame), 2);
     NSRectFillUsingOperation(lineRect, NSCompositingOperationSourceOver);
 }
