@@ -3419,6 +3419,7 @@ iTermKittyImageDraw *iTermFindKittyImageDrawForVirtualPlaceholder(NSArray<iTermK
         int preWrapY = 0;
         BOOL justWrapped = NO;
         BOOL foundCursor = NO;
+        NSMutableArray<NSValue *> *underlineRects = [NSMutableArray array];
         BOOL unusedBold = NO;
         BOOL unusedItalic = NO;
         UTF32Char ignore = 0;
@@ -3464,20 +3465,12 @@ iTermKittyImageDraw *iTermFindKittyImageDrawForVirtualPlaceholder(NSArray<iTermK
                                      colorRun:nil
                                       matches:nil
                                forceTextColor:[self defaultTextColor]
-                                      context:ctx
+                                     context:ctx
                                 virtualOffset:virtualOffset];
-            // Draw an underline.
-            NSRect rect = NSMakeRect(x,
-                                     y - round((_cellSize.height - _cellSizeWithoutSpacing.height) / 2.0),
-                                     charsInLine * _cellSize.width,
-                                     _cellSize.height);
-            [self drawUnderlineOrStrikethroughOfColor:[self defaultTextColor]
-                                        wantUnderline:YES
-                                                style:NSUnderlineStyleSingle
-                                                 font:fontInfo.font
-                                                 rect:rect
-                                              context:ctx
-                                        virtualOffset:virtualOffset];
+            [underlineRects addObject:[NSValue valueWithRect:NSMakeRect(x,
+                                                                        y - round((_cellSize.height - _cellSizeWithoutSpacing.height) / 2.0),
+                                                                        charsInLine * _cellSize.width,
+                                                                        _cellSize.height)]];
 
             // Save the cursor's cell coords
             if (i <= cursorIndex && i + charsInLine > cursorIndex) {
@@ -3501,6 +3494,16 @@ iTermKittyImageDraw *iTermFindKittyImageDrawForVirtualPlaceholder(NSArray<iTermK
             x = floor(xStart * _cellSize.width + [iTermPreferences sideMargins]);
             y = (yStart + _numberOfLines - height) * _cellSize.height;
             i += charsInLine;
+        }
+
+        for (NSValue *value in underlineRects) {
+            [self drawUnderlineOrStrikethroughOfColor:[self defaultTextColor]
+                                        wantUnderline:YES
+                                                style:NSUnderlineStyleSingle
+                                                 font:fontInfo.font
+                                                 rect:value.rectValue
+                                              context:ctx
+                                        virtualOffset:virtualOffset];
         }
 
         if (!foundCursor && i == cursorIndex) {
