@@ -64,6 +64,17 @@ static NSColor *PSMTideyTabBarBackgroundColor(void) {
     }
 }
 
+- (NSRect)closeButtonRectForTabCell:(PSMTabBarCell *)cell {
+    // Get the default left-side rect from super, then move to right side.
+    NSRect rect = [super closeButtonRectForTabCell:cell];
+    if (NSIsEmptyRect(rect)) {
+        return rect;
+    }
+    NSRect cellFrame = [cell frame];
+    rect.origin.x = NSMaxX(cellFrame) - kSPMTabBarCellInternalXMargin - rect.size.width;
+    return rect;
+}
+
 - (NSColor *)tabBarColor {
     return PSMTideyTabBarBackgroundColor();
 }
