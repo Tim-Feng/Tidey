@@ -187,6 +187,13 @@ static NSRect PSMConvertAccessibilityFrameToScreen(NSView *view, NSRect frame) {
     NSTrackingArea *_closeButtonTrackingArea;
 }
 
+- (void)psmApplyCloseButtonVisibilityToIndicator {
+    if (self.closeButtonVisible) {
+        self.indicator.hidden = YES;
+        self.indicator.animate = NO;
+    }
+}
+
 #pragma mark - Creation/Destruction
 
 - (id)initWithControlView:(PSMTabBarControl *)controlView {
@@ -400,15 +407,18 @@ static NSRect PSMConvertAccessibilityFrameToScreen(NSView *view, NSRect frame) {
             self.indicator.hidden = !_isProcessing;
             self.indicator.animate = _isProcessing;
             [self.indicator becomeIndeterminate];
+            [self psmApplyCloseButtonVisibilityToIndicator];
             return;
         case PSMProgressIndeterminate:
             [self.indicator becomeIndeterminate];
             self.indicator.hidden = NO;
             self.indicator.animate = YES;
+            [self psmApplyCloseButtonVisibilityToIndicator];
             return;
         case PSMProgressError:
             self.indicator.hidden = NO;
             [self.indicator becomeDeterminateWithFraction:1.0 status: PSMStatusError animated:NO];
+            [self psmApplyCloseButtonVisibilityToIndicator];
             return;
         case PSMProgressSuccessBase:
         case PSMProgressWarningBase:
@@ -435,6 +445,7 @@ static NSRect PSMConvertAccessibilityFrameToScreen(NSView *view, NSRect frame) {
                                            status:status
                                          animated:!self.indicator.indeterminate];
     self.indicator.hidden = NO;
+    [self psmApplyCloseButtonVisibilityToIndicator];
 }
 
 - (PSMProgressIndicator *)indicator {
@@ -757,6 +768,7 @@ static NSRect PSMConvertAccessibilityFrameToScreen(NSView *view, NSRect frame) {
     BOOL wasHighlighted = self.isHighlighted;
     _highlighted = highlighted;
     if (highlighted != wasHighlighted) {
+        [self updateIndicators];
         if ([self highlightAnimationDuration] > 0) {
             _highlightChangeTime = [NSDate timeIntervalSinceReferenceDate];
             [NSTimer scheduledTimerWithTimeInterval:1 / 60.0
@@ -768,6 +780,14 @@ static NSRect PSMConvertAccessibilityFrameToScreen(NSView *view, NSRect frame) {
             [self.controlView setNeedsDisplayInRect:self.frame];
         }
     }
+}
+
+- (void)setCloseButtonOver:(BOOL)closeButtonOver {
+    if (_closeButtonOver == closeButtonOver) {
+        return;
+    }
+    _closeButtonOver = closeButtonOver;
+    [self updateIndicators];
 }
 
 - (CGFloat)highlightAnimationDuration {
