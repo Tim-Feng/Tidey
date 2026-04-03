@@ -3179,6 +3179,12 @@ ITERM_WEAKLY_REFERENCEABLE
     if ([_contentView closeCurrentTideyEditorTab]) {
         return;
     }
+    if ([_contentView.tabView numberOfTabViewItems] <= 1) {
+        PTYTab *currentTab = self.currentTab;
+        if (currentTab && currentTab.sessions.count <= 1) {
+            return;
+        }
+    }
     if ([[self window] isKeyWindow]) {
         PTYSession *aSession = [[[_contentView.tabView selectedTabViewItem] identifier] activeSession];
         if ([aSession closeComposer]) {
