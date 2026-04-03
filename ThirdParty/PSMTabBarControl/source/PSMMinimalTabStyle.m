@@ -125,7 +125,8 @@ static CGFloat PSMWeightedAverage(CGFloat l, CGFloat u, CGFloat w) {
 - (NSColor *)textColorDefaultSelected:(BOOL)selected
                       backgroundColor:(NSColor *)backgroundColor
            windowIsMainAndAppIsActive:(BOOL)mainAndActive {
-    return selected ? NSColor.labelColor : NSColor.secondaryLabelColor;
+    return selected ? [TideyThemeManager shared].currentTheme.textPrimary
+                    : [TideyThemeManager shared].currentTheme.textSecondary;
 }
 
 - (NSColor *)horizontalLineColor {
