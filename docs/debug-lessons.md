@@ -114,6 +114,38 @@
   - 用明確事件：`session-start`、`prompt-submit`、`notification`、`stop`、`session-end`
 - hook command 只要含空白路徑就要先 escape
 
+## Theme System
+
+- `NSTableViewStyleSourceList` 的 selection 顏色無法自訂
+  - 沒有公開 API，`drawSelectionInRect:` 在 SourceList 模式下不會被呼叫
+  - 解法：`selectionHighlightStyle = NSTableViewSelectionHighlightStyleNone` + 自己加 overlay subview
+  - overlay z-order：系統 selection → overlay → cell content（用 `NSWindowBelow relativeTo:cellView`）
+  - 不要改 `NSTableViewStylePlain`，會破壞 SourceList 的排版（padding、行高、字體）
+
+- `CALayer.backgroundColor` 改了但畫面不更新
+  - notification handler 確認有被呼叫（用 NSLog 驗證），但 layer 改動沒反映到畫面
+  - 可能需要 `setNeedsDisplay:YES`、`setNeedsLayout:YES`、或 `CATransaction.flush()`
+  - 這個問題在 feature/theme-system 上沒有解決，需要繼續調查
+
+- theme token 替換要一個元素一個元素來
+  - 一次全換容易出錯且難以 debug
+  - 每換一個就 build + 視覺確認 + commit
+  - 先從最明顯的元素開始（focus bar → tab bar 背景 → sidebar 選中態）
+
+- 櫻花爛漫（light theme）配色不能直接把 dark theme 的 token 對調
+  - 主內容區用近白色（胡粉 #FFFFFB），粉色只點綴 sidebar
+  - focus indicator 需要更深更飽和的色（今様 #D05A6E），不能用淺粉
+  - 文字選取反白要夠深（今様 @55%），不然看不到
+  - 先用 front-end mockup 規劃全局配色，再實作
+
+- `pkill -9` 會破壞 saved state，導致 "session ended very soon" warning
+  - 用 ⌘Q 正常關閉，不要 force kill
+  - 清 UserDefaults 後第一次開正常，第二次才出 warning（因為第一次存了壞的 state）
+
+- `docs/theme-token-map.md` 是 UI 元件 ↔ 色碼 ↔ token 的對照表
+  - 改色之前先確認元件在畫面上的位置
+  - 行號會隨改動偏移，用色碼值和上下文定位
+
 ## Testing
 
 - 不要在 test host 直接初始化 `iTermRootTerminalView`
