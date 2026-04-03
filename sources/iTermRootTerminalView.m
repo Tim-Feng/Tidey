@@ -1514,7 +1514,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _tideyEditorPanelHintViews = [[NSMutableArray alloc] init];
 
         _tideyEditorPanelLabel = [NSTextField labelWithString:@"Loading Editor…"];
-        _tideyEditorPanelLabel.textColor = [NSColor colorWithWhite:0.92 alpha:1];
+        _tideyEditorPanelLabel.textColor = TideyCurrentTheme().textPrimary;
         _tideyEditorPanelLabel.font = [NSFont systemFontOfSize:22 weight:NSFontWeightSemibold];
         _tideyEditorPanelLabel.alignment = NSTextAlignmentCenter;
         _tideyEditorPanelLabel.translatesAutoresizingMaskIntoConstraints = NO;
@@ -3627,6 +3627,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     _tideyEditorPanelView.layer.backgroundColor = theme.bgBase.CGColor;
     _tideyEditorTabStripView.layer.backgroundColor = theme.bgBase.CGColor;
     _tideyEditorFileTreeContainerView.layer.backgroundColor = theme.bgSurface.CGColor;
+    _tideyEditorPanelLabel.textColor = theme.textPrimary;
     if (_tideyBrowserContainerView.subviews.count > 0) {
         NSView *toolbar = _tideyBrowserContainerView.subviews.firstObject;
         toolbar.layer.backgroundColor = theme.bgControl.CGColor;
@@ -3645,6 +3646,8 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     }
     self.tabBarControl.wantsLayer = YES;
     self.tabBarControl.layer.backgroundColor = theme.bgBase.CGColor;
+    [self reloadTideyEditorTabs];
+    [_tideyEditorFileTreeView reloadData];
     [_tideySidebarTableView setNeedsDisplay:YES];
     [self setNeedsDisplay:YES];
 }
@@ -3864,7 +3867,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         groupButton.attributedTitle = [[NSAttributedString alloc] initWithString:groupLabel
                                                                       attributes:@{
             NSFontAttributeName: groupLabelAttributes[NSFontAttributeName],
-            NSForegroundColorAttributeName: group.expanded ? NSColor.labelColor : NSColor.secondaryLabelColor,
+            NSForegroundColorAttributeName: group.expanded ? TideyCurrentTheme().textPrimary : TideyCurrentTheme().textSecondary,
         }];
         [_tideyEditorTabStripView addSubview:groupButton];
         x += labelWidth;
@@ -3893,7 +3896,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
             selectButton.alignment = NSTextAlignmentLeft;
             NSFont *baseFont = [NSFont systemFontOfSize:11 weight:selected ? NSFontWeightSemibold : NSFontWeightMedium];
             selectButton.font = tab.preview ? [[NSFontManager sharedFontManager] convertFont:baseFont toHaveTrait:NSItalicFontMask] : baseFont;
-            selectButton.contentTintColor = selected ? NSColor.labelColor : NSColor.secondaryLabelColor;
+            selectButton.contentTintColor = selected ? TideyCurrentTheme().textPrimary : TideyCurrentTheme().textSecondary;
             selectButton.title = title;
             selectButton.imagePosition = NSNoImage;
             selectButton.tag = originalIndex;
@@ -3905,7 +3908,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
             closeButton.bordered = NO;
             closeButton.buttonType = NSButtonTypeMomentaryChange;
             closeButton.font = [NSFont systemFontOfSize:10 weight:NSFontWeightSemibold];
-            closeButton.contentTintColor = selected ? NSColor.labelColor : NSColor.secondaryLabelColor;
+            closeButton.contentTintColor = selected ? TideyCurrentTheme().textPrimary : TideyCurrentTheme().textSecondary;
             closeButton.title = @"✕";
             closeButton.tag = originalIndex;
             closeButton.target = self;
@@ -3927,7 +3930,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
             addButton.bordered = NO;
             addButton.buttonType = NSButtonTypeMomentaryChange;
             addButton.font = [NSFont systemFontOfSize:14 weight:NSFontWeightMedium];
-            addButton.contentTintColor = NSColor.secondaryLabelColor;
+            addButton.contentTintColor = TideyCurrentTheme().textSecondary;
             addButton.title = @"+";
             addButton.alignment = NSTextAlignmentCenter;
             addButton.target = self;
@@ -5272,7 +5275,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         NSImage *image = [NSImage imageWithSystemSymbolName:symbolName accessibilityDescription:nil];
         image.template = YES;
         cellView.imageView.image = image;
-        cellView.imageView.contentTintColor = [NSColor colorWithWhite:0.78 alpha:1];
+        cellView.imageView.contentTintColor = TideyCurrentTheme().textSecondary;
     }
     return cellView;
 }
@@ -5291,7 +5294,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     titleField.frame = NSMakeRect(24, 2, 168, 18);
     titleField.translatesAutoresizingMaskIntoConstraints = NO;
     titleField.font = [NSFont systemFontOfSize:12 weight:NSFontWeightRegular];
-    titleField.textColor = [NSColor colorWithWhite:0.92 alpha:1];
+    titleField.textColor = TideyCurrentTheme().textPrimary;
     titleField.drawsBackground = NO;
     titleField.backgroundColor = [NSColor clearColor];
     titleField.bezeled = NO;
