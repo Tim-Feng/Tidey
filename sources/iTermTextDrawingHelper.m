@@ -3386,7 +3386,6 @@ iTermKittyImageDraw *iTermFindKittyImageDrawForVirtualPlaceholder(NSArray<iTermK
                        cursorHeight:(double)cursorHeight
                                 ctx:(CGContextRef)ctx
                       virtualOffset:(CGFloat)virtualOffset {
-    (void)cursorHeight;
     iTermColorMap *colorMap = _colorMap;
 
     // draw any text for NSTextInput
@@ -3419,15 +3418,6 @@ iTermKittyImageDraw *iTermFindKittyImageDrawForVirtualPlaceholder(NSArray<iTermK
         int preWrapY = 0;
         BOOL justWrapped = NO;
         BOOL foundCursor = NO;
-        NSMutableArray<NSValue *> *underlineRects = [NSMutableArray array];
-        BOOL unusedBold = NO;
-        BOOL unusedItalic = NO;
-        UTF32Char ignore = 0;
-        PTYFontInfo *fontInfo = [_delegate drawingHelperFontForChar:128
-                                                          isComplex:NO
-                                                         renderBold:&unusedBold
-                                                       renderItalic:&unusedItalic
-                                                           remapped:&ignore];
         for (i = 0; i < len; ) {
             const int remainingCharsInBuffer = len - i;
             const int remainingCharsInLine = width - xStart;
@@ -3465,12 +3455,28 @@ iTermKittyImageDraw *iTermFindKittyImageDrawForVirtualPlaceholder(NSArray<iTermK
                                      colorRun:nil
                                       matches:nil
                                forceTextColor:[self defaultTextColor]
-                                     context:ctx
+                                      context:ctx
                                 virtualOffset:virtualOffset];
-            [underlineRects addObject:[NSValue valueWithRect:NSMakeRect(x,
-                                                                        y - round((_cellSize.height - _cellSizeWithoutSpacing.height) / 2.0),
-                                                                        charsInLine * _cellSize.width,
-                                                                        _cellSize.height)]];
+            // Draw an underline.
+            BOOL unusedBold = NO;
+            BOOL unusedItalic = NO;
+            UTF32Char ignore = 0;
+            PTYFontInfo *fontInfo = [_delegate drawingHelperFontForChar:128
+                                                              isComplex:NO
+                                                             renderBold:&unusedBold
+                                                           renderItalic:&unusedItalic
+                                                               remapped:&ignore];
+            NSRect rect = NSMakeRect(x,
+                                     y - round((_cellSize.height - _cellSizeWithoutSpacing.height) / 2.0),
+                                     charsInLine * _cellSize.width,
+                                     _cellSize.height);
+            [self drawUnderlineOrStrikethroughOfColor:[self defaultTextColor]
+                                        wantUnderline:YES
+                                                style:NSUnderlineStyleSingle
+                                                 font:fontInfo.font
+                                                 rect:rect
+                                              context:ctx
+                                        virtualOffset:virtualOffset];
 
             // Save the cursor's cell coords
             if (i <= cursorIndex && i + charsInLine > cursorIndex) {
@@ -3496,16 +3502,6 @@ iTermKittyImageDraw *iTermFindKittyImageDrawForVirtualPlaceholder(NSArray<iTermK
             i += charsInLine;
         }
 
-        for (NSValue *value in underlineRects) {
-            [self drawUnderlineOrStrikethroughOfColor:[self defaultTextColor]
-                                        wantUnderline:YES
-                                                style:NSUnderlineStyleSingle
-                                                 font:fontInfo.font
-                                                 rect:value.rectValue
-                                              context:ctx
-                                        virtualOffset:virtualOffset];
-        }
-
         if (!foundCursor && i == cursorIndex) {
             if (justWrapped) {
                 cursorX = [iTermPreferences sideMargins] + width * _cellSize.width;
@@ -3515,24 +3511,21 @@ iTermKittyImageDraw *iTermFindKittyImageDrawForVirtualPlaceholder(NSArray<iTermK
                 cursorY = y;
             }
         }
-        const CGFloat cursorCellWidth = _cellSize.width;
-        CGFloat rightMargin = [iTermPreferences sideMargins] + _gridSize.width * _cellSize.width;
-        if (cursorX + cursorCellWidth > rightMargin) {
-            cursorX = rightMargin - cursorCellWidth;
+        const double kCursorWidth = 2.0;
+        double rightMargin = [iTermPreferences sideMargins] + _gridSize.width * _cellSize.width;
+        if (cursorX + kCursorWidth >= rightMargin) {
+            // Make sure the cursor doesn't draw in the margin. Shove it left
+            // a little bit so it fits.
+            cursorX = rightMargin - kCursorWidth;
         }
-        NSRect cursorUnderlineRect = NSMakeRect(cursorX,
-                                                cursorY - round((_cellSize.height - _cellSizeWithoutSpacing.height) / 2.0),
-                                                cursorCellWidth,
-                                                _cellSize.height);
-        _imeCursorLastPos = NSMakePoint(cursorX, cursorY);
+        NSRect cursorFrame = NSMakeRect(cursorX,
+                                        cursorY + round((_cellSize.height - _cellSizeWithoutSpacing.height) / 2.0),
+                                        2.0,
+                                        cursorHeight);
+        _imeCursorLastPos = cursorFrame.origin;
         [self.delegate drawingHelperUpdateFindCursorView];
-        [self drawUnderlineOrStrikethroughOfColor:[colorMap processedBackgroundColorForBackgroundColor:[colorMap colorForKey:kColorMapIMECursor]]
-                                    wantUnderline:YES
-                                            style:NSUnderlineStyleDouble
-                                             font:fontInfo.font
-                                             rect:cursorUnderlineRect
-                                          context:ctx
-                                    virtualOffset:virtualOffset];
+        [[colorMap processedBackgroundColorForBackgroundColor:[colorMap colorForKey:kColorMapIMECursor]] set];
+        iTermRectFill(cursorFrame, virtualOffset);
 
         return YES;
     }

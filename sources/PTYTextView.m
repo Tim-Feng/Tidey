@@ -2042,7 +2042,7 @@ static NSString *iTermStringForEventPhase(NSEventPhase eventPhase) {
         @{ NSBackgroundColorAttributeName: [self defaultBackgroundColor] ?: [NSColor blackColor],
            NSForegroundColorAttributeName: [self defaultTextColor] ?: [NSColor whiteColor],
            NSFontAttributeName: _fontTable.defaultNonASCIIFont.font ?: [NSFont systemFontOfSize:12],
-           NSUnderlineStyleAttributeName: @(NSUnderlineStyleSingle) };
+           NSUnderlineStyleAttributeName: @(NSUnderlineStyleSingle | NSUnderlineByWord) };
 
     [self setMarkedTextAttributes:theAttributes];
 }
