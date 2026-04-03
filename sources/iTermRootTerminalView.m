@@ -1866,6 +1866,9 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     _tideyEditorDragHandle.delegate = nil;
     _tideyEditorFileTreeDragHandle.delegate = nil;
     [_tideyEditorWebView.configuration.userContentController removeScriptMessageHandlerForName:@"tideyEditorReady"];
+    [_tideyEditorWebView.configuration.userContentController removeScriptMessageHandlerForName:@"tideyEditorChanged"];
+    [_tideyEditorWebView.configuration.userContentController removeScriptMessageHandlerForName:@"tideyEditorSaveRequested"];
+    [_tideyEditorWebView.configuration.userContentController removeScriptMessageHandlerForName:@"tideyEditorOpenLink"];
     _tideyEditorWebView.navigationDelegate = nil;
 }
 
@@ -2977,6 +2980,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     [contentController addScriptMessageHandler:_tideyEditorScriptMessageHandler name:@"tideyEditorReady"];
     [contentController addScriptMessageHandler:_tideyEditorScriptMessageHandler name:@"tideyEditorChanged"];
     [contentController addScriptMessageHandler:_tideyEditorScriptMessageHandler name:@"tideyEditorSaveRequested"];
+    [contentController addScriptMessageHandler:_tideyEditorScriptMessageHandler name:@"tideyEditorOpenLink"];
     configuration.userContentController = contentController;
 
     _tideyEditorWebView = [[WKWebView alloc] initWithFrame:_tideyEditorPanelView.bounds configuration:configuration];
@@ -4474,6 +4478,16 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     }
     if ([message.name isEqualToString:@"tideyEditorSaveRequested"]) {
         [self saveTideyEditorCurrentTab];
+        return;
+    }
+    if ([message.name isEqualToString:@"tideyEditorOpenLink"] &&
+        [message.body isKindOfClass:[NSDictionary class]]) {
+        NSString *urlString = [message.body[@"url"] isKindOfClass:[NSString class]] ? message.body[@"url"] : nil;
+        NSURL *url = urlString.length > 0 ? [NSURL URLWithString:urlString] : nil;
+        NSString *scheme = url.scheme.lowercaseString;
+        if (url && ([scheme isEqualToString:@"http"] || [scheme isEqualToString:@"https"])) {
+            [self tideyOpenBrowserTabWithURL:url];
+        }
     }
 }
 
@@ -4706,6 +4720,17 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
             "    if (window.__tideyApplyingNativeUpdate) { return; }"
             "    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.tideyEditorChanged) {"
             "      window.webkit.messageHandlers.tideyEditorChanged.postMessage({ value: window.__tideyEditor.getValue() });"
+            "    }"
+            "  });"
+            "  monaco.editor.registerLinkOpener({"
+            "    open: function(resource) {"
+            "      const url = resource && typeof resource.toString === 'function' ? resource.toString() : String(resource || '');"
+            "      if (!url) { return false; }"
+            "      if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.tideyEditorOpenLink) {"
+            "        window.webkit.messageHandlers.tideyEditorOpenLink.postMessage({ url: url });"
+            "        return true;"
+            "      }"
+            "      return false;"
             "    }"
             "  });"
             "  window.addEventListener('keydown', function(event) {"
