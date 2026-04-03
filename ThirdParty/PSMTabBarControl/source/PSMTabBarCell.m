@@ -459,7 +459,7 @@ static NSRect PSMConvertAccessibilityFrameToScreen(NSView *view, NSRect frame) {
 
 - (BOOL)hasIcon {
     BOOL hasIndicator = [self indicator] && !self.indicator.isHidden;
-    return _hasIcon && !hasIndicator;
+    return _hasIcon && !hasIndicator && !self.closeButtonVisible;
 }
 
 - (void)setCount:(int)value {
