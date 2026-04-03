@@ -193,7 +193,7 @@ static CGFloat PSMWeightedAverage(CGFloat l, CGFloat u, CGFloat w) {
     if (bar.orientation != PSMTabBarHorizontalOrientation) {
         return;
     }
-    [[NSColor controlAccentColor] set];
+    [[NSColor colorWithSRGBRed:0.188 green:0.835 blue:0.784 alpha:1.0] set];
     NSRect lineRect = NSMakeRect(NSMinX(cell.frame), NSMinY(cell.frame), NSWidth(cell.frame), 2);
     NSRectFillUsingOperation(lineRect, NSCompositingOperationSourceOver);
 }
