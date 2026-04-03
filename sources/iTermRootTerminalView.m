@@ -2943,6 +2943,12 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         return;
     }
     _shouldShowTideyEditorFileTree = shouldShowTideyEditorFileTree;
+    if (shouldShowTideyEditorFileTree) {
+        [self syncTideyEditorFileTreeRootIfNeeded];
+        if (_tideyEditorFileTreeRootNode == nil || _tideyEditorFileTreeView.numberOfRows == 0) {
+            [self reloadTideyEditorFileTree];
+        }
+    }
     [self tideyPersistLayoutState];
 }
 
@@ -3099,12 +3105,12 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     BOOL isBrowser = (tab != nil && tab.kind == TideyRightPanelTabKindBrowser);
     _tideyBrowserContainerView.hidden = !isBrowser;
     _tideyEditorWebView.hidden = isBrowser || tab == nil;
-    _tideyEditorFileTreeContainerView.hidden = isBrowser || !self.shouldShowTideyEditorFileTree;
+    _tideyEditorFileTreeContainerView.hidden = !self.shouldShowTideyEditorFileTree;
     if (self.tideyEditorFileTreeToggleButton) {
-        self.tideyEditorFileTreeToggleButton.hidden = isBrowser || !self.shouldShowTideyEditorPanel;
+        self.tideyEditorFileTreeToggleButton.hidden = !self.shouldShowTideyEditorPanel;
     }
     if (self.tideyEditorFileTreeDragHandle) {
-        self.tideyEditorFileTreeDragHandle.hidden = isBrowser;
+        self.tideyEditorFileTreeDragHandle.hidden = !self.shouldShowTideyEditorFileTree;
     }
 }
 
@@ -3115,7 +3121,10 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     const NSRect bounds = _tideyEditorPanelView.bounds;
     const CGFloat tabStripHeight = TideyEditorEffectiveTabStripHeight(_tabBarControl.height);
     const CGFloat contentHeight = MAX(0, NSHeight(bounds) - tabStripHeight);
-    const CGFloat contentWidth = NSWidth(bounds);
+    const CGFloat fileTreeWidth = self.shouldShowTideyEditorFileTree
+        ? MIN(self.tideyEditorFileTreeWidth, MAX(0, NSWidth(bounds) - kTideyMinimumEditorContentWidth))
+        : 0;
+    const CGFloat contentWidth = MAX(0, NSWidth(bounds) - fileTreeWidth);
     _tideyBrowserContainerView.frame = NSMakeRect(0, 0, contentWidth, contentHeight);
 
     // Toolbar at top of container
@@ -4156,6 +4165,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     if (!url) {
         return;
     }
+    self.shouldShowTideyEditorFileTree = NO;
     TideyEditorTab *tab = [TideyEditorTab browserTabWithURL:url];
     [_tideyEditorTabs addObject:tab];
     if (!_shouldShowTideyEditorPanel) {
@@ -4514,6 +4524,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         self.shouldShowTideyEditorPanel = YES;
         [self layoutSubviews];
     }
+    self.shouldShowTideyEditorFileTree = NO;
     NSURL *homeURL = [NSURL URLWithString:@"https://github.com/Tim-Feng/Tidey"];
     TideyEditorTab *tab = [TideyEditorTab browserTabWithURL:homeURL];
     [_tideyEditorTabs addObject:tab];
@@ -4847,9 +4858,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         self.tideyEditorToggleButton.frame = NSZeroRect;
     }
 
-    TideyEditorTab *currentRightPanelTab = [self tideyCurrentRightPanelTab];
-    const BOOL rightPanelShowsBrowser = (currentRightPanelTab.kind == TideyRightPanelTabKindBrowser);
-    const BOOL showFileTreeToggle = self.shouldShowTideyEditorPanel && !rightPanelShowsBrowser;
+    const BOOL showFileTreeToggle = self.shouldShowTideyEditorPanel;
     self.tideyEditorFileTreeToggleButton.hidden = !showFileTreeToggle;
     if (!showFileTreeToggle) {
         return;
