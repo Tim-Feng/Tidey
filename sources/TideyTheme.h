@@ -12,6 +12,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, readonly) NSColor *bgBase;
 @property (nonatomic, readonly) NSColor *bgSurface;
 @property (nonatomic, readonly) NSColor *bgControl;
+@property (nonatomic, readonly) NSColor *bgSelected;
 @property (nonatomic, readonly) NSColor *bgHover;
 
 @property (nonatomic, readonly) NSColor *borderDefault;

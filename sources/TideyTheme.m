@@ -11,6 +11,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, readwrite) NSColor *bgBase;
 @property (nonatomic, readwrite) NSColor *bgSurface;
 @property (nonatomic, readwrite) NSColor *bgControl;
+@property (nonatomic, readwrite) NSColor *bgSelected;
 @property (nonatomic, readwrite) NSColor *bgHover;
 @property (nonatomic, readwrite) NSColor *borderDefault;
 @property (nonatomic, readwrite) NSColor *borderStrong;
@@ -63,6 +64,7 @@ static NSColor *TideyThemeRequireColor(NSDictionary<NSString *, NSColor *> *dict
         _bgBase = TideyThemeRequireColor(dictionary, @"bgBase");
         _bgSurface = TideyThemeRequireColor(dictionary, @"bgSurface");
         _bgControl = TideyThemeRequireColor(dictionary, @"bgControl");
+        _bgSelected = TideyThemeRequireColor(dictionary, @"bgSelected");
         _bgHover = TideyThemeRequireColor(dictionary, @"bgHover");
         _borderDefault = TideyThemeRequireColor(dictionary, @"borderDefault");
         _borderStrong = TideyThemeRequireColor(dictionary, @"borderStrong");

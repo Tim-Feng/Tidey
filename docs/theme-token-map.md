@@ -223,6 +223,27 @@ Accent 層：（⚠️ 需要調整）
 - [ ] 所有邊框 → borderDefault / borderStrong
 - [ ] 所有 hover 態 → bgHover
 
+### Terminal / Profile 色碼
+- [ ] background（終端背景）→ background — iTermProfilePreferences.m:853, PTYSession.m:1365
+- [ ] foreground（終端前景文字）→ foreground — iTermProfilePreferences.m:852, PTYSession.m:2179
+- [ ] cursor（終端游標）→ cursor — iTermProfilePreferences.m:859, PTYSession.m:5077
+- [ ] imeCursor（IME 游標）→ imeCursor — iTermProfilePreferences.m:861, PTYSession.m:5079
+- [ ] selection（文字選取反白）→ selection — iTermProfilePreferences.m:857, PTYSession.m:5072
+
+### ANSI 16 色
+全部定義在 iTermProfilePreferences.m:862-877，映射在 iTermColorMap.m:542-557
+- [ ] ansiBlack ~ ansiWhite（8 色）
+- [ ] ansiBrightBlack ~ ansiBrightWhite（8 色）
+
+### 狀態色
+- [ ] stateSuccess → 成功 mark — iTermTextDrawingHelper.m:1184 `successMarkColor`
+- [ ] stateWarning → 中性 mark — iTermTextDrawingHelper.m:1198 `otherMarkColor`
+- [ ] stateError → 失敗 mark — iTermTextDrawingHelper.m:1191 `errorMarkColor`
+
+### 其他分隔線
+- [ ] lineHairline → tab division — iTermRootTerminalView.m:2569-2577
+- [ ] lineHairline → pane divider — PTYSplitView.m:85 `dividerColor`
+
 ### 未收錄（待補路徑）
 - [ ] Terminal tab 未讀藍點
 - [ ] Sidebar workspace 選中態背景

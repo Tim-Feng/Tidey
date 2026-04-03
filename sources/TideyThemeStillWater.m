@@ -14,6 +14,7 @@
         @"bgBase": [TideyPalette kurotsurubami],
         @"bgSurface": [TideyPalette kon],
         @"bgControl": [TideyPalette rindoh],
+        @"bgSelected": [[TideyPalette seiran] colorWithAlphaComponent:0.5],
         @"bgHover": [[TideyPalette geppaku] colorWithAlphaComponent:0.06],
         @"borderDefault": [[TideyPalette fukaganezumi] colorWithAlphaComponent:0.20],
         @"borderStrong": [[TideyPalette ginnezumi] colorWithAlphaComponent:0.35],

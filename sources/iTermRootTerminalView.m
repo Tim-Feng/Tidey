@@ -45,6 +45,7 @@
 #import "SCEventListenerProtocol.h"
 #import "SCEvents.h"
 #import "TideyNotificationStore.h"
+#import "TideyThemeManager.h"
 
 #import <WebKit/WebKit.h>
 
@@ -132,6 +133,10 @@ static CGFloat TideyEditorEffectiveTabStripHeight(CGFloat terminalTabBarHeight) 
         return round(terminalTabBarHeight);
     }
     return kTideyEditorTabStripHeight;
+}
+
+static TideyTheme *TideyCurrentTheme(void) {
+    return [TideyThemeManager shared].currentTheme;
 }
 
 static NSRect TideyPanelShortcutHintFrameForAnchorRect(NSRect anchorRect) {
@@ -359,6 +364,8 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
 - (void)tideyEnsureBrowserWebView;
 - (void)tideyLoadBrowserURL:(NSURL *)url;
 - (void)tideyUpdateBrowserContentVisibility;
+- (void)tideyThemeDidChange:(NSNotification *)notification;
+- (void)tideyApplyBackgroundTheme;
 
 @end
 
@@ -543,20 +550,69 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 @end
 
 @interface TideySidebarRowView : NSTableRowView {
+    NSView *_tideySelectionOverlay;
 }
 @end
 
 @implementation TideySidebarRowView
 
-- (void)drawSelectionInRect:(NSRect)dirtyRect {
-    if (!self.selectionHighlightStyle || !self.isSelected) {
-        return;
+- (instancetype)initWithFrame:(NSRect)frameRect {
+    self = [super initWithFrame:frameRect];
+    if (self) {
+        self.selectionHighlightStyle = NSTableViewSelectionHighlightStyleNone;
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(tideyThemeDidChange:)
+                                                     name:TideyThemeDidChangeNotification
+                                                   object:[TideyThemeManager shared]];
     }
-    NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds, 6, 4)
-                                                         xRadius:8
-                                                         yRadius:8];
-    [[NSColor selectedContentBackgroundColor] setFill];
-    [path fill];
+    return self;
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+- (void)tideyThemeDidChange:(NSNotification *)notification {
+    if (self.isSelected) {
+        _tideySelectionOverlay.layer.backgroundColor = [[TideyThemeManager shared] currentTheme].bgSelected.CGColor;
+    }
+}
+
+- (void)ensureOverlay {
+    if (!_tideySelectionOverlay) {
+        _tideySelectionOverlay = [[NSView alloc] initWithFrame:NSZeroRect];
+        _tideySelectionOverlay.wantsLayer = YES;
+        _tideySelectionOverlay.layer.cornerRadius = 8;
+        _tideySelectionOverlay.hidden = YES;
+        [self addSubview:_tideySelectionOverlay];
+    }
+    NSTableCellView *contentView = nil;
+    for (NSView *subview in self.subviews) {
+        if ([subview isKindOfClass:[NSTableCellView class]]) {
+            contentView = (NSTableCellView *)subview;
+            break;
+        }
+    }
+    if (contentView) {
+        [self addSubview:_tideySelectionOverlay positioned:NSWindowBelow relativeTo:contentView];
+    }
+}
+
+- (void)setSelectionHighlightStyle:(NSTableViewSelectionHighlightStyle)selectionHighlightStyle {
+    [super setSelectionHighlightStyle:NSTableViewSelectionHighlightStyleNone];
+}
+
+- (void)layout {
+    [super layout];
+    [self ensureOverlay];
+    _tideySelectionOverlay.frame = NSInsetRect(self.bounds, 10, 2);
+}
+
+- (void)setSelected:(BOOL)selected {
+    [super setSelected:selected];
+    [self ensureOverlay];
+    _tideySelectionOverlay.hidden = !selected;
+    _tideySelectionOverlay.layer.backgroundColor = [[TideyThemeManager shared] currentTheme].bgSelected.CGColor;
 }
 
 - (BOOL)isEmphasized {
@@ -965,7 +1021,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSView *container = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, viewSize.width, viewSize.height)];
     container.wantsLayer = YES;
     container.layer.cornerRadius = 4;
-    container.layer.backgroundColor = [NSColor colorWithSRGBRed:0.075 green:0.102 blue:0.129 alpha:1.0].CGColor;
+    container.layer.backgroundColor = TideyCurrentTheme().bgControl.CGColor;
     container.layer.borderColor = [NSColor colorWithWhite:1.0 alpha:0.25].CGColor;
     container.layer.borderWidth = 1.0;
     container.hidden = YES;
@@ -984,7 +1040,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     hint.identifier = kTideyPanelHintViewIdentifier;
     hint.wantsLayer = YES;
     hint.layer.cornerRadius = 4;
-    hint.layer.backgroundColor = [NSColor colorWithSRGBRed:0.075 green:0.102 blue:0.129 alpha:1.0].CGColor;
+    hint.layer.backgroundColor = TideyCurrentTheme().bgControl.CGColor;
     hint.layer.borderColor = [NSColor colorWithWhite:1.0 alpha:0.25].CGColor;
     hint.layer.borderWidth = 1.0;
     hint.hidden = YES;
@@ -1378,10 +1434,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _tideySidebarView = [[NSView alloc] initWithFrame:NSZeroRect];
         _tideySidebarView.autoresizingMask = NSViewHeightSizable;
         _tideySidebarView.wantsLayer = YES;
-        _tideySidebarView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.11
-                                                                      green:0.12
-                                                                       blue:0.15
-                                                                      alpha:1].CGColor;
+        _tideySidebarView.layer.backgroundColor = TideyCurrentTheme().bgSurface.CGColor;
         [self addSubview:_tideySidebarView];
 
         _tideySidebarScrollView = [[NSScrollView alloc] initWithFrame:NSZeroRect];
@@ -1426,6 +1479,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                  selector:@selector(tideyApplicationDidBecomeActive:)
                                                      name:NSApplicationDidBecomeActiveNotification
                                                    object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(tideyThemeDidChange:)
+                                                     name:TideyThemeDidChangeNotification
+                                                   object:[TideyThemeManager shared]];
 
         _tideyModifierMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskFlagsChanged
                                                                       handler:^NSEvent *(NSEvent *event) {
@@ -1441,20 +1498,14 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _tideyEditorPanelView = [[NSView alloc] initWithFrame:NSZeroRect];
         _tideyEditorPanelView.autoresizingMask = NSViewMinXMargin | NSViewHeightSizable;
         _tideyEditorPanelView.wantsLayer = YES;
-        _tideyEditorPanelView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.10
-                                                                          green:0.11
-                                                                           blue:0.14
-                                                                          alpha:1].CGColor;
+        _tideyEditorPanelView.layer.backgroundColor = TideyCurrentTheme().bgBase.CGColor;
         _tideyEditorPanelView.hidden = YES;
         [self addSubview:_tideyEditorPanelView];
 
         _tideyEditorTabStripView = [[NSView alloc] initWithFrame:NSZeroRect];
         _tideyEditorTabStripView.autoresizingMask = NSViewWidthSizable;
         _tideyEditorTabStripView.wantsLayer = YES;
-        _tideyEditorTabStripView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.09
-                                                                           green:0.10
-                                                                            blue:0.13
-                                                                           alpha:1].CGColor;
+        _tideyEditorTabStripView.layer.backgroundColor = TideyCurrentTheme().bgBase.CGColor;
 
         [_tideyEditorPanelView addSubview:_tideyEditorTabStripView];
         _tideyEditorPanelHintOverlayView = [[TideyPassthroughView alloc] initWithFrame:NSZeroRect];
@@ -1476,10 +1527,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _tideyEditorFileTreeContainerView = [[NSView alloc] initWithFrame:NSZeroRect];
         _tideyEditorFileTreeContainerView.autoresizingMask = NSViewMinXMargin | NSViewHeightSizable;
         _tideyEditorFileTreeContainerView.wantsLayer = YES;
-        _tideyEditorFileTreeContainerView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.12
-                                                                                      green:0.13
-                                                                                       blue:0.17
-                                                                                      alpha:1].CGColor;
+        _tideyEditorFileTreeContainerView.layer.backgroundColor = TideyCurrentTheme().bgSurface.CGColor;
         [_tideyEditorPanelView addSubview:_tideyEditorFileTreeContainerView];
 
         _tideyEditorFileTreeScrollView = [[TideyVerticalOnlyScrollView alloc] initWithFrame:NSZeroRect];
@@ -1818,6 +1866,9 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     [[NSNotificationCenter defaultCenter] removeObserver:self
                                                     name:NSApplicationDidBecomeActiveNotification
                                                   object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                    name:TideyThemeDidChangeNotification
+                                                  object:[TideyThemeManager shared]];
     [self tideyStopWatchingCurrentEditorFile];
     [self tideyStopWatchingEditorFileTree];
     if (_tideyBrowserWebView) {
@@ -2966,7 +3017,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     NSView *toolbar = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 100, kTideyBrowserToolbarHeight)];
     toolbar.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
     toolbar.wantsLayer = YES;
-    toolbar.layer.backgroundColor = [NSColor colorWithWhite:0.15 alpha:1].CGColor;
+    toolbar.layer.backgroundColor = TideyCurrentTheme().bgControl.CGColor;
 
     // Back button
     _tideyBrowserBackButton = [NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:@"chevron.left" accessibilityDescription:@"Back"]
@@ -3003,7 +3054,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     _tideyBrowserURLField.placeholderString = @"Enter URL";
     _tideyBrowserURLField.font = [NSFont systemFontOfSize:12];
     _tideyBrowserURLField.textColor = [NSColor labelColor];
-    _tideyBrowserURLField.backgroundColor = [NSColor colorWithWhite:0.22 alpha:1];
+    _tideyBrowserURLField.backgroundColor = TideyCurrentTheme().bgControl;
     _tideyBrowserURLField.drawsBackground = YES;
     _tideyBrowserURLField.bordered = YES;
     _tideyBrowserURLField.bezeled = YES;
@@ -3566,6 +3617,38 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     [self updateTideyChromeToggleButtons];
 }
 
+- (void)tideyThemeDidChange:(NSNotification *)notification {
+    [self tideyApplyBackgroundTheme];
+}
+
+- (void)tideyApplyBackgroundTheme {
+    TideyTheme *theme = TideyCurrentTheme();
+    _tideySidebarView.layer.backgroundColor = theme.bgSurface.CGColor;
+    _tideyEditorPanelView.layer.backgroundColor = theme.bgBase.CGColor;
+    _tideyEditorTabStripView.layer.backgroundColor = theme.bgBase.CGColor;
+    _tideyEditorFileTreeContainerView.layer.backgroundColor = theme.bgSurface.CGColor;
+    if (_tideyBrowserContainerView.subviews.count > 0) {
+        NSView *toolbar = _tideyBrowserContainerView.subviews.firstObject;
+        toolbar.layer.backgroundColor = theme.bgControl.CGColor;
+    }
+    if (_tideyBrowserURLField) {
+        _tideyBrowserURLField.backgroundColor = theme.bgControl;
+    }
+    if (_tideyFileTreeToggleHint) {
+        _tideyFileTreeToggleHint.layer.backgroundColor = theme.bgControl.CGColor;
+    }
+    for (NSView *hintView in _tideyEditorPanelHintViews) {
+        hintView.layer.backgroundColor = theme.bgControl.CGColor;
+    }
+    for (NSView *hintView in _tideyTerminalPanelHintViews) {
+        hintView.layer.backgroundColor = theme.bgControl.CGColor;
+    }
+    self.tabBarControl.wantsLayer = YES;
+    self.tabBarControl.layer.backgroundColor = theme.bgBase.CGColor;
+    [_tideySidebarTableView setNeedsDisplay:YES];
+    [self setNeedsDisplay:YES];
+}
+
 - (void)tideyEditorLoadDemoFileIfNeeded {
     if (_tideyEditorLoadedDemoFile) {
         return;
@@ -3738,10 +3821,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         [subview removeFromSuperview];
     }
 
-    _tideyEditorTabStripView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.102
-                                                                         green:0.108
-                                                                          blue:0.135
-                                                                         alpha:1].CGColor;
+    _tideyEditorTabStripView.layer.backgroundColor = TideyCurrentTheme().bgBase.CGColor;
     const CGFloat stripHeight = NSHeight(_tideyEditorTabStripView.bounds) > 0 ?
         NSHeight(_tideyEditorTabStripView.bounds) :
         TideyEditorEffectiveTabStripHeight(_tabBarControl.height);
@@ -4860,7 +4940,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     self.tabBarControl.frame = NSMakeRect(0, 0, NSWidth(_tabBarBacking.bounds), originalHeight);
     // Fill the 1-2pt gap at the top where PSMMinimalTabStyle doesn't draw.
     self.tabBarControl.wantsLayer = YES;
-    self.tabBarControl.layer.backgroundColor = [NSColor colorWithSRGBRed:0.09 green:0.10 blue:0.13 alpha:1].CGColor;
+    self.tabBarControl.layer.backgroundColor = TideyCurrentTheme().bgBase.CGColor;
 }
 
 - (void)layoutSubviewsWithVisibleBottomTabBarForWindow:(NSWindow *)thisWindow {

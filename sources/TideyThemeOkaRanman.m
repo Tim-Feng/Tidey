@@ -14,6 +14,7 @@
         @"bgBase": [TideyPaletteOkaRanman sakura],
         @"bgSurface": [TideyPaletteOkaRanman shironeri],
         @"bgControl": [TideyPaletteOkaRanman neri],
+        @"bgSelected": [[TideyPaletteOkaRanman imayoh] colorWithAlphaComponent:0.55],
         @"bgHover": [[TideyPaletteOkaRanman taikoh] colorWithAlphaComponent:0.25],
         @"borderDefault": [[TideyPaletteOkaRanman umenezumi] colorWithAlphaComponent:0.25],
         @"borderStrong": [[TideyPaletteOkaRanman sakuranezumi] colorWithAlphaComponent:0.45],
