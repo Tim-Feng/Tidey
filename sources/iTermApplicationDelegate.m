@@ -183,6 +183,16 @@ static BOOL hasBecomeActive = NO;
 
 @end
 
+@interface iTermApplicationDelegate (TideyQuitConfirmationTesting)
++ (BOOL)tideyShouldRequireQuitConfirmationAtDate:(NSDate *)now
+                            lastConfirmationDate:(NSDate *)lastConfirmationDate
+                           systemIsShuttingDown:(BOOL)systemIsShuttingDown
+                              sparkleRestarting:(BOOL)sparkleRestarting
+                                       interval:(NSTimeInterval)interval;
++ (NSString *)tideyFullscreenShortcutKeyEquivalentForProfileShortcutChange:(NSNumber *)fShortcut;
++ (NSEventModifierFlags)tideyFullscreenShortcutModifierMaskForProfileShortcutChange:(NSNumber *)fShortcut;
+@end
+
 
 @implementation iTermApplicationDelegate {
     iTermPasswordManagerWindowController *_passwordManagerWindowController;
@@ -911,15 +921,18 @@ static BOOL hasBecomeActive = NO;
     if (_disableTermination) {
         return NSTerminateCancel;
     }
+    NSDate *now = [NSDate date];
+    if ([[self class] tideyShouldRequireQuitConfirmationAtDate:now
+                                          lastConfirmationDate:_tideyLastQuitConfirmationDate
+                                         systemIsShuttingDown:[self systemIsShuttingDown]
+                                            sparkleRestarting:self.sparkleRestarting
+                                                     interval:kTideyQuitConfirmationInterval]) {
+        _tideyLastQuitConfirmationDate = now;
+        [ToastWindowController showToastWithMessage:@"再按一次 ⌘Q 退出"
+                                           duration:(NSInteger)ceil(kTideyQuitConfirmationInterval)];
+        return NSTerminateCancel;
+    }
     if (![self systemIsShuttingDown] && !self.sparkleRestarting) {
-        NSDate *now = [NSDate date];
-        if (_tideyLastQuitConfirmationDate == nil ||
-            [now timeIntervalSinceDate:_tideyLastQuitConfirmationDate] > kTideyQuitConfirmationInterval) {
-            _tideyLastQuitConfirmationDate = now;
-            [ToastWindowController showToastWithMessage:@"再按一次 ⌘Q 退出"
-                                               duration:(NSInteger)ceil(kTideyQuitConfirmationInterval)];
-            return NSTerminateCancel;
-        }
         _tideyLastQuitConfirmationDate = nil;
     }
     
@@ -2068,10 +2081,37 @@ static iTermKeyEventReplayer *gReplayer;
     // See issue 6254.
     NSNumber *fShortcut = shortcutsChanged[@"F"];
     if (fShortcut) {
-        // Keep cmd-ctrl-F reserved for Tidey's file tree toggle. Use cmd-enter for full screen.
-        [_enterFullScreenMenuItem setKeyEquivalent:@"\n"];
-        [_enterFullScreenMenuItem setKeyEquivalentModifierMask:NSEventModifierFlagCommand];
+        [_enterFullScreenMenuItem setKeyEquivalent:[[self class] tideyFullscreenShortcutKeyEquivalentForProfileShortcutChange:fShortcut]];
+        [_enterFullScreenMenuItem setKeyEquivalentModifierMask:[[self class] tideyFullscreenShortcutModifierMaskForProfileShortcutChange:fShortcut]];
     }
+}
+
++ (BOOL)tideyShouldRequireQuitConfirmationAtDate:(NSDate *)now
+                            lastConfirmationDate:(NSDate *)lastConfirmationDate
+                           systemIsShuttingDown:(BOOL)systemIsShuttingDown
+                              sparkleRestarting:(BOOL)sparkleRestarting
+                                       interval:(NSTimeInterval)interval {
+    if (systemIsShuttingDown || sparkleRestarting) {
+        return NO;
+    }
+    if (lastConfirmationDate == nil) {
+        return YES;
+    }
+    return [now timeIntervalSinceDate:lastConfirmationDate] > interval;
+}
+
++ (NSString *)tideyFullscreenShortcutKeyEquivalentForProfileShortcutChange:(NSNumber *)fShortcut {
+    if (!fShortcut) {
+        return nil;
+    }
+    return @"\n";
+}
+
++ (NSEventModifierFlags)tideyFullscreenShortcutModifierMaskForProfileShortcutChange:(NSNumber *)fShortcut {
+    if (!fShortcut) {
+        return 0;
+    }
+    return NSEventModifierFlagCommand;
 }
 
 #pragma mark - Startup Helpers

@@ -1018,6 +1018,8 @@
 		F0A10D1E3A34000100000001 /* TideyRightPanelTabGroupingTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A34000100000000 /* TideyRightPanelTabGroupingTests.m */; };
 		F0A10D1E3A37000100000001 /* TideyBrowserTabTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A37000100000000 /* TideyBrowserTabTests.m */; };
 		TIDE7B00001A000000000001 /* TideyBrowserPanelTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDE7B00001A000000000000 /* TideyBrowserPanelTests.m */; };
+		TIDEAPP0001A00000000001 /* TideyAppShortcutBehaviorTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEAPP0001A00000000000 /* TideyAppShortcutBehaviorTests.m */; };
+		TIDEAPP0001A00000000002 /* TideyAppShortcutBehaviorTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEAPP0001A00000000000 /* TideyAppShortcutBehaviorTests.m */; };
 		F0A10D1E3A33000100000001 /* TideyLoginShellCommandTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A33000100000000 /* TideyLoginShellCommandTests.m */; };
 		F0A10D1E3A35000100000001 /* TideySidebarCloseButtonTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A35000100000000 /* TideySidebarCloseButtonTests.m */; };
 		F0A10D1E3A36000100000001 /* TideySessionFactoryLaunchCommandTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A36000100000000 /* TideySessionFactoryLaunchCommandTests.m */; };
@@ -6416,6 +6418,7 @@
 		F0A10D1E3A34000100000000 /* TideyRightPanelTabGroupingTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyRightPanelTabGroupingTests.m; sourceTree = "<group>"; };
 		F0A10D1E3A37000100000000 /* TideyBrowserTabTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyBrowserTabTests.m; sourceTree = "<group>"; };
 		TIDE7B00001A000000000000 /* TideyBrowserPanelTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyBrowserPanelTests.m; sourceTree = "<group>"; };
+		TIDEAPP0001A00000000000 /* TideyAppShortcutBehaviorTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyAppShortcutBehaviorTests.m; sourceTree = "<group>"; };
 		F0A10D1E3A33000100000000 /* TideyLoginShellCommandTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyLoginShellCommandTests.m; sourceTree = "<group>"; };
 		F0A10D1E3A35000100000000 /* TideySidebarCloseButtonTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySidebarCloseButtonTests.m; sourceTree = "<group>"; };
 		F0A10D1E3A36000100000000 /* TideySessionFactoryLaunchCommandTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySessionFactoryLaunchCommandTests.m; sourceTree = "<group>"; };
@@ -13656,6 +13659,7 @@
 				F0A10D1E3A34000100000000 /* TideyRightPanelTabGroupingTests.m */,
 				F0A10D1E3A37000100000000 /* TideyBrowserTabTests.m */,
 				TIDE7B00001A000000000000 /* TideyBrowserPanelTests.m */,
+				TIDEAPP0001A00000000000 /* TideyAppShortcutBehaviorTests.m */,
 				F0A10D1E3A33000100000000 /* TideyLoginShellCommandTests.m */,
 				F0A10D1E3A35000100000000 /* TideySidebarCloseButtonTests.m */,
 				F0A10D1E3A36000100000000 /* TideySessionFactoryLaunchCommandTests.m */,
@@ -20214,6 +20218,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				TIDEAPP0001A00000000002 /* TideyAppShortcutBehaviorTests.m in Sources */,
 				A6C811F42DCFD5E40088E628 /* SearchEngineTests.swift in Sources */,
 				A77D8D50729267B406541654 /* AccessibilityDeletionDetectionTests.swift in Sources */,
 				92738CD9A08C339E8F473394 /* IntervalTreeGraphEncodingTests.swift in Sources */,
@@ -20491,6 +20496,7 @@
 				F0A10D1E3A32000100000001 /* TideyEditorExternalChangeTests.m in Sources */,
 				F0A10D1E3A34000100000001 /* TideyRightPanelTabGroupingTests.m in Sources */,
 				F0A10D1E3A37000100000001 /* TideyBrowserTabTests.m in Sources */,
+				TIDEAPP0001A00000000001 /* TideyAppShortcutBehaviorTests.m in Sources */,
 				F0A10D1E3A33000100000001 /* TideyLoginShellCommandTests.m in Sources */,
 				F0A10D1E3A35000100000001 /* TideySidebarCloseButtonTests.m in Sources */,
 				F0A10D1E3A36000100000001 /* TideySessionFactoryLaunchCommandTests.m in Sources */,

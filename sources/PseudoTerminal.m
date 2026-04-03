@@ -341,6 +341,12 @@ typedef NS_ENUM(int, iTermShouldHaveTitleSeparator) {
 - (void)closeWorkspacesAtIndexes:(NSIndexSet *)indexes;
 @end
 
+@interface PseudoTerminal (TideyCloseCurrentSessionTesting)
++ (BOOL)tideyShouldIgnoreCloseCurrentSessionWithTabCount:(NSInteger)tabCount
+                                  currentTabSessionCount:(NSInteger)sessionCount
+                                 didCloseRightPanelTab:(BOOL)didCloseRightPanelTab;
+@end
+
 @implementation PseudoTerminal {
     ////////////////////////////////////////////////////////////////////////////
     // Instant Replay
@@ -3176,14 +3182,13 @@ ITERM_WEAKLY_REFERENCEABLE
 - (IBAction)closeCurrentSession:(id)sender {
     iTermApplicationDelegate *appDelegate = [iTermApplication.sharedApplication delegate];
     [appDelegate userDidInteractWithASession];
-    if ([_contentView closeCurrentTideyEditorTab]) {
+    BOOL didCloseRightPanelTab = [_contentView closeCurrentTideyEditorTab];
+    NSInteger tabCount = [_contentView.tabView numberOfTabViewItems];
+    NSInteger sessionCount = self.currentTab ? self.currentTab.sessions.count : 0;
+    if ([[self class] tideyShouldIgnoreCloseCurrentSessionWithTabCount:tabCount
+                                                currentTabSessionCount:sessionCount
+                                               didCloseRightPanelTab:didCloseRightPanelTab]) {
         return;
-    }
-    if ([_contentView.tabView numberOfTabViewItems] <= 1) {
-        PTYTab *currentTab = self.currentTab;
-        if (currentTab && currentTab.sessions.count <= 1) {
-            return;
-        }
     }
     if ([[self window] isKeyWindow]) {
         PTYSession *aSession = [[[_contentView.tabView selectedTabViewItem] identifier] activeSession];
@@ -3192,6 +3197,15 @@ ITERM_WEAKLY_REFERENCEABLE
         }
         [self closeSessionWithConfirmation:aSession];
     }
+}
+
++ (BOOL)tideyShouldIgnoreCloseCurrentSessionWithTabCount:(NSInteger)tabCount
+                                  currentTabSessionCount:(NSInteger)sessionCount
+                                 didCloseRightPanelTab:(BOOL)didCloseRightPanelTab {
+    if (didCloseRightPanelTab) {
+        return YES;
+    }
+    return (tabCount <= 1 && sessionCount <= 1);
 }
 
 - (BOOL)closeSessionWithConfirmation:(PTYSession *)aSession {

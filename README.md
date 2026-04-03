@@ -61,6 +61,9 @@ Hold ⌘ for a moment to see shortcut hints on toggle buttons and panel tabs.
 
 ## Documentation
 
+- [AGENTS.md](AGENTS.md) — Codex（OpenAI Codex CLI）用的 agent guide
+- [CLAUDE.md](CLAUDE.md) — Claude Code 用的開發規則
+- Tidey 使用 Claude Code + Codex 雙 agent 協作開發：Claude Code 做 audit / build / test / 協調，Codex 做實作
 - [Socket API](docs/socket-api.md) — for agent developers integrating with Tidey
 - [Debug Lessons](docs/debug-lessons.md) — pitfalls and solutions discovered during development
 
