@@ -63,6 +63,11 @@
   - browser URL bar 要自然置中時，`SquareBezel` 比較對稱
 - 不要用 custom `NSTextFieldCell` 去改 `titleRectForBounds:` / `editingRectForBounds:`
   - 很容易把 click / editing hit testing 弄壞
+- `closeTideyRightPanelTabAtIndex:` 的 `count == 0` early return 路徑
+  - 容易漏掉 `tideyUpdateBrowserContentVisibility` / `layoutTideyEditorContents` / `updateTideyChromeToggleButtons`
+  - 關掉最後一個 browser tab 後 file tree 不恢復就是這個原因
+- `updateTideyChromeToggleButtons` 要考慮 browser mode
+  - file tree toggle button 在 browser 顯示時要 hidden，切回 editor 時要恢復
 
 ## Terminal Selection / Mouse
 
@@ -92,6 +97,12 @@
   - tmux 內通常會變成 `tmux`
 - 不要在 shell integration 裡用 `tmux set-option`
   - 會污染所有連到同一個 tmux session 的 terminal，不只 Tidey
+- shell integration 裡的 PROMPT override 會被 oh-my-zsh 覆蓋
+  - 要用 `precmd` hook 在 `.zshrc` 跑完後才設定，不能直接賦值
+  - 不要用 one-shot hook（`add-zsh-hook -d`），oh-my-zsh 每次 precmd 都會重設 PROMPT
+- `LC_TERMINAL` 在 tmux 裡是空的
+  - tmux 不自動轉發 `LC_TERMINAL`
+  - 用 `tmux show-environment LC_TERMINAL` 查 tmux server 的環境變數作為 fallback
 
 ## Socket / Notification / Claude Hook
 
@@ -117,3 +128,4 @@
   - `.icon` 和 `.icns` 不要混
 - 改 `DefaultBookmark.plist` 後，如果 app 還在吃舊預設，要先清掉已寫入的 user defaults / cached profile
   - 不然 plist 改了，執行中的預設 profile 不一定會立刻跟著變
+
