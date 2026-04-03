@@ -278,6 +278,7 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
 - (TideyEditorTab *)tideyCurrentEditorTab;
 - (TideyEditorTab *)tideyCurrentRightPanelTab;
 - (void)reloadTideyRightPanelTabs;
+- (void)tideyScrollRightPanelTabStripByDelta:(CGFloat)delta;
 - (void)selectTideyRightPanelTabAtIndex:(NSInteger)index;
 - (void)closeTideyRightPanelTabAtIndex:(NSInteger)index;
 - (void)tideyRightPanelSelectTab:(id)sender;
@@ -832,6 +833,27 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 @end
 
+@interface TideyRightPanelTabStripView : NSView
+@property(nonatomic, assign) id tideyOwner;
+@end
+
+@implementation TideyRightPanelTabStripView
+
+- (void)scrollWheel:(NSEvent *)event {
+    CGFloat delta = fabs(event.scrollingDeltaX) > fabs(event.scrollingDeltaY) ? event.scrollingDeltaX : event.scrollingDeltaY;
+    if (fabs(delta) < DBL_EPSILON) {
+        [super scrollWheel:event];
+        return;
+    }
+    if ([self.tideyOwner respondsToSelector:@selector(tideyScrollRightPanelTabStripByDelta:)]) {
+        [self.tideyOwner tideyScrollRightPanelTabStripByDelta:-delta];
+        return;
+    }
+    [super scrollWheel:event];
+}
+
+@end
+
 @implementation iTermRootTerminalView {
     BOOL _tabViewFrameReduced;
     BOOL _haveShownToolbelt;
@@ -878,6 +900,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     BOOL _tideyBrowserGroupExpanded;
     NSString *_tideyLastActiveEditorTabIdentifier;
     NSString *_tideyLastActiveBrowserTabIdentifier;
+    CGFloat _tideyRightPanelTabStripScrollOffset;
+    CGFloat _tideyRightPanelTabStripContentWidth;
 
     // Browser panel
     WKWebView *_tideyBrowserWebView;
@@ -1453,13 +1477,14 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _tideyEditorPanelView.hidden = YES;
         [self addSubview:_tideyEditorPanelView];
 
-        _tideyEditorTabStripView = [[NSView alloc] initWithFrame:NSZeroRect];
+        _tideyEditorTabStripView = [[TideyRightPanelTabStripView alloc] initWithFrame:NSZeroRect];
         _tideyEditorTabStripView.autoresizingMask = NSViewWidthSizable;
         _tideyEditorTabStripView.wantsLayer = YES;
         _tideyEditorTabStripView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.09
                                                                            green:0.10
                                                                             blue:0.13
                                                                            alpha:1].CGColor;
+        ((TideyRightPanelTabStripView *)_tideyEditorTabStripView).tideyOwner = self;
 
         [_tideyEditorPanelView addSubview:_tideyEditorTabStripView];
         _tideyEditorPanelHintOverlayView = [[TideyPassthroughView alloc] initWithFrame:NSZeroRect];
@@ -3735,6 +3760,19 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     return [[self class] tideyRightPanelGroupLabelForKind:kind];
 }
 
+- (void)tideyScrollRightPanelTabStripByDelta:(CGFloat)delta {
+    CGFloat maxOffset = MAX(0, _tideyRightPanelTabStripContentWidth - NSWidth(_tideyEditorTabStripView.bounds));
+    if (maxOffset <= 0) {
+        return;
+    }
+    CGFloat newOffset = MIN(MAX(0, _tideyRightPanelTabStripScrollOffset + delta), maxOffset);
+    if (fabs(newOffset - _tideyRightPanelTabStripScrollOffset) < 0.5) {
+        return;
+    }
+    _tideyRightPanelTabStripScrollOffset = newOffset;
+    [self reloadTideyRightPanelTabs];
+}
+
 - (void)reloadTideyRightPanelTabs {
     for (NSView *subview in [_tideyEditorTabStripView.subviews copy]) {
         if (subview == _tideyEditorPanelHintOverlayView) {
@@ -3775,7 +3813,10 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         CGFloat labelWidth = labelTextWidth + kTideyRightPanelGroupLabelHorizontalPadding * 2;
         CGFloat groupButtonHeight = 20;
         CGFloat groupButtonY = floor((tabHeight - groupButtonHeight) / 2.0);
-        NSButton *groupButton = [[NSButton alloc] initWithFrame:NSMakeRect(x, groupButtonY, labelWidth, groupButtonHeight)];
+        NSButton *groupButton = [[NSButton alloc] initWithFrame:NSMakeRect(x - _tideyRightPanelTabStripScrollOffset,
+                                                                           groupButtonY,
+                                                                           labelWidth,
+                                                                           groupButtonHeight)];
         groupButton.bordered = NO;
         groupButton.buttonType = NSButtonTypeMomentaryChange;
         groupButton.title = groupLabel;
@@ -3823,7 +3864,10 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
             CGFloat tabWidth = MIN(MAX(112, textWidth + 38), 240);
             NSInteger originalIndex = [_tideyEditorTabs indexOfObjectIdenticalTo:tab];
 
-            TideyEditorTabItemView *tabView = [[TideyEditorTabItemView alloc] initWithFrame:NSMakeRect(x, 0, tabWidth, tabHeight)];
+            TideyEditorTabItemView *tabView = [[TideyEditorTabItemView alloc] initWithFrame:NSMakeRect(x - _tideyRightPanelTabStripScrollOffset,
+                                                                                                        0,
+                                                                                                        tabWidth,
+                                                                                                        tabHeight)];
             BOOL selected = (originalIndex == _tideySelectedEditorTabIndex);
             tabView.tideySelected = selected;
             tabView.tideyHovered = NO;
@@ -3862,7 +3906,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         }
 
         if (group.kind == TideyRightPanelTabKindBrowser) {
-            NSButton *addButton = [[NSButton alloc] initWithFrame:NSMakeRect(x + 4,
+            NSButton *addButton = [[NSButton alloc] initWithFrame:NSMakeRect(x + 4 - _tideyRightPanelTabStripScrollOffset,
                                                                              floor((tabHeight - addButtonSize) / 2.0),
                                                                              addButtonSize,
                                                                              addButtonSize)];
@@ -3878,6 +3922,15 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
             x += addButtonSize + 4;
         }
     }
+    _tideyRightPanelTabStripContentWidth = x;
+    CGFloat maxOffset = MAX(0, _tideyRightPanelTabStripContentWidth - NSWidth(_tideyEditorTabStripView.bounds));
+    CGFloat clampedOffset = MIN(_tideyRightPanelTabStripScrollOffset, maxOffset);
+    if (fabs(clampedOffset - _tideyRightPanelTabStripScrollOffset) >= 0.5) {
+        _tideyRightPanelTabStripScrollOffset = clampedOffset;
+        [self reloadTideyRightPanelTabs];
+        return;
+    }
+
     [_tideyEditorTabStripView addSubview:_tideyEditorPanelHintOverlayView positioned:NSWindowAbove relativeTo:nil];
     [self tideyUpdatePanelShortcutHints];
     [self updateTideyChromeToggleButtons];
