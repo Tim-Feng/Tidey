@@ -3780,13 +3780,27 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         groupButton.action = @selector(tideyRightPanelSelectGroup:);
         groupButton.wantsLayer = YES;
         groupButton.layer.cornerRadius = floor(groupButtonHeight / 2.0);
-        groupButton.layer.backgroundColor = group.expanded
-            ? [NSColor colorWithWhite:1 alpha:0.14].CGColor
-            : [NSColor colorWithWhite:1 alpha:0.04].CGColor;
+        NSColor *expandedBackgroundColor = [NSColor colorWithSRGBRed:(255.0 / 255.0)
+                                                               green:(177.0 / 255.0)
+                                                                blue:(27.0 / 255.0)
+                                                               alpha:0.20];
+        NSColor *collapsedBackgroundColor = [NSColor colorWithSRGBRed:(255.0 / 255.0)
+                                                                green:(177.0 / 255.0)
+                                                                 blue:(27.0 / 255.0)
+                                                                alpha:0.10];
+        NSColor *expandedTextColor = [NSColor colorWithSRGBRed:(255.0 / 255.0)
+                                                         green:(177.0 / 255.0)
+                                                          blue:(27.0 / 255.0)
+                                                         alpha:1.0];
+        NSColor *collapsedTextColor = [NSColor colorWithSRGBRed:(209.0 / 255.0)
+                                                          green:(152.0 / 255.0)
+                                                           blue:(38.0 / 255.0)
+                                                          alpha:1.0];
+        groupButton.layer.backgroundColor = (group.expanded ? expandedBackgroundColor : collapsedBackgroundColor).CGColor;
         groupButton.attributedTitle = [[NSAttributedString alloc] initWithString:groupLabel
                                                                       attributes:@{
             NSFontAttributeName: groupLabelAttributes[NSFontAttributeName],
-            NSForegroundColorAttributeName: group.expanded ? NSColor.labelColor : NSColor.secondaryLabelColor,
+            NSForegroundColorAttributeName: group.expanded ? expandedTextColor : collapsedTextColor,
         }];
         [_tideyEditorTabStripView addSubview:groupButton];
         x += labelWidth;
@@ -4313,6 +4327,9 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         [self reloadTideyEditorFileTree];
     }
     [self tideyUpdateEditorPlaceholder];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self reloadTideyRightPanelTabs];
+    });
 }
 
 - (void)tideyEditorDidReceiveScriptMessage:(WKScriptMessage *)message {
