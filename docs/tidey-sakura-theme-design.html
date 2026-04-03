@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tidey — 櫻花爛漫 Complete Token Design</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Sans+JP:wght@300;400;500;700&family=Noto+Serif+JP:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --gofun: #FFFFFB;
+  --shironeri: #FCFAF2;
+  --neri: #F2E8D0;
+  --sakura: #FEDFE1;
+  --taikou: #F8C3CD;
+  --ikkonzome: #F4A7B9;
+  --nadeshiko: #DC9FB4;
+  --imayou: #D05A6E;
+  --koubai: #E16B8C;
+  --usubeni: #E87A90;
+  --nakabeni: #DB4D6D;
+  --suou: #8E354A;
+  --kuwazome: #64363C;
+  --kenpou: #43341B;
+  --umenezumi: #9E7A7A;
+  --sakuranezumi: #B19693;
+  --wakatake: #5DAC81;
+  --aotake: #00896C;
+  --rokusyoh: #24936E;
+  --yamabukicha: #D19826;
+  --yamabuki: #FFB11B;
+  --kikyou: #6A4C9C;
+  --fujimurasaki: #8A6BBE;
+  --benihi: #CB4042;
+  --matsuba: #42602D;
+}
+
+* { margin:0; padding:0; box-sizing:border-box; }
+
+body {
+  font-family: 'Noto Sans JP', sans-serif;
+  background: linear-gradient(180deg, #f7f2ed 0%, #f0e8e0 100%);
+  color: var(--kenpou);
+  min-height: 100vh;
+  padding: 40px 32px;
+}
+
+.page-header {
+  text-align: center;
+  margin-bottom: 56px;
+}
+
+.page-header h1 {
+  font-family: 'Noto Serif JP', serif;
+  font-size: 2.6rem;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--suou), var(--imayou), var(--koubai));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  letter-spacing: 0.1em;
+  margin-bottom: 6px;
+}
+
+.page-header .subtitle {
+  font-size: 0.9rem;
+  color: var(--umenezumi);
+  font-weight: 300;
+  letter-spacing: 0.06em;
+}
+
+.page-header .token-count {
+  display: inline-block;
+  margin-top: 10px;
+  padding: 4px 14px;
+  background: var(--sakura);
+  border-radius: 20px;
+  font-size: 0.8rem;
+  color: var(--suou);
+  font-weight: 500;
+}
+
+/* Section styling */
+.section {
+  max-width: 1240px;
+  margin: 0 auto 56px;
+}
+
+.section h2 {
+  font-family: 'Noto Serif JP', serif;
+  font-size: 1.6rem;
+  color: var(--suou);
+  margin-bottom: 20px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid var(--taikou);
+}
+
+.section h3 {
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--kuwazome);
+  margin: 28px 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.section h3::before {
+  content: '';
+  width: 3px;
+  height: 16px;
+  background: var(--imayou);
+  border-radius: 2px;
+}
+
+/* ====== IDE MOCKUP ====== */
+.ide-wrap {
+  max-width: 1200px;
+  margin: 0 auto 48px;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 2px 4px rgba(67,52,27,0.06), 0 12px 40px rgba(67,52,27,0.12), 0 0 0 1px rgba(158,122,122,0.12);
+}
+
+.ide-titlebar {
+  background: var(--neri);
+  height: 38px;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  border-bottom: 1px solid rgba(158,122,122,0.15);
+}
+
+.dots { display:flex; gap:8px; }
+.dots span { width:12px; height:12px; border-radius:50%; }
+.dots .r { background:#EC6A5E; } .dots .y { background:#F5BF4F; } .dots .g { background:#61C554; }
+
+.ide-titlebar .title {
+  flex:1; text-align:center;
+  font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--umenezumi);
+}
+
+.ide-body { display:flex; height:480px; }
+
+/* Sidebar */
+.sb { width:140px; background:var(--sakura); border-right:1px solid rgba(209,90,110,0.12); padding:12px 0; }
+.sb-ws { padding:8px 12px; margin:0 8px; border-radius:6px; background:rgba(209,90,110,0.10); }
+.sb-ws .nm { font-size:12px; font-weight:500; color:var(--kuwazome); }
+.sb-ws .pt { font-family:'IBM Plex Mono',monospace; font-size:10px; color:var(--umenezumi); margin-top:2px; }
+.sb-ws .st { display:flex; align-items:center; gap:4px; margin-top:4px; font-size:10px; color:var(--aotake); }
+.sb-ws .st::before { content:''; width:6px; height:6px; border-radius:50%; background:var(--wakatake); }
+
+/* Panels */
+.panels { flex:1; display:flex; flex-direction:column; }
+.panels-row { flex:1; display:flex; }
+
+/* Tab bar */
+.tbar { background:var(--shironeri); height:34px; display:flex; align-items:stretch; border-bottom:1px solid rgba(158,122,122,0.12); }
+.tab { display:flex; align-items:center; padding:0 14px; font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--umenezumi); position:relative; }
+.tab.active { color:var(--kuwazome); background:var(--gofun); }
+.tab.active::after { content:''; position:absolute; bottom:0; left:0; right:0; height:2px; background:var(--imayou); }
+.tab-plus { padding:0 10px; color:var(--sakuranezumi); font-size:14px; display:flex; align-items:center; }
+.tab-sep { display:flex; align-items:center; padding:0 12px; font-size:11px; font-weight:500; color:var(--sakuranezumi); border-left:1px solid rgba(158,122,122,0.1); }
+
+/* Terminal */
+.term-area { flex:1; display:flex; flex-direction:column; border-right:1px solid rgba(158,122,122,0.12); }
+.term { flex:1; background:var(--gofun); padding:14px 16px; font-family:'IBM Plex Mono',monospace; font-size:12px; line-height:1.65; color:var(--kenpou); overflow:hidden; }
+.term .dim { color:var(--sakuranezumi); }
+.term .arrow { color:var(--wakatake); }
+.term .path { color:var(--aotake); }
+.term .cursor { display:inline-block; width:8px; height:14px; background:var(--imayou); opacity:0.7; vertical-align:text-bottom; animation:blink 1s step-end infinite; }
+@keyframes blink { 50%{opacity:0;} }
+
+/* Editor */
+.edit-area { flex:1.2; display:flex; flex-direction:column; }
+.edit { flex:1; background:var(--gofun); font-family:'IBM Plex Mono',monospace; font-size:12px; line-height:1.7; overflow:hidden; }
+.cl { display:flex; padding:0 16px 0 0; }
+.cl:hover { background:rgba(209,90,110,0.04); }
+.ln { width:44px; text-align:right; padding-right:14px; color:var(--sakuranezumi); user-select:none; flex-shrink:0; }
+.ct { flex:1; white-space:pre; }
+.s-cm { color:var(--sakuranezumi); }
+.s-kw { color:var(--kikyou); }
+.s-st { color:var(--aotake); }
+.s-fn { color:var(--imayou); }
+.s-vr { color:var(--kuwazome); }
+.s-nm { color:var(--yamabukicha); }
+.s-op { color:var(--umenezumi); }
+
+/* File tree */
+.ftree { width:190px; background:var(--shironeri); border-left:1px solid rgba(158,122,122,0.12); padding:8px 0; font-size:12px; }
+.fi { display:flex; align-items:center; padding:3px 12px 3px 16px; gap:6px; color:var(--kuwazome); }
+.fi:hover { background:rgba(209,90,110,0.06); }
+.fi.sel { background:rgba(209,90,110,0.12); color:var(--suou); font-weight:500; }
+.fi .ic { font-size:13px; color:var(--umenezumi); width:16px; text-align:center; }
+.fi.dir .ic { color:var(--yamabukicha); }
+
+/* ====== TERMINAL SIM ====== */
+.term-sim {
+  background: var(--gofun);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 2px 12px rgba(67,52,27,0.08), 0 0 0 1px rgba(158,122,122,0.12);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12.5px;
+  line-height: 1.65;
+  margin: 16px 0 24px;
+}
+
+.term-sim-bar {
+  background: var(--shironeri);
+  padding: 6px 14px;
+  font-size: 11px;
+  color: var(--umenezumi);
+  border-bottom: 1px solid rgba(158,122,122,0.12);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.term-sim-bar .indicator {
+  width: 2px;
+  height: 12px;
+  background: var(--imayou);
+  border-radius: 1px;
+}
+
+.term-sim-body {
+  padding: 16px 20px;
+  color: var(--kenpou);
+}
+
+/* ANSI colors in terminal sim */
+.a-black { color: #43341B; }
+.a-red { color: #D05A6E; }
+.a-green { color: #5DAC81; }
+.a-yellow { color: #D19826; }
+.a-blue { color: #6A4C9C; }
+.a-magenta { color: #E16B8C; }
+.a-cyan { color: #00896C; }
+.a-white { color: #FCFAF2; }
+.a-br-black { color: #B19693; }
+.a-br-red { color: #DB4D6D; }
+.a-br-green { color: #68BE8D; }
+.a-br-yellow { color: #FFB11B; }
+.a-br-blue { color: #8A6BBE; }
+.a-br-magenta { color: #E87A90; }
+.a-br-cyan { color: #24936E; }
+.a-br-white { color: #FFFFFB; }
+
+.sel-highlight { background: rgba(244,167,185,0.30); }
+.sel-a { background: rgba(209,90,110,0.40); }  /* 今様 @40% */
+.sel-b { background: rgba(209,90,110,0.55); }  /* 今様 @55% */
+.sel-c { background: rgba(142,53,74,0.30); }   /* 蘇芳 @30% */
+.sel-d { background: rgba(142,53,74,0.45); }   /* 蘇芳 @45% */
+.sel-e { background: rgba(100,54,60,0.35); }   /* 桑染 @35% */
+
+/* ====== TABLES ====== */
+.tok-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  margin-bottom: 20px;
+}
+
+.tok-table th {
+  text-align: left;
+  padding: 8px 10px;
+  background: var(--neri);
+  color: var(--kuwazome);
+  font-weight: 500;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 2px solid var(--taikou);
+}
+
+.tok-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid rgba(158,122,122,0.08);
+  vertical-align: middle;
+}
+
+.tok-table tr:hover td { background: rgba(254,223,225,0.25); }
+
+.sw {
+  display: inline-block;
+  width: 22px; height: 22px;
+  border-radius: 4px;
+  vertical-align: middle;
+  margin-right: 6px;
+  border: 1px solid rgba(0,0,0,0.08);
+}
+
+.hex { font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--umenezumi); }
+
+.badge {
+  display:inline-block; padding:2px 6px; border-radius:3px;
+  font-size:10px; font-weight:600; font-family:'IBM Plex Mono',monospace;
+}
+.b-aaa { background:#d4edda; color:#155724; }
+.b-aa { background:#fff3cd; color:#856404; }
+.b-fail { background:#f8d7da; color:#721c24; }
+.b-na { background:#e2e3e5; color:#383d41; }
+
+/* ANSI Grid */
+.ansi-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 6px;
+  margin: 16px 0 24px;
+}
+
+.ansi-cell {
+  border-radius: 8px;
+  padding: 10px 8px 8px;
+  text-align: center;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  line-height: 1.4;
+  border: 1px solid rgba(0,0,0,0.06);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+}
+
+.ansi-cell .name {
+  font-weight: 600;
+  font-size: 9px;
+  margin-bottom: 4px;
+  opacity: 0.8;
+}
+
+.ansi-cell .wago {
+  font-size: 10px;
+  margin-bottom: 2px;
+}
+
+.ansi-cell .code {
+  font-size: 9px;
+  opacity: 0.6;
+}
+
+/* Notes */
+.note {
+  background: var(--sakura);
+  border-left: 3px solid var(--imayou);
+  padding: 14px 18px;
+  border-radius: 0 8px 8px 0;
+  margin: 20px 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--kuwazome);
+}
+.note strong { color: var(--suou); }
+
+/* Comparison row */
+.cmp-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin: 16px 0;
+}
+
+.cmp-card {
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+}
+
+.cmp-card .hdr {
+  padding: 8px 14px;
+  font-weight: 500;
+  font-size: 12px;
+}
+
+.cmp-card.dk .hdr { background:#0B1013; color:#EAF4FC; }
+.cmp-card.lt .hdr { background:var(--sakura); color:var(--suou); }
+
+.cmp-mini {
+  height: 100px;
+  display: flex;
+  font-family:'IBM Plex Mono',monospace;
+  font-size: 9px;
+}
+
+.cmp-mini.dk { background:#0B1013; color:#EAF4FC; }
+.cmp-mini.lt { background:var(--gofun); color:var(--kenpou); }
+
+.cmp-mini .msb { width:40px; padding:6px; }
+.cmp-mini.dk .msb { background:#192236; border-right:1px solid rgba(255,255,255,0.06); }
+.cmp-mini.lt .msb { background:var(--sakura); border-right:1px solid rgba(209,90,110,0.12); }
+
+.cmp-mini .mcnt { flex:1; padding:6px 8px; }
+.cmp-mini .mln { height:7px; margin:2px 0; border-radius:2px; opacity:0.25; }
+.cmp-mini.dk .mln { background:#EAF4FC; }
+.cmp-mini.lt .mln { background:var(--kenpou); }
+
+.cmp-mini .mtab { height:12px; margin-bottom:4px; display:flex; gap:3px; align-items:center; }
+.cmp-mini .mt { padding:1px 5px; border-radius:2px; font-size:7px; }
+.cmp-mini.dk .mt.a { background:#0B1013; border-bottom:1px solid #3A8FB7; }
+.cmp-mini.lt .mt.a { background:var(--gofun); border-bottom:1px solid var(--imayou); }
+</style>
+</head>
+<body>
+
+<div class="page-header">
+  <h1>櫻花爛漫</h1>
+  <div class="subtitle">Tidey IDE Light Theme — 全 43 Token 配色設計</div>
+  <div class="token-count">43 / 43 tokens assigned</div>
+</div>
+
+<!-- ===== SIDE BY SIDE ===== -->
+<div class="section">
+  <h2>Dark / Light 對照</h2>
+  <div class="cmp-row">
+    <div class="cmp-card dk">
+      <div class="hdr">靜水深流 (Dark)</div>
+      <div class="cmp-mini dk">
+        <div class="msb"><div style="font-size:7px;opacity:0.5;">ws</div></div>
+        <div class="mcnt">
+          <div class="mtab"><div class="mt a">zsh</div></div>
+          <div class="mln" style="width:55%"></div><div class="mln" style="width:75%"></div>
+          <div class="mln" style="width:40%"></div><div class="mln" style="width:65%"></div>
+        </div>
+      </div>
+    </div>
+    <div class="cmp-card lt">
+      <div class="hdr">櫻花爛漫 (Light)</div>
+      <div class="cmp-mini lt">
+        <div class="msb"><div style="font-size:7px;opacity:0.5;">ws</div></div>
+        <div class="mcnt">
+          <div class="mtab"><div class="mt a">zsh</div></div>
+          <div class="mln" style="width:55%"></div><div class="mln" style="width:75%"></div>
+          <div class="mln" style="width:40%"></div><div class="mln" style="width:65%"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== IDE MOCKUP ===== -->
+<div class="section">
+  <h2>完整版面 Mockup</h2>
+  <div class="ide-wrap">
+    <div class="ide-titlebar">
+      <div class="dots"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+      <div class="title">timfeng@Tim-FengdeMac-mini:~</div>
+    </div>
+    <div class="ide-body">
+      <div class="sb">
+        <div class="sb-ws">
+          <div class="nm">timfeng@Tim-</div>
+          <div class="pt">~</div>
+          <div class="st">Idle</div>
+        </div>
+      </div>
+      <div class="panels">
+        <div class="panels-row">
+          <div class="term-area">
+            <div class="tbar">
+              <div class="tab active">~ (-zsh)</div>
+              <div class="tab-plus">+</div>
+              <div class="tab-sep">Code</div>
+            </div>
+            <div class="term">
+              <div><span class="dim">Last login: Fri Apr  3 20:17:12 on ttys001</span></div>
+              <div style="margin-top:8px;"><span class="arrow">&rarr;</span><span class="path"> ~</span> <span class="cursor"></span></div>
+            </div>
+          </div>
+          <div class="edit-area">
+            <div class="tbar">
+              <div class="tab active">start-claude.sh <span style="margin-left:6px;color:var(--sakuranezumi);font-size:13px;">&times;</span></div>
+            </div>
+            <div class="edit">
+              <div class="cl"><span class="ln">1</span><span class="ct"><span class="s-cm">#!/bin/bash</span></span></div>
+              <div class="cl"><span class="ln">2</span><span class="ct"></span></div>
+              <div class="cl"><span class="ln">3</span><span class="ct"><span class="s-cm"># Homebrew PATH</span></span></div>
+              <div class="cl"><span class="ln">4</span><span class="ct"><span class="s-kw">eval</span> <span class="s-st">"$(/opt/homebrew/bin/brew shellenv)"</span></span></div>
+              <div class="cl"><span class="ln">5</span><span class="ct"></span></div>
+              <div class="cl"><span class="ln">6</span><span class="ct"><span class="s-cm"># UTF-8</span></span></div>
+              <div class="cl"><span class="ln">7</span><span class="ct"><span class="s-kw">export</span> <span class="s-vr">LANG</span><span class="s-op">=</span><span class="s-st">en_US.UTF-8</span></span></div>
+              <div class="cl"><span class="ln">8</span><span class="ct"><span class="s-kw">export</span> <span class="s-vr">LC_ALL</span><span class="s-op">=</span><span class="s-st">en_US.UTF-8</span></span></div>
+              <div class="cl"><span class="ln">9</span><span class="ct"></span></div>
+              <div class="cl"><span class="ln">10</span><span class="ct"><span class="s-kw">if</span> [ <span class="s-op">-n</span> <span class="s-st">"$1"</span> ]; <span class="s-kw">then</span></span></div>
+              <div class="cl"><span class="ln">11</span><span class="ct">    <span class="s-vr">SESSION</span><span class="s-op">=</span><span class="s-st">"$1"</span></span></div>
+              <div class="cl"><span class="ln">12</span><span class="ct"><span class="s-kw">else</span></span></div>
+              <div class="cl"><span class="ln">13</span><span class="ct">    <span class="s-vr">COUNTER</span><span class="s-op">=</span><span class="s-nm">1</span></span></div>
+            </div>
+          </div>
+          <div class="ftree">
+            <div class="fi dir"><span class="ic">&#9658;</span> Applications</div>
+            <div class="fi dir"><span class="ic">&#9658;</span> Desktop</div>
+            <div class="fi dir"><span class="ic">&#9658;</span> Documents</div>
+            <div class="fi dir"><span class="ic">&#9658;</span> Downloads</div>
+            <div class="fi dir"><span class="ic">&#9658;</span> GitHub</div>
+            <div class="fi dir"><span class="ic">&#9658;</span> Movies</div>
+            <div class="fi dir"><span class="ic">&#9658;</span> Music</div>
+            <div class="fi dir"><span class="ic">&#9658;</span> Pictures</div>
+            <div class="fi dir"><span class="ic">&#9658;</span> Public</div>
+            <div class="fi dir"><span class="ic">&#9658;</span> Google Drive</div>
+            <div class="fi sel"><span class="ic">&#9724;</span> start-claude.sh</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== TERMINAL SIMULATION ===== -->
+<div class="section">
+  <h2>終端模擬 — ANSI 色碼實際效果</h2>
+
+  <h3>ls --color 效果</h3>
+  <div class="term-sim">
+    <div class="term-sim-bar"><div class="indicator"></div> ~ (-zsh)</div>
+    <div class="term-sim-body">
+      <div><span class="a-br-black">$</span> ls -la</div>
+      <div>total <span class="a-br-black">42</span></div>
+      <div><span class="a-blue">drwxr-xr-x</span>  <span class="a-br-black">12</span> timfeng staff  <span class="a-br-black">384</span> Apr  3 <span class="a-br-black">20:17</span> <span class="a-blue">.</span></div>
+      <div><span class="a-blue">drwxr-xr-x</span>   <span class="a-br-black">6</span> timfeng staff  <span class="a-br-black">192</span> Mar 21 <span class="a-br-black">14:30</span> <span class="a-blue">..</span></div>
+      <div><span class="a-green">-rwxr-xr-x</span>   <span class="a-br-black">1</span> timfeng staff  <span class="a-br-black">482</span> Apr  3 <span class="a-br-black">19:03</span> <span class="a-green">start-claude.sh</span></div>
+      <div><span class="a-br-black">-rw-r--r--</span>   <span class="a-br-black">1</span> timfeng staff <span class="a-br-black">2.1K</span> Apr  2 <span class="a-br-black">15:30</span> CLAUDE.md</div>
+      <div><span class="a-cyan">lrwxr-xr-x</span>   <span class="a-br-black">1</span> timfeng staff   <span class="a-br-black">24</span> Mar 15 <span class="a-br-black">09:00</span> <span class="a-cyan">config</span> -&gt; <span class="a-magenta">.config/tidey</span></div>
+      <div><span class="a-blue">drwxr-xr-x</span>   <span class="a-br-black">8</span> timfeng staff  <span class="a-br-black">256</span> Apr  3 <span class="a-br-black">18:45</span> <span class="a-blue">sources</span></div>
+    </div>
+  </div>
+
+  <h3>git diff 效果</h3>
+  <div class="term-sim">
+    <div class="term-sim-bar"><div class="indicator"></div> ~/GitHub/Tidey (-zsh)</div>
+    <div class="term-sim-body">
+      <div><span class="a-br-black">$</span> git diff --stat</div>
+      <div> sources/PSMMinimalTabStyle.m | <span class="a-br-yellow">25</span> <span class="a-green">++++++++++++</span><span class="a-red">-</span></div>
+      <div> sources/iTermRootTerminalView.m | <span class="a-br-yellow">10</span> <span class="a-green">+++++</span><span class="a-red">-----</span></div>
+      <div> <span class="a-br-black">2 files changed,</span> <span class="a-green">30 insertions(+)</span>, <span class="a-red">5 deletions(-)</span></div>
+      <div style="margin-top:8px;"><span class="a-br-black">diff --git a/sources/PSMMinimalTabStyle.m</span></div>
+      <div><span class="a-cyan">@@ -193,7 +216,7 @@</span> <span class="a-br-blue">drawPostHocDecorationsOnSelectedCell:</span></div>
+      <div><span class="a-red">-    [[NSColor controlAccentColor] set];</span></div>
+      <div><span class="a-green">+    [[[TideyThemeManager shared] currentTheme].accentIndicator set];</span></div>
+      <div style="margin-top:6px;"><span class="a-br-black">$</span> <span class="a-br-black">|</span></div>
+    </div>
+  </div>
+
+  <h3>文字選取效果 — 候選比較</h3>
+  <div class="term-sim">
+    <div class="term-sim-bar"><div class="indicator"></div> selection candidates</div>
+    <div class="term-sim-body">
+      <div>Normal text — no selection</div>
+      <div><span class="sel-a">A. 今様 #D05A6E @40%</span></div>
+      <div><span class="sel-b">B. 今様 #D05A6E @55%</span></div>
+      <div><span class="sel-c">C. 蘇芳 #8E354A @30%</span></div>
+      <div><span class="sel-d">D. 蘇芳 #8E354A @45%</span></div>
+      <div><span class="sel-e">E. 桑染 #64363C @35%</span></div>
+      <div>Normal text — no selection</div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== ANSI COLOR GRID ===== -->
+<div class="section">
+  <h2>ANSI 16 色 — 和色版</h2>
+
+  <h3>Standard Colors (0-7)</h3>
+  <div class="ansi-grid">
+    <div class="ansi-cell" style="background:#43341B;color:#FFFFFB;"><div class="name">0 Black</div><div class="wago">憲法</div><div class="code">#43341B</div></div>
+    <div class="ansi-cell" style="background:#D05A6E;color:#FFFFFB;"><div class="name">1 Red</div><div class="wago">今様</div><div class="code">#D05A6E</div></div>
+    <div class="ansi-cell" style="background:#5DAC81;color:#FFFFFB;"><div class="name">2 Green</div><div class="wago">若竹</div><div class="code">#5DAC81</div></div>
+    <div class="ansi-cell" style="background:#D19826;color:#FFFFFB;"><div class="name">3 Yellow</div><div class="wago">山吹茶</div><div class="code">#D19826</div></div>
+    <div class="ansi-cell" style="background:#6A4C9C;color:#FFFFFB;"><div class="name">4 Blue</div><div class="wago">桔梗</div><div class="code">#6A4C9C</div></div>
+    <div class="ansi-cell" style="background:#E16B8C;color:#FFFFFB;"><div class="name">5 Magenta</div><div class="wago">紅梅</div><div class="code">#E16B8C</div></div>
+    <div class="ansi-cell" style="background:#00896C;color:#FFFFFB;"><div class="name">6 Cyan</div><div class="wago">青竹</div><div class="code">#00896C</div></div>
+    <div class="ansi-cell" style="background:#FCFAF2;color:#43341B;border:1px solid #e0d8d0;"><div class="name">7 White</div><div class="wago">白練</div><div class="code">#FCFAF2</div></div>
+  </div>
+
+  <h3>Bright Colors (8-15)</h3>
+  <div class="ansi-grid">
+    <div class="ansi-cell" style="background:#B19693;color:#FFFFFB;"><div class="name">8 Br.Black</div><div class="wago">桜鼠</div><div class="code">#B19693</div></div>
+    <div class="ansi-cell" style="background:#DB4D6D;color:#FFFFFB;"><div class="name">9 Br.Red</div><div class="wago">中紅</div><div class="code">#DB4D6D</div></div>
+    <div class="ansi-cell" style="background:#68BE8D;color:#43341B;"><div class="name">10 Br.Green</div><div class="wago">若竹(明)</div><div class="code">#68BE8D</div></div>
+    <div class="ansi-cell" style="background:#FFB11B;color:#43341B;"><div class="name">11 Br.Yellow</div><div class="wago">山吹</div><div class="code">#FFB11B</div></div>
+    <div class="ansi-cell" style="background:#8A6BBE;color:#FFFFFB;"><div class="name">12 Br.Blue</div><div class="wago">藤紫</div><div class="code">#8A6BBE</div></div>
+    <div class="ansi-cell" style="background:#E87A90;color:#FFFFFB;"><div class="name">13 Br.Magenta</div><div class="wago">薄紅</div><div class="code">#E87A90</div></div>
+    <div class="ansi-cell" style="background:#24936E;color:#FFFFFB;"><div class="name">14 Br.Cyan</div><div class="wago">緑青</div><div class="code">#24936E</div></div>
+    <div class="ansi-cell" style="background:#FFFFFB;color:#43341B;border:1px solid #e0d8d0;"><div class="name">15 Br.White</div><div class="wago">胡粉</div><div class="code">#FFFFFB</div></div>
+  </div>
+</div>
+
+<!-- ===== FULL 43 TOKEN TABLE ===== -->
+<div class="section">
+  <h2>完整 43 Token 對照表</h2>
+
+  <h3>Chrome 背景 (4)</h3>
+  <table class="tok-table">
+    <thead><tr><th>Token</th><th>靜水深流</th><th></th><th>櫻花爛漫</th><th></th><th>用途</th><th>對比度</th></tr></thead>
+    <tbody>
+      <tr><td>bgBase</td><td><span class="sw" style="background:#0B1013"></span><span class="hex">黒橡 #0B1013</span></td><td>&rarr;</td><td><span class="sw" style="background:#FFFFFB"></span><span class="hex">胡粉 #FFFFFB</span></td><td></td><td>Editor / Terminal 主內容區</td><td><span class="badge b-na">base</span></td></tr>
+      <tr><td>bgSurface</td><td><span class="sw" style="background:#192236"></span><span class="hex">紺 #192236</span></td><td>&rarr;</td><td><span class="sw" style="background:#FCFAF2"></span><span class="hex">白練 #FCFAF2</span></td><td></td><td>Tab bar / File tree</td><td><span class="badge b-aa">1.02</span></td></tr>
+      <tr><td>bgControl</td><td><span class="sw" style="background:#2B2F4A"></span><span class="hex">竜胆 #2B2F4A</span></td><td>&rarr;</td><td><span class="sw" style="background:#F2E8D0"></span><span class="hex">練 #F2E8D0</span></td><td></td><td>Toolbar / 控制元件</td><td><span class="badge b-aa">1.10</span></td></tr>
+      <tr><td>bgHover</td><td><span class="sw" style="background:rgba(234,244,252,0.06);border:1px solid #333"></span><span class="hex">月白@6%</span></td><td>&rarr;</td><td><span class="sw" style="background:rgba(209,90,110,0.06)"></span><span class="hex">今様@6%</span></td><td></td><td>Hover 疊加</td><td><span class="badge b-na">overlay</span></td></tr>
+    </tbody>
+  </table>
+
+  <h3>邊框 / 線條 (4)</h3>
+  <table class="tok-table">
+    <thead><tr><th>Token</th><th>靜水深流</th><th></th><th>櫻花爛漫</th><th></th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td>borderDefault</td><td><span class="sw" style="background:rgba(119,150,154,0.20)"></span><span class="hex">深金鼠@20%</span></td><td>&rarr;</td><td><span class="sw" style="background:rgba(158,122,122,0.15)"></span><span class="hex">梅鼠@15%</span></td><td></td><td>一般邊框</td></tr>
+      <tr><td>borderStrong</td><td><span class="sw" style="background:rgba(145,152,159,0.35)"></span><span class="hex">銀鼠@35%</span></td><td>&rarr;</td><td><span class="sw" style="background:rgba(177,150,147,0.45)"></span><span class="hex">桜鼠@45%</span></td><td></td><td>強調邊框</td></tr>
+      <tr><td>lineActive</td><td><span class="sw" style="background:#70C5BA"></span><span class="hex">水浅葱 #70C5BA</span></td><td>&rarr;</td><td><span class="sw" style="background:#D05A6E"></span><span class="hex">今様 #D05A6E</span></td><td></td><td>活躍分隔線</td></tr>
+      <tr><td>lineHairline</td><td><span class="sw" style="background:rgba(234,244,252,0.10)"></span><span class="hex">月白@10%</span></td><td>&rarr;</td><td><span class="sw" style="background:rgba(158,122,122,0.12)"></span><span class="hex">梅鼠@12%</span></td><td></td><td>細分隔線</td></tr>
+    </tbody>
+  </table>
+
+  <h3>文字 (4)</h3>
+  <table class="tok-table">
+    <thead><tr><th>Token</th><th>靜水深流</th><th></th><th>櫻花爛漫</th><th></th><th>用途</th><th>對 bgBase</th></tr></thead>
+    <tbody>
+      <tr><td>textPrimary</td><td><span class="sw" style="background:#EAF4FC"></span><span class="hex">月白 #EAF4FC</span></td><td>&rarr;</td><td><span class="sw" style="background:#43341B"></span><span class="hex">憲法 #43341B</span></td><td></td><td>主要文字</td><td><span class="badge b-aaa">10.8:1</span></td></tr>
+      <tr><td>textSecondary</td><td><span class="sw" style="background:#77969A"></span><span class="hex">深金鼠 #77969A</span></td><td>&rarr;</td><td><span class="sw" style="background:#9E7A7A"></span><span class="hex">梅鼠 #9E7A7A</span></td><td></td><td>副標題</td><td><span class="badge b-aa">3.5:1</span></td></tr>
+      <tr><td>textTertiary</td><td><span class="sw" style="background:#656765"></span><span class="hex">鼠 #656765</span></td><td>&rarr;</td><td><span class="sw" style="background:#B19693"></span><span class="hex">桜鼠 #B19693</span></td><td></td><td>行號 / hint</td><td><span class="badge b-aa">2.7:1</span></td></tr>
+      <tr><td>textOnAccent</td><td><span class="sw" style="background:#FFFFFF"></span><span class="hex">白 #FFFFFF</span></td><td>&rarr;</td><td><span class="sw" style="background:#FFFFFB"></span><span class="hex">胡粉 #FFFFFB</span></td><td></td><td>Accent 上的文字</td><td><span class="badge b-na">-</span></td></tr>
+    </tbody>
+  </table>
+
+  <h3>Accent (3)</h3>
+  <table class="tok-table">
+    <thead><tr><th>Token</th><th>靜水深流</th><th></th><th>櫻花爛漫</th><th></th><th>用途</th><th>對 bgBase</th></tr></thead>
+    <tbody>
+      <tr><td>accentPrimary</td><td><span class="sw" style="background:#70C5BA"></span><span class="hex">水浅葱 #70C5BA</span></td><td>&rarr;</td><td><span class="sw" style="background:#E16B8C"></span><span class="hex">紅梅 #E16B8C</span></td><td></td><td>Badge / 連結</td><td><span class="badge b-aa">3.4:1</span></td></tr>
+      <tr><td>accentMuted</td><td><span class="sw" style="background:#5C9291"></span><span class="hex">錆浅葱 #5C9291</span></td><td>&rarr;</td><td><span class="sw" style="background:#DC9FB4"></span><span class="hex">撫子 #DC9FB4</span></td><td></td><td>次要互動</td><td><span class="badge b-fail">2.1:1</span></td></tr>
+      <tr><td>accentIndicator</td><td><span class="sw" style="background:#3A8FB7"></span><span class="hex">千草 #3A8FB7</span></td><td>&rarr;</td><td><span class="sw" style="background:#D05A6E"></span><span class="hex">今様 #D05A6E</span></td><td></td><td>Focus bar (2px)</td><td><span class="badge b-aaa">4.2:1</span></td></tr>
+    </tbody>
+  </table>
+
+  <h3>狀態 (3)</h3>
+  <table class="tok-table">
+    <thead><tr><th>Token</th><th>靜水深流</th><th></th><th>櫻花爛漫</th><th></th><th>用途</th><th>對 bgBase</th></tr></thead>
+    <tbody>
+      <tr><td>stateSuccess</td><td><span class="sw" style="background:#68BE8D"></span><span class="hex">若竹 #68BE8D</span></td><td>&rarr;</td><td><span class="sw" style="background:#5DAC81"></span><span class="hex">若竹 #5DAC81</span></td><td></td><td>成功 mark</td><td><span class="badge b-aa">3.1:1</span></td></tr>
+      <tr><td>stateWarning</td><td><span class="sw" style="background:#FFB11B"></span><span class="hex">蒲公英 #FFB11B</span></td><td>&rarr;</td><td><span class="sw" style="background:#D19826"></span><span class="hex">山吹茶 #D19826</span></td><td></td><td>警告 mark</td><td><span class="badge b-aa">2.9:1</span></td></tr>
+      <tr><td>stateError</td><td><span class="sw" style="background:#CB4042"></span><span class="hex">紅火 #CB4042</span></td><td>&rarr;</td><td><span class="sw" style="background:#CB4042"></span><span class="hex">紅火 #CB4042</span></td><td></td><td>失敗 mark</td><td><span class="badge b-aaa">4.6:1</span></td></tr>
+    </tbody>
+  </table>
+
+  <h3>ANSI 16 色 (16)</h3>
+  <table class="tok-table">
+    <thead><tr><th>Token</th><th>靜水深流</th><th></th><th>櫻花爛漫</th><th></th><th>和色</th><th>對 bgBase</th></tr></thead>
+    <tbody>
+      <tr><td>ansiBlack</td><td><span class="sw" style="background:#181B26"></span><span class="hex">#181B26</span></td><td>&rarr;</td><td><span class="sw" style="background:#43341B"></span><span class="hex">#43341B</span></td><td></td><td>憲法</td><td><span class="badge b-aaa">10.8:1</span></td></tr>
+      <tr><td>ansiRed</td><td><span class="sw" style="background:#CB4042"></span><span class="hex">#CB4042</span></td><td>&rarr;</td><td><span class="sw" style="background:#D05A6E"></span><span class="hex">#D05A6E</span></td><td></td><td>今様</td><td><span class="badge b-aaa">4.2:1</span></td></tr>
+      <tr><td>ansiGreen</td><td><span class="sw" style="background:#839B5C"></span><span class="hex">#839B5C</span></td><td>&rarr;</td><td><span class="sw" style="background:#5DAC81"></span><span class="hex">#5DAC81</span></td><td></td><td>若竹</td><td><span class="badge b-aa">3.1:1</span></td></tr>
+      <tr><td>ansiYellow</td><td><span class="sw" style="background:#CAAD5F"></span><span class="hex">#CAAD5F</span></td><td>&rarr;</td><td><span class="sw" style="background:#D19826"></span><span class="hex">#D19826</span></td><td></td><td>山吹茶</td><td><span class="badge b-aa">2.9:1</span></td></tr>
+      <tr><td>ansiBlue</td><td><span class="sw" style="background:#5B7E91"></span><span class="hex">#5B7E91</span></td><td>&rarr;</td><td><span class="sw" style="background:#6A4C9C"></span><span class="hex">#6A4C9C</span></td><td></td><td>桔梗</td><td><span class="badge b-aaa">5.9:1</span></td></tr>
+      <tr><td>ansiMagenta</td><td><span class="sw" style="background:#8B81C3"></span><span class="hex">#8B81C3</span></td><td>&rarr;</td><td><span class="sw" style="background:#E16B8C"></span><span class="hex">#E16B8C</span></td><td></td><td>紅梅</td><td><span class="badge b-aa">3.4:1</span></td></tr>
+      <tr><td>ansiCyan</td><td><span class="sw" style="background:#5C9291"></span><span class="hex">#5C9291</span></td><td>&rarr;</td><td><span class="sw" style="background:#00896C"></span><span class="hex">#00896C</span></td><td></td><td>青竹</td><td><span class="badge b-aaa">4.5:1</span></td></tr>
+      <tr><td>ansiWhite</td><td><span class="sw" style="background:#91989F"></span><span class="hex">#91989F</span></td><td>&rarr;</td><td><span class="sw" style="background:#FCFAF2;border:1px solid #ddd"></span><span class="hex">#FCFAF2</span></td><td></td><td>白練</td><td><span class="badge b-fail">1.02:1</span></td></tr>
+      <tr><td>ansiBrightBlack</td><td><span class="sw" style="background:#656765"></span><span class="hex">#656765</span></td><td>&rarr;</td><td><span class="sw" style="background:#B19693"></span><span class="hex">#B19693</span></td><td></td><td>桜鼠</td><td><span class="badge b-aa">2.7:1</span></td></tr>
+      <tr><td>ansiBrightRed</td><td><span class="sw" style="background:#E87A90"></span><span class="hex">#E87A90</span></td><td>&rarr;</td><td><span class="sw" style="background:#DB4D6D"></span><span class="hex">#DB4D6D</span></td><td></td><td>中紅</td><td><span class="badge b-aaa">4.5:1</span></td></tr>
+      <tr><td>ansiBrightGreen</td><td><span class="sw" style="background:#68BE8D"></span><span class="hex">#68BE8D</span></td><td>&rarr;</td><td><span class="sw" style="background:#68BE8D"></span><span class="hex">#68BE8D</span></td><td></td><td>若竹(明)</td><td><span class="badge b-aa">2.6:1</span></td></tr>
+      <tr><td>ansiBrightYellow</td><td><span class="sw" style="background:#FFB11B"></span><span class="hex">#FFB11B</span></td><td>&rarr;</td><td><span class="sw" style="background:#FFB11B"></span><span class="hex">#FFB11B</span></td><td></td><td>山吹</td><td><span class="badge b-fail">1.9:1</span></td></tr>
+      <tr><td>ansiBrightBlue</td><td><span class="sw" style="background:#58B2DC"></span><span class="hex">#58B2DC</span></td><td>&rarr;</td><td><span class="sw" style="background:#8A6BBE"></span><span class="hex">#8A6BBE</span></td><td></td><td>藤紫</td><td><span class="badge b-aa">3.6:1</span></td></tr>
+      <tr><td>ansiBrightMagenta</td><td><span class="sw" style="background:#E7609E"></span><span class="hex">#E7609E</span></td><td>&rarr;</td><td><span class="sw" style="background:#E87A90"></span><span class="hex">#E87A90</span></td><td></td><td>薄紅</td><td><span class="badge b-aa">3.0:1</span></td></tr>
+      <tr><td>ansiBrightCyan</td><td><span class="sw" style="background:#70C5BA"></span><span class="hex">#70C5BA</span></td><td>&rarr;</td><td><span class="sw" style="background:#24936E"></span><span class="hex">#24936E</span></td><td></td><td>緑青</td><td><span class="badge b-aaa">4.2:1</span></td></tr>
+      <tr><td>ansiBrightWhite</td><td><span class="sw" style="background:#EAF4FC"></span><span class="hex">#EAF4FC</span></td><td>&rarr;</td><td><span class="sw" style="background:#FFFFFB;border:1px solid #ddd"></span><span class="hex">#FFFFFB</span></td><td></td><td>胡粉</td><td><span class="badge b-na">base</span></td></tr>
+    </tbody>
+  </table>
+
+  <h3>Terminal (5)</h3>
+  <table class="tok-table">
+    <thead><tr><th>Token</th><th>靜水深流</th><th></th><th>櫻花爛漫</th><th></th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td>background</td><td><span class="sw" style="background:#0B1013"></span><span class="hex">黒橡 #0B1013</span></td><td>&rarr;</td><td><span class="sw" style="background:#FFFFFB"></span><span class="hex">胡粉 #FFFFFB</span></td><td></td><td>終端背景</td></tr>
+      <tr><td>foreground</td><td><span class="sw" style="background:#EAF4FC"></span><span class="hex">月白 #EAF4FC</span></td><td>&rarr;</td><td><span class="sw" style="background:#43341B"></span><span class="hex">憲法 #43341B</span></td><td></td><td>終端前景文字</td></tr>
+      <tr><td>cursor</td><td><span class="sw" style="background:#58B2DC"></span><span class="hex">空 #58B2DC</span></td><td>&rarr;</td><td><span class="sw" style="background:#D05A6E"></span><span class="hex">今様 #D05A6E</span></td><td></td><td>終端游標</td></tr>
+      <tr><td>imeCursor</td><td><span class="sw" style="background:#58B2DC"></span><span class="hex">空 #58B2DC</span></td><td>&rarr;</td><td><span class="sw" style="background:#D05A6E"></span><span class="hex">今様 #D05A6E</span></td><td></td><td>IME 組字游標</td></tr>
+      <tr><td>selection</td><td><span class="sw" style="background:#274A78"></span><span class="hex">青藍 #274A78</span></td><td>&rarr;</td><td><span class="sw" style="background:rgba(209,90,110,0.55)"></span><span class="hex">今様@55%</span></td><td></td><td>文字選取反白</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ===== DESIGN PRINCIPLES ===== -->
+<div class="section">
+  <h2>設計原則</h2>
+  <div class="note"><strong>1. 白紙に桜</strong> — 主內容區用胡粉（近白），如和紙底色。桜粉只出現在 sidebar，如落花點綴紙邊。</div>
+  <div class="note"><strong>2. 墨と花</strong> — 文字用憲法（深棕），不用純黑。毛筆墨色與花朵的溫潤對比。對比度 10.8:1 超過 WCAG AAA。</div>
+  <div class="note"><strong>3. 一輪の紅</strong> — Focus indicator 和游標都用今様（深粉紅），整個畫面最飽和的色。對比度 4.2:1 達 AA。</div>
+  <div class="note"><strong>4. 春の彩り</strong> — ANSI 16 色全部對應到和色，讓終端輸出也有春天的氣質。桔梗紫、若竹綠、山吹金都是花園裡的色彩。</div>
+  <div class="note"><strong>5. hover = 今様@6%</strong> — Hover 態統一用今様極淡透明疊加。dark theme 用白色疊加，light theme 用 accent 疊加，各自協調。</div>
+</div>
+
+</body>
+</html>

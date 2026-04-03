@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>山野春櫻 — Mountain Spring Cherry Blossoms</title>
+<style>
+body { background: #FEDFE1; color: #563F2E; font-family: -apple-system, sans-serif; padding: 24px; font-size: 13px; max-width: 960px; margin: 0 auto; }
+h1 { font-size: 20px; color: #D05A6E; margin-bottom: 2px; }
+h1 span { font-size: 13px; color: #9E7A7A; font-weight: normal; }
+h2 { font-size: 14px; color: #9E7A7A; font-weight: normal; margin-top: 32px; margin-bottom: 12px; border-bottom: 1px solid #B1969330; padding-bottom: 4px; }
+table { border-collapse: collapse; width: 100%; margin-bottom: 16px; }
+th { text-align: left; padding: 6px 8px; color: #B19693; border-bottom: 1px solid #B1969330; font-weight: 500; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+td { padding: 6px 8px; border-bottom: 1px solid #B1969315; font-size: 12px; vertical-align: middle; }
+.sw { display: inline-block; width: 40px; height: 20px; border-radius: 3px; vertical-align: middle; margin-right: 6px; border: 1px solid #B1969320; }
+.hex { font-family: 'JetBrains Mono', 'SF Mono', monospace; font-size: 11px; color: #9E7A7A; }
+.jp { font-size: 15px; }
+.rm { color: #B19693; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+.why { color: #9E7A7A; font-size: 11px; line-height: 1.4; }
+.section { background: #FCFAF2; padding: 16px 20px; border-radius: 8px; margin-bottom: 16px; border: 1px solid #B1969315; }
+.preview { font-family: 'JetBrains Mono', 'SF Mono', monospace; font-size: 13px; line-height: 1.9; padding: 16px; border-radius: 6px; margin-top: 8px; }
+.depth { display: flex; gap: 0; margin: 12px 0; border-radius: 6px; overflow: hidden; height: 40px; }
+.depth div { flex: 1; display: flex; align-items: center; justify-content: center; font-size: 9px; }
+.cherry-range { display: flex; gap: 0; margin: 12px 0; border-radius: 6px; overflow: hidden; height: 50px; }
+.cherry-range div { flex: 1; display: flex; align-items: flex-end; justify-content: center; font-size: 8px; padding-bottom: 4px; }
+</style></head><body>
+
+<h1>山野春櫻 <span>— Mountain Spring Cherry Blossoms</span></h1>
+<p style="color:#B19693;font-size:11px;margin-top:4px;">Light theme · 日本傳統色 · nipponcolors.com</p>
+
+<h2>櫻花漸層 Cherry Range</h2>
+<div class="cherry-range">
+<div style="background:#F8C3CD;color:#9E7A7A">退紅</div>
+<div style="background:#F4A7B9;color:#9E7A7A">一斥染</div>
+<div style="background:#F596AA;color:#64363C">桃</div>
+<div style="background:#E87A90;color:#FFFFFB">薄紅</div>
+<div style="background:#E16B8C;color:#FFFFFB">紅梅</div>
+<div style="background:#D05A6E;color:#FFFFFB">今様</div>
+<div style="background:#DB4D6D;color:#FFFFFB">中紅</div>
+<div style="background:#B5495B;color:#FFFFFB">苺</div>
+<div style="background:#8E354A;color:#FFFFFB">蘇芳</div>
+</div>
+
+<h2>深度層 Background → Surface → Control</h2>
+<div class="depth">
+<div style="background:#FEDFE1;color:#9E7A7A">桜</div>
+<div style="background:#FCFAF2;color:#9E7A7A">白練</div>
+<div style="background:#F2E8D0;color:#9E7A7A">練</div>
+<div style="background:#F3E2B9;color:#9E7A7A">肌</div>
+<div style="background:#B19693;color:#FFFFFB">桜鼠</div>
+<div style="background:#9E7A7A;color:#FFFFFB">梅鼠</div>
+<div style="background:#64363C;color:#FFFFFB">桑染</div>
+<div style="background:#563F2E;color:#FFFFFB">焦茶</div>
+</div>
+
+<div class="section">
+<h2 style="border:none;margin-top:0;">Terminal ANSI 16 色</h2>
+<table>
+<tr><th>Role</th><th>Color</th><th>Name</th><th>Why</th></tr>
+<tr><td>Background</td><td><span class="sw" style="background:#FEDFE1"></span><span class="hex">#FEDFE1</span></td><td><span class="jp">桜</span><br><span class="rm">Sakura</span></td><td class="why">櫻花粉白，春的畫布</td></tr>
+<tr><td>Foreground</td><td><span class="sw" style="background:#563F2E"></span><span class="hex">#563F2E</span></td><td><span class="jp">焦茶</span><br><span class="rm">Kogecha</span></td><td class="why">焦茶，溫潤的深棕 7.2:1</td></tr>
+<tr><td style="padding-top:12px" colspan="4"><strong style="color:#B19693;font-size:10px;">NORMAL</strong></td></tr>
+<tr><td>Black</td><td><span class="sw" style="background:#43341B"></span><span class="hex">#43341B</span></td><td><span class="jp">憲法</span> <span class="rm">Kenpoh</span></td><td class="why">憲法染，深栗棕</td></tr>
+<tr><td>Red</td><td><span class="sw" style="background:#D05A6E"></span><span class="hex">#D05A6E</span></td><td><span class="jp">今様</span> <span class="rm">Imayoh</span></td><td class="why">今様色，櫻紅</td></tr>
+<tr><td>Green</td><td><span class="sw" style="background:#42602D"></span><span class="hex">#42602D</span></td><td><span class="jp">松葉</span> <span class="rm">Matsuba</span></td><td class="why">松針，山中的綠</td></tr>
+<tr><td>Yellow</td><td><span class="sw" style="background:#D19826"></span><span class="hex">#D19826</span></td><td><span class="jp">山吹茶</span> <span class="rm">Yamabukicha</span></td><td class="why">山吹茶金</td></tr>
+<tr><td>Blue</td><td><span class="sw" style="background:#6A4C9C"></span><span class="hex">#6A4C9C</span></td><td><span class="jp">桔梗</span> <span class="rm">Kikyo</span></td><td class="why">桔梗花紫，冷暖對比</td></tr>
+<tr><td>Magenta</td><td><span class="sw" style="background:#E16B8C"></span><span class="hex">#E16B8C</span></td><td><span class="jp">紅梅</span> <span class="rm">Kohbai</span></td><td class="why">紅梅，梅花先於櫻花</td></tr>
+<tr><td>Cyan</td><td><span class="sw" style="background:#00896C"></span><span class="hex">#00896C</span></td><td><span class="jp">青竹</span> <span class="rm">Aotake</span></td><td class="why">青竹，山徑竹林</td></tr>
+<tr><td>White</td><td><span class="sw" style="background:#FCFAF2"></span><span class="hex">#FCFAF2</span></td><td><span class="jp">白練</span> <span class="rm">Shironeri</span></td><td class="why">白練絲</td></tr>
+<tr><td style="padding-top:12px" colspan="4"><strong style="color:#B19693;font-size:10px;">BRIGHT</strong></td></tr>
+<tr><td>Black</td><td><span class="sw" style="background:#64363C"></span><span class="hex">#64363C</span></td><td><span class="jp">桑染</span> <span class="rm">Kuwazome</span></td><td class="why">桑染，溫暖的暗梅灰</td></tr>
+<tr><td>Red</td><td><span class="sw" style="background:#DB4D6D"></span><span class="hex">#DB4D6D</span></td><td><span class="jp">中紅</span> <span class="rm">Nakabeni</span></td><td class="why">中紅，鮮明的緋</td></tr>
+<tr><td>Green</td><td><span class="sw" style="background:#5DAC81"></span><span class="hex">#5DAC81</span></td><td><span class="jp">若竹</span> <span class="rm">Wakatake</span></td><td class="why">嫩竹，初春新芽</td></tr>
+<tr><td>Yellow</td><td><span class="sw" style="background:#F9BF45"></span><span class="hex">#F9BF45</span></td><td><span class="jp">玉子</span> <span class="rm">Tamago</span></td><td class="why">玉子金</td></tr>
+<tr><td>Blue</td><td><span class="sw" style="background:#8A6BBE"></span><span class="hex">#8A6BBE</span></td><td><span class="jp">藤紫</span> <span class="rm">Fujimurasaki</span></td><td class="why">紫藤，晚春的藤花</td></tr>
+<tr><td>Magenta</td><td><span class="sw" style="background:#E87A90"></span><span class="hex">#E87A90</span></td><td><span class="jp">薄紅</span> <span class="rm">Usubeni</span></td><td class="why">薄紅，午後的花瓣</td></tr>
+<tr><td>Cyan</td><td><span class="sw" style="background:#24936E"></span><span class="hex">#24936E</span></td><td><span class="jp">緑青</span> <span class="rm">Rokusyoh</span></td><td class="why">銅綠，山寺的屋頂</td></tr>
+<tr><td>White</td><td><span class="sw" style="background:#FFFFFB"></span><span class="hex">#FFFFFB</span></td><td><span class="jp">胡粉</span> <span class="rm">Gofun</span></td><td class="why">貝殼白</td></tr>
+</table>
+</div>
+
+<div class="section">
+<h2 style="border:none;margin-top:0;">UI Chrome</h2>
+<table>
+<tr><th>Role</th><th>Color</th><th>Name</th><th>Why</th></tr>
+<tr><td>Surface</td><td><span class="sw" style="background:#FCFAF2"></span><span class="hex">#FCFAF2</span></td><td><span class="jp">白練</span> <span class="rm">Shironeri</span></td><td class="why">白練絲，panel 底色</td></tr>
+<tr><td>Control</td><td><span class="sw" style="background:#F2E8D0"></span><span class="hex">#F2E8D0</span></td><td><span class="jp">練</span> <span class="rm">Neri</span></td><td class="why">練色，輸入框</td></tr>
+<tr><td>Accent</td><td><span class="sw" style="background:#D05A6E"></span><span class="hex">#D05A6E</span></td><td><span class="jp">今様</span> <span class="rm">Imayoh</span></td><td class="why">今様，唯一的強調色</td></tr>
+<tr><td>Indicator</td><td><span class="sw" style="background:#DC9FB4"></span><span class="hex">#DC9FB4</span></td><td><span class="jp">撫子</span> <span class="rm">Nadeshiko</span></td><td class="why">撫子粉，低調的 active</td></tr>
+<tr><td>Selection</td><td><span class="sw" style="background:#F4A7B940"></span><span class="hex">#F4A7B9</span></td><td><span class="jp">一斥染</span> <span class="rm">Ikkonzome</span></td><td class="why">一斥染，花瓣落紙 25%</td></tr>
+<tr><td>Text 1°</td><td><span class="sw" style="background:#563F2E"></span><span class="hex">#563F2E</span></td><td><span class="jp">焦茶</span> <span class="rm">Kogecha</span></td><td class="why">焦茶</td></tr>
+<tr><td>Text 2°</td><td><span class="sw" style="background:#9E7A7A"></span><span class="hex">#9E7A7A</span></td><td><span class="jp">梅鼠</span> <span class="rm">Umenezumi</span></td><td class="why">梅灰</td></tr>
+<tr><td>Text 3°</td><td><span class="sw" style="background:#B19693"></span><span class="hex">#B19693</span></td><td><span class="jp">桜鼠</span> <span class="rm">Sakuranezumi</span></td><td class="why">櫻灰</td></tr>
+</table>
+</div>
+
+<div class="section">
+<h2 style="border:none;margin-top:0;">Code Preview</h2>
+<div class="preview" style="background:#FEDFE1">
+<span style="color:#6A4C9C">const</span> <span style="color:#563F2E">server</span> = <span style="color:#6A4C9C">require</span>(<span style="color:#E16B8C">'express'</span>)<br>
+<span style="color:#64363C">// listening on port 3000</span><br>
+<span style="color:#6A4C9C">if</span> (<span style="color:#563F2E">process</span>.<span style="color:#563F2E">env</span>.<span style="color:#00896C">NODE_ENV</span> === <span style="color:#E16B8C">'production'</span>) {<br>
+&nbsp;&nbsp;<span style="color:#8B81C3">console</span>.<span style="color:#563F2E">log</span>(<span style="color:#E87A90">`Ready on port ${</span><span style="color:#DB4D6D">3000</span><span style="color:#E87A90">}`</span>)<br>
+}<br>
+<span style="color:#6A4C9C">throw</span> <span style="color:#563F2E">new</span> <span style="color:#D05A6E">Error</span>(<span style="color:#E16B8C">'Not found'</span>)<br>
+<br>
+<span style="color:#64363C">// git diff</span><br>
+<span style="color:#5DAC81">+ added line</span><br>
+<span style="color:#DB4D6D">- removed line</span><br>
+<br>
+<div style="background:#FCFAF2; color:#9E7A7A; padding:2px 8px; border-radius:2px; display:inline-block; border-left: 2px solid #D05A6E;">
+[tidey-cc]0:zsh*&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#563F2E">"Claude Code"</span> 15:30
+</div>
+</div>
+</div>
+
+<div class="section">
+<h2 style="border:none;margin-top:0;">Prompt Preview</h2>
+<div class="preview" style="background:#FEDFE1">
+<span style="color:#42602D">➜</span>  <span style="color:#6A4C9C">~</span> echo "hello world"<br>
+hello world<br>
+<span style="color:#42602D">➜</span>  <span style="color:#6A4C9C">~/GitHub/Tidey</span> <span style="color:#D05A6E">git:(</span><span style="color:#DB4D6D">master</span><span style="color:#D05A6E">)</span> <span style="color:#D19826">✗</span><br>
+</div>
+</div>
+
+</body></html>
