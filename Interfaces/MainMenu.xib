@@ -900,8 +900,8 @@ DQ
                                     <action selector="toggleFullScreenTabBar:" target="-1" id="1259"/>
                                 </connections>
                             </menuItem>
-                            <menuItem title="Toggle Full Screen" keyEquivalent="f" identifier="Toggle Full Screen" id="914">
-                                <modifierMask key="keyEquivalentModifierMask" control="YES" command="YES"/>
+                            <menuItem title="Toggle Full Screen" keyEquivalent="" identifier="Toggle Full Screen" id="914">
+                                <modifierMask key="keyEquivalentModifierMask"/>
                                 <connections>
                                     <action selector="toggleFullScreenMode:" target="-1" id="1256"/>
                                 </connections>

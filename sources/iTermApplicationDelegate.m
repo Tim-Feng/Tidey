@@ -2068,16 +2068,9 @@ static iTermKeyEventReplayer *gReplayer;
     // See issue 6254.
     NSNumber *fShortcut = shortcutsChanged[@"F"];
     if (fShortcut) {
-        if (fShortcut.boolValue) {
-            // Added a menu item with cmd-ctrl-F as the shortcut. Change enter full screen to cmd-enter.
-            [_enterFullScreenMenuItem setKeyEquivalent:@"\n"];
-            [_enterFullScreenMenuItem setKeyEquivalentModifierMask:NSEventModifierFlagCommand];
-        } else {
-            // Removed a menu item with cmd-ctrl-F as the shortcut. Change enter full screen to cmd-F.
-            [_enterFullScreenMenuItem setKeyEquivalent:@"f"];
-            [_enterFullScreenMenuItem setKeyEquivalentModifierMask:(NSEventModifierFlagCommand |
-                                                                    NSEventModifierFlagControl)];
-        }
+        // Keep cmd-ctrl-F reserved for Tidey's file tree toggle. Use cmd-enter for full screen.
+        [_enterFullScreenMenuItem setKeyEquivalent:@"\n"];
+        [_enterFullScreenMenuItem setKeyEquivalentModifierMask:NSEventModifierFlagCommand];
     }
 }
 
