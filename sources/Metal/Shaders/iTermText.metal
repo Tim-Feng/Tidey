@@ -54,14 +54,16 @@ iTermTextVertexShader(uint vertexID [[ vertex_id ]],
     out.underlineColor = perInstanceUniforms[iid].underlineColor;
     out.alphaVector = iTermAlphaVectorForTextColor(out.textColor);
     out.flags = textInfo->flags;
+    out.inMarkedRange = perInstanceUniforms[iid].inMarkedRange;
+    // Use 2*cellWidth to handle wide CJK characters that span 2 cells
     out.predecessorWasUnderlined = (iid > 0 &&
                                     perInstanceUniforms[iid - 1].offset.y == perInstanceUniforms[iid].offset.y &&
-                                    perInstanceUniforms[iid - 1].offset.x >= perInstanceUniforms[iid].offset.x - textInfo->cellWidth &&
+                                    perInstanceUniforms[iid - 1].offset.x >= perInstanceUniforms[iid].offset.x - textInfo->cellWidth * 2 &&
                                     perInstanceUniforms[iid - 1].offset.x <= perInstanceUniforms[iid].offset.x &&
                                     (perInstanceUniforms[iid - 1].underlineStyle == perInstanceUniforms[iid].underlineStyle));
     out.successorWillBeUnderlined = (iid + 1 < textInfo->numInstances &&
                                      perInstanceUniforms[iid].offset.y == perInstanceUniforms[iid + 1].offset.y &&
-                                     perInstanceUniforms[iid].offset.x >= perInstanceUniforms[iid + 1].offset.x - textInfo->cellWidth &&
+                                     perInstanceUniforms[iid].offset.x >= perInstanceUniforms[iid + 1].offset.x - textInfo->cellWidth * 2 &&
                                      perInstanceUniforms[iid].offset.x <= perInstanceUniforms[iid + 1].offset.x &&
                                      (perInstanceUniforms[iid].underlineStyle == perInstanceUniforms[iid + 1].underlineStyle));
     return out;
@@ -216,6 +218,7 @@ iTermTextFragmentShaderWithBlendingUnderlinedEmoji(iTermTextVertexFunctionOutput
                                                               textureSampler,
                                                               dimensions->scale,
                                                               (in.flags & iTermTextVertexInfoFlagsSolidUnderlines) != 0,
+                                                              in.inMarkedRange,
                                                               in.predecessorWasUnderlined,
                                                               in.successorWillBeUnderlined);
     }
@@ -236,6 +239,7 @@ iTermTextFragmentShaderWithBlendingUnderlinedEmoji(iTermTextVertexFunctionOutput
                                                                   textureSampler,
                                                                   dimensions->scale,
                                                                   (in.flags & iTermTextVertexInfoFlagsSolidUnderlines) != 0,
+                                                                  in.inMarkedRange,
                                                                   in.predecessorWasUnderlined,
                                                                   in.successorWillBeUnderlined);
     return mix(bwColor,
@@ -275,6 +279,7 @@ iTermTextFragmentShaderWithBlendingUnderlined(iTermTextVertexFunctionOutput in [
                                                                textureSampler,
                                                                dimensions->scale,
                                                                (in.flags & iTermTextVertexInfoFlagsSolidUnderlines) != 0,
+                                                               in.inMarkedRange,
                                                                in.predecessorWasUnderlined,
                                                                in.successorWillBeUnderlined);
     }
@@ -293,6 +298,7 @@ iTermTextFragmentShaderWithBlendingUnderlined(iTermTextVertexFunctionOutput in [
                                                                    textureSampler,
                                                                    dimensions->scale,
                                                                    (in.flags & iTermTextVertexInfoFlagsSolidUnderlines) != 0,
+                                                                   in.inMarkedRange,
                                                                    in.predecessorWasUnderlined,
                                                                    in.successorWillBeUnderlined);
     const float combinedWidth = max(strikethroughWeight, underlineWeight);
@@ -353,6 +359,7 @@ iTermTextFragmentShaderMonochromeUnderlinedEmoji(iTermTextVertexFunctionOutput i
                                                               textureSampler,
                                                               dimensions->scale,
                                                               (in.flags & iTermTextVertexInfoFlagsSolidUnderlines) != 0,
+                                                              in.inMarkedRange,
                                                               in.predecessorWasUnderlined,
                                                               in.successorWillBeUnderlined);
     }
@@ -372,7 +379,8 @@ iTermTextFragmentShaderMonochromeUnderlinedEmoji(iTermTextVertexFunctionOutput i
                                                                  texture,
                                                                  textureSampler,
                                                                  dimensions->scale,
-                                                                  (in.flags & iTermTextVertexInfoFlagsSolidUnderlines) != 0,
+                                                                 (in.flags & iTermTextVertexInfoFlagsSolidUnderlines) != 0,
+                                                                  in.inMarkedRange,
                                                                   in.predecessorWasUnderlined,
                                                                   in.successorWillBeUnderlined);
     float4 result = mix(textureColor,
@@ -412,6 +420,7 @@ iTermTextFragmentShaderMonochromeUnderlined(iTermTextVertexFunctionOutput in [[s
                                                               textureSampler,
                                                               dimensions->scale,
                                                               (in.flags & iTermTextVertexInfoFlagsSolidUnderlines) != 0,
+                                                              in.inMarkedRange,
                                                               in.predecessorWasUnderlined,
                                                               in.successorWillBeUnderlined);
     }
@@ -431,6 +440,7 @@ iTermTextFragmentShaderMonochromeUnderlined(iTermTextVertexFunctionOutput in [[s
                                                                   textureSampler,
                                                                   dimensions->scale,
                                                                   (in.flags & iTermTextVertexInfoFlagsSolidUnderlines) != 0,
+                                                                  in.inMarkedRange,
                                                                   in.predecessorWasUnderlined,
                                                                   in.successorWillBeUnderlined);
 

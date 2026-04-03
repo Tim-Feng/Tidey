@@ -30,7 +30,10 @@ static const size_t iTermPIUArrayIndexNotUnderlined = 0;
 static const size_t iTermPIUArrayIndexUnderlined = 1;  // This can be used as the Underlined bit in this bitmask
 static const size_t iTermPIUArrayIndexNotUnderlinedEmoji = 2;  // This can be used as the Emoji bit in this bitmask
 static const size_t iTermPIUArrayIndexUnderlinedEmoji = 3;
-static const size_t iTermPIUArraySize = 4;
+static const size_t iTermPIUArrayIndexIME = 4;
+static const size_t iTermPIUArrayIndexIMEUnderlined = iTermPIUArrayIndexIME | iTermPIUArrayIndexUnderlined;
+static const size_t iTermPIUArrayIndexIMEUnderlinedEmoji = iTermPIUArrayIndexIME | iTermPIUArrayIndexUnderlinedEmoji;
+static const size_t iTermPIUArraySize = 8;
 
 static const size_t iTermNumberOfPIUArrays = iTermASCIITextureAttributesMax * 2;
 
@@ -207,6 +210,7 @@ static const size_t iTermNumberOfPIUArrays = iTermASCIITextureAttributesMax * 2;
 }
 
 - (void)enumerateASCIIDrawsFromArrays:(iTerm2::PIUArray<iTermTextPIU> *)piuArrays
+                  underlineDescriptor:(iTermMetalUnderlineDescriptor)underlineDescriptor
                            underlined:(BOOL)underlined
                                 emoji:(BOOL)emoji
                                 block:(void (^)(const iTermTextPIU *,
@@ -220,7 +224,7 @@ static const size_t iTermNumberOfPIUArrays = iTermASCIITextureAttributesMax * 2;
                                                 BOOL emoji))block {
     // ASCII glyphs are shifted by self.asciiOffset.height pixels relative to non-ascii glyphs.
     // The underlines would come along with them so we adjust them here. Issue 10168.
-    iTermMetalUnderlineDescriptor adjustedASCIIUnderlineDescriptor = _asciiUnderlineDescriptor;
+    iTermMetalUnderlineDescriptor adjustedASCIIUnderlineDescriptor = underlineDescriptor;
     adjustedASCIIUnderlineDescriptor.offset -= self.asciiOffset.height / self.configuration.scale;
     vector_uint2 augmentedGlyphSize = CGSizeToVectorUInt2(_asciiTextureGroup.glyphSize);
     if (iTermTextIsMonochrome()) {
@@ -268,12 +272,14 @@ static const size_t iTermNumberOfPIUArrays = iTermASCIITextureAttributesMax * 2;
                 const size_t count = piuArray->size_of_segment(i);
                 if (count > 0) {
                     sum += count;
+                    const iTermMetalUnderlineDescriptor underlineDescriptor =
+                        (k & iTermPIUArrayIndexIME) ? _imeUnderlineDescriptor : _nonAsciiUnderlineDescriptor;
                     block(piuArray->start_of_segment(i),
                           count,
                           texturePage->get_texture(),
                           texturePage->get_atlas_size(),
                           texturePage->get_cell_size(),
-                          _nonAsciiUnderlineDescriptor,
+                          underlineDescriptor,
                           _strikethroughUnderlineDescriptor,
                           !!(k & iTermPIUArrayIndexUnderlined),
                           !!(k & iTermPIUArrayIndexNotUnderlinedEmoji));
@@ -287,18 +293,32 @@ static const size_t iTermNumberOfPIUArrays = iTermASCIITextureAttributesMax * 2;
 - (void)enumerateASCIIDrawsFromArrays:(iTerm2::PIUArray<iTermTextPIU>[iTermPIUArraySize][iTermNumberOfPIUArrays])piuArrays
                                 block:(void (^)(const iTermTextPIU *, NSInteger, id<MTLTexture>, vector_uint2, vector_uint2, iTermMetalUnderlineDescriptor, iTermMetalUnderlineDescriptor, BOOL, BOOL))block {
     [self enumerateASCIIDrawsFromArrays:piuArrays[iTermPIUArrayIndexUnderlined]
+                    underlineDescriptor:_asciiUnderlineDescriptor
                              underlined:true
                                   emoji:false
                                   block:block];
     [self enumerateASCIIDrawsFromArrays:piuArrays[iTermPIUArrayIndexUnderlinedEmoji]
+                    underlineDescriptor:_asciiUnderlineDescriptor
+                             underlined:true
+                                  emoji:true
+                                  block:block];
+    [self enumerateASCIIDrawsFromArrays:piuArrays[iTermPIUArrayIndexIMEUnderlined]
+                    underlineDescriptor:_imeUnderlineDescriptor
+                             underlined:true
+                                  emoji:false
+                                  block:block];
+    [self enumerateASCIIDrawsFromArrays:piuArrays[iTermPIUArrayIndexIMEUnderlinedEmoji]
+                    underlineDescriptor:_imeUnderlineDescriptor
                              underlined:true
                                   emoji:true
                                   block:block];
     [self enumerateASCIIDrawsFromArrays:piuArrays[iTermPIUArrayIndexNotUnderlined]
+                    underlineDescriptor:_asciiUnderlineDescriptor
                              underlined:false
                                   emoji:false
                                   block:block];
     [self enumerateASCIIDrawsFromArrays:piuArrays[iTermPIUArrayIndexNotUnderlinedEmoji]
+                    underlineDescriptor:_asciiUnderlineDescriptor
                              underlined:false
                                   emoji:true
                                   block:block];
@@ -344,7 +364,8 @@ NS_INLINE iTermTextPIU *iTermTextRendererTransientStateAddASCIIPart(iTermTextPIU
                                                                     iTermASCIITextureOffset offset,
                                                                     vector_float4 textColor,
                                                                     iTermMetalGlyphAttributesUnderline underlineStyle,
-                                                                    vector_float4 underlineColor) {
+                                                                    vector_float4 underlineColor,
+                                                                    BOOL inMarkedRange) {
     piu->offset = simd_make_float2(visualColumn * cellWidth + asciiOffset.width,
                                    asciiOffset.height);
     const int index = iTermASCIITextureIndexOfCode(code, offset);
@@ -353,13 +374,18 @@ NS_INLINE iTermTextPIU *iTermTextRendererTransientStateAddASCIIPart(iTermTextPIU
     piu->textColor = textColor;
     piu->underlineStyle = underlineStyle;
     piu->underlineColor = underlineColor;
+    piu->inMarkedRange = inMarkedRange;
     return piu;
 }
 
-static inline int iTermOuterPIUIndex(const bool &annotation, const bool &underlined, const bool &emoji) {
+static inline int iTermOuterPIUIndex(const bool &annotation,
+                                     const bool &underlined,
+                                     const bool &emoji,
+                                     const bool &ime) {
     const int underlineBit = (annotation || underlined) ? iTermPIUArrayIndexUnderlined : 0;
     const int emojiBit = emoji ? iTermPIUArrayIndexNotUnderlinedEmoji : 0;
-    return underlineBit | emojiBit;
+    const int imeBit = ime ? iTermPIUArrayIndexIME : 0;
+    return underlineBit | emojiBit | imeBit;
 }
 
 - (void)addASCIICellToPIUsForCode:(char)code
@@ -385,7 +411,10 @@ static inline int iTermOuterPIUIndex(const bool &annotation, const bool &underli
 
     const bool &hasAnnotation = attributes[visualColumn].annotation;
     const bool hasUnderline = attributes[visualColumn].underlineStyle != iTermMetalGlyphAttributesUnderlineNone;
-    const int outerPIUIndex = iTermOuterPIUIndex(hasAnnotation, hasUnderline, false);
+    const int outerPIUIndex = iTermOuterPIUIndex(hasAnnotation,
+                                                 hasUnderline || inMarkedRange,
+                                                 false,
+                                                 inMarkedRange);
     if (hasAnnotation) {
         underlineColor = iTermAnnotationUnderlineColor;
     } else if (hasUnderline) {
@@ -399,7 +428,7 @@ static inline int iTermOuterPIUIndex(const bool &annotation, const bool &underli
     iTermMetalGlyphAttributesUnderline underlineStyle = attributes[visualColumn].underlineStyle;
     vector_float4 textColor = attributes[visualColumn].foregroundColor;
     if (inMarkedRange) {
-        // Marked range gets a yellow underline.
+        underlineColor = _imeUnderlineDescriptor.color.w > 0 ? _imeUnderlineDescriptor.color : textColor;
         underlineStyle = iTermMetalGlyphAttributesUnderlineSingle;
     }
 
@@ -416,7 +445,8 @@ static inline int iTermOuterPIUIndex(const bool &annotation, const bool &underli
                                                     iTermASCIITextureOffsetCenter,
                                                     textColor,
                                                     underlineStyle,
-                                                    underlineColor);
+                                                    underlineColor,
+                                                    inMarkedRange);
         return;
     }
     // Pre-10.14, ASCII glyphs can get chopped up into multiple parts. This is necessary so subpixel AA will work right.
@@ -434,7 +464,8 @@ static inline int iTermOuterPIUIndex(const bool &annotation, const bool &underli
                                                     iTermASCIITextureOffsetLeft,
                                                     textColor,
                                                     iTermMetalGlyphAttributesUnderlineNone,
-                                                    underlineColor);
+                                                    underlineColor,
+                                                    NO);
     }
 
     // Add PIU for center part, which is always present
@@ -449,7 +480,8 @@ static inline int iTermOuterPIUIndex(const bool &annotation, const bool &underli
                                                 iTermASCIITextureOffsetCenter,
                                                 textColor,
                                                 underlineStyle,
-                                                underlineColor);
+                                                underlineColor,
+                                                inMarkedRange);
     // Add PIU for right overflow
     if (parts & iTermASCIITexturePartsRight) {
 
@@ -464,7 +496,8 @@ static inline int iTermOuterPIUIndex(const bool &annotation, const bool &underli
                                                     iTermASCIITextureOffsetRight,
                                                     attributes[visualColumn].foregroundColor,
                                                     iTermMetalGlyphAttributesUnderlineNone,
-                                                    underlineColor);
+                                                    underlineColor,
+                                                    NO);
     }
 }
 
@@ -597,7 +630,10 @@ typedef struct {
     const bool &hasAnnotation = attributes[visualIndex].annotation;
     const bool hasUnderline = attributes[visualIndex].underlineStyle != iTermMetalGlyphAttributesUnderlineNone;
     const iTerm2::GlyphEntry *firstGlyphEntry = (*entries)[0];
-    const int outerPIUIndex = iTermOuterPIUIndex(hasAnnotation, hasUnderline, firstGlyphEntry->_is_emoji);
+    const int outerPIUIndex = iTermOuterPIUIndex(hasAnnotation,
+                                                 hasUnderline || state->inMarkedRange,
+                                                 firstGlyphEntry->_is_emoji,
+                                                 state->inMarkedRange);
     for (auto entry : *entries) {
         auto it = _pius[outerPIUIndex].find(entry->_page);
         iTerm2::PIUArray<iTermTextPIU> *array;
@@ -618,12 +654,13 @@ typedef struct {
         piu->textureOffset = simd_make_float2(origin.x * reciprocal_atlas_size.x,
                                               origin.y * reciprocal_atlas_size.y);
         piu->textColor = attributes[visualIndex].foregroundColor;
+        piu->inMarkedRange = state->inMarkedRange;
         if (attributes[visualIndex].annotation) {
             piu->underlineStyle = iTermMetalGlyphAttributesUnderlineSingle;
             piu->underlineColor = iTermAnnotationUnderlineColor;
         } else if (state->inMarkedRange) {
             piu->underlineStyle = iTermMetalGlyphAttributesUnderlineSingle;
-            piu->underlineColor = _nonAsciiUnderlineDescriptor.color.w > 1 ? _nonAsciiUnderlineDescriptor.color : piu->textColor;
+            piu->underlineColor = _imeUnderlineDescriptor.color.w > 0 ? _imeUnderlineDescriptor.color : piu->textColor;
         } else {
             piu->underlineStyle = attributes[visualIndex].underlineStyle;
             if (attributes[visualIndex].hasUnderlineColor) {
@@ -660,4 +697,3 @@ typedef struct {
 }
 
 @end
-

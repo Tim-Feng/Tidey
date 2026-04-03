@@ -1335,12 +1335,16 @@ legacyScrollbarWidth:(unsigned int)legacyScrollbarWidth
     // Configure underlines
     iTermMetalUnderlineDescriptor asciiUnderlineDescriptor;
     iTermMetalUnderlineDescriptor nonAsciiUnderlineDescriptor;
+    iTermMetalUnderlineDescriptor imeUnderlineDescriptor;
     iTermMetalUnderlineDescriptor strikethroughUnderlineDescriptor;
     [frameData.perFrameState metalGetUnderlineDescriptorsForASCII:&asciiUnderlineDescriptor
                                                          nonASCII:&nonAsciiUnderlineDescriptor
                                                     strikethrough:&strikethroughUnderlineDescriptor];
+    imeUnderlineDescriptor = asciiUnderlineDescriptor;
+    // imeUnderlineDescriptor uses ASCII metrics for consistent IME underline
     textState.asciiUnderlineDescriptor = asciiUnderlineDescriptor;
     textState.nonAsciiUnderlineDescriptor = nonAsciiUnderlineDescriptor;
+    textState.imeUnderlineDescriptor = imeUnderlineDescriptor;
     textState.strikethroughUnderlineDescriptor = strikethroughUnderlineDescriptor;
 
     CGSize glyphSize = textState.cellConfiguration.glyphSize;

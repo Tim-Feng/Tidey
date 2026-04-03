@@ -27,6 +27,7 @@ typedef struct {
     int flags;  // copied from iTermVertexTextInfoStruct.flags
     bool predecessorWasUnderlined;
     bool successorWillBeUnderlined;
+    bool inMarkedRange;
     float verticalOffset;  // Used by offscreen command line to shift text so it is not grid-aligned.
 } iTermTextVertexFunctionOutput;
 
@@ -68,6 +69,7 @@ float ComputeWeightOfUnderlineInverted(int underlineStyle,  // iTermMetalGlyphAt
                                        sampler textureSampler,
                                        float scale,
                                        bool solid,
+                                       bool inMarkedRange,
                                        bool predecessorWasUnderlined,
                                        bool successorWillBeUnderlined);
 
@@ -89,6 +91,7 @@ float ComputeWeightOfUnderlineRegular(int underlineStyle,  // iTermMetalGlyphAtt
                                       sampler textureSampler,
                                       float scale,
                                       bool solid,
+                                      bool inMarkedRange,
                                       bool predecessorWasUnderlined,
                                       bool successorWillBeUnderlined);
 

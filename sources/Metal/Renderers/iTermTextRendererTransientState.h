@@ -20,6 +20,7 @@ NS_CLASS_AVAILABLE(10_11, NA)
 @property (nonatomic, strong) id<MTLTexture> backgroundTexture;
 @property (nonatomic) iTermMetalUnderlineDescriptor asciiUnderlineDescriptor;
 @property (nonatomic) iTermMetalUnderlineDescriptor nonAsciiUnderlineDescriptor;
+@property (nonatomic) iTermMetalUnderlineDescriptor imeUnderlineDescriptor;
 @property (nonatomic) iTermMetalUnderlineDescriptor strikethroughUnderlineDescriptor;
 @property (nonatomic) CGFloat verticalOffset;
 

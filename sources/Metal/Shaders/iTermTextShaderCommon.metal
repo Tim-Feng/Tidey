@@ -248,6 +248,7 @@ float ComputeWeightOfUnderlineInverted(int underlineStyle,  // iTermMetalGlyphAt
                                        sampler textureSampler,
                                        float scale,
                                        bool solid,
+                                       bool inMarkedRange,
                                        bool predecessorWasUnderlined,
                                        bool successorWillBeUnderlined) {
     float thickness;
@@ -277,11 +278,12 @@ float ComputeWeightOfUnderlineInverted(int underlineStyle,  // iTermMetalGlyphAt
     if (weight == 0) {
         return 0;
     }
-    const float margin = predecessorWasUnderlined ? 0 : underlineOffset.x;
+    const float margin = (predecessorWasUnderlined || inMarkedRange) ? 0 : underlineOffset.x;
     if (clipSpacePosition.x < cellOffset.x + margin) {
         return 0;
     }
-    if (!successorWillBeUnderlined && clipSpacePosition.x >= cellOffset.x + cellSize.x) {
+    const float trailingInset = inMarkedRange ? 0 : underlineOffset.x;
+    if (!successorWillBeUnderlined && clipSpacePosition.x >= cellOffset.x + cellSize.x - trailingInset) {
         return 0;
     }
     if (clipSpacePosition.x >= cellOffset.x + glyphSize.x) {
@@ -324,6 +326,7 @@ float ComputeWeightOfUnderlineRegular(int underlineStyle,  // iTermMetalGlyphAtt
                                       sampler textureSampler,
                                       float scale,
                                       bool solid,
+                                      bool inMarkedRange,
                                       bool predecessorWasUnderlined,
                                       bool successorWillBeUnderlined) {
     float offset;
@@ -355,11 +358,12 @@ float ComputeWeightOfUnderlineRegular(int underlineStyle,  // iTermMetalGlyphAtt
     if (weight == 0) {
         return 0;
     }
-    const float margin = predecessorWasUnderlined ? 0 : regularOffset.x;
+    const float margin = (predecessorWasUnderlined || inMarkedRange) ? 0 : regularOffset.x;
     if (clipSpacePosition.x < cellOffset.x + margin) {
         return 0;
     }
-    if (!successorWillBeUnderlined && clipSpacePosition.x >= cellOffset.x + cellSize.x) {
+    const float trailingInset = inMarkedRange ? 0 : regularOffset.x;
+    if (!successorWillBeUnderlined && clipSpacePosition.x >= cellOffset.x + cellSize.x - trailingInset) {
         return 0;
     }
     if (clipSpacePosition.x >= cellOffset.x + glyphSize.x) {
@@ -386,4 +390,3 @@ float ComputeWeightOfUnderlineRegular(int underlineStyle,  // iTermMetalGlyphAtt
         return weight * min(1.0, pow(opacity * 1.1, 10));
     }
 }
-

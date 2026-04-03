@@ -95,6 +95,9 @@ typedef struct iTermTextPIU {
 
     // Color for underline, if one is to be drawn
     vector_float4 underlineColor;
+
+    // True when this glyph is part of the IME marked range.
+    bool inMarkedRange;
 } iTermTextPIU;
 
 typedef struct {
