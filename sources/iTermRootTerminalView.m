@@ -78,7 +78,7 @@ static const CGFloat kTideySidebarCloseButtonTopInset = 10;
 static const CGFloat kTideyPanelShortcutHintWidth = 28;
 static const CGFloat kTideyPanelShortcutHintHeight = 18;
 static const CGFloat kTideyPanelShortcutHintTrailingInset = 8;
-static const CGFloat kTideyRightPanelGroupLabelHorizontalPadding = 10;
+static const CGFloat kTideyRightPanelGroupLabelHorizontalPadding = 12;
 static const CGFloat kTideyRightPanelGroupLabelGap = 6;
 static const CGFloat kTideyRightPanelGroupTabsGap = 8;
 static NSString *const kTideyBundledMonacoVersion = @"0.52.2";
@@ -3753,7 +3753,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         NSFontAttributeName: [NSFont systemFontOfSize:11 weight:NSFontWeightMedium]
     };
     NSDictionary<NSAttributedStringKey, id> *groupLabelAttributes = @{
-        NSFontAttributeName: [NSFont systemFontOfSize:10 weight:NSFontWeightSemibold]
+        NSFontAttributeName: [NSFont systemFontOfSize:9 weight:NSFontWeightSemibold]
     };
     NSArray<TideyRightPanelTabGroupState *> *groups = [[self class] tideyRightPanelGroupStatesForTabs:_tideyEditorTabs
                                                                                            expandedKind:_tideyExpandedRightPanelTabKind];
@@ -3767,7 +3767,9 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         NSString *groupLabel = group.label ?: [self tideyRightPanelGroupLabelForKind:group.kind];
         CGFloat labelTextWidth = ceil([groupLabel sizeWithAttributes:groupLabelAttributes].width);
         CGFloat labelWidth = labelTextWidth + kTideyRightPanelGroupLabelHorizontalPadding * 2;
-        NSButton *groupButton = [[NSButton alloc] initWithFrame:NSMakeRect(x, 4, labelWidth, MAX(22, tabHeight - 8))];
+        CGFloat groupButtonHeight = 20;
+        CGFloat groupButtonY = floor((tabHeight - groupButtonHeight) / 2.0);
+        NSButton *groupButton = [[NSButton alloc] initWithFrame:NSMakeRect(x, groupButtonY, labelWidth, groupButtonHeight)];
         groupButton.bordered = NO;
         groupButton.buttonType = NSButtonTypeMomentaryChange;
         groupButton.title = groupLabel;
@@ -3777,10 +3779,10 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         groupButton.target = self;
         groupButton.action = @selector(tideyRightPanelSelectGroup:);
         groupButton.wantsLayer = YES;
-        groupButton.layer.cornerRadius = 5;
+        groupButton.layer.cornerRadius = floor(groupButtonHeight / 2.0);
         groupButton.layer.backgroundColor = group.expanded
-            ? [NSColor colorWithWhite:1 alpha:0.08].CGColor
-            : NSColor.clearColor.CGColor;
+            ? [NSColor colorWithWhite:1 alpha:0.14].CGColor
+            : [NSColor colorWithWhite:1 alpha:0.04].CGColor;
         groupButton.attributedTitle = [[NSAttributedString alloc] initWithString:groupLabel
                                                                       attributes:@{
             NSFontAttributeName: groupLabelAttributes[NSFontAttributeName],
