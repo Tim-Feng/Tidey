@@ -71,7 +71,9 @@ static NSColor *PSMTideyTabBarBackgroundColor(void) {
         return rect;
     }
     NSRect cellFrame = [cell frame];
-    rect.origin.x = NSMaxX(cellFrame) - kSPMTabBarCellInternalXMargin - rect.size.width;
+    // Align close button center with icon (blue dot) center.
+    CGFloat iconSlotX = NSMaxX(cellFrame) - kSPMTabBarCellInternalXMargin - kPSMTabBarIconWidth;
+    rect.origin.x = iconSlotX + floor((kPSMTabBarIconWidth - rect.size.width) / 2.0) + 0.5;
     return rect;
 }
 
