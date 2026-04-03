@@ -3618,6 +3618,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 }
 
 - (void)tideyThemeDidChange:(NSNotification *)notification {
+    NSLog(@"TIDEY_DEBUG: received theme change, applying background theme");
     [self tideyApplyBackgroundTheme];
 }
 
@@ -3646,6 +3647,32 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     }
     self.tabBarControl.wantsLayer = YES;
     self.tabBarControl.layer.backgroundColor = theme.bgBase.CGColor;
+    NSArray<NSView *> *viewsNeedingDisplay = @[
+        _tideySidebarView ?: (id)NSNull.null,
+        _tideyEditorPanelView ?: (id)NSNull.null,
+        _tideyEditorTabStripView ?: (id)NSNull.null,
+        _tideyEditorFileTreeContainerView ?: (id)NSNull.null,
+        _tideyBrowserContainerView ?: (id)NSNull.null,
+        _tideyFileTreeToggleHint ?: (id)NSNull.null,
+        self.tabBarControl ?: (id)NSNull.null,
+    ];
+    for (id candidate in viewsNeedingDisplay) {
+        if (![candidate isKindOfClass:[NSView class]]) {
+            continue;
+        }
+        NSView *view = candidate;
+        [view setNeedsLayout:YES];
+        [view setNeedsDisplay:YES];
+        [view.layer setNeedsDisplay];
+    }
+    for (NSView *hintView in _tideyEditorPanelHintViews) {
+        [hintView setNeedsDisplay:YES];
+        [hintView.layer setNeedsDisplay];
+    }
+    for (NSView *hintView in _tideyTerminalPanelHintViews) {
+        [hintView setNeedsDisplay:YES];
+        [hintView.layer setNeedsDisplay];
+    }
     [self reloadTideyEditorTabs];
     [_tideyEditorFileTreeView reloadData];
     [_tideySidebarTableView setNeedsDisplay:YES];

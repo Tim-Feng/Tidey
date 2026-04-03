@@ -66,6 +66,7 @@ NSNotificationName const TideyThemeDidChangeNotification = @"TideyThemeDidChange
     _currentTheme = theme;
     [iTermPreferences setInteger:[[self class] styleForTheme:theme]
                           forKey:kPreferenceKeyTideyTheme];
+    NSLog(@"TIDEY_DEBUG: posting theme change notification");
     [[NSNotificationCenter defaultCenter] postNotificationName:TideyThemeDidChangeNotification
                                                         object:self];
 }
