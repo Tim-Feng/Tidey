@@ -4,7 +4,7 @@
 
 A terminal-first IDE for AI agents. Run agents in workspaces, edit code side by side, see what each agent is doing — all in one window.
 
-<!-- TODO: hero screenshot -->
+![Tidey main window](docs/screenshots/hero-main.png)
 
 ## Install
 
@@ -34,9 +34,19 @@ Requires Xcode, [rustup](https://rustup.rs), and Homebrew.
 
 **Editor** — ⌘-click any file path in the terminal to open it. Syntax highlighting, search, save. Auto-refreshes when files change externally. Works offline.
 
+**Code / Web Tabs** — the right panel manages code tabs and web tabs together, so files and pages stay in the same working context.
+
+**Split View** — split the right panel into two panes, mix code and web tabs on either side, and drag tabs across panes.
+
+**In-app Browser** — ⌘-click URLs in the terminal opens them in the right-side browser panel instead of leaving the IDE.
+
 **Claude Code** — just type `claude`. Tidey automatically tracks status (Running / Idle / Needs input), shows notifications when Claude finishes or needs your attention, and sets the workspace title. Works in tmux too.
 
 **Layout** — sidebar, terminal, editor, and file tree are all independently collapsible and resizable. File tree auto-updates on changes. Built on iTerm2's terminal emulation.
+
+| Split View | Code + Browser |
+|---|---|
+| ![Split view with two code panes](docs/screenshots/split-code-code.png) | ![Split view with code and browser](docs/screenshots/split-code-web.png) |
 
 ## Keyboard Shortcuts
 
@@ -52,12 +62,18 @@ Requires Xcode, [rustup](https://rustup.rs), and Homebrew.
 | Show/Hide Editor | ⇧⌘E |
 | Show/Hide Terminal | ⇧⌘T |
 | Show/Hide File Tree | ⌃⌘F |
+| Toggle Split View | click split icon |
 | Find in Editor | ⌘F |
 | Switch Panel / Editor Tab | ⌃1–⌃9 |
 | Save | ⌘S |
 | Reset Layout | double-click any divider |
 
 Hold ⌘ for a moment to see shortcut hints on toggle buttons and panel tabs.
+
+Top-right icons:
+- terminal — new terminal panel
+- web — new browser tab
+- split — toggle split view
 
 ## Documentation
 
