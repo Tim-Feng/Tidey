@@ -279,6 +279,9 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
 - (void)tideyEditorDidBecomeReady;
 - (void)tideyEditorDidReceiveScriptMessage:(WKScriptMessage *)message;
 - (NSString *)tideyEditorHTML;
+- (TideyRightPanelPane *)activePane;
+- (BOOL)isSplitVisible;
+- (void)setSplitVisible:(BOOL)splitVisible;
 - (void)reloadTideyEditorFileTree;
 - (NSString *)tideyEditorFileTreeWatchRootPath;
 - (void)tideySyncEditorFileTreeWatcher;
@@ -971,6 +974,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSString *_tideyEditorFileTreeWatchedRootPath;
     NSString *_tideyEditorRootOverridePath;
     TideyRightPanelPane *_primaryPane;
+    TideyRightPanelPane *_secondaryPane;
+    TideyRightPanelPane *_activePane;
+    BOOL _splitVisible;
+    CGFloat _splitFraction;
 
     // Browser panel
     NSTextField *_tideyBrowserURLField;
@@ -1450,6 +1457,9 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _shouldShowTideyEditorFileTree = YES;
         _primaryPane = [[TideyRightPanelPane alloc] init];
         _primaryPane.expandedTabKind = TideyRightPanelTabKindEditor;
+        _activePane = _primaryPane;
+        _splitVisible = NO;
+        _splitFraction = 0.5;
         _tideySidebarPreferredWidth = kTideySidebarWidth;
         _tideyEditorFileTreePreferredWidth = kTideyEditorFileTreeWidth;
         _tideyEditorPreferredWidth = MAX(kTideyMinimumEditorPanelWidth,
@@ -1540,7 +1550,6 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                                           alpha:1].CGColor;
         _tideyEditorPanelView.hidden = YES;
         [self addSubview:_tideyEditorPanelView];
-        _primaryPane.containerView = _tideyEditorPanelView;
 
         _tideyEditorTabStripView = [[TideyRightPanelTabStripView alloc] initWithFrame:NSZeroRect];
         _tideyEditorTabStripView.autoresizingMask = NSViewWidthSizable;
@@ -3007,6 +3016,18 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     return MAX(minWidth, MIN(_tideyEditorFileTreePreferredWidth, maxWidth));
 }
 
+- (TideyRightPanelPane *)activePane {
+    return _activePane ?: _primaryPane;
+}
+
+- (BOOL)isSplitVisible {
+    return _splitVisible;
+}
+
+- (void)setSplitVisible:(BOOL)splitVisible {
+    _splitVisible = splitVisible;
+}
+
 - (void)setShouldShowTideyEditorFileTree:(BOOL)shouldShowTideyEditorFileTree {
     if (_shouldShowTideyEditorFileTree == shouldShowTideyEditorFileTree) {
         return;
@@ -3655,14 +3676,30 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     const CGFloat fileTreeWidth = self.shouldShowTideyEditorFileTree
         ? MIN(self.tideyEditorFileTreeWidth, MAX(0, NSWidth(bounds) - kTideyMinimumEditorContentWidth))
         : 0;
-    const CGFloat editorWidth = MAX(0, NSWidth(bounds) - fileTreeWidth);
-    _primaryPane.editorWebView.frame = NSMakeRect(0, 0, editorWidth, contentHeight);
+    const CGFloat contentWidth = MAX(0, NSWidth(bounds) - fileTreeWidth);
+    const CGFloat splitHandleWidth = kTideyDragHandleWidth;
+    const BOOL shouldShowSplitShell = (_splitVisible && _secondaryPane != nil && _secondaryPane.containerView != nil);
+    CGFloat primaryWidth = contentWidth;
+    CGFloat secondaryWidth = 0;
+    CGFloat secondaryOriginX = contentWidth;
+    if (shouldShowSplitShell) {
+        const CGFloat availableSplitWidth = MAX(0, contentWidth - splitHandleWidth);
+        primaryWidth = floor(availableSplitWidth * MIN(MAX(_splitFraction, 0.0), 1.0));
+        secondaryWidth = MAX(0, availableSplitWidth - primaryWidth);
+        secondaryOriginX = primaryWidth + splitHandleWidth;
+    }
+    _primaryPane.editorWebView.frame = NSMakeRect(0, 0, primaryWidth, contentHeight);
+    if (_secondaryPane.containerView) {
+        _secondaryPane.containerView.hidden = !shouldShowSplitShell;
+        _secondaryPane.containerView.frame = NSMakeRect(secondaryOriginX, 0, secondaryWidth, contentHeight);
+        _secondaryPane.editorWebView.frame = _secondaryPane.containerView.bounds;
+    }
     _tideyEditorFileTreeContainerView.hidden = !self.shouldShowTideyEditorFileTree;
-    _tideyEditorFileTreeContainerView.frame = NSMakeRect(editorWidth, 0, fileTreeWidth, contentHeight);
+    _tideyEditorFileTreeContainerView.frame = NSMakeRect(contentWidth, 0, fileTreeWidth, contentHeight);
     _tideyEditorFileTreeScrollView.frame = _tideyEditorFileTreeContainerView.bounds;
     [self tideySyncEditorFileTreeWatcher];
     [self constrainTideyEditorFileTreeToVisibleWidth];
-    self.tideyEditorFileTreeDragHandle.frame = NSMakeRect(MAX(0, editorWidth - kTideyDragHandleWidth / 2.0),
+    self.tideyEditorFileTreeDragHandle.frame = NSMakeRect(MAX(0, contentWidth - kTideyDragHandleWidth / 2.0),
                                                           0,
                                                           kTideyDragHandleWidth,
                                                           contentHeight);
@@ -3670,7 +3707,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     if (!_tideyEditorPanelLabel.hidden) {
         CGFloat labelWidth = 200;
         CGFloat labelHeight = 30;
-        _tideyEditorPanelLabel.frame = NSMakeRect((editorWidth - labelWidth) / 2.0,
+        _tideyEditorPanelLabel.frame = NSMakeRect((primaryWidth - labelWidth) / 2.0,
                                                    (contentHeight - labelHeight) / 2.0,
                                                    labelWidth,
                                                    labelHeight);
