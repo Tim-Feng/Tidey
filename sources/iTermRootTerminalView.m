@@ -1671,6 +1671,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         [_tabView setDelegate:_tabBarControl];
         _tabBarControl.delegate = tabBarDelegate;
         _tabBarControl.hideForSingleTab = NO;
+        _tabBarControl.stretchCellsToFit = YES;
 
         // Create the toolbelt with its current default size.
         _toolbeltWidth = [iTermPreferences floatForKey:kPreferenceKeyDefaultToolbeltWidth];
