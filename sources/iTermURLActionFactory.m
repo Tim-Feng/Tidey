@@ -62,6 +62,28 @@ typedef enum {
 
 static NSMutableArray<iTermURLActionFactory *> *sFactories;
 
+static NSCharacterSet *iTermCJKURLBoundaryCharacterSet(void) {
+    static NSCharacterSet *characterSet;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSMutableCharacterSet *set = [[NSMutableCharacterSet alloc] init];
+        [set addCharactersInRange:NSMakeRange(0x2E80, 0x9FFF - 0x2E80 + 1)];
+        [set addCharactersInRange:NSMakeRange(0xF900, 0xFAFF - 0xF900 + 1)];
+        [set addCharactersInRange:NSMakeRange(0xFF00, 0xFFEF - 0xFF00 + 1)];
+        characterSet = [set copy];
+    });
+    return characterSet;
+}
+
+static BOOL iTermStringIsASCIIOnly(NSString *string) {
+    for (NSUInteger i = 0; i < string.length; i++) {
+        if ([string characterAtIndex:i] > 0x7f) {
+            return NO;
+        }
+    }
+    return YES;
+}
+
 @implementation iTermURLActionFactory {
     BOOL _finished;
     id<iTermCancelable> _pathFinderCanceler;
@@ -637,6 +659,16 @@ static NSMutableArray<iTermURLActionFactory *> *sFactories;
     }
 
     if (looksLikeURL) {
+        if ([stringWithoutNearbyPunctuation rangeOfString:@"://"].location != NSNotFound) {
+            NSURL *candidateURL = [NSURL URLWithUserSuppliedString:stringWithoutNearbyPunctuation];
+            if (candidateURL.host.length > 0 && iTermStringIsASCIIOnly(candidateURL.host)) {
+                NSString *trimmed = [stringWithoutNearbyPunctuation stringByTrimmingTrailingCharactersFromCharacterSet:iTermCJKURLBoundaryCharacterSet()];
+                if (trimmed.length != stringWithoutNearbyPunctuation.length) {
+                    rangeWithoutNearbyPunctuation.length -= (stringWithoutNearbyPunctuation.length - trimmed.length);
+                    stringWithoutNearbyPunctuation = trimmed;
+                }
+            }
+        }
         DLog(@"Looks like a URL. Return %@ with range %@ and prefix %d", stringWithoutNearbyPunctuation, NSStringFromRange(rangeWithoutNearbyPunctuation), prefixChars);
         // If the string contains non-ascii characters, percent escape them. URLs are limited to ASCII.
         return [self urlActionForString:stringWithoutNearbyPunctuation
@@ -777,6 +809,21 @@ static NSMutableArray<iTermURLActionFactory *> *sFactories;
         return NO;
     }
     if (slashRange.length > 0) {
+        if ([s rangeOfString:@"://"].location == NSNotFound) {
+            static NSCharacterSet *cjkCharacterSet;
+            static dispatch_once_t onceToken;
+            dispatch_once(&onceToken, ^{
+                NSMutableCharacterSet *set = [[NSMutableCharacterSet alloc] init];
+                [set addCharactersInRange:NSMakeRange(0x2E80, 0x9FFF - 0x2E80 + 1)];
+                [set addCharactersInRange:NSMakeRange(0xF900, 0xFAFF - 0xF900 + 1)];
+                [set addCharactersInRange:NSMakeRange(0xFF00, 0xFFEF - 0xFF00 + 1)];
+                cjkCharacterSet = [set copy];
+            });
+            NSString *prefix = [s substringToIndex:slashRange.location];
+            if ([prefix rangeOfCharacterFromSet:cjkCharacterSet].location != NSNotFound) {
+                return NO;
+            }
+        }
         // Contains a slash but does not start with it.
         return YES;
     }
@@ -800,4 +847,3 @@ static NSMutableArray<iTermURLActionFactory *> *sFactories;
 }
 
 @end
-
