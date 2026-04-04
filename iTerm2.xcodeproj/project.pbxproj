@@ -4910,6 +4910,8 @@
 		A7B100132F0A000100000001 /* TideySocketServer.m in Sources */ = {isa = PBXBuildFile; fileRef = A7B100062F0A000100000001 /* TideySocketServer.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
 		A7B100142F0A000100000001 /* TideyEditorExternalChangeWatcher.h in Headers */ = {isa = PBXBuildFile; fileRef = A7B100072F0A000100000001 /* TideyEditorExternalChangeWatcher.h */; };
 		A7B100152F0A000100000001 /* TideyEditorExternalChangeWatcher.m in Sources */ = {isa = PBXBuildFile; fileRef = A7B100082F0A000100000001 /* TideyEditorExternalChangeWatcher.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		F0A10D1E3A29000100000001 /* TideyRightPanelPane.h in Headers */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A29000100000002 /* TideyRightPanelPane.h */; };
+		F0A10D1E3A29000100000003 /* TideyRightPanelPane.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A29000100000004 /* TideyRightPanelPane.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
 		F0A10D1E3A2800010000000F /* TideySocketCommandDecoder.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A2800010000000E /* TideySocketCommandDecoder.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
 		F0A10D1E3A28000100000011 /* TideySocketCommandDecoderTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000010 /* TideySocketCommandDecoderTests.m */; };
 		A6F7A707213CB143004DE961 /* StatusBarIconUser.png in Resources */ = {isa = PBXBuildFile; fileRef = A6F7A6EF213CB13D004DE961 /* StatusBarIconUser.png */; };
@@ -9041,6 +9043,8 @@
 		A7B100062F0A000100000001 /* TideySocketServer.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySocketServer.m; sourceTree = "<group>"; };
 		A7B100072F0A000100000001 /* TideyEditorExternalChangeWatcher.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyEditorExternalChangeWatcher.h; sourceTree = "<group>"; };
 		A7B100082F0A000100000001 /* TideyEditorExternalChangeWatcher.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyEditorExternalChangeWatcher.m; sourceTree = "<group>"; };
+		F0A10D1E3A29000100000002 /* TideyRightPanelPane.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyRightPanelPane.h; sourceTree = "<group>"; };
+		F0A10D1E3A29000100000004 /* TideyRightPanelPane.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyRightPanelPane.m; sourceTree = "<group>"; };
 		F0A10D1E3A2800010000000D /* TideySocketCommandDecoder.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideySocketCommandDecoder.h; sourceTree = "<group>"; };
 		F0A10D1E3A2800010000000E /* TideySocketCommandDecoder.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySocketCommandDecoder.m; sourceTree = "<group>"; };
 		A6F7A6EF213CB13D004DE961 /* StatusBarIconUser.png */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; name = StatusBarIconUser.png; path = images/StatusBarIcons/StatusBarIconUser.png; sourceTree = "<group>"; };
@@ -11812,6 +11816,8 @@
 				A7B100042F0A000100000001 /* TideySocketConnection.m */,
 				A7B100072F0A000100000001 /* TideyEditorExternalChangeWatcher.h */,
 				A7B100082F0A000100000001 /* TideyEditorExternalChangeWatcher.m */,
+				F0A10D1E3A29000100000002 /* TideyRightPanelPane.h */,
+				F0A10D1E3A29000100000004 /* TideyRightPanelPane.m */,
 				F0A10D1E3A2800010000000D /* TideySocketCommandDecoder.h */,
 				F0A10D1E3A2800010000000E /* TideySocketCommandDecoder.m */,
 				A7B100052F0A000100000001 /* TideySocketServer.h */,
@@ -15436,6 +15442,7 @@
 				A626DF0B217D3034005600F9 /* iTermTabBarAccessoryViewController.h in Headers */,
 				A667190A1DCE36C3000CE608 /* iTermRootTerminalView.h in Headers */,
 				A7B100142F0A000100000001 /* TideyEditorExternalChangeWatcher.h in Headers */,
+				F0A10D1E3A29000100000001 /* TideyRightPanelPane.h in Headers */,
 				D5EF7F4036204859817200E0 /* iTermLayoutCalculator.h in Headers */,
 				A667190B1DCE36C3000CE608 /* iTermCarbonHotKeyController.h in Headers */,
 				A6E7352A20EBF3270034FCFD /* iTermSetCurrentTerminalHelper.h in Headers */,
@@ -19272,6 +19279,7 @@
 				A7B100112F0A000100000001 /* TideyNotificationStore.m in Sources */,
 				A7B100122F0A000100000001 /* TideySocketConnection.m in Sources */,
 				A7B100152F0A000100000001 /* TideyEditorExternalChangeWatcher.m in Sources */,
+				F0A10D1E3A29000100000003 /* TideyRightPanelPane.m in Sources */,
 				F0A10D1E3A2800010000000F /* TideySocketCommandDecoder.m in Sources */,
 				A7B100132F0A000100000001 /* TideySocketServer.m in Sources */,
 				A62C8FC3248033C000E22E95 /* iTermTmuxJobManager.m in Sources */,

@@ -28,6 +28,7 @@
 #import "iTermApplication.h"
 #import "iTermDragHandleView.h"
 #import "TideyEditorExternalChangeWatcher.h"
+#import "TideyRightPanelPane.h"
 #import "iTermFakeWindowTitleLabel.h"
 #import "iTermGenericStatusBarContainer.h"
 #import "iTermImageView.h"
@@ -916,15 +917,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     SCEvents *_tideyEditorFileTreeWatcher;
     NSString *_tideyEditorFileTreeWatchedRootPath;
     NSString *_tideyEditorRootOverridePath;
-    NSMutableArray<TideyEditorTab *> *_tideyEditorTabs;
-    NSInteger _tideySelectedEditorTabIndex;
-    TideyRightPanelTabKind _tideyExpandedRightPanelTabKind;
-    BOOL _tideyEditorGroupExpanded;
-    BOOL _tideyBrowserGroupExpanded;
-    NSString *_tideyLastActiveEditorTabIdentifier;
-    NSString *_tideyLastActiveBrowserTabIdentifier;
-    CGFloat _tideyRightPanelTabStripScrollOffset;
-    CGFloat _tideyRightPanelTabStripContentWidth;
+    TideyRightPanelPane *_primaryPane;
 
     // Browser panel
     WKWebView *_tideyBrowserWebView;
@@ -1355,7 +1348,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSArray<TideyShortcutHintDescriptor *> *editorDescriptors = @[];
     NSArray<TideyShortcutHintDescriptor *> *terminalDescriptors = @[];
     if (_tideyShowingShortcutHints) {
-        if (_shouldShowTideyEditorPanel && _tideyEditorTabs.count > 0) {
+        if (_shouldShowTideyEditorPanel && _primaryPane.tabs.count > 0) {
             editorDescriptors = [self tideyEditorPanelShortcutHintDescriptors];
         }
         terminalDescriptors = [self tideyTerminalPanelShortcutHintDescriptors];
@@ -1404,11 +1397,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _shouldShowTideyTerminal = YES;
         _shouldShowTideyEditorPanel = NO;
         _shouldShowTideyEditorFileTree = YES;
-        _tideyEditorTabs = [[NSMutableArray alloc] init];
-        _tideySelectedEditorTabIndex = -1;
-        _tideyExpandedRightPanelTabKind = TideyRightPanelTabKindEditor;
-        _tideyEditorGroupExpanded = YES;
-        _tideyBrowserGroupExpanded = NO;
+        _primaryPane = [[TideyRightPanelPane alloc] init];
+        _primaryPane.expandedTabKind = TideyRightPanelTabKindEditor;
         _tideySidebarPreferredWidth = kTideySidebarWidth;
         _tideyEditorFileTreePreferredWidth = kTideyEditorFileTreeWidth;
         _tideyEditorPreferredWidth = MAX(kTideyMinimumEditorPanelWidth,
@@ -3658,8 +3648,8 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         }
     }
 
-    [_tideyEditorTabs removeAllObjects];
-    _tideySelectedEditorTabIndex = -1;
+    [_primaryPane.tabs removeAllObjects];
+    _primaryPane.selectedTabIndex = -1;
     [self tideyEditorSetLanguage:@"plaintext"];
     [self tideyEditorSetEditable:NO];
     [self tideyEditorSetValue:@"// Tidey editor panel\n// Demo file not found."];
@@ -3669,18 +3659,18 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 }
 
 - (TideyEditorTab *)tideyCurrentEditorTab {
-    if (_tideySelectedEditorTabIndex < 0 || _tideySelectedEditorTabIndex >= (NSInteger)_tideyEditorTabs.count) {
+    if (_primaryPane.selectedTabIndex < 0 || _primaryPane.selectedTabIndex >= (NSInteger)_primaryPane.tabs.count) {
         return nil;
     }
-    TideyEditorTab *tab = _tideyEditorTabs[_tideySelectedEditorTabIndex];
+    TideyEditorTab *tab = _primaryPane.tabs[_primaryPane.selectedTabIndex];
     return tab.kind == TideyRightPanelTabKindEditor ? tab : nil;
 }
 
 - (TideyEditorTab *)tideyCurrentRightPanelTab {
-    if (_tideySelectedEditorTabIndex < 0 || _tideySelectedEditorTabIndex >= (NSInteger)_tideyEditorTabs.count) {
+    if (_primaryPane.selectedTabIndex < 0 || _primaryPane.selectedTabIndex >= (NSInteger)_primaryPane.tabs.count) {
         return nil;
     }
-    return _tideyEditorTabs[_tideySelectedEditorTabIndex];
+    return _primaryPane.tabs[_primaryPane.selectedTabIndex];
 }
 
 - (NSString *)tideyCurrentEditorWatchablePath {
@@ -3775,8 +3765,8 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     if (identifier.length == 0) {
         return NSNotFound;
     }
-    for (NSInteger i = 0; i < (NSInteger)_tideyEditorTabs.count; i++) {
-        if ([_tideyEditorTabs[i].identifier isEqualToString:identifier]) {
+    for (NSInteger i = 0; i < (NSInteger)_primaryPane.tabs.count; i++) {
+        if ([_primaryPane.tabs[i].identifier isEqualToString:identifier]) {
             return i;
         }
     }
@@ -3788,14 +3778,14 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         return;
     }
     if (tab.kind == TideyRightPanelTabKindBrowser) {
-        _tideyLastActiveBrowserTabIdentifier = [tab.identifier copy];
+        _primaryPane.lastActiveBrowserTabIdentifier = [tab.identifier copy];
     } else {
-        _tideyLastActiveEditorTabIdentifier = [tab.identifier copy];
+        _primaryPane.lastActiveEditorTabIdentifier = [tab.identifier copy];
     }
 }
 
 - (NSString *)tideyLastActiveTabIdentifierForKind:(TideyRightPanelTabKind)kind {
-    return kind == TideyRightPanelTabKindBrowser ? _tideyLastActiveBrowserTabIdentifier : _tideyLastActiveEditorTabIdentifier;
+    return kind == TideyRightPanelTabKindBrowser ? _primaryPane.lastActiveBrowserTabIdentifier : _primaryPane.lastActiveEditorTabIdentifier;
 }
 
 - (NSString *)tideyRightPanelGroupLabelForKind:(TideyRightPanelTabKind)kind {
@@ -3803,20 +3793,20 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 }
 
 - (void)tideyScrollRightPanelTabStripByDelta:(CGFloat)delta {
-    CGFloat maxOffset = MAX(0, _tideyRightPanelTabStripContentWidth - NSWidth(_tideyEditorTabStripView.bounds));
+    CGFloat maxOffset = MAX(0, _primaryPane.tabStripContentWidth - NSWidth(_tideyEditorTabStripView.bounds));
     if (maxOffset <= 0) {
         return;
     }
-    CGFloat newOffset = MIN(MAX(0, _tideyRightPanelTabStripScrollOffset + delta), maxOffset);
-    if (fabs(newOffset - _tideyRightPanelTabStripScrollOffset) < 0.5) {
+    CGFloat newOffset = MIN(MAX(0, _primaryPane.tabStripScrollOffset + delta), maxOffset);
+    if (fabs(newOffset - _primaryPane.tabStripScrollOffset) < 0.5) {
         return;
     }
-    _tideyRightPanelTabStripScrollOffset = newOffset;
+    _primaryPane.tabStripScrollOffset = newOffset;
     [self reloadTideyRightPanelTabs];
 }
 
 - (void)tideyScrollSelectedRightPanelTabIntoView {
-    if (_tideySelectedEditorTabIndex < 0) {
+    if (_primaryPane.selectedTabIndex < 0) {
         return;
     }
     TideyEditorTabItemView *selectedTabView = nil;
@@ -3830,7 +3820,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
             }
             NSButton *button = (NSButton *)child;
             if (button.action == @selector(tideyRightPanelSelectTab:) &&
-                button.tag == _tideySelectedEditorTabIndex) {
+                button.tag == _primaryPane.selectedTabIndex) {
                 selectedTabView = (TideyEditorTabItemView *)subview;
                 break;
             }
@@ -3843,22 +3833,22 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         return;
     }
 
-    CGFloat maxOffset = MAX(0, _tideyRightPanelTabStripContentWidth - NSWidth(_tideyEditorTabStripView.bounds));
-    CGFloat newOffset = _tideyRightPanelTabStripScrollOffset;
+    CGFloat maxOffset = MAX(0, _primaryPane.tabStripContentWidth - NSWidth(_tideyEditorTabStripView.bounds));
+    CGFloat newOffset = _primaryPane.tabStripScrollOffset;
     NSRect frame = selectedTabView.frame;
     const CGFloat padding = 8;
     const CGFloat trailingReserve = 22 + 4 + kTideyRightPanelAddButtonTrailingPadding;
     if (NSMinX(frame) < padding) {
-        newOffset = MAX(0, _tideyRightPanelTabStripScrollOffset + NSMinX(frame) - padding);
+        newOffset = MAX(0, _primaryPane.tabStripScrollOffset + NSMinX(frame) - padding);
     } else if (NSMaxX(frame) > NSWidth(_tideyEditorTabStripView.bounds) - trailingReserve) {
         newOffset = MIN(maxOffset,
-                        _tideyRightPanelTabStripScrollOffset +
+                        _primaryPane.tabStripScrollOffset +
                         (NSMaxX(frame) - (NSWidth(_tideyEditorTabStripView.bounds) - trailingReserve)));
     }
-    if (fabs(newOffset - _tideyRightPanelTabStripScrollOffset) < 0.5) {
+    if (fabs(newOffset - _primaryPane.tabStripScrollOffset) < 0.5) {
         return;
     }
-    _tideyRightPanelTabStripScrollOffset = newOffset;
+    _primaryPane.tabStripScrollOffset = newOffset;
     [self reloadTideyRightPanelTabs];
 }
 
@@ -3887,9 +3877,9 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     NSDictionary<NSAttributedStringKey, id> *groupLabelAttributes = @{
         NSFontAttributeName: [NSFont systemFontOfSize:9 weight:NSFontWeightSemibold]
     };
-    NSArray<TideyRightPanelTabGroupState *> *groups = [[self class] tideyRightPanelGroupStatesForTabs:_tideyEditorTabs
-                                                                                        editorExpanded:_tideyEditorGroupExpanded
-                                                                                       browserExpanded:_tideyBrowserGroupExpanded];
+    NSArray<TideyRightPanelTabGroupState *> *groups = [[self class] tideyRightPanelGroupStatesForTabs:_primaryPane.tabs
+                                                                                        editorExpanded:_primaryPane.editorGroupExpanded
+                                                                                       browserExpanded:_primaryPane.browserGroupExpanded];
     BOOL isFirstGroup = YES;
     for (TideyRightPanelTabGroupState *group in groups) {
         if (!isFirstGroup) {
@@ -3902,7 +3892,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         CGFloat labelWidth = labelTextWidth + kTideyRightPanelGroupLabelHorizontalPadding * 2;
         CGFloat groupButtonHeight = 20;
         CGFloat groupButtonY = floor((tabHeight - groupButtonHeight) / 2.0);
-        NSButton *groupButton = [[NSButton alloc] initWithFrame:NSMakeRect(x - _tideyRightPanelTabStripScrollOffset,
+        NSButton *groupButton = [[NSButton alloc] initWithFrame:NSMakeRect(x - _primaryPane.tabStripScrollOffset,
                                                                            groupButtonY,
                                                                            labelWidth,
                                                                            groupButtonHeight)];
@@ -3951,13 +3941,13 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
             NSString *title = tab.dirty ? [NSString stringWithFormat:@"● %@", tab.displayName ?: @"Untitled"] : (tab.displayName ?: @"Untitled");
             CGFloat textWidth = ceil([title sizeWithAttributes:tabAttributes].width);
             CGFloat tabWidth = MIN(MAX(112, textWidth + 38), 240);
-            NSInteger originalIndex = [_tideyEditorTabs indexOfObjectIdenticalTo:tab];
+            NSInteger originalIndex = [_primaryPane.tabs indexOfObjectIdenticalTo:tab];
 
-            TideyEditorTabItemView *tabView = [[TideyEditorTabItemView alloc] initWithFrame:NSMakeRect(x - _tideyRightPanelTabStripScrollOffset,
+            TideyEditorTabItemView *tabView = [[TideyEditorTabItemView alloc] initWithFrame:NSMakeRect(x - _primaryPane.tabStripScrollOffset,
                                                                                                         0,
                                                                                                         tabWidth,
                                                                                                         tabHeight)];
-            BOOL selected = (originalIndex == _tideySelectedEditorTabIndex);
+            BOOL selected = (originalIndex == _primaryPane.selectedTabIndex);
             tabView.tideySelected = selected;
             tabView.tideyHovered = NO;
             [tabView tideyUpdateAppearance];
@@ -3995,7 +3985,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         }
 
         if (group.kind == TideyRightPanelTabKindEditor || group.kind == TideyRightPanelTabKindBrowser) {
-            NSButton *addButton = [[NSButton alloc] initWithFrame:NSMakeRect(x + 4 - _tideyRightPanelTabStripScrollOffset,
+            NSButton *addButton = [[NSButton alloc] initWithFrame:NSMakeRect(x + 4 - _primaryPane.tabStripScrollOffset,
                                                                              floor((tabHeight - addButtonSize) / 2.0),
                                                                              addButtonSize,
                                                                              addButtonSize)];
@@ -4013,11 +4003,11 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
             x += addButtonSize + 4 + kTideyRightPanelAddButtonTrailingPadding;
         }
     }
-    _tideyRightPanelTabStripContentWidth = x;
-    CGFloat maxOffset = MAX(0, _tideyRightPanelTabStripContentWidth - NSWidth(_tideyEditorTabStripView.bounds));
-    CGFloat clampedOffset = MIN(_tideyRightPanelTabStripScrollOffset, maxOffset);
-    if (fabs(clampedOffset - _tideyRightPanelTabStripScrollOffset) >= 0.5) {
-        _tideyRightPanelTabStripScrollOffset = clampedOffset;
+    _primaryPane.tabStripContentWidth = x;
+    CGFloat maxOffset = MAX(0, _primaryPane.tabStripContentWidth - NSWidth(_tideyEditorTabStripView.bounds));
+    CGFloat clampedOffset = MIN(_primaryPane.tabStripScrollOffset, maxOffset);
+    if (fabs(clampedOffset - _primaryPane.tabStripScrollOffset) >= 0.5) {
+        _primaryPane.tabStripScrollOffset = clampedOffset;
         [self reloadTideyRightPanelTabs];
         return;
     }
@@ -4028,17 +4018,17 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 }
 
 - (void)selectTideyRightPanelTabAtIndex:(NSInteger)index {
-    if (index < 0 || index >= (NSInteger)_tideyEditorTabs.count) {
+    if (index < 0 || index >= (NSInteger)_primaryPane.tabs.count) {
         return;
     }
-    BOOL sameTab = (_tideySelectedEditorTabIndex == index);
-    _tideySelectedEditorTabIndex = index;
-    TideyEditorTab *tab = _tideyEditorTabs[index];
-    _tideyExpandedRightPanelTabKind = tab.kind;
+    BOOL sameTab = (_primaryPane.selectedTabIndex == index);
+    _primaryPane.selectedTabIndex = index;
+    TideyEditorTab *tab = _primaryPane.tabs[index];
+    _primaryPane.expandedTabKind = tab.kind;
     if (tab.kind == TideyRightPanelTabKindBrowser) {
-        _tideyBrowserGroupExpanded = YES;
+        _primaryPane.browserGroupExpanded = YES;
     } else {
-        _tideyEditorGroupExpanded = YES;
+        _primaryPane.editorGroupExpanded = YES;
     }
     [self tideyRememberLastActiveRightPanelTab:tab];
     _tideyEditorLoadedPath = [tab.path copy];
@@ -4074,7 +4064,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     if (!selectionState) {
         return;
     }
-    _tideyExpandedRightPanelTabKind = selectionState.expandedKind;
+    _primaryPane.expandedTabKind = selectionState.expandedKind;
     NSInteger index = [self tideyIndexOfRightPanelTabWithIdentifier:selectionState.selectedTabIdentifier];
     if (index == NSNotFound) {
         [self reloadTideyRightPanelTabs];
@@ -4085,20 +4075,20 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 }
 
 - (void)closeTideyRightPanelTabAtIndex:(NSInteger)index {
-    if (index < 0 || index >= (NSInteger)_tideyEditorTabs.count) {
+    if (index < 0 || index >= (NSInteger)_primaryPane.tabs.count) {
         return;
     }
-    TideyEditorTab *closingTab = _tideyEditorTabs[index];
+    TideyEditorTab *closingTab = _primaryPane.tabs[index];
     NSString *currentSelectedIdentifier = [self tideyCurrentRightPanelTabIdentifier];
-    [_tideyEditorTabs removeObjectAtIndex:index];
-    if ([[[self class] tideyRightPanelTabsOfKind:TideyRightPanelTabKindEditor inTabs:_tideyEditorTabs] count] == 0) {
-        _tideyEditorGroupExpanded = NO;
+    [_primaryPane.tabs removeObjectAtIndex:index];
+    if ([[[self class] tideyRightPanelTabsOfKind:TideyRightPanelTabKindEditor inTabs:_primaryPane.tabs] count] == 0) {
+        _primaryPane.editorGroupExpanded = NO;
     }
-    if ([[[self class] tideyRightPanelTabsOfKind:TideyRightPanelTabKindBrowser inTabs:_tideyEditorTabs] count] == 0) {
-        _tideyBrowserGroupExpanded = NO;
+    if ([[[self class] tideyRightPanelTabsOfKind:TideyRightPanelTabKindBrowser inTabs:_primaryPane.tabs] count] == 0) {
+        _primaryPane.browserGroupExpanded = NO;
     }
-    if (_tideyEditorTabs.count == 0) {
-        _tideySelectedEditorTabIndex = -1;
+    if (_primaryPane.tabs.count == 0) {
+        _primaryPane.selectedTabIndex = -1;
         _tideyEditorLoadedPath = nil;
         _tideyEditorRootOverridePath = nil;
         [self tideyStopWatchingCurrentEditorFile];
@@ -4115,11 +4105,11 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         currentSelectedIdentifier = nil;
     }
     TideyRightPanelSelectionState *state =
-        [[self class] tideyRightPanelSelectionStateForTabs:_tideyEditorTabs
-                                      preferredExpandedKind:_tideyExpandedRightPanelTabKind
+        [[self class] tideyRightPanelSelectionStateForTabs:_primaryPane.tabs
+                                      preferredExpandedKind:_primaryPane.expandedTabKind
                                   currentSelectedTabIdentifier:currentSelectedIdentifier
-                                   lastActiveEditorTabIdentifier:_tideyLastActiveEditorTabIdentifier
-                                  lastActiveBrowserTabIdentifier:_tideyLastActiveBrowserTabIdentifier];
+                                   lastActiveEditorTabIdentifier:_primaryPane.lastActiveEditorTabIdentifier
+                                  lastActiveBrowserTabIdentifier:_primaryPane.lastActiveBrowserTabIdentifier];
     [self tideyApplyRightPanelSelectionState:state];
     [self layoutTideyEditorContents];
     [self tideyUpdateBrowserContentVisibility];
@@ -4136,9 +4126,12 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 
 - (void)tideyRightPanelSelectGroup:(id)sender {
     TideyRightPanelTabKind kind = (TideyRightPanelTabKind)([sender tag] - kTideyRightPanelGroupButtonTagBase);
-    BOOL *expandedFlag = (kind == TideyRightPanelTabKindBrowser) ? &_tideyBrowserGroupExpanded : &_tideyEditorGroupExpanded;
-    *expandedFlag = !*expandedFlag;
-    _tideyExpandedRightPanelTabKind = kind;
+    if (kind == TideyRightPanelTabKindBrowser) {
+        _primaryPane.browserGroupExpanded = !_primaryPane.browserGroupExpanded;
+    } else {
+        _primaryPane.editorGroupExpanded = !_primaryPane.editorGroupExpanded;
+    }
+    _primaryPane.expandedTabKind = kind;
     [self reloadTideyRightPanelTabs];
 }
 
@@ -4171,8 +4164,8 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     if (normalizedPath.length == 0) {
         return;
     }
-    for (NSInteger i = 0; i < (NSInteger)_tideyEditorTabs.count; i++) {
-        TideyEditorTab *existing = _tideyEditorTabs[i];
+    for (NSInteger i = 0; i < (NSInteger)_primaryPane.tabs.count; i++) {
+        TideyEditorTab *existing = _primaryPane.tabs[i];
         if ([[existing.path stringByStandardizingPath] isEqualToString:normalizedPath]) {
             if (!preview && existing.preview) {
                 existing.preview = NO;
@@ -4186,8 +4179,8 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     TideyEditorTab *previewTab = nil;
     NSInteger previewIndex = NSNotFound;
     if (preview) {
-        for (NSInteger i = 0; i < (NSInteger)_tideyEditorTabs.count; i++) {
-            TideyEditorTab *candidate = _tideyEditorTabs[i];
+        for (NSInteger i = 0; i < (NSInteger)_primaryPane.tabs.count; i++) {
+            TideyEditorTab *candidate = _primaryPane.tabs[i];
             if (candidate.preview) {
                 previewTab = candidate;
                 previewIndex = i;
@@ -4236,8 +4229,8 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
                                              language:[self tideyEditorLanguageForPath:normalizedPath]
                                               content:contents];
     tab.preview = preview;
-    [_tideyEditorTabs addObject:tab];
-    [self selectTideyEditorTabAtIndex:_tideyEditorTabs.count - 1];
+    [_primaryPane.tabs addObject:tab];
+    [self selectTideyEditorTabAtIndex:_primaryPane.tabs.count - 1];
 }
 
 - (void)tideyEditorLoadFileAtPath:(NSString *)path {
@@ -4250,12 +4243,12 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     }
     self.shouldShowTideyEditorFileTree = NO;
     TideyEditorTab *tab = [TideyEditorTab browserTabWithURL:url];
-    [_tideyEditorTabs addObject:tab];
+    [_primaryPane.tabs addObject:tab];
     if (!_shouldShowTideyEditorPanel) {
         [self setShouldShowTideyEditorPanel:YES];
         [self.delegate repositionWidgets];
     }
-    [self selectTideyRightPanelTabAtIndex:_tideyEditorTabs.count - 1];
+    [self selectTideyRightPanelTabAtIndex:_primaryPane.tabs.count - 1];
 }
 
 - (NSString *)tideyEditorPreferredRootPathForFileAtPath:(NSString *)path {
@@ -4595,8 +4588,8 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
                                           displayName:@"Untitled"
                                              language:@"plaintext"
                                               content:@""];
-    [_tideyEditorTabs addObject:tab];
-    [self selectTideyEditorTabAtIndex:_tideyEditorTabs.count - 1];
+    [_primaryPane.tabs addObject:tab];
+    [self selectTideyEditorTabAtIndex:_primaryPane.tabs.count - 1];
 }
 
 - (BOOL)tideyBrowserHasFocus {
@@ -4620,21 +4613,21 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     self.shouldShowTideyEditorFileTree = NO;
     NSURL *homeURL = [NSURL URLWithString:@"https://github.com/Tim-Feng/Tidey"];
     TideyEditorTab *tab = [TideyEditorTab browserTabWithURL:homeURL];
-    [_tideyEditorTabs addObject:tab];
-    [self selectTideyRightPanelTabAtIndex:_tideyEditorTabs.count - 1];
+    [_primaryPane.tabs addObject:tab];
+    [self selectTideyRightPanelTabAtIndex:_primaryPane.tabs.count - 1];
 }
 
 - (BOOL)selectTideyEditorTabByNumber:(NSInteger)number {
-    if (_tideyEditorTabs.count == 0) {
+    if (_primaryPane.tabs.count == 0) {
         return NO;
     }
     TideyEditorTab *tab = [[self class] tideyRightPanelTabForShortcutNumber:number
-                                                                        tabs:_tideyEditorTabs
-                                                                expandedKind:_tideyExpandedRightPanelTabKind];
+                                                                        tabs:_primaryPane.tabs
+                                                                expandedKind:_primaryPane.expandedTabKind];
     if (!tab) {
         return NO;
     }
-    NSInteger index = [_tideyEditorTabs indexOfObjectIdenticalTo:tab];
+    NSInteger index = [_primaryPane.tabs indexOfObjectIdenticalTo:tab];
     if (index == NSNotFound) {
         return NO;
     }
@@ -4643,10 +4636,10 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 }
 
 - (BOOL)closeCurrentTideyEditorTab {
-    if (![self tideyEditorHasFocus] || _tideySelectedEditorTabIndex < 0) {
+    if (![self tideyEditorHasFocus] || _primaryPane.selectedTabIndex < 0) {
         return NO;
     }
-    [self closeTideyEditorTabAtIndex:_tideySelectedEditorTabIndex];
+    [self closeTideyEditorTabAtIndex:_primaryPane.selectedTabIndex];
     return YES;
 }
 
