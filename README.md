@@ -77,9 +77,9 @@ Top-right icons:
 
 ## Documentation
 
-- [AGENTS.md](AGENTS.md) — Codex（OpenAI Codex CLI）用的 agent guide
-- [CLAUDE.md](CLAUDE.md) — Claude Code 用的開發規則
-- Tidey 使用 Claude Code + Codex 雙 agent 協作開發：Claude Code 做 audit / build / test / 協調，Codex 做實作
+- [AGENTS.md](AGENTS.md) — agent guide for Codex (OpenAI Codex CLI)
+- [CLAUDE.md](CLAUDE.md) — development rules for Claude Code
+- Tidey is developed with a dual-agent workflow: Claude Code handles audit / build / test / coordination, and Codex handles implementation
 - [Socket API](docs/socket-api.md) — for agent developers integrating with Tidey
 - [Debug Lessons](docs/debug-lessons.md) — pitfalls and solutions discovered during development
 
