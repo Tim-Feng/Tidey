@@ -12452,6 +12452,7 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
         [aTabViewItem release];
         if (_automaticallySelectNewTabs || _contentView.tabView.tabViewItems.count == 1) {
             [_contentView.tabView selectTabViewItemAtIndex:safeIndex];
+            [_contentView tideyRecordTerminalInteraction];
         }
         if (self.isShowingTideySidebar && !_tideySwitchingWorkspace) {
             NSInteger targetWorkspaceIndex = _pendingWorkspaceIndexForInsertedPanel;

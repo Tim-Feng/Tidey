@@ -210,6 +210,7 @@ extern const NSInteger iTermRootTerminalViewWindowNumberLabelWidth;
 - (BOOL)tideyBrowserHasFocus;
 - (void)createNewUntitledEditorTab;
 - (void)createNewBlankBrowserTab;
+- (void)tideyRecordTerminalInteraction;
 - (BOOL)closeCurrentTideyEditorTab;
 - (BOOL)selectTideyEditorTabByNumber:(NSInteger)number;
 - (void)tideyOpenBrowserTabWithURL:(NSURL *)url;

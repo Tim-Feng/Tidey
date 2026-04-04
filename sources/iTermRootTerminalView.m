@@ -209,6 +209,14 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
     TideyRightPanelTabKindBrowser = 1,
 };
 
+typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
+    TideyLastClickedRegionUnknown = 0,
+    TideyLastClickedRegionTerminal = 1,
+    TideyLastClickedRegionSidebar = 2,
+    TideyLastClickedRegionEditor = 3,
+    TideyLastClickedRegionBrowser = 4,
+};
+
 @class TideyBrowserOpenResult;
 
 @interface iTermRootTerminalView()<
@@ -247,6 +255,8 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
 - (void)updateTideyChromeToggleButtons;
 - (void)syncTideyEditorFileTreeRootIfNeeded;
 - (void)constrainTideyEditorFileTreeToVisibleWidth;
+- (void)tideyHandleMouseDownEvent:(NSEvent *)event;
+- (void)tideySetLastClickedRegion:(TideyLastClickedRegion)region;
 - (void)ensureTideyEditorWebView;
 - (void)ensureTideyEditorWebViewForPane:(TideyRightPanelPane *)pane inContainerView:(NSView *)containerView;
 - (void)loadTideyEditorShellIfNeeded;
@@ -425,6 +435,7 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
                                                         inTabs:(NSArray<TideyEditorTab *> *)tabs;
 + (BOOL)tideyResponder:(NSResponder *)responder isDescendantOfView:(NSView *)view;
 + (BOOL)tideyResponderLooksLikeWebKitResponder:(NSResponder *)responder;
++ (WKWebView *)tideyNearestWebViewForResponder:(NSResponder *)responder;
 - (NSArray<TideyShortcutHintDescriptor *> *)tideyEditorPanelShortcutHintDescriptors;
 - (NSArray<TideyShortcutHintDescriptor *> *)tideyTerminalPanelShortcutHintDescriptors;
 - (void)tideyUpdatePanelShortcutHints;
@@ -1018,6 +1029,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     TideyRightPanelPane *_activePane;
     BOOL _splitVisible;
     CGFloat _splitFraction;
+    TideyLastClickedRegion _tideyLastClickedRegion;
 
     // Browser panel
     NSTextField *_tideyBrowserURLField;
@@ -1027,6 +1039,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSProgressIndicator *_tideyBrowserLoadingIndicator;
     BOOL _tideyEditorIsRevealingSelection;
     BOOL _tideyIgnoreNextSidebarSelection;
+    id _tideyMouseDownMonitor;
     id _tideyModifierMonitor;
     id _tideyKeyDownMonitor;
     dispatch_block_t _tideyShortcutHintWorkItem;
@@ -1319,6 +1332,22 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     return NO;
 }
 
++ (WKWebView *)tideyNearestWebViewForResponder:(NSResponder *)responder {
+    for (NSResponder *current = responder; current != nil; current = current.nextResponder) {
+        if ([current isKindOfClass:[WKWebView class]]) {
+            return (WKWebView *)current;
+        }
+        if ([current isKindOfClass:[NSView class]]) {
+            for (NSView *view = (NSView *)current; view != nil; view = view.superview) {
+                if ([view isKindOfClass:[WKWebView class]]) {
+                    return (WKWebView *)view;
+                }
+            }
+        }
+    }
+    return nil;
+}
+
 + (TideyEditorTab *)tideyRightPanelPreferredTabForKind:(TideyRightPanelTabKind)kind
                                                  inTabs:(NSArray<TideyEditorTab *> *)tabs
                                  selectedTabIdentifier:(NSString *)selectedTabIdentifier
@@ -1500,6 +1529,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         _activePane = _primaryPane;
         _splitVisible = NO;
         _splitFraction = 0.5;
+        _tideyLastClickedRegion = TideyLastClickedRegionTerminal;
         _tideySidebarPreferredWidth = kTideySidebarWidth;
         _tideyEditorFileTreePreferredWidth = kTideyEditorFileTreeWidth;
         _tideyEditorPreferredWidth = MAX(kTideyMinimumEditorPanelWidth,
@@ -1570,6 +1600,11 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                      name:NSApplicationDidBecomeActiveNotification
                                                    object:nil];
 
+        _tideyMouseDownMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown
+                                                                       handler:^NSEvent *(NSEvent *event) {
+            [self tideyHandleMouseDownEvent:event];
+            return event;
+        }];
         _tideyModifierMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskFlagsChanged
                                                                       handler:^NSEvent *(NSEvent *event) {
             [self tideyHandleModifierFlagsChanged:event];
@@ -1963,6 +1998,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 
 - (void)dealloc {
+    if (_tideyMouseDownMonitor) {
+        [NSEvent removeMonitor:_tideyMouseDownMonitor];
+        _tideyMouseDownMonitor = nil;
+    }
     if (_tideyModifierMonitor) {
         [NSEvent removeMonitor:_tideyModifierMonitor];
         _tideyModifierMonitor = nil;
@@ -3158,6 +3197,51 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     [self layoutTideyEditorContents];
 }
 
+- (void)tideySetLastClickedRegion:(TideyLastClickedRegion)region {
+    _tideyLastClickedRegion = region;
+}
+
+- (void)tideyHandleMouseDownEvent:(NSEvent *)event {
+    if (!event || event.window != self.window) {
+        return;
+    }
+    NSPoint pointInSelf = [self convertPoint:event.locationInWindow fromView:nil];
+    if (!NSPointInRect(pointInSelf, self.bounds)) {
+        return;
+    }
+    if (!_tideyEditorPanelView.hidden && NSPointInRect(pointInSelf, _tideyEditorPanelView.frame)) {
+        TideyRightPanelPane *pane = _primaryPane;
+        if (_splitVisible && _secondaryPane.containerView) {
+            NSPoint pointInSecondaryContainer = [self convertPoint:event.locationInWindow
+                                                            toView:_secondaryPane.containerView];
+            if (NSPointInRect(pointInSecondaryContainer, _secondaryPane.containerView.bounds)) {
+                pane = _secondaryPane;
+            }
+        }
+        [self tideySetActivePane:pane];
+        if (pane.browserContainerView && !pane.browserContainerView.hidden) {
+            NSPoint pointInBrowser = [self convertPoint:event.locationInWindow toView:pane.browserContainerView];
+            if (NSPointInRect(pointInBrowser, pane.browserContainerView.bounds)) {
+                [self tideySetLastClickedRegion:TideyLastClickedRegionBrowser];
+                return;
+            }
+        }
+        [self tideySetLastClickedRegion:TideyLastClickedRegionEditor];
+        return;
+    }
+    if (!_tideySidebarView.hidden && NSPointInRect(pointInSelf, _tideySidebarView.frame)) {
+        [self tideySetLastClickedRegion:TideyLastClickedRegionSidebar];
+        return;
+    }
+    if (!_tabBarControl.hidden && NSPointInRect(pointInSelf, _tabBarControl.frame)) {
+        [self tideySetLastClickedRegion:TideyLastClickedRegionTerminal];
+        return;
+    }
+    if (_tabView && NSPointInRect(pointInSelf, _tabView.frame)) {
+        [self tideySetLastClickedRegion:TideyLastClickedRegionTerminal];
+    }
+}
+
 - (void)tideyHandleEditorPanelClick:(NSGestureRecognizer *)recognizer {
     if (!_splitVisible || !_secondaryPane || recognizer.state != NSGestureRecognizerStateEnded) {
         return;
@@ -3851,6 +3935,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 
 - (void)layoutTideyEditorContents {
     if (_tideyEditorPanelView.hidden) {
+        self.tideyEditorSplitToggleButton.hidden = YES;
         [self tideySyncEditorFileTreeWatcher];
         [self updateTideyChromeToggleButtons];
         return;
@@ -3924,6 +4009,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     [self tideyLayoutBrowserContainer];
     [self tideyUpdateBrowserContentVisibility];
     [self updateTideyChromeToggleButtons];
+    [_tideyEditorPanelView addSubview:self.tideyEditorSplitToggleButton positioned:NSWindowAbove relativeTo:nil];
 }
 
 - (void)tideyEditorLoadDemoFileIfNeeded {
@@ -5130,22 +5216,12 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 }
 
 - (BOOL)tideyEditorPaneHasFocus {
-    if (_tideyEditorPanelView.hidden) {
+    if (_tideyEditorPanelView.hidden || _activePane == nil) {
         return NO;
     }
-    NSResponder *responder = self.window.firstResponder;
-    for (TideyRightPanelPane *pane in [self tideyVisibleRightPanelPanes]) {
-        if (pane.browserContainerView &&
-            [[self class] tideyResponder:responder isDescendantOfView:pane.browserContainerView]) {
-            continue;
-        }
-        if ((pane.editorWebView && [[self class] tideyResponder:responder isDescendantOfView:pane.editorWebView]) ||
-            (pane.tabStripView && [[self class] tideyResponder:responder isDescendantOfView:pane.tabStripView]) ||
-            (pane.containerView && [[self class] tideyResponder:responder isDescendantOfView:pane.containerView])) {
-            return YES;
-        }
-    }
-    return NO;
+    TideyEditorTab *tab = [self tideyCurrentRightPanelTabInPane:_activePane];
+    return tab.kind != TideyRightPanelTabKindBrowser &&
+           _tideyLastClickedRegion == TideyLastClickedRegionEditor;
 }
 
 - (BOOL)tideyRightPanelHasFocus {
@@ -5178,17 +5254,12 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 }
 
 - (BOOL)tideyBrowserHasFocus {
-    if (_tideyEditorPanelView.hidden) {
+    if (_tideyEditorPanelView.hidden || _activePane == nil) {
         return NO;
     }
-    TideyRightPanelPane *pane = self.activePane;
-    TideyEditorTab *tab = [self tideyCurrentRightPanelTabInPane:pane];
-    if (tab.kind != TideyRightPanelTabKindBrowser) {
-        return NO;
-    }
-    NSResponder *responder = self.window.firstResponder;
-    return [[self class] tideyResponder:responder isDescendantOfView:pane.browserContainerView] ||
-           [[self class] tideyResponderLooksLikeWebKitResponder:responder];
+    TideyEditorTab *tab = [self tideyCurrentRightPanelTabInPane:_activePane];
+    return tab.kind == TideyRightPanelTabKindBrowser &&
+           _tideyLastClickedRegion == TideyLastClickedRegionBrowser;
 }
 
 - (void)createNewBlankBrowserTab {
@@ -5202,6 +5273,10 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     TideyEditorTab *tab = [TideyEditorTab browserTabWithURL:homeURL];
     [pane.tabs addObject:tab];
     [self selectTideyRightPanelTabAtIndex:pane.tabs.count - 1 inPane:pane];
+}
+
+- (void)tideyRecordTerminalInteraction {
+    [self tideySetLastClickedRegion:TideyLastClickedRegionTerminal];
 }
 
 - (BOOL)selectTideyEditorTabByNumber:(NSInteger)number {
