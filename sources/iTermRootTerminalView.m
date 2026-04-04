@@ -3908,14 +3908,6 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 }
 
 - (NSString *)tideyEditorFileTreeRootPath {
-    NSString *overrideRoot = [_tideyEditorRootOverridePath stringByStandardizingPath];
-    if (overrideRoot.length > 0 && [[NSFileManager defaultManager] fileExistsAtPath:overrideRoot]) {
-        return overrideRoot;
-    }
-    NSString *cwd = [[self.delegate rootTerminalViewCurrentWorkingDirectory] stringByStandardizingPath];
-    if (cwd.length > 0 && [[NSFileManager defaultManager] fileExistsAtPath:cwd]) {
-        return cwd;
-    }
     return NSHomeDirectory();
 }
 
@@ -3950,16 +3942,8 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         !isDirectory) {
         _tideyEditorLoadedPath = [savedFilePath copy];
         _shouldShowTideyEditorPanel = YES;
-
-        NSString *savedRootPath = [[defaults stringForKey:kTideyLastEditorFileTreeRootDefaultsKey] stringByStandardizingPath];
-        BOOL savedRootIsDirectory = NO;
-        if (savedRootPath.length > 0 &&
-            [fileManager fileExistsAtPath:savedRootPath isDirectory:&savedRootIsDirectory] &&
-            savedRootIsDirectory) {
-            _tideyEditorRootOverridePath = [savedRootPath copy];
-        } else {
-            _tideyEditorRootOverridePath = [[self tideyEditorPreferredRootPathForFileAtPath:savedFilePath] copy];
-        }
+        [defaults removeObjectForKey:kTideyLastEditorFileTreeRootDefaultsKey];
+        _tideyEditorRootOverridePath = nil;
         return;
     }
 
@@ -3983,16 +3967,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     } else {
         [defaults removeObjectForKey:kTideyLastEditorFilePathDefaultsKey];
     }
-
-    NSString *rootPath = [[self tideyEditorFileTreeRootPath] stringByStandardizingPath];
-    BOOL rootIsDirectory = NO;
-    if (rootPath.length > 0 &&
-        [fileManager fileExistsAtPath:rootPath isDirectory:&rootIsDirectory] &&
-        rootIsDirectory) {
-        [defaults setObject:rootPath forKey:kTideyLastEditorFileTreeRootDefaultsKey];
-    } else {
-        [defaults removeObjectForKey:kTideyLastEditorFileTreeRootDefaultsKey];
-    }
+    [defaults removeObjectForKey:kTideyLastEditorFileTreeRootDefaultsKey];
 }
 
 - (void)tideyRestoreLayoutStateFromDefaults {
@@ -5119,35 +5094,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 }
 
 - (NSString *)tideyEditorPreferredRootPathForFileAtPath:(NSString *)path {
-    NSString *normalizedPath = [path stringByStandardizingPath];
-    if (normalizedPath.length == 0) {
-        return [self tideyEditorFileTreeRootPath];
-    }
-    BOOL isDirectory = NO;
-    if (![[NSFileManager defaultManager] fileExistsAtPath:normalizedPath isDirectory:&isDirectory]) {
-        return [self tideyEditorFileTreeRootPath];
-    }
-    NSString *candidate = isDirectory ? normalizedPath : normalizedPath.stringByDeletingLastPathComponent;
-    NSFileManager *fileManager = [NSFileManager defaultManager];
-    while (candidate.length > 1) {
-        NSString *gitPath = [candidate stringByAppendingPathComponent:@".git"];
-        BOOL gitExists = [fileManager fileExistsAtPath:gitPath];
-        if (gitExists) {
-            return candidate;
-        }
-        NSString *parent = candidate.stringByDeletingLastPathComponent;
-        if (parent.length == 0 || [parent isEqualToString:candidate]) {
-            break;
-        }
-        candidate = parent;
-    }
-    NSString *homePath = [NSHomeDirectory() stringByStandardizingPath];
-    if (homePath.length > 0 &&
-        ([normalizedPath isEqualToString:homePath] ||
-         [normalizedPath hasPrefix:[homePath stringByAppendingString:@"/"]])) {
-        return homePath;
-    }
-    return isDirectory ? normalizedPath : normalizedPath.stringByDeletingLastPathComponent;
+    return [NSHomeDirectory() stringByStandardizingPath];
 }
 
 - (void)tideyEditorRevealFileAtPath:(NSString *)path {
@@ -5253,7 +5200,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         [self tideyEditorRevealFileAtPath:normalizedPath];
         return;
     }
-    _tideyEditorRootOverridePath = [[self tideyEditorPreferredRootPathForFileAtPath:path] copy];
+    _tideyEditorRootOverridePath = nil;
     if (_tideyEditorPanelView.hidden) {
         self.shouldShowTideyEditorPanel = YES;
         [self layoutSubviews];
