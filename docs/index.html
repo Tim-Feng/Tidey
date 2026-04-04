@@ -328,20 +328,25 @@
       letter-spacing: -0.02em;
     }
 
-    .showcase-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 16px;
-    }
-
-    .showcase-item {
+    .showcase-carousel {
       position: relative;
-      border-radius: 10px;
       overflow: hidden;
+      border-radius: 12px;
       border: 1px solid var(--border);
+      box-shadow: 0 8px 40px rgba(0,0,0,0.35);
     }
 
-    .showcase-item img {
+    .showcase-track {
+      display: flex;
+      transition: transform 0.4s ease;
+    }
+
+    .showcase-slide {
+      min-width: 100%;
+      position: relative;
+    }
+
+    .showcase-slide img {
       width: 100%;
       display: block;
     }
@@ -351,18 +356,71 @@
       bottom: 0;
       left: 0;
       right: 0;
-      padding: 8px 12px;
-      background: linear-gradient(transparent, rgba(12, 17, 23, 0.88));
+      padding: 10px 16px;
+      background: linear-gradient(transparent, rgba(12, 17, 23, 0.92));
       font-family: var(--mono);
-      font-size: 0.7rem;
+      font-size: 0.75rem;
       color: var(--text-muted);
       letter-spacing: 0.06em;
       text-align: right;
     }
 
+    .showcase-dots {
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      margin-top: 16px;
+    }
+
+    .showcase-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--text-faint);
+      border: none;
+      padding: 0;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.2s;
+    }
+
+    .showcase-dot:hover { background: var(--text-muted); }
+    .showcase-dot.active {
+      background: var(--accent);
+      transform: scale(1.25);
+    }
+
+    .showcase-nav {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      border: 1px solid var(--border);
+      background: rgba(12, 17, 23, 0.8);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      color: var(--text-muted);
+      font-size: 1rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.2s, color 0.2s;
+      z-index: 2;
+    }
+
+    .showcase-nav:hover {
+      background: rgba(12, 17, 23, 0.95);
+      color: var(--text);
+    }
+
+    .showcase-prev { left: 10px; }
+    .showcase-next { right: 10px; }
+
     @media (max-width: 520px) {
-      .showcase-grid { grid-template-columns: 1fr; }
       .showcase-subtitle { font-size: 1.15rem; }
+      .showcase-nav { width: 28px; height: 28px; font-size: 0.8rem; }
     }
 
     /* ─── FAQ ─── */
@@ -538,24 +596,33 @@
   <section class="showcase reveal">
     <p class="showcase-label" data-en="Split View" data-zh="分割檢視">Split View</p>
     <p class="showcase-subtitle" data-en="Two panes, one context." data-zh="兩個窗格，一個脈絡。">Two panes, one context.</p>
-    <div class="showcase-grid">
-      <div class="showcase-item">
-        <img src="screenshots/terminal-code.png" alt="Terminal and code editor side by side">
-        <div class="showcase-caption">Terminal + Code</div>
-      </div>
-      <div class="showcase-item">
-        <img src="screenshots/terminal-web.png" alt="Terminal and browser side by side">
-        <div class="showcase-caption">Terminal + Browser</div>
-      </div>
-      <div class="showcase-item">
-        <img src="screenshots/split-code-code.png" alt="Split view — two code editors side by side">
-        <div class="showcase-caption">Code + Code</div>
-      </div>
-      <div class="showcase-item">
-        <img src="screenshots/split-code-web.png" alt="Split view — code editor and browser side by side">
-        <div class="showcase-caption">Code + Browser</div>
+    <div class="showcase-carousel" id="showcaseCarousel">
+      <button class="showcase-nav showcase-prev" id="showcasePrev">‹</button>
+      <button class="showcase-nav showcase-next" id="showcaseNext">›</button>
+      <div class="showcase-track" id="showcaseTrack">
+        <div class="showcase-slide">
+          <img src="screenshots/hero-main.png" alt="Full workspace — sidebar, terminal, editor, file tree">
+          <div class="showcase-caption">Full Workspace</div>
+        </div>
+        <div class="showcase-slide">
+          <img src="screenshots/terminal-code.png" alt="Terminal and code editor side by side">
+          <div class="showcase-caption">Terminal + Code</div>
+        </div>
+        <div class="showcase-slide">
+          <img src="screenshots/terminal-web.png" alt="Terminal and browser side by side">
+          <div class="showcase-caption">Terminal + Browser</div>
+        </div>
+        <div class="showcase-slide">
+          <img src="screenshots/split-code-code.png" alt="Split view — two code editors">
+          <div class="showcase-caption">Code + Code</div>
+        </div>
+        <div class="showcase-slide">
+          <img src="screenshots/split-code-web.png" alt="Split view — code and browser">
+          <div class="showcase-caption">Code + Browser</div>
+        </div>
       </div>
     </div>
+    <div class="showcase-dots" id="showcaseDots"></div>
   </section>
 
   <hr class="divider">
@@ -631,6 +698,30 @@
       entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('visible'); });
     }, { threshold: 0.15 });
     document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+
+    // Carousel
+    const track = document.getElementById('showcaseTrack');
+    const slides = track.querySelectorAll('.showcase-slide');
+    const dotsContainer = document.getElementById('showcaseDots');
+    let currentSlide = 0;
+
+    slides.forEach((_, i) => {
+      const dot = document.createElement('button');
+      dot.className = 'showcase-dot' + (i === 0 ? ' active' : '');
+      dot.addEventListener('click', () => goTo(i));
+      dotsContainer.appendChild(dot);
+    });
+
+    function goTo(i) {
+      currentSlide = ((i % slides.length) + slides.length) % slides.length;
+      track.style.transform = 'translateX(-' + (currentSlide * 100) + '%)';
+      dotsContainer.querySelectorAll('.showcase-dot').forEach((d, j) => {
+        d.classList.toggle('active', j === currentSlide);
+      });
+    }
+
+    document.getElementById('showcasePrev').addEventListener('click', () => goTo(currentSlide - 1));
+    document.getElementById('showcaseNext').addEventListener('click', () => goTo(currentSlide + 1));
   })();
 </script>
 
