@@ -1598,6 +1598,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                                            green:0.10
                                                                             blue:0.13
                                                                            alpha:1].CGColor;
+        _tideyEditorTabStripView.layer.masksToBounds = YES;
         ((TideyRightPanelTabStripView *)_tideyEditorTabStripView).tideyOwner = self;
         _primaryPane.tabStripView = _tideyEditorTabStripView;
 
@@ -3856,7 +3857,6 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     }
     const NSRect bounds = _tideyEditorPanelView.bounds;
     const CGFloat tabStripHeight = TideyEditorEffectiveTabStripHeight(_tabBarControl.height);
-    _tideyEditorTabStripView.frame = NSMakeRect(0, NSHeight(bounds) - tabStripHeight, NSWidth(bounds), tabStripHeight);
     self.tideyEditorSplitToggleButton.hidden = NO;
     self.tideyEditorSplitToggleButton.frame = NSMakeRect(MAX(0, NSWidth(bounds) - 30),
                                                          NSHeight(bounds) - tabStripHeight + floor((tabStripHeight - 22) / 2.0),
@@ -5011,6 +5011,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     TideyRightPanelTabStripView *tabStripView = [[TideyRightPanelTabStripView alloc] initWithFrame:NSZeroRect];
     tabStripView.autoresizingMask = NSViewWidthSizable;
     tabStripView.wantsLayer = YES;
+    tabStripView.layer.masksToBounds = YES;
     ((TideyRightPanelTabStripView *)tabStripView).tideyOwner = self;
     [containerView addSubview:tabStripView];
     _secondaryPane.tabStripView = tabStripView;
