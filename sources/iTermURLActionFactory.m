@@ -812,15 +812,27 @@ static BOOL iTermStringIsASCIIOnly(NSString *string) {
         if ([s rangeOfString:@"://"].location == NSNotFound) {
             static NSCharacterSet *cjkCharacterSet;
             static dispatch_once_t onceToken;
+            static NSSet<NSString *> *sourceLikeExtensions;
             dispatch_once(&onceToken, ^{
                 NSMutableCharacterSet *set = [[NSMutableCharacterSet alloc] init];
                 [set addCharactersInRange:NSMakeRange(0x2E80, 0x9FFF - 0x2E80 + 1)];
                 [set addCharactersInRange:NSMakeRange(0xF900, 0xFAFF - 0xF900 + 1)];
                 [set addCharactersInRange:NSMakeRange(0xFF00, 0xFFEF - 0xFF00 + 1)];
                 cjkCharacterSet = [set copy];
+                sourceLikeExtensions = [NSSet setWithArray:@[
+                    @"sh", @"py", @"js", @"ts", @"m", @"h", @"c", @"cpp", @"swift",
+                    @"go", @"rs", @"java", @"rb", @"pl", @"md", @"txt", @"json",
+                    @"yaml", @"yml", @"xml", @"html", @"css", @"toml", @"cfg",
+                    @"conf", @"ini", @"log", @"csv"
+                ]];
             });
             NSString *prefix = [s substringToIndex:slashRange.location];
             if ([prefix rangeOfCharacterFromSet:cjkCharacterSet].location != NSNotFound) {
+                return NO;
+            }
+            NSString *lastPathComponent = [[s componentsSeparatedByString:@"/"] lastObject];
+            NSString *extension = lastPathComponent.pathExtension.lowercaseString;
+            if (extension.length > 0 && [sourceLikeExtensions containsObject:extension]) {
                 return NO;
             }
         }
