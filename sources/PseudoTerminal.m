@@ -11714,6 +11714,10 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
     [self tideyMarkWorkspaceUnreadAtIndex:index];
 }
 
+- (void)rootTerminalViewCreateTideyTerminalPanel {
+    [self createTideyPanelPossiblyTmux:YES];
+}
+
 #pragma mark - PSMPUAFontProvider
 
 - (NSFont *)fontForPUACodePoint:(UTF32Char)codePoint {

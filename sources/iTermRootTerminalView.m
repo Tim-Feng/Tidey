@@ -151,6 +151,23 @@ static NSRect TideyPanelShortcutHintFrameForAnchorRect(NSRect anchorRect) {
                       kTideyPanelShortcutHintHeight);
 }
 
+static NSButton *TideyMakeEditorChromeIconButton(NSString *symbolName,
+                                                 NSString *accessibilityDescription,
+                                                 id target,
+                                                 SEL action) {
+    NSButton *button = [[NSButton alloc] initWithFrame:NSMakeRect(0, 0, 22, 22)];
+    button.bordered = NO;
+    button.buttonType = NSButtonTypeMomentaryPushIn;
+    button.focusRingType = NSFocusRingTypeNone;
+    button.wantsLayer = YES;
+    button.layer.backgroundColor = NSColor.clearColor.CGColor;
+    button.image = [NSImage imageWithSystemSymbolName:symbolName accessibilityDescription:accessibilityDescription];
+    button.contentTintColor = [NSColor colorWithWhite:0.72 alpha:1.0];
+    button.target = target;
+    button.action = action;
+    return button;
+}
+
 @class TideyEditorFileNode;
 @class TideyEditorTab;
 @class TideyEditorTabItemView;
@@ -264,7 +281,10 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
 @property(nonatomic, strong) NSButton *tideyTerminalToggleButton;
 @property(nonatomic, strong) NSButton *tideyEditorToggleButton;
 @property(nonatomic, strong) NSButton *tideyEditorFileTreeToggleButton;
+@property(nonatomic, strong) NSButton *tideyEditorNewTerminalButton;
+@property(nonatomic, strong) NSButton *tideyEditorNewWebButton;
 @property(nonatomic, strong) NSButton *tideyEditorSplitToggleButton;
+@property(nonatomic, strong) NSView *tideyEditorSplitDividerView;
 
 - (CGFloat)tideySidebarWidth;
 - (CGFloat)tideyEditorPanelWidth;
@@ -322,6 +342,8 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
 - (void)tideyEditorDidReceiveScriptMessage:(WKScriptMessage *)message;
 - (void)tideyEditorDidReceiveScriptMessage:(WKScriptMessage *)message fromPane:(TideyRightPanelPane *)pane;
 - (void)toggleTideyEditorSplit:(id)sender;
+- (void)tideyCreateTerminalPanelFromEditorChrome:(id)sender;
+- (void)tideyCreateBrowserTabFromEditorChrome:(id)sender;
 - (void)ensureSecondaryPane;
 - (void)teardownSecondaryPane;
 - (NSString *)tideyEditorHTML;
@@ -1791,19 +1813,29 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         self.tideyEditorFileTreeToggleButton = [self newTideyChromeToggleButtonWithAction:@selector(toggleTideyEditorFileTree:)];
         [_tideyEditorPanelView addSubview:self.tideyEditorFileTreeToggleButton];
 
-        self.tideyEditorSplitToggleButton = [[NSButton alloc] initWithFrame:NSMakeRect(0, 0, 22, 22)];
-        self.tideyEditorSplitToggleButton.bordered = NO;
-        self.tideyEditorSplitToggleButton.buttonType = NSButtonTypeMomentaryPushIn;
-        self.tideyEditorSplitToggleButton.focusRingType = NSFocusRingTypeNone;
-        self.tideyEditorSplitToggleButton.wantsLayer = YES;
-        self.tideyEditorSplitToggleButton.layer.cornerRadius = 6;
-        self.tideyEditorSplitToggleButton.layer.backgroundColor = NSColor.clearColor.CGColor;
-        self.tideyEditorSplitToggleButton.contentTintColor = [NSColor colorWithWhite:0.72 alpha:1];
-        self.tideyEditorSplitToggleButton.image = [NSImage imageWithSystemSymbolName:@"rectangle.split.2x1"
-                                                                accessibilityDescription:@"Split Editor"];
-        self.tideyEditorSplitToggleButton.target = self;
-        self.tideyEditorSplitToggleButton.action = @selector(toggleTideyEditorSplit:);
+        self.tideyEditorNewTerminalButton = TideyMakeEditorChromeIconButton(@"terminal",
+                                                                            @"New Terminal Panel",
+                                                                            self,
+                                                                            @selector(tideyCreateTerminalPanelFromEditorChrome:));
+        [_tideyEditorPanelView addSubview:self.tideyEditorNewTerminalButton];
+
+        self.tideyEditorNewWebButton = TideyMakeEditorChromeIconButton(@"globe",
+                                                                       @"New Browser Tab",
+                                                                       self,
+                                                                       @selector(tideyCreateBrowserTabFromEditorChrome:));
+        [_tideyEditorPanelView addSubview:self.tideyEditorNewWebButton];
+
+        self.tideyEditorSplitToggleButton = TideyMakeEditorChromeIconButton(@"rectangle.split.2x1",
+                                                                            @"Split Editor",
+                                                                            self,
+                                                                            @selector(toggleTideyEditorSplit:));
         [_tideyEditorPanelView addSubview:self.tideyEditorSplitToggleButton];
+
+        self.tideyEditorSplitDividerView = [[NSView alloc] initWithFrame:NSZeroRect];
+        self.tideyEditorSplitDividerView.wantsLayer = YES;
+        self.tideyEditorSplitDividerView.layer.backgroundColor = [NSColor colorWithWhite:0.24 alpha:1.0].CGColor;
+        self.tideyEditorSplitDividerView.hidden = YES;
+        [_tideyEditorPanelView addSubview:self.tideyEditorSplitDividerView positioned:NSWindowAbove relativeTo:nil];
 
         // Create the tab view.
         self.tabView = [[PTYTabView alloc] initWithFrame:self.bounds];
@@ -4198,23 +4230,36 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 
 - (void)layoutTideyEditorContents {
     if (_tideyEditorPanelView.hidden) {
+        self.tideyEditorNewTerminalButton.hidden = YES;
+        self.tideyEditorNewWebButton.hidden = YES;
         self.tideyEditorSplitToggleButton.hidden = YES;
+        self.tideyEditorSplitDividerView.hidden = YES;
         [self tideySyncEditorFileTreeWatcher];
         [self updateTideyChromeToggleButtons];
         return;
     }
     const NSRect bounds = _tideyEditorPanelView.bounds;
     const CGFloat tabStripHeight = TideyEditorEffectiveTabStripHeight(_tabBarControl.height);
+    const CGFloat chromeButtonSize = 22;
+    const CGFloat chromeButtonPadding = 8;
+    const CGFloat chromeButtonGap = 4;
+    const CGFloat chromeButtonY = NSHeight(bounds) - tabStripHeight + floor((tabStripHeight - chromeButtonSize) / 2.0);
+    const CGFloat splitButtonX = MAX(0, NSWidth(bounds) - chromeButtonPadding - chromeButtonSize);
+    const CGFloat webButtonX = MAX(0, splitButtonX - chromeButtonGap - chromeButtonSize);
+    const CGFloat terminalButtonX = MAX(0, webButtonX - chromeButtonGap - chromeButtonSize);
+    self.tideyEditorNewTerminalButton.hidden = NO;
+    self.tideyEditorNewWebButton.hidden = NO;
     self.tideyEditorSplitToggleButton.hidden = NO;
-    self.tideyEditorSplitToggleButton.frame = NSMakeRect(MAX(0, NSWidth(bounds) - 30),
-                                                         NSHeight(bounds) - tabStripHeight + floor((tabStripHeight - 22) / 2.0),
-                                                         22,
-                                                         22);
-    self.tideyEditorSplitToggleButton.layer.backgroundColor = (_splitVisible
-                                                               ? [NSColor colorWithWhite:1 alpha:0.12].CGColor
-                                                               : NSColor.clearColor.CGColor);
+    self.tideyEditorNewTerminalButton.frame = NSMakeRect(terminalButtonX, chromeButtonY, chromeButtonSize, chromeButtonSize);
+    self.tideyEditorNewWebButton.frame = NSMakeRect(webButtonX, chromeButtonY, chromeButtonSize, chromeButtonSize);
+    self.tideyEditorSplitToggleButton.frame = NSMakeRect(splitButtonX, chromeButtonY, chromeButtonSize, chromeButtonSize);
+    self.tideyEditorNewTerminalButton.layer.backgroundColor = NSColor.clearColor.CGColor;
+    self.tideyEditorNewWebButton.layer.backgroundColor = NSColor.clearColor.CGColor;
+    self.tideyEditorSplitToggleButton.layer.backgroundColor = NSColor.clearColor.CGColor;
+    self.tideyEditorNewTerminalButton.contentTintColor = [NSColor colorWithWhite:0.72 alpha:1.0];
+    self.tideyEditorNewWebButton.contentTintColor = [NSColor colorWithWhite:0.72 alpha:1.0];
     self.tideyEditorSplitToggleButton.contentTintColor = _splitVisible
-        ? [NSColor colorWithWhite:0.92 alpha:1.0]
+        ? [NSColor colorWithSRGBRed:1.0 green:0.694 blue:0.106 alpha:1.0]
         : [NSColor colorWithWhite:0.72 alpha:1.0];
 
     const CGFloat contentHeight = MAX(0, NSHeight(bounds) - tabStripHeight);
@@ -4250,6 +4295,13 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
                                                              : [NSColor colorWithSRGBRed:0.102 green:0.108 blue:0.135 alpha:1].CGColor);
         _secondaryPane.editorWebView.frame = NSMakeRect(0, 0, secondaryWidth, contentHeight);
     }
+    self.tideyEditorSplitDividerView.hidden = !shouldShowSplitShell;
+    if (shouldShowSplitShell) {
+        self.tideyEditorSplitDividerView.frame = NSMakeRect(MAX(0, primaryWidth + floor((splitHandleWidth - 2.0) / 2.0)),
+                                                            0,
+                                                            2.0,
+                                                            contentHeight);
+    }
     _tideyEditorFileTreeContainerView.hidden = !self.shouldShowTideyEditorFileTree;
     _tideyEditorFileTreeContainerView.frame = NSMakeRect(contentWidth, 0, fileTreeWidth, contentHeight);
     _tideyEditorFileTreeScrollView.frame = _tideyEditorFileTreeContainerView.bounds;
@@ -4272,6 +4324,9 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     [self tideyLayoutBrowserContainer];
     [self tideyUpdateBrowserContentVisibility];
     [self updateTideyChromeToggleButtons];
+    [_tideyEditorPanelView addSubview:self.tideyEditorSplitDividerView positioned:NSWindowAbove relativeTo:nil];
+    [_tideyEditorPanelView addSubview:self.tideyEditorNewTerminalButton positioned:NSWindowAbove relativeTo:nil];
+    [_tideyEditorPanelView addSubview:self.tideyEditorNewWebButton positioned:NSWindowAbove relativeTo:nil];
     [_tideyEditorPanelView addSubview:self.tideyEditorSplitToggleButton positioned:NSWindowAbove relativeTo:nil];
 }
 
@@ -5414,6 +5469,16 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     [self layoutTideyEditorContents];
 }
 
+- (void)tideyCreateTerminalPanelFromEditorChrome:(id)sender {
+    (void)sender;
+    [self.delegate rootTerminalViewCreateTideyTerminalPanel];
+}
+
+- (void)tideyCreateBrowserTabFromEditorChrome:(id)sender {
+    (void)sender;
+    [self createNewBlankBrowserTab];
+}
+
 - (void)tideyEditorDidChangeValue:(NSString *)value {
     [self tideyEditorDidChangeValue:value inPane:self.activePane];
 }
@@ -5793,7 +5858,10 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     const CGFloat width = self.tideyEditorPanelWidth;
     _tideyEditorPanelView.hidden = (width <= 0);
     if (width <= 0) {
+        self.tideyEditorNewTerminalButton.hidden = YES;
+        self.tideyEditorNewWebButton.hidden = YES;
         self.tideyEditorSplitToggleButton.hidden = YES;
+        self.tideyEditorSplitDividerView.hidden = YES;
         return;
     }
 
