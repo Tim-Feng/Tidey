@@ -305,6 +305,66 @@
       color: var(--text-muted);
     }
 
+    /* ─── Showcase ─── */
+    .showcase {
+      padding: 64px 0;
+    }
+
+    .showcase-label {
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      color: var(--accent);
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+
+    .showcase-subtitle {
+      font-family: var(--serif);
+      font-size: 1.4rem;
+      font-weight: 300;
+      color: #fff;
+      margin-bottom: 28px;
+      letter-spacing: -0.02em;
+    }
+
+    .showcase-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    .showcase-item {
+      position: relative;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+
+    .showcase-item img {
+      width: 100%;
+      display: block;
+    }
+
+    .showcase-caption {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      padding: 8px 12px;
+      background: linear-gradient(transparent, rgba(12, 17, 23, 0.88));
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      letter-spacing: 0.06em;
+      text-align: right;
+    }
+
+    @media (max-width: 520px) {
+      .showcase-grid { grid-template-columns: 1fr; }
+      .showcase-subtitle { font-size: 1.15rem; }
+    }
+
     /* ─── FAQ ─── */
     .faq {
       padding: 64px 0;
@@ -400,7 +460,7 @@
 <body>
 
 <div class="top-nav">
-<a class="top-dl" href="https://github.com/Tim-Feng/Tidey/releases/latest" data-en="Download" data-zh="下載">Download</a>
+<a class="top-dl" href="https://github.com/Tim-Feng/Tidey/releases/download/v0.1.0/Tidey.dmg" data-en="Download" data-zh="下載">Download</a>
 <div class="lang-switcher" id="langSwitcher">
   <button class="lang-btn" id="langBtn">English</button>
   <div class="lang-menu" id="langMenu">
@@ -417,15 +477,14 @@
     <h1>Tidey</h1>
     <p class="tagline" data-en="A terminal-first IDE for AI agents on macOS." data-zh="為 AI agent 打造的 terminal-first IDE。macOS 原生。">A terminal-first IDE for AI agents on macOS.</p>
     <div class="cta-row">
-      <a class="cta" href="https://github.com/Tim-Feng/Tidey/releases/latest" data-en="Download for macOS" data-zh="下載 macOS 版">Download for macOS</a>
+      <a class="cta" href="https://github.com/Tim-Feng/Tidey/releases/download/v0.1.0/Tidey.dmg" data-en="Download for macOS" data-zh="下載 macOS 版">Download for macOS</a>
       <a class="cta-ghost" href="https://github.com/Tim-Feng/Tidey" data-en="View on GitHub" data-zh="在 GitHub 上查看">View on GitHub</a>
     </div>
     <span class="cta-note" data-en="macOS 12+ · Apple Silicon & Intel · Free & Open Source" data-zh="macOS 12+ · Apple Silicon & Intel · 免費開源">macOS 12+ · Apple Silicon & Intel · Free & Open Source</span>
   </section>
 
   <section class="screenshot">
-    <!-- screenshot -->
-    <div class="screenshot-frame" data-en="Screenshot coming soon" data-zh="截圖即將推出">Screenshot coming soon</div>
+    <img src="screenshots/hero-main.png" alt="Tidey main window — sidebar, terminal, editor, and file tree" style="width:100%; border-radius:12px; border:1px solid var(--border); box-shadow: 0 8px 40px rgba(0,0,0,0.35);">
   </section>
 
   <hr class="divider">
@@ -449,8 +508,13 @@
     </div>
 
     <div class="feature-item">
-      <strong data-en="Split Panes" data-zh="分割窗格">Split Panes</strong><span class="sep">·</span>
-      <span data-en="Horizontal and vertical splits within each workspace." data-zh="每個 workspace 內支援水平和垂直分割。">Horizontal and vertical splits within each workspace.</span>
+      <strong data-en="Split View" data-zh="分割檢視">Split View</strong><span class="sep">·</span>
+      <span data-en="Split the editor into two panes, mix code and web tabs, drag tabs between panes. Terminal splits too." data-zh="編輯器分割成兩個窗格，混合 code 和 web tab，跨窗格拖曳。Terminal 也支援分割。">Split the editor into two panes, mix code and web tabs, drag tabs between panes. Terminal splits too.</span>
+    </div>
+
+    <div class="feature-item">
+      <strong data-en="In-app Browser" data-zh="內建瀏覽器">In-app Browser</strong><span class="sep">·</span>
+      <span data-en="⌘-click URLs in the terminal to open them in the built-in browser panel, without leaving the IDE." data-zh="⌘-click terminal 裡的 URL，在內建瀏覽器開啟，不離開 IDE。">⌘-click URLs in the terminal to open them in the built-in browser panel, without leaving the IDE.</span>
     </div>
 
     <div class="feature-item">
@@ -466,6 +530,23 @@
     <div class="feature-item">
       <strong data-en="Keyboard-Driven" data-zh="鍵盤驅動">Keyboard-Driven</strong><span class="sep">·</span>
       <span data-en="Hold ⌘ to reveal shortcut hints. ⌃1–⌃9 to switch panels." data-zh="Hold ⌘ 浮現快捷鍵提示。⌃1–⌃9 切換 panel。">Hold ⌘ to reveal shortcut hints. ⌃1–⌃9 to switch panels.</span>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <section class="showcase reveal">
+    <p class="showcase-label" data-en="Split View" data-zh="分割檢視">Split View</p>
+    <p class="showcase-subtitle" data-en="Two panes, one context." data-zh="兩個窗格，一個脈絡。">Two panes, one context.</p>
+    <div class="showcase-grid">
+      <div class="showcase-item">
+        <img src="screenshots/split-code-code.png" alt="Split view — two code editors side by side">
+        <div class="showcase-caption">Code + Code</div>
+      </div>
+      <div class="showcase-item">
+        <img src="screenshots/split-code-web.png" alt="Split view — code editor and browser side by side">
+        <div class="showcase-caption">Code + Browser</div>
+      </div>
     </div>
   </section>
 
@@ -492,7 +573,7 @@
   <section class="closing reveal">
     <h2 data-en="Ready to try?" data-zh="準備好了嗎？">Ready to try?</h2>
     <div class="cta-row">
-      <a class="cta" href="https://github.com/Tim-Feng/Tidey/releases/latest" data-en="Download for macOS" data-zh="下載 macOS 版">Download for macOS</a>
+      <a class="cta" href="https://github.com/Tim-Feng/Tidey/releases/download/v0.1.0/Tidey.dmg" data-en="Download for macOS" data-zh="下載 macOS 版">Download for macOS</a>
       <a class="cta-ghost" href="https://github.com/Tim-Feng/Tidey" data-en="View on GitHub" data-zh="在 GitHub 上查看">View on GitHub</a>
     </div>
     <span class="cta-note" data-en="macOS 12+ · Apple Silicon & Intel · Free & Open Source" data-zh="macOS 12+ · Apple Silicon & Intel · 免費開源">macOS 12+ · Apple Silicon & Intel · Free & Open Source</span>
