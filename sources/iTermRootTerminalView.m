@@ -153,7 +153,28 @@ static NSRect TideyPanelShortcutHintFrameForAnchorRect(NSRect anchorRect) {
 
 @class TideyEditorFileNode;
 @class TideyEditorTab;
+@class TideyEditorTabItemView;
 @class PSMTabBarCell;
+
+@protocol TideyEditorTabItemViewOwner <NSObject>
+- (void)tideySetActivePane:(TideyRightPanelPane *)pane;
+- (void)tideySetLastClickedRegion:(NSInteger)region;
+- (void)selectTideyRightPanelTabAtIndex:(NSInteger)index inPane:(TideyRightPanelPane *)pane;
+- (void)tideyBeginRightPanelTabDragWithTabView:(TideyEditorTabItemView *)tabView event:(NSEvent *)event;
+- (void)tideyUpdateRightPanelTabDragWithEvent:(NSEvent *)event;
+- (void)tideyEndRightPanelTabDragWithEvent:(NSEvent *)event;
+@end
+
+@interface TideyPassthroughLabel : NSTextField
+@end
+
+@implementation TideyPassthroughLabel
+
+- (NSView *)hitTest:(NSPoint)point {
+    return nil;
+}
+
+@end
 
 @interface TideyBrowserContainerView : NSView
 @property(nonatomic, copy) void (^tideyNewTabHandler)(void);
@@ -257,6 +278,12 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
 - (void)constrainTideyEditorFileTreeToVisibleWidth;
 - (void)tideyHandleMouseDownEvent:(NSEvent *)event;
 - (void)tideySetLastClickedRegion:(TideyLastClickedRegion)region;
+- (void)tideyBeginRightPanelTabDragWithTabView:(TideyEditorTabItemView *)tabView event:(NSEvent *)event;
+- (void)tideyUpdateRightPanelTabDragWithEvent:(NSEvent *)event;
+- (void)tideyEndRightPanelTabDragWithEvent:(NSEvent *)event;
+- (NSInteger)tideyInsertionIndexForPane:(TideyRightPanelPane *)pane atWindowPoint:(NSPoint)point;
+- (void)tideyUpdateRightPanelTabInsertionIndicatorForPane:(TideyRightPanelPane *)pane index:(NSInteger)index;
+- (void)tideyRemoveRightPanelTabDragArtifacts;
 - (void)ensureTideyEditorWebView;
 - (void)ensureTideyEditorWebViewForPane:(TideyRightPanelPane *)pane inContainerView:(NSView *)containerView;
 - (void)loadTideyEditorShellIfNeeded;
@@ -658,6 +685,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 @interface TideyEditorTabItemView : NSView {
     NSTrackingArea *_trackingArea;
 }
+@property(nonatomic, weak) id<TideyEditorTabItemViewOwner> tideyOwner;
+@property(nonatomic, assign) TideyRightPanelPane *tideyPane;
+@property(nonatomic) NSInteger tideyTabIndex;
+@property(nonatomic, copy) NSString *tideyDragTitle;
 @property(nonatomic) BOOL tideySelected;
 @property(nonatomic) BOOL tideyHovered;
 @property(nonatomic, strong) NSView *tideyHoverView;
@@ -722,6 +753,35 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     [super mouseExited:event];
     self.tideyHovered = NO;
     [self tideyUpdateAppearance];
+}
+
+- (void)mouseDown:(NSEvent *)event {
+    [self.tideyOwner tideySetActivePane:self.tideyPane];
+    [self.tideyOwner tideySetLastClickedRegion:TideyLastClickedRegionEditor];
+    NSPoint startPoint = event.locationInWindow;
+    BOOL dragging = NO;
+    while (YES) {
+        NSEvent *nextEvent = [self.window nextEventMatchingMask:(NSEventMaskLeftMouseDragged | NSEventMaskLeftMouseUp)];
+        if (nextEvent.type == NSEventTypeLeftMouseDragged) {
+            if (!dragging) {
+                NSPoint delta = NSMakePoint(nextEvent.locationInWindow.x - startPoint.x,
+                                            nextEvent.locationInWindow.y - startPoint.y);
+                if (hypot(delta.x, delta.y) < 4.0) {
+                    continue;
+                }
+                dragging = YES;
+                [self.tideyOwner tideyBeginRightPanelTabDragWithTabView:self event:nextEvent];
+            }
+            [self.tideyOwner tideyUpdateRightPanelTabDragWithEvent:nextEvent];
+            continue;
+        }
+        if (dragging) {
+            [self.tideyOwner tideyEndRightPanelTabDragWithEvent:nextEvent];
+        } else {
+            [self.tideyOwner selectTideyRightPanelTabAtIndex:self.tideyTabIndex inPane:self.tideyPane];
+        }
+        break;
+    }
 }
 
 - (void)layout {
@@ -1030,6 +1090,14 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     BOOL _splitVisible;
     CGFloat _splitFraction;
     TideyLastClickedRegion _tideyLastClickedRegion;
+    BOOL _tideyRightPanelTabDragActive;
+    TideyRightPanelPane *_tideyDraggingTabSourcePane;
+    NSInteger _tideyDraggingTabSourceIndex;
+    TideyRightPanelPane *_tideyDraggingTabDropPane;
+    NSInteger _tideyDraggingTabDropIndex;
+    NSView *_tideyDraggingTabGhostView;
+    NSTextField *_tideyDraggingTabGhostLabel;
+    NSView *_tideyDraggingTabInsertionIndicatorView;
 
     // Browser panel
     NSTextField *_tideyBrowserURLField;
@@ -3242,6 +3310,190 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     }
 }
 
+- (void)tideyBeginRightPanelTabDragWithTabView:(TideyEditorTabItemView *)tabView event:(NSEvent *)event {
+    if (!tabView || !tabView.tideyPane || tabView.tideyTabIndex == NSNotFound) {
+        return;
+    }
+    _tideyRightPanelTabDragActive = YES;
+    _tideyDraggingTabSourcePane = tabView.tideyPane;
+    _tideyDraggingTabSourceIndex = tabView.tideyTabIndex;
+    _tideyDraggingTabDropPane = nil;
+    _tideyDraggingTabDropIndex = NSNotFound;
+
+    if (!_tideyDraggingTabGhostView) {
+        _tideyDraggingTabGhostView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, NSWidth(tabView.bounds), NSHeight(tabView.bounds))];
+        _tideyDraggingTabGhostView.wantsLayer = YES;
+        _tideyDraggingTabGhostView.layer.cornerRadius = 8;
+        _tideyDraggingTabGhostView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.17 green:0.18 blue:0.22 alpha:0.92].CGColor;
+        _tideyDraggingTabGhostLabel = [NSTextField labelWithString:@""];
+        _tideyDraggingTabGhostLabel.frame = NSInsetRect(_tideyDraggingTabGhostView.bounds, 10, 4);
+        _tideyDraggingTabGhostLabel.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        _tideyDraggingTabGhostLabel.font = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
+        _tideyDraggingTabGhostLabel.textColor = NSColor.whiteColor;
+        [_tideyDraggingTabGhostView addSubview:_tideyDraggingTabGhostLabel];
+    }
+    _tideyDraggingTabGhostView.frame = NSMakeRect(0, 0, NSWidth(tabView.bounds), NSHeight(tabView.bounds));
+    _tideyDraggingTabGhostLabel.stringValue = tabView.tideyDragTitle ?: @"Untitled";
+    [_tideyEditorPanelView addSubview:_tideyDraggingTabGhostView positioned:NSWindowAbove relativeTo:nil];
+    [self tideyUpdateRightPanelTabDragWithEvent:event];
+}
+
+- (NSInteger)tideyInsertionIndexForPane:(TideyRightPanelPane *)pane atWindowPoint:(NSPoint)point {
+    NSView *tabStripView = pane.tabStripView;
+    if (!tabStripView) {
+        return NSNotFound;
+    }
+    NSPoint pointInStrip = [tabStripView convertPoint:point fromView:nil];
+    if (!NSPointInRect(pointInStrip, tabStripView.bounds)) {
+        return NSNotFound;
+    }
+    NSMutableArray<TideyEditorTabItemView *> *tabViews = [NSMutableArray array];
+    for (NSView *subview in tabStripView.subviews) {
+        if ([subview isKindOfClass:[TideyEditorTabItemView class]]) {
+            [tabViews addObject:(TideyEditorTabItemView *)subview];
+        }
+    }
+    [tabViews sortUsingComparator:^NSComparisonResult(TideyEditorTabItemView *lhs, TideyEditorTabItemView *rhs) {
+        if (NSMinX(lhs.frame) < NSMinX(rhs.frame)) {
+            return NSOrderedAscending;
+        }
+        if (NSMinX(lhs.frame) > NSMinX(rhs.frame)) {
+            return NSOrderedDescending;
+        }
+        return NSOrderedSame;
+    }];
+    NSInteger insertionIndex = pane.tabs.count;
+    for (TideyEditorTabItemView *tabView in tabViews) {
+        if (pointInStrip.x < NSMidX(tabView.frame)) {
+            insertionIndex = tabView.tideyTabIndex;
+            break;
+        }
+    }
+    return insertionIndex;
+}
+
+- (void)tideyUpdateRightPanelTabInsertionIndicatorForPane:(TideyRightPanelPane *)pane index:(NSInteger)index {
+    if (!pane || index == NSNotFound || !pane.tabStripView) {
+        _tideyDraggingTabInsertionIndicatorView.hidden = YES;
+        return;
+    }
+    if (!_tideyDraggingTabInsertionIndicatorView) {
+        _tideyDraggingTabInsertionIndicatorView = [[NSView alloc] initWithFrame:NSZeroRect];
+        _tideyDraggingTabInsertionIndicatorView.wantsLayer = YES;
+        _tideyDraggingTabInsertionIndicatorView.layer.backgroundColor = [NSColor colorWithSRGBRed:1.0 green:0.694 blue:0.106 alpha:1.0].CGColor;
+        _tideyDraggingTabInsertionIndicatorView.layer.cornerRadius = 1.0;
+    }
+    NSView *tabStripView = pane.tabStripView;
+    CGFloat x = 8;
+    TideyEditorTabItemView *referenceView = nil;
+    for (NSView *subview in tabStripView.subviews) {
+        if ([subview isKindOfClass:[TideyEditorTabItemView class]] &&
+            ((TideyEditorTabItemView *)subview).tideyTabIndex == index) {
+            referenceView = (TideyEditorTabItemView *)subview;
+            break;
+        }
+    }
+    if (referenceView) {
+        x = NSMinX(referenceView.frame) - 1;
+    } else {
+        CGFloat maxX = 8;
+        for (NSView *subview in tabStripView.subviews) {
+            if ([subview isKindOfClass:[TideyEditorTabItemView class]]) {
+                maxX = MAX(maxX, NSMaxX(subview.frame) + 2);
+            }
+        }
+        x = maxX;
+    }
+    _tideyDraggingTabInsertionIndicatorView.hidden = NO;
+    _tideyDraggingTabInsertionIndicatorView.frame = NSMakeRect(x,
+                                                               4,
+                                                               2,
+                                                               MAX(0, NSHeight(tabStripView.bounds) - 8));
+    [tabStripView addSubview:_tideyDraggingTabInsertionIndicatorView positioned:NSWindowAbove relativeTo:nil];
+}
+
+- (void)tideyUpdateRightPanelTabDragWithEvent:(NSEvent *)event {
+    if (!_tideyRightPanelTabDragActive || !_tideyDraggingTabGhostView) {
+        return;
+    }
+    NSPoint pointInEditorPanel = [_tideyEditorPanelView convertPoint:event.locationInWindow fromView:nil];
+    _tideyDraggingTabGhostView.frame = NSMakeRect(pointInEditorPanel.x - NSWidth(_tideyDraggingTabGhostView.frame) / 2.0,
+                                                  pointInEditorPanel.y - NSHeight(_tideyDraggingTabGhostView.frame) / 2.0,
+                                                  NSWidth(_tideyDraggingTabGhostView.frame),
+                                                  NSHeight(_tideyDraggingTabGhostView.frame));
+
+    _tideyDraggingTabDropPane = nil;
+    _tideyDraggingTabDropIndex = NSNotFound;
+    for (TideyRightPanelPane *pane in [self tideyVisibleRightPanelPanes]) {
+        NSInteger index = [self tideyInsertionIndexForPane:pane atWindowPoint:event.locationInWindow];
+        if (index != NSNotFound) {
+            _tideyDraggingTabDropPane = pane;
+            _tideyDraggingTabDropIndex = index;
+            break;
+        }
+    }
+    [self tideyUpdateRightPanelTabInsertionIndicatorForPane:_tideyDraggingTabDropPane
+                                                      index:_tideyDraggingTabDropIndex];
+}
+
+- (void)tideyRemoveRightPanelTabDragArtifacts {
+    [_tideyDraggingTabGhostView removeFromSuperview];
+    _tideyDraggingTabInsertionIndicatorView.hidden = YES;
+    [_tideyDraggingTabInsertionIndicatorView removeFromSuperview];
+    _tideyRightPanelTabDragActive = NO;
+    _tideyDraggingTabSourcePane = nil;
+    _tideyDraggingTabSourceIndex = NSNotFound;
+    _tideyDraggingTabDropPane = nil;
+    _tideyDraggingTabDropIndex = NSNotFound;
+}
+
+- (void)tideyEndRightPanelTabDragWithEvent:(NSEvent *)event {
+    (void)event;
+    if (!_tideyRightPanelTabDragActive) {
+        return;
+    }
+    TideyRightPanelPane *sourcePane = _tideyDraggingTabSourcePane;
+    TideyRightPanelPane *destinationPane = _tideyDraggingTabDropPane;
+    NSInteger sourceIndex = _tideyDraggingTabSourceIndex;
+    NSInteger destinationIndex = _tideyDraggingTabDropIndex;
+    BOOL canMove = (sourcePane && destinationPane &&
+                    sourceIndex != NSNotFound &&
+                    destinationIndex != NSNotFound &&
+                    sourceIndex >= 0 &&
+                    sourceIndex < (NSInteger)sourcePane.tabs.count);
+    if (canMove && sourcePane == _primaryPane && destinationPane != sourcePane && sourcePane.tabs.count == 1) {
+        canMove = NO;
+    }
+    if (canMove) {
+        TideyEditorTab *tab = sourcePane.tabs[sourceIndex];
+        [sourcePane.tabs removeObjectAtIndex:sourceIndex];
+        if (sourcePane.selectedTabIndex == sourceIndex) {
+            sourcePane.selectedTabIndex = MIN(sourceIndex, (NSInteger)sourcePane.tabs.count - 1);
+        } else if (sourcePane.selectedTabIndex > sourceIndex) {
+            sourcePane.selectedTabIndex--;
+        }
+        if (sourcePane == destinationPane && destinationIndex > sourceIndex) {
+            destinationIndex--;
+        }
+        destinationIndex = MAX(0, MIN(destinationIndex, (NSInteger)destinationPane.tabs.count));
+        [destinationPane.tabs insertObject:tab atIndex:destinationIndex];
+        [self tideySetActivePane:destinationPane];
+        [self selectTideyRightPanelTabAtIndex:destinationIndex inPane:destinationPane];
+        if (sourcePane == _secondaryPane && sourcePane.tabs.count == 0) {
+            [self toggleTideyEditorSplit:nil];
+            [self tideySetActivePane:_primaryPane];
+        } else {
+            if (sourcePane.selectedTabIndex >= (NSInteger)sourcePane.tabs.count) {
+                sourcePane.selectedTabIndex = sourcePane.tabs.count - 1;
+            }
+            [self reloadTideyRightPanelTabsForPane:sourcePane];
+            [self reloadTideyRightPanelTabsForPane:destinationPane];
+            [self layoutTideyEditorContents];
+        }
+    }
+    [self tideyRemoveRightPanelTabDragArtifacts];
+}
+
 - (void)tideyHandleEditorPanelClick:(NSGestureRecognizer *)recognizer {
     if (!_splitVisible || !_secondaryPane || recognizer.state != NSGestureRecognizerStateEnded) {
         return;
@@ -3977,15 +4229,15 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     _primaryPane.editorWebView.frame = NSMakeRect(0, 0, primaryWidth, contentHeight);
     if (_secondaryPane.containerView) {
         _secondaryPane.containerView.hidden = !shouldShowSplitShell;
-        _secondaryPane.containerView.frame = NSMakeRect(secondaryOriginX, 0, secondaryWidth, contentHeight);
+        _secondaryPane.containerView.frame = NSMakeRect(secondaryOriginX, 0, secondaryWidth, NSHeight(bounds));
         _secondaryPane.containerView.layer.backgroundColor = ((_activePane == _secondaryPane)
                                                               ? [NSColor colorWithSRGBRed:0.10 green:0.11 blue:0.14 alpha:1].CGColor
                                                               : [NSColor colorWithSRGBRed:0.095 green:0.102 blue:0.13 alpha:1].CGColor);
-        _secondaryPane.tabStripView.frame = NSMakeRect(0, contentHeight - tabStripHeight, secondaryWidth, tabStripHeight);
+        _secondaryPane.tabStripView.frame = NSMakeRect(0, NSHeight(_secondaryPane.containerView.bounds) - tabStripHeight, secondaryWidth, tabStripHeight);
         _secondaryPane.tabStripView.layer.backgroundColor = ((_activePane == _secondaryPane)
                                                              ? [NSColor colorWithSRGBRed:0.118 green:0.126 blue:0.155 alpha:1].CGColor
                                                              : [NSColor colorWithSRGBRed:0.102 green:0.108 blue:0.135 alpha:1].CGColor);
-        _secondaryPane.editorWebView.frame = NSMakeRect(0, 0, secondaryWidth, MAX(0, contentHeight - tabStripHeight));
+        _secondaryPane.editorWebView.frame = NSMakeRect(0, 0, secondaryWidth, contentHeight);
     }
     _tideyEditorFileTreeContainerView.hidden = !self.shouldShowTideyEditorFileTree;
     _tideyEditorFileTreeContainerView.frame = NSMakeRect(contentWidth, 0, fileTreeWidth, contentHeight);
@@ -4413,24 +4665,23 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
                                                                                                         0,
                                                                                                         tabWidth,
                                                                                                         tabHeight)];
+            tabView.tideyOwner = (id<TideyEditorTabItemViewOwner>)self;
+            tabView.tideyPane = pane;
+            tabView.tideyTabIndex = originalIndex;
+            tabView.tideyDragTitle = title;
             BOOL selected = (originalIndex == pane.selectedTabIndex);
             tabView.tideySelected = selected;
             tabView.tideyHovered = NO;
             [tabView tideyUpdateAppearance];
 
-            NSButton *selectButton = [[NSButton alloc] initWithFrame:NSMakeRect(10, 2, tabWidth - 34, tabHeight - 2)];
-            selectButton.bordered = NO;
-            selectButton.buttonType = NSButtonTypeMomentaryChange;
-            selectButton.alignment = NSTextAlignmentLeft;
             NSFont *baseFont = [NSFont systemFontOfSize:11 weight:selected ? NSFontWeightSemibold : NSFontWeightMedium];
-            selectButton.font = tab.preview ? [[NSFontManager sharedFontManager] convertFont:baseFont toHaveTrait:NSItalicFontMask] : baseFont;
-            selectButton.contentTintColor = selected ? NSColor.labelColor : NSColor.secondaryLabelColor;
-            selectButton.title = title;
-            selectButton.imagePosition = NSNoImage;
-            selectButton.tag = originalIndex;
-            selectButton.target = self;
-            selectButton.action = @selector(tideyRightPanelSelectTab:);
-            [tabView addSubview:selectButton];
+            TideyPassthroughLabel *titleLabel = [TideyPassthroughLabel labelWithString:title];
+            titleLabel.frame = NSMakeRect(10, 2, tabWidth - 34, tabHeight - 2);
+            titleLabel.alignment = NSTextAlignmentLeft;
+            titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+            titleLabel.font = tab.preview ? [[NSFontManager sharedFontManager] convertFont:baseFont toHaveTrait:NSItalicFontMask] : baseFont;
+            titleLabel.textColor = selected ? NSColor.labelColor : NSColor.secondaryLabelColor;
+            [tabView addSubview:titleLabel];
 
             NSButton *closeButton = [[NSButton alloc] initWithFrame:NSMakeRect(tabWidth - 22, 2, 20, tabHeight - 2)];
             closeButton.bordered = NO;
@@ -5212,7 +5463,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     if (tab.kind == TideyRightPanelTabKindBrowser) {
         return [self tideyBrowserHasFocus];
     }
-    return [self tideyRightPanelHasFocus];
+    return [self tideyEditorPaneHasFocus];
 }
 
 - (BOOL)tideyEditorPaneHasFocus {

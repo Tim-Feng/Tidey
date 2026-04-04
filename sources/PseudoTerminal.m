@@ -12450,7 +12450,10 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
         const int safeIndex = MAX(0, MIN(_contentView.tabView.tabViewItems.count, anIndex));
         [_contentView.tabView insertTabViewItem:aTabViewItem atIndex:safeIndex];
         [aTabViewItem release];
-        if (_automaticallySelectNewTabs || _contentView.tabView.tabViewItems.count == 1) {
+        BOOL shouldSelectInsertedTab = (_automaticallySelectNewTabs ||
+                                        _contentView.tabView.tabViewItems.count == 1 ||
+                                        (self.isShowingTideySidebar && !_tideySwitchingWorkspace));
+        if (shouldSelectInsertedTab) {
             [_contentView.tabView selectTabViewItemAtIndex:safeIndex];
             [_contentView tideyRecordTerminalInteraction];
         }
@@ -12490,6 +12493,11 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
             } else {
                 [_contentView reloadTideySidebar];
                 [_contentView selectTideySidebarWorkspaceAtIndex:self.selectedWorkspaceIndex];
+                NSInteger visibleIndex = [self indexOfTab:aTab];
+                if (visibleIndex != NSNotFound) {
+                    [_contentView.tabView selectTabViewItemAtIndex:visibleIndex];
+                    [_contentView tideyRecordTerminalInteraction];
+                }
             }
         }
         _pendingWorkspaceIndexForInsertedPanel = -1;
