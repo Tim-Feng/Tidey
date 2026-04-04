@@ -57,6 +57,10 @@
 - `WKWebView` 不是普通 sibling view
   - 它有自己的 compositing layer，`NSView` sibling 的 z-order 和 `layer.zPosition` 不足以保證蓋在它上面
   - 需要真正的 panel-level overlay，或更高層的 overlay 容器
+- 不要靠 `osascript` quit 驗證 UI 改動
+  - Tidey 有 `cmd+q` 雙重確認
+  - `osascript` / menu quit 會被 quit guard 攔住，看起來像 app 沒關、還在跑舊 UI
+  - 要用使用者手動 `cmd+q` 再 `cmd+q` 真正關掉
 - browser/editor mixed tab strip 先改 render policy，再改 model
   - collapsed group 最安全的做法是不 layout tabs，不是 remove/re-add model
 - `NSTextFieldRoundedBezel` 的文字基線偏上
@@ -68,6 +72,13 @@
   - 關掉最後一個 browser tab 後 file tree 不恢復就是這個原因
 - `updateTideyChromeToggleButtons` 要考慮 browser mode
   - file tree toggle button 在 browser 顯示時要 hidden，切回 editor 時要恢復
+- `NSButton` 會吃掉 tab drag 的 `mouseDragged`
+  - `mouseDown` 進 `NSCell trackMouse:` 後，local monitor 收不到後續 drag/up
+  - tab title 不能用會攔事件的 `NSButton`
+  - 要在 item view 自己用 `mouseDown` + `nextEventMatchingMask:` 做 click vs drag
+- split 後 browser host 只能用 pane-local bounds
+  - browser container / webview 不能 fallback 回 whole-panel bounds
+  - primary pane 如果直接用 `_tideyEditorPanelView.bounds`，左 pane 開 web 會橫跨兩欄
 
 ## Terminal Selection / Mouse
 
@@ -79,6 +90,10 @@
   - 這題要看 click / drag 實際吃的是哪條 path，再決定 rounding
 - `textView.frame.origin.y` 和 `topBottomMargins` 都會影響視覺起點
   - 先確認 point 所在座標系，再決定要不要扣 offset
+- `WKWebView` 的 responder chain 不能拿來判斷 editor focus
+  - `firstResponder` 常是 WebKit 內部 view，不是穩定 contract
+  - `isDescendantOfView:` 和 class-name heuristic 都會飄
+  - editor/browser 快捷鍵 routing 要改用 click-based region tracking
 
 ## Rendering
 
@@ -158,6 +173,12 @@
   - app bundle image/resource 常常缺，會在 init 途中炸掉
 - 把 feature 抽成 standalone helper，或只測窄 seam
   - test subclass 只 override feature seam，不要依賴完整 view init
+- split view 先抽 owner 再加第二 pane
+  - 先做 `TideyRightPanelPane` / `TideyEditorDocumentStore`
+  - 直接在單一 owner 上加 left/right 分支，後面會變成到處補 `if/else`
+- `containerView` 不能直接指到 panel root view
+  - `layoutTideyEditorContents` 只該管 panel 內部子 view
+  - pane container 如果直接等於 `_tideyEditorPanelView`，一設 frame 就會把整個 panel 位置打亂
 
 ## Branding / Defaults
 
@@ -166,4 +187,3 @@
   - `.icon` 和 `.icns` 不要混
 - 改 `DefaultBookmark.plist` 後，如果 app 還在吃舊預設，要先清掉已寫入的 user defaults / cached profile
   - 不然 plist 改了，執行中的預設 profile 不一定會立刻跟著變
-

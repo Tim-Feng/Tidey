@@ -1073,6 +1073,19 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 @end
 
+@interface iTermRootTerminalView (TideySplitViewTesting)
++ (NSDictionary<NSString *, id> *)tideyTabMoveResultByMovingObjectAtSourceIndex:(NSInteger)sourceIndex
+                                                              fromSourceObjects:(NSArray *)sourceObjects
+                                                            sourceSelectedIndex:(NSInteger)sourceSelectedIndex
+                                                       toDestinationObjects:(NSArray *)destinationObjects
+                                                 destinationSelectedIndex:(NSInteger)destinationSelectedIndex
+                                                           destinationIndex:(NSInteger)destinationIndex
+                                                                    samePane:(BOOL)samePane
+                                                             sourceIsPrimary:(BOOL)sourceIsPrimary
+                                                            splitWasVisible:(BOOL)splitWasVisible;
++ (BOOL)tideyNextSplitVisibilityAfterToggleFromVisible:(BOOL)splitVisible;
+@end
+
 @implementation iTermRootTerminalView {
     BOOL _tabViewFrameReduced;
     BOOL _haveShownToolbelt;
@@ -7728,6 +7741,71 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 
 - (NSColor *)genericStatusBarContainerBackgroundColor {
     return [self.delegate rootTerminalViewTabBarBackgroundColorIgnoringTabColor:YES];
+}
+
+@end
+
+@implementation iTermRootTerminalView (TideySplitViewTesting)
+
++ (NSDictionary<NSString *, id> *)tideyTabMoveResultByMovingObjectAtSourceIndex:(NSInteger)sourceIndex
+                                                              fromSourceObjects:(NSArray *)sourceObjects
+                                                            sourceSelectedIndex:(NSInteger)sourceSelectedIndex
+                                                       toDestinationObjects:(NSArray *)destinationObjects
+                                                 destinationSelectedIndex:(NSInteger)destinationSelectedIndex
+                                                           destinationIndex:(NSInteger)destinationIndex
+                                                                    samePane:(BOOL)samePane
+                                                             sourceIsPrimary:(BOOL)sourceIsPrimary
+                                                            splitWasVisible:(BOOL)splitWasVisible {
+    if (sourceIndex < 0 || sourceIndex >= (NSInteger)sourceObjects.count) {
+        return nil;
+    }
+    NSMutableArray *source = [sourceObjects mutableCopy];
+    NSMutableArray *destination = samePane ? source : [destinationObjects mutableCopy];
+    id object = source[sourceIndex];
+    [source removeObjectAtIndex:sourceIndex];
+
+    NSInteger updatedSourceSelectedIndex = sourceSelectedIndex;
+    if (updatedSourceSelectedIndex == sourceIndex) {
+        updatedSourceSelectedIndex = MIN(sourceIndex, (NSInteger)source.count - 1);
+    } else if (updatedSourceSelectedIndex > sourceIndex) {
+        updatedSourceSelectedIndex--;
+    }
+
+    NSInteger updatedDestinationIndex = MAX(0, MIN(destinationIndex, (NSInteger)destination.count));
+    if (samePane && updatedDestinationIndex > sourceIndex) {
+        updatedDestinationIndex--;
+    }
+    [destination insertObject:object atIndex:updatedDestinationIndex];
+
+    BOOL resultingSplitVisible = splitWasVisible;
+    BOOL mergedPrimary = NO;
+    NSInteger updatedDestinationSelectedIndex = updatedDestinationIndex;
+
+    if (!samePane && splitWasVisible && source.count == 0) {
+        resultingSplitVisible = NO;
+        if (sourceIsPrimary) {
+            mergedPrimary = YES;
+            source = [destination mutableCopy];
+            [destination removeAllObjects];
+            updatedSourceSelectedIndex = updatedDestinationIndex;
+            updatedDestinationSelectedIndex = NSNotFound;
+        } else {
+            updatedSourceSelectedIndex = NSNotFound;
+        }
+    }
+
+    return @{
+        @"sourceObjects": source,
+        @"destinationObjects": destination,
+        @"sourceSelectedIndex": @(updatedSourceSelectedIndex),
+        @"destinationSelectedIndex": @(updatedDestinationSelectedIndex),
+        @"splitVisible": @(resultingSplitVisible),
+        @"mergedPrimary": @(mergedPrimary),
+    };
+}
+
++ (BOOL)tideyNextSplitVisibilityAfterToggleFromVisible:(BOOL)splitVisible {
+    return !splitVisible;
 }
 
 @end

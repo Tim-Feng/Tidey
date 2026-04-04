@@ -1,7 +1,9 @@
 #import <XCTest/XCTest.h>
 
 #import "PseudoTerminal.h"
+#import "TideyEditorDocumentStore.h"
 #import "iTermApplicationDelegate.h"
+#import "iTermRootTerminalView.h"
 
 @interface PseudoTerminal (TideyAppShortcutBehaviorTests)
 + (BOOL)tideyShouldIgnoreCloseCurrentSessionWithTabCount:(NSInteger)tabCount
@@ -18,7 +20,21 @@
 + (NSString *)tideyFullscreenShortcutKeyEquivalentForProfileShortcutChange:(NSNumber *)fShortcut;
 + (NSEventModifierFlags)tideyFullscreenShortcutModifierMaskForProfileShortcutChange:(NSNumber *)fShortcut;
 + (NSInteger)tideyAlternateNewSessionActionForBrowserFocus:(BOOL)browserHasFocus
+                                       editorPaneHasFocus:(BOOL)editorPaneHasFocus
                                        showingTideySidebar:(BOOL)showingTideySidebar;
+@end
+
+@interface iTermRootTerminalView (TideySplitViewTesting)
++ (NSDictionary<NSString *, id> *)tideyTabMoveResultByMovingObjectAtSourceIndex:(NSInteger)sourceIndex
+                                                              fromSourceObjects:(NSArray *)sourceObjects
+                                                            sourceSelectedIndex:(NSInteger)sourceSelectedIndex
+                                                       toDestinationObjects:(NSArray *)destinationObjects
+                                                 destinationSelectedIndex:(NSInteger)destinationSelectedIndex
+                                                           destinationIndex:(NSInteger)destinationIndex
+                                                                    samePane:(BOOL)samePane
+                                                             sourceIsPrimary:(BOOL)sourceIsPrimary
+                                                            splitWasVisible:(BOOL)splitWasVisible;
++ (BOOL)tideyNextSplitVisibilityAfterToggleFromVisible:(BOOL)splitVisible;
 @end
 
 @interface TideyBrowserContainerView : NSView
@@ -97,20 +113,118 @@
 
 - (void)testAlternateNewSessionRoutingUsesBrowserTabWhenBrowserHasFocus {
     XCTAssertEqual([iTermApplicationDelegate tideyAlternateNewSessionActionForBrowserFocus:YES
+                                                                        editorPaneHasFocus:NO
                                                                        showingTideySidebar:NO],
+                   1);
+}
+
+- (void)testAlternateNewSessionRoutingUsesEditorTabWhenEditorPaneHasFocus {
+    XCTAssertEqual([iTermApplicationDelegate tideyAlternateNewSessionActionForBrowserFocus:NO
+                                                                        editorPaneHasFocus:YES
+                                                                        showingTideySidebar:NO],
+                   3);
+}
+
+- (void)testAlternateNewSessionRoutingPrefersBrowserOverEditor {
+    XCTAssertEqual([iTermApplicationDelegate tideyAlternateNewSessionActionForBrowserFocus:YES
+                                                                        editorPaneHasFocus:YES
+                                                                        showingTideySidebar:NO],
                    1);
 }
 
 - (void)testAlternateNewSessionRoutingUsesTerminalTabOutsideTideySidebar {
     XCTAssertEqual([iTermApplicationDelegate tideyAlternateNewSessionActionForBrowserFocus:NO
+                                                                        editorPaneHasFocus:NO
                                                                        showingTideySidebar:NO],
                    0);
 }
 
 - (void)testAlternateNewSessionRoutingUsesTideyPanelInsideSidebar {
     XCTAssertEqual([iTermApplicationDelegate tideyAlternateNewSessionActionForBrowserFocus:NO
+                                                                        editorPaneHasFocus:NO
                                                                        showingTideySidebar:YES],
                    2);
+}
+
+- (void)testDocumentStoreReturnsSameDocumentForCanonicalizedPath {
+    TideyEditorDocumentStore *store = [[TideyEditorDocumentStore alloc] init];
+    id doc1 = [store documentForPath:@"/foo/bar/../baz.txt"];
+    id doc2 = [store documentForPath:@"/foo/baz.txt"];
+    XCTAssertNotNil(doc1);
+    XCTAssertEqual(doc1, doc2);
+}
+
+- (void)testDocumentStoreCreatesDistinctUntitledDocuments {
+    TideyEditorDocumentStore *store = [[TideyEditorDocumentStore alloc] init];
+    id doc1 = [store createUntitledDocument];
+    id doc2 = [store createUntitledDocument];
+    XCTAssertNotNil(doc1);
+    XCTAssertNotNil(doc2);
+    XCTAssertNotEqual(doc1, doc2);
+    XCTAssertNotEqualObjects([doc1 identifier], [doc2 identifier]);
+}
+
+- (void)testDocumentStoreRemoveDocumentDropsStoredInstance {
+    TideyEditorDocumentStore *store = [[TideyEditorDocumentStore alloc] init];
+    id doc1 = [store documentForPath:@"/tmp/test.txt"];
+    [store removeDocument:doc1];
+    id doc2 = [store documentForPath:@"/tmp/test.txt"];
+    XCTAssertNotEqual(doc1, doc2);
+}
+
+- (void)testTabDragStateMovesTabAcrossPanesAndFixesSelection {
+    NSDictionary *result = [iTermRootTerminalView tideyTabMoveResultByMovingObjectAtSourceIndex:1
+                                                                               fromSourceObjects:@[@"a", @"b", @"c"]
+                                                                             sourceSelectedIndex:2
+                                                                        toDestinationObjects:@[@"x"]
+                                                                  destinationSelectedIndex:0
+                                                                            destinationIndex:1
+                                                                                     samePane:NO
+                                                                              sourceIsPrimary:NO
+                                                                             splitWasVisible:YES];
+    XCTAssertEqualObjects(result[@"sourceObjects"], (@[@"a", @"c"]));
+    XCTAssertEqualObjects(result[@"destinationObjects"], (@[@"x", @"b"]));
+    XCTAssertEqual([result[@"sourceSelectedIndex"] integerValue], 1);
+    XCTAssertEqual([result[@"destinationSelectedIndex"] integerValue], 1);
+    XCTAssertTrue([result[@"splitVisible"] boolValue]);
+}
+
+- (void)testTabDragStateCollapsesWhenSecondaryBecomesEmpty {
+    NSDictionary *result = [iTermRootTerminalView tideyTabMoveResultByMovingObjectAtSourceIndex:0
+                                                                               fromSourceObjects:@[@"b"]
+                                                                             sourceSelectedIndex:0
+                                                                        toDestinationObjects:@[@"a"]
+                                                                  destinationSelectedIndex:0
+                                                                            destinationIndex:1
+                                                                                     samePane:NO
+                                                                              sourceIsPrimary:NO
+                                                                             splitWasVisible:YES];
+    XCTAssertEqualObjects(result[@"sourceObjects"], (@[]));
+    XCTAssertEqualObjects(result[@"destinationObjects"], (@[@"a", @"b"]));
+    XCTAssertEqual([result[@"sourceSelectedIndex"] integerValue], NSNotFound);
+    XCTAssertFalse([result[@"splitVisible"] boolValue]);
+}
+
+- (void)testTabDragStateMergesSecondaryIntoPrimaryWhenPrimaryBecomesEmpty {
+    NSDictionary *result = [iTermRootTerminalView tideyTabMoveResultByMovingObjectAtSourceIndex:0
+                                                                               fromSourceObjects:@[@"a"]
+                                                                             sourceSelectedIndex:0
+                                                                        toDestinationObjects:@[@"b", @"c"]
+                                                                  destinationSelectedIndex:1
+                                                                            destinationIndex:1
+                                                                                     samePane:NO
+                                                                              sourceIsPrimary:YES
+                                                                             splitWasVisible:YES];
+    XCTAssertEqualObjects(result[@"sourceObjects"], (@[@"b", @"a", @"c"]));
+    XCTAssertEqualObjects(result[@"destinationObjects"], (@[]));
+    XCTAssertEqual([result[@"sourceSelectedIndex"] integerValue], 1);
+    XCTAssertTrue([result[@"mergedPrimary"] boolValue]);
+    XCTAssertFalse([result[@"splitVisible"] boolValue]);
+}
+
+- (void)testSplitToggleStateFlipsVisibility {
+    XCTAssertTrue([iTermRootTerminalView tideyNextSplitVisibilityAfterToggleFromVisible:NO]);
+    XCTAssertFalse([iTermRootTerminalView tideyNextSplitVisibilityAfterToggleFromVisible:YES]);
 }
 
 - (void)testBrowserContainerPerformKeyEquivalentInterceptsCommandT {
