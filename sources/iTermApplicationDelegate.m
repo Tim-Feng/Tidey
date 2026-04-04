@@ -164,6 +164,12 @@ static NSString *const kRestoreDefaultWindowArrangementShortcut = @"R";
 NSString *const iTermApplicationWillTerminate = @"iTermApplicationWillTerminate";
 static const NSTimeInterval kTideyQuitConfirmationInterval = 3.0;
 
+typedef NS_ENUM(NSInteger, TideyAlternateNewSessionAction) {
+    TideyAlternateNewSessionActionTerminalTab = 0,
+    TideyAlternateNewSessionActionBrowserTab = 1,
+    TideyAlternateNewSessionActionTideyPanel = 2,
+};
+
 static BOOL gStartupActivitiesPerformed = NO;
 // Prior to 8/7/11, there was only one window arrangement, always called Default.
 static NSString *LEGACY_DEFAULT_ARRANGEMENT_NAME = @"Default";
@@ -191,6 +197,8 @@ static BOOL hasBecomeActive = NO;
                                        interval:(NSTimeInterval)interval;
 + (NSString *)tideyFullscreenShortcutKeyEquivalentForProfileShortcutChange:(NSNumber *)fShortcut;
 + (NSEventModifierFlags)tideyFullscreenShortcutModifierMaskForProfileShortcutChange:(NSNumber *)fShortcut;
++ (TideyAlternateNewSessionAction)tideyAlternateNewSessionActionForBrowserFocus:(BOOL)browserHasFocus
+                                                             showingTideySidebar:(BOOL)showingTideySidebar;
 @end
 
 
@@ -2901,9 +2909,21 @@ static iTermKeyEventReplayer *gReplayer;
     NSNumber *index = nil;
     PseudoTerminal *term = [[iTermController sharedInstance] currentTerminal];
     if (term) {
-        if ([term tideyBrowserHasFocus]) {
-            [term createNewBlankBrowserTab];
-            return;
+        switch ([[self class] tideyAlternateNewSessionActionForBrowserFocus:[term tideyBrowserHasFocus]
+                                                         showingTideySidebar:term.isShowingTideySidebar]) {
+            case TideyAlternateNewSessionActionBrowserTab:
+                [term createNewBlankBrowserTab];
+                return;
+            case TideyAlternateNewSessionActionTideyPanel: {
+                BOOL cancel;
+                BOOL tmux = [self possiblyTmuxValueForWindow:NO cancel:&cancel];
+                if (!cancel) {
+                    [term createTideyPanelPossiblyTmux:tmux];
+                }
+                return;
+            }
+            case TideyAlternateNewSessionActionTerminalTab:
+                break;
         }
         if ([self alternateNewSessionShouldOpenAtEnd]) {
             index = @(term.numberOfTabs);
@@ -2918,6 +2938,17 @@ static iTermKeyEventReplayer *gReplayer;
         }
     }
     [self newTabAtIndex:index];
+}
+
++ (TideyAlternateNewSessionAction)tideyAlternateNewSessionActionForBrowserFocus:(BOOL)browserHasFocus
+                                                             showingTideySidebar:(BOOL)showingTideySidebar {
+    if (browserHasFocus) {
+        return TideyAlternateNewSessionActionBrowserTab;
+    }
+    if (showingTideySidebar) {
+        return TideyAlternateNewSessionActionTideyPanel;
+    }
+    return TideyAlternateNewSessionActionTerminalTab;
 }
 
 - (void)newTabAtIndex:(NSNumber *)index {
