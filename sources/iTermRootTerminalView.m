@@ -3476,7 +3476,14 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         [destinationPane.tabs insertObject:tab atIndex:destinationIndex];
         [self tideySetActivePane:destinationPane];
         [self selectTideyRightPanelTabAtIndex:destinationIndex inPane:destinationPane];
-        if (sourcePane == _secondaryPane && sourcePane.tabs.count == 0) {
+        if (sourcePane.tabs.count == 0 && _splitVisible) {
+            if (sourcePane == _primaryPane) {
+                for (TideyEditorTab *t in [_secondaryPane.tabs copy]) {
+                    [_primaryPane.tabs addObject:t];
+                }
+                [_secondaryPane.tabs removeAllObjects];
+                _primaryPane.selectedTabIndex = [_primaryPane.tabs indexOfObjectIdenticalTo:tab];
+            }
             [self toggleTideyEditorSplit:nil];
             [self tideySetActivePane:_primaryPane];
         } else {
