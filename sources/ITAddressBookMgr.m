@@ -249,6 +249,7 @@ iTermPercentage iTermPercentageFromProfile(Profile *profile) {
             [[ProfileModel sharedInstance] addBookmark:aDict];
             [[ProfileModel sharedInstance] flush];
         }
+        [ITAddressBookMgr applyTideyDefaultSelectionColorsToDefaultBookmarkIfNeeded];
 
         if ([iTermPreferences boolForKey:kPreferenceKeyAddBonjourHostsToProfiles]) {
             [self locateBonjourServices];
@@ -356,6 +357,102 @@ iTermPercentage iTermPercentageFromProfile(Profile *profile) {
     }
     DLog(@"Giving you red so you know it's bad");
     return [NSColor colorWithDisplayP3Red:1.0 green:0 blue:0 alpha:1];
+}
+
++ (NSDictionary *)tideyLegacySelectionColorDictionary {
+    return @{
+        @"Alpha Component": @1,
+        @"Blue Component": @0.29019609093666077,
+        @"Color Space": @"sRGB",
+        @"Green Component": @0.22745098173618317,
+        @"Red Component": @0.16470588743686676,
+    };
+}
+
++ (NSDictionary *)tideyDefaultSelectionColorDictionary {
+    return @{
+        @"Alpha Component": @1,
+        @"Blue Component": @0.37254902720451355,
+        @"Color Space": @"sRGB",
+        @"Green Component": @0.67843139171600342,
+        @"Red Component": @0.7921568751335144,
+    };
+}
+
++ (NSDictionary *)tideyLegacySelectedTextColorDictionary {
+    return @{
+        @"Alpha Component": @1,
+        @"Blue Component": @0,
+        @"Color Space": @"sRGB",
+        @"Green Component": @0,
+        @"Red Component": @0,
+    };
+}
+
++ (NSDictionary *)tideyDefaultSelectedTextColorDictionary {
+    return @{
+        @"Alpha Component": @1,
+        @"Blue Component": @0.10980392247438431,
+        @"Color Space": @"sRGB",
+        @"Green Component": @0.10980392247438431,
+        @"Red Component": @0.10980392247438431,
+    };
+}
+
++ (void)applyTideyDefaultSelectionColorsToDefaultBookmarkIfNeeded {
+    ProfileModel *model = [ProfileModel sharedInstance];
+    Profile *bookmark = model.defaultBookmark;
+    if (!bookmark) {
+        return;
+    }
+    NSString *defaultName = NSLocalizedStringFromTableInBundle(@"Default",
+                                                               @"iTerm",
+                                                               [NSBundle bundleForClass:self],
+                                                               @"Terminal Profiles");
+    if (![bookmark[KEY_NAME] isEqualToString:defaultName]) {
+        return;
+    }
+
+    NSDictionary *legacySelection = [self tideyLegacySelectionColorDictionary];
+    NSDictionary *legacySelectedText = [self tideyLegacySelectedTextColorDictionary];
+    NSDictionary *currentSelection = bookmark[KEY_SELECTION_COLOR];
+    NSDictionary *currentSelectionDark = bookmark[iTermAmendedColorKey(KEY_SELECTION_COLOR, bookmark, YES)];
+    NSDictionary *currentSelectionLight = bookmark[iTermAmendedColorKey(KEY_SELECTION_COLOR, bookmark, NO)];
+    NSDictionary *currentSelectedText = bookmark[KEY_SELECTED_TEXT_COLOR];
+    NSDictionary *currentSelectedTextDark = bookmark[iTermAmendedColorKey(KEY_SELECTED_TEXT_COLOR, bookmark, YES)];
+    NSDictionary *currentSelectedTextLight = bookmark[iTermAmendedColorKey(KEY_SELECTED_TEXT_COLOR, bookmark, NO)];
+
+    const BOOL shouldMigrateSelectionColor =
+        [currentSelection isEqual:legacySelection] &&
+        [currentSelectionDark isEqual:legacySelection] &&
+        [currentSelectionLight isEqual:legacySelection];
+    const BOOL shouldMigrateSelectedTextColor =
+        [currentSelectedText isEqual:legacySelectedText] &&
+        [currentSelectedTextDark isEqual:legacySelectedText] &&
+        [currentSelectedTextLight isEqual:legacySelectedText];
+
+    if (!shouldMigrateSelectionColor && !shouldMigrateSelectedTextColor) {
+        return;
+    }
+
+    NSMutableDictionary *updates = [NSMutableDictionary dictionary];
+    if (shouldMigrateSelectionColor) {
+        NSDictionary *replacement = [self tideyDefaultSelectionColorDictionary];
+        updates[KEY_SELECTION_COLOR] = replacement;
+        updates[KEY_SELECTION_COLOR COLORS_DARK_MODE_SUFFIX] = replacement;
+        updates[KEY_SELECTION_COLOR COLORS_LIGHT_MODE_SUFFIX] = replacement;
+    }
+    if (shouldMigrateSelectedTextColor) {
+        NSDictionary *replacement = [self tideyDefaultSelectedTextColorDictionary];
+        updates[KEY_SELECTED_TEXT_COLOR] = replacement;
+        updates[KEY_SELECTED_TEXT_COLOR COLORS_DARK_MODE_SUFFIX] = replacement;
+        updates[KEY_SELECTED_TEXT_COLOR COLORS_LIGHT_MODE_SUFFIX] = replacement;
+        updates[KEY_USE_SELECTED_TEXT_COLOR] = @YES;
+        updates[KEY_USE_SELECTED_TEXT_COLOR COLORS_DARK_MODE_SUFFIX] = @YES;
+        updates[KEY_USE_SELECTED_TEXT_COLOR COLORS_LIGHT_MODE_SUFFIX] = @YES;
+    }
+    [model setObjectsFromDictionary:updates inProfile:bookmark];
+    [model flush];
 }
 
 + (NSFont *)defaultFont {
