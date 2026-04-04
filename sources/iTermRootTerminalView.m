@@ -235,6 +235,7 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
 @property(nonatomic, strong) NSButton *tideyTerminalToggleButton;
 @property(nonatomic, strong) NSButton *tideyEditorToggleButton;
 @property(nonatomic, strong) NSButton *tideyEditorFileTreeToggleButton;
+@property(nonatomic, strong) NSButton *tideyEditorSplitToggleButton;
 
 - (CGFloat)tideySidebarWidth;
 - (CGFloat)tideyEditorPanelWidth;
@@ -247,7 +248,9 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
 - (void)syncTideyEditorFileTreeRootIfNeeded;
 - (void)constrainTideyEditorFileTreeToVisibleWidth;
 - (void)ensureTideyEditorWebView;
+- (void)ensureTideyEditorWebViewForPane:(TideyRightPanelPane *)pane inContainerView:(NSView *)containerView;
 - (void)loadTideyEditorShellIfNeeded;
+- (void)loadTideyEditorShellIfNeededForPane:(TideyRightPanelPane *)pane;
 - (void)tideyEditorLoadDemoFileIfNeeded;
 - (BOOL)tideyEditorIsDemoFilePath:(NSString *)path;
 - (void)tideyEditorLoadFileAtPath:(NSString *)path;
@@ -276,8 +279,14 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
 - (void)tideySyncCurrentEditorFileWatcher;
 - (void)tideyHandleCurrentEditorFileDidChange;
 - (void)tideyEditorApplyPendingStateIfReady;
+- (void)tideyEditorApplyPendingStateIfReadyForPane:(TideyRightPanelPane *)pane;
 - (void)tideyEditorDidBecomeReady;
+- (void)tideyEditorDidBecomeReadyForPane:(TideyRightPanelPane *)pane;
 - (void)tideyEditorDidReceiveScriptMessage:(WKScriptMessage *)message;
+- (void)tideyEditorDidReceiveScriptMessage:(WKScriptMessage *)message fromPane:(TideyRightPanelPane *)pane;
+- (void)toggleTideyEditorSplit:(id)sender;
+- (void)ensureSecondaryPane;
+- (void)teardownSecondaryPane;
 - (NSString *)tideyEditorHTML;
 - (TideyRightPanelPane *)activePane;
 - (BOOL)isSplitVisible;
@@ -734,13 +743,14 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 @interface TideyEditorScriptMessageHandler : NSObject<WKScriptMessageHandler>
 @property(nonatomic, weak) iTermRootTerminalView *rootView;
+@property(nonatomic, weak) TideyRightPanelPane *pane;
 @end
 
 @implementation TideyEditorScriptMessageHandler
 
 - (void)userContentController:(WKUserContentController *)userContentController
       didReceiveScriptMessage:(WKScriptMessage *)message {
-    [self.rootView tideyEditorDidReceiveScriptMessage:message];
+    [self.rootView tideyEditorDidReceiveScriptMessage:message fromPane:self.pane];
 }
 
 @end
@@ -1641,6 +1651,20 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         self.tideyEditorFileTreeToggleButton = [self newTideyChromeToggleButtonWithAction:@selector(toggleTideyEditorFileTree:)];
         [_tideyEditorPanelView addSubview:self.tideyEditorFileTreeToggleButton];
 
+        self.tideyEditorSplitToggleButton = [[NSButton alloc] initWithFrame:NSMakeRect(0, 0, 22, 22)];
+        self.tideyEditorSplitToggleButton.bordered = NO;
+        self.tideyEditorSplitToggleButton.buttonType = NSButtonTypeMomentaryPushIn;
+        self.tideyEditorSplitToggleButton.focusRingType = NSFocusRingTypeNone;
+        self.tideyEditorSplitToggleButton.wantsLayer = YES;
+        self.tideyEditorSplitToggleButton.layer.cornerRadius = 6;
+        self.tideyEditorSplitToggleButton.layer.backgroundColor = NSColor.clearColor.CGColor;
+        self.tideyEditorSplitToggleButton.contentTintColor = [NSColor colorWithWhite:0.72 alpha:1];
+        self.tideyEditorSplitToggleButton.image = [NSImage imageWithSystemSymbolName:@"rectangle.split.2x1"
+                                                                accessibilityDescription:@"Split Editor"];
+        self.tideyEditorSplitToggleButton.target = self;
+        self.tideyEditorSplitToggleButton.action = @selector(toggleTideyEditorSplit:);
+        [_tideyEditorPanelView addSubview:self.tideyEditorSplitToggleButton];
+
         // Create the tab view.
         self.tabView = [[PTYTabView alloc] initWithFrame:self.bounds];
         self.tabView.drawsBackground = NO;
@@ -1931,6 +1955,13 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         [_primaryPane.browserWebView removeObserver:self forKeyPath:@"loading"];
         [_primaryPane.browserWebView removeObserver:self forKeyPath:@"canGoBack"];
         [_primaryPane.browserWebView removeObserver:self forKeyPath:@"canGoForward"];
+    }
+    if (_secondaryPane.editorWebView) {
+        [_secondaryPane.editorWebView.configuration.userContentController removeScriptMessageHandlerForName:@"tideyEditorReady"];
+        [_secondaryPane.editorWebView.configuration.userContentController removeScriptMessageHandlerForName:@"tideyEditorChanged"];
+        [_secondaryPane.editorWebView.configuration.userContentController removeScriptMessageHandlerForName:@"tideyEditorSaveRequested"];
+        [_secondaryPane.editorWebView.configuration.userContentController removeScriptMessageHandlerForName:@"tideyEditorOpenLink"];
+        _secondaryPane.editorWebView.navigationDelegate = nil;
     }
     _tabBarControl.itermTabBarDelegate = nil;
     _tabBarControl.delegate = nil;
@@ -3043,7 +3074,11 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 
 - (void)ensureTideyEditorWebView {
-    if (_primaryPane.editorWebView != nil) {
+    [self ensureTideyEditorWebViewForPane:_primaryPane inContainerView:_tideyEditorPanelView];
+}
+
+- (void)ensureTideyEditorWebViewForPane:(TideyRightPanelPane *)pane inContainerView:(NSView *)containerView {
+    if (!pane || !containerView || pane.editorWebView != nil) {
         return;
     }
 
@@ -3062,20 +3097,21 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     WKUserContentController *contentController = [[WKUserContentController alloc] init];
     TideyEditorScriptMessageHandler *handler = [[TideyEditorScriptMessageHandler alloc] init];
     handler.rootView = self;
-    _primaryPane.editorScriptMessageHandler = handler;
+    handler.pane = pane;
+    pane.editorScriptMessageHandler = handler;
     [contentController addScriptMessageHandler:handler name:@"tideyEditorReady"];
     [contentController addScriptMessageHandler:handler name:@"tideyEditorChanged"];
     [contentController addScriptMessageHandler:handler name:@"tideyEditorSaveRequested"];
     [contentController addScriptMessageHandler:handler name:@"tideyEditorOpenLink"];
     configuration.userContentController = contentController;
 
-    _primaryPane.editorWebView = [[WKWebView alloc] initWithFrame:_tideyEditorPanelView.bounds configuration:configuration];
-    _primaryPane.editorWebView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    _primaryPane.editorWebView.navigationDelegate = self;
+    pane.editorWebView = [[WKWebView alloc] initWithFrame:containerView.bounds configuration:configuration];
+    pane.editorWebView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    pane.editorWebView.navigationDelegate = self;
     if (@available(macOS 13.3, *)) {
-        _primaryPane.editorWebView.inspectable = YES;
+        pane.editorWebView.inspectable = YES;
     }
-    [_tideyEditorPanelView addSubview:_primaryPane.editorWebView positioned:NSWindowBelow relativeTo:_tideyEditorPanelLabel];
+    [containerView addSubview:pane.editorWebView positioned:NSWindowBelow relativeTo:nil];
     [self layoutTideyEditorContents];
 }
 
@@ -3278,14 +3314,22 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 }
 
 - (void)loadTideyEditorShellIfNeeded {
-    [self ensureTideyEditorWebView];
-    if (_primaryPane.editorShellLoaded) {
+    [self loadTideyEditorShellIfNeededForPane:_primaryPane];
+}
+
+- (void)loadTideyEditorShellIfNeededForPane:(TideyRightPanelPane *)pane {
+    if (!pane) {
         return;
     }
-    _primaryPane.editorShellLoaded = YES;
+    NSView *containerView = (pane == _primaryPane) ? _tideyEditorPanelView : pane.containerView;
+    [self ensureTideyEditorWebViewForPane:pane inContainerView:containerView];
+    if (pane.editorShellLoaded) {
+        return;
+    }
+    pane.editorShellLoaded = YES;
     NSURL *baseURL = [self tideyEditorMonacoBaseURL];
-    [_primaryPane.editorWebView loadHTMLString:[self tideyEditorHTML]
-                                       baseURL:baseURL];
+    [pane.editorWebView loadHTMLString:[self tideyEditorHTML]
+                               baseURL:baseURL];
 }
 
 - (NSURL *)tideyEditorMonacoBundleURL {
@@ -3671,6 +3715,17 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     const NSRect bounds = _tideyEditorPanelView.bounds;
     const CGFloat tabStripHeight = TideyEditorEffectiveTabStripHeight(_tabBarControl.height);
     _tideyEditorTabStripView.frame = NSMakeRect(0, NSHeight(bounds) - tabStripHeight, NSWidth(bounds), tabStripHeight);
+    self.tideyEditorSplitToggleButton.hidden = NO;
+    self.tideyEditorSplitToggleButton.frame = NSMakeRect(MAX(0, NSWidth(bounds) - 30),
+                                                         floor((tabStripHeight - 22) / 2.0),
+                                                         22,
+                                                         22);
+    self.tideyEditorSplitToggleButton.layer.backgroundColor = (_splitVisible
+                                                               ? [NSColor colorWithWhite:1 alpha:0.12].CGColor
+                                                               : NSColor.clearColor.CGColor);
+    self.tideyEditorSplitToggleButton.contentTintColor = _splitVisible
+        ? [NSColor colorWithWhite:0.92 alpha:1.0]
+        : [NSColor colorWithWhite:0.72 alpha:1.0];
 
     const CGFloat contentHeight = MAX(0, NSHeight(bounds) - tabStripHeight);
     const CGFloat fileTreeWidth = self.shouldShowTideyEditorFileTree
@@ -4577,31 +4632,45 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 }
 
 - (void)tideyEditorApplyPendingStateIfReady {
-    if (!_primaryPane.editorReady || _primaryPane.editorWebView == nil) {
+    [self tideyEditorApplyPendingStateIfReadyForPane:_primaryPane];
+}
+
+- (void)tideyEditorApplyPendingStateIfReadyForPane:(TideyRightPanelPane *)pane {
+    if (!pane || !pane.editorReady || pane.editorWebView == nil) {
         return;
     }
-    if (_primaryPane.pendingEditorLanguage != nil) {
+    if (pane.pendingEditorLanguage != nil) {
         NSString *js = [NSString stringWithFormat:@"window.tideyNative && window.tideyNative.setLanguage(%@);",
-                        [NSJSONSerialization it_jsonStringForObject:_primaryPane.pendingEditorLanguage]];
-        [_primaryPane.editorWebView evaluateJavaScript:js completionHandler:nil];
+                        [NSJSONSerialization it_jsonStringForObject:pane.pendingEditorLanguage]];
+        [pane.editorWebView evaluateJavaScript:js completionHandler:nil];
     }
-    if (_primaryPane.pendingEditorValue != nil) {
+    if (pane.pendingEditorValue != nil) {
         NSString *js = [NSString stringWithFormat:@"window.tideyNative && window.tideyNative.setValue(%@);",
-                        [NSJSONSerialization it_jsonStringForObject:_primaryPane.pendingEditorValue]];
-        [_primaryPane.editorWebView evaluateJavaScript:js completionHandler:nil];
+                        [NSJSONSerialization it_jsonStringForObject:pane.pendingEditorValue]];
+        [pane.editorWebView evaluateJavaScript:js completionHandler:nil];
     }
-    if (_primaryPane.pendingEditorEditable != nil) {
+    if (pane.pendingEditorEditable != nil) {
         NSString *js = [NSString stringWithFormat:@"window.tideyNative && window.tideyNative.setEditable(%@);",
-                        _primaryPane.pendingEditorEditable.boolValue ? @"true" : @"false"];
-        [_primaryPane.editorWebView evaluateJavaScript:js completionHandler:nil];
+                        pane.pendingEditorEditable.boolValue ? @"true" : @"false"];
+        [pane.editorWebView evaluateJavaScript:js completionHandler:nil];
     }
-    [_primaryPane.editorWebView evaluateJavaScript:@"window.__tideyEditor && window.__tideyEditor.layout();"
-                                 completionHandler:nil];
+    [pane.editorWebView evaluateJavaScript:@"window.__tideyEditor && window.__tideyEditor.layout();"
+                         completionHandler:nil];
 }
 
 - (void)tideyEditorDidBecomeReady {
-    _primaryPane.editorReady = YES;
-    [self tideyEditorApplyPendingStateIfReady];
+    [self tideyEditorDidBecomeReadyForPane:_primaryPane];
+}
+
+- (void)tideyEditorDidBecomeReadyForPane:(TideyRightPanelPane *)pane {
+    if (!pane) {
+        return;
+    }
+    pane.editorReady = YES;
+    [self tideyEditorApplyPendingStateIfReadyForPane:pane];
+    if (pane != _primaryPane) {
+        return;
+    }
     NSString *restoredPath = [_tideyEditorLoadedPath stringByStandardizingPath];
     BOOL isDirectory = NO;
     if (restoredPath.length > 0 &&
@@ -4623,17 +4692,23 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 }
 
 - (void)tideyEditorDidReceiveScriptMessage:(WKScriptMessage *)message {
+    [self tideyEditorDidReceiveScriptMessage:message fromPane:_primaryPane];
+}
+
+- (void)tideyEditorDidReceiveScriptMessage:(WKScriptMessage *)message fromPane:(TideyRightPanelPane *)pane {
     if ([message.name isEqualToString:@"tideyEditorReady"]) {
-        [self tideyEditorDidBecomeReady];
+        [self tideyEditorDidBecomeReadyForPane:pane];
         return;
     }
-    if ([message.name isEqualToString:@"tideyEditorChanged"] &&
+    if (pane == _primaryPane &&
+        [message.name isEqualToString:@"tideyEditorChanged"] &&
         [message.body isKindOfClass:[NSDictionary class]]) {
         NSString *value = [message.body[@"value"] isKindOfClass:[NSString class]] ? message.body[@"value"] : @"";
         [self tideyEditorDidChangeValue:value];
         return;
     }
-    if ([message.name isEqualToString:@"tideyEditorSaveRequested"]) {
+    if (pane == _primaryPane &&
+        [message.name isEqualToString:@"tideyEditorSaveRequested"]) {
         [self saveTideyEditorCurrentTab];
         return;
     }
@@ -4646,6 +4721,62 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
             [self tideyOpenBrowserTabWithURL:url];
         }
     }
+}
+
+- (void)ensureSecondaryPane {
+    if (_secondaryPane != nil) {
+        return;
+    }
+    _secondaryPane = [[TideyRightPanelPane alloc] init];
+    _secondaryPane.expandedTabKind = TideyRightPanelTabKindEditor;
+    _secondaryPane.pendingEditorLanguage = @"plaintext";
+    _secondaryPane.pendingEditorValue = @"";
+    _secondaryPane.pendingEditorEditable = @YES;
+
+    NSView *containerView = [[NSView alloc] initWithFrame:NSZeroRect];
+    containerView.wantsLayer = YES;
+    containerView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.10
+                                                              green:0.11
+                                                               blue:0.14
+                                                              alpha:1].CGColor;
+    [_tideyEditorPanelView addSubview:containerView positioned:NSWindowBelow relativeTo:_tideyEditorTabStripView];
+    _secondaryPane.containerView = containerView;
+
+    [self loadTideyEditorShellIfNeededForPane:_secondaryPane];
+}
+
+- (void)teardownSecondaryPane {
+    if (!_secondaryPane) {
+        return;
+    }
+    if (_secondaryPane.editorWebView) {
+        [_secondaryPane.editorWebView.configuration.userContentController removeScriptMessageHandlerForName:@"tideyEditorReady"];
+        [_secondaryPane.editorWebView.configuration.userContentController removeScriptMessageHandlerForName:@"tideyEditorChanged"];
+        [_secondaryPane.editorWebView.configuration.userContentController removeScriptMessageHandlerForName:@"tideyEditorSaveRequested"];
+        [_secondaryPane.editorWebView.configuration.userContentController removeScriptMessageHandlerForName:@"tideyEditorOpenLink"];
+        _secondaryPane.editorWebView.navigationDelegate = nil;
+    }
+    [_secondaryPane.editorWebView removeFromSuperview];
+    [_secondaryPane.browserContainerView removeFromSuperview];
+    [_secondaryPane.containerView removeFromSuperview];
+    _secondaryPane = nil;
+    _activePane = _primaryPane;
+}
+
+- (void)toggleTideyEditorSplit:(id)sender {
+    (void)sender;
+    if (!_splitVisible) {
+        [self ensureSecondaryPane];
+        _splitVisible = YES;
+        _activePane = _secondaryPane ?: _primaryPane;
+    } else {
+        if (_secondaryPane.tabs.count > 0) {
+            [_primaryPane.tabs addObjectsFromArray:_secondaryPane.tabs];
+        }
+        [self teardownSecondaryPane];
+        _splitVisible = NO;
+    }
+    [self layoutTideyEditorContents];
 }
 
 - (void)tideyEditorDidChangeValue:(NSString *)value {
@@ -5007,6 +5138,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     const CGFloat width = self.tideyEditorPanelWidth;
     _tideyEditorPanelView.hidden = (width <= 0);
     if (width <= 0) {
+        self.tideyEditorSplitToggleButton.hidden = YES;
         return;
     }
 
@@ -5158,7 +5290,9 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
     if (webView == _primaryPane.editorWebView) {
-        [self tideyEditorApplyPendingStateIfReady];
+        [self tideyEditorApplyPendingStateIfReadyForPane:_primaryPane];
+    } else if (webView == _secondaryPane.editorWebView) {
+        [self tideyEditorApplyPendingStateIfReadyForPane:_secondaryPane];
     }
 }
 
