@@ -82,6 +82,12 @@
 
 ## Rendering
 
+- **Selection Color 的 alpha 被渲染層覆寫為 1.0**
+  - profile `Selection Color` 的 alpha 完全不生效
+  - AppKit 路徑：`iTermTextDrawingHelper.m:755` 用 `[color colorWithAlphaComponent:alpha]` 覆寫，`alpha` 來自 `_transparencyAlpha` 或硬寫 1.0
+  - Metal 路徑：`iTermMetalPerFrameState.m:1822` 用 `color.w = alpha` 覆寫，同樣來自 `_transparencyAlpha`
+  - 所以改 selection color 只能改 RGB，alpha 無效
+  - 要讓 selection 半透明需要改渲染管線，讓 selected path 保留 color 自身的 alpha
 - 非 live resize 不要切回 legacy renderer
   - sidebar toggle / panel switch flicker 很常是多切了一次 fallback renderer
 - `it_imageWithTintColor:` 會把多層 SF Symbol 壓成單色
