@@ -4910,6 +4910,10 @@
 		A7B100132F0A000100000001 /* TideySocketServer.m in Sources */ = {isa = PBXBuildFile; fileRef = A7B100062F0A000100000001 /* TideySocketServer.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
 		A7B100142F0A000100000001 /* TideyEditorExternalChangeWatcher.h in Headers */ = {isa = PBXBuildFile; fileRef = A7B100072F0A000100000001 /* TideyEditorExternalChangeWatcher.h */; };
 		A7B100152F0A000100000001 /* TideyEditorExternalChangeWatcher.m in Sources */ = {isa = PBXBuildFile; fileRef = A7B100082F0A000100000001 /* TideyEditorExternalChangeWatcher.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		F0A10D1E3A2A000100000001 /* TideyEditorDocument.h in Headers */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A2A000100000002 /* TideyEditorDocument.h */; };
+		F0A10D1E3A2A000100000003 /* TideyEditorDocument.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A2A000100000004 /* TideyEditorDocument.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		F0A10D1E3A2A000100000005 /* TideyEditorDocumentStore.h in Headers */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A2A000100000006 /* TideyEditorDocumentStore.h */; };
+		F0A10D1E3A2A000100000007 /* TideyEditorDocumentStore.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A2A000100000008 /* TideyEditorDocumentStore.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
 		F0A10D1E3A29000100000001 /* TideyRightPanelPane.h in Headers */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A29000100000002 /* TideyRightPanelPane.h */; };
 		F0A10D1E3A29000100000003 /* TideyRightPanelPane.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A29000100000004 /* TideyRightPanelPane.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
 		F0A10D1E3A2800010000000F /* TideySocketCommandDecoder.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A2800010000000E /* TideySocketCommandDecoder.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
@@ -9043,6 +9047,10 @@
 		A7B100062F0A000100000001 /* TideySocketServer.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySocketServer.m; sourceTree = "<group>"; };
 		A7B100072F0A000100000001 /* TideyEditorExternalChangeWatcher.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyEditorExternalChangeWatcher.h; sourceTree = "<group>"; };
 		A7B100082F0A000100000001 /* TideyEditorExternalChangeWatcher.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyEditorExternalChangeWatcher.m; sourceTree = "<group>"; };
+		F0A10D1E3A2A000100000002 /* TideyEditorDocument.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyEditorDocument.h; sourceTree = "<group>"; };
+		F0A10D1E3A2A000100000004 /* TideyEditorDocument.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyEditorDocument.m; sourceTree = "<group>"; };
+		F0A10D1E3A2A000100000006 /* TideyEditorDocumentStore.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyEditorDocumentStore.h; sourceTree = "<group>"; };
+		F0A10D1E3A2A000100000008 /* TideyEditorDocumentStore.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyEditorDocumentStore.m; sourceTree = "<group>"; };
 		F0A10D1E3A29000100000002 /* TideyRightPanelPane.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyRightPanelPane.h; sourceTree = "<group>"; };
 		F0A10D1E3A29000100000004 /* TideyRightPanelPane.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyRightPanelPane.m; sourceTree = "<group>"; };
 		F0A10D1E3A2800010000000D /* TideySocketCommandDecoder.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideySocketCommandDecoder.h; sourceTree = "<group>"; };
@@ -11816,6 +11824,10 @@
 				A7B100042F0A000100000001 /* TideySocketConnection.m */,
 				A7B100072F0A000100000001 /* TideyEditorExternalChangeWatcher.h */,
 				A7B100082F0A000100000001 /* TideyEditorExternalChangeWatcher.m */,
+				F0A10D1E3A2A000100000002 /* TideyEditorDocument.h */,
+				F0A10D1E3A2A000100000004 /* TideyEditorDocument.m */,
+				F0A10D1E3A2A000100000006 /* TideyEditorDocumentStore.h */,
+				F0A10D1E3A2A000100000008 /* TideyEditorDocumentStore.m */,
 				F0A10D1E3A29000100000002 /* TideyRightPanelPane.h */,
 				F0A10D1E3A29000100000004 /* TideyRightPanelPane.m */,
 				F0A10D1E3A2800010000000D /* TideySocketCommandDecoder.h */,
@@ -15442,6 +15454,8 @@
 				A626DF0B217D3034005600F9 /* iTermTabBarAccessoryViewController.h in Headers */,
 				A667190A1DCE36C3000CE608 /* iTermRootTerminalView.h in Headers */,
 				A7B100142F0A000100000001 /* TideyEditorExternalChangeWatcher.h in Headers */,
+				F0A10D1E3A2A000100000001 /* TideyEditorDocument.h in Headers */,
+				F0A10D1E3A2A000100000005 /* TideyEditorDocumentStore.h in Headers */,
 				F0A10D1E3A29000100000001 /* TideyRightPanelPane.h in Headers */,
 				D5EF7F4036204859817200E0 /* iTermLayoutCalculator.h in Headers */,
 				A667190B1DCE36C3000CE608 /* iTermCarbonHotKeyController.h in Headers */,
@@ -19279,6 +19293,8 @@
 				A7B100112F0A000100000001 /* TideyNotificationStore.m in Sources */,
 				A7B100122F0A000100000001 /* TideySocketConnection.m in Sources */,
 				A7B100152F0A000100000001 /* TideyEditorExternalChangeWatcher.m in Sources */,
+				F0A10D1E3A2A000100000003 /* TideyEditorDocument.m in Sources */,
+				F0A10D1E3A2A000100000007 /* TideyEditorDocumentStore.m in Sources */,
 				F0A10D1E3A29000100000003 /* TideyRightPanelPane.m in Sources */,
 				F0A10D1E3A2800010000000F /* TideySocketCommandDecoder.m in Sources */,
 				A7B100132F0A000100000001 /* TideySocketServer.m in Sources */,

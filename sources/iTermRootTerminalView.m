@@ -27,6 +27,8 @@
 #import "iTermAdvancedSettingsModel.h"
 #import "iTermApplication.h"
 #import "iTermDragHandleView.h"
+#import "TideyEditorDocument.h"
+#import "TideyEditorDocumentStore.h"
 #import "TideyEditorExternalChangeWatcher.h"
 #import "TideyRightPanelPane.h"
 #import "iTermFakeWindowTitleLabel.h"
@@ -264,7 +266,9 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
 - (void)tideyEditorSetValue:(NSString *)content;
 - (void)tideyEditorSetLanguage:(NSString *)language;
 - (void)tideyEditorSetEditable:(BOOL)editable;
+- (TideyEditorDocumentStore *)tideyEditorDocumentStore;
 - (TideyEditorExternalChangeWatcher *)tideyEditorExternalChangeWatcher;
+- (void)tideyRemoveDocumentIfUnreferenced:(TideyEditorDocument *)document;
 - (NSString *)tideyCurrentEditorWatchablePath;
 - (id)tideyStartWatchingEditorFileAtPath:(NSString *)path;
 - (void)tideyStopWatchingEditorFileWithToken:(id)token;
@@ -796,6 +800,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 @interface TideyEditorTab : NSObject
 @property(nonatomic, copy) NSString *identifier;
+@property(nonatomic, strong, nullable) TideyEditorDocument *document;
 @property(nonatomic, copy) NSString *path;
 @property(nonatomic, copy) NSString *displayName;
 @property(nonatomic, copy) NSString *language;
@@ -810,6 +815,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 @end
 
 @implementation TideyEditorTab
+@synthesize path = _path;
+@synthesize language = _language;
+@synthesize content = _content;
+@synthesize dirty = _dirty;
 
 + (instancetype)tabWithPath:(NSString *)path
                 displayName:(NSString *)displayName
@@ -837,6 +846,56 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     tab.preview = NO;
     tab.kind = TideyRightPanelTabKindBrowser;
     return tab;
+}
+
+- (NSString *)path {
+    return self.document ? self.document.path : _path;
+}
+
+- (void)setPath:(NSString *)path {
+    if (self.document) {
+        self.document.path = [path copy];
+    } else {
+        _path = [path copy];
+    }
+}
+
+- (NSString *)language {
+    return self.document ? self.document.language : _language;
+}
+
+- (void)setLanguage:(NSString *)language {
+    NSString *value = [language copy] ?: @"plaintext";
+    if (self.document) {
+        self.document.language = value;
+    } else {
+        _language = value;
+    }
+}
+
+- (NSString *)content {
+    return self.document ? self.document.content : _content;
+}
+
+- (void)setContent:(NSString *)content {
+    NSString *value = [content copy] ?: @"";
+    if (self.document) {
+        self.document.content = value;
+    } else {
+        _content = value;
+    }
+}
+
+- (BOOL)dirty {
+    return self.document ? self.document.dirty : _dirty;
+}
+
+- (void)setDirty:(BOOL)dirty {
+    if (self.document) {
+        self.document.dirty = dirty;
+    } else {
+        _dirty = dirty;
+    }
 }
 
 @end
@@ -912,6 +971,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSString *_tideyEditorPendingLanguage;
     NSNumber *_tideyEditorPendingEditable;
     NSString *_tideyEditorLoadedPath;
+    TideyEditorDocumentStore *_tideyEditorDocumentStore;
     TideyEditorExternalChangeWatcher *_tideyEditorExternalChangeWatcher;
     NSString *_tideyEditorCurrentRootPath;
     SCEvents *_tideyEditorFileTreeWatcher;
@@ -3700,6 +3760,25 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     return _tideyEditorExternalChangeWatcher;
 }
 
+- (TideyEditorDocumentStore *)tideyEditorDocumentStore {
+    if (!_tideyEditorDocumentStore) {
+        _tideyEditorDocumentStore = [[TideyEditorDocumentStore alloc] init];
+    }
+    return _tideyEditorDocumentStore;
+}
+
+- (void)tideyRemoveDocumentIfUnreferenced:(TideyEditorDocument *)document {
+    if (!document) {
+        return;
+    }
+    for (TideyEditorTab *tab in _primaryPane.tabs) {
+        if (tab.document == document) {
+            return;
+        }
+    }
+    [[self tideyEditorDocumentStore] removeDocument:document];
+}
+
 - (id)tideyStartWatchingEditorFileAtPath:(NSString *)path {
     __weak __typeof(self) weakSelf = self;
     return [[NSFileManager defaultManager] monitorFile:path block:^(long flags) {
@@ -3722,11 +3801,15 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 - (void)tideyHandleCurrentEditorFileDidChange {
     TideyEditorTab *tab = [self tideyCurrentEditorTab];
     NSString *path = [self tideyCurrentEditorWatchablePath];
+    TideyEditorDocument *document = tab.document;
     [[self tideyEditorExternalChangeWatcher] handleExternalChangeForPath:path
                                                                    dirty:tab.dirty
                                                           currentContent:tab.content
                                                                didReload:^(NSString *contents) {
-        tab.content = contents;
+        document.content = contents;
+        document.dirty = NO;
+        document.lastKnownModificationDate = [[[NSFileManager defaultManager] attributesOfItemAtPath:path
+                                                                                                error:nil] fileModificationDate];
         [self tideyEditorSetValue:contents];
         [self tideyPersistEditorState];
     }];
@@ -4079,8 +4162,10 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         return;
     }
     TideyEditorTab *closingTab = _primaryPane.tabs[index];
+    TideyEditorDocument *closingDocument = closingTab.document;
     NSString *currentSelectedIdentifier = [self tideyCurrentRightPanelTabIdentifier];
     [_primaryPane.tabs removeObjectAtIndex:index];
+    [self tideyRemoveDocumentIfUnreferenced:closingDocument];
     if ([[[self class] tideyRightPanelTabsOfKind:TideyRightPanelTabKindEditor inTabs:_primaryPane.tabs] count] == 0) {
         _primaryPane.editorGroupExpanded = NO;
     }
@@ -4196,6 +4281,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     }
 
     if (preview && previewTab != nil) {
+        TideyEditorDocument *oldDocument = previewTab.document;
         NSError *replaceError = nil;
         NSString *replacementContents = [NSString stringWithContentsOfFile:normalizedPath
                                                                   encoding:NSUTF8StringEncoding
@@ -4205,12 +4291,21 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
                                    normalizedPath.lastPathComponent,
                                    replaceError.localizedDescription ?: @"Unknown error"];
         }
-        previewTab.path = normalizedPath;
+        TideyEditorDocumentStore *store = [self tideyEditorDocumentStore];
+        TideyEditorDocument *document = [store documentForIdentifier:normalizedPath];
+        if (!document) {
+            document = [store documentForPath:normalizedPath];
+            document.content = replacementContents ?: @"";
+            document.language = [self tideyEditorLanguageForPath:normalizedPath];
+            document.dirty = NO;
+            document.editable = YES;
+            document.lastKnownModificationDate = [[[NSFileManager defaultManager] attributesOfItemAtPath:normalizedPath
+                                                                                                    error:nil] fileModificationDate];
+        }
+        previewTab.document = document;
         previewTab.displayName = [self tideyEditorDisplayNameForPath:normalizedPath];
-        previewTab.language = [self tideyEditorLanguageForPath:normalizedPath];
-        previewTab.content = replacementContents ?: @"";
-        previewTab.dirty = NO;
         previewTab.preview = YES;
+        [self tideyRemoveDocumentIfUnreferenced:oldDocument];
         [self selectTideyEditorTabAtIndex:previewIndex];
         return;
     }
@@ -4224,10 +4319,22 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
                     normalizedPath.lastPathComponent,
                     error.localizedDescription ?: @"Unknown error"];
     }
+    TideyEditorDocumentStore *store = [self tideyEditorDocumentStore];
+    TideyEditorDocument *document = [store documentForIdentifier:normalizedPath];
+    if (!document) {
+        document = [store documentForPath:normalizedPath];
+        document.content = contents ?: @"";
+        document.language = [self tideyEditorLanguageForPath:normalizedPath];
+        document.dirty = NO;
+        document.editable = YES;
+        document.lastKnownModificationDate = [[[NSFileManager defaultManager] attributesOfItemAtPath:normalizedPath
+                                                                                                error:nil] fileModificationDate];
+    }
     TideyEditorTab *tab = [TideyEditorTab tabWithPath:normalizedPath
                                           displayName:[self tideyEditorDisplayNameForPath:normalizedPath]
-                                             language:[self tideyEditorLanguageForPath:normalizedPath]
-                                              content:contents];
+                                             language:document.language
+                                              content:document.content];
+    tab.document = document;
     tab.preview = preview;
     [_primaryPane.tabs addObject:tab];
     [self selectTideyEditorTabAtIndex:_primaryPane.tabs.count - 1];
@@ -4551,6 +4658,8 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         return NO;
     }
     tab.dirty = NO;
+    tab.document.lastKnownModificationDate = [[[NSFileManager defaultManager] attributesOfItemAtPath:tab.path
+                                                                                                error:nil] fileModificationDate];
     [self tideySyncCurrentEditorFileWatcher];
     [self reloadTideyEditorTabs];
     [self tideyPersistEditorState];
@@ -4584,10 +4693,16 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         self.shouldShowTideyEditorPanel = YES;
         [self layoutSubviews];
     }
+    TideyEditorDocument *document = [[self tideyEditorDocumentStore] createUntitledDocument];
+    document.language = @"plaintext";
+    document.content = @"";
+    document.dirty = NO;
+    document.editable = YES;
     TideyEditorTab *tab = [TideyEditorTab tabWithPath:@""
                                           displayName:@"Untitled"
-                                             language:@"plaintext"
-                                              content:@""];
+                                             language:document.language
+                                              content:document.content];
+    tab.document = document;
     [_primaryPane.tabs addObject:tab];
     [self selectTideyEditorTabAtIndex:_primaryPane.tabs.count - 1];
 }
