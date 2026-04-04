@@ -3461,9 +3461,6 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                     destinationIndex != NSNotFound &&
                     sourceIndex >= 0 &&
                     sourceIndex < (NSInteger)sourcePane.tabs.count);
-    if (canMove && sourcePane == _primaryPane && destinationPane != sourcePane && sourcePane.tabs.count == 1) {
-        canMove = NO;
-    }
     if (canMove) {
         TideyEditorTab *tab = sourcePane.tabs[sourceIndex];
         [sourcePane.tabs removeObjectAtIndex:sourceIndex];
@@ -3724,12 +3721,19 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     if (!pane.browserContainerView) {
         return;
     }
-    NSView *hostView = pane.containerView ?: _tideyEditorPanelView;
-    const NSRect bounds = hostView.bounds;
     const CGFloat tabStripHeight = pane.tabStripView ? NSHeight(pane.tabStripView.bounds) : TideyEditorEffectiveTabStripHeight(_tabBarControl.height);
-    const CGFloat contentHeight = MAX(0, NSHeight(bounds) - tabStripHeight);
-    const CGFloat contentWidth = NSWidth(bounds);
-    pane.browserContainerView.frame = NSMakeRect(0, 0, contentWidth, contentHeight);
+    NSRect contentBounds = NSZeroRect;
+    if (pane.containerView) {
+        contentBounds = pane.containerView.bounds;
+    } else {
+        contentBounds = NSMakeRect(0,
+                                   0,
+                                   NSWidth(pane.tabStripView.bounds),
+                                   MAX(0, NSHeight(_tideyEditorPanelView.bounds) - tabStripHeight));
+    }
+    const CGFloat contentHeight = NSHeight(contentBounds);
+    const CGFloat contentWidth = NSWidth(contentBounds);
+    pane.browserContainerView.frame = contentBounds;
 
     // Toolbar at top of container
     NSView *toolbar = pane.browserContainerView.subviews.firstObject;
@@ -4676,11 +4680,16 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 
             NSFont *baseFont = [NSFont systemFontOfSize:11 weight:selected ? NSFontWeightSemibold : NSFontWeightMedium];
             TideyPassthroughLabel *titleLabel = [TideyPassthroughLabel labelWithString:title];
-            titleLabel.frame = NSMakeRect(10, 2, tabWidth - 34, tabHeight - 2);
+            titleLabel.usesSingleLineMode = YES;
+            titleLabel.maximumNumberOfLines = 1;
             titleLabel.alignment = NSTextAlignmentLeft;
             titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
             titleLabel.font = tab.preview ? [[NSFontManager sharedFontManager] convertFont:baseFont toHaveTrait:NSItalicFontMask] : baseFont;
             titleLabel.textColor = selected ? NSColor.labelColor : NSColor.secondaryLabelColor;
+            NSSize titleLabelSize = titleLabel.fittingSize;
+            CGFloat titleLabelHeight = MIN(MAX(14.0, ceil(titleLabelSize.height)), MAX(14.0, tabHeight - 4));
+            CGFloat titleLabelY = floor((tabHeight - titleLabelHeight) / 2.0);
+            titleLabel.frame = NSMakeRect(10, titleLabelY, tabWidth - 34, titleLabelHeight);
             [tabView addSubview:titleLabel];
 
             NSButton *closeButton = [[NSButton alloc] initWithFrame:NSMakeRect(tabWidth - 22, 2, 20, tabHeight - 2)];
