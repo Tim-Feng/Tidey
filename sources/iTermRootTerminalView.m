@@ -195,17 +195,21 @@ static NSButton *TideyMakeEditorChromeIconButton(NSString *symbolName,
 
 @interface TideyBrowserContainerView : NSView
 @property(nonatomic, copy) void (^tideyNewTabHandler)(void);
+@property(nonatomic, copy) void (^tideyReloadHandler)(void);
 @end
 
 @implementation TideyBrowserContainerView
 
 - (BOOL)performKeyEquivalent:(NSEvent *)event {
     NSEventModifierFlags modifiers = [event modifierFlags] & NSEventModifierFlagDeviceIndependentFlagsMask;
-    if (event.type == NSEventTypeKeyDown &&
-        [event.charactersIgnoringModifiers.lowercaseString isEqualToString:@"t"] &&
-        modifiers == NSEventModifierFlagCommand) {
-        if (self.tideyNewTabHandler) {
+    if (event.type == NSEventTypeKeyDown && modifiers == NSEventModifierFlagCommand) {
+        NSString *key = event.charactersIgnoringModifiers.lowercaseString;
+        if ([key isEqualToString:@"t"] && self.tideyNewTabHandler) {
             self.tideyNewTabHandler();
+            return YES;
+        }
+        if ([key isEqualToString:@"r"] && self.tideyReloadHandler) {
+            self.tideyReloadHandler();
             return YES;
         }
     }
@@ -3630,6 +3634,10 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     browserContainerView.tideyNewTabHandler = ^{
         [weakSelf tideySetActivePane:pane];
         [weakSelf createNewBlankBrowserTab];
+    };
+    browserContainerView.tideyReloadHandler = ^{
+        [weakSelf tideySetActivePane:pane];
+        [pane.browserWebView reload];
     };
     pane.browserContainerView = browserContainerView;
     pane.browserContainerView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
