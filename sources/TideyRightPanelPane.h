@@ -7,9 +7,15 @@
 
 @property(nonatomic, readonly) NSMutableArray<TideyEditorTab *> *tabs;
 @property(nonatomic, strong) NSView *containerView;
+@property(nonatomic, strong) NSView *tabStripView;
 @property(nonatomic, strong) NSView *browserContainerView;
 @property(nonatomic, strong) WKWebView *editorWebView;
 @property(nonatomic, strong) WKWebView *browserWebView;
+@property(nonatomic, strong) NSTextField *browserURLField;
+@property(nonatomic, strong) NSButton *browserBackButton;
+@property(nonatomic, strong) NSButton *browserForwardButton;
+@property(nonatomic, strong) NSButton *browserReloadButton;
+@property(nonatomic, strong) NSProgressIndicator *browserLoadingIndicator;
 @property(nonatomic, strong) id editorScriptMessageHandler;
 @property(nonatomic) NSInteger selectedTabIndex;
 @property(nonatomic) NSInteger expandedTabKind;
