@@ -65,3 +65,4 @@ iTermBrowserPlugin/iTermBrowserPlugin.xcodeproj/project.xcworkspace/xcuserdata/g
 
 # Claude Code local settings
 .claude/*.local.json
+plan.md
