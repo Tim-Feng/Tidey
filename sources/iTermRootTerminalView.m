@@ -49,6 +49,7 @@
 #import "SCEvents.h"
 #import "TideyNotificationStore.h"
 
+#import <QuartzCore/QuartzCore.h>
 #import <WebKit/WebKit.h>
 
 static const CGFloat iTermWindowBorderRadius = 12;
@@ -288,6 +289,7 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
 @property(nonatomic, strong) NSButton *tideyEditorNewTerminalButton;
 @property(nonatomic, strong) NSButton *tideyEditorNewWebButton;
 @property(nonatomic, strong) NSButton *tideyEditorSplitToggleButton;
+@property(nonatomic, strong) NSView *tideyEditorChromeGradientMaskView;
 @property(nonatomic, strong) NSView *tideyEditorSplitDividerView;
 
 - (CGFloat)tideySidebarWidth;
@@ -1847,6 +1849,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                                             self,
                                                                             @selector(toggleTideyEditorSplit:));
         [_tideyEditorPanelView addSubview:self.tideyEditorSplitToggleButton];
+
+        self.tideyEditorChromeGradientMaskView = [[NSView alloc] initWithFrame:NSZeroRect];
+        self.tideyEditorChromeGradientMaskView.wantsLayer = YES;
+        [_tideyEditorPanelView addSubview:self.tideyEditorChromeGradientMaskView];
 
         self.tideyEditorSplitDividerView = [[NSView alloc] initWithFrame:NSZeroRect];
         self.tideyEditorSplitDividerView.wantsLayer = YES;
@@ -4229,6 +4235,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         self.tideyEditorNewTerminalButton.hidden = YES;
         self.tideyEditorNewWebButton.hidden = YES;
         self.tideyEditorSplitToggleButton.hidden = YES;
+        self.tideyEditorChromeGradientMaskView.hidden = YES;
         self.tideyEditorSplitDividerView.hidden = YES;
         [self tideySyncEditorFileTreeWatcher];
         [self updateTideyChromeToggleButtons];
@@ -4239,6 +4246,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     const CGFloat chromeButtonSize = 22;
     const CGFloat chromeButtonPadding = 8;
     const CGFloat chromeButtonGap = 4;
+    const CGFloat chromeMaskWidth = 100;
     const CGFloat chromeButtonY = NSHeight(bounds) - tabStripHeight + floor((tabStripHeight - chromeButtonSize) / 2.0);
     const CGFloat splitButtonX = MAX(0, NSWidth(bounds) - chromeButtonPadding - chromeButtonSize);
     const CGFloat webButtonX = MAX(0, splitButtonX - chromeButtonGap - chromeButtonSize);
@@ -4246,6 +4254,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     self.tideyEditorNewTerminalButton.hidden = NO;
     self.tideyEditorNewWebButton.hidden = NO;
     self.tideyEditorSplitToggleButton.hidden = NO;
+    self.tideyEditorChromeGradientMaskView.hidden = NO;
     self.tideyEditorNewTerminalButton.frame = NSMakeRect(terminalButtonX, chromeButtonY, chromeButtonSize, chromeButtonSize);
     self.tideyEditorNewWebButton.frame = NSMakeRect(webButtonX, chromeButtonY, chromeButtonSize, chromeButtonSize);
     self.tideyEditorSplitToggleButton.frame = NSMakeRect(splitButtonX, chromeButtonY, chromeButtonSize, chromeButtonSize);
@@ -4257,6 +4266,10 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     self.tideyEditorSplitToggleButton.contentTintColor = _splitVisible
         ? [NSColor colorWithSRGBRed:1.0 green:0.694 blue:0.106 alpha:1.0]
         : [NSColor colorWithWhite:0.72 alpha:1.0];
+    self.tideyEditorChromeGradientMaskView.frame = NSMakeRect(MAX(0, NSWidth(bounds) - chromeMaskWidth),
+                                                              NSHeight(bounds) - tabStripHeight,
+                                                              chromeMaskWidth,
+                                                              tabStripHeight);
 
     const CGFloat contentHeight = MAX(0, NSHeight(bounds) - tabStripHeight);
     const CGFloat fileTreeWidth = self.shouldShowTideyEditorFileTree
@@ -4291,6 +4304,25 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
                                                              : [NSColor colorWithSRGBRed:0.102 green:0.108 blue:0.135 alpha:1].CGColor);
         _secondaryPane.editorWebView.frame = NSMakeRect(0, 0, secondaryWidth, contentHeight);
     }
+    CGColorRef maskBackgroundColor = shouldShowSplitShell
+        ? _secondaryPane.tabStripView.layer.backgroundColor
+        : _primaryPane.tabStripView.layer.backgroundColor;
+    CAGradientLayer *gradientLayer = nil;
+    if ([self.tideyEditorChromeGradientMaskView.layer.sublayers.firstObject isKindOfClass:[CAGradientLayer class]]) {
+        gradientLayer = (CAGradientLayer *)self.tideyEditorChromeGradientMaskView.layer.sublayers.firstObject;
+    } else {
+        [self.tideyEditorChromeGradientMaskView.layer.sublayers makeObjectsPerformSelector:@selector(removeFromSuperlayer)];
+        gradientLayer = [CAGradientLayer layer];
+        gradientLayer.startPoint = CGPointMake(0, 0.5);
+        gradientLayer.endPoint = CGPointMake(1, 0.5);
+        gradientLayer.locations = @[ @0.0, @0.3, @1.0 ];
+        [self.tideyEditorChromeGradientMaskView.layer addSublayer:gradientLayer];
+    }
+    gradientLayer.frame = self.tideyEditorChromeGradientMaskView.bounds;
+    CGColorRef solidColor = maskBackgroundColor ?: [NSColor colorWithSRGBRed:0.102 green:0.108 blue:0.135 alpha:1].CGColor;
+    gradientLayer.colors = @[ (__bridge id)NSColor.clearColor.CGColor,
+                              (__bridge id)solidColor,
+                              (__bridge id)solidColor ];
     self.tideyEditorSplitDividerView.hidden = !shouldShowSplitShell;
     if (shouldShowSplitShell) {
         self.tideyEditorSplitDividerView.frame = NSMakeRect(MAX(0, primaryWidth + floor((splitHandleWidth - 2.0) / 2.0)),
@@ -4320,6 +4352,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     [self tideyLayoutBrowserContainer];
     [self tideyUpdateBrowserContentVisibility];
     [self updateTideyChromeToggleButtons];
+    [_tideyEditorPanelView addSubview:self.tideyEditorChromeGradientMaskView positioned:NSWindowAbove relativeTo:_tideyEditorTabStripView];
     [_tideyEditorPanelView addSubview:self.tideyEditorSplitDividerView positioned:NSWindowAbove relativeTo:nil];
     [_tideyEditorPanelView addSubview:self.tideyEditorNewTerminalButton positioned:NSWindowAbove relativeTo:nil];
     [_tideyEditorPanelView addSubview:self.tideyEditorNewWebButton positioned:NSWindowAbove relativeTo:nil];
