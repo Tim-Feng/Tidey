@@ -1992,6 +1992,10 @@ ITERM_WEAKLY_REFERENCEABLE
     return _contentView.shouldShowTideyEditorPanel;
 }
 
+- (BOOL)tideyEditorPaneHasFocus {
+    return [_contentView tideyEditorPaneHasFocus];
+}
+
 - (BOOL)tideyEditorHasFocus {
     return [_contentView tideyEditorHasFocus];
 }

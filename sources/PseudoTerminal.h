@@ -230,6 +230,7 @@ extern NSString *const iTermDidCreateTerminalWindowNotification;
 - (void)createTideyPanelPossiblyTmux:(BOOL)possiblyTmux;
 - (BOOL)isShowingTideySidebar;
 - (BOOL)isShowingTideyEditorPanel;
+- (BOOL)tideyEditorPaneHasFocus;
 - (BOOL)tideyEditorHasFocus;
 - (BOOL)tideyBrowserHasFocus;
 - (void)createNewUntitledEditorTab;

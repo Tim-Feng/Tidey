@@ -168,6 +168,7 @@ typedef NS_ENUM(NSInteger, TideyAlternateNewSessionAction) {
     TideyAlternateNewSessionActionTerminalTab = 0,
     TideyAlternateNewSessionActionBrowserTab = 1,
     TideyAlternateNewSessionActionTideyPanel = 2,
+    TideyAlternateNewSessionActionEditorTab = 3,
 };
 
 static BOOL gStartupActivitiesPerformed = NO;
@@ -198,6 +199,7 @@ static BOOL hasBecomeActive = NO;
 + (NSString *)tideyFullscreenShortcutKeyEquivalentForProfileShortcutChange:(NSNumber *)fShortcut;
 + (NSEventModifierFlags)tideyFullscreenShortcutModifierMaskForProfileShortcutChange:(NSNumber *)fShortcut;
 + (TideyAlternateNewSessionAction)tideyAlternateNewSessionActionForBrowserFocus:(BOOL)browserHasFocus
+                                                            editorPaneHasFocus:(BOOL)editorPaneHasFocus
                                                              showingTideySidebar:(BOOL)showingTideySidebar;
 @end
 
@@ -2857,11 +2859,11 @@ static iTermKeyEventReplayer *gReplayer;
         [currentTerminal createNewBlankBrowserTab];
         return;
     }
+    if ([currentTerminal tideyEditorPaneHasFocus]) {
+        [currentTerminal createNewUntitledEditorTab];
+        return;
+    }
     if (currentTerminal.isShowingTideySidebar) {
-        if ([currentTerminal tideyEditorHasFocus]) {
-            [currentTerminal createNewUntitledEditorTab];
-            return;
-        }
         BOOL cancel;
         BOOL tmux = [self possiblyTmuxValueForWindow:NO cancel:&cancel];
         if (!cancel) {
@@ -2890,6 +2892,14 @@ static iTermKeyEventReplayer *gReplayer;
 
 - (IBAction)newSession:(id)sender {
     PseudoTerminal *currentTerminal = [[iTermController sharedInstance] currentTerminal];
+    if ([currentTerminal tideyBrowserHasFocus]) {
+        [currentTerminal createNewBlankBrowserTab];
+        return;
+    }
+    if ([currentTerminal tideyEditorPaneHasFocus]) {
+        [currentTerminal createNewUntitledEditorTab];
+        return;
+    }
     if (currentTerminal.isShowingTideySidebar) {
         BOOL cancel;
         BOOL tmux = [self possiblyTmuxValueForWindow:NO cancel:&cancel];
@@ -2910,9 +2920,13 @@ static iTermKeyEventReplayer *gReplayer;
     PseudoTerminal *term = [[iTermController sharedInstance] currentTerminal];
     if (term) {
         switch ([[self class] tideyAlternateNewSessionActionForBrowserFocus:[term tideyBrowserHasFocus]
+                                                           editorPaneHasFocus:[term tideyEditorPaneHasFocus]
                                                          showingTideySidebar:term.isShowingTideySidebar]) {
             case TideyAlternateNewSessionActionBrowserTab:
                 [term createNewBlankBrowserTab];
+                return;
+            case TideyAlternateNewSessionActionEditorTab:
+                [term createNewUntitledEditorTab];
                 return;
             case TideyAlternateNewSessionActionTideyPanel: {
                 BOOL cancel;
@@ -2941,9 +2955,13 @@ static iTermKeyEventReplayer *gReplayer;
 }
 
 + (TideyAlternateNewSessionAction)tideyAlternateNewSessionActionForBrowserFocus:(BOOL)browserHasFocus
+                                                            editorPaneHasFocus:(BOOL)editorPaneHasFocus
                                                              showingTideySidebar:(BOOL)showingTideySidebar {
     if (browserHasFocus) {
         return TideyAlternateNewSessionActionBrowserTab;
+    }
+    if (editorPaneHasFocus) {
+        return TideyAlternateNewSessionActionEditorTab;
     }
     if (showingTideySidebar) {
         return TideyAlternateNewSessionActionTideyPanel;

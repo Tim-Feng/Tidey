@@ -3859,7 +3859,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     _tideyEditorTabStripView.frame = NSMakeRect(0, NSHeight(bounds) - tabStripHeight, NSWidth(bounds), tabStripHeight);
     self.tideyEditorSplitToggleButton.hidden = NO;
     self.tideyEditorSplitToggleButton.frame = NSMakeRect(MAX(0, NSWidth(bounds) - 30),
-                                                         floor((tabStripHeight - 22) / 2.0),
+                                                         NSHeight(bounds) - tabStripHeight + floor((tabStripHeight - 22) / 2.0),
                                                          22,
                                                          22);
     self.tideyEditorSplitToggleButton.layer.backgroundColor = (_splitVisible
@@ -5126,6 +5126,25 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         return [self tideyBrowserHasFocus];
     }
     return [self tideyRightPanelHasFocus];
+}
+
+- (BOOL)tideyEditorPaneHasFocus {
+    if (_tideyEditorPanelView.hidden) {
+        return NO;
+    }
+    NSResponder *responder = self.window.firstResponder;
+    for (TideyRightPanelPane *pane in [self tideyVisibleRightPanelPanes]) {
+        if (pane.browserContainerView &&
+            [[self class] tideyResponder:responder isDescendantOfView:pane.browserContainerView]) {
+            continue;
+        }
+        if ((pane.editorWebView && [[self class] tideyResponder:responder isDescendantOfView:pane.editorWebView]) ||
+            (pane.tabStripView && [[self class] tideyResponder:responder isDescendantOfView:pane.tabStripView]) ||
+            (pane.containerView && [[self class] tideyResponder:responder isDescendantOfView:pane.containerView])) {
+            return YES;
+        }
+    }
+    return NO;
 }
 
 - (BOOL)tideyRightPanelHasFocus {
