@@ -2901,6 +2901,10 @@ static iTermKeyEventReplayer *gReplayer;
     NSNumber *index = nil;
     PseudoTerminal *term = [[iTermController sharedInstance] currentTerminal];
     if (term) {
+        if ([term tideyBrowserHasFocus]) {
+            [term createNewBlankBrowserTab];
+            return;
+        }
         if ([self alternateNewSessionShouldOpenAtEnd]) {
             index = @(term.numberOfTabs);
         } else {

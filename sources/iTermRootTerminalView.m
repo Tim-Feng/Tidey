@@ -152,6 +152,27 @@ static NSRect TideyPanelShortcutHintFrameForAnchorRect(NSRect anchorRect) {
 @class TideyEditorTab;
 @class PSMTabBarCell;
 
+@interface TideyBrowserContainerView : NSView
+@property(nonatomic, copy) void (^tideyNewTabHandler)(void);
+@end
+
+@implementation TideyBrowserContainerView
+
+- (BOOL)performKeyEquivalent:(NSEvent *)event {
+    NSEventModifierFlags modifiers = [event modifierFlags] & NSEventModifierFlagDeviceIndependentFlagsMask;
+    if (event.type == NSEventTypeKeyDown &&
+        [event.charactersIgnoringModifiers.lowercaseString isEqualToString:@"t"] &&
+        modifiers == NSEventModifierFlagCommand) {
+        if (self.tideyNewTabHandler) {
+            self.tideyNewTabHandler();
+            return YES;
+        }
+    }
+    return [super performKeyEquivalent:event];
+}
+
+@end
+
 @interface PSMTabBarControl (TideyShortcutHints)
 - (NSMutableArray *)cells;
 @end
@@ -3000,7 +3021,12 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         return;
     }
     // Container holds toolbar + webview
-    _tideyBrowserContainerView = [[NSView alloc] initWithFrame:NSZeroRect];
+    TideyBrowserContainerView *browserContainerView = [[TideyBrowserContainerView alloc] initWithFrame:NSZeroRect];
+    __weak typeof(self) weakSelf = self;
+    browserContainerView.tideyNewTabHandler = ^{
+        [weakSelf createNewBlankBrowserTab];
+    };
+    _tideyBrowserContainerView = browserContainerView;
     _tideyBrowserContainerView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     _tideyBrowserContainerView.hidden = YES;
 
