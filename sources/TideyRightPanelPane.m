@@ -10,6 +10,8 @@
         _expandedTabKind = 0;
         _editorGroupExpanded = YES;
         _browserGroupExpanded = NO;
+        _editorReady = NO;
+        _editorShellLoaded = NO;
         _tabStripScrollOffset = 0;
         _tabStripContentWidth = 0;
     }

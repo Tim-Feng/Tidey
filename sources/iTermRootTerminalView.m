@@ -958,18 +958,11 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSTextField *_tideyEditorPanelLabel;
     NSView *_tideyEditorTabStripView;
 
-    WKWebView *_tideyEditorWebView;
     NSView *_tideyEditorFileTreeContainerView;
     NSScrollView *_tideyEditorFileTreeScrollView;
     NSOutlineView *_tideyEditorFileTreeView;
     TideyEditorFileNode *_tideyEditorFileTreeRootNode;
-    TideyEditorScriptMessageHandler *_tideyEditorScriptMessageHandler;
-    BOOL _tideyEditorShellLoaded;
-    BOOL _tideyEditorReady;
     BOOL _tideyEditorLoadedDemoFile;
-    NSString *_tideyEditorPendingValue;
-    NSString *_tideyEditorPendingLanguage;
-    NSNumber *_tideyEditorPendingEditable;
     NSString *_tideyEditorLoadedPath;
     TideyEditorDocumentStore *_tideyEditorDocumentStore;
     TideyEditorExternalChangeWatcher *_tideyEditorExternalChangeWatcher;
@@ -980,8 +973,6 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     TideyRightPanelPane *_primaryPane;
 
     // Browser panel
-    WKWebView *_tideyBrowserWebView;
-    NSView *_tideyBrowserContainerView;
     NSTextField *_tideyBrowserURLField;
     NSButton *_tideyBrowserBackButton;
     NSButton *_tideyBrowserForwardButton;
@@ -1549,6 +1540,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                                           alpha:1].CGColor;
         _tideyEditorPanelView.hidden = YES;
         [self addSubview:_tideyEditorPanelView];
+        _primaryPane.containerView = _tideyEditorPanelView;
 
         _tideyEditorTabStripView = [[TideyRightPanelTabStripView alloc] initWithFrame:NSZeroRect];
         _tideyEditorTabStripView.autoresizingMask = NSViewWidthSizable;
@@ -1924,12 +1916,12 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                   object:nil];
     [self tideyStopWatchingCurrentEditorFile];
     [self tideyStopWatchingEditorFileTree];
-    if (_tideyBrowserWebView) {
-        [_tideyBrowserWebView removeObserver:self forKeyPath:@"title"];
-        [_tideyBrowserWebView removeObserver:self forKeyPath:@"URL"];
-        [_tideyBrowserWebView removeObserver:self forKeyPath:@"loading"];
-        [_tideyBrowserWebView removeObserver:self forKeyPath:@"canGoBack"];
-        [_tideyBrowserWebView removeObserver:self forKeyPath:@"canGoForward"];
+    if (_primaryPane.browserWebView) {
+        [_primaryPane.browserWebView removeObserver:self forKeyPath:@"title"];
+        [_primaryPane.browserWebView removeObserver:self forKeyPath:@"URL"];
+        [_primaryPane.browserWebView removeObserver:self forKeyPath:@"loading"];
+        [_primaryPane.browserWebView removeObserver:self forKeyPath:@"canGoBack"];
+        [_primaryPane.browserWebView removeObserver:self forKeyPath:@"canGoForward"];
     }
     _tabBarControl.itermTabBarDelegate = nil;
     _tabBarControl.delegate = nil;
@@ -1937,31 +1929,31 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     _tideySidebarDragHandle.delegate = nil;
     _tideyEditorDragHandle.delegate = nil;
     _tideyEditorFileTreeDragHandle.delegate = nil;
-    [_tideyEditorWebView.configuration.userContentController removeScriptMessageHandlerForName:@"tideyEditorReady"];
-    [_tideyEditorWebView.configuration.userContentController removeScriptMessageHandlerForName:@"tideyEditorChanged"];
-    [_tideyEditorWebView.configuration.userContentController removeScriptMessageHandlerForName:@"tideyEditorSaveRequested"];
-    [_tideyEditorWebView.configuration.userContentController removeScriptMessageHandlerForName:@"tideyEditorOpenLink"];
-    _tideyEditorWebView.navigationDelegate = nil;
+    [_primaryPane.editorWebView.configuration.userContentController removeScriptMessageHandlerForName:@"tideyEditorReady"];
+    [_primaryPane.editorWebView.configuration.userContentController removeScriptMessageHandlerForName:@"tideyEditorChanged"];
+    [_primaryPane.editorWebView.configuration.userContentController removeScriptMessageHandlerForName:@"tideyEditorSaveRequested"];
+    [_primaryPane.editorWebView.configuration.userContentController removeScriptMessageHandlerForName:@"tideyEditorOpenLink"];
+    _primaryPane.editorWebView.navigationDelegate = nil;
 }
 
 - (void)observeValueForKeyPath:(NSString *)keyPath
                       ofObject:(id)object
                         change:(NSDictionary<NSKeyValueChangeKey,id> *)change
                        context:(void *)context {
-    if (object != _tideyBrowserWebView) {
+    if (object != _primaryPane.browserWebView) {
         [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
         return;
     }
     if ([keyPath isEqualToString:@"title"]) {
-        NSString *title = _tideyBrowserWebView.title;
+        NSString *title = _primaryPane.browserWebView.title;
         TideyEditorTab *tab = [self tideyCurrentRightPanelTab];
         if (tab && tab.kind == TideyRightPanelTabKindBrowser && title.length > 0) {
-            tab.displayName = [[self class] tideyBrowserDisplayNameForURL:_tideyBrowserWebView.URL
+            tab.displayName = [[self class] tideyBrowserDisplayNameForURL:_primaryPane.browserWebView.URL
                                                                pageTitle:title];
             [self reloadTideyRightPanelTabs];
         }
     } else if ([keyPath isEqualToString:@"URL"]) {
-        NSURL *url = _tideyBrowserWebView.URL;
+        NSURL *url = _primaryPane.browserWebView.URL;
         if (url) {
             _tideyBrowserURLField.stringValue = url.absoluteString;
             TideyEditorTab *tab = [self tideyCurrentRightPanelTab];
@@ -1970,15 +1962,15 @@ NS_CLASS_AVAILABLE_MAC(10_14)
             }
         }
     } else if ([keyPath isEqualToString:@"loading"]) {
-        if (_tideyBrowserWebView.isLoading) {
+        if (_primaryPane.browserWebView.isLoading) {
             [_tideyBrowserLoadingIndicator startAnimation:nil];
         } else {
             [_tideyBrowserLoadingIndicator stopAnimation:nil];
         }
     } else if ([keyPath isEqualToString:@"canGoBack"]) {
-        _tideyBrowserBackButton.enabled = _tideyBrowserWebView.canGoBack;
+        _tideyBrowserBackButton.enabled = _primaryPane.browserWebView.canGoBack;
     } else if ([keyPath isEqualToString:@"canGoForward"]) {
-        _tideyBrowserForwardButton.enabled = _tideyBrowserWebView.canGoForward;
+        _tideyBrowserForwardButton.enabled = _primaryPane.browserWebView.canGoForward;
     }
 }
 
@@ -3030,7 +3022,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 
 - (void)ensureTideyEditorWebView {
-    if (_tideyEditorWebView != nil) {
+    if (_primaryPane.editorWebView != nil) {
         return;
     }
 
@@ -3047,28 +3039,29 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     configuration.preferences = preferences;
 
     WKUserContentController *contentController = [[WKUserContentController alloc] init];
-    _tideyEditorScriptMessageHandler = [[TideyEditorScriptMessageHandler alloc] init];
-    _tideyEditorScriptMessageHandler.rootView = self;
-    [contentController addScriptMessageHandler:_tideyEditorScriptMessageHandler name:@"tideyEditorReady"];
-    [contentController addScriptMessageHandler:_tideyEditorScriptMessageHandler name:@"tideyEditorChanged"];
-    [contentController addScriptMessageHandler:_tideyEditorScriptMessageHandler name:@"tideyEditorSaveRequested"];
-    [contentController addScriptMessageHandler:_tideyEditorScriptMessageHandler name:@"tideyEditorOpenLink"];
+    TideyEditorScriptMessageHandler *handler = [[TideyEditorScriptMessageHandler alloc] init];
+    handler.rootView = self;
+    _primaryPane.editorScriptMessageHandler = handler;
+    [contentController addScriptMessageHandler:handler name:@"tideyEditorReady"];
+    [contentController addScriptMessageHandler:handler name:@"tideyEditorChanged"];
+    [contentController addScriptMessageHandler:handler name:@"tideyEditorSaveRequested"];
+    [contentController addScriptMessageHandler:handler name:@"tideyEditorOpenLink"];
     configuration.userContentController = contentController;
 
-    _tideyEditorWebView = [[WKWebView alloc] initWithFrame:_tideyEditorPanelView.bounds configuration:configuration];
-    _tideyEditorWebView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    _tideyEditorWebView.navigationDelegate = self;
+    _primaryPane.editorWebView = [[WKWebView alloc] initWithFrame:_tideyEditorPanelView.bounds configuration:configuration];
+    _primaryPane.editorWebView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    _primaryPane.editorWebView.navigationDelegate = self;
     if (@available(macOS 13.3, *)) {
-        _tideyEditorWebView.inspectable = YES;
+        _primaryPane.editorWebView.inspectable = YES;
     }
-    [_tideyEditorPanelView addSubview:_tideyEditorWebView positioned:NSWindowBelow relativeTo:_tideyEditorPanelLabel];
+    [_tideyEditorPanelView addSubview:_primaryPane.editorWebView positioned:NSWindowBelow relativeTo:_tideyEditorPanelLabel];
     [self layoutTideyEditorContents];
 }
 
 static const CGFloat kTideyBrowserToolbarHeight = 28;
 
 - (void)tideyEnsureBrowserWebView {
-    if (_tideyBrowserWebView != nil) {
+    if (_primaryPane.browserWebView != nil) {
         return;
     }
     // Container holds toolbar + webview
@@ -3077,9 +3070,9 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     browserContainerView.tideyNewTabHandler = ^{
         [weakSelf createNewBlankBrowserTab];
     };
-    _tideyBrowserContainerView = browserContainerView;
-    _tideyBrowserContainerView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    _tideyBrowserContainerView.hidden = YES;
+    _primaryPane.browserContainerView = browserContainerView;
+    _primaryPane.browserContainerView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    _primaryPane.browserContainerView.hidden = YES;
 
     // Toolbar background
     NSView *toolbar = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 100, kTideyBrowserToolbarHeight)];
@@ -3144,7 +3137,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     _tideyBrowserLoadingIndicator.autoresizingMask = NSViewMinXMargin | NSViewMinYMargin;
     [toolbar addSubview:_tideyBrowserLoadingIndicator];
 
-    [_tideyBrowserContainerView addSubview:toolbar];
+    [_primaryPane.browserContainerView addSubview:toolbar];
 
     // WKWebView
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
@@ -3159,35 +3152,35 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     }
     config.preferences = prefs;
 
-    _tideyBrowserWebView = [[WKWebView alloc] initWithFrame:NSZeroRect configuration:config];
-    _tideyBrowserWebView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    _tideyBrowserWebView.navigationDelegate = self;
-    _tideyBrowserWebView.allowsBackForwardNavigationGestures = YES;
+    _primaryPane.browserWebView = [[WKWebView alloc] initWithFrame:NSZeroRect configuration:config];
+    _primaryPane.browserWebView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    _primaryPane.browserWebView.navigationDelegate = self;
+    _primaryPane.browserWebView.allowsBackForwardNavigationGestures = YES;
     if (@available(macOS 13.3, *)) {
-        _tideyBrowserWebView.inspectable = YES;
+        _primaryPane.browserWebView.inspectable = YES;
     }
-    [_tideyBrowserContainerView addSubview:_tideyBrowserWebView];
+    [_primaryPane.browserContainerView addSubview:_primaryPane.browserWebView];
 
-    [_tideyEditorPanelView addSubview:_tideyBrowserContainerView positioned:NSWindowBelow relativeTo:_tideyEditorTabStripView];
+    [_tideyEditorPanelView addSubview:_primaryPane.browserContainerView positioned:NSWindowBelow relativeTo:_tideyEditorTabStripView];
 
     // KVO for title and loading
-    [_tideyBrowserWebView addObserver:self forKeyPath:@"title" options:NSKeyValueObservingOptionNew context:NULL];
-    [_tideyBrowserWebView addObserver:self forKeyPath:@"URL" options:NSKeyValueObservingOptionNew context:NULL];
-    [_tideyBrowserWebView addObserver:self forKeyPath:@"loading" options:NSKeyValueObservingOptionNew context:NULL];
-    [_tideyBrowserWebView addObserver:self forKeyPath:@"canGoBack" options:NSKeyValueObservingOptionNew context:NULL];
-    [_tideyBrowserWebView addObserver:self forKeyPath:@"canGoForward" options:NSKeyValueObservingOptionNew context:NULL];
+    [_primaryPane.browserWebView addObserver:self forKeyPath:@"title" options:NSKeyValueObservingOptionNew context:NULL];
+    [_primaryPane.browserWebView addObserver:self forKeyPath:@"URL" options:NSKeyValueObservingOptionNew context:NULL];
+    [_primaryPane.browserWebView addObserver:self forKeyPath:@"loading" options:NSKeyValueObservingOptionNew context:NULL];
+    [_primaryPane.browserWebView addObserver:self forKeyPath:@"canGoBack" options:NSKeyValueObservingOptionNew context:NULL];
+    [_primaryPane.browserWebView addObserver:self forKeyPath:@"canGoForward" options:NSKeyValueObservingOptionNew context:NULL];
 }
 
 - (void)tideyLoadBrowserURL:(NSURL *)url {
-    [_tideyBrowserWebView loadRequest:[NSURLRequest requestWithURL:url]];
+    [_primaryPane.browserWebView loadRequest:[NSURLRequest requestWithURL:url]];
     _tideyBrowserURLField.stringValue = url.absoluteString;
 }
 
 - (void)tideyUpdateBrowserContentVisibility {
     TideyEditorTab *tab = [self tideyCurrentRightPanelTab];
     BOOL isBrowser = (tab != nil && tab.kind == TideyRightPanelTabKindBrowser);
-    _tideyBrowserContainerView.hidden = !isBrowser;
-    _tideyEditorWebView.hidden = isBrowser || tab == nil;
+    _primaryPane.browserContainerView.hidden = !isBrowser;
+    _primaryPane.editorWebView.hidden = isBrowser || tab == nil;
     _tideyEditorFileTreeContainerView.hidden = !self.shouldShowTideyEditorFileTree;
     if (self.tideyEditorFileTreeToggleButton) {
         self.tideyEditorFileTreeToggleButton.hidden = !self.shouldShowTideyEditorPanel;
@@ -3198,7 +3191,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 }
 
 - (void)tideyLayoutBrowserContainer {
-    if (!_tideyBrowserContainerView) {
+    if (!_primaryPane.browserContainerView) {
         return;
     }
     const NSRect bounds = _tideyEditorPanelView.bounds;
@@ -3208,10 +3201,10 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         ? MIN(self.tideyEditorFileTreeWidth, MAX(0, NSWidth(bounds) - kTideyMinimumEditorContentWidth))
         : 0;
     const CGFloat contentWidth = MAX(0, NSWidth(bounds) - fileTreeWidth);
-    _tideyBrowserContainerView.frame = NSMakeRect(0, 0, contentWidth, contentHeight);
+    _primaryPane.browserContainerView.frame = NSMakeRect(0, 0, contentWidth, contentHeight);
 
     // Toolbar at top of container
-    NSView *toolbar = _tideyBrowserContainerView.subviews.firstObject;
+    NSView *toolbar = _primaryPane.browserContainerView.subviews.firstObject;
     toolbar.frame = NSMakeRect(0, contentHeight - kTideyBrowserToolbarHeight, contentWidth, kTideyBrowserToolbarHeight);
 
     // URL field fills remaining width after buttons
@@ -3230,21 +3223,21 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     _tideyBrowserLoadingIndicator.frame = NSMakeRect(contentWidth - 24, indicatorY, indicatorSize, indicatorSize);
 
     // WebView below toolbar
-    _tideyBrowserWebView.frame = NSMakeRect(0, 0, contentWidth, MAX(0, contentHeight - kTideyBrowserToolbarHeight));
+    _primaryPane.browserWebView.frame = NSMakeRect(0, 0, contentWidth, MAX(0, contentHeight - kTideyBrowserToolbarHeight));
 }
 
 #pragma mark - Browser Actions
 
 - (void)tideyBrowserGoBack:(id)sender {
-    [_tideyBrowserWebView goBack];
+    [_primaryPane.browserWebView goBack];
 }
 
 - (void)tideyBrowserGoForward:(id)sender {
-    [_tideyBrowserWebView goForward];
+    [_primaryPane.browserWebView goForward];
 }
 
 - (void)tideyBrowserReload:(id)sender {
-    [_tideyBrowserWebView reload];
+    [_primaryPane.browserWebView reload];
 }
 
 - (void)tideyBrowserURLFieldAction:(id)sender {
@@ -3265,13 +3258,13 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 
 - (void)loadTideyEditorShellIfNeeded {
     [self ensureTideyEditorWebView];
-    if (_tideyEditorShellLoaded) {
+    if (_primaryPane.editorShellLoaded) {
         return;
     }
-    _tideyEditorShellLoaded = YES;
+    _primaryPane.editorShellLoaded = YES;
     NSURL *baseURL = [self tideyEditorMonacoBaseURL];
-    [_tideyEditorWebView loadHTMLString:[self tideyEditorHTML]
-                                baseURL:baseURL];
+    [_primaryPane.editorWebView loadHTMLString:[self tideyEditorHTML]
+                                       baseURL:baseURL];
 }
 
 - (NSURL *)tideyEditorMonacoBundleURL {
@@ -3663,7 +3656,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         ? MIN(self.tideyEditorFileTreeWidth, MAX(0, NSWidth(bounds) - kTideyMinimumEditorContentWidth))
         : 0;
     const CGFloat editorWidth = MAX(0, NSWidth(bounds) - fileTreeWidth);
-    _tideyEditorWebView.frame = NSMakeRect(0, 0, editorWidth, contentHeight);
+    _primaryPane.editorWebView.frame = NSMakeRect(0, 0, editorWidth, contentHeight);
     _tideyEditorFileTreeContainerView.hidden = !self.shouldShowTideyEditorFileTree;
     _tideyEditorFileTreeContainerView.frame = NSMakeRect(editorWidth, 0, fileTreeWidth, contentHeight);
     _tideyEditorFileTreeScrollView.frame = _tideyEditorFileTreeContainerView.bounds;
@@ -3824,15 +3817,15 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     TideyEditorTab *tab = [self tideyCurrentRightPanelTab];
     BOOL hasCurrentTab = (tab != nil);
     BOOL isBrowser = (hasCurrentTab && tab.kind == TideyRightPanelTabKindBrowser);
-    if (!_tideyEditorReady && !isBrowser) {
+    if (!_primaryPane.editorReady && !isBrowser) {
         _tideyEditorPanelLabel.hidden = YES;
-        _tideyEditorWebView.hidden = YES;
-        _tideyBrowserContainerView.hidden = YES;
+        _primaryPane.editorWebView.hidden = YES;
+        _primaryPane.browserContainerView.hidden = YES;
         return;
     }
     _tideyEditorPanelLabel.hidden = YES;
-    _tideyEditorWebView.hidden = isBrowser || !hasCurrentTab;
-    _tideyBrowserContainerView.hidden = !isBrowser;
+    _primaryPane.editorWebView.hidden = isBrowser || !hasCurrentTab;
+    _primaryPane.browserContainerView.hidden = !isBrowser;
     if (!hasCurrentTab) {
         [self tideyEditorSetLanguage:@"plaintext"];
         [self tideyEditorSetEditable:NO];
@@ -4532,45 +4525,45 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 }
 
 - (void)tideyEditorSetValue:(NSString *)content {
-    _tideyEditorPendingValue = [content copy] ?: @"";
+    _primaryPane.pendingEditorValue = [content copy] ?: @"";
     [self tideyEditorApplyPendingStateIfReady];
 }
 
 - (void)tideyEditorSetLanguage:(NSString *)language {
-    _tideyEditorPendingLanguage = [language copy] ?: @"plaintext";
+    _primaryPane.pendingEditorLanguage = [language copy] ?: @"plaintext";
     [self tideyEditorApplyPendingStateIfReady];
 }
 
 - (void)tideyEditorSetEditable:(BOOL)editable {
-    _tideyEditorPendingEditable = @(editable);
+    _primaryPane.pendingEditorEditable = @(editable);
     [self tideyEditorApplyPendingStateIfReady];
 }
 
 - (void)tideyEditorApplyPendingStateIfReady {
-    if (!_tideyEditorReady || _tideyEditorWebView == nil) {
+    if (!_primaryPane.editorReady || _primaryPane.editorWebView == nil) {
         return;
     }
-    if (_tideyEditorPendingLanguage != nil) {
+    if (_primaryPane.pendingEditorLanguage != nil) {
         NSString *js = [NSString stringWithFormat:@"window.tideyNative && window.tideyNative.setLanguage(%@);",
-                        [NSJSONSerialization it_jsonStringForObject:_tideyEditorPendingLanguage]];
-        [_tideyEditorWebView evaluateJavaScript:js completionHandler:nil];
+                        [NSJSONSerialization it_jsonStringForObject:_primaryPane.pendingEditorLanguage]];
+        [_primaryPane.editorWebView evaluateJavaScript:js completionHandler:nil];
     }
-    if (_tideyEditorPendingValue != nil) {
+    if (_primaryPane.pendingEditorValue != nil) {
         NSString *js = [NSString stringWithFormat:@"window.tideyNative && window.tideyNative.setValue(%@);",
-                        [NSJSONSerialization it_jsonStringForObject:_tideyEditorPendingValue]];
-        [_tideyEditorWebView evaluateJavaScript:js completionHandler:nil];
+                        [NSJSONSerialization it_jsonStringForObject:_primaryPane.pendingEditorValue]];
+        [_primaryPane.editorWebView evaluateJavaScript:js completionHandler:nil];
     }
-    if (_tideyEditorPendingEditable != nil) {
+    if (_primaryPane.pendingEditorEditable != nil) {
         NSString *js = [NSString stringWithFormat:@"window.tideyNative && window.tideyNative.setEditable(%@);",
-                        _tideyEditorPendingEditable.boolValue ? @"true" : @"false"];
-        [_tideyEditorWebView evaluateJavaScript:js completionHandler:nil];
+                        _primaryPane.pendingEditorEditable.boolValue ? @"true" : @"false"];
+        [_primaryPane.editorWebView evaluateJavaScript:js completionHandler:nil];
     }
-    [_tideyEditorWebView evaluateJavaScript:@"window.__tideyEditor && window.__tideyEditor.layout();"
-                          completionHandler:nil];
+    [_primaryPane.editorWebView evaluateJavaScript:@"window.__tideyEditor && window.__tideyEditor.layout();"
+                                 completionHandler:nil];
 }
 
 - (void)tideyEditorDidBecomeReady {
-    _tideyEditorReady = YES;
+    _primaryPane.editorReady = YES;
     [self tideyEditorApplyPendingStateIfReady];
     NSString *restoredPath = [_tideyEditorLoadedPath stringByStandardizingPath];
     BOOL isDirectory = NO;
@@ -4667,10 +4660,10 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 }
 
 - (BOOL)tideyEditorShouldHandleFindPanelAction {
-    if (_tideyEditorPanelView.hidden || !_tideyEditorWebView) {
+    if (_tideyEditorPanelView.hidden || !_primaryPane.editorWebView) {
         return NO;
     }
-    return [[self class] tideyResponder:self.window.firstResponder isDescendantOfView:_tideyEditorWebView];
+    return [[self class] tideyResponder:self.window.firstResponder isDescendantOfView:_primaryPane.editorWebView];
 }
 
 - (BOOL)tideyEditorHasFocus {
@@ -4716,7 +4709,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         return NO;
     }
     NSResponder *responder = self.window.firstResponder;
-    return [[self class] tideyResponder:responder isDescendantOfView:_tideyBrowserContainerView] ||
+    return [[self class] tideyResponder:responder isDescendantOfView:_primaryPane.browserContainerView] ||
            [[self class] tideyResponderLooksLikeWebKitResponder:responder];
 }
 
@@ -4776,7 +4769,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
                 break;
         }
         if (js) {
-            [_tideyEditorWebView evaluateJavaScript:js completionHandler:nil];
+            [_primaryPane.editorWebView evaluateJavaScript:js completionHandler:nil];
             return;
         }
     }
@@ -4989,9 +4982,9 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     _tideyEditorPanelView.frame = NSMakeRect(originX, 0, MIN(width, rightEdge), NSHeight(self.bounds));
 
     [self layoutTideyEditorContents];
-    if (_tideyEditorReady) {
-        [_tideyEditorWebView evaluateJavaScript:@"window.__tideyEditor && window.__tideyEditor.layout();"
-                              completionHandler:nil];
+    if (_primaryPane.editorReady) {
+        [_primaryPane.editorWebView evaluateJavaScript:@"window.__tideyEditor && window.__tideyEditor.layout();"
+                                     completionHandler:nil];
     }
 }
 
@@ -5127,7 +5120,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 #pragma mark - WKNavigationDelegate
 
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
-    if (webView == _tideyEditorWebView) {
+    if (webView == _primaryPane.editorWebView) {
         [self tideyEditorApplyPendingStateIfReady];
     }
 }
