@@ -6635,12 +6635,15 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 }
 
 - (void)dragHandleViewDidDoubleClick:(iTermDragHandleView *)dragHandle {
-    if (dragHandle == self.tideySidebarDragHandle ||
-        dragHandle == self.tideyEditorDragHandle ||
-        dragHandle == self.tideyEditorFileTreeDragHandle) {
-        // Reset all panels to default sizes
+    if (dragHandle == self.tideySidebarDragHandle) {
         _tideySidebarPreferredWidth = kTideySidebarWidth;
-        _tideyEditorPreferredWidth = floor(NSWidth(self.bounds) / 2.0);
+    } else if (dragHandle == self.tideyEditorDragHandle) {
+        const CGFloat availableWidth = MAX(0, NSWidth(self.bounds) - (self.shouldShowToolbelt ? floor(self.toolbeltWidth) : 0));
+        const CGFloat sidebarWidth = self.tideySidebarWidth;
+        const CGFloat fileTreeWidth = self.shouldShowTideyEditorFileTree ? self.tideyEditorFileTreeWidth : 0;
+        const CGFloat sharedWidth = MAX(0, floor((availableWidth - sidebarWidth - fileTreeWidth) / 2.0));
+        _tideyEditorPreferredWidth = sharedWidth + fileTreeWidth;
+    } else if (dragHandle == self.tideyEditorFileTreeDragHandle) {
         _tideyEditorFileTreePreferredWidth = kTideyEditorFileTreeWidth;
     } else {
         return;
