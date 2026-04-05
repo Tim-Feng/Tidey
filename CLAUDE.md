@@ -20,3 +20,25 @@
 - Avoid duplicate expressions; hoist shared computations into a named `const` before branching.
 - Don't change defaults silently.
 - Before changing UI/layout code, read `docs/debug-lessons.md` — it covers layout pitfalls, PSMTabBarControl quirks, icon cache, and shell integration issues we've already solved.
+
+## Testing Policy
+
+Tidey 不套用 `~/GitHub/CLAUDE.md` 預設的 TDD。繼承的 iTerm2 codebase 大部分是 AppKit UI / layout / WKWebView / NSOutlineView 等難以在 XCTest 穩定 reproduce 的互動類 bug，全面 TDD 的成本高於收益。
+
+**綁測試（寫進 `ModernTests` / `iTerm2XCTests`，regression 必備）**：
+- 純邏輯 class：parser、state machine、script function call、shortcut routing、status store
+- 跨 session 行為契約：keybinding、IPC、socket protocol
+- 修 bug 前能在 XCTest 先 reproduce 的 → 一律先寫 failing test
+
+**不綁測試（依賴人工驗證 + `docs/debug-lessons.md`）**：
+- Layout、autoresizing、split view geometry
+- Drag session、mouse tracking、responder chain
+- Rendering（PTYTextView、Metal renderer、PSMTabBarControl drawing）
+- WebKit integration（WKWebView focus、content policy）
+
+**執行方式**：
+- 跑測試：`tools/run_tests.expect ModernTests/<TestClass>/<testMethod>`
+- CI gate：`.github/workflows/test.yml` 會在 push master / PR 時跑全套 ModernTests（macos-15）
+- 本地無 pre-commit test gate，`.git/hooks/pre-commit` 僅提示檢查 `docs/debug-lessons.md`
+
+**原則**：修不綁測試類型的 bug 時，commit message 要寫清楚症狀關鍵字（方便 `git log | grep` 回查），並考慮是否要補一條進 `docs/debug-lessons.md`。
