@@ -6469,6 +6469,8 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 - (NSTableCellView *)newTideyEditorFileTreeCellView {
     NSTableCellView *cellView = [[NSTableCellView alloc] initWithFrame:NSZeroRect];
     cellView.identifier = @"TideyEditorFileTreeCell";
+    cellView.wantsLayer = YES;
+    cellView.layer.masksToBounds = YES;
 
     NSImageView *iconView = [[NSImageView alloc] initWithFrame:NSMakeRect(4, 2, 16, 16)];
     iconView.translatesAutoresizingMaskIntoConstraints = NO;
