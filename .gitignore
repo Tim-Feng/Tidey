@@ -66,3 +66,14 @@ iTermBrowserPlugin/iTermBrowserPlugin.xcodeproj/project.xcworkspace/xcuserdata/g
 # Claude Code local settings
 .claude/*.local.json
 plan.md
+
+# Claude Code session state
+.claude/
+
+# Local build artifacts
+Tidey.dmg
+Tidey-*.dmg
+
+# Internal tools / references
+nippon_colors.txt
+tests/selection-color-preview.html
