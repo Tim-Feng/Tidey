@@ -3171,6 +3171,19 @@ ITERM_WEAKLY_REFERENCEABLE
     [self closeTabIfConfirmed:tab];
 }
 
+- (IBAction)closeCurrentTideySidebarWorkspace:(id)sender {
+    (void)sender;
+    if (!self.isShowingTideySidebar) {
+        return;
+    }
+    [self ensureTideyWorkspacesInitialized];
+    [self updateSelectedPanelIndexFromVisibleTabSelection];
+    if (self.selectedWorkspaceIndex < 0 || self.selectedWorkspaceIndex >= self.workspaces.count) {
+        return;
+    }
+    [self closeWorkspacesAtIndexes:[NSIndexSet indexSetWithIndex:self.selectedWorkspaceIndex]];
+}
+
 - (BOOL)closeTabIfConfirmed:(PTYTab *)tab {
     const BOOL shouldClose = [self tabView:_contentView.tabView
                     shouldCloseTabViewItem:tab.tabViewItem
@@ -12914,6 +12927,8 @@ typedef NS_ENUM(NSUInteger, iTermBroadcastCommand) {
         } else {
             result = NO;
         }
+    } else if ([item action] == @selector(closeCurrentTideySidebarWorkspace:)) {
+        result = self.isShowingTideySidebar && self.selectedWorkspaceIndex >= 0 && self.selectedWorkspaceIndex < self.workspaces.count;
     } else if ([item action] == @selector(restartSession:)) {
         return [[self currentSession] isRestartable];
     } else if ([item action] == @selector(duplicateSession:)) {

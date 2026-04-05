@@ -746,6 +746,13 @@ ITERM_WEAKLY_REFERENCEABLE
             return YES;
         }
     }
+    // ⌘⇧W → close current Tidey workspace
+    if (flags == (NSEventModifierFlagCommand | NSEventModifierFlagShift) && [chars isEqualToString:@"w"]) {
+        if ([controller respondsToSelector:@selector(closeCurrentTideySidebarWorkspace:)]) {
+            [controller closeCurrentTideySidebarWorkspace:nil];
+            return YES;
+        }
+    }
     // ⌃⌘F → toggleTideyEditorFileTree:
     if (flags == (NSEventModifierFlagCommand | NSEventModifierFlagControl) && [chars isEqualToString:@"f"]) {
         if ([controller respondsToSelector:@selector(toggleTideyEditorFileTree:)]) {
