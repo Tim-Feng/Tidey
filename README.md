@@ -54,7 +54,8 @@ Requires Xcode, [rustup](https://rustup.rs), and Homebrew.
 |--------|----------|
 | New Workspace | ⌘N |
 | New Panel | ⌘T |
-| Close | ⌘W |
+| Close Tab | ⌘W |
+| Close Workspace | ⇧⌘W |
 | Switch Workspace | ⌘1–⌘9 (⌘9 = last) |
 | Next / Previous Workspace | ⌃⌘] / ⌃⌘[ |
 | Last Workspace | ⌃⌘\ |
