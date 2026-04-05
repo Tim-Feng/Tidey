@@ -3532,14 +3532,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         [self tideySetActivePane:destinationPane];
         [self selectTideyRightPanelTabAtIndex:destinationIndex inPane:destinationPane];
         if (sourcePane.tabs.count == 0 && _splitVisible) {
-            if (sourcePane == _primaryPane) {
-                for (TideyEditorTab *t in [_secondaryPane.tabs copy]) {
-                    [_primaryPane.tabs addObject:t];
-                }
-                [_secondaryPane.tabs removeAllObjects];
-                _primaryPane.selectedTabIndex = [_primaryPane.tabs indexOfObjectIdenticalTo:tab];
-            }
-            [self toggleTideyEditorSplit:nil];
+            NSString *selectedIdentifier = [self tideyCurrentRightPanelTabIdentifierInPane:destinationPane];
+            [self tideyCollapseEditorSplitPreferringSelectedTabIdentifier:selectedIdentifier];
             [self tideySetActivePane:_primaryPane];
         } else {
             if (sourcePane.selectedTabIndex >= (NSInteger)sourcePane.tabs.count) {
@@ -4932,6 +4926,15 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     }
     if (pane.tabs.count == 0) {
         pane.selectedTabIndex = -1;
+        if (_splitVisible) {
+            NSString *selectedIdentifier = nil;
+            if (pane == _primaryPane) {
+                selectedIdentifier = [self tideyCurrentRightPanelTabIdentifierInPane:_secondaryPane];
+            }
+            [self tideyCollapseEditorSplitPreferringSelectedTabIdentifier:selectedIdentifier];
+            [self tideySetActivePane:_primaryPane];
+            return;
+        }
         if (pane == _primaryPane) {
             _tideyEditorLoadedPath = nil;
             _tideyEditorRootOverridePath = nil;
@@ -5454,6 +5457,77 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     _activePane = _primaryPane;
 }
 
+- (BOOL)tideyPane:(TideyRightPanelPane *)pane hasTabWithIdentifier:(NSString *)identifier kind:(TideyRightPanelTabKind)kind {
+    if (identifier.length == 0 || !pane) {
+        return NO;
+    }
+    for (TideyEditorTab *tab in pane.tabs) {
+        if (tab.kind == kind && [tab.identifier isEqualToString:identifier]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+- (void)tideyMergeSecondaryPaneIntoPrimary {
+    if (!_secondaryPane) {
+        return;
+    }
+    NSString *primaryLastEditor = [_primaryPane.lastActiveEditorTabIdentifier copy];
+    NSString *primaryLastBrowser = [_primaryPane.lastActiveBrowserTabIdentifier copy];
+    NSString *secondaryLastEditor = [_secondaryPane.lastActiveEditorTabIdentifier copy];
+    NSString *secondaryLastBrowser = [_secondaryPane.lastActiveBrowserTabIdentifier copy];
+
+    _primaryPane.editorGroupExpanded = _primaryPane.editorGroupExpanded || _secondaryPane.editorGroupExpanded;
+    _primaryPane.browserGroupExpanded = _primaryPane.browserGroupExpanded || _secondaryPane.browserGroupExpanded;
+
+    for (TideyEditorTab *t in [_secondaryPane.tabs copy]) {
+        [_primaryPane.tabs addObject:t];
+    }
+    [_secondaryPane.tabs removeAllObjects];
+
+    _primaryPane.lastActiveEditorTabIdentifier = [self tideyPane:_primaryPane
+                                          hasTabWithIdentifier:primaryLastEditor
+                                                         kind:TideyRightPanelTabKindEditor]
+        ? primaryLastEditor
+        : ([self tideyPane:_primaryPane
+       hasTabWithIdentifier:secondaryLastEditor
+                      kind:TideyRightPanelTabKindEditor] ? secondaryLastEditor : nil);
+    _primaryPane.lastActiveBrowserTabIdentifier = [self tideyPane:_primaryPane
+                                           hasTabWithIdentifier:primaryLastBrowser
+                                                          kind:TideyRightPanelTabKindBrowser]
+        ? primaryLastBrowser
+        : ([self tideyPane:_primaryPane
+       hasTabWithIdentifier:secondaryLastBrowser
+                      kind:TideyRightPanelTabKindBrowser] ? secondaryLastBrowser : nil);
+}
+
+- (void)tideyCollapseEditorSplitPreferringSelectedTabIdentifier:(NSString *)selectedIdentifier {
+    if (!_splitVisible) {
+        return;
+    }
+    [self tideyMergeSecondaryPaneIntoPrimary];
+    if (selectedIdentifier.length > 0) {
+        NSInteger index = [self tideyIndexOfRightPanelTabWithIdentifier:selectedIdentifier inPane:_primaryPane];
+        if (index != NSNotFound) {
+            _primaryPane.selectedTabIndex = index;
+        }
+    }
+    if (_primaryPane.selectedTabIndex >= (NSInteger)_primaryPane.tabs.count) {
+        _primaryPane.selectedTabIndex = _primaryPane.tabs.count - 1;
+    }
+    if (_primaryPane.selectedTabIndex < 0 && _primaryPane.tabs.count > 0) {
+        _primaryPane.selectedTabIndex = 0;
+    }
+    [self teardownSecondaryPane];
+    _splitVisible = NO;
+    [self reloadTideyRightPanelTabs];
+    [self tideyUpdateBrowserContentVisibility];
+    [self layoutTideyEditorContents];
+    [self updateTideyChromeToggleButtons];
+    [self tideyUpdateEditorPlaceholder];
+}
+
 - (void)toggleTideyEditorSplit:(id)sender {
     (void)sender;
     if (!_splitVisible) {
@@ -5461,11 +5535,11 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         _splitVisible = YES;
         _activePane = _secondaryPane ?: _primaryPane;
     } else {
-        if (_secondaryPane.tabs.count > 0) {
-            [_primaryPane.tabs addObjectsFromArray:_secondaryPane.tabs];
-        }
-        [self teardownSecondaryPane];
-        _splitVisible = NO;
+        NSString *selectedIdentifier = (_activePane == _secondaryPane)
+            ? [self tideyCurrentRightPanelTabIdentifierInPane:_secondaryPane]
+            : [self tideyCurrentRightPanelTabIdentifierInPane:_primaryPane];
+        [self tideyCollapseEditorSplitPreferringSelectedTabIdentifier:selectedIdentifier];
+        return;
     }
     [self layoutTideyEditorContents];
 }
