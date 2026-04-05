@@ -1797,8 +1797,9 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         }
         _tideyEditorFileTreeView.rowHeight = 22;
         _tideyEditorFileTreeView.indentationPerLevel = 12;
-        _tideyEditorFileTreeView.columnAutoresizingStyle = NSTableViewUniformColumnAutoresizingStyle;
-        _tideyEditorFileTreeView.autoresizesOutlineColumn = YES;
+        _tideyEditorFileTreeView.columnAutoresizingStyle = NSTableViewNoColumnAutoresizing;
+        _tideyEditorFileTreeView.autoresizesOutlineColumn = NO;
+        _tideyEditorFileTreeView.intercellSpacing = NSZeroSize;
         _tideyEditorFileTreeView.target = self;
         _tideyEditorFileTreeView.doubleAction = @selector(tideyEditorOpenSelectedFilePermanently:);
         NSTableColumn *fileTreeColumn = [[NSTableColumn alloc] initWithIdentifier:@"TideyEditorFileTreeColumn"];
