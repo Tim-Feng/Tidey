@@ -30,7 +30,9 @@
 - 一次只改一個假設
   - 同一輪不要同時換 owner、座標系、view hierarchy
 - 要加 debug 時優先寫 `/tmp/`
-  - Console 常常看不到，log 看完就刪
+  - Tidey `NSLog` 不會進 macOS unified log stream：`log stream --predicate 'process == "Tidey"'` 抓不到任何東西
+  - 原因：macOS 對第三方 app log 預設標為 private，被系統 redact 掉
+  - 用 `fopen("/tmp/tidey-xxx.log", "a")` + `fprintf` 最穩，log 看完就刪
 
 ## UI / Layout
 
@@ -42,6 +44,12 @@
   - 先分清楚最終 frame 錯，還是中間一拍錯
 - `NSOutlineView` / `NSTableView` / `NSScrollView` 的行為先查 API
   - selection、indentation、disclosure、horizontal scroll 多半是 control 自己算的
+- `NSOutlineView` 會自動把自己的 frame 撐寬到容納最寬的 row
+  - 預設 `columnAutoresizingStyle = NSTableViewUniformColumnAutoresizingStyle` + `autoresizesOutlineColumn = YES`
+  - 就算手動設 column width / view frame，NSOutlineView 還是會在 layout pass 把 outline view 的 frame 撐到最寬 cell 的寬度
+  - 症狀：file tree 長檔名的 `...` 截斷在初次 render 顯示、捲動後消失，因為 outline frame (267pt) 已經比 scroll document visible width (199pt) 寬，cell 有空間完整畫出來
+  - 用 `fopen("/tmp/...")` log `outlineView.frame.size.width` vs `scrollView.documentVisibleRect.size.width` 就能抓到
+  - 解法：`columnAutoresizingStyle = NSTableViewNoColumnAutoresizing` + `autoresizesOutlineColumn = NO`，讓自己的 layout code 成為 column width 的唯一 authority
 
 ## Sidebar / File Tree
 
