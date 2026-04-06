@@ -15,17 +15,28 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 SIGN_ID="Developer ID Application: Hsueh Cheng Feng (4T64VW5B7M)"
 KEYCHAIN_PROFILE="Tidey"
 DMG_PATH="$PROJECT_DIR/Tidey.dmg"
-DERIVED_DATA="$HOME/Library/Developer/Xcode/DerivedData"
+STAGING=""
 
-# Find DerivedData directory for this project
+cleanup() {
+    [[ -n "${STAGING:-}" ]] && hdiutil detach "$STAGING/mnt" 2>/dev/null || true
+    [[ -n "${STAGING:-}" && -d "${STAGING:-}" ]] && rm -rf "$STAGING"
+}
+
+trap cleanup EXIT
+
+# Resolve the exact build products directory for this build.
 find_app() {
-    local dd_dir
-    dd_dir=$(find "$DERIVED_DATA" -maxdepth 1 -name "iTerm2-*" -type d | head -1)
-    if [[ -z "$dd_dir" ]]; then
-        echo "Error: No DerivedData directory found for iTerm2/Tidey" >&2
+    local built_products_dir
+    built_products_dir=$(
+        xcodebuild -project iTerm2.xcodeproj -scheme iTerm2 -configuration Deployment -showBuildSettings 2>/dev/null |
+            grep ' BUILT_PRODUCTS_DIR' |
+            awk -F ' = ' 'NR == 1 { print $2 }' || true
+    )
+    if [[ -z "$built_products_dir" ]]; then
+        echo "Error: Unable to determine BUILT_PRODUCTS_DIR for iTerm2/Tidey" >&2
         exit 1
     fi
-    echo "$dd_dir/Build/Products/Deployment/Tidey.app"
+    echo "$built_products_dir/Tidey.app"
 }
 
 step() {
@@ -83,7 +94,7 @@ find "$APP_PATH" -type f | while read -r f; do
 done
 
 # 2. Sign all code bundles (deepest first via -depth)
-find "$APP_PATH" \( -name "*.app" -o -name "*.framework" -o -name "*.xpc" -o -name "*.bundle" \) -type d -not -path "$APP_PATH" -depth | while read -r bundle; do
+find "$APP_PATH" \( -name "*.app" -o -name "*.framework" -o -name "*.xpc" -o -name "*.bundle" -o -name "*.appex" -o -name "*.pluginkit" -o -name "*.plugin" -o -name "*.prefPane" -o -name "*.qlgenerator" \) -type d -not -path "$APP_PATH" -depth | while read -r bundle; do
     echo "  Signing: ${bundle#$APP_PATH/}"
     codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$bundle"
 done
@@ -104,14 +115,15 @@ STAGING=$(mktemp -d)
 cp -R "$APP_PATH" "$STAGING/"
 hdiutil detach /Volumes/Tidey 2>/dev/null || true
 TEMP_DMG="$STAGING/tidey-temp.dmg"
-hdiutil create -size 200m -fs HFS+ -volname "Tidey" "$TEMP_DMG" 2>&1
+APP_SIZE_KB=$(du -sk "$STAGING/Tidey.app" | cut -f1)
+DMG_SIZE_MB=$(( (APP_SIZE_KB / 1024) + 50 ))
+hdiutil create -size "${DMG_SIZE_MB}m" -fs HFS+ -volname "Tidey" "$TEMP_DMG" 2>&1
 hdiutil attach "$TEMP_DMG" -nobrowse -mountpoint "$STAGING/mnt" 2>&1
 cp -R "$STAGING/Tidey.app" "$STAGING/mnt/"
 ln -s /Applications "$STAGING/mnt/Applications"
 hdiutil detach "$STAGING/mnt" 2>&1
 hdiutil convert "$TEMP_DMG" -format UDZO -o "$DMG_PATH" -ov 2>&1
-rm -rf "$STAGING"
-codesign --force --sign "$SIGN_ID" "$DMG_PATH"
+codesign --force --timestamp --sign "$SIGN_ID" "$DMG_PATH"
 echo "DMG: $DMG_PATH"
 
 # --- Notarize ---
@@ -142,29 +154,33 @@ APPCAST="$PROJECT_DIR/docs/appcast.xml"
 PUB_DATE=$(date -R)
 DMG_URL="https://github.com/Tim-Feng/Tidey/releases/download/v${VERSION}/Tidey.dmg"
 
-# Create the new item XML
-NEW_ITEM="    <item>
-      <title>Tidey $VERSION</title>
-      <pubDate>$PUB_DATE</pubDate>
-      <sparkle:version>$BUILD</sparkle:version>
-      <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
-      <enclosure url=\"$DMG_URL\"
-                 type=\"application/octet-stream\"
-                 sparkle:edSignature=\"$SPARKLE_SIG\"
-                 length=\"$DMG_SIZE\" />
-    </item>"
-
-# Insert before </channel> — remove any existing item with same version first
+# Update the appcast XML with the current release item.
 python3 -c "
-import re, sys
-appcast = open('$APPCAST').read()
-# Remove existing items with same version
-appcast = re.sub(r'    <item>\n.*?<sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>.*?</item>\n', '', appcast, flags=re.DOTALL)
-# Insert new item before </channel>
-appcast = appcast.replace('  </channel>', '''$NEW_ITEM
-  </channel>''')
-open('$APPCAST', 'w').write(appcast)
+import xml.etree.ElementTree as ET
+
+ET.register_namespace('sparkle', 'http://www.andymatuschak.net/xml-namespaces/sparkle')
+ET.register_namespace('dc', 'http://purl.org/dc/elements/1.1/')
+tree = ET.parse('$APPCAST')
+channel = tree.find('channel')
+ns = {'sparkle': 'http://www.andymatuschak.net/xml-namespaces/sparkle'}
+if channel is None:
+    raise SystemExit('Error: channel element not found in appcast')
+for item in channel.findall('item'):
+    ver = item.find('sparkle:shortVersionString', ns)
+    if ver is not None and ver.text == '$VERSION':
+        channel.remove(item)
+item = ET.SubElement(channel, 'item')
+ET.SubElement(item, 'title').text = 'Tidey $VERSION'
+ET.SubElement(item, 'pubDate').text = '$PUB_DATE'
+ET.SubElement(item, '{http://www.andymatuschak.net/xml-namespaces/sparkle}version').text = '$BUILD'
+ET.SubElement(item, '{http://www.andymatuschak.net/xml-namespaces/sparkle}shortVersionString').text = '$VERSION'
+ET.SubElement(item, '{http://www.andymatuschak.net/xml-namespaces/sparkle}minimumSystemVersion').text = '12.0'
+enc = ET.SubElement(item, 'enclosure')
+enc.set('url', '$DMG_URL')
+enc.set('type', 'application/octet-stream')
+enc.set('{http://www.andymatuschak.net/xml-namespaces/sparkle}edSignature', '$SPARKLE_SIG')
+enc.set('length', '$DMG_SIZE')
+tree.write('$APPCAST', xml_declaration=True, encoding='utf-8')
 "
 
 echo "Appcast updated: $APPCAST"

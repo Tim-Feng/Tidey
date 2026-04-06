@@ -4,6 +4,7 @@ import base64
 import os
 import subprocess
 import sys
+from typing import Optional
 
 try:
     from nacl.signing import SigningKey
@@ -17,7 +18,10 @@ KEYCHAIN_ACCOUNT = "ed25519"
 
 
 def usage() -> int:
-    print(f"Usage: {os.path.basename(sys.argv[0])} <path-to-dmg>", file=sys.stderr)
+    print(
+        f"Usage: {os.path.basename(sys.argv[0])} [--plist <path-to-Info.plist>] <path-to-dmg>",
+        file=sys.stderr,
+    )
     return 1
 
 
@@ -60,7 +64,49 @@ def load_private_key() -> bytes:
         )
         sys.exit(1)
 
+    stored_public = key_data[64:]
+    signing_key = SigningKey(key_data[:32])
+    reconstructed = bytes(signing_key.verify_key)
+    if stored_public != reconstructed:
+        print("Error: Sparkle keychain entry contains a mismatched public key", file=sys.stderr)
+        sys.exit(1)
+
     return key_data[:64]
+
+
+def verify_plist_key(public_key_bytes: bytes, plist_path: Optional[str] = None) -> None:
+    if plist_path is None:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        plist_path = os.path.join(os.path.dirname(script_dir), "plists", "iTerm2.plist")
+
+    try:
+        result = subprocess.run(
+            ["plutil", "-extract", "SUPublicEDKey", "raw", plist_path],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        print("Warning: plutil command not found; skipped SUPublicEDKey verification", file=sys.stderr)
+        return
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.strip()
+        message = stderr or f"unable to read SUPublicEDKey from {plist_path}"
+        print(f"Warning: {message}", file=sys.stderr)
+        return
+
+    encoded_public = result.stdout.strip()
+    try:
+        plist_public = base64.b64decode(encoded_public, validate=True)
+    except Exception as exc:
+        print(f"Warning: invalid SUPublicEDKey in {plist_path}: {exc}", file=sys.stderr)
+        return
+
+    if plist_public != public_key_bytes:
+        print(
+            f"Warning: SUPublicEDKey in {plist_path} does not match the Keychain Sparkle public key",
+            file=sys.stderr,
+        )
 
 
 def sign_file(path: str, private_key: bytes) -> tuple[str, int]:
@@ -78,15 +124,22 @@ def sign_file(path: str, private_key: bytes) -> tuple[str, int]:
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
+    args = sys.argv[1:]
+    plist_path = None
+    if len(args) == 3 and args[0] == "--plist":
+        plist_path = args[1]
+        dmg_path = args[2]
+    elif len(args) == 1:
+        dmg_path = args[0]
+    else:
         return usage()
 
-    dmg_path = sys.argv[1]
     if not os.path.isfile(dmg_path):
         print(f"Error: file not found: {dmg_path}", file=sys.stderr)
         return 1
 
     private_key = load_private_key()
+    verify_plist_key(private_key[32:], plist_path)
     signature, file_size = sign_file(dmg_path, private_key)
 
     print(f'sparkle:edSignature="{signature}" length="{file_size}"')
