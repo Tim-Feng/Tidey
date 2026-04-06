@@ -188,6 +188,14 @@
   - `layoutTideyEditorContents` 只該管 panel 內部子 view
   - pane container 如果直接等於 `_tideyEditorPanelView`，一設 frame 就會把整個 panel 位置打亂
 
+## Versioning
+
+- `version.txt` 是版號的唯一 source of truth，不是 `plists/iTerm2.plist`
+  - Xcode build phase script 每次 build 都會讀 `version.txt`，用 PlistBuddy 覆寫 plist 的 `CFBundleShortVersionString`、`CFBundleVersion`、`CFBundleGetInfoString`
+  - 直接改 plist 的版號無效，下次 build 就被蓋掉
+  - Development config 會加 `-dev` suffix，Deployment 加日期 suffix（除非 version.txt 不含 `%(extra)s` placeholder）
+  - 要改版號就改 `version.txt`，不要改 plist
+
 ## Branding / Defaults
 
 - 改 app icon 先分清楚是 build 問題還是 Launch Services cache
