@@ -266,17 +266,6 @@ static NSString *const kTideyFirstRunBootstrapSource = @"TideyFirstRunBootstrapS
     } @catch (NSException *exception) {
         object = nil;
     }
-    if (object) {
-        return object;
-    }
-    @try {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-        object = [NSUnarchiver unarchiveObjectWithData:data];
-#pragma clang diagnostic pop
-    } @catch (NSException *exception) {
-        object = nil;
-    }
     return object;
 }
 
