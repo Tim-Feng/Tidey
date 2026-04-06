@@ -101,10 +101,60 @@ step "Staple"
 
 xcrun stapler staple "$DMG_PATH"
 
+# --- Sparkle Signing ---
+step "Sparkle Sign"
+
+SPARKLE_OUTPUT=$(python3 "$SCRIPT_DIR/sign_sparkle_update.py" "$DMG_PATH")
+SPARKLE_SIG=$(echo "$SPARKLE_OUTPUT" | tail -1)
+DMG_SIZE=$(stat -f%z "$DMG_PATH")
+echo "EdDSA signature: $SPARKLE_SIG"
+echo "DMG size: $DMG_SIZE bytes"
+
+# --- Update Appcast ---
+step "Update Appcast"
+
+VERSION=$(plutil -extract CFBundleShortVersionString raw "$APP_PATH/Contents/Info.plist")
+BUILD=$(plutil -extract CFBundleVersion raw "$APP_PATH/Contents/Info.plist")
+APPCAST="$PROJECT_DIR/docs/appcast.xml"
+PUB_DATE=$(date -R)
+DMG_URL="https://github.com/Tim-Feng/Tidey/releases/download/v${VERSION}/Tidey.dmg"
+
+# Create the new item XML
+NEW_ITEM="    <item>
+      <title>Tidey $VERSION</title>
+      <pubDate>$PUB_DATE</pubDate>
+      <sparkle:version>$BUILD</sparkle:version>
+      <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+      <enclosure url=\"$DMG_URL\"
+                 type=\"application/octet-stream\"
+                 sparkle:edSignature=\"$SPARKLE_SIG\"
+                 length=\"$DMG_SIZE\" />
+    </item>"
+
+# Insert before </channel> — remove any existing item with same version first
+python3 -c "
+import re, sys
+appcast = open('$APPCAST').read()
+# Remove existing items with same version
+appcast = re.sub(r'    <item>\n.*?<sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>.*?</item>\n', '', appcast, flags=re.DOTALL)
+# Insert new item before </channel>
+appcast = appcast.replace('  </channel>', '''$NEW_ITEM
+  </channel>''')
+open('$APPCAST', 'w').write(appcast)
+"
+
+echo "Appcast updated: $APPCAST"
+echo "Version: $VERSION (build $BUILD)"
+
 # --- Verify ---
 step "Final Check"
 
 spctl --assess -t open --context context:primary-signature -v "$DMG_PATH" 2>&1
 echo ""
 echo "Done. DMG ready at: $DMG_PATH"
-echo "Upload: gh release upload v0.1.0 \"$DMG_PATH\" --clobber"
+echo ""
+echo "Next steps:"
+echo "  1. gh release upload v$VERSION \"$DMG_PATH\" --clobber"
+echo "  2. git add docs/appcast.xml && git commit -m 'Update appcast for v$VERSION'"
+echo "  3. git push origin master  # deploys appcast via GitHub Pages"

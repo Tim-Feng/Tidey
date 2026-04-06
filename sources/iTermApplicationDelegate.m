@@ -1398,8 +1398,7 @@ void TurnOnDebugLoggingAutomatically(void) {
     }
     DLog(@"didFinishLaunching");
 
-    // Tidey: Fully disable Sparkle auto-update prompt and checks.
-    suUpdater.automaticallyChecksForUpdates = NO;
+    suUpdater.automaticallyChecksForUpdates = YES;
     suUpdater.automaticallyDownloadsUpdates = NO;
 
     [iTermLaunchExperienceController applicationDidFinishLaunching];
@@ -2267,9 +2266,7 @@ static iTermKeyEventReplayer *gReplayer;
 }
 
 - (IBAction)checkForUpdatesFromMenu:(id)sender {
-    // Tidey: Sparkle auto-update disabled. Do nothing.
-    return;
-    // [suUpdater checkForUpdates:(sender)];
+    [suUpdater checkForUpdates:sender];
 }
 
 #pragma mark - Tidey Feature Trim
@@ -2285,7 +2282,6 @@ static iTermKeyEventReplayer *gReplayer;
         // ── Tidey (app) menu ──
         @"About Tidey",
         @"Show Tip of the Day",
-        @"Check For Updates\u2026",
         @"Toggle Debug Logging",
         @"Copy Performance Stats",
         @"Capture Metal Frame",
