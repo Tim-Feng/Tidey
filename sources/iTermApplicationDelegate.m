@@ -128,6 +128,7 @@
 #import "iTermURLStore.h"
 #import "iTermUntitledWindowStateMachine.h"
 #import "iTermUserDefaults.h"
+#import "TideyFirstRunCompatibilityBootstrap.h"
 #import "iTermWarning.h"
 #import "iTermWebSocketCookieJar.h"
 #import "TideyNotificationStore.h"
@@ -1453,6 +1454,7 @@ void TurnOnDebugLoggingAutomatically(void) {
     [self updateRestoreWindowArrangementsMenu:windowArrangementsAsTabs_ asTabs:YES fromDock:NO];
 
     // register for services
+    [TideyFirstRunCompatibilityBootstrap performIfNeeded];
     [NSApp registerServicesMenuSendTypes:@[ NSPasteboardTypeString ]
                              returnTypes:@[ NSPasteboardTypeFileURL,
                                             NSPasteboardTypeString ]];
