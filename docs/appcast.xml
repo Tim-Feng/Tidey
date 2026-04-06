@@ -1,20 +1,9 @@
-<?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.net/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<?xml version='1.0' encoding='utf-8'?>
+<rss xmlns:sparkle="http://www.andymatuschak.net/xml-namespaces/sparkle" version="2.0">
   <channel>
     <title>Tidey</title>
     <link>https://tim-feng.github.io/Tidey/</link>
     <description>Tidey Updates</description>
     <language>en</language>
-    <item>
-      <title>Tidey 0.20260316_133328-adhoc</title>
-      <pubDate>Mon, 06 Apr 2026 18:53:28 +0800</pubDate>
-      <sparkle:version>0.20260316_133328-adhoc</sparkle:version>
-      <sparkle:shortVersionString>0.20260316_133328-adhoc</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
-      <enclosure url="https://github.com/Tim-Feng/Tidey/releases/download/v0.20260316_133328-adhoc/Tidey.dmg"
-                 type="application/octet-stream"
-                 sparkle:edSignature="w6IUp184Yu3KXDj+J5UGNbyfg4nRfBceMi7cS7NcYBnQR68V0aQRxJ93XX/X9BS3yrIMYFpqOO+G6rxm33tFDg=="
-                 length="34695065" />
-    </item>
-  </channel>
+    <item><title>Tidey 0.20260316_133328-adhoc</title><pubDate>Tue, 07 Apr 2026 00:26:51 +0800</pubDate><sparkle:version>0.20260316_133328-adhoc</sparkle:version><sparkle:shortVersionString>0.20260316_133328-adhoc</sparkle:shortVersionString><sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion><enclosure url="https://github.com/Tim-Feng/Tidey/releases/download/v0.20260316_133328-adhoc/Tidey.dmg" type="application/octet-stream" sparkle:edSignature="rFSj28VbJ1rNeGityDi2JFXdrkFi1g5lAVSnjEZocBexSIdmdxRXWbeRjMs3aZ1D9skYW0z1361TrkIigE4CDA==" length="34702576" /></item></channel>
 </rss>
