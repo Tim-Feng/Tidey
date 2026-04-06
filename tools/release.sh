@@ -66,8 +66,14 @@ echo "App: $APP_PATH"
 # --- Sign ---
 step "Code Sign"
 
-# Sign inner Mach-O binaries that --deep might miss
-find "$APP_PATH" -type f -perm +111 | while read -r f; do
+# Sign everything inside-out: find all signable items, sort deepest-first
+# Covers: .dylib, .xpc, .app, .framework, .bundle, standalone Mach-O
+
+# 1. Sign all loose Mach-O files EXCEPT the main executable
+#    (main executable gets signed as part of the outer app bundle in step 3)
+MAIN_EXE="$APP_PATH/Contents/MacOS/Tidey"
+find "$APP_PATH" -type f | while read -r f; do
+    [[ "$f" == "$MAIN_EXE" ]] && continue
     if file -b "$f" | grep -q "Mach-O"; then
         codesign -dv "$f" 2>&1 | grep -q "Developer ID" || {
             echo "  Signing: ${f#$APP_PATH/}"
@@ -76,9 +82,15 @@ find "$APP_PATH" -type f -perm +111 | while read -r f; do
     fi
 done
 
-# Sign the outer app bundle
+# 2. Sign all code bundles (deepest first via -depth)
+find "$APP_PATH" \( -name "*.app" -o -name "*.framework" -o -name "*.xpc" -o -name "*.bundle" \) -type d -not -path "$APP_PATH" -depth | while read -r bundle; do
+    echo "  Signing: ${bundle#$APP_PATH/}"
+    codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$bundle"
+done
+
+# 3. Sign the outer app bundle
 echo "  Signing: Tidey.app"
-codesign --deep --force --options runtime --timestamp --sign "$SIGN_ID" "$APP_PATH"
+codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$APP_PATH"
 
 # Verify
 codesign --verify --deep --strict "$APP_PATH"
@@ -87,7 +99,18 @@ echo "Signature: verified"
 # --- Package DMG ---
 step "Create DMG"
 
-hdiutil create -volname "Tidey" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG_PATH" 2>&1
+# Stage in temp dir and create writable image manually to avoid /Volumes name collisions
+STAGING=$(mktemp -d)
+cp -R "$APP_PATH" "$STAGING/"
+hdiutil detach /Volumes/Tidey 2>/dev/null || true
+TEMP_DMG="$STAGING/tidey-temp.dmg"
+hdiutil create -size 200m -fs HFS+ -volname "Tidey" "$TEMP_DMG" 2>&1
+hdiutil attach "$TEMP_DMG" -nobrowse -mountpoint "$STAGING/mnt" 2>&1
+cp -R "$STAGING/Tidey.app" "$STAGING/mnt/"
+ln -s /Applications "$STAGING/mnt/Applications"
+hdiutil detach "$STAGING/mnt" 2>&1
+hdiutil convert "$TEMP_DMG" -format UDZO -o "$DMG_PATH" -ov 2>&1
+rm -rf "$STAGING"
 codesign --force --sign "$SIGN_ID" "$DMG_PATH"
 echo "DMG: $DMG_PATH"
 
