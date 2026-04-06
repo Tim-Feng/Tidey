@@ -1020,6 +1020,10 @@
 		TIDE7B00001A000000000001 /* TideyBrowserPanelTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDE7B00001A000000000000 /* TideyBrowserPanelTests.m */; };
 		TIDEAPP0001A00000000001 /* TideyAppShortcutBehaviorTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEAPP0001A00000000000 /* TideyAppShortcutBehaviorTests.m */; };
 		TIDEAPP0001A00000000002 /* TideyAppShortcutBehaviorTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEAPP0001A00000000000 /* TideyAppShortcutBehaviorTests.m */; };
+		TIDEBOOT0001A00000000001 /* TideyFirstRunCompatibilityBootstrapTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEBOOT0001A00000000000 /* TideyFirstRunCompatibilityBootstrapTests.m */; };
+		TIDEBOOT0001A00000000002 /* TideyFirstRunCompatibilityBootstrapTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEBOOT0001A00000000000 /* TideyFirstRunCompatibilityBootstrapTests.m */; };
+		TIDECFG0001A00000000001 /* TideyReleaseConfigTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDECFG0001A00000000000 /* TideyReleaseConfigTests.m */; };
+		TIDECFG0001A00000000002 /* TideyReleaseConfigTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDECFG0001A00000000000 /* TideyReleaseConfigTests.m */; };
 		F0A10D1E3A33000100000001 /* TideyLoginShellCommandTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A33000100000000 /* TideyLoginShellCommandTests.m */; };
 		F0A10D1E3A35000100000001 /* TideySidebarCloseButtonTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A35000100000000 /* TideySidebarCloseButtonTests.m */; };
 		F0A10D1E3A36000100000001 /* TideySessionFactoryLaunchCommandTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A36000100000000 /* TideySessionFactoryLaunchCommandTests.m */; };
@@ -6427,6 +6431,8 @@
 		F0A10D1E3A37000100000000 /* TideyBrowserTabTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyBrowserTabTests.m; sourceTree = "<group>"; };
 		TIDE7B00001A000000000000 /* TideyBrowserPanelTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyBrowserPanelTests.m; sourceTree = "<group>"; };
 		TIDEAPP0001A00000000000 /* TideyAppShortcutBehaviorTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyAppShortcutBehaviorTests.m; sourceTree = "<group>"; };
+		TIDEBOOT0001A00000000000 /* TideyFirstRunCompatibilityBootstrapTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyFirstRunCompatibilityBootstrapTests.m; sourceTree = "<group>"; };
+		TIDECFG0001A00000000000 /* TideyReleaseConfigTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyReleaseConfigTests.m; sourceTree = "<group>"; };
 		F0A10D1E3A33000100000000 /* TideyLoginShellCommandTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyLoginShellCommandTests.m; sourceTree = "<group>"; };
 		F0A10D1E3A35000100000000 /* TideySidebarCloseButtonTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySidebarCloseButtonTests.m; sourceTree = "<group>"; };
 		F0A10D1E3A36000100000000 /* TideySessionFactoryLaunchCommandTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySessionFactoryLaunchCommandTests.m; sourceTree = "<group>"; };
@@ -13684,6 +13690,8 @@
 				F0A10D1E3A37000100000000 /* TideyBrowserTabTests.m */,
 				TIDE7B00001A000000000000 /* TideyBrowserPanelTests.m */,
 				TIDEAPP0001A00000000000 /* TideyAppShortcutBehaviorTests.m */,
+				TIDEBOOT0001A00000000000 /* TideyFirstRunCompatibilityBootstrapTests.m */,
+				TIDECFG0001A00000000000 /* TideyReleaseConfigTests.m */,
 				F0A10D1E3A33000100000000 /* TideyLoginShellCommandTests.m */,
 				F0A10D1E3A35000100000000 /* TideySidebarCloseButtonTests.m */,
 				F0A10D1E3A36000100000000 /* TideySessionFactoryLaunchCommandTests.m */,
@@ -20251,6 +20259,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				TIDEAPP0001A00000000002 /* TideyAppShortcutBehaviorTests.m in Sources */,
+				TIDEBOOT0001A00000000002 /* TideyFirstRunCompatibilityBootstrapTests.m in Sources */,
+				TIDECFG0001A00000000002 /* TideyReleaseConfigTests.m in Sources */,
 				A6C811F42DCFD5E40088E628 /* SearchEngineTests.swift in Sources */,
 				A77D8D50729267B406541654 /* AccessibilityDeletionDetectionTests.swift in Sources */,
 				92738CD9A08C339E8F473394 /* IntervalTreeGraphEncodingTests.swift in Sources */,
@@ -20529,6 +20539,8 @@
 				F0A10D1E3A34000100000001 /* TideyRightPanelTabGroupingTests.m in Sources */,
 				F0A10D1E3A37000100000001 /* TideyBrowserTabTests.m in Sources */,
 				TIDEAPP0001A00000000001 /* TideyAppShortcutBehaviorTests.m in Sources */,
+				TIDEBOOT0001A00000000001 /* TideyFirstRunCompatibilityBootstrapTests.m in Sources */,
+				TIDECFG0001A00000000001 /* TideyReleaseConfigTests.m in Sources */,
 				F0A10D1E3A33000100000001 /* TideyLoginShellCommandTests.m in Sources */,
 				F0A10D1E3A35000100000001 /* TideySidebarCloseButtonTests.m in Sources */,
 				F0A10D1E3A36000100000001 /* TideySessionFactoryLaunchCommandTests.m in Sources */,
@@ -20729,7 +20741,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_OBJC_BRIDGING_HEADER = "$(SRCROOT)/PerformanceTests/PerformanceTests-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Tidey.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Tidey";
+				TEST_HOST = "$(BUILD_ROOT)/$(CONFIGURATION)/Tidey Dev.app/Contents/MacOS/Tidey Dev";
 				USER_HEADER_SEARCH_PATHS = (
 					"$(SRCROOT)/sources",
 					"$(SRCROOT)/ThirdParty",
@@ -20762,7 +20774,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_OBJC_BRIDGING_HEADER = "$(SRCROOT)/PerformanceTests/PerformanceTests-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Tidey.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Tidey";
+				TEST_HOST = "$(BUILD_ROOT)/$(CONFIGURATION)/Tidey Dev.app/Contents/MacOS/Tidey Dev";
 				USER_HEADER_SEARCH_PATHS = (
 					"$(SRCROOT)/sources",
 					"$(SRCROOT)/ThirdParty",
@@ -24151,7 +24163,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Tidey.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Tidey";
+				TEST_HOST = "$(BUILD_ROOT)/$(CONFIGURATION)/Tidey Dev.app/Contents/MacOS/Tidey Dev";
 				USER_HEADER_SEARCH_PATHS = (
 					"$(SRCROOT)/ThirdParty",
 					"$(PROJECT_DIR)/ThirdParty/adblock-rust/include",
@@ -24231,7 +24243,7 @@
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Tidey.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Tidey";
+				TEST_HOST = "$(SRCROOT)/build/Development/Tidey.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Tidey";
 				USER_HEADER_SEARCH_PATHS = (
 					"$(SRCROOT)/ThirdParty",
 					"$(PROJECT_DIR)/ThirdParty/adblock-rust/include",

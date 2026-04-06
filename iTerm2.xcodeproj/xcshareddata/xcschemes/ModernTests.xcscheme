@@ -16,7 +16,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "874206460564169600CFC3F1"
-               BuildableName = "iTerm2.app"
+               BuildableName = "Tidey Dev.app"
                BlueprintName = "iTerm2"
                ReferencedContainer = "container:iTerm2.xcodeproj">
             </BuildableReference>
@@ -32,7 +32,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "874206460564169600CFC3F1"
-            BuildableName = "iTerm2.app"
+            BuildableName = "Tidey Dev.app"
             BlueprintName = "iTerm2"
             ReferencedContainer = "container:iTerm2.xcodeproj">
          </BuildableReference>

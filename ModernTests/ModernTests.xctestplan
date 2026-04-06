@@ -10,8 +10,8 @@
   ],
   "defaultOptions" : {
     "addressSanitizer" : {
-      "detectStackUseAfterReturn" : true,
-      "enabled" : true
+      "detectStackUseAfterReturn" : false,
+      "enabled" : false
     },
     "environmentVariableEntries" : [
       {

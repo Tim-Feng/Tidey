@@ -1351,13 +1351,10 @@ replaceInitialDirectoryForSessionWithGUID:(NSString *)guid
 
 - (void)refreshSoftwareUpdateUserDefaults {
     BOOL checkForTestReleases = [iTermPreferences boolForKey:kPreferenceKeyCheckForTestReleases];
-    NSString *appCast = checkForTestReleases ?
-        [[NSBundle mainBundle] objectForInfoDictionaryKey:@"SUFeedURLForTesting"] :
-        [[NSBundle mainBundle] objectForInfoDictionaryKey:@"SUFeedURLForFinal"];
-    NSURL *url = [NSURL URLWithString:appCast];
-    NSNumber *shard = @([iTermController shard]);
-    url = [url URLByAppendingQueryParameter:[NSString stringWithFormat:@"shard=%@", shard]];
-    [[iTermUserDefaults userDefaults] setObject:url.absoluteString forKey:@"SUFeedURL"];
+    NSString *urlString = [[self class] tideySoftwareUpdateFeedURLWithInfoDictionary:[[NSBundle mainBundle] infoDictionary]
+                                                               checkForTestReleases:checkForTestReleases
+                                                                               shard:[iTermController shard]];
+    [[iTermUserDefaults userDefaults] setObject:urlString forKey:@"SUFeedURL"];
     // Allow Sparkle to update from a zip file containing an "iTerm" directory,
     // even though our bundle name is now "iTerm2". I had to add this feature
     // to my fork of Sparkle so I could change the app's name without breaking
@@ -1365,6 +1362,15 @@ replaceInitialDirectoryForSessionWithGUID:(NSString *)guid
     // bd6a8df6e63b843f1f8aff79f40bd70907761a99.
     [[iTermUserDefaults userDefaults] setObject:@"iTerm"
                                               forKey:@"SUFeedAlternateAppNameKey"];
+}
+
++ (NSString *)tideySoftwareUpdateFeedURLWithInfoDictionary:(NSDictionary *)infoDictionary
+                                     checkForTestReleases:(BOOL)checkForTestReleases
+                                                     shard:(NSInteger)shard {
+    NSString *appCast = checkForTestReleases ? infoDictionary[@"SUFeedURLForTesting"] : infoDictionary[@"SUFeedURLForFinal"];
+    NSURL *url = [NSURL URLWithString:appCast];
+    url = [url URLByAppendingQueryParameter:[NSString stringWithFormat:@"shard=%@", @(shard)]];
+    return url.absoluteString;
 }
 
 - (BOOL)selectionRespectsSoftBoundaries {
@@ -2035,4 +2041,3 @@ replaceInitialDirectoryForSessionWithGUID:(NSString *)guid
 }
 
 @end
-

@@ -11,6 +11,57 @@ static NSString *const kTideyFirstRunBootstrapSource = @"TideyFirstRunBootstrapS
 
 @implementation TideyFirstRunCompatibilityBootstrap
 
++ (nullable NSString *)tideyBootstrapSourceForAlreadyDone:(BOOL)done
+                             defaultBookmarkUntouched:(BOOL)untouched
+                                        importedSource:(NSString *)importedSource {
+    if (done) {
+        return nil;
+    }
+    if (!untouched) {
+        return @"existing-settings";
+    }
+    return importedSource ?: @"limited";
+}
+
++ (nullable NSString *)tideyPreferredBootstrapSourceForITerm2:(BOOL)hasITerm2
+                                                      ghostty:(BOOL)hasGhostty
+                                                  terminalApp:(BOOL)hasTerminalApp
+                                                        kitty:(BOOL)hasKitty
+                                                     alacritty:(BOOL)hasAlacritty {
+    if (hasITerm2) {
+        return @"iterm2";
+    }
+    if (hasGhostty) {
+        return @"ghostty";
+    }
+    if (hasTerminalApp) {
+        return @"terminal-app";
+    }
+    if (hasKitty) {
+        return @"kitty";
+    }
+    if (hasAlacritty) {
+        return @"alacritty";
+    }
+    return nil;
+}
+
++ (NSDictionary *)tideyITerm2ProfileUpdatesForSourceProfile:(NSDictionary *)sourceProfile {
+    return [[self sharedInstance] iTerm2ProfileUpdatesForSourceProfile:sourceProfile];
+}
+
++ (NSDictionary *)tideyGhosttyProfileUpdatesForConfigContents:(NSString *)contents {
+    return [[self sharedInstance] ghosttyProfileUpdatesForConfigContents:contents];
+}
+
++ (NSDictionary *)tideyKittyProfileUpdatesForConfigContents:(NSString *)contents {
+    return [[self sharedInstance] kittyProfileUpdatesForConfigContents:contents];
+}
+
++ (NSDictionary *)tideyAlacrittyProfileUpdatesForConfigContents:(NSString *)contents {
+    return [[self sharedInstance] alacrittyProfileUpdatesForConfigContents:contents];
+}
+
 + (instancetype)sharedInstance {
     static TideyFirstRunCompatibilityBootstrap *instance;
     static dispatch_once_t onceToken;
@@ -145,6 +196,15 @@ static NSString *const kTideyFirstRunBootstrapSource = @"TideyFirstRunBootstrapS
     if (!sourceProfile) {
         return NO;
     }
+    NSDictionary *updates = [self iTerm2ProfileUpdatesForSourceProfile:sourceProfile];
+    if (updates.count == 0) {
+        return NO;
+    }
+    [self applyProfileUpdates:updates];
+    return YES;
+}
+
+- (NSDictionary *)iTerm2ProfileUpdatesForSourceProfile:(NSDictionary *)sourceProfile {
     NSMutableDictionary *updates = [NSMutableDictionary dictionary];
     for (NSString *key in [self terminalBootstrapKeys]) {
         id value = sourceProfile[key];
@@ -179,11 +239,7 @@ static NSString *const kTideyFirstRunBootstrapSource = @"TideyFirstRunBootstrapS
             updates[darkKey] = colorDict;
         }
     }
-    if (updates.count == 0) {
-        return NO;
-    }
-    [self applyProfileUpdates:updates];
-    return YES;
+    return updates;
 }
 
 - (nullable NSString *)importFromKnownTerminalApps {
@@ -347,6 +403,10 @@ static NSString *const kTideyFirstRunBootstrapSource = @"TideyFirstRunBootstrapS
 
 - (NSDictionary<NSString *, NSString *> *)flatKeyValueConfigAtPath:(NSString *)path separator:(NSString *)separator {
     NSString *contents = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+    return [self flatKeyValueConfigFromContents:contents separator:separator];
+}
+
+- (NSDictionary<NSString *, NSString *> *)flatKeyValueConfigFromContents:(NSString *)contents separator:(NSString *)separator {
     if (contents.length == 0) {
         return @{};
     }
@@ -357,16 +417,16 @@ static NSString *const kTideyFirstRunBootstrapSource = @"TideyFirstRunBootstrapS
         if (trimmed.length == 0 || [trimmed hasPrefix:@"#"]) {
             continue;
         }
-        NSRange commentRange = [trimmed rangeOfString:@"#"];
-        if (commentRange.location != NSNotFound) {
-            trimmed = [[trimmed substringToIndex:commentRange.location] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        }
         NSRange separatorRange = [trimmed rangeOfString:separator];
         if (separatorRange.location == NSNotFound) {
             continue;
         }
         NSString *key = [[trimmed substringToIndex:separatorRange.location] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
         NSString *value = [[trimmed substringFromIndex:NSMaxRange(separatorRange)] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        NSRange inlineCommentRange = [value rangeOfString:@" #"];
+        if (inlineCommentRange.location != NSNotFound) {
+            value = [[value substringToIndex:inlineCommentRange.location] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        }
         if ([value hasPrefix:@"\""] && [value hasSuffix:@"\""] && value.length >= 2) {
             value = [value substringWithRange:NSMakeRange(1, value.length - 2)];
         }
@@ -379,15 +439,24 @@ static NSString *const kTideyFirstRunBootstrapSource = @"TideyFirstRunBootstrapS
 
 - (BOOL)importGhosttyConfigIfPossible {
     NSString *path = [@"~/.config/ghostty/config" stringByExpandingTildeInPath];
-    NSDictionary<NSString *, NSString *> *config = [self flatKeyValueConfigAtPath:path separator:@"="];
-    NSDictionary *fontUpdates = [self profileUpdatesForFontName:config[@"font-family"]
-                                                           size:config[@"font-size"].doubleValue];
-    return [self applyImportedProfileUpdates:fontUpdates ?: @{}];
+    NSString *contents = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+    return [self applyImportedProfileUpdates:[self ghosttyProfileUpdatesForConfigContents:contents]];
+}
+
+- (NSDictionary *)ghosttyProfileUpdatesForConfigContents:(NSString *)contents {
+    NSDictionary<NSString *, NSString *> *config = [self flatKeyValueConfigFromContents:contents separator:@"="];
+    return [self profileUpdatesForFontName:config[@"font-family"]
+                                      size:config[@"font-size"].doubleValue] ?: @{};
 }
 
 - (BOOL)importKittyConfigIfPossible {
     NSString *path = [@"~/.config/kitty/kitty.conf" stringByExpandingTildeInPath];
-    NSDictionary<NSString *, NSString *> *config = [self flatKeyValueConfigAtPath:path separator:@" "];
+    NSString *contents = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+    return [self applyImportedProfileUpdates:[self kittyProfileUpdatesForConfigContents:contents]];
+}
+
+- (NSDictionary *)kittyProfileUpdatesForConfigContents:(NSString *)contents {
+    NSDictionary<NSString *, NSString *> *config = [self flatKeyValueConfigFromContents:contents separator:@" "];
     NSMutableDictionary *updates = [NSMutableDictionary dictionary];
     NSDictionary *fontUpdates = [self profileUpdatesForFontName:config[@"font_family"]
                                                            size:config[@"font_size"].doubleValue];
@@ -410,14 +479,18 @@ static NSString *const kTideyFirstRunBootstrapSource = @"TideyFirstRunBootstrapS
         NSString *targetKey = [NSString stringWithFormat:KEYTEMPLATE_ANSI_X_COLOR, (int)i];
         [updates addEntriesFromDictionary:[self profileColorUpdateForHexString:config[sourceKey] targetKey:targetKey]];
     }
-    return [self applyImportedProfileUpdates:updates];
+    return updates;
 }
 
 - (BOOL)importAlacrittyConfigIfPossible {
     NSString *path = [@"~/.config/alacritty/alacritty.toml" stringByExpandingTildeInPath];
     NSString *contents = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+    return [self applyImportedProfileUpdates:[self alacrittyProfileUpdatesForConfigContents:contents]];
+}
+
+- (NSDictionary *)alacrittyProfileUpdatesForConfigContents:(NSString *)contents {
     if (contents.length == 0) {
-        return NO;
+        return @{};
     }
     NSMutableDictionary<NSString *, NSString *> *values = [NSMutableDictionary dictionary];
     NSString *section = @"";
@@ -463,7 +536,7 @@ static NSString *const kTideyFirstRunBootstrapSource = @"TideyFirstRunBootstrapS
         targetKey = [NSString stringWithFormat:KEYTEMPLATE_ANSI_X_COLOR, (int)(i + 8)];
         [updates addEntriesFromDictionary:[self profileColorUpdateForHexString:values[[NSString stringWithFormat:@"colors.bright.%@", ansiNames[i]]] targetKey:targetKey]];
     }
-    return [self applyImportedProfileUpdates:updates];
+    return updates;
 }
 
 - (BOOL)importTerminalAppProfileIfPossible {
