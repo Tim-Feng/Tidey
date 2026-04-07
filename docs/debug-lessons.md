@@ -23,6 +23,11 @@
 
 ## 每次下刀前先做
 
+- **profile 顏色永遠要考慮 (Dark)/(Light) variant**
+  - iTerm2 runtime 在 dark mode 讀的是 `Background Color (Dark)`，不是 `Background Color`
+  - 寫入時要 fan out 到 base + `(Dark)` + `(Light)` 三份
+  - 測試 iTerm2 匯入時，source profile 的 variant key 也要一起改，只改 base key 畫面不會變
+  - 這個坑已經踩三次：bootstrap color fan-out、Settings Appearance 寫入、iTerm2 importer 測試
 - 找最後一個 writer
   - AppKit / PSM / shell startup 常常在後面把剛設好的值蓋掉
 - 先做 local patch
