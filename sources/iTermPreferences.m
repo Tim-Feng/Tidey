@@ -490,7 +490,7 @@ static NSString *sPreviousVersion;
                   kPreferenceKeyCustomScriptsFolder: [NSNull null],
                   kPreferenceKeySelectionCopiesText: @YES,
                   kPreferenceKeyCopyLastNewline: @NO,
-                  kPreferenceKeyAllowClipboardAccessFromTerminal: @NO,
+                  kPreferenceKeyAllowClipboardAccessFromTerminal: @YES,
                   kPreferenceKeyCharactersConsideredPartOfAWordForSelection: @"/-+\\~_.",
                   kPreferenceKeyCharactersConsideredPartOfAWordForSelectionMode: @(iTermSelectionWordModeCharacterList),
                   kPreferenceKeyWordSelectionRegexPattern: @"-|\\+|\\\\|~|_",
