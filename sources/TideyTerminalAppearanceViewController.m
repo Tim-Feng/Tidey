@@ -1,140 +1,288 @@
 #import "TideyTerminalAppearanceViewController.h"
 
 #import "ITAddressBookMgr.h"
+#import "TideyColorSwatchView.h"
 #import "TideyTerminalAppearanceProfileAdapter.h"
+#import "iTermFlippedView.h"
 #import "iTermFontPanel.h"
 
+// ----- Card view: rounded rect with border -----
+@interface TideySettingsCardView : NSView
+@end
+
+@implementation TideySettingsCardView
+
+- (BOOL)isFlipped {
+    return YES;
+}
+
+- (void)drawRect:(NSRect)dirtyRect {
+    NSRect bounds = self.bounds;
+    NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(bounds, 0.5, 0.5)
+                                                         xRadius:13
+                                                         yRadius:13];
+    // Card background: rgba(255,255,255,0.04)
+    [[NSColor colorWithSRGBRed:1 green:1 blue:1 alpha:0.04] setFill];
+    [path fill];
+
+    // Card border: rgba(255,255,255,0.08)
+    [[NSColor colorWithSRGBRed:1 green:1 blue:1 alpha:0.08] setStroke];
+    [path setLineWidth:1.0];
+    [path stroke];
+}
+
+@end
+
+// ----- Row divider line -----
+@interface TideySettingsCardDivider : NSView
+@end
+
+@implementation TideySettingsCardDivider
+
+- (void)drawRect:(NSRect)dirtyRect {
+    // Separator: rgba(255,255,255,0.06)
+    [[NSColor colorWithSRGBRed:1 green:1 blue:1 alpha:0.06] setFill];
+    NSRectFill(self.bounds);
+}
+
+@end
+
+// ----- Colors -----
+static NSColor *TideySettingsPrimaryTextColor(void) {
+    return [NSColor colorWithSRGBRed:0xe8/255.0 green:0xe8/255.0 blue:0xe8/255.0 alpha:1.0];
+}
+
+static NSColor *TideySettingsSecondaryTextColor(void) {
+    return [NSColor colorWithSRGBRed:0x88/255.0 green:0x88/255.0 blue:0x88/255.0 alpha:1.0];
+}
+
+// ----- Main VC -----
 @interface TideyTerminalAppearanceViewController ()
 
 @property(nonatomic, strong) TideyTerminalAppearanceProfileAdapter *adapter;
 @property(nonatomic, strong) NSTextField *fontPreviewLabel;
 @property(nonatomic, strong) NSTextField *fontSizeField;
 @property(nonatomic, strong) NSStepper *fontSizeStepper;
-@property(nonatomic, strong) NSMutableDictionary<NSString *, NSColorWell *> *coreColorWells;
-@property(nonatomic, strong) NSMutableArray<NSColorWell *> *ansiColorWells;
+@property(nonatomic, strong) NSMutableDictionary<NSString *, TideyColorSwatchView *> *coreColorWells;
+@property(nonatomic, strong) NSMutableArray<TideyColorSwatchView *> *ansiColorWells;
 @property(nonatomic, strong) NSFont *selectedFont;
 
 @end
 
 @implementation TideyTerminalAppearanceViewController
 
+#pragma mark - Constants
+
+static const CGFloat kContentPadding = 20;
+static const CGFloat kCardInternalPaddingH = 14;
+static const CGFloat kCardRowHeight = 40;
+static const CGFloat kSectionGap = 20;
+static const CGFloat kSectionHeaderHeight = 16;
+static const CGFloat kSectionHeaderToCardGap = 8;
+static const CGFloat kAnsiWellSize = 28;
+static const CGFloat kAnsiLabelHeight = 14;
+
+#pragma mark - loadView
+
 - (void)loadView {
-    NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 680, 480)];
-    self.view = view;
+    // The root view is an NSScrollView so content can scroll.
+    NSScrollView *scrollView = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 560, 516)];
+    scrollView.drawsBackground = NO;
+    scrollView.hasVerticalScroller = YES;
+    scrollView.hasHorizontalScroller = NO;
+    scrollView.borderType = NSNoBorder;
+    scrollView.automaticallyAdjustsContentInsets = NO;
+    scrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+
+    // Flipped container for top-down layout.
+    iTermFlippedView *documentView = [[iTermFlippedView alloc] initWithFrame:NSMakeRect(0, 0, 560, 800)];
+    scrollView.documentView = documentView;
+    self.view = scrollView;
+
     self.adapter = [[TideyTerminalAppearanceProfileAdapter alloc] init];
     self.coreColorWells = [NSMutableDictionary dictionary];
     self.ansiColorWells = [NSMutableArray array];
 
-    NSTextField *title = [NSTextField labelWithString:@"Terminal Appearance"];
-    title.font = [NSFont boldSystemFontOfSize:15];
-    title.frame = NSMakeRect(24, 432, 260, 22);
-    [view addSubview:title];
+    CGFloat contentWidth = 560 - kContentPadding * 2;
+    CGFloat y = 0; // top-down in flipped view
 
-    NSTextField *subtitle = [NSTextField labelWithString:@"Font, core colors, and ANSI palette for the default terminal profile."];
-    subtitle.font = [NSFont systemFontOfSize:12];
-    subtitle.textColor = [NSColor secondaryLabelColor];
-    subtitle.frame = NSMakeRect(24, 408, 420, 18);
-    [view addSubview:subtitle];
+    // ===== FONT section =====
+    y += [self addSectionHeader:@"FONT" toView:documentView atY:y width:contentWidth];
+    y += [self buildFontCardInView:documentView atY:y width:contentWidth];
+    y += kSectionGap;
 
-    [self buildFontSectionInView:view];
-    [self buildCoreColorsSectionInView:view];
-    [self buildANSISectionInView:view];
+    // ===== COLORS section =====
+    y += [self addSectionHeader:@"COLORS" toView:documentView atY:y width:contentWidth];
+    y += [self buildCoreColorsCardInView:documentView atY:y width:contentWidth];
+    y += kSectionGap;
+
+    // ===== ANSI PALETTE section =====
+    y += [self addSectionHeader:@"ANSI PALETTE" toView:documentView atY:y width:contentWidth];
+    y += [self buildANSICardInView:documentView atY:y width:contentWidth];
+    y += 24; // bottom padding
+
+    // Set document view height to fit content
+    NSRect docFrame = documentView.frame;
+    docFrame.size.height = y;
+    documentView.frame = docFrame;
+
     [self reloadValuesFromProfile];
 }
 
-- (void)buildFontSectionInView:(NSView *)view {
-    NSTextField *fontLabel = [NSTextField labelWithString:@"Font"];
-    fontLabel.font = [NSFont boldSystemFontOfSize:13];
-    fontLabel.frame = NSMakeRect(24, 360, 120, 18);
-    [view addSubview:fontLabel];
+#pragma mark - Section Header
 
-    self.fontPreviewLabel = [NSTextField labelWithString:@""];
-    self.fontPreviewLabel.frame = NSMakeRect(24, 332, 360, 18);
-    [view addSubview:self.fontPreviewLabel];
-
-    NSButton *chooseFontButton = [NSButton buttonWithTitle:@"Choose Font…"
-                                                    target:self
-                                                    action:@selector(chooseFont:)];
-    chooseFontButton.frame = NSMakeRect(24, 294, 120, 30);
-    [view addSubview:chooseFontButton];
-
-    NSTextField *sizeLabel = [NSTextField labelWithString:@"Size"];
-    sizeLabel.frame = NSMakeRect(170, 300, 40, 18);
-    [view addSubview:sizeLabel];
-
-    self.fontSizeField = [[NSTextField alloc] initWithFrame:NSMakeRect(214, 295, 52, 24)];
-    self.fontSizeField.delegate = self;
-    [view addSubview:self.fontSizeField];
-
-    self.fontSizeStepper = [[NSStepper alloc] initWithFrame:NSMakeRect(272, 294, 20, 24)];
-    self.fontSizeStepper.minValue = 6;
-    self.fontSizeStepper.maxValue = 48;
-    self.fontSizeStepper.increment = 1;
-    self.fontSizeStepper.target = self;
-    self.fontSizeStepper.action = @selector(fontSizeStepperDidChange:);
-    [view addSubview:self.fontSizeStepper];
+- (CGFloat)addSectionHeader:(NSString *)title toView:(NSView *)parent atY:(CGFloat)y width:(CGFloat)width {
+    NSTextField *label = [NSTextField labelWithString:title];
+    label.font = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
+    label.textColor = TideySettingsSecondaryTextColor();
+    label.frame = NSMakeRect(kContentPadding + 2, y, width, kSectionHeaderHeight);
+    [parent addSubview:label];
+    return kSectionHeaderHeight + kSectionHeaderToCardGap;
 }
 
-- (void)buildCoreColorsSectionInView:(NSView *)view {
-    NSTextField *coreColorsLabel = [NSTextField labelWithString:@"Core Colors"];
-    coreColorsLabel.font = [NSFont boldSystemFontOfSize:13];
-    coreColorsLabel.frame = NSMakeRect(24, 246, 120, 18);
-    [view addSubview:coreColorsLabel];
+#pragma mark - Font Card
 
+- (CGFloat)buildFontCardInView:(NSView *)parent atY:(CGFloat)y width:(CGFloat)width {
+    CGFloat cardHeight = kCardRowHeight * 2 + 1; // 2 rows + 1 divider
+    TideySettingsCardView *card = [[TideySettingsCardView alloc] initWithFrame:NSMakeRect(kContentPadding, y, width, cardHeight)];
+    [parent addSubview:card];
+
+    // Row 1: Font Family
+    {
+        NSTextField *label = [NSTextField labelWithString:@"Font Family"];
+        label.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
+        label.textColor = TideySettingsPrimaryTextColor();
+        label.frame = NSMakeRect(kCardInternalPaddingH, 10, 150, 20);
+        [card addSubview:label];
+
+        NSButton *changeButton = [[NSButton alloc] initWithFrame:NSMakeRect(width - kCardInternalPaddingH - 70, 8, 70, 24)];
+        changeButton.title = @"Change\u2026";
+        changeButton.bezelStyle = NSBezelStyleRounded;
+        changeButton.font = [NSFont systemFontOfSize:12];
+        changeButton.target = self;
+        changeButton.action = @selector(chooseFont:);
+        [card addSubview:changeButton];
+
+        self.fontPreviewLabel = [NSTextField labelWithString:@""];
+        self.fontPreviewLabel.font = [NSFont systemFontOfSize:13];
+        self.fontPreviewLabel.textColor = TideySettingsSecondaryTextColor();
+        self.fontPreviewLabel.alignment = NSTextAlignmentRight;
+        self.fontPreviewLabel.frame = NSMakeRect(150, 10, width - kCardInternalPaddingH - 70 - 150 - 8, 20);
+        [card addSubview:self.fontPreviewLabel];
+    }
+
+    // Divider
+    {
+        TideySettingsCardDivider *div = [[TideySettingsCardDivider alloc] initWithFrame:NSMakeRect(kCardInternalPaddingH, kCardRowHeight, width - kCardInternalPaddingH * 2, 1)];
+        [card addSubview:div];
+    }
+
+    // Row 2: Size
+    {
+        CGFloat row2Y = kCardRowHeight + 1;
+        NSTextField *label = [NSTextField labelWithString:@"Size"];
+        label.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
+        label.textColor = TideySettingsPrimaryTextColor();
+        label.frame = NSMakeRect(kCardInternalPaddingH, row2Y + 10, 60, 20);
+        [card addSubview:label];
+
+        self.fontSizeStepper = [[NSStepper alloc] initWithFrame:NSMakeRect(width - kCardInternalPaddingH - 20, row2Y + 8, 20, 24)];
+        self.fontSizeStepper.minValue = 6;
+        self.fontSizeStepper.maxValue = 48;
+        self.fontSizeStepper.increment = 1;
+        self.fontSizeStepper.target = self;
+        self.fontSizeStepper.action = @selector(fontSizeStepperDidChange:);
+        [card addSubview:self.fontSizeStepper];
+
+        self.fontSizeField = [[NSTextField alloc] initWithFrame:NSMakeRect(width - kCardInternalPaddingH - 20 - 8 - 52, row2Y + 8, 52, 24)];
+        self.fontSizeField.delegate = self;
+        self.fontSizeField.alignment = NSTextAlignmentCenter;
+        self.fontSizeField.font = [NSFont systemFontOfSize:13];
+        [card addSubview:self.fontSizeField];
+    }
+
+    return cardHeight;
+}
+
+#pragma mark - Core Colors Card
+
+- (CGFloat)buildCoreColorsCardInView:(NSView *)parent atY:(CGFloat)y width:(CGFloat)width {
     NSArray<NSArray<NSString *> *> *coreRows = @[
-        @[ @"Foreground", KEY_FOREGROUND_COLOR ],
         @[ @"Background", KEY_BACKGROUND_COLOR ],
+        @[ @"Foreground", KEY_FOREGROUND_COLOR ],
         @[ @"Cursor", KEY_CURSOR_COLOR ],
         @[ @"Selection", KEY_SELECTION_COLOR ],
     ];
 
-    CGFloat x = 24;
-    for (NSArray<NSString *> *row in coreRows) {
-        NSTextField *label = [NSTextField labelWithString:row[0]];
-        label.alignment = NSTextAlignmentCenter;
-        label.frame = NSMakeRect(x, 214, 96, 18);
-        [view addSubview:label];
+    NSInteger rowCount = (NSInteger)coreRows.count;
+    CGFloat cardHeight = kCardRowHeight * rowCount + (rowCount - 1); // rows + dividers
+    TideySettingsCardView *card = [[TideySettingsCardView alloc] initWithFrame:NSMakeRect(kContentPadding, y, width, cardHeight)];
+    [parent addSubview:card];
 
-        NSColorWell *well = [[NSColorWell alloc] initWithFrame:NSMakeRect(x + 28, 176, 40, 28)];
+    CGFloat rowY = 0;
+    for (NSInteger i = 0; i < rowCount; i++) {
+        if (i > 0) {
+            TideySettingsCardDivider *div = [[TideySettingsCardDivider alloc] initWithFrame:NSMakeRect(kCardInternalPaddingH, rowY, width - kCardInternalPaddingH * 2, 1)];
+            [card addSubview:div];
+            rowY += 1;
+        }
+
+        NSTextField *label = [NSTextField labelWithString:coreRows[i][0]];
+        label.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
+        label.textColor = TideySettingsPrimaryTextColor();
+        label.frame = NSMakeRect(kCardInternalPaddingH, rowY + 10, 200, 20);
+        [card addSubview:label];
+
+        TideyColorSwatchView *well = [[TideyColorSwatchView alloc] initWithFrame:NSMakeRect(width - kCardInternalPaddingH - 24, rowY + 8, 24, 24)];
         well.target = self;
         well.action = @selector(coreColorWellDidChange:);
-        well.identifier = row[1];
-        [view addSubview:well];
-        self.coreColorWells[row[1]] = well;
+        well.identifier = coreRows[i][1];
+        [card addSubview:well];
+        self.coreColorWells[coreRows[i][1]] = well;
 
-        x += 116;
+        rowY += kCardRowHeight;
     }
+
+    return cardHeight;
 }
 
-- (void)buildANSISectionInView:(NSView *)view {
-    NSTextField *ansiLabel = [NSTextField labelWithString:@"ANSI Palette"];
-    ansiLabel.font = [NSFont boldSystemFontOfSize:13];
-    ansiLabel.frame = NSMakeRect(24, 134, 160, 18);
-    [view addSubview:ansiLabel];
+#pragma mark - ANSI Palette Card
 
-    CGFloat startX = 24;
-    CGFloat startY = 90;
-    CGFloat cellSize = 28;
-    CGFloat gap = 10;
+- (CGFloat)buildANSICardInView:(NSView *)parent atY:(CGFloat)y width:(CGFloat)width {
+    // 2 rows of 8 wells, each well has a number label below
+    CGFloat gridPadding = 14;
+    CGFloat availableWidth = width - gridPadding * 2;
+    CGFloat cellSpacing = (availableWidth - kAnsiWellSize * 8) / 7.0;
+    CGFloat rowHeight = kAnsiWellSize + kAnsiLabelHeight + 4; // well + gap + label
+    CGFloat gridHeight = 12 + rowHeight + 6 + rowHeight + 12; // top padding + row1 + gap + row2 + bottom padding
+    TideySettingsCardView *card = [[TideySettingsCardView alloc] initWithFrame:NSMakeRect(kContentPadding, y, width, gridHeight)];
+    [parent addSubview:card];
+
     for (NSInteger i = 0; i < 16; i++) {
         NSInteger row = i / 8;
-        NSInteger column = i % 8;
-        CGFloat x = startX + column * (cellSize + gap + 24);
-        CGFloat y = startY - row * 54;
+        NSInteger col = i % 8;
+        CGFloat cellX = gridPadding + col * (kAnsiWellSize + cellSpacing);
+        CGFloat cellY = 12 + row * (rowHeight + 6);
 
-        NSTextField *label = [NSTextField labelWithString:[NSString stringWithFormat:@"%ld", (long)i]];
-        label.alignment = NSTextAlignmentCenter;
-        label.frame = NSMakeRect(x - 2, y + 30, 32, 16);
-        [view addSubview:label];
-
-        NSColorWell *well = [[NSColorWell alloc] initWithFrame:NSMakeRect(x, y, cellSize, cellSize)];
+        TideyColorSwatchView *well = [[TideyColorSwatchView alloc] initWithFrame:NSMakeRect(cellX, cellY, kAnsiWellSize, kAnsiWellSize)];
         well.target = self;
         well.action = @selector(ansiColorWellDidChange:);
-        well.tag = i;
-        [view addSubview:well];
+        [well setTag:i];
+        [card addSubview:well];
         [self.ansiColorWells addObject:well];
+
+        NSTextField *numLabel = [NSTextField labelWithString:[NSString stringWithFormat:@"%ld", (long)i]];
+        numLabel.font = [NSFont systemFontOfSize:9];
+        numLabel.textColor = [NSColor colorWithSRGBRed:0x55/255.0 green:0x55/255.0 blue:0x55/255.0 alpha:1.0];
+        numLabel.alignment = NSTextAlignmentCenter;
+        numLabel.frame = NSMakeRect(cellX - 2, cellY + kAnsiWellSize + 2, kAnsiWellSize + 4, kAnsiLabelHeight);
+        [card addSubview:numLabel];
     }
+
+    return gridHeight;
 }
+
+#pragma mark - Profile Read/Write
 
 - (void)reloadValuesFromProfile {
     self.selectedFont = [self.adapter normalFont];
@@ -142,17 +290,18 @@
     for (NSString *key in self.coreColorWells) {
         self.coreColorWells[key].color = [self.adapter colorForKey:key];
     }
-    for (NSInteger i = 0; i < self.ansiColorWells.count; i++) {
+    for (NSInteger i = 0; i < (NSInteger)self.ansiColorWells.count; i++) {
         self.ansiColorWells[i].color = [self.adapter ansiColorAtIndex:i];
     }
 }
 
 - (void)updateFontControls {
-    self.fontPreviewLabel.stringValue = [NSString stringWithFormat:@"%@ %.0f", self.selectedFont.displayName ?: self.selectedFont.fontName, self.selectedFont.pointSize];
-    self.fontPreviewLabel.font = self.selectedFont;
+    self.fontPreviewLabel.stringValue = self.selectedFont.displayName ?: self.selectedFont.fontName;
     self.fontSizeField.doubleValue = self.selectedFont.pointSize;
     self.fontSizeStepper.doubleValue = self.selectedFont.pointSize;
 }
+
+#pragma mark - Font Actions
 
 - (void)chooseFont:(id)sender {
     (void)sender;
@@ -192,11 +341,13 @@
     [self.adapter updateNormalFont:self.selectedFont];
 }
 
-- (void)coreColorWellDidChange:(NSColorWell *)sender {
+#pragma mark - Color Actions
+
+- (void)coreColorWellDidChange:(TideyColorSwatchView *)sender {
     [self.adapter updateColor:sender.color forKey:sender.identifier];
 }
 
-- (void)ansiColorWellDidChange:(NSColorWell *)sender {
+- (void)ansiColorWellDidChange:(TideyColorSwatchView *)sender {
     [self.adapter updateANSIColor:sender.color atIndex:sender.tag];
 }
 

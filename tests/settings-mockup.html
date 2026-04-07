@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tidey Settings — Design Options</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #1a1a1a;
+    --surface: #242424;
+    --card: rgba(255,255,255,0.04);
+    --card-border: rgba(255,255,255,0.08);
+    --card-hover: rgba(255,255,255,0.06);
+    --text: #e8e8e8;
+    --text-secondary: #888;
+    --text-tertiary: #555;
+    --accent: #58B2DC; /* 空 sora */
+    --accent-dim: rgba(88,178,220,0.12);
+    --separator: rgba(255,255,255,0.06);
+    --radius: 10px;
+    --radius-lg: 13px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
+    background: #111;
+    color: var(--text);
+    display: flex;
+    gap: 40px;
+    padding: 40px;
+    flex-wrap: wrap;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .option-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--accent);
+    margin-bottom: 12px;
+  }
+
+  /* ═══ OPTION A: cmux-style card scroll ═══ */
+  .window {
+    width: 560px;
+    background: var(--bg);
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid rgba(255,255,255,0.1);
+    box-shadow: 0 24px 80px rgba(0,0,0,0.5);
+  }
+
+  .titlebar {
+    height: 52px;
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    position: relative;
+  }
+
+  .traffic-lights {
+    display: flex;
+    gap: 8px;
+  }
+
+  .traffic-lights span {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+  }
+  .tl-close { background: #ff5f57; }
+  .tl-minimize { background: #febc2e; }
+  .tl-maximize { background: #28c840; }
+
+  .titlebar-text {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+  }
+
+  /* Tab switcher */
+  .tab-bar {
+    display: flex;
+    gap: 2px;
+    padding: 0 20px 12px;
+  }
+  .tab-bar button {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 500;
+    padding: 6px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .tab-bar button.active {
+    background: var(--accent-dim);
+    color: var(--accent);
+  }
+  .tab-bar button:hover:not(.active) {
+    background: rgba(255,255,255,0.04);
+    color: var(--text);
+  }
+
+  .settings-content {
+    padding: 0 20px 24px;
+    max-height: 520px;
+    overflow-y: auto;
+  }
+  .settings-content::-webkit-scrollbar { width: 6px; }
+  .settings-content::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+
+  .section-header {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text-secondary);
+    margin: 20px 0 8px 2px;
+  }
+  .section-header:first-child { margin-top: 0; }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+  }
+
+  .card-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    min-height: 40px;
+  }
+
+  .card-row + .card-row {
+    border-top: 1px solid var(--separator);
+  }
+
+  .card-row-label {
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  .card-row-sublabel {
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-top: 2px;
+  }
+
+  .card-row-control {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* Font preview pill */
+  .font-preview {
+    font-size: 13px;
+    color: var(--text-secondary);
+    background: rgba(255,255,255,0.06);
+    padding: 4px 10px;
+    border-radius: 6px;
+  }
+
+  .btn-small {
+    font-size: 12px;
+    padding: 4px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--card-border);
+    background: rgba(255,255,255,0.06);
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  /* Color well */
+  .color-well {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.15);
+    cursor: pointer;
+  }
+
+  .color-row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  /* ANSI grid */
+  .ansi-grid {
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    gap: 4px;
+    padding: 12px 14px;
+  }
+
+  .ansi-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+  }
+
+  .ansi-well {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.12);
+    cursor: pointer;
+  }
+
+  .ansi-label {
+    font-size: 9px;
+    color: var(--text-tertiary);
+  }
+
+  /* ═══ OPTION B: Compact grouped ═══ */
+  .window-b .settings-content { padding: 0 16px 20px; }
+
+  .window-b .section-header {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--text);
+    margin: 24px 0 10px 0;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--separator);
+  }
+
+  .window-b .row-flat {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 0;
+  }
+
+  .window-b .row-flat-label {
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+
+  .window-b .color-inline {
+    display: flex;
+    gap: 12px;
+    padding: 10px 0;
+  }
+
+  .window-b .color-inline-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .window-b .color-inline-label {
+    font-size: 10px;
+    color: var(--text-tertiary);
+  }
+
+  .window-b .ansi-compact {
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    gap: 6px;
+    padding: 8px 0;
+  }
+
+  .window-b .ansi-compact .ansi-well {
+    width: 100%;
+    aspect-ratio: 1;
+    border-radius: 4px;
+  }
+
+  /* ═══ OPTION C: Two-column with sidebar ═══ */
+  .window-c {
+    width: 640px;
+  }
+  .window-c .layout {
+    display: flex;
+    min-height: 480px;
+  }
+  .window-c .sidebar {
+    width: 160px;
+    padding: 12px 8px;
+    border-right: 1px solid var(--separator);
+    flex-shrink: 0;
+  }
+  .window-c .sidebar-item {
+    font-size: 12px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    margin-bottom: 2px;
+  }
+  .window-c .sidebar-item.active {
+    background: var(--accent-dim);
+    color: var(--accent);
+  }
+  .window-c .sidebar-item:hover:not(.active) {
+    background: rgba(255,255,255,0.04);
+  }
+  .window-c .main-panel {
+    flex: 1;
+    padding: 16px 20px;
+    overflow-y: auto;
+    max-height: 480px;
+  }
+  .window-c .main-panel h2 {
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: 16px;
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══════════ OPTION A: cmux-style card scroll ═══════════ -->
+<div>
+  <div class="option-label">Option A — Card Scroll (cmux style)</div>
+  <div class="window">
+    <div class="titlebar">
+      <div class="traffic-lights">
+        <span class="tl-close"></span>
+        <span class="tl-minimize"></span>
+        <span class="tl-maximize"></span>
+      </div>
+      <span class="titlebar-text">Settings</span>
+    </div>
+    <div class="tab-bar">
+      <button class="active">Appearance</button>
+      <button>Shortcuts</button>
+    </div>
+    <div class="settings-content">
+      <div class="section-header">Font</div>
+      <div class="card">
+        <div class="card-row">
+          <div>
+            <div class="card-row-label">Font Family</div>
+            <div class="card-row-sublabel">Used for all terminal text</div>
+          </div>
+          <div class="card-row-control">
+            <span class="font-preview">Menlo-Regular</span>
+            <button class="btn-small">Change…</button>
+          </div>
+        </div>
+        <div class="card-row">
+          <div class="card-row-label">Size</div>
+          <div class="card-row-control">
+            <span class="font-preview">14 pt</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-header">Colors</div>
+      <div class="card">
+        <div class="card-row">
+          <div class="card-row-label">Background</div>
+          <div class="color-well" style="background:#0B1013;"></div>
+        </div>
+        <div class="card-row">
+          <div class="card-row-label">Foreground</div>
+          <div class="color-well" style="background:#EAF4FC;"></div>
+        </div>
+        <div class="card-row">
+          <div class="card-row-label">Cursor</div>
+          <div class="color-well" style="background:#58B2DC;"></div>
+        </div>
+        <div class="card-row">
+          <div class="card-row-label">Selection</div>
+          <div class="color-well" style="background:#274A78;"></div>
+        </div>
+      </div>
+
+      <div class="section-header">ANSI Palette</div>
+      <div class="card">
+        <div class="ansi-grid">
+          <div class="ansi-cell"><div class="ansi-well" style="background:#181B26;"></div><span class="ansi-label">0</span></div>
+          <div class="ansi-cell"><div class="ansi-well" style="background:#CB4042;"></div><span class="ansi-label">1</span></div>
+          <div class="ansi-cell"><div class="ansi-well" style="background:#839B5C;"></div><span class="ansi-label">2</span></div>
+          <div class="ansi-cell"><div class="ansi-well" style="background:#CAAD5F;"></div><span class="ansi-label">3</span></div>
+          <div class="ansi-cell"><div class="ansi-well" style="background:#5B7E91;"></div><span class="ansi-label">4</span></div>
+          <div class="ansi-cell"><div class="ansi-well" style="background:#8B81C3;"></div><span class="ansi-label">5</span></div>
+          <div class="ansi-cell"><div class="ansi-well" style="background:#5C9291;"></div><span class="ansi-label">6</span></div>
+          <div class="ansi-cell"><div class="ansi-well" style="background:#91989F;"></div><span class="ansi-label">7</span></div>
+          <div class="ansi-cell"><div class="ansi-well" style="background:#656765;"></div><span class="ansi-label">8</span></div>
+          <div class="ansi-cell"><div class="ansi-well" style="background:#E87A90;"></div><span class="ansi-label">9</span></div>
+          <div class="ansi-cell"><div class="ansi-well" style="background:#68BE8D;"></div><span class="ansi-label">10</span></div>
+          <div class="ansi-cell"><div class="ansi-well" style="background:#FFB11B;"></div><span class="ansi-label">11</span></div>
+          <div class="ansi-cell"><div class="ansi-well" style="background:#58B2DC;"></div><span class="ansi-label">12</span></div>
+          <div class="ansi-cell"><div class="ansi-well" style="background:#E7609E;"></div><span class="ansi-label">13</span></div>
+          <div class="ansi-cell"><div class="ansi-well" style="background:#70C5BA;"></div><span class="ansi-label">14</span></div>
+          <div class="ansi-cell"><div class="ansi-well" style="background:#EAF4FC;"></div><span class="ansi-label">15</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ OPTION B: Compact grouped ═══════════ -->
+<div>
+  <div class="option-label">Option B — Compact Flat</div>
+  <div class="window window-b">
+    <div class="titlebar">
+      <div class="traffic-lights">
+        <span class="tl-close"></span>
+        <span class="tl-minimize"></span>
+        <span class="tl-maximize"></span>
+      </div>
+      <span class="titlebar-text">Settings</span>
+    </div>
+    <div class="tab-bar">
+      <button class="active">Appearance</button>
+      <button>Shortcuts</button>
+    </div>
+    <div class="settings-content">
+      <div class="section-header" style="margin-top:0">Font</div>
+      <div class="row-flat">
+        <span class="row-flat-label">Family</span>
+        <div class="card-row-control">
+          <span class="font-preview">Menlo-Regular 14pt</span>
+          <button class="btn-small">Change…</button>
+        </div>
+      </div>
+
+      <div class="section-header">Core Colors</div>
+      <div class="color-inline">
+        <div class="color-inline-item">
+          <div class="color-well" style="background:#0B1013; width:36px; height:36px; border-radius:8px;"></div>
+          <span class="color-inline-label">Background</span>
+        </div>
+        <div class="color-inline-item">
+          <div class="color-well" style="background:#EAF4FC; width:36px; height:36px; border-radius:8px;"></div>
+          <span class="color-inline-label">Foreground</span>
+        </div>
+        <div class="color-inline-item">
+          <div class="color-well" style="background:#58B2DC; width:36px; height:36px; border-radius:8px;"></div>
+          <span class="color-inline-label">Cursor</span>
+        </div>
+        <div class="color-inline-item">
+          <div class="color-well" style="background:#274A78; width:36px; height:36px; border-radius:8px;"></div>
+          <span class="color-inline-label">Selection</span>
+        </div>
+      </div>
+
+      <div class="section-header">ANSI Palette</div>
+      <div style="display:flex; gap:4px; margin-bottom:4px;">
+        <span style="font-size:10px; color:var(--text-tertiary); width:100%">Normal</span>
+      </div>
+      <div class="ansi-compact">
+        <div class="ansi-well" style="background:#181B26;"></div>
+        <div class="ansi-well" style="background:#CB4042;"></div>
+        <div class="ansi-well" style="background:#839B5C;"></div>
+        <div class="ansi-well" style="background:#CAAD5F;"></div>
+        <div class="ansi-well" style="background:#5B7E91;"></div>
+        <div class="ansi-well" style="background:#8B81C3;"></div>
+        <div class="ansi-well" style="background:#5C9291;"></div>
+        <div class="ansi-well" style="background:#91989F;"></div>
+      </div>
+      <div style="display:flex; gap:4px; margin: 8px 0 4px;">
+        <span style="font-size:10px; color:var(--text-tertiary); width:100%">Bright</span>
+      </div>
+      <div class="ansi-compact">
+        <div class="ansi-well" style="background:#656765;"></div>
+        <div class="ansi-well" style="background:#E87A90;"></div>
+        <div class="ansi-well" style="background:#68BE8D;"></div>
+        <div class="ansi-well" style="background:#FFB11B;"></div>
+        <div class="ansi-well" style="background:#58B2DC;"></div>
+        <div class="ansi-well" style="background:#E7609E;"></div>
+        <div class="ansi-well" style="background:#70C5BA;"></div>
+        <div class="ansi-well" style="background:#EAF4FC;"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ OPTION C: Sidebar nav ═══════════ -->
+<div>
+  <div class="option-label">Option C — Sidebar Navigation</div>
+  <div class="window window-c">
+    <div class="titlebar">
+      <div class="traffic-lights">
+        <span class="tl-close"></span>
+        <span class="tl-minimize"></span>
+        <span class="tl-maximize"></span>
+      </div>
+      <span class="titlebar-text">Settings</span>
+    </div>
+    <div class="layout">
+      <div class="sidebar">
+        <div class="sidebar-item active">Appearance</div>
+        <div class="sidebar-item">Shortcuts</div>
+      </div>
+      <div class="main-panel">
+        <h2>Appearance</h2>
+
+        <div class="section-header" style="margin-top:0; border:none; padding:0; font-size:11px; text-transform:uppercase; letter-spacing:0.8px; color:var(--text-secondary);">Font</div>
+        <div class="card" style="margin: 8px 0 20px;">
+          <div class="card-row">
+            <div>
+              <div class="card-row-label">Font Family</div>
+            </div>
+            <div class="card-row-control">
+              <span class="font-preview">Menlo-Regular</span>
+              <button class="btn-small">Change…</button>
+            </div>
+          </div>
+          <div class="card-row">
+            <div class="card-row-label">Size</div>
+            <div class="card-row-control">
+              <span class="font-preview">14 pt</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-header" style="border:none; padding:0; font-size:11px; text-transform:uppercase; letter-spacing:0.8px; color:var(--text-secondary);">Colors</div>
+        <div class="card" style="margin: 8px 0 20px;">
+          <div class="card-row">
+            <div class="card-row-label">Background</div>
+            <div class="color-well" style="background:#0B1013;"></div>
+          </div>
+          <div class="card-row">
+            <div class="card-row-label">Foreground</div>
+            <div class="color-well" style="background:#EAF4FC;"></div>
+          </div>
+          <div class="card-row">
+            <div class="card-row-label">Cursor</div>
+            <div class="color-well" style="background:#58B2DC;"></div>
+          </div>
+          <div class="card-row">
+            <div class="card-row-label">Selection</div>
+            <div class="color-well" style="background:#274A78;"></div>
+          </div>
+        </div>
+
+        <div class="section-header" style="border:none; padding:0; font-size:11px; text-transform:uppercase; letter-spacing:0.8px; color:var(--text-secondary);">ANSI Palette</div>
+        <div class="card" style="margin: 8px 0 20px;">
+          <div class="ansi-grid">
+            <div class="ansi-cell"><div class="ansi-well" style="background:#181B26;"></div><span class="ansi-label">0</span></div>
+            <div class="ansi-cell"><div class="ansi-well" style="background:#CB4042;"></div><span class="ansi-label">1</span></div>
+            <div class="ansi-cell"><div class="ansi-well" style="background:#839B5C;"></div><span class="ansi-label">2</span></div>
+            <div class="ansi-cell"><div class="ansi-well" style="background:#CAAD5F;"></div><span class="ansi-label">3</span></div>
+            <div class="ansi-cell"><div class="ansi-well" style="background:#5B7E91;"></div><span class="ansi-label">4</span></div>
+            <div class="ansi-cell"><div class="ansi-well" style="background:#8B81C3;"></div><span class="ansi-label">5</span></div>
+            <div class="ansi-cell"><div class="ansi-well" style="background:#5C9291;"></div><span class="ansi-label">6</span></div>
+            <div class="ansi-cell"><div class="ansi-well" style="background:#91989F;"></div><span class="ansi-label">7</span></div>
+            <div class="ansi-cell"><div class="ansi-well" style="background:#656765;"></div><span class="ansi-label">8</span></div>
+            <div class="ansi-cell"><div class="ansi-well" style="background:#E87A90;"></div><span class="ansi-label">9</span></div>
+            <div class="ansi-cell"><div class="ansi-well" style="background:#68BE8D;"></div><span class="ansi-label">10</span></div>
+            <div class="ansi-cell"><div class="ansi-well" style="background:#FFB11B;"></div><span class="ansi-label">11</span></div>
+            <div class="ansi-cell"><div class="ansi-well" style="background:#58B2DC;"></div><span class="ansi-label">12</span></div>
+            <div class="ansi-cell"><div class="ansi-well" style="background:#E7609E;"></div><span class="ansi-label">13</span></div>
+            <div class="ansi-cell"><div class="ansi-well" style="background:#70C5BA;"></div><span class="ansi-label">14</span></div>
+            <div class="ansi-cell"><div class="ansi-well" style="background:#EAF4FC;"></div><span class="ansi-label">15</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
