@@ -194,7 +194,7 @@
   - Xcode build phase script 每次 build 都會讀 `version.txt`，用 PlistBuddy 覆寫 plist 的 `CFBundleShortVersionString`、`CFBundleVersion`、`CFBundleGetInfoString`
   - 直接改 plist 的版號無效，下次 build 就被蓋掉
   - Development config 會加 `-dev` suffix，Deployment 加日期 suffix（除非 version.txt 不含 `%(extra)s` placeholder）
-  - 要改版號就改 `version.txt`，不要改 plist
+  - 要改版號就改 `version.txt`，不要改 plist，也不要只看 Xcode General tab 的 Version / Build 顯示值（那些是 build 後才被覆寫的結果）
 
 ## Branding / Defaults
 
