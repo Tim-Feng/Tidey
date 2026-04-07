@@ -345,7 +345,7 @@ static NSString *const kTideyFirstRunBootstrapSource = @"TideyFirstRunBootstrapS
     return @{
         KEY_NORMAL_FONT: font.stringValue,
         KEY_NON_ASCII_FONT: font.stringValue,
-        KEY_USE_NONASCII_FONT: @YES,
+        KEY_USE_NONASCII_FONT: @NO,
         KEY_POWERLINE: @YES,
     };
 }
@@ -385,7 +385,7 @@ static NSString *const kTideyFirstRunBootstrapSource = @"TideyFirstRunBootstrapS
     return @{
         KEY_NORMAL_FONT: font.stringValue,
         KEY_NON_ASCII_FONT: font.stringValue,
-        KEY_USE_NONASCII_FONT: @YES,
+        KEY_USE_NONASCII_FONT: @NO,
     };
 }
 
