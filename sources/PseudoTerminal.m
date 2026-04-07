@@ -13449,10 +13449,11 @@ typedef NS_ENUM(NSUInteger, iTermBroadcastCommand) {
 
 - (void)reloadBookmarks
 {
+    NSArray *sessions = [self allSessions];
     for (PTYTab *tab in self.tabs) {
         [tab setDeferFontChanges:YES];
     }
-    for (PTYSession* session in [self allSessions]) {
+    for (PTYSession* session in sessions) {
         Profile *oldBookmark = [session profile];
         NSString* oldName = [[[oldBookmark objectForKey:KEY_NAME] copy] autorelease];
         NSString* guid = [oldBookmark objectForKey:KEY_GUID];

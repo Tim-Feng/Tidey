@@ -129,6 +129,7 @@
 #import "iTermUntitledWindowStateMachine.h"
 #import "iTermUserDefaults.h"
 #import "TideyFirstRunCompatibilityBootstrap.h"
+#import "TideySettingsWindowController.h"
 #import "iTermWarning.h"
 #import "iTermWebSocketCookieJar.h"
 #import "TideyNotificationStore.h"
@@ -207,6 +208,7 @@ static BOOL hasBecomeActive = NO;
 
 @implementation iTermApplicationDelegate {
     iTermPasswordManagerWindowController *_passwordManagerWindowController;
+    TideySettingsWindowController *_tideySettingsWindowController;
 
     // Menu items
     IBOutlet NSMenu *bookmarkMenu;
@@ -3079,81 +3081,18 @@ static iTermKeyEventReplayer *gReplayer;
 }
 
 - (IBAction)showPrefWindow:(id)sender {
-    [self showTideyShortcutsPanel];
+    [self showTideySettingsWindow];
 }
 
 - (IBAction)showAndOrderFrontRegardlessPrefWindow:(id)sender {
-    [self showTideyShortcutsPanel];
+    [self showTideySettingsWindow];
 }
 
-- (void)showTideyShortcutsPanel {
-    static NSPanel *panel = nil;
-    if (panel) {
-        [panel makeKeyAndOrderFront:nil];
-        return;
+- (void)showTideySettingsWindow {
+    if (!_tideySettingsWindowController) {
+        _tideySettingsWindowController = [[TideySettingsWindowController alloc] init];
     }
-
-    // Keep this list in sync with README.md's Tidey keyboard shortcuts table.
-    NSArray<NSArray<NSString *> *> *shortcuts = @[
-        @[@"New Workspace",          @"\u2318N"],
-        @[@"New Panel",              @"\u2318T"],
-        @[@"Close",                  @"\u2318W"],
-        @[@"Switch Workspace",       @"\u23181\u20139 (\u23189 = last)"],
-        @[@"Next / Previous Workspace", @"\u2303\u2318] / \u2303\u2318["],
-        @[@"Last Workspace",         @"\u2303\u2318\\"],
-        @[@"Show/Hide Sidebar",      @"\u2318B"],
-        @[@"Show/Hide Editor",       @"\u21e7\u2318E"],
-        @[@"Show/Hide Terminal",     @"\u21e7\u2318T"],
-        @[@"Show/Hide File Tree",    @"\u2303\u2318F"],
-        @[@"Find in Editor",         @"\u2318F"],
-        @[@"Switch Panel / Editor Tab", @"\u23031\u20139"],
-        @[@"Save",                   @"\u2318S"],
-        @[@"Reset Layout",           @"double-click divider"],
-    ];
-
-    CGFloat panelWidth = 420;
-    CGFloat rowHeight = 24;
-    CGFloat topPadding = 12;
-    CGFloat bottomPadding = 16;
-    CGFloat titleHeight = 30;
-    CGFloat contentHeight = titleHeight + topPadding + shortcuts.count * rowHeight + bottomPadding;
-
-    panel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, panelWidth, contentHeight)
-                                       styleMask:(NSWindowStyleMaskTitled |
-                                                  NSWindowStyleMaskClosable |
-                                                  NSWindowStyleMaskUtilityWindow)
-                                         backing:NSBackingStoreBuffered
-                                           defer:NO];
-    panel.title = @"Tidey Shortcuts";
-    [panel setReleasedWhenClosed:NO];
-    panel.level = NSFloatingWindowLevel;
-
-    NSView *contentView = panel.contentView;
-
-    CGFloat y = contentHeight - titleHeight;
-    NSTextField *title = [NSTextField labelWithString:@"Keyboard Shortcuts"];
-    title.font = [NSFont boldSystemFontOfSize:14];
-    title.frame = NSMakeRect(20, y, panelWidth - 40, 20);
-    [contentView addSubview:title];
-
-    y -= topPadding;
-
-    for (NSArray<NSString *> *row in shortcuts) {
-        y -= rowHeight;
-        NSTextField *action = [NSTextField labelWithString:row[0]];
-        action.font = [NSFont systemFontOfSize:12];
-        action.frame = NSMakeRect(20, y, 190, 18);
-        [contentView addSubview:action];
-
-        NSTextField *key = [NSTextField labelWithString:row[1]];
-        key.font = [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightMedium];
-        key.alignment = NSTextAlignmentRight;
-        key.frame = NSMakeRect(210, y, panelWidth - 230, 18);
-        [contentView addSubview:key];
-    }
-
-    [panel center];
-    [panel makeKeyAndOrderFront:nil];
+    [_tideySettingsWindowController showWindowSelectingAppearance];
 }
 
 - (IBAction)showBookmarkWindow:(id)sender {

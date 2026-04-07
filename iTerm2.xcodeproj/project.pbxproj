@@ -4922,6 +4922,14 @@
 		F0A10D1E3A2B000100000003 /* TideyFirstRunCompatibilityBootstrap.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A2B000100000004 /* TideyFirstRunCompatibilityBootstrap.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
 		F0A10D1E3A29000100000001 /* TideyRightPanelPane.h in Headers */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A29000100000002 /* TideyRightPanelPane.h */; };
 		F0A10D1E3A29000100000003 /* TideyRightPanelPane.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A29000100000004 /* TideyRightPanelPane.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		F0A10D1E3A40000100000001 /* TideyKeyboardShortcutsViewController.h in Headers */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A40000100000002 /* TideyKeyboardShortcutsViewController.h */; };
+		F0A10D1E3A40000100000003 /* TideyKeyboardShortcutsViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A40000100000004 /* TideyKeyboardShortcutsViewController.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		F0A10D1E3A40000100000005 /* TideySettingsWindowController.h in Headers */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A40000100000006 /* TideySettingsWindowController.h */; };
+		F0A10D1E3A40000100000007 /* TideySettingsWindowController.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A40000100000008 /* TideySettingsWindowController.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		F0A10D1E3A4000010000000D /* TideyTerminalAppearanceProfileAdapter.h in Headers */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A4000010000000E /* TideyTerminalAppearanceProfileAdapter.h */; };
+		F0A10D1E3A4000010000000F /* TideyTerminalAppearanceProfileAdapter.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A40000100000010 /* TideyTerminalAppearanceProfileAdapter.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		F0A10D1E3A40000100000009 /* TideyTerminalAppearanceViewController.h in Headers */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A4000010000000A /* TideyTerminalAppearanceViewController.h */; };
+		F0A10D1E3A4000010000000B /* TideyTerminalAppearanceViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A4000010000000C /* TideyTerminalAppearanceViewController.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
 		F0A10D1E3A2800010000000F /* TideySocketCommandDecoder.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A2800010000000E /* TideySocketCommandDecoder.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
 		F0A10D1E3A28000100000011 /* TideySocketCommandDecoderTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000010 /* TideySocketCommandDecoderTests.m */; };
 		A6F7A707213CB143004DE961 /* StatusBarIconUser.png in Resources */ = {isa = PBXBuildFile; fileRef = A6F7A6EF213CB13D004DE961 /* StatusBarIconUser.png */; };
@@ -9063,6 +9071,14 @@
 		F0A10D1E3A2B000100000004 /* TideyFirstRunCompatibilityBootstrap.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyFirstRunCompatibilityBootstrap.m; sourceTree = "<group>"; };
 		F0A10D1E3A29000100000002 /* TideyRightPanelPane.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyRightPanelPane.h; sourceTree = "<group>"; };
 		F0A10D1E3A29000100000004 /* TideyRightPanelPane.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyRightPanelPane.m; sourceTree = "<group>"; };
+		F0A10D1E3A40000100000002 /* TideyKeyboardShortcutsViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyKeyboardShortcutsViewController.h; sourceTree = "<group>"; };
+		F0A10D1E3A40000100000004 /* TideyKeyboardShortcutsViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyKeyboardShortcutsViewController.m; sourceTree = "<group>"; };
+		F0A10D1E3A40000100000006 /* TideySettingsWindowController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideySettingsWindowController.h; sourceTree = "<group>"; };
+		F0A10D1E3A40000100000008 /* TideySettingsWindowController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySettingsWindowController.m; sourceTree = "<group>"; };
+		F0A10D1E3A4000010000000E /* TideyTerminalAppearanceProfileAdapter.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyTerminalAppearanceProfileAdapter.h; sourceTree = "<group>"; };
+		F0A10D1E3A40000100000010 /* TideyTerminalAppearanceProfileAdapter.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyTerminalAppearanceProfileAdapter.m; sourceTree = "<group>"; };
+		F0A10D1E3A4000010000000A /* TideyTerminalAppearanceViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyTerminalAppearanceViewController.h; sourceTree = "<group>"; };
+		F0A10D1E3A4000010000000C /* TideyTerminalAppearanceViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyTerminalAppearanceViewController.m; sourceTree = "<group>"; };
 		F0A10D1E3A2800010000000D /* TideySocketCommandDecoder.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideySocketCommandDecoder.h; sourceTree = "<group>"; };
 		F0A10D1E3A2800010000000E /* TideySocketCommandDecoder.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySocketCommandDecoder.m; sourceTree = "<group>"; };
 		A6F7A6EF213CB13D004DE961 /* StatusBarIconUser.png */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; name = StatusBarIconUser.png; path = images/StatusBarIcons/StatusBarIconUser.png; sourceTree = "<group>"; };
@@ -11840,12 +11856,20 @@
 				F0A10D1E3A2A000100000008 /* TideyEditorDocumentStore.m */,
 				F0A10D1E3A2B000100000002 /* TideyFirstRunCompatibilityBootstrap.h */,
 				F0A10D1E3A2B000100000004 /* TideyFirstRunCompatibilityBootstrap.m */,
+				F0A10D1E3A40000100000002 /* TideyKeyboardShortcutsViewController.h */,
+				F0A10D1E3A40000100000004 /* TideyKeyboardShortcutsViewController.m */,
 				F0A10D1E3A29000100000002 /* TideyRightPanelPane.h */,
 				F0A10D1E3A29000100000004 /* TideyRightPanelPane.m */,
+				F0A10D1E3A40000100000006 /* TideySettingsWindowController.h */,
+				F0A10D1E3A40000100000008 /* TideySettingsWindowController.m */,
+				F0A10D1E3A4000010000000E /* TideyTerminalAppearanceProfileAdapter.h */,
+				F0A10D1E3A40000100000010 /* TideyTerminalAppearanceProfileAdapter.m */,
 				F0A10D1E3A2800010000000D /* TideySocketCommandDecoder.h */,
 				F0A10D1E3A2800010000000E /* TideySocketCommandDecoder.m */,
 				A7B100052F0A000100000001 /* TideySocketServer.h */,
 				A7B100062F0A000100000001 /* TideySocketServer.m */,
+				F0A10D1E3A4000010000000A /* TideyTerminalAppearanceViewController.h */,
+				F0A10D1E3A4000010000000C /* TideyTerminalAppearanceViewController.m */,
 				1D44218B1290B34500891504 /* TextViewWrapper.m */,
 				A62132D227862A4800B80724 /* TokenExecutor.swift */,
 				1D8B8A121806038F00C2DC25 /* VT100Grid.h */,
@@ -15471,7 +15495,11 @@
 				F0A10D1E3A2A000100000001 /* TideyEditorDocument.h in Headers */,
 				F0A10D1E3A2A000100000005 /* TideyEditorDocumentStore.h in Headers */,
 				F0A10D1E3A2B000100000001 /* TideyFirstRunCompatibilityBootstrap.h in Headers */,
+				F0A10D1E3A40000100000001 /* TideyKeyboardShortcutsViewController.h in Headers */,
 				F0A10D1E3A29000100000001 /* TideyRightPanelPane.h in Headers */,
+				F0A10D1E3A40000100000005 /* TideySettingsWindowController.h in Headers */,
+				F0A10D1E3A4000010000000D /* TideyTerminalAppearanceProfileAdapter.h in Headers */,
+				F0A10D1E3A40000100000009 /* TideyTerminalAppearanceViewController.h in Headers */,
 				D5EF7F4036204859817200E0 /* iTermLayoutCalculator.h in Headers */,
 				A667190B1DCE36C3000CE608 /* iTermCarbonHotKeyController.h in Headers */,
 				A6E7352A20EBF3270034FCFD /* iTermSetCurrentTerminalHelper.h in Headers */,
@@ -19311,9 +19339,13 @@
 				F0A10D1E3A2A000100000003 /* TideyEditorDocument.m in Sources */,
 				F0A10D1E3A2A000100000007 /* TideyEditorDocumentStore.m in Sources */,
 				F0A10D1E3A2B000100000003 /* TideyFirstRunCompatibilityBootstrap.m in Sources */,
+				F0A10D1E3A40000100000003 /* TideyKeyboardShortcutsViewController.m in Sources */,
 				F0A10D1E3A29000100000003 /* TideyRightPanelPane.m in Sources */,
+				F0A10D1E3A40000100000007 /* TideySettingsWindowController.m in Sources */,
+				F0A10D1E3A4000010000000F /* TideyTerminalAppearanceProfileAdapter.m in Sources */,
 				F0A10D1E3A2800010000000F /* TideySocketCommandDecoder.m in Sources */,
 				A7B100132F0A000100000001 /* TideySocketServer.m in Sources */,
+				F0A10D1E3A4000010000000B /* TideyTerminalAppearanceViewController.m in Sources */,
 				A62C8FC3248033C000E22E95 /* iTermTmuxJobManager.m in Sources */,
 				A65B1BD52D1E3CC800F5A740 /* iTermMTKView.swift in Sources */,
 				A63011B220E7EE62008114B7 /* iTermStatusBarKnobNumericViewController.m in Sources */,
