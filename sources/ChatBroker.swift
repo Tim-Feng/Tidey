@@ -117,6 +117,11 @@ class ChatBroker {
                 return
             }
         }
+        // Ensure the in-memory cache is initialized before appending.
+        // Without this, early-return paths in append() (e.g. .append, .commit)
+        // use createIfNeeded:false and skip cache init, so snippet(forChatID:)
+        // falls back to the database which may not yet reflect the new message.
+        _ = listModel.messages(forChat: chatID, createIfNeeded: true)
         try listModel.append(message: processed, toChatID: chatID)
         for sub in subs {
             if sub.chatID == chatID || sub.chatID == nil {

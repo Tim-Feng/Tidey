@@ -147,6 +147,10 @@
 - Claude hook 不要靠 terminal output 猜狀態
   - 用明確事件：`session-start`、`prompt-submit`、`notification`、`stop`、`session-end`
 - hook command 只要含空白路徑就要先 escape
+- `ChatBroker.publish()` 要在 `append()` 前先 init cache
+  - `ChatListModel.append()` 的 early-return 路徑（`.append`、`.commit` 等）用 `createIfNeeded: false`
+  - 如果 cache 尚未 init，sidebar `snippet(forChatID:)` 會 fallback 到 DB，讀到舊資料
+  - 解法：在 `publish()` 呼叫 `messages(forChat:createIfNeeded: true)` 確保 cache 存在
 
 ## Theme System
 
