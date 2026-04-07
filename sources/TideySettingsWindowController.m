@@ -71,6 +71,7 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
                                                        defer:NO];
     self = [super initWithWindow:window];
     if (self) {
+        window.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
         window.title = @"Settings";
         window.backgroundColor = [NSColor colorWithSRGBRed:0x1a/255.0 green:0x1a/255.0 blue:0x1a/255.0 alpha:1.0];
         [window center];

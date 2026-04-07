@@ -1401,6 +1401,9 @@ void TurnOnDebugLoggingAutomatically(void) {
     }
     DLog(@"didFinishLaunching");
 
+    // Force dark appearance for entire app — Tidey is a terminal app, always dark.
+    NSApp.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+
     suUpdater.automaticallyChecksForUpdates = YES;
     suUpdater.automaticallyDownloadsUpdates = NO;
 

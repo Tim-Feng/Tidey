@@ -171,6 +171,7 @@ iTermWindowType iTermWindowTypeNormalized(iTermWindowType windowType) {
                                                                    styleMask:styleMask
                                                                      backing:NSBackingStoreBuffered
                                                                        defer:defer];
+    myWindow.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
     myWindow.collectionBehavior = [self desiredWindowCollectionBehavior];
     if (@available(macOS 26, *)) {
         // macOS 26 forces me to use the .titled window style and set
