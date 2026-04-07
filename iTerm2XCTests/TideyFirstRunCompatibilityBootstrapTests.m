@@ -16,6 +16,7 @@
 + (NSDictionary *)tideyGhosttyProfileUpdatesForConfigContents:(NSString *)contents;
 + (NSDictionary *)tideyKittyProfileUpdatesForConfigContents:(NSString *)contents;
 + (NSDictionary *)tideyAlacrittyProfileUpdatesForConfigContents:(NSString *)contents;
++ (NSDictionary *)tideyProfileUpdatesForArchivedFont:(NSFont *)font;
 @end
 
 @interface TideyFirstRunCompatibilityBootstrapTests : XCTestCase
@@ -158,6 +159,13 @@
     XCTAssertNotNil(updates[KEY_BACKGROUND_COLOR]);
     XCTAssertNotNil(updates[ansi0Key]);
     XCTAssertNotNil(updates[ansi15Key]);
+}
+
+- (void)testArchivedDotFontIsRejected {
+    NSFont *font = [NSFont systemFontOfSize:11];
+    NSDictionary *updates = [TideyFirstRunCompatibilityBootstrap tideyProfileUpdatesForArchivedFont:font];
+    XCTAssertTrue([font.fontName hasPrefix:@"."]);
+    XCTAssertEqual(updates.count, 0);
 }
 
 @end

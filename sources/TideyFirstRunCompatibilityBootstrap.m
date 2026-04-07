@@ -11,6 +11,7 @@ static NSString *const kTideyFirstRunBootstrapSource = @"TideyFirstRunBootstrapS
 
 @implementation TideyFirstRunCompatibilityBootstrap
 
+
 + (nullable NSString *)tideyBootstrapSourceForAlreadyDone:(BOOL)done
                              defaultBookmarkUntouched:(BOOL)untouched
                                         importedSource:(NSString *)importedSource {
@@ -60,6 +61,19 @@ static NSString *const kTideyFirstRunBootstrapSource = @"TideyFirstRunBootstrapS
 
 + (NSDictionary *)tideyAlacrittyProfileUpdatesForConfigContents:(NSString *)contents {
     return [[self sharedInstance] alacrittyProfileUpdatesForConfigContents:contents];
+}
+
++ (NSDictionary *)tideyProfileUpdatesForArchivedFont:(NSFont *)font {
+    if (!font) {
+        return @{};
+    }
+    NSData *data = nil;
+    @try {
+        data = [NSKeyedArchiver archivedDataWithRootObject:font];
+    } @catch (NSException *exception) {
+        data = nil;
+    }
+    return [[[self sharedInstance] profileUpdatesForArchivedFontData:data] copy] ?: @{};
 }
 
 + (instancetype)sharedInstance {
@@ -262,12 +276,43 @@ static NSString *const kTideyFirstRunBootstrapSource = @"TideyFirstRunBootstrapS
 }
 
 - (void)applyCompatibilityDarkPreset {
-    ProfileModel *model = [ProfileModel sharedInstance];
-    Profile *profile = [model defaultBookmark];
-    if (!profile) {
-        return;
+    // Tidey 靜水深流（Still Water Runs Deep）和色 palette
+    // 色碼 source of truth: TideyPalette.h
+    NSMutableDictionary *updates = [NSMutableDictionary dictionary];
+
+    // Font: Menlo-Regular 14pt (PostScript name required by iTerm2 font parser)
+    NSDictionary *fontUpdates = [self profileUpdatesForFontName:@"Menlo-Regular" size:14];
+    if (fontUpdates) {
+        [updates addEntriesFromDictionary:fontUpdates];
     }
-    [model addColorPresetNamed:@"Dark Background" toProfile:profile];
+
+    // Core colors
+    [updates addEntriesFromDictionary:[self profileColorUpdateForHexString:@"#0B1013" targetKey:KEY_BACKGROUND_COLOR]];   // 黒橡
+    [updates addEntriesFromDictionary:[self profileColorUpdateForHexString:@"#EAF4FC" targetKey:KEY_FOREGROUND_COLOR]];   // 月白
+    [updates addEntriesFromDictionary:[self profileColorUpdateForHexString:@"#58B2DC" targetKey:KEY_CURSOR_COLOR]];       // 空
+    [updates addEntriesFromDictionary:[self profileColorUpdateForHexString:@"#274A78" targetKey:KEY_SELECTION_COLOR]];     // 青藍
+
+    // ANSI Normal 0-7
+    [updates addEntriesFromDictionary:[self profileColorUpdateForHexString:@"#181B26" targetKey:[NSString stringWithFormat:KEYTEMPLATE_ANSI_X_COLOR, 0]]];   // 勝色
+    [updates addEntriesFromDictionary:[self profileColorUpdateForHexString:@"#CB4042" targetKey:[NSString stringWithFormat:KEYTEMPLATE_ANSI_X_COLOR, 1]]];   // 紅緋
+    [updates addEntriesFromDictionary:[self profileColorUpdateForHexString:@"#839B5C" targetKey:[NSString stringWithFormat:KEYTEMPLATE_ANSI_X_COLOR, 2]]];   // 松葉
+    [updates addEntriesFromDictionary:[self profileColorUpdateForHexString:@"#CAAD5F" targetKey:[NSString stringWithFormat:KEYTEMPLATE_ANSI_X_COLOR, 3]]];   // 芥子
+    [updates addEntriesFromDictionary:[self profileColorUpdateForHexString:@"#5B7E91" targetKey:[NSString stringWithFormat:KEYTEMPLATE_ANSI_X_COLOR, 4]]];   // 花
+    [updates addEntriesFromDictionary:[self profileColorUpdateForHexString:@"#8B81C3" targetKey:[NSString stringWithFormat:KEYTEMPLATE_ANSI_X_COLOR, 5]]];   // 紫苑
+    [updates addEntriesFromDictionary:[self profileColorUpdateForHexString:@"#5C9291" targetKey:[NSString stringWithFormat:KEYTEMPLATE_ANSI_X_COLOR, 6]]];   // 錆浅葱
+    [updates addEntriesFromDictionary:[self profileColorUpdateForHexString:@"#91989F" targetKey:[NSString stringWithFormat:KEYTEMPLATE_ANSI_X_COLOR, 7]]];   // 銀鼠
+
+    // ANSI Bright 8-15
+    [updates addEntriesFromDictionary:[self profileColorUpdateForHexString:@"#656765" targetKey:[NSString stringWithFormat:KEYTEMPLATE_ANSI_X_COLOR, 8]]];   // 涅
+    [updates addEntriesFromDictionary:[self profileColorUpdateForHexString:@"#E87A90" targetKey:[NSString stringWithFormat:KEYTEMPLATE_ANSI_X_COLOR, 9]]];   // 薄紅
+    [updates addEntriesFromDictionary:[self profileColorUpdateForHexString:@"#68BE8D" targetKey:[NSString stringWithFormat:KEYTEMPLATE_ANSI_X_COLOR, 10]]];  // 若竹
+    [updates addEntriesFromDictionary:[self profileColorUpdateForHexString:@"#FFB11B" targetKey:[NSString stringWithFormat:KEYTEMPLATE_ANSI_X_COLOR, 11]]];  // 蒲公英
+    [updates addEntriesFromDictionary:[self profileColorUpdateForHexString:@"#58B2DC" targetKey:[NSString stringWithFormat:KEYTEMPLATE_ANSI_X_COLOR, 12]]];  // 空
+    [updates addEntriesFromDictionary:[self profileColorUpdateForHexString:@"#E7609E" targetKey:[NSString stringWithFormat:KEYTEMPLATE_ANSI_X_COLOR, 13]]];  // 牡丹
+    [updates addEntriesFromDictionary:[self profileColorUpdateForHexString:@"#70C5BA" targetKey:[NSString stringWithFormat:KEYTEMPLATE_ANSI_X_COLOR, 14]]];  // 水浅葱
+    [updates addEntriesFromDictionary:[self profileColorUpdateForHexString:@"#EAF4FC" targetKey:[NSString stringWithFormat:KEYTEMPLATE_ANSI_X_COLOR, 15]]];  // 月白
+
+    [self applyProfileUpdates:updates];
 }
 
 - (nullable NSFont *)installedFontWithName:(NSString *)fontName size:(CGFloat)size {
@@ -331,6 +376,9 @@ static NSString *const kTideyFirstRunBootstrapSource = @"TideyFirstRunBootstrapS
         return nil;
     }
     NSFont *font = object;
+    if ([font.fontName hasPrefix:@"."]) {
+        return nil;
+    }
     if (![self installedFontWithName:font.fontName size:font.pointSize]) {
         return nil;
     }
@@ -396,7 +444,6 @@ static NSString *const kTideyFirstRunBootstrapSource = @"TideyFirstRunBootstrapS
     if (updates.count == 0) {
         return NO;
     }
-    [self applyCompatibilityDarkPreset];
     [self applyProfileUpdates:updates];
     return YES;
 }
