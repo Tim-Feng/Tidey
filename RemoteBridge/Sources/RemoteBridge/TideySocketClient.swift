@@ -12,25 +12,13 @@ final class TideySocketClient {
             throw BridgeInternalError.socketUnavailable
         }
         let fd = try Self.connectUnixSocket(path: socketPath)
-        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        defer { close(fd) }
         let data = try JSONSerialization.data(withJSONObject: request.tideySocketJSONObject)
         var payload = data
         payload.append(0x0a)
-        try handle.write(contentsOf: payload)
-
-        var buffer = Data()
-        while true {
-            let chunk = try handle.read(upToCount: 4096) ?? Data()
-            if chunk.isEmpty {
-                break
-            }
-            buffer.append(chunk)
-            if let newline = buffer.firstIndex(of: 0x0a) {
-                let line = buffer.prefix(upTo: newline)
-                return try JSONDecoder().decode(BridgeResponse.self, from: line)
-            }
-        }
-        throw BridgeInternalError.invalidResponse
+        try Self.writeAll(payload, to: fd)
+        let line = try Self.readLine(from: fd)
+        return try JSONDecoder().decode(BridgeResponse.self, from: line)
     }
 
     private static func connectUnixSocket(path: String) throws -> Int32 {
@@ -41,9 +29,10 @@ final class TideySocketClient {
         guard !utf8.isEmpty && utf8.count < maxLength else {
             throw BridgeInternalError.socketUnavailable
         }
+        let addressLength = socklen_t((MemoryLayout<sockaddr_un>.offset(of: \.sun_path) ?? 0) + utf8.count + 1)
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else {
-            throw POSIXError(.ECONNREFUSED)
+            throw Self.currentPOSIXError(defaultCode: .ECONNREFUSED)
         }
         var timeout = timeval(tv_sec: 2, tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
@@ -58,14 +47,62 @@ final class TideySocketClient {
         }
         let result = withUnsafePointer(to: &addr) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+                connect(fd, $0, addressLength)
             }
         }
         guard result == 0 else {
-            let error = POSIXError(POSIXErrorCode(rawValue: errno) ?? .ECONNREFUSED)
+            let error = Self.currentPOSIXError(defaultCode: .ECONNREFUSED)
             close(fd)
             throw error
         }
         return fd
+    }
+
+    private static func writeAll(_ data: Data, to fd: Int32) throws {
+        try data.withUnsafeBytes { rawBuffer in
+            guard let baseAddress = rawBuffer.baseAddress else {
+                return
+            }
+            var bytesWritten = 0
+            while bytesWritten < rawBuffer.count {
+                let pointer = baseAddress.advanced(by: bytesWritten)
+                let result = write(fd, pointer, rawBuffer.count - bytesWritten)
+                if result > 0 {
+                    bytesWritten += result
+                    continue
+                }
+                if result == -1 && errno == EINTR {
+                    continue
+                }
+                throw currentPOSIXError(defaultCode: .EIO)
+            }
+        }
+    }
+
+    private static func readLine(from fd: Int32) throws -> Data {
+        var buffer = Data()
+        var chunk = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let count = read(fd, &chunk, chunk.count)
+            if count > 0 {
+                buffer.append(chunk, count: count)
+                if let newline = buffer.firstIndex(of: 0x0a) {
+                    return buffer.prefix(upTo: newline)
+                }
+                continue
+            }
+            if count == 0 {
+                break
+            }
+            if errno == EINTR {
+                continue
+            }
+            throw currentPOSIXError(defaultCode: .EIO)
+        }
+        throw BridgeInternalError.invalidResponse
+    }
+
+    private static func currentPOSIXError(defaultCode: POSIXErrorCode) -> POSIXError {
+        POSIXError(POSIXErrorCode(rawValue: errno) ?? defaultCode)
     }
 }
