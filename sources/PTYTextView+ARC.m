@@ -344,7 +344,6 @@ iTermCommandInfoViewControllerDelegate>
     }
     x = MAX(0, MIN(x, limit));
     y = MAX(0, MIN(y, [self.dataSource numberOfLines] - 1));
-
     return VT100GridCoordMake(x, y);
 }
 

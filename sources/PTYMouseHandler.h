@@ -119,6 +119,7 @@ dragSemanticHistoryWithEvent:(NSEvent *)event
 - (id<iTermSwipeHandler>)mouseHandlerSwipeHandler:(PTYMouseHandler *)sender;
 - (CGSize)mouseHandlerAccumulatedDelta:(PTYMouseHandler *)sender forEvent:(NSEvent *)event;
 - (long long)mouseHandlerTotalScrollbackOverflow:(PTYMouseHandler *)sender;
+- (int)mouseHandlerNumberOfScrollbackLines:(PTYMouseHandler *)sender;
 - (void)mouseHandlerSetClickCoord:(VT100GridCoord)coord
                            button:(NSInteger)button
                             count:(NSInteger)count

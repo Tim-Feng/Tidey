@@ -7452,6 +7452,10 @@ dragSemanticHistoryWithEvent:(NSEvent *)event
     return _dataSource.totalScrollbackOverflow;
 }
 
+- (int)mouseHandlerNumberOfScrollbackLines:(nonnull PTYMouseHandler *)sender {
+    return _dataSource.numberOfScrollbackLines;
+}
+
 - (void)mouseHandlerSetClickCoord:(VT100GridCoord)coord
                            button:(NSInteger)button
                             count:(NSInteger)count

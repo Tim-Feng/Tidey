@@ -894,6 +894,7 @@ static const int kMaxScreenRows = 4096;
                         const int x = [_delegate terminalCursorX];
                         const int y = [_delegate terminalCursorY];
                         [_delegate terminalShowPrimaryBuffer];
+                        [self resetMouseReportingAfterReturningToPrimaryScreen];
                         [_delegate terminalSetCursorX:x];
                         [_delegate terminalSetCursorY:y];
                     }
@@ -915,6 +916,7 @@ static const int kMaxScreenRows = 4096;
                         const int x = [_delegate terminalCursorX];
                         const int y = [_delegate terminalCursorY];
                         [_delegate terminalShowPrimaryBuffer];
+                        [self resetMouseReportingAfterReturningToPrimaryScreen];
                         [_delegate terminalSetCursorX:x];
                         [_delegate terminalSetCursorY:y];
                     }
@@ -948,6 +950,7 @@ static const int kMaxScreenRows = 4096;
                         [_delegate terminalMoveCursorToX:1 y:1];
                     } else {
                         [_delegate terminalShowPrimaryBuffer];
+                        [self resetMouseReportingAfterReturningToPrimaryScreen];
                         [self restoreCursor];
                     }
                 }
@@ -1221,6 +1224,15 @@ static const int kMaxScreenRows = 4096;
     }
     _mouseMode = mode;
     [_delegate terminalMouseModeDidChangeTo:_mouseMode];
+}
+
+- (void)resetMouseReportingAfterReturningToPrimaryScreen {
+    if (_mouseMode != MOUSE_REPORTING_NONE) {
+        self.mouseMode = MOUSE_REPORTING_NONE;
+    }
+    if (_mouseFormat != MOUSE_FORMAT_XTERM) {
+        self.mouseFormat = MOUSE_FORMAT_XTERM;
+    }
 }
 
 - (void)handleDeviceStatusReportWithToken:(VT100Token *)token withQuestion:(BOOL)withQuestion {
@@ -4528,6 +4540,7 @@ static NSString *VT100GetURLParamForKey(NSString *params, NSString *key) {
         case 'A':
             // Sequence marking the start of the command prompt (FTCS_PROMPT_START)
             self.softAlternateScreenMode = NO;  // We can reasonably assume alternate screen mode has ended if there's a prompt. Could be ssh dying, etc.
+            [self resetMouseReportingAfterReturningToPrimaryScreen];
             self.dirty = YES;
             const BOOL wasInCommand = inCommand_;
             inCommand_ = NO;  // Issue 7954
