@@ -1022,6 +1022,10 @@
 		TIDEAPP0001A00000000002 /* TideyAppShortcutBehaviorTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEAPP0001A00000000000 /* TideyAppShortcutBehaviorTests.m */; };
 		TIDEBOOT0001A00000000001 /* TideyFirstRunCompatibilityBootstrapTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEBOOT0001A00000000000 /* TideyFirstRunCompatibilityBootstrapTests.m */; };
 		TIDEBOOT0001A00000000002 /* TideyFirstRunCompatibilityBootstrapTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEBOOT0001A00000000000 /* TideyFirstRunCompatibilityBootstrapTests.m */; };
+		TIDEMOUSE0001A00000000001 /* PTYMouseHandlerSelectionTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEMOUSE0001A00000000000 /* PTYMouseHandlerSelectionTests.m */; };
+		TIDEMOUSE0001A00000000002 /* PTYMouseHandlerSelectionTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEMOUSE0001A00000000000 /* PTYMouseHandlerSelectionTests.m */; };
+		TIDESOCK0001A00000000001 /* TideySocketServerTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDESOCK0001A00000000000 /* TideySocketServerTests.m */; };
+		TIDESOCK0001A00000000002 /* TideySocketServerTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDESOCK0001A00000000000 /* TideySocketServerTests.m */; };
 		TIDECFG0001A00000000001 /* TideyReleaseConfigTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDECFG0001A00000000000 /* TideyReleaseConfigTests.m */; };
 		TIDECFG0001A00000000002 /* TideyReleaseConfigTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDECFG0001A00000000000 /* TideyReleaseConfigTests.m */; };
 		F0A10D1E3A33000100000001 /* TideyLoginShellCommandTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A33000100000000 /* TideyLoginShellCommandTests.m */; };
@@ -6442,6 +6446,8 @@
 		TIDE7B00001A000000000000 /* TideyBrowserPanelTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyBrowserPanelTests.m; sourceTree = "<group>"; };
 		TIDEAPP0001A00000000000 /* TideyAppShortcutBehaviorTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyAppShortcutBehaviorTests.m; sourceTree = "<group>"; };
 		TIDEBOOT0001A00000000000 /* TideyFirstRunCompatibilityBootstrapTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyFirstRunCompatibilityBootstrapTests.m; sourceTree = "<group>"; };
+		TIDEMOUSE0001A00000000000 /* PTYMouseHandlerSelectionTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = PTYMouseHandlerSelectionTests.m; sourceTree = "<group>"; };
+		TIDESOCK0001A00000000000 /* TideySocketServerTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySocketServerTests.m; sourceTree = "<group>"; };
 		TIDECFG0001A00000000000 /* TideyReleaseConfigTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyReleaseConfigTests.m; sourceTree = "<group>"; };
 		F0A10D1E3A33000100000000 /* TideyLoginShellCommandTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyLoginShellCommandTests.m; sourceTree = "<group>"; };
 		F0A10D1E3A35000100000000 /* TideySidebarCloseButtonTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySidebarCloseButtonTests.m; sourceTree = "<group>"; };
@@ -13721,6 +13727,8 @@
 				TIDE7B00001A000000000000 /* TideyBrowserPanelTests.m */,
 				TIDEAPP0001A00000000000 /* TideyAppShortcutBehaviorTests.m */,
 				TIDEBOOT0001A00000000000 /* TideyFirstRunCompatibilityBootstrapTests.m */,
+				TIDEMOUSE0001A00000000000 /* PTYMouseHandlerSelectionTests.m */,
+				TIDESOCK0001A00000000000 /* TideySocketServerTests.m */,
 				TIDECFG0001A00000000000 /* TideyReleaseConfigTests.m */,
 				F0A10D1E3A33000100000000 /* TideyLoginShellCommandTests.m */,
 				F0A10D1E3A35000100000000 /* TideySidebarCloseButtonTests.m */,
@@ -20300,6 +20308,8 @@
 			files = (
 				TIDEAPP0001A00000000002 /* TideyAppShortcutBehaviorTests.m in Sources */,
 				TIDEBOOT0001A00000000002 /* TideyFirstRunCompatibilityBootstrapTests.m in Sources */,
+				TIDEMOUSE0001A00000000002 /* PTYMouseHandlerSelectionTests.m in Sources */,
+				TIDESOCK0001A00000000002 /* TideySocketServerTests.m in Sources */,
 				TIDECFG0001A00000000002 /* TideyReleaseConfigTests.m in Sources */,
 				A6C811F42DCFD5E40088E628 /* SearchEngineTests.swift in Sources */,
 				A77D8D50729267B406541654 /* AccessibilityDeletionDetectionTests.swift in Sources */,
@@ -20580,6 +20590,8 @@
 				F0A10D1E3A37000100000001 /* TideyBrowserTabTests.m in Sources */,
 				TIDEAPP0001A00000000001 /* TideyAppShortcutBehaviorTests.m in Sources */,
 				TIDEBOOT0001A00000000001 /* TideyFirstRunCompatibilityBootstrapTests.m in Sources */,
+				TIDEMOUSE0001A00000000001 /* PTYMouseHandlerSelectionTests.m in Sources */,
+				TIDESOCK0001A00000000001 /* TideySocketServerTests.m in Sources */,
 				TIDECFG0001A00000000001 /* TideyReleaseConfigTests.m in Sources */,
 				F0A10D1E3A33000100000001 /* TideyLoginShellCommandTests.m in Sources */,
 				F0A10D1E3A35000100000001 /* TideySidebarCloseButtonTests.m in Sources */,

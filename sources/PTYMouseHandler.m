@@ -1597,3 +1597,13 @@ static double EuclideanDistance(NSPoint p1, NSPoint p2) {
 }
 
 @end
+
+@implementation PTYMouseHandler (Testing)
+
++ (long long)tideySelectionAbsoluteYForSelectionY:(int)selectionY
+                                         overflow:(long long)overflow
+                          numberOfScrollbackLines:(int)numberOfScrollbackLines {
+    return selectionY + overflow + numberOfScrollbackLines;
+}
+
+@end

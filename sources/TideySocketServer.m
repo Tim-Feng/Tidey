@@ -70,10 +70,20 @@ static NSInteger TideySocketIntegerParam(NSDictionary *params, NSString *key, NS
     return defaultValue;
 }
 
+typedef BOOL (^TideySocketSendInputHandler)(NSString *workspaceID, NSString *input);
+typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *workspaceID);
+
 @interface TideySocketServer ()
 @property(nonatomic, strong) iTermSocket *socket;
 @property(nonatomic, strong) NSMutableSet<TideySocketConnection *> *connections;
 @property(nonatomic) BOOL started;
+@end
+
+@interface TideySocketServer (Testing)
++ (nullable NSDictionary *)tideyResponseForRequestMessage:(NSDictionary *)message
+                                       workspaceSummaries:(NSArray<NSDictionary *> *)workspaceSummaries
+                                         sendInputHandler:(nullable TideySocketSendInputHandler)sendInputHandler
+                                     recentOutputProvider:(nullable TideySocketRecentOutputProvider)recentOutputProvider;
 @end
 
 @implementation TideySocketServer
@@ -237,39 +247,32 @@ static NSInteger TideySocketIntegerParam(NSDictionary *params, NSString *key, NS
 }
 
 - (void)handleRequestMessage:(NSDictionary *)message onConnection:(TideySocketConnection *)connection {
-    NSString *requestID = [message[@"id"] isKindOfClass:[NSString class]] ? message[@"id"] : nil;
-    NSString *action = [message[@"action"] isKindOfClass:[NSString class]] ? message[@"action"] : nil;
-    if (requestID.length == 0 || action.length == 0) {
-        [self sendErrorResponseForRequestID:requestID
-                                       code:@"invalid_request"
-                                    message:@"Missing request id or action."
-                               onConnection:connection];
-        return;
+    NSMutableArray<NSDictionary *> *workspaces = [NSMutableArray array];
+    for (PseudoTerminal *term in [[iTermController sharedInstance] terminals]) {
+        [workspaces addObjectsFromArray:[term tideySocketWorkspaceSummaries]];
     }
-
-    if ([action isEqualToString:@"ping"]) {
-        [self sendSuccessResponseForRequestID:requestID
-                                       result:@{ @"pong": @YES }
-                                  onConnection:connection];
-        return;
+    NSDictionary *response = [TideySocketServer tideyResponseForRequestMessage:message
+                                                            workspaceSummaries:workspaces
+                                                              sendInputHandler:^BOOL(NSString *workspaceID, NSString *input) {
+                                                                  for (PseudoTerminal *term in [[iTermController sharedInstance] terminals]) {
+                                                                      if ([term tideySendInput:input toWorkspaceWithIdentifier:workspaceID]) {
+                                                                          return YES;
+                                                                      }
+                                                                  }
+                                                                  return NO;
+                                                              }
+                                                          recentOutputProvider:^NSString * _Nullable(NSString *workspaceID) {
+                                                              for (PseudoTerminal *term in [[iTermController sharedInstance] terminals]) {
+                                                                  NSString *output = [term tideyRecentOutputForWorkspaceIdentifier:workspaceID];
+                                                                  if (output) {
+                                                                      return output;
+                                                                  }
+                                                              }
+                                                              return nil;
+                                                          }];
+    if (response) {
+        [connection sendJSONObject:response];
     }
-    if ([action isEqualToString:@"list_workspaces"]) {
-        [self handleListWorkspacesRequestWithID:requestID onConnection:connection];
-        return;
-    }
-    if ([action isEqualToString:@"send_input"]) {
-        [self handleSendInputRequest:message requestID:requestID onConnection:connection];
-        return;
-    }
-    if ([action isEqualToString:@"get_recent_output"]) {
-        [self handleGetRecentOutputRequest:message requestID:requestID onConnection:connection];
-        return;
-    }
-
-    [self sendErrorResponseForRequestID:requestID
-                                   code:@"unsupported_action"
-                                message:[NSString stringWithFormat:@"Unsupported request action: %@", action]
-                           onConnection:connection];
 }
 
 - (void)handleListWorkspacesRequestWithID:(NSString *)requestID
@@ -366,6 +369,107 @@ static NSInteger TideySocketIntegerParam(NSDictionary *params, NSString *key, NS
         trimmed = [trimmed substringFromIndex:trimmed.length - maxChars];
     }
     return trimmed;
+}
+
++ (NSString *)tideyTrimmedRecentOutput:(NSString *)output maxLines:(NSInteger)maxLines maxChars:(NSInteger)maxChars {
+    TideySocketServer *server = [[self alloc] init];
+    return [server trimmedRecentOutput:output maxLines:maxLines maxChars:maxChars];
+}
+
++ (NSDictionary *)tideySuccessResponseForRequestID:(NSString *)requestID result:(NSDictionary *)result {
+    if (requestID.length == 0) {
+        return nil;
+    }
+    return @{
+        @"id": requestID,
+        @"ok": @YES,
+        @"result": result ?: @{},
+    };
+}
+
++ (NSDictionary *)tideyErrorResponseForRequestID:(NSString *)requestID code:(NSString *)code message:(NSString *)message {
+    NSMutableDictionary *response = [NSMutableDictionary dictionaryWithDictionary:@{
+        @"ok": @NO,
+        @"error": @{
+            @"code": code ?: @"unknown_error",
+            @"message": message ?: @"Unknown error",
+        },
+    }];
+    if (requestID.length > 0) {
+        response[@"id"] = requestID;
+    }
+    return response;
+}
+
++ (NSDictionary *)tideyResponseForRequestMessage:(NSDictionary *)message
+                               workspaceSummaries:(NSArray<NSDictionary *> *)workspaceSummaries
+                                 sendInputHandler:(TideySocketSendInputHandler)sendInputHandler
+                             recentOutputProvider:(TideySocketRecentOutputProvider)recentOutputProvider {
+    NSString *requestID = [message[@"id"] isKindOfClass:[NSString class]] ? message[@"id"] : nil;
+    NSString *action = [message[@"action"] isKindOfClass:[NSString class]] ? message[@"action"] : nil;
+    if (requestID.length == 0 || action.length == 0) {
+        return [self tideyErrorResponseForRequestID:requestID
+                                               code:@"invalid_request"
+                                            message:@"Missing request id or action."];
+    }
+
+    if ([action isEqualToString:@"ping"]) {
+        return [self tideySuccessResponseForRequestID:requestID result:@{ @"pong": @YES }];
+    }
+    if ([action isEqualToString:@"list_workspaces"]) {
+        return [self tideySuccessResponseForRequestID:requestID
+                                               result:@{ @"workspaces": workspaceSummaries ?: @[] }];
+    }
+
+    NSDictionary *params = [message[@"params"] isKindOfClass:[NSDictionary class]] ? message[@"params"] : nil;
+    NSDictionary *source = params ?: message;
+
+    if ([action isEqualToString:@"send_input"]) {
+        NSString *workspaceID = TideySocketStringParam(source, @"workspace_id");
+        NSString *input = TideySocketStringParam(source, @"input");
+        if (workspaceID.length == 0 || input.length == 0) {
+            return [self tideyErrorResponseForRequestID:requestID
+                                                   code:@"invalid_params"
+                                                message:@"send_input requires workspace_id and input."];
+        }
+        if (sendInputHandler && sendInputHandler(workspaceID, input)) {
+            return [self tideySuccessResponseForRequestID:requestID result:@{ @"sent": @YES }];
+        }
+        return [self tideyErrorResponseForRequestID:requestID
+                                               code:@"workspace_not_found"
+                                            message:@"No terminal workspace accepted the input."];
+    }
+
+    if ([action isEqualToString:@"get_recent_output"]) {
+        NSString *workspaceID = TideySocketStringParam(source, @"workspace_id");
+        if (workspaceID.length == 0) {
+            return [self tideyErrorResponseForRequestID:requestID
+                                                   code:@"invalid_params"
+                                                message:@"get_recent_output requires workspace_id."];
+        }
+        NSInteger maxLines = TideySocketIntegerParam(source, @"max_lines", 200);
+        NSInteger maxChars = TideySocketIntegerParam(source, @"max_chars", 12000);
+        if (maxLines < 0) {
+            maxLines = 0;
+        }
+        if (maxChars < 0) {
+            maxChars = 0;
+        }
+        NSString *output = recentOutputProvider ? recentOutputProvider(workspaceID) : nil;
+        if (!output) {
+            return [self tideyErrorResponseForRequestID:requestID
+                                                   code:@"workspace_not_found"
+                                                message:@"No terminal workspace produced recent output."];
+        }
+        NSString *trimmed = [self tideyTrimmedRecentOutput:output maxLines:maxLines maxChars:maxChars];
+        return [self tideySuccessResponseForRequestID:requestID
+                                               result:@{ @"output": trimmed ?: @"",
+                                                         @"workspace_id": workspaceID }];
+    }
+
+    return [self tideyErrorResponseForRequestID:requestID
+                                           code:@"unsupported_action"
+                                        message:[NSString stringWithFormat:@"Unsupported request action: %@", action]];
 }
 
 - (void)sendSuccessResponseForRequestID:(NSString *)requestID
