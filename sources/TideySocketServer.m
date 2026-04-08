@@ -112,6 +112,8 @@ static NSInteger TideySocketIntegerParam(NSDictionary *params, NSString *key, NS
                               withIntermediateDirectories:YES
                                                attributes:@{ NSFilePosixPermissions: @(0700) }
                                                     error:nil];
+    [self cleanupStaleSockets:directory];
+
     NSString *defaultPath = TideyDefaultSocketPath();
     NSString *chosenPath = defaultPath;
     if (TideySocketPathHasLiveListener(defaultPath)) {
@@ -157,6 +159,21 @@ static NSInteger TideySocketIntegerParam(NSDictionary *params, NSString *key, NS
 
     self.started = YES;
     return YES;
+}
+
+- (void)cleanupStaleSockets:(NSString *)directory {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSArray<NSString *> *entries = [fm contentsOfDirectoryAtPath:directory error:nil];
+    for (NSString *entry in entries) {
+        if (![entry hasSuffix:@".sock"]) {
+            continue;
+        }
+        NSString *path = [directory stringByAppendingPathComponent:entry];
+        if (!TideySocketPathHasLiveListener(path)) {
+            DLog(@"Removing stale socket: %@", entry);
+            unlink(path.UTF8String);
+        }
+    }
 }
 
 - (void)acceptFileDescriptor:(int)fd {
