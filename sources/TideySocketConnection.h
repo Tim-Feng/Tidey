@@ -5,9 +5,10 @@ NS_ASSUME_NONNULL_BEGIN
 @interface TideySocketConnection : NSObject
 
 - (instancetype)initWithFileDescriptor:(int)fileDescriptor
-                        messageHandler:(void (^)(NSDictionary *message))messageHandler
+                        messageHandler:(void (^)(TideySocketConnection *connection, NSDictionary *message))messageHandler
                            closeHandler:(void (^)(TideySocketConnection *connection))closeHandler NS_DESIGNATED_INITIALIZER;
 - (instancetype)init NS_UNAVAILABLE;
+- (void)sendJSONObject:(NSDictionary *)object;
 - (void)close;
 
 @end

@@ -5,7 +5,7 @@
 @interface TideySocketConnection ()
 @property(nonatomic, strong) NSFileHandle *fileHandle;
 @property(nonatomic, strong) NSMutableData *buffer;
-@property(nonatomic, copy) void (^messageHandler)(NSDictionary *message);
+@property(nonatomic, copy) void (^messageHandler)(TideySocketConnection *connection, NSDictionary *message);
 @property(nonatomic, copy) void (^closeHandler)(TideySocketConnection *connection);
 @property(nonatomic) BOOL closed;
 @end
@@ -13,7 +13,7 @@
 @implementation TideySocketConnection
 
 - (instancetype)initWithFileDescriptor:(int)fileDescriptor
-                        messageHandler:(void (^)(NSDictionary *message))messageHandler
+                        messageHandler:(void (^)(TideySocketConnection *connection, NSDictionary *message))messageHandler
                           closeHandler:(void (^)(TideySocketConnection *connection))closeHandler {
     self = [super init];
     if (self) {
@@ -78,8 +78,28 @@
     }
     if (self.messageHandler) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            self.messageHandler(dict);
+            self.messageHandler(self, dict);
         });
+    }
+}
+
+- (void)sendJSONObject:(NSDictionary *)object {
+    if (self.closed || object.count == 0) {
+        return;
+    }
+    NSError *error = nil;
+    NSData *json = [NSJSONSerialization dataWithJSONObject:object options:0 error:&error];
+    if (!json) {
+        DLog(@"Ignoring Tidey socket response serialization failure: %@", error.localizedDescription);
+        return;
+    }
+    NSMutableData *payload = [json mutableCopy];
+    [payload appendData:[NSData dataWithBytes:"\n" length:1]];
+    @try {
+        [self.fileHandle writeData:payload];
+    } @catch (NSException *exception) {
+        DLog(@"Failed to write Tidey socket response: %@", exception);
+        [self close];
     }
 }
 

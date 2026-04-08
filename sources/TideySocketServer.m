@@ -54,6 +54,22 @@ static BOOL TideySocketPathHasLiveListener(NSString *path) {
     return connected;
 }
 
+static NSString *TideySocketStringParam(NSDictionary *params, NSString *key) {
+    id value = params[key];
+    return [value isKindOfClass:[NSString class]] ? value : nil;
+}
+
+static NSInteger TideySocketIntegerParam(NSDictionary *params, NSString *key, NSInteger defaultValue) {
+    id value = params[key];
+    if ([value isKindOfClass:[NSNumber class]]) {
+        return [value integerValue];
+    }
+    if ([value isKindOfClass:[NSString class]]) {
+        return [value integerValue];
+    }
+    return defaultValue;
+}
+
 @interface TideySocketServer ()
 @property(nonatomic, strong) iTermSocket *socket;
 @property(nonatomic, strong) NSMutableSet<TideySocketConnection *> *connections;
@@ -147,9 +163,9 @@ static BOOL TideySocketPathHasLiveListener(NSString *path) {
     __weak __typeof(self) weakSelf = self;
     TideySocketConnection *connection =
         [[TideySocketConnection alloc] initWithFileDescriptor:fd
-                                               messageHandler:^(NSDictionary *message) {
+                                               messageHandler:^(TideySocketConnection *connection, NSDictionary *message) {
                                                    __strong __typeof(weakSelf) strongSelf = weakSelf;
-                                                   [strongSelf handleMessage:message];
+                                                   [strongSelf handleMessage:message onConnection:connection];
                                                }
                                                  closeHandler:^(TideySocketConnection *closingConnection) {
                                                      __strong __typeof(weakSelf) strongSelf = weakSelf;
@@ -158,8 +174,13 @@ static BOOL TideySocketPathHasLiveListener(NSString *path) {
     [self.connections addObject:connection];
 }
 
-- (void)handleMessage:(NSDictionary *)message {
+- (void)handleMessage:(NSDictionary *)message onConnection:(TideySocketConnection *)connection {
     NSString *action = [message[@"action"] isKindOfClass:[NSString class]] ? message[@"action"] : nil;
+    NSString *requestID = [message[@"id"] isKindOfClass:[NSString class]] ? message[@"id"] : nil;
+    if (requestID.length > 0) {
+        [self handleRequestMessage:message onConnection:connection];
+        return;
+    }
 
     if ([action isEqualToString:@"set_status"]) {
         [self handleSetStatus:message];
@@ -196,6 +217,169 @@ static BOOL TideySocketPathHasLiveListener(NSString *path) {
                                                                    subtitle:command.subtitle
                                                                        body:command.body];
     [[TideyNotificationStore sharedStore] postSystemNotificationForItem:item];
+}
+
+- (void)handleRequestMessage:(NSDictionary *)message onConnection:(TideySocketConnection *)connection {
+    NSString *requestID = [message[@"id"] isKindOfClass:[NSString class]] ? message[@"id"] : nil;
+    NSString *action = [message[@"action"] isKindOfClass:[NSString class]] ? message[@"action"] : nil;
+    if (requestID.length == 0 || action.length == 0) {
+        [self sendErrorResponseForRequestID:requestID
+                                       code:@"invalid_request"
+                                    message:@"Missing request id or action."
+                               onConnection:connection];
+        return;
+    }
+
+    if ([action isEqualToString:@"ping"]) {
+        [self sendSuccessResponseForRequestID:requestID
+                                       result:@{ @"pong": @YES }
+                                  onConnection:connection];
+        return;
+    }
+    if ([action isEqualToString:@"list_workspaces"]) {
+        [self handleListWorkspacesRequestWithID:requestID onConnection:connection];
+        return;
+    }
+    if ([action isEqualToString:@"send_input"]) {
+        [self handleSendInputRequest:message requestID:requestID onConnection:connection];
+        return;
+    }
+    if ([action isEqualToString:@"get_recent_output"]) {
+        [self handleGetRecentOutputRequest:message requestID:requestID onConnection:connection];
+        return;
+    }
+
+    [self sendErrorResponseForRequestID:requestID
+                                   code:@"unsupported_action"
+                                message:[NSString stringWithFormat:@"Unsupported request action: %@", action]
+                           onConnection:connection];
+}
+
+- (void)handleListWorkspacesRequestWithID:(NSString *)requestID
+                             onConnection:(TideySocketConnection *)connection {
+    NSMutableArray<NSDictionary *> *workspaces = [NSMutableArray array];
+    for (PseudoTerminal *term in [[iTermController sharedInstance] terminals]) {
+        [workspaces addObjectsFromArray:[term tideySocketWorkspaceSummaries]];
+    }
+    [self sendSuccessResponseForRequestID:requestID
+                                   result:@{ @"workspaces": workspaces }
+                              onConnection:connection];
+}
+
+- (void)handleSendInputRequest:(NSDictionary *)message
+                     requestID:(NSString *)requestID
+                  onConnection:(TideySocketConnection *)connection {
+    NSDictionary *params = [message[@"params"] isKindOfClass:[NSDictionary class]] ? message[@"params"] : nil;
+    NSString *workspaceID = TideySocketStringParam(params ?: message, @"workspace_id");
+    NSString *input = TideySocketStringParam(params ?: message, @"input");
+    if (workspaceID.length == 0 || input.length == 0) {
+        [self sendErrorResponseForRequestID:requestID
+                                       code:@"invalid_params"
+                                    message:@"send_input requires workspace_id and input."
+                               onConnection:connection];
+        return;
+    }
+
+    for (PseudoTerminal *term in [[iTermController sharedInstance] terminals]) {
+        if ([term tideySendInput:input toWorkspaceWithIdentifier:workspaceID]) {
+            [self sendSuccessResponseForRequestID:requestID
+                                           result:@{ @"sent": @YES }
+                                      onConnection:connection];
+            return;
+        }
+    }
+
+    [self sendErrorResponseForRequestID:requestID
+                                   code:@"workspace_not_found"
+                                message:@"No terminal workspace accepted the input."
+                           onConnection:connection];
+}
+
+- (void)handleGetRecentOutputRequest:(NSDictionary *)message
+                           requestID:(NSString *)requestID
+                        onConnection:(TideySocketConnection *)connection {
+    NSDictionary *params = [message[@"params"] isKindOfClass:[NSDictionary class]] ? message[@"params"] : nil;
+    NSString *workspaceID = TideySocketStringParam(params ?: message, @"workspace_id");
+    if (workspaceID.length == 0) {
+        [self sendErrorResponseForRequestID:requestID
+                                       code:@"invalid_params"
+                                    message:@"get_recent_output requires workspace_id."
+                               onConnection:connection];
+        return;
+    }
+
+    NSInteger maxLines = TideySocketIntegerParam(params ?: message, @"max_lines", 200);
+    NSInteger maxChars = TideySocketIntegerParam(params ?: message, @"max_chars", 12000);
+    if (maxLines < 0) {
+        maxLines = 0;
+    }
+    if (maxChars < 0) {
+        maxChars = 0;
+    }
+
+    for (PseudoTerminal *term in [[iTermController sharedInstance] terminals]) {
+        NSString *output = [term tideyRecentOutputForWorkspaceIdentifier:workspaceID];
+        if (!output) {
+            continue;
+        }
+        NSString *trimmed = [self trimmedRecentOutput:output maxLines:maxLines maxChars:maxChars];
+        [self sendSuccessResponseForRequestID:requestID
+                                       result:@{ @"output": trimmed ?: @"",
+                                                 @"workspace_id": workspaceID }
+                                  onConnection:connection];
+        return;
+    }
+
+    [self sendErrorResponseForRequestID:requestID
+                                   code:@"workspace_not_found"
+                                message:@"No terminal workspace produced recent output."
+                           onConnection:connection];
+}
+
+- (NSString *)trimmedRecentOutput:(NSString *)output maxLines:(NSInteger)maxLines maxChars:(NSInteger)maxChars {
+    NSString *trimmed = output ?: @"";
+    if (maxLines > 0) {
+        NSArray<NSString *> *lines = [trimmed componentsSeparatedByString:@"\n"];
+        if ((NSInteger)lines.count > maxLines) {
+            lines = [lines subarrayWithRange:NSMakeRange(lines.count - maxLines, maxLines)];
+            trimmed = [lines componentsJoinedByString:@"\n"];
+        }
+    }
+    if (maxChars > 0 && (NSInteger)trimmed.length > maxChars) {
+        trimmed = [trimmed substringFromIndex:trimmed.length - maxChars];
+    }
+    return trimmed;
+}
+
+- (void)sendSuccessResponseForRequestID:(NSString *)requestID
+                                 result:(NSDictionary *)result
+                            onConnection:(TideySocketConnection *)connection {
+    if (requestID.length == 0) {
+        return;
+    }
+    NSMutableDictionary *response = [NSMutableDictionary dictionaryWithDictionary:@{
+        @"id": requestID,
+        @"ok": @YES,
+    }];
+    response[@"result"] = result ?: @{};
+    [connection sendJSONObject:response];
+}
+
+- (void)sendErrorResponseForRequestID:(NSString *)requestID
+                                 code:(NSString *)code
+                              message:(NSString *)message
+                         onConnection:(TideySocketConnection *)connection {
+    NSMutableDictionary *response = [NSMutableDictionary dictionaryWithDictionary:@{
+        @"ok": @NO,
+        @"error": @{
+            @"code": code ?: @"unknown_error",
+            @"message": message ?: @"Unknown error",
+        },
+    }];
+    if (requestID.length > 0) {
+        response[@"id"] = requestID;
+    }
+    [connection sendJSONObject:response];
 }
 
 - (void)handleReportShellState:(NSDictionary *)message {

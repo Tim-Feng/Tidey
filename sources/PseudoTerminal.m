@@ -1274,6 +1274,70 @@ ITERM_WEAKLY_REFERENCEABLE
     return NO;
 }
 
+- (NSArray<NSDictionary *> *)tideySocketWorkspaceSummaries {
+    [self ensureTideyWorkspacesInitialized];
+    NSMutableArray<NSDictionary *> *summaries = [NSMutableArray array];
+    for (NSInteger i = 0; i < (NSInteger)self.workspaces.count; i++) {
+        Workspace *workspace = self.workspaces[i];
+        PTYTab *panel = [[workspace.selectedPanel retain] autorelease];
+        PTYSession *session = [[panel.activeSession retain] autorelease];
+        NSString *workspaceID = [self tideyWorkspaceIdentifierForWorkspace:workspace] ?: @"";
+        NSString *title = [self rootTerminalViewTideySidebarWorkspaceTitleAtIndex:i] ?: @"Untitled";
+        NSString *subtitle = [self rootTerminalViewTideySidebarWorkspaceSubtitleAtIndex:i] ?: @"";
+        NSString *state = panel.isProcessing ? @"running" : @"idle";
+        NSMutableDictionary *summary = [NSMutableDictionary dictionaryWithDictionary:@{
+            @"workspace_id": workspaceID,
+            @"title": title,
+            @"subtitle": subtitle,
+            @"state": state,
+            @"selected": @(i == self.selectedWorkspaceIndex),
+            @"window_guid": self.terminalGuid ?: @"",
+            @"panel_count": @(workspace.panels.count),
+        }];
+        if (session.currentLocalWorkingDirectory.length > 0) {
+            summary[@"cwd"] = session.currentLocalWorkingDirectory;
+        }
+        [summaries addObject:summary];
+    }
+    return summaries;
+}
+
+- (PTYSession *)tideySelectedSessionForWorkspaceIdentifier:(NSString *)workspaceIdentifier {
+    if (workspaceIdentifier.length == 0) {
+        return nil;
+    }
+    [self ensureTideyWorkspacesInitialized];
+    for (NSInteger i = 0; i < (NSInteger)self.workspaces.count; i++) {
+        Workspace *workspace = self.workspaces[i];
+        if (![[self tideyWorkspaceIdentifierForWorkspace:workspace] isEqualToString:workspaceIdentifier]) {
+            continue;
+        }
+        PTYTab *panel = workspace.selectedPanel;
+        return panel.activeSession;
+    }
+    return nil;
+}
+
+- (BOOL)tideySendInput:(NSString *)input toWorkspaceWithIdentifier:(NSString *)workspaceIdentifier {
+    if (input.length == 0) {
+        return NO;
+    }
+    PTYSession *session = [self tideySelectedSessionForWorkspaceIdentifier:workspaceIdentifier];
+    if (!session || session.isBrowserSession) {
+        return NO;
+    }
+    [session writeTaskNoBroadcast:input];
+    return YES;
+}
+
+- (NSString *)tideyRecentOutputForWorkspaceIdentifier:(NSString *)workspaceIdentifier {
+    PTYSession *session = [self tideySelectedSessionForWorkspaceIdentifier:workspaceIdentifier];
+    if (!session || session.isBrowserSession) {
+        return nil;
+    }
+    return [session.screen compactLineDumpWithHistory];
+}
+
 - (void)tideyNotificationStoreDidChange:(NSNotification *)notification {
     NSString *workspaceID = notification.userInfo[@"workspaceID"];
     NSString *selectedWorkspaceID = [self tideySelectedWorkspaceIdentifier];

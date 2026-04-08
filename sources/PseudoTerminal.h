@@ -249,6 +249,18 @@ extern NSString *const iTermDidCreateTerminalWindowNotification;
 // Clear the socket-driven title override so the workspace falls back to defaults.
 - (void)tideyClearWorkspaceTitleForWorkspaceID:(NSString *)workspaceID;
 
+// Returns workspace summaries for socket clients.
+- (NSArray<NSDictionary *> *)tideySocketWorkspaceSummaries;
+
+// Returns the selected session for the workspace with the given identifier, if it exists.
+- (nullable PTYSession *)tideySelectedSessionForWorkspaceIdentifier:(NSString *)workspaceIdentifier;
+
+// Sends terminal input to the selected session for the given workspace. Returns YES on success.
+- (BOOL)tideySendInput:(NSString *)input toWorkspaceWithIdentifier:(NSString *)workspaceIdentifier;
+
+// Returns recent terminal output for the workspace's selected session, or nil if unavailable.
+- (nullable NSString *)tideyRecentOutputForWorkspaceIdentifier:(NSString *)workspaceIdentifier;
+
 // A unique number for this window assigned by finishInitializationWithSmartLayout.
 - (NSString *)terminalGuid;
 
