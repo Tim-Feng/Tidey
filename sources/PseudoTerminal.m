@@ -1345,21 +1345,41 @@ ITERM_WEAKLY_REFERENCEABLE
 
     NSMutableArray<NSString *> *rows = [NSMutableArray arrayWithCapacity:height];
     for (int y = 0; y < height; y++) {
-        const screen_char_t *line = [(VT100Grid *)grid screenCharsAtLineNumber:y];
+        const screen_char_t *line = [grid immutableScreenCharsAtLineNumber:y];
         NSMutableString *row = [NSMutableString stringWithCapacity:width];
         for (int x = 0; x < width; x++) {
-            if (ScreenCharIsDWC_RIGHT(line[x]) || ScreenCharIsDWC_SKIP(line[x])) {
+            const screen_char_t cell = line[x];
+            if (ScreenCharIsDWC_RIGHT(cell) || ScreenCharIsDWC_SKIP(cell)) {
                 continue;
             }
-            if (line[x].complexChar) {
-                NSString *s = ScreenCharToStr(&line[x]);
-                if (s) {
-                    [row appendString:s];
+
+            NSString *cellString = nil;
+            if (!cell.complexChar && cell.code == 0) {
+                cellString = @" ";
+            } else if (cell.image) {
+                continue;
+            } else if (!cell.complexChar &&
+                       cell.code >= ITERM2_PRIVATE_BEGIN &&
+                       cell.code <= ITERM2_PRIVATE_END) {
+                if (cell.code == TAB_FILLER) {
+                    cellString = @" ";
+                } else {
+                    continue;
                 }
-            } else if (line[x].code == 0) {
-                [row appendString:@" "];
-            } else if (line[x].code > 0) {
-                [row appendString:[NSString stringWithFormat:@"%C", line[x].code]];
+            } else {
+                cellString = ScreenCharToStr(&cell);
+                if (cellString.length == 0) {
+                    if (cell.complexChar) {
+                        cellString = ReplacementString();
+                    } else if (cell.code > 0) {
+                        const unichar code = cell.code;
+                        cellString = [NSString stringWithCharacters:&code length:1];
+                    }
+                }
+            }
+
+            if (cellString.length > 0) {
+                [row appendString:cellString];
             }
         }
 
