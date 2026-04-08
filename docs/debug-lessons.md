@@ -99,6 +99,12 @@
   - selection anchor 主要走這條，不是 `coordForPoint:`
 - URL hover / `cmd+click` 和文字選取不是同一路
   - URL hit testing 可以走 biased coord；文字選取不要跟著吃 bias
+- **`clickCoord` 和 `selectionCoord` 走不同座標系**
+  - `clickCoord` 走 `coordForPoint:`（document 座標，含 scrollback）
+  - `selectionCoord` 走 `mouseHandlerCoordForPointInView:`（screen-relative，已扣 `numberOfScrollbackLines`）
+  - `beginSelectionAtAbsCoord` 要用 `selectionY + overflow + numberOfScrollbackLines` 才正確
+  - 只加 `overflow` 會少 `numberOfScrollbackLines` 行，selection 起點偏上
+  - tmux detach 後特別容易觸發：primary buffer 恢復 scrollback，`numberOfScrollbackLines` 不再是 0
 - `locationInTextViewFromEvent` 的 `ceil(y)` 會在行邊界把 click 推到下一行
   - 這題要看 click / drag 實際吃的是哪條 path，再決定 rounding
 - `textView.frame.origin.y` 和 `topBottomMargins` 都會影響視覺起點
