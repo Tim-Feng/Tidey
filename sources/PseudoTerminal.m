@@ -1335,7 +1335,49 @@ ITERM_WEAKLY_REFERENCEABLE
     if (!session || session.isBrowserSession) {
         return nil;
     }
-    return [session.screen compactLineDumpWithHistory];
+    id<VT100GridReading> grid = [session.screen currentGrid];
+    if (!grid) {
+        return nil;
+    }
+    const VT100GridSize size = [grid size];
+    const int width = size.width;
+    const int height = size.height;
+
+    NSMutableArray<NSString *> *rows = [NSMutableArray arrayWithCapacity:height];
+    for (int y = 0; y < height; y++) {
+        const screen_char_t *line = [(VT100Grid *)grid screenCharsAtLineNumber:y];
+        NSMutableString *row = [NSMutableString stringWithCapacity:width];
+        for (int x = 0; x < width; x++) {
+            if (ScreenCharIsDWC_RIGHT(line[x]) || ScreenCharIsDWC_SKIP(line[x])) {
+                continue;
+            }
+            if (line[x].complexChar) {
+                NSString *s = ScreenCharToStr(&line[x]);
+                if (s) {
+                    [row appendString:s];
+                }
+            } else if (line[x].code == 0) {
+                [row appendString:@" "];
+            } else if (line[x].code > 0) {
+                [row appendString:[NSString stringWithFormat:@"%C", line[x].code]];
+            }
+        }
+
+        NSInteger trimmedLength = row.length;
+        while (trimmedLength > 0 && [row characterAtIndex:trimmedLength - 1] == ' ') {
+            trimmedLength--;
+        }
+        if (trimmedLength < row.length) {
+            [row deleteCharactersInRange:NSMakeRange(trimmedLength, row.length - trimmedLength)];
+        }
+        [rows addObject:row];
+    }
+
+    while (rows.count > 0 && rows.lastObject.length == 0) {
+        [rows removeLastObject];
+    }
+
+    return [rows componentsJoinedByString:@"\n"];
 }
 
 - (void)tideyNotificationStoreDidChange:(NSNotification *)notification {
