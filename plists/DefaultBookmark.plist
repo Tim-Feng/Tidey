@@ -1079,39 +1079,39 @@
 		<key>Alpha Component</key>
 		<real>1.0</real>
 		<key>Blue Component</key>
-		<real>0.47058823529411764</real>
+		<real>0.372549019607843</real>
 		<key>Color Space</key>
 		<string>sRGB</string>
 		<key>Green Component</key>
-		<real>0.2901960784313726</real>
+		<real>0.67843137254902</real>
 		<key>Red Component</key>
-		<real>0.15294117647058825</real>
+		<real>0.792156862745098</real>
 	</dict>
 	<key>Selection Color (Dark)</key>
 	<dict>
 		<key>Alpha Component</key>
 		<real>1.0</real>
 		<key>Blue Component</key>
-		<real>0.47058823529411764</real>
+		<real>0.372549019607843</real>
 		<key>Color Space</key>
 		<string>sRGB</string>
 		<key>Green Component</key>
-		<real>0.2901960784313726</real>
+		<real>0.67843137254902</real>
 		<key>Red Component</key>
-		<real>0.15294117647058825</real>
+		<real>0.792156862745098</real>
 	</dict>
 	<key>Selection Color (Light)</key>
 	<dict>
 		<key>Alpha Component</key>
 		<real>1.0</real>
 		<key>Blue Component</key>
-		<real>0.47058823529411764</real>
+		<real>0.372549019607843</real>
 		<key>Color Space</key>
 		<string>sRGB</string>
 		<key>Green Component</key>
-		<real>0.2901960784313726</real>
+		<real>0.67843137254902</real>
 		<key>Red Component</key>
-		<real>0.15294117647058825</real>
+		<real>0.792156862745098</real>
 	</dict>
 	<key>Send Code When Idle</key>
 	<false/>

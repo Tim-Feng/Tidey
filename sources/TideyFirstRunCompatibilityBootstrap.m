@@ -290,7 +290,7 @@ static NSString *const kTideyFirstRunBootstrapSource = @"TideyFirstRunBootstrapS
     [updates addEntriesFromDictionary:[self profileColorUpdateForHexString:@"#0B1013" targetKey:KEY_BACKGROUND_COLOR]];   // 黒橡
     [updates addEntriesFromDictionary:[self profileColorUpdateForHexString:@"#EAF4FC" targetKey:KEY_FOREGROUND_COLOR]];   // 月白
     [updates addEntriesFromDictionary:[self profileColorUpdateForHexString:@"#58B2DC" targetKey:KEY_CURSOR_COLOR]];       // 空
-    [updates addEntriesFromDictionary:[self profileColorUpdateForHexString:@"#274A78" targetKey:KEY_SELECTION_COLOR]];     // 青藍
+    [updates addEntriesFromDictionary:[self profileColorUpdateForHexString:@"#CAAD5F" targetKey:KEY_SELECTION_COLOR]];     // 芥子
 
     // ANSI Normal 0-7
     [updates addEntriesFromDictionary:[self profileColorUpdateForHexString:@"#181B26" targetKey:[NSString stringWithFormat:KEYTEMPLATE_ANSI_X_COLOR, 0]]];   // 勝色
