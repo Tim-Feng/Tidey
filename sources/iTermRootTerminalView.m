@@ -5582,9 +5582,35 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 
 - (BOOL)saveTideyEditorCurrentTab {
     TideyEditorTab *tab = [self tideyCurrentEditorTab];
-    if (!tab || tab.path.length == 0) {
+    if (!tab) {
         return NO;
     }
+    if (tab.path.length == 0) {
+        return [self tideyEditorSaveAsForTab:tab];
+    }
+    return [self tideyEditorWriteTab:tab];
+}
+
+- (BOOL)tideyEditorSaveAsForTab:(TideyEditorTab *)tab {
+    NSSavePanel *panel = [NSSavePanel savePanel];
+    panel.nameFieldStringValue = tab.displayName ?: @"Untitled";
+    panel.allowsOtherFileTypes = YES;
+    NSModalResponse response = [panel runModal];
+    if (response != NSModalResponseOK || !panel.URL.path) {
+        return NO;
+    }
+    NSString *chosenPath = panel.URL.path;
+    tab.path = chosenPath;
+    tab.displayName = chosenPath.lastPathComponent;
+    NSString *detectedLanguage = [self tideyEditorLanguageForPath:chosenPath];
+    tab.language = detectedLanguage;
+    if (tab.document) {
+        tab.document.language = detectedLanguage;
+    }
+    return [self tideyEditorWriteTab:tab];
+}
+
+- (BOOL)tideyEditorWriteTab:(TideyEditorTab *)tab {
     NSError *error = nil;
     BOOL ok = [(tab.content ?: @"") writeToFile:tab.path
                                      atomically:YES
