@@ -1024,6 +1024,8 @@
 		TIDEBOOT0001A00000000002 /* TideyFirstRunCompatibilityBootstrapTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEBOOT0001A00000000000 /* TideyFirstRunCompatibilityBootstrapTests.m */; };
 		TIDEMOUSE0001A00000000001 /* PTYMouseHandlerSelectionTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEMOUSE0001A00000000000 /* PTYMouseHandlerSelectionTests.m */; };
 		TIDEMOUSE0001A00000000002 /* PTYMouseHandlerSelectionTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEMOUSE0001A00000000000 /* PTYMouseHandlerSelectionTests.m */; };
+		TIDEPATH0001A00000000001 /* iTermPathFinderTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEPATH0001A00000000000 /* iTermPathFinderTests.m */; };
+		TIDEPATH0001A00000000002 /* iTermPathFinderTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEPATH0001A00000000000 /* iTermPathFinderTests.m */; };
 		TIDESOCK0001A00000000001 /* TideySocketServerTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDESOCK0001A00000000000 /* TideySocketServerTests.m */; };
 		TIDESOCK0001A00000000002 /* TideySocketServerTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDESOCK0001A00000000000 /* TideySocketServerTests.m */; };
 		TIDECFG0001A00000000001 /* TideyReleaseConfigTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDECFG0001A00000000000 /* TideyReleaseConfigTests.m */; };
@@ -6447,6 +6449,7 @@
 		TIDEAPP0001A00000000000 /* TideyAppShortcutBehaviorTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyAppShortcutBehaviorTests.m; sourceTree = "<group>"; };
 		TIDEBOOT0001A00000000000 /* TideyFirstRunCompatibilityBootstrapTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyFirstRunCompatibilityBootstrapTests.m; sourceTree = "<group>"; };
 		TIDEMOUSE0001A00000000000 /* PTYMouseHandlerSelectionTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = PTYMouseHandlerSelectionTests.m; sourceTree = "<group>"; };
+		TIDEPATH0001A00000000000 /* iTermPathFinderTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = iTermPathFinderTests.m; sourceTree = "<group>"; };
 		TIDESOCK0001A00000000000 /* TideySocketServerTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySocketServerTests.m; sourceTree = "<group>"; };
 		TIDECFG0001A00000000000 /* TideyReleaseConfigTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyReleaseConfigTests.m; sourceTree = "<group>"; };
 		F0A10D1E3A33000100000000 /* TideyLoginShellCommandTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyLoginShellCommandTests.m; sourceTree = "<group>"; };
@@ -13728,6 +13731,7 @@
 				TIDEAPP0001A00000000000 /* TideyAppShortcutBehaviorTests.m */,
 				TIDEBOOT0001A00000000000 /* TideyFirstRunCompatibilityBootstrapTests.m */,
 				TIDEMOUSE0001A00000000000 /* PTYMouseHandlerSelectionTests.m */,
+				TIDEPATH0001A00000000000 /* iTermPathFinderTests.m */,
 				TIDESOCK0001A00000000000 /* TideySocketServerTests.m */,
 				TIDECFG0001A00000000000 /* TideyReleaseConfigTests.m */,
 				F0A10D1E3A33000100000000 /* TideyLoginShellCommandTests.m */,
@@ -20309,6 +20313,7 @@
 				TIDEAPP0001A00000000002 /* TideyAppShortcutBehaviorTests.m in Sources */,
 				TIDEBOOT0001A00000000002 /* TideyFirstRunCompatibilityBootstrapTests.m in Sources */,
 				TIDEMOUSE0001A00000000002 /* PTYMouseHandlerSelectionTests.m in Sources */,
+				TIDEPATH0001A00000000002 /* iTermPathFinderTests.m in Sources */,
 				TIDESOCK0001A00000000002 /* TideySocketServerTests.m in Sources */,
 				TIDECFG0001A00000000002 /* TideyReleaseConfigTests.m in Sources */,
 				A6C811F42DCFD5E40088E628 /* SearchEngineTests.swift in Sources */,
@@ -20591,6 +20596,7 @@
 				TIDEAPP0001A00000000001 /* TideyAppShortcutBehaviorTests.m in Sources */,
 				TIDEBOOT0001A00000000001 /* TideyFirstRunCompatibilityBootstrapTests.m in Sources */,
 				TIDEMOUSE0001A00000000001 /* PTYMouseHandlerSelectionTests.m in Sources */,
+				TIDEPATH0001A00000000001 /* iTermPathFinderTests.m in Sources */,
 				TIDESOCK0001A00000000001 /* TideySocketServerTests.m in Sources */,
 				TIDECFG0001A00000000001 /* TideyReleaseConfigTests.m in Sources */,
 				F0A10D1E3A33000100000001 /* TideyLoginShellCommandTests.m in Sources */,
