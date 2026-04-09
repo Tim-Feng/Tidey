@@ -4,7 +4,12 @@ let tokenStore = PairTokenStore()
 let token = try tokenStore.loadOrCreateToken()
 let locator = TideySocketLocator()
 let socketClient = TideySocketClient(locator: locator)
-let server = TideyRemoteBridgeServer(token: token, socketClient: socketClient)
+let eventHub = AgentEventHub()
+let registryMonitor = AgentSessionRegistryMonitor(hub: eventHub)
+let server = TideyRemoteBridgeServer(token: token,
+                                     socketClient: socketClient,
+                                     eventHub: eventHub,
+                                     registryMonitor: registryMonitor)
 
 do {
     try server.run()

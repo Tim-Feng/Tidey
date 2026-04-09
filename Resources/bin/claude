@@ -8,6 +8,8 @@
 
 set -euo pipefail
 
+REGISTRY_ROOT="$HOME/Library/Application Support/Tidey Remote Bridge/agent-sessions/claude"
+
 json_escape() {
     local s="${1-}"
     s=${s//\\/\\\\}
@@ -16,6 +18,23 @@ json_escape() {
     s=${s//$'\r'/\\r}
     s=${s//$'\t'/\\t}
     printf '%s' "$s"
+}
+
+write_registry_file() {
+    local path="$1"
+    local workspace_id="$2"
+    local session_id="$3"
+    local pid="$4"
+    local cwd="$5"
+    local created_at="$6"
+
+    mkdir -p "$REGISTRY_ROOT"
+    printf '{"version":1,"vendor":"claude","workspace_id":"%s","session_id":"%s","pid":%s,"cwd":"%s","created_at":"%s"}\n' \
+        "$(json_escape "$workspace_id")" \
+        "$(json_escape "$session_id")" \
+        "$pid" \
+        "$(json_escape "$cwd")" \
+        "$(json_escape "$created_at")" > "$path"
 }
 
 shell_quote() {
@@ -49,16 +68,69 @@ case "${1:-}" in
     mcp|config|api-key) exec "$REAL_CLAUDE" "$@" ;;
 esac
 
-# Check if the user already specified a session/resume flag.
-SKIP_SESSION_ID=false
-for arg in "$@"; do
-    case "$arg" in
-        --resume|--resume=*|-r|--session-id|--session-id=*|--continue|-c)
-            SKIP_SESSION_ID=true
-            break
-            ;;
-    esac
-done
+find_explicit_session_id() {
+    local args=("$@")
+    local i=0
+    while [[ $i -lt ${#args[@]} ]]; do
+        local arg="${args[$i]}"
+        case "$arg" in
+            --session-id=*)
+                printf '%s' "${arg#--session-id=}"
+                return 0
+                ;;
+            --resume=*)
+                printf '%s' "${arg#--resume=}"
+                return 0
+                ;;
+            --continue=*)
+                printf '%s' "${arg#--continue=}"
+                return 0
+                ;;
+            --session-id|--resume|--continue|-r|-c)
+                if [[ $((i + 1)) -lt ${#args[@]} ]]; then
+                    local next="${args[$((i + 1))]}"
+                    if [[ "$next" != -* ]]; then
+                        printf '%s' "$next"
+                        return 0
+                    fi
+                fi
+                ;;
+        esac
+        i=$((i + 1))
+    done
+    return 1
+}
+
+has_implicit_resume_flag() {
+    local args=("$@")
+    local i=0
+    while [[ $i -lt ${#args[@]} ]]; do
+        local arg="${args[$i]}"
+        case "$arg" in
+            --resume|--continue|-r|-c)
+                if [[ $((i + 1)) -ge ${#args[@]} ]]; then
+                    return 0
+                fi
+                local next="${args[$((i + 1))]}"
+                if [[ "$next" == -* ]]; then
+                    return 0
+                fi
+                ;;
+        esac
+        i=$((i + 1))
+    done
+    return 1
+}
+
+SESSION_ID=""
+if ! SESSION_ID="$(find_explicit_session_id "$@")"; then
+    if has_implicit_resume_flag "$@"; then
+        SESSION_ID=""
+    else
+    SESSION_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
+    set -- --session-id "$SESSION_ID" "$@"
+    fi
+fi
 
 # Build hooks settings JSON.
 # Claude Code merges --settings additively with the user's own settings.json.
@@ -71,9 +143,19 @@ SESSION_END_CMD="$(json_escape "$TIDEY_BIN claude-hook session-end")"
 PROMPT_SUBMIT_CMD="$(json_escape "$TIDEY_BIN claude-hook prompt-submit")"
 HOOKS_JSON="{\"hooks\":{\"SessionStart\":[{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"$SESSION_START_CMD\",\"timeout\":10}]}],\"Notification\":[{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"$NOTIFICATION_CMD\",\"timeout\":10}]}],\"Stop\":[{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"$STOP_CMD\",\"timeout\":10}]}],\"SessionEnd\":[{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"$SESSION_END_CMD\",\"timeout\":1}]}],\"UserPromptSubmit\":[{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"$PROMPT_SUBMIT_CMD\",\"timeout\":10}]}]}}"
 
-if [[ "$SKIP_SESSION_ID" == true ]]; then
-    exec "$REAL_CLAUDE" --settings "$HOOKS_JSON" "$@"
-else
-    SESSION_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
-    exec "$REAL_CLAUDE" --session-id "$SESSION_ID" --settings "$HOOKS_JSON" "$@"
+REGISTRY_FILE=""
+if [[ -n "${TIDEY_WORKSPACE_ID:-}" && -n "$SESSION_ID" ]]; then
+    REGISTRY_FILE="$REGISTRY_ROOT/claude-${SESSION_ID}.json"
+    CREATED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    write_registry_file "$REGISTRY_FILE" "$TIDEY_WORKSPACE_ID" "$SESSION_ID" "$$" "$PWD" "$CREATED_AT"
 fi
+
+cleanup() {
+    if [[ -n "${REGISTRY_FILE:-}" ]]; then
+        rm -f "$REGISTRY_FILE"
+    fi
+}
+
+trap cleanup EXIT
+
+"$REAL_CLAUDE" --settings "$HOOKS_JSON" "$@"

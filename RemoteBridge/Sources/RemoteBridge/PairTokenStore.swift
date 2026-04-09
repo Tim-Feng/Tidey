@@ -8,33 +8,28 @@ struct PairTokenRecord: Codable {
 
 final class PairTokenStore {
     private let fileManager = FileManager.default
-    private let supportDirectory: URL
-    private let tokenFileURL: URL
+    private let paths: BridgePaths
 
     init() {
-        let base = fileManager.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support", isDirectory: true)
-            .appendingPathComponent("Tidey Remote Bridge", isDirectory: true)
-        supportDirectory = base
-        tokenFileURL = base.appendingPathComponent("pair-token.json", isDirectory: false)
+        paths = BridgePaths(fileManager: fileManager)
     }
 
     func loadOrCreateToken() throws -> String {
         if let existing = try loadToken() {
             return existing.token
         }
-        try fileManager.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
         let record = PairTokenRecord(token: Self.generateToken(), createdAt: Date())
         let data = try JSONEncoder().encode(record)
-        try data.write(to: tokenFileURL, options: .atomic)
+        try data.write(to: paths.pairTokenFileURL, options: .atomic)
         return record.token
     }
 
     private func loadToken() throws -> PairTokenRecord? {
-        guard fileManager.fileExists(atPath: tokenFileURL.path) else {
+        guard fileManager.fileExists(atPath: paths.pairTokenFileURL.path) else {
             return nil
         }
-        let data = try Data(contentsOf: tokenFileURL)
+        let data = try Data(contentsOf: paths.pairTokenFileURL)
         return try JSONDecoder().decode(PairTokenRecord.self, from: data)
     }
 

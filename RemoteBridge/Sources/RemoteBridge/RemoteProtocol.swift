@@ -1,5 +1,7 @@
 import Foundation
 
+let bridgeProtocolVersion = 1
+
 enum JSONValue: Codable, Sendable {
     case string(String)
     case number(Double)
@@ -63,6 +65,34 @@ enum JSONValue: Codable, Sendable {
             return NSNull()
         }
     }
+
+    var stringValue: String? {
+        if case .string(let value) = self {
+            return value
+        }
+        return nil
+    }
+
+    var boolValue: Bool? {
+        if case .bool(let value) = self {
+            return value
+        }
+        return nil
+    }
+
+    var objectValue: [String: JSONValue]? {
+        if case .object(let value) = self {
+            return value
+        }
+        return nil
+    }
+
+    var arrayValue: [JSONValue]? {
+        if case .array(let value) = self {
+            return value
+        }
+        return nil
+    }
 }
 
 struct BridgeRequest: Codable, Sendable {
@@ -79,8 +109,38 @@ struct BridgeErrorPayload: Codable, Sendable {
 struct BridgeResponse: Codable, Sendable {
     let id: String?
     let ok: Bool
+    let v: Int
     let result: [String: JSONValue]?
     let error: BridgeErrorPayload?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case ok
+        case v
+        case result
+        case error
+    }
+
+    init(id: String?,
+         ok: Bool,
+         v: Int = bridgeProtocolVersion,
+         result: [String: JSONValue]?,
+         error: BridgeErrorPayload?) {
+        self.id = id
+        self.ok = ok
+        self.v = v
+        self.result = result
+        self.error = error
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(String.self, forKey: .id)
+        ok = try container.decode(Bool.self, forKey: .ok)
+        v = try container.decodeIfPresent(Int.self, forKey: .v) ?? bridgeProtocolVersion
+        result = try container.decodeIfPresent([String: JSONValue].self, forKey: .result)
+        error = try container.decodeIfPresent(BridgeErrorPayload.self, forKey: .error)
+    }
 }
 
 enum BridgeInternalError: Error {
