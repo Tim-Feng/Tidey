@@ -27,7 +27,8 @@ static dispatch_queue_t iTermPathFinderQueue(void) {
 @property (atomic, readwrite) BOOL canceled;
 @end
 
-static const NSInteger iTermPathFinderMaxExtendedSuffixChunks = 5;
+static const NSInteger iTermPathFinderInitialSuffixChunkLimit = 25;
+static const NSInteger iTermPathFinderMaxExtendedSuffixChunks = 25;
 
 @implementation iTermPathFinder {
     NSString *_beforeStringIn;
@@ -98,8 +99,9 @@ static const NSInteger iTermPathFinderMaxExtendedSuffixChunks = 5;
 
         [left insertString:beforeChunk atIndex:0];
         NSMutableString *right = [NSMutableString string];
-        // Do not search more than 10 chunks forward to avoid starving leftward search.
-        for (int j = 0; j < MAX(1, afterChunks.count) && j < 10; j++) {
+        // Limit how far we search into the suffix so leftward search still makes progress,
+        // but allow enough room for long filenames with many space-separated words.
+        for (int j = 0; j < MAX(1, afterChunks.count) && j < iTermPathFinderInitialSuffixChunkLimit; j++) {
             if (self.canceled) {
                 _path = nil;
                 return;

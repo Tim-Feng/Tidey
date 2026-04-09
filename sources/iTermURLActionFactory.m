@@ -230,10 +230,10 @@ static BOOL iTermStringIsASCIIOnly(NSString *string) {
             [self tryHypertextLink];
             break;
         case iTermURLActionFactoryPhaseExistingFile:
-            [self tryExistingFileForceRespectingHardNewlines:NO];
+            [self tryExistingFileRespectingHardNewlines:self.respectHardNewlines];
             break;
         case iTermURLActionFactoryPhaseExistingFileRespectingHardNewlines:
-            [self tryExistingFileForceRespectingHardNewlines:YES];
+            [self tryExistingFileRespectingHardNewlines:!self.respectHardNewlines];
             break;
         case iTermURLActionFactoryPhaseSmartSelectionAction:
             [self trySmartSelectionAction];
@@ -275,16 +275,11 @@ static BOOL iTermStringIsASCIIOnly(NSString *string) {
     }
 }
 
-- (void)tryExistingFileForceRespectingHardNewlines:(BOOL)forceRespect {
-    if (forceRespect && self.respectHardNewlines) {
-        // No need to force it
-        [self fail];
-        return;
-    }
+- (void)tryExistingFileRespectingHardNewlines:(BOOL)respectHardNewlines {
     iTermLocatedString *locatedPrefix =
         [self.extractor wrappedLocatedStringAt:self.coord
                                        forward:NO
-                           respectHardNewlines:forceRespect || self.respectHardNewlines
+                           respectHardNewlines:respectHardNewlines
                                       maxChars:[iTermAdvancedSettingsModel maxSemanticHistoryPrefixOrSuffix]
                              continuationChars:[NSMutableIndexSet indexSet]
                            convertNullsToSpace:NO];
@@ -295,7 +290,7 @@ static BOOL iTermStringIsASCIIOnly(NSString *string) {
     iTermLocatedString *locatedSuffix =
         [self.extractor wrappedLocatedStringAt:self.coord
                                        forward:YES
-                           respectHardNewlines:forceRespect || self.respectHardNewlines
+                           respectHardNewlines:respectHardNewlines
                                       maxChars:[iTermAdvancedSettingsModel maxSemanticHistoryPrefixOrSuffix]
                              continuationChars:[NSMutableIndexSet indexSet]
                            convertNullsToSpace:NO];
@@ -432,28 +427,49 @@ static BOOL iTermStringIsASCIIOnly(NSString *string) {
     [locatedSuffix.string substringIncludingOffset:0
                                   fromCharacterSet:suffixCharacterSet
                               charsTakenFromPrefix:NULL];
+    NSString *rawPrefix = locatedPrefix.string ?: @"";
+    NSString *rawSuffix = locatedSuffix.string ?: @"";
     DLog(@"Prefix=%@", possibleFilePart1);
     DLog(@"Suffix=%@", possibleFilePart2);
     DLog(@"URLActionFactory sending request for %@ + %@",
          [possibleFilePart1 substringFromIndex:MAX(10, possibleFilePart1.length) - 10],
          [possibleFilePart2 substringToIndex:MIN(possibleFilePart2.length, 10)]);
+    BOOL shouldRetryWithRawContext =
+        (([rawPrefix containsString:@" "] || [rawSuffix containsString:@" "]) &&
+         (![rawPrefix isEqualToString:possibleFilePart1] || ![rawSuffix isEqualToString:possibleFilePart2]));
 
-    _pathFinderCanceler = [self.semanticHistoryController pathOfExistingFileFoundWithPrefix:possibleFilePart1
-                                                                                     suffix:possibleFilePart2
-                                                                           workingDirectory:self.workingDirectory
-                                                                             trimWhitespace:NO
-                                                                                 completion:^(NSString *filename,
-                                                                                              int prefixChars,
-                                                                                              int suffixChars,
-                                                                                              BOOL workingDirectoryIsLocal) {
-        DLog(@"Semantic history controller returned filename %@ with %@ prefix and %@ suffix chars", filename, @(prefixChars), @(suffixChars));
-        URLAction *action = [self urlActionForFilename:filename
-                                         locatedPrefix:locatedPrefix
-                                         locatedSuffix:locatedSuffix
-                                           prefixChars:prefixChars
-                                           suffixChars:suffixChars];
-        completion(action, workingDirectoryIsLocal);
-    }];
+    __weak __typeof(self) weakSelf = self;
+    __block void (^request)(NSString *, NSString *, BOOL);
+    request = ^(NSString *prefix, NSString *suffix, BOOL usingRawContext) {
+        __strong __typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            completion(nil, NO);
+            return;
+        }
+        strongSelf->_pathFinderCanceler =
+            [strongSelf.semanticHistoryController pathOfExistingFileFoundWithPrefix:prefix
+                                                                             suffix:suffix
+                                                                   workingDirectory:strongSelf.workingDirectory
+                                                                     trimWhitespace:NO
+                                                                         completion:^(NSString *filename,
+                                                                                      int prefixChars,
+                                                                                      int suffixChars,
+                                                                                      BOOL workingDirectoryIsLocal) {
+            DLog(@"Semantic history controller returned filename %@ with %@ prefix and %@ suffix chars", filename, @(prefixChars), @(suffixChars));
+            if (!filename && !usingRawContext && shouldRetryWithRawContext) {
+                DLog(@"Retry existing-file lookup with raw located strings");
+                request(rawPrefix, rawSuffix, YES);
+                return;
+            }
+            URLAction *action = [strongSelf urlActionForFilename:filename
+                                                   locatedPrefix:locatedPrefix
+                                                   locatedSuffix:locatedSuffix
+                                                     prefixChars:prefixChars
+                                                     suffixChars:suffixChars];
+            completion(action, workingDirectoryIsLocal);
+        }];
+    };
+    request(possibleFilePart1, possibleFilePart2, NO);
 }
 
 - (URLAction *)urlActionForFilename:(NSString *)filename
