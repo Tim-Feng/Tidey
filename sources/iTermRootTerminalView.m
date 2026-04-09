@@ -4943,6 +4943,8 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
             [self reloadTideyEditorFileTree];
             [self tideyPersistEditorState];
         }
+        self.shouldShowTideyEditorPanel = NO;
+        [self.delegate repositionWidgets];
         [self reloadTideyRightPanelTabsForPane:pane];
         [self tideyUpdateBrowserContentVisibility];
         [self layoutTideyEditorContents];
