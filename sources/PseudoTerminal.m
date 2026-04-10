@@ -1368,7 +1368,13 @@ ITERM_WEAKLY_REFERENCEABLE
                                        panelIndex:(NSInteger)panelIndex {
     PTYSession *session = [[panel.activeSession retain] autorelease];
     NSString *workspaceID = [self tideyWorkspaceIdentifierForWorkspace:workspace] ?: @"";
-    NSString *title = session ? ([self tideySidebarDisplayTitleForSession:session] ?: @"Untitled") : @"Untitled";
+    NSString *title = panel.title;
+    if (title.length == 0 && session) {
+        title = [self tideySidebarDisplayTitleForSession:session];
+    }
+    if (title.length == 0) {
+        title = @"Untitled";
+    }
     NSString *subtitle = session ? ([self tideySidebarDisplaySubtitleForSession:session panel:panel] ?: @"") : @"";
     NSString *state = panel.isProcessing ? @"running" : @"idle";
     NSMutableDictionary *summary = [NSMutableDictionary dictionaryWithDictionary:@{
@@ -1670,6 +1676,21 @@ ITERM_WEAKLY_REFERENCEABLE
     } else {
         [self setCustomTitle:title forWorkspaceAtIndex:workspaceIndex];
     }
+    return YES;
+}
+
+- (BOOL)tideyRenamePanelWithIdentifier:(NSString *)panelIdentifier title:(NSString *)title {
+    PTYTab *panel = [self tideyPanelWithIdentifier:panelIdentifier
+                                         workspace:nil
+                                    workspaceIndex:nil
+                                        panelIndex:nil];
+    if (!panel) {
+        return NO;
+    }
+    NSString *trimmed = [title stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    [panel setTitleOverride:trimmed.length > 0 ? trimmed : nil];
+    [panel updatePaneTitles];
+    [_contentView reloadTideySidebar];
     return YES;
 }
 
@@ -2101,6 +2122,36 @@ ITERM_WEAKLY_REFERENCEABLE
 
     if ([alert runSheetModalForWindow:self.window] == NSAlertFirstButtonReturn) {
         [self setCustomTitle:textField.stringValue forWorkspaceAtIndex:index];
+    }
+}
+
+- (void)renamePanel:(PTYTab *)panel {
+    if (!panel) {
+        return;
+    }
+
+    NSString *currentTitle = panel.titleOverride;
+    if (currentTitle.length == 0) {
+        currentTitle = panel.title ?: @"";
+    }
+
+    NSAlert *alert = [[[NSAlert alloc] init] autorelease];
+    alert.messageText = @"Rename Panel";
+    alert.informativeText = @"Set a custom name for this panel.";
+
+    NSTextField *textField = [[[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 320, 24)] autorelease];
+    textField.editable = YES;
+    textField.selectable = YES;
+    textField.stringValue = currentTitle ?: @"";
+    alert.accessoryView = textField;
+    [alert addButtonWithTitle:@"OK"];
+    [alert addButtonWithTitle:@"Cancel"];
+
+    if ([alert runSheetModalForWindow:self.window] == NSAlertFirstButtonReturn) {
+        NSString *trimmed = [textField.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        [panel setTitleOverride:trimmed.length > 0 ? trimmed : nil];
+        [panel updatePaneTitles];
+        [_contentView reloadTideySidebar];
     }
 }
 
@@ -8788,6 +8839,12 @@ hidingToolbeltShouldResizeWindow:(BOOL)hidingToolbeltShouldResizeWindow
     [item setRepresentedObject:tabViewItem];
     [rootMenu addItem:item];
 
+    item = [[[NSMenuItem alloc] initWithTitle:@"Rename Panel…"
+                                       action:@selector(renamePanelContextualMenuAction:)
+                                keyEquivalent:@""] autorelease];
+    [item setRepresentedObject:tabViewItem];
+    [rootMenu addItem:item];
+
     item = [[[NSMenuItem alloc] initWithTitle:@"Close Tab"
                                        action:@selector(closeTabContextualMenuAction:)
                                 keyEquivalent:@""] autorelease];
@@ -11951,6 +12008,11 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
         }
     }
 
+    PTYTab *panel = (PTYTab *)session.delegate;
+    if (panel.titleOverride.length > 0) {
+        return panel.titleOverride;
+    }
+
     // Use OSC 0/2 window title whenever available (works for shells, cmux, Claude Code, etc.)
     // Skip window names that contain "tmux" (e.g. "tmux attach -t ...") since they are
     // not useful — fall through to cwd instead.
@@ -13771,6 +13833,15 @@ typedef NS_ENUM(NSUInteger, iTermBroadcastCommand) {
             [WindowArrangements setArrangement:@[ arrangement ] withName:name];
         }
     }];
+}
+
+- (void)renamePanelContextualMenuAction:(id)sender {
+    NSTabViewItem *tabViewItem = [sender representedObject];
+    PTYTab *panel = [tabViewItem identifier];
+    if (!panel) {
+        panel = [self currentTab];
+    }
+    [self renamePanel:panel];
 }
 
 // These two methods are delicate because -closeTab: won't remove the tab from

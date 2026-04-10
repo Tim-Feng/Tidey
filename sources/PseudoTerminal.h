@@ -282,6 +282,7 @@ extern NSString *const iTermDidCreateTerminalWindowNotification;
 - (nullable NSDictionary *)tideyCreatePanelInWorkspaceWithIdentifier:(NSString *)workspaceIdentifier;
 - (BOOL)tideyCloseWorkspaceWithIdentifier:(NSString *)workspaceIdentifier;
 - (BOOL)tideyRenameWorkspaceWithIdentifier:(NSString *)workspaceIdentifier title:(NSString *)title;
+- (BOOL)tideyRenamePanelWithIdentifier:(NSString *)panelIdentifier title:(NSString *)title;
 - (BOOL)tideySelectPanelWithIdentifier:(NSString *)panelIdentifier;
 - (BOOL)tideyClosePanelWithIdentifier:(NSString *)panelIdentifier;
 

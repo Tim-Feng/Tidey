@@ -496,6 +496,31 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
         return;
     }
 
+    if ([action isEqualToString:@"rename_panel"]) {
+        NSString *panelID = TideySocketStringParam(source, @"panel_id");
+        NSString *title = TideySocketStringParam(source, @"title");
+        if (panelID.length == 0 || title == nil) {
+            [self sendErrorResponseForRequestID:requestID
+                                           code:@"invalid_params"
+                                        message:@"rename_panel requires panel_id and title."
+                                   onConnection:connection];
+            return;
+        }
+        PseudoTerminal *term = [self tideyTerminalForPanelIdentifier:panelID];
+        if (![term tideyRenamePanelWithIdentifier:panelID title:title]) {
+            [self sendErrorResponseForRequestID:requestID
+                                           code:@"panel_not_found"
+                                        message:@"No panel matched panel_id."
+                                   onConnection:connection];
+            return;
+        }
+        NSDictionary *summary = [term tideySocketPanelSummaryForPanelIdentifier:panelID];
+        [self sendSuccessResponseForRequestID:requestID
+                                       result:@{ @"panel": summary ?: @{} }
+                                  onConnection:connection];
+        return;
+    }
+
     if ([action isEqualToString:@"select_workspace"]) {
         NSString *workspaceID = TideySocketStringParam(source, @"workspace_id");
         if (workspaceID.length == 0) {
