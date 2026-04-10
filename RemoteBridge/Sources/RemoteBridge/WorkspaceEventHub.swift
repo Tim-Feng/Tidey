@@ -18,22 +18,11 @@ final class WorkspaceEventHub {
         queue.sync {
             let subscriberID = UUID()
             subscribers[subscriberID] = Subscriber(workspaceID: workspaceID, sink: sink)
-
-            let replay = bufferedEvents
-                .filter { event in
-                    guard let workspaceID else {
-                        return true
-                    }
-                    return event.workspaceID == workspaceID
-                }
-                .sorted { lhs, rhs in
-                    if lhs.timestamp == rhs.timestamp {
-                        return lhs.seq < rhs.seq
-                    }
-                    return lhs.timestamp < rhs.timestamp
-                }
-                .map { WorkspaceEventEnvelope(replay: true, event: $0) }
-            return (subscriberID, replay)
+            // Workspace and panel views always load an authoritative snapshot via
+            // list_workspaces / list_panels before subscribing. Replaying historical
+            // workspace events here can resurrect stale workspaces after reconnects
+            // or Tidey socket failover, so only deliver live events.
+            return (subscriberID, [])
         }
     }
 

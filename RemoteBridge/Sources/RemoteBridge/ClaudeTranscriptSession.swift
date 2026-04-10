@@ -8,6 +8,7 @@ struct AgentSessionRegistryRecord: Codable, Sendable {
     let vendor: String
     let workspaceID: String
     let sessionID: String
+    let panelID: String?
     let pid: Int32
     let cwd: String
     let createdAt: String
@@ -18,6 +19,7 @@ struct AgentSessionRegistryRecord: Codable, Sendable {
         case vendor
         case workspaceID = "workspace_id"
         case sessionID = "session_id"
+        case panelID = "panel_id"
         case pid
         case cwd
         case createdAt = "created_at"
@@ -321,7 +323,7 @@ final class ClaudeTranscriptSession {
                          input: nil,
                          output: nil,
                          toolCallID: nil,
-                         metadata: ["cwd": self.record.cwd])
+                         metadata: self.baseMetadata(["cwd": self.record.cwd]))
             self.startResolver()
         }
     }
@@ -352,7 +354,7 @@ final class ClaudeTranscriptSession {
                         input: nil,
                         output: nil,
                         toolCallID: nil,
-                        metadata: nil)
+                        metadata: baseMetadata(nil))
             }
         }
     }
@@ -638,9 +640,17 @@ final class ClaudeTranscriptSession {
                                input: input,
                                output: output,
                                toolCallID: toolCallID,
-                               metadata: metadata)
+                               metadata: baseMetadata(metadata))
         nextSequence += 1
         hub.publish(event)
+    }
+
+    private func baseMetadata(_ metadata: [String: String]?) -> [String: String]? {
+        var merged = metadata ?? [:]
+        if let panelID = record.panelID, !panelID.isEmpty {
+            merged["panel_id"] = panelID
+        }
+        return merged.isEmpty ? nil : merged
     }
 
     private static func compactString(_ value: Any?) -> String {

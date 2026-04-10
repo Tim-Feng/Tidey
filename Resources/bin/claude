@@ -24,17 +24,19 @@ write_registry_file() {
     local path="$1"
     local workspace_id="$2"
     local session_id="$3"
-    local pid="$4"
-    local cwd="$5"
-    local created_at="$6"
+    local panel_id="$4"
+    local pid="$5"
+    local cwd="$6"
+    local created_at="$7"
     local tmp_path=""
 
     mkdir -p "$REGISTRY_ROOT"
     tmp_path="$(mktemp "$REGISTRY_ROOT/.claude-registry.XXXXXX")"
     {
-        printf '{"version":1,"vendor":"claude","workspace_id":"%s","session_id":"%s","pid":%s,"cwd":"%s","created_at":"%s"}\n' \
+        printf '{"version":1,"vendor":"claude","workspace_id":"%s","session_id":"%s","panel_id":"%s","pid":%s,"cwd":"%s","created_at":"%s"}\n' \
             "$(json_escape "$workspace_id")" \
             "$(json_escape "$session_id")" \
+            "$(json_escape "$panel_id")" \
             "$pid" \
             "$(json_escape "$cwd")" \
             "$(json_escape "$created_at")" > "$tmp_path"
@@ -155,7 +157,7 @@ REGISTRY_FILE=""
 if [[ -n "${TIDEY_WORKSPACE_ID:-}" && -n "$SESSION_ID" ]]; then
     REGISTRY_FILE="$REGISTRY_ROOT/claude-${SESSION_ID}.json"
     CREATED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-    write_registry_file "$REGISTRY_FILE" "$TIDEY_WORKSPACE_ID" "$SESSION_ID" "$$" "$PWD" "$CREATED_AT"
+    write_registry_file "$REGISTRY_FILE" "$TIDEY_WORKSPACE_ID" "$SESSION_ID" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$CREATED_AT"
 fi
 
 cleanup() {
