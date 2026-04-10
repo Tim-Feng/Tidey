@@ -334,6 +334,22 @@ typedef NS_ENUM(int, iTermShouldHaveTitleSeparator) {
 - (void)setCustomTitle:(NSString *)title forWorkspaceAtIndex:(NSInteger)index;
 - (void)clearCustomTitleForWorkspaceAtIndex:(NSInteger)index;
 - (NSString *)tideyWorkspaceIdentifierForWorkspace:(Workspace *)workspace;
+- (Workspace *)tideyWorkspaceWithIdentifier:(NSString *)workspaceIdentifier index:(NSInteger *)index;
+- (PTYTab *)tideyPanelWithIdentifier:(NSString *)panelIdentifier
+                           workspace:(Workspace **)workspace
+                      workspaceIndex:(NSInteger *)workspaceIndex
+                          panelIndex:(NSInteger *)panelIndex;
+- (NSDictionary *)tideySocketWorkspaceSummaryForWorkspace:(Workspace *)workspace index:(NSInteger)index;
+- (NSDictionary *)tideySocketPanelSummaryForPanel:(PTYTab *)panel
+                                        workspace:(Workspace *)workspace
+                                   workspaceIndex:(NSInteger)workspaceIndex
+                                       panelIndex:(NSInteger)panelIndex;
+- (PTYSession *)tideySelectedSessionForPanelIdentifier:(NSString *)panelIdentifier;
+- (NSString *)tideyRecentOutputForSession:(PTYSession *)session;
+- (PTYSession *)tideyCreateDefaultSessionWithTargetWorkspaceIndex:(NSInteger)targetWorkspaceIndex
+                                                  createWorkspace:(BOOL)createWorkspace
+                                                previousDirectory:(NSString *)previousDirectory;
+- (NSDictionary *)tideySocketCreationResultForSession:(PTYSession *)session;
 - (void)tideyMarkWorkspaceReadAtIndex:(NSInteger)index;
 - (void)tideyMarkWorkspaceUnreadAtIndex:(NSInteger)index;
 - (void)tideyNotificationStoreDidChange:(NSNotification *)notification;
@@ -1258,20 +1274,119 @@ ITERM_WEAKLY_REFERENCEABLE
     return [self tideyWorkspaceIdentifierForWorkspace:ws];
 }
 
+- (NSString *)tideyPanelIdentifierForSession:(PTYSession *)session {
+    PTYTab *panel = [self tabForSession:session];
+    return panel.stringUniqueIdentifier;
+}
+
+- (Workspace *)tideyWorkspaceWithIdentifier:(NSString *)workspaceIdentifier index:(NSInteger *)index {
+    if (workspaceIdentifier.length == 0) {
+        return nil;
+    }
+    [self ensureTideyWorkspacesInitialized];
+    for (NSInteger i = 0; i < (NSInteger)self.workspaces.count; i++) {
+        Workspace *workspace = self.workspaces[i];
+        if ([[self tideyWorkspaceIdentifierForWorkspace:workspace] isEqualToString:workspaceIdentifier]) {
+            if (index) {
+                *index = i;
+            }
+            return workspace;
+        }
+    }
+    return nil;
+}
+
+- (PTYTab *)tideyPanelWithIdentifier:(NSString *)panelIdentifier
+                           workspace:(Workspace **)workspace
+                      workspaceIndex:(NSInteger *)workspaceIndex
+                          panelIndex:(NSInteger *)panelIndex {
+    if (panelIdentifier.length == 0) {
+        return nil;
+    }
+    [self ensureTideyWorkspacesInitialized];
+    for (NSInteger i = 0; i < (NSInteger)self.workspaces.count; i++) {
+        Workspace *candidateWorkspace = self.workspaces[i];
+        for (NSInteger j = 0; j < (NSInteger)candidateWorkspace.panels.count; j++) {
+            PTYTab *panel = candidateWorkspace.panels[j];
+            if (![panel.stringUniqueIdentifier isEqualToString:panelIdentifier]) {
+                continue;
+            }
+            if (workspace) {
+                *workspace = candidateWorkspace;
+            }
+            if (workspaceIndex) {
+                *workspaceIndex = i;
+            }
+            if (panelIndex) {
+                *panelIndex = j;
+            }
+            return panel;
+        }
+    }
+    return nil;
+}
+
 - (BOOL)tideySelectWorkspaceWithIdentifier:(NSString *)workspaceIdentifier {
     if (workspaceIdentifier.length == 0) {
         return NO;
     }
-    [self ensureTideyWorkspacesInitialized];
-    for (NSInteger i = 0; i < (NSInteger)self.workspaces.count; i++) {
-        Workspace *ws = self.workspaces[i];
-        if ([[self tideyWorkspaceIdentifierForWorkspace:ws] isEqualToString:workspaceIdentifier]) {
-            [self selectWorkspaceAtIndex:i recordHistory:YES];
-            [self tideyMarkWorkspaceReadAtIndex:i];
-            return YES;
-        }
+    NSInteger index = NSNotFound;
+    if ([self tideyWorkspaceWithIdentifier:workspaceIdentifier index:&index]) {
+        [self selectWorkspaceAtIndex:index recordHistory:YES];
+        [self tideyMarkWorkspaceReadAtIndex:index];
+        return YES;
     }
     return NO;
+}
+
+- (NSDictionary *)tideySocketWorkspaceSummaryForWorkspace:(Workspace *)workspace index:(NSInteger)index {
+    PTYTab *panel = [[workspace.selectedPanel retain] autorelease];
+    PTYSession *session = [[panel.activeSession retain] autorelease];
+    NSString *workspaceID = [self tideyWorkspaceIdentifierForWorkspace:workspace] ?: @"";
+    NSString *title = [self rootTerminalViewTideySidebarWorkspaceTitleAtIndex:index] ?: @"Untitled";
+    NSString *subtitle = [self rootTerminalViewTideySidebarWorkspaceSubtitleAtIndex:index] ?: @"";
+    NSString *state = panel.isProcessing ? @"running" : @"idle";
+    NSMutableDictionary *summary = [NSMutableDictionary dictionaryWithDictionary:@{
+        @"workspace_id": workspaceID,
+        @"title": title,
+        @"subtitle": subtitle,
+        @"state": state,
+        @"selected": @(index == self.selectedWorkspaceIndex),
+        @"window_guid": self.terminalGuid ?: @"",
+        @"panel_count": @(workspace.panels.count),
+        @"selected_panel_id": panel.stringUniqueIdentifier ?: @"",
+    }];
+    if (session.currentLocalWorkingDirectory.length > 0) {
+        summary[@"cwd"] = session.currentLocalWorkingDirectory;
+    }
+    return summary;
+}
+
+- (NSDictionary *)tideySocketPanelSummaryForPanel:(PTYTab *)panel
+                                        workspace:(Workspace *)workspace
+                                   workspaceIndex:(NSInteger)workspaceIndex
+                                       panelIndex:(NSInteger)panelIndex {
+    PTYSession *session = [[panel.activeSession retain] autorelease];
+    NSString *workspaceID = [self tideyWorkspaceIdentifierForWorkspace:workspace] ?: @"";
+    NSString *title = session ? ([self tideySidebarDisplayTitleForSession:session] ?: @"Untitled") : @"Untitled";
+    NSString *subtitle = session ? ([self tideySidebarDisplaySubtitleForSession:session panel:panel] ?: @"") : @"";
+    NSString *state = panel.isProcessing ? @"running" : @"idle";
+    NSMutableDictionary *summary = [NSMutableDictionary dictionaryWithDictionary:@{
+        @"panel_id": panel.stringUniqueIdentifier ?: @"",
+        @"workspace_id": workspaceID,
+        @"window_guid": self.terminalGuid ?: @"",
+        @"title": title,
+        @"subtitle": subtitle,
+        @"state": state,
+        @"selected": @([workspace selectedPanel] == panel),
+        @"is_browser": @(session.isBrowserSession),
+        @"panel_index": @(panelIndex),
+        @"workspace_index": @(workspaceIndex),
+    }];
+    if (session.currentLocalWorkingDirectory.length > 0) {
+        summary[@"cwd"] = session.currentLocalWorkingDirectory;
+    }
+    return summary;
 }
 
 - (NSArray<NSDictionary *> *)tideySocketWorkspaceSummaries {
@@ -1279,43 +1394,83 @@ ITERM_WEAKLY_REFERENCEABLE
     NSMutableArray<NSDictionary *> *summaries = [NSMutableArray array];
     for (NSInteger i = 0; i < (NSInteger)self.workspaces.count; i++) {
         Workspace *workspace = self.workspaces[i];
-        PTYTab *panel = [[workspace.selectedPanel retain] autorelease];
-        PTYSession *session = [[panel.activeSession retain] autorelease];
-        NSString *workspaceID = [self tideyWorkspaceIdentifierForWorkspace:workspace] ?: @"";
-        NSString *title = [self rootTerminalViewTideySidebarWorkspaceTitleAtIndex:i] ?: @"Untitled";
-        NSString *subtitle = [self rootTerminalViewTideySidebarWorkspaceSubtitleAtIndex:i] ?: @"";
-        NSString *state = panel.isProcessing ? @"running" : @"idle";
-        NSMutableDictionary *summary = [NSMutableDictionary dictionaryWithDictionary:@{
-            @"workspace_id": workspaceID,
-            @"title": title,
-            @"subtitle": subtitle,
-            @"state": state,
-            @"selected": @(i == self.selectedWorkspaceIndex),
-            @"window_guid": self.terminalGuid ?: @"",
-            @"panel_count": @(workspace.panels.count),
-        }];
-        if (session.currentLocalWorkingDirectory.length > 0) {
-            summary[@"cwd"] = session.currentLocalWorkingDirectory;
-        }
-        [summaries addObject:summary];
+        [summaries addObject:[self tideySocketWorkspaceSummaryForWorkspace:workspace index:i]];
     }
     return summaries;
 }
 
-- (PTYSession *)tideySelectedSessionForWorkspaceIdentifier:(NSString *)workspaceIdentifier {
-    if (workspaceIdentifier.length == 0) {
+- (NSDictionary *)tideySocketWorkspaceSummaryForWorkspaceIdentifier:(NSString *)workspaceIdentifier {
+    NSInteger index = NSNotFound;
+    Workspace *workspace = [self tideyWorkspaceWithIdentifier:workspaceIdentifier index:&index];
+    if (!workspace) {
         return nil;
     }
-    [self ensureTideyWorkspacesInitialized];
-    for (NSInteger i = 0; i < (NSInteger)self.workspaces.count; i++) {
-        Workspace *workspace = self.workspaces[i];
-        if (![[self tideyWorkspaceIdentifierForWorkspace:workspace] isEqualToString:workspaceIdentifier]) {
-            continue;
-        }
-        PTYTab *panel = workspace.selectedPanel;
-        return panel.activeSession;
+    return [self tideySocketWorkspaceSummaryForWorkspace:workspace index:index];
+}
+
+- (NSDictionary *)tideySocketPanelSummaryForPanelIdentifier:(NSString *)panelIdentifier {
+    Workspace *workspace = nil;
+    NSInteger workspaceIndex = NSNotFound;
+    NSInteger panelIndex = NSNotFound;
+    PTYTab *panel = [self tideyPanelWithIdentifier:panelIdentifier
+                                         workspace:&workspace
+                                    workspaceIndex:&workspaceIndex
+                                        panelIndex:&panelIndex];
+    if (!panel || !workspace) {
+        return nil;
     }
-    return nil;
+    return [self tideySocketPanelSummaryForPanel:panel
+                                       workspace:workspace
+                                  workspaceIndex:workspaceIndex
+                                      panelIndex:panelIndex];
+}
+
+- (NSDictionary *)tideySocketPanelListForWorkspaceIdentifier:(NSString *)workspaceIdentifier {
+    NSInteger workspaceIndex = NSNotFound;
+    Workspace *workspace = [self tideyWorkspaceWithIdentifier:workspaceIdentifier index:&workspaceIndex];
+    if (!workspace) {
+        return nil;
+    }
+
+    NSMutableArray<NSDictionary *> *panels = [NSMutableArray array];
+    for (NSInteger i = 0; i < (NSInteger)workspace.panels.count; i++) {
+        PTYTab *panel = workspace.panels[i];
+        [panels addObject:[self tideySocketPanelSummaryForPanel:panel
+                                                      workspace:workspace
+                                                 workspaceIndex:workspaceIndex
+                                                     panelIndex:i]];
+    }
+
+    return @{
+        @"workspace_id": workspaceIdentifier,
+        @"selected_panel_id": workspace.selectedPanel.stringUniqueIdentifier ?: @"",
+        @"panels": panels,
+    };
+}
+
+- (PTYSession *)tideySelectedSessionForWorkspaceIdentifier:(NSString *)workspaceIdentifier {
+    Workspace *workspace = [self tideyWorkspaceWithIdentifier:workspaceIdentifier index:nil];
+    return workspace.selectedPanel.activeSession;
+}
+
+- (PTYSession *)tideySelectedSessionForPanelIdentifier:(NSString *)panelIdentifier {
+    PTYTab *panel = [self tideyPanelWithIdentifier:panelIdentifier
+                                         workspace:nil
+                                    workspaceIndex:nil
+                                        panelIndex:nil];
+    return panel.activeSession;
+}
+
+- (BOOL)tideySendInput:(NSString *)input toPanelWithIdentifier:(NSString *)panelIdentifier {
+    if (input.length == 0) {
+        return NO;
+    }
+    PTYSession *session = [self tideySelectedSessionForPanelIdentifier:panelIdentifier];
+    if (!session || session.isBrowserSession) {
+        return NO;
+    }
+    [session writeTaskNoBroadcast:input];
+    return YES;
 }
 
 - (BOOL)tideySendInput:(NSString *)input toWorkspaceWithIdentifier:(NSString *)workspaceIdentifier {
@@ -1330,8 +1485,7 @@ ITERM_WEAKLY_REFERENCEABLE
     return YES;
 }
 
-- (NSString *)tideyRecentOutputForWorkspaceIdentifier:(NSString *)workspaceIdentifier {
-    PTYSession *session = [self tideySelectedSessionForWorkspaceIdentifier:workspaceIdentifier];
+- (NSString *)tideyRecentOutputForSession:(PTYSession *)session {
     if (!session || session.isBrowserSession) {
         return nil;
     }
@@ -1398,6 +1552,160 @@ ITERM_WEAKLY_REFERENCEABLE
     }
 
     return [rows componentsJoinedByString:@"\n"];
+}
+
+- (NSString *)tideyRecentOutputForPanelIdentifier:(NSString *)panelIdentifier {
+    return [self tideyRecentOutputForSession:[self tideySelectedSessionForPanelIdentifier:panelIdentifier]];
+}
+
+- (NSString *)tideyRecentOutputForWorkspaceIdentifier:(NSString *)workspaceIdentifier {
+    return [self tideyRecentOutputForSession:[self tideySelectedSessionForWorkspaceIdentifier:workspaceIdentifier]];
+}
+
+- (PTYSession *)tideyCreateDefaultSessionWithTargetWorkspaceIndex:(NSInteger)targetWorkspaceIndex
+                                                  createWorkspace:(BOOL)createWorkspace
+                                                previousDirectory:(NSString *)previousDirectory {
+    Profile *profile = [ProfileModel profileForCreatingNewSessionBasedOn:[[ProfileModel sharedInstance] defaultBookmark]];
+    if (!profile) {
+        profile = [[ProfileModel sharedInstance] defaultBookmark];
+    }
+    if (!profile) {
+        return nil;
+    }
+
+    _pendingWorkspaceIndexForInsertedPanel = targetWorkspaceIndex;
+    _pendingInsertedPanelCreatesWorkspace = createWorkspace;
+    _pendingInsertedPanelShouldAssignInitialTitle = YES;
+    return [self createTabWithProfile:profile
+                          withCommand:nil
+                          environment:nil
+                             tabIndex:nil
+                    previousDirectory:previousDirectory
+                               parent:nil
+                           completion:nil];
+}
+
+- (NSDictionary *)tideySocketCreationResultForSession:(PTYSession *)session {
+    PTYTab *panel = [self tabForSession:session];
+    if (!panel) {
+        return nil;
+    }
+    NSInteger workspaceIndex = [self indexOfWorkspaceContainingPanel:panel];
+    Workspace *workspace = [self workspaceAtIndex:workspaceIndex];
+    NSInteger panelIndex = [workspace.panels indexOfObjectIdenticalTo:panel];
+    if (!workspace || panelIndex == NSNotFound) {
+        return nil;
+    }
+
+    NSDictionary *workspaceSummary = [self tideySocketWorkspaceSummaryForWorkspace:workspace index:workspaceIndex];
+    NSDictionary *panelSummary = [self tideySocketPanelSummaryForPanel:panel
+                                                             workspace:workspace
+                                                        workspaceIndex:workspaceIndex
+                                                            panelIndex:panelIndex];
+    return @{
+        @"workspace": workspaceSummary ?: @{},
+        @"panel": panelSummary ?: @{},
+    };
+}
+
+- (NSDictionary *)tideyCreateWorkspaceWithCustomTitle:(NSString *)title {
+    [self ensureTideyWorkspacesInitialized];
+    __block PTYSession *session = nil;
+    NSString *previousDirectory = self.currentSession.currentLocalWorkingDirectory;
+    [self performTideyWorkspaceMutationPreservingWindowFrame:^{
+        session = [self tideyCreateDefaultSessionWithTargetWorkspaceIndex:self.workspaces.count
+                                                          createWorkspace:YES
+                                                        previousDirectory:previousDirectory];
+    }];
+    NSDictionary *result = session ? [self tideySocketCreationResultForSession:session] : nil;
+    NSDictionary *workspaceSummary = [result[@"workspace"] isKindOfClass:[NSDictionary class]] ? result[@"workspace"] : nil;
+    NSString *workspaceID = [workspaceSummary[@"workspace_id"] isKindOfClass:[NSString class]] ? workspaceSummary[@"workspace_id"] : nil;
+    if (workspaceID.length > 0 && title.length > 0) {
+        [self tideyRenameWorkspaceWithIdentifier:workspaceID title:title];
+        result = [self tideySocketCreationResultForSession:session];
+    }
+    return result;
+}
+
+- (NSDictionary *)tideyCreatePanelInWorkspaceWithIdentifier:(NSString *)workspaceIdentifier {
+    NSInteger workspaceIndex = NSNotFound;
+    Workspace *workspace = [self tideyWorkspaceWithIdentifier:workspaceIdentifier index:&workspaceIndex];
+    if (!workspace) {
+        return nil;
+    }
+
+    PTYSession *sourceSession = workspace.selectedPanel.activeSession;
+    NSString *previousDirectory = sourceSession.currentLocalWorkingDirectory;
+    __block PTYSession *session = nil;
+    [self performTideyWorkspaceMutationPreservingWindowFrame:^{
+        [self selectWorkspaceAtIndex:workspaceIndex recordHistory:YES];
+        session = [self tideyCreateDefaultSessionWithTargetWorkspaceIndex:workspaceIndex
+                                                          createWorkspace:NO
+                                                        previousDirectory:previousDirectory];
+    }];
+    return session ? [self tideySocketCreationResultForSession:session] : nil;
+}
+
+- (BOOL)tideyCloseWorkspaceWithIdentifier:(NSString *)workspaceIdentifier {
+    Workspace *workspace = [self tideyWorkspaceWithIdentifier:workspaceIdentifier index:nil];
+    if (!workspace) {
+        return NO;
+    }
+    NSArray<PTYTab *> *panels = [[workspace.panels copy] autorelease];
+    [self performTideyWorkspaceMutationPreservingWindowFrame:^{
+        for (PTYTab *panel in panels) {
+            [self closeTab:panel soft:YES];
+        }
+    }];
+    return YES;
+}
+
+- (BOOL)tideyRenameWorkspaceWithIdentifier:(NSString *)workspaceIdentifier title:(NSString *)title {
+    NSInteger workspaceIndex = NSNotFound;
+    if (![self tideyWorkspaceWithIdentifier:workspaceIdentifier index:&workspaceIndex]) {
+        return NO;
+    }
+    if ([title stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]].length == 0) {
+        [self clearCustomTitleForWorkspaceAtIndex:workspaceIndex];
+    } else {
+        [self setCustomTitle:title forWorkspaceAtIndex:workspaceIndex];
+    }
+    return YES;
+}
+
+- (BOOL)tideySelectPanelWithIdentifier:(NSString *)panelIdentifier {
+    Workspace *workspace = nil;
+    NSInteger workspaceIndex = NSNotFound;
+    NSInteger panelIndex = NSNotFound;
+    PTYTab *panel = [self tideyPanelWithIdentifier:panelIdentifier
+                                         workspace:&workspace
+                                    workspaceIndex:&workspaceIndex
+                                        panelIndex:&panelIndex];
+    if (!panel || !workspace) {
+        return NO;
+    }
+    [self selectWorkspaceAtIndex:workspaceIndex recordHistory:YES];
+    workspace.selectedPanelIndex = panelIndex;
+    NSInteger visibleIndex = [self indexOfTab:panel];
+    if (visibleIndex != NSNotFound) {
+        [_contentView.tabView selectTabViewItemAtIndex:visibleIndex];
+    }
+    [self tideyMarkWorkspaceReadAtIndex:workspaceIndex];
+    return YES;
+}
+
+- (BOOL)tideyClosePanelWithIdentifier:(NSString *)panelIdentifier {
+    PTYTab *panel = [self tideyPanelWithIdentifier:panelIdentifier
+                                         workspace:nil
+                                    workspaceIndex:nil
+                                        panelIndex:nil];
+    if (!panel) {
+        return NO;
+    }
+    [self performTideyWorkspaceMutationPreservingWindowFrame:^{
+        [self closeTab:panel soft:YES];
+    }];
+    return YES;
 }
 
 - (void)tideyNotificationStoreDidChange:(NSNotification *)notification {

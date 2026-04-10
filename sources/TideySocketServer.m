@@ -70,6 +70,27 @@ static NSInteger TideySocketIntegerParam(NSDictionary *params, NSString *key, NS
     return defaultValue;
 }
 
+static BOOL TideySocketBoolParam(NSDictionary *params, NSString *key, BOOL defaultValue) {
+    id value = params[key];
+    if ([value isKindOfClass:[NSNumber class]]) {
+        return [value boolValue];
+    }
+    if ([value isKindOfClass:[NSString class]]) {
+        NSString *string = [(NSString *)value lowercaseString];
+        if ([string isEqualToString:@"1"] ||
+            [string isEqualToString:@"true"] ||
+            [string isEqualToString:@"yes"]) {
+            return YES;
+        }
+        if ([string isEqualToString:@"0"] ||
+            [string isEqualToString:@"false"] ||
+            [string isEqualToString:@"no"]) {
+            return NO;
+        }
+    }
+    return defaultValue;
+}
+
 typedef BOOL (^TideySocketSendInputHandler)(NSString *workspaceID, NSString *input);
 typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *workspaceID);
 
@@ -201,6 +222,31 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
     [self.connections addObject:connection];
 }
 
+- (PseudoTerminal *)tideyTerminalForWorkspaceIdentifier:(NSString *)workspaceIdentifier {
+    for (PseudoTerminal *term in [[iTermController sharedInstance] terminals]) {
+        if ([term tideySocketWorkspaceSummaryForWorkspaceIdentifier:workspaceIdentifier]) {
+            return term;
+        }
+    }
+    return nil;
+}
+
+- (PseudoTerminal *)tideyTerminalForPanelIdentifier:(NSString *)panelIdentifier {
+    for (PseudoTerminal *term in [[iTermController sharedInstance] terminals]) {
+        if ([term tideySocketPanelSummaryForPanelIdentifier:panelIdentifier]) {
+            return term;
+        }
+    }
+    return nil;
+}
+
+- (PseudoTerminal *)tideyTerminalForWindowGUID:(NSString *)windowGUID {
+    if (windowGUID.length == 0) {
+        return [iTermController sharedInstance].currentTerminal ?: [[[iTermController sharedInstance] terminals] firstObject];
+    }
+    return [[iTermController sharedInstance] terminalWithGuid:windowGUID];
+}
+
 - (void)handleMessage:(NSDictionary *)message onConnection:(TideySocketConnection *)connection {
     NSString *action = [message[@"action"] isKindOfClass:[NSString class]] ? message[@"action"] : nil;
     NSString *requestID = [message[@"id"] isKindOfClass:[NSString class]] ? message[@"id"] : nil;
@@ -247,29 +293,319 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
 }
 
 - (void)handleRequestMessage:(NSDictionary *)message onConnection:(TideySocketConnection *)connection {
-    NSMutableArray<NSDictionary *> *workspaces = [NSMutableArray array];
-    for (PseudoTerminal *term in [[iTermController sharedInstance] terminals]) {
-        [workspaces addObjectsFromArray:[term tideySocketWorkspaceSummaries]];
+    NSString *requestID = [message[@"id"] isKindOfClass:[NSString class]] ? message[@"id"] : nil;
+    NSString *action = [message[@"action"] isKindOfClass:[NSString class]] ? message[@"action"] : nil;
+    NSDictionary *params = [message[@"params"] isKindOfClass:[NSDictionary class]] ? message[@"params"] : nil;
+    NSDictionary *source = params ?: message;
+
+    if (requestID.length == 0 || action.length == 0) {
+        [self sendErrorResponseForRequestID:requestID
+                                       code:@"invalid_request"
+                                    message:@"Missing request id or action."
+                               onConnection:connection];
+        return;
     }
+
+    if ([action isEqualToString:@"ping"]) {
+        [self sendSuccessResponseForRequestID:requestID
+                                       result:@{ @"pong": @YES }
+                                  onConnection:connection];
+        return;
+    }
+
+    if ([action isEqualToString:@"list_workspaces"]) {
+        [self handleListWorkspacesRequestWithID:requestID onConnection:connection];
+        return;
+    }
+
+    if ([action isEqualToString:@"list_panels"]) {
+        NSString *workspaceID = TideySocketStringParam(source, @"workspace_id");
+        if (workspaceID.length == 0) {
+            [self sendErrorResponseForRequestID:requestID
+                                           code:@"invalid_params"
+                                        message:@"list_panels requires workspace_id."
+                                   onConnection:connection];
+            return;
+        }
+        PseudoTerminal *term = [self tideyTerminalForWorkspaceIdentifier:workspaceID];
+        NSDictionary *result = [term tideySocketPanelListForWorkspaceIdentifier:workspaceID];
+        if (!result) {
+            [self sendErrorResponseForRequestID:requestID
+                                           code:@"workspace_not_found"
+                                        message:@"No workspace matched workspace_id."
+                                   onConnection:connection];
+            return;
+        }
+        [self sendSuccessResponseForRequestID:requestID result:result onConnection:connection];
+        return;
+    }
+
+    if ([action isEqualToString:@"send_input"]) {
+        NSString *panelID = TideySocketStringParam(source, @"panel_id");
+        NSString *workspaceID = TideySocketStringParam(source, @"workspace_id");
+        NSString *input = TideySocketStringParam(source, @"input");
+        if (input.length == 0 || (panelID.length == 0 && workspaceID.length == 0)) {
+            [self sendErrorResponseForRequestID:requestID
+                                           code:@"invalid_params"
+                                        message:@"send_input requires input and panel_id or workspace_id."
+                                   onConnection:connection];
+            return;
+        }
+
+        if (panelID.length > 0) {
+            PseudoTerminal *term = [self tideyTerminalForPanelIdentifier:panelID];
+            NSDictionary *panelSummary = [term tideySocketPanelSummaryForPanelIdentifier:panelID];
+            if (!panelSummary) {
+                [self sendErrorResponseForRequestID:requestID
+                                               code:@"panel_not_found"
+                                            message:@"No panel matched panel_id."
+                                       onConnection:connection];
+                return;
+            }
+            if (![term tideySendInput:input toPanelWithIdentifier:panelID]) {
+                [self sendErrorResponseForRequestID:requestID
+                                               code:@"panel_not_interactive"
+                                            message:@"The panel does not accept terminal input."
+                                       onConnection:connection];
+                return;
+            }
+            [self sendSuccessResponseForRequestID:requestID
+                                           result:@{ @"sent": @YES,
+                                                     @"panel_id": panelID,
+                                                     @"workspace_id": panelSummary[@"workspace_id"] ?: @"" }
+                                      onConnection:connection];
+            return;
+        }
+
+        [self handleSendInputRequest:message requestID:requestID onConnection:connection];
+        return;
+    }
+
+    if ([action isEqualToString:@"get_recent_output"]) {
+        NSString *panelID = TideySocketStringParam(source, @"panel_id");
+        NSString *workspaceID = TideySocketStringParam(source, @"workspace_id");
+        NSInteger maxLines = TideySocketIntegerParam(source, @"max_lines", 200);
+        NSInteger maxChars = TideySocketIntegerParam(source, @"max_chars", 12000);
+        if (maxLines < 0) {
+            maxLines = 0;
+        }
+        if (maxChars < 0) {
+            maxChars = 0;
+        }
+
+        if (panelID.length > 0) {
+            PseudoTerminal *term = [self tideyTerminalForPanelIdentifier:panelID];
+            NSDictionary *panelSummary = [term tideySocketPanelSummaryForPanelIdentifier:panelID];
+            if (!panelSummary) {
+                [self sendErrorResponseForRequestID:requestID
+                                               code:@"panel_not_found"
+                                            message:@"No panel matched panel_id."
+                                       onConnection:connection];
+                return;
+            }
+            NSString *output = [term tideyRecentOutputForPanelIdentifier:panelID];
+            if (!output) {
+                [self sendErrorResponseForRequestID:requestID
+                                               code:@"panel_not_interactive"
+                                            message:@"The panel does not produce terminal output."
+                                       onConnection:connection];
+                return;
+            }
+            NSString *trimmed = [self trimmedRecentOutput:output maxLines:maxLines maxChars:maxChars];
+            [self sendSuccessResponseForRequestID:requestID
+                                           result:@{ @"output": trimmed ?: @"",
+                                                     @"panel_id": panelID,
+                                                     @"workspace_id": panelSummary[@"workspace_id"] ?: @"" }
+                                      onConnection:connection];
+            return;
+        }
+
+        if (workspaceID.length == 0) {
+            [self sendErrorResponseForRequestID:requestID
+                                           code:@"invalid_params"
+                                        message:@"get_recent_output requires panel_id or workspace_id."
+                                   onConnection:connection];
+            return;
+        }
+        [self handleGetRecentOutputRequest:message requestID:requestID onConnection:connection];
+        return;
+    }
+
+    if ([action isEqualToString:@"create_workspace"]) {
+        NSString *windowGUID = TideySocketStringParam(source, @"window_guid");
+        NSString *title = TideySocketStringParam(source, @"title");
+        (void)TideySocketBoolParam(source, @"make_selected", YES);
+        PseudoTerminal *term = [self tideyTerminalForWindowGUID:windowGUID];
+        NSDictionary *result = [term tideyCreateWorkspaceWithCustomTitle:title];
+        if (!result) {
+            [self sendErrorResponseForRequestID:requestID
+                                           code:@"window_not_found"
+                                        message:@"Could not resolve a target terminal window."
+                                   onConnection:connection];
+            return;
+        }
+        [self sendSuccessResponseForRequestID:requestID result:result onConnection:connection];
+        return;
+    }
+
+    if ([action isEqualToString:@"close_workspace"]) {
+        NSString *workspaceID = TideySocketStringParam(source, @"workspace_id");
+        if (workspaceID.length == 0) {
+            [self sendErrorResponseForRequestID:requestID
+                                           code:@"invalid_params"
+                                        message:@"close_workspace requires workspace_id."
+                                   onConnection:connection];
+            return;
+        }
+        PseudoTerminal *term = [self tideyTerminalForWorkspaceIdentifier:workspaceID];
+        if (![term tideyCloseWorkspaceWithIdentifier:workspaceID]) {
+            [self sendErrorResponseForRequestID:requestID
+                                           code:@"workspace_not_found"
+                                        message:@"No workspace matched workspace_id."
+                                   onConnection:connection];
+            return;
+        }
+        [self sendSuccessResponseForRequestID:requestID
+                                       result:@{ @"closed": @YES, @"workspace_id": workspaceID }
+                                  onConnection:connection];
+        return;
+    }
+
+    if ([action isEqualToString:@"rename_workspace"]) {
+        NSString *workspaceID = TideySocketStringParam(source, @"workspace_id");
+        NSString *title = TideySocketStringParam(source, @"title");
+        if (workspaceID.length == 0 || title == nil) {
+            [self sendErrorResponseForRequestID:requestID
+                                           code:@"invalid_params"
+                                        message:@"rename_workspace requires workspace_id and title."
+                                   onConnection:connection];
+            return;
+        }
+        PseudoTerminal *term = [self tideyTerminalForWorkspaceIdentifier:workspaceID];
+        if (![term tideyRenameWorkspaceWithIdentifier:workspaceID title:title]) {
+            [self sendErrorResponseForRequestID:requestID
+                                           code:@"workspace_not_found"
+                                        message:@"No workspace matched workspace_id."
+                                   onConnection:connection];
+            return;
+        }
+        NSDictionary *summary = [term tideySocketWorkspaceSummaryForWorkspaceIdentifier:workspaceID];
+        [self sendSuccessResponseForRequestID:requestID
+                                       result:@{ @"workspace": summary ?: @{} }
+                                  onConnection:connection];
+        return;
+    }
+
+    if ([action isEqualToString:@"select_workspace"]) {
+        NSString *workspaceID = TideySocketStringParam(source, @"workspace_id");
+        if (workspaceID.length == 0) {
+            [self sendErrorResponseForRequestID:requestID
+                                           code:@"invalid_params"
+                                        message:@"select_workspace requires workspace_id."
+                                   onConnection:connection];
+            return;
+        }
+        PseudoTerminal *term = [self tideyTerminalForWorkspaceIdentifier:workspaceID];
+        if (![term tideySelectWorkspaceWithIdentifier:workspaceID]) {
+            [self sendErrorResponseForRequestID:requestID
+                                           code:@"workspace_not_found"
+                                        message:@"No workspace matched workspace_id."
+                                   onConnection:connection];
+            return;
+        }
+        NSDictionary *summary = [term tideySocketWorkspaceSummaryForWorkspaceIdentifier:workspaceID];
+        [self sendSuccessResponseForRequestID:requestID
+                                       result:@{ @"selected": @YES,
+                                                 @"workspace": summary ?: @{} }
+                                  onConnection:connection];
+        return;
+    }
+
+    if ([action isEqualToString:@"create_panel"]) {
+        NSString *workspaceID = TideySocketStringParam(source, @"workspace_id");
+        (void)TideySocketBoolParam(source, @"make_selected", YES);
+        if (workspaceID.length == 0) {
+            [self sendErrorResponseForRequestID:requestID
+                                           code:@"invalid_params"
+                                        message:@"create_panel requires workspace_id."
+                                   onConnection:connection];
+            return;
+        }
+        PseudoTerminal *term = [self tideyTerminalForWorkspaceIdentifier:workspaceID];
+        NSDictionary *result = [term tideyCreatePanelInWorkspaceWithIdentifier:workspaceID];
+        if (!result) {
+            [self sendErrorResponseForRequestID:requestID
+                                           code:@"workspace_not_found"
+                                        message:@"No workspace matched workspace_id."
+                                   onConnection:connection];
+            return;
+        }
+        [self sendSuccessResponseForRequestID:requestID result:result onConnection:connection];
+        return;
+    }
+
+    if ([action isEqualToString:@"select_panel"]) {
+        NSString *panelID = TideySocketStringParam(source, @"panel_id");
+        if (panelID.length == 0) {
+            [self sendErrorResponseForRequestID:requestID
+                                           code:@"invalid_params"
+                                        message:@"select_panel requires panel_id."
+                                   onConnection:connection];
+            return;
+        }
+        PseudoTerminal *term = [self tideyTerminalForPanelIdentifier:panelID];
+        if (![term tideySelectPanelWithIdentifier:panelID]) {
+            [self sendErrorResponseForRequestID:requestID
+                                           code:@"panel_not_found"
+                                        message:@"No panel matched panel_id."
+                                   onConnection:connection];
+            return;
+        }
+        NSDictionary *panelSummary = [term tideySocketPanelSummaryForPanelIdentifier:panelID];
+        NSString *workspaceID = [panelSummary[@"workspace_id"] isKindOfClass:[NSString class]] ? panelSummary[@"workspace_id"] : nil;
+        NSDictionary *workspaceSummary = workspaceID.length > 0 ? [term tideySocketWorkspaceSummaryForWorkspaceIdentifier:workspaceID] : nil;
+        [self sendSuccessResponseForRequestID:requestID
+                                       result:@{ @"selected": @YES,
+                                                 @"panel": panelSummary ?: @{},
+                                                 @"workspace": workspaceSummary ?: @{} }
+                                  onConnection:connection];
+        return;
+    }
+
+    if ([action isEqualToString:@"close_panel"]) {
+        NSString *panelID = TideySocketStringParam(source, @"panel_id");
+        if (panelID.length == 0) {
+            [self sendErrorResponseForRequestID:requestID
+                                           code:@"invalid_params"
+                                        message:@"close_panel requires panel_id."
+                                   onConnection:connection];
+            return;
+        }
+        PseudoTerminal *term = [self tideyTerminalForPanelIdentifier:panelID];
+        NSDictionary *panelSummary = [term tideySocketPanelSummaryForPanelIdentifier:panelID];
+        NSString *workspaceID = [panelSummary[@"workspace_id"] isKindOfClass:[NSString class]] ? panelSummary[@"workspace_id"] : @"";
+        NSDictionary *workspaceSummary = workspaceID.length > 0 ? [term tideySocketWorkspaceSummaryForWorkspaceIdentifier:workspaceID] : nil;
+        BOOL workspaceClosed = [workspaceSummary[@"panel_count"] integerValue] <= 1;
+        if (![term tideyClosePanelWithIdentifier:panelID]) {
+            [self sendErrorResponseForRequestID:requestID
+                                           code:@"panel_not_found"
+                                        message:@"No panel matched panel_id."
+                                   onConnection:connection];
+            return;
+        }
+        [self sendSuccessResponseForRequestID:requestID
+                                       result:@{ @"closed": @YES,
+                                                 @"panel_id": panelID,
+                                                 @"workspace_id": workspaceID ?: @"",
+                                                 @"workspace_closed": @(workspaceClosed) }
+                                  onConnection:connection];
+        return;
+    }
+
     NSDictionary *response = [TideySocketServer tideyResponseForRequestMessage:message
-                                                            workspaceSummaries:workspaces
-                                                              sendInputHandler:^BOOL(NSString *workspaceID, NSString *input) {
-                                                                  for (PseudoTerminal *term in [[iTermController sharedInstance] terminals]) {
-                                                                      if ([term tideySendInput:input toWorkspaceWithIdentifier:workspaceID]) {
-                                                                          return YES;
-                                                                      }
-                                                                  }
-                                                                  return NO;
-                                                              }
-                                                          recentOutputProvider:^NSString * _Nullable(NSString *workspaceID) {
-                                                              for (PseudoTerminal *term in [[iTermController sharedInstance] terminals]) {
-                                                                  NSString *output = [term tideyRecentOutputForWorkspaceIdentifier:workspaceID];
-                                                                  if (output) {
-                                                                      return output;
-                                                                  }
-                                                              }
-                                                              return nil;
-                                                          }];
+                                                            workspaceSummaries:nil
+                                                              sendInputHandler:nil
+                                                          recentOutputProvider:nil];
     if (response) {
         [connection sendJSONObject:response];
     }

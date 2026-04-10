@@ -2,7 +2,21 @@
 
 ## Overview
 
-Tidey exposes a Unix domain socket that accepts newline-delimited messages. Processes inside Tidey terminal sessions use this socket to report shell state, set status indicators, create notifications, and override tab titles. The protocol is fire-and-forget: clients connect, write one or more newline-terminated messages, and close. There are no responses.
+Tidey exposes a Unix domain socket that accepts newline-delimited messages.
+
+There are two protocol modes on the same socket:
+
+- Legacy fire-and-forget messages from shell integration and agent hooks
+- JSON request/response control messages used by RemoteBridge
+
+As of 2026-04-10, the implemented request/response actions are:
+
+- `ping`
+- `list_workspaces`
+- `send_input`
+- `get_recent_output`
+
+The sections below also define the next-step contract for panel-scoped control, workspace/panel CRUD, and server-pushed sync events. Those parts are design targets until the corresponding ObjC implementation lands.
 
 ## Connection
 
@@ -16,6 +30,7 @@ The directory is created with mode `0700` and the socket file with mode `0600` (
 |---|---|
 | `TIDEY_SOCKET_PATH` | Absolute path to the Unix domain socket. |
 | `TIDEY_WORKSPACE_ID` | Identifier for the current workspace (tab/split). Used to scope status, notifications, and titles to a specific pane. |
+| `TIDEY_PANEL_ID` | Planned addition. Stable identifier for the current terminal panel. Agent wrappers should write this into their session registry so ownership is panel-scoped rather than workspace-scoped. |
 | `TIDEY_BIN_DIR` | Directory containing the `tidey` CLI binary and the `claude` wrapper. Prepended to `PATH` by shell integration. |
 | `LC_TERMINAL` | Set to `"Tidey"`. Survives SSH forwarding (unlike `TERM_PROGRAM`), so remote shells can detect they are running inside Tidey. |
 
@@ -23,9 +38,14 @@ The directory is created with mode `0700` and the socket file with mode `0600` (
 
 1. Open a `SOCK_STREAM` connection to `TIDEY_SOCKET_PATH`.
 2. Write one or more messages, each terminated by `\n`.
-3. Close the connection.
+3. For fire-and-forget messages, close the connection after writing.
+4. For request/response or subscription flows, keep the connection open and continue reading newline-delimited JSON responses/events.
 
-No acknowledgment is sent. Invalid or unrecognized messages are silently dropped.
+Behavior depends on payload shape:
+
+- Messages without an `id` are fire-and-forget. No response is sent.
+- JSON messages with an `id` are treated as requests. Tidey replies with one JSON response line.
+- Long-lived clients may later subscribe to server-pushed event streams. Those events are also sent as newline-delimited JSON objects on the same connection.
 
 ## Message Formats
 
@@ -37,6 +57,24 @@ A single JSON object on one line:
 
 ```json
 {"action":"<command>","workspace_id":"abc123","key":"value",...}
+```
+
+Request/response actions use this shape:
+
+```json
+{"id":"req-123","action":"list_workspaces","params":{...}}
+```
+
+Successful response:
+
+```json
+{"id":"req-123","ok":true,"result":{...}}
+```
+
+Error response:
+
+```json
+{"id":"req-123","ok":false,"error":{"code":"invalid_params","message":"..."}}
 ```
 
 ### Plaintext Format
@@ -54,7 +92,380 @@ report_shell_state running --workspace_id=abc123
 
 The parser splits on spaces, assigns `parts[0]` to `action`, `parts[1]` to `state`, and parses remaining `--key=value` tokens into dictionary keys.
 
-## Commands
+## Identifier Model
+
+### `workspace_id`
+
+- Backed by `Workspace.identifier.UUIDString` in `PseudoTerminal`
+- Stable for the lifetime of a workspace object
+- Opaque to clients
+- Not guaranteed to survive close/reopen or app restart
+
+### `panel_id`
+
+- Planned contract: backed by `PTYTab.stringUniqueIdentifier`
+- Stable for the lifetime of a panel object
+- Opaque to clients
+- This is the source of truth for terminal I/O, recent output, and agent ownership
+
+### `window_guid`
+
+- Backed by `PseudoTerminal.terminalGuid`
+- Identifies the owning macOS terminal window
+- Useful for grouping workspaces, but not a replacement for `workspace_id` or `panel_id`
+
+## Implemented Request / Response Actions
+
+These actions are implemented today.
+
+### `ping`
+
+Request:
+
+```json
+{"id":"req-1","action":"ping"}
+```
+
+Response:
+
+```json
+{"id":"req-1","ok":true,"result":{"pong":true}}
+```
+
+### `list_workspaces`
+
+Returns one summary per workspace.
+
+Current response fields:
+
+- `workspace_id`
+- `title`
+- `subtitle`
+- `state`
+- `selected`
+- `window_guid`
+- `panel_count`
+- `cwd` when available
+
+### `send_input`
+
+Current contract:
+
+- Requires `workspace_id`
+- Sends input to the selected panel in that workspace
+- Returns `workspace_not_found` if no interactive terminal session accepts the input
+
+### `get_recent_output`
+
+Current contract:
+
+- Requires `workspace_id`
+- Reads recent output from the selected panel in that workspace
+- Supports `max_lines` and `max_chars`
+- Returns `workspace_not_found` if no interactive terminal session produces output
+
+## Next-Step Control Contract
+
+The following additions define the contract for Tidey Remote workspace/panel control. They are not all implemented yet.
+
+### Workspace Summary
+
+`list_workspaces` will grow these optional fields:
+
+- `selected_panel_id`
+- `has_agent_session`
+- `agent_panel_id`
+
+Target shape:
+
+```json
+{
+  "workspace_id": "ws-uuid",
+  "window_guid": "pty-uuid",
+  "title": "api-server",
+  "subtitle": "~/GitHub/project",
+  "state": "idle",
+  "selected": true,
+  "panel_count": 2,
+  "selected_panel_id": "tab-guid",
+  "has_agent_session": true,
+  "agent_panel_id": "tab-guid",
+  "cwd": "/Users/timfeng/GitHub/project"
+}
+```
+
+### Panel Summary
+
+Panels are listed in visual order within a workspace.
+
+Target shape:
+
+```json
+{
+  "panel_id": "tab-guid",
+  "workspace_id": "ws-uuid",
+  "window_guid": "pty-uuid",
+  "title": "zsh",
+  "subtitle": "~/GitHub/project",
+  "state": "idle",
+  "selected": true,
+  "is_browser": false,
+  "cwd": "/Users/timfeng/GitHub/project",
+  "agent_session": {
+    "vendor": "claude",
+    "session_id": "session-uuid"
+  }
+}
+```
+
+`agent_session` is optional. When present, it is owned by `panel_id`, not just `workspace_id`.
+
+### Action Semantics
+
+- Actions that accept `panel_id` operate on that exact panel
+- `workspace_id` remains supported for backwards compatibility
+- For `send_input` and `get_recent_output`, `panel_id` wins over `workspace_id` when both are present
+- When only `workspace_id` is provided, Tidey uses the selected panel in that workspace
+
+### `list_panels`
+
+Request:
+
+```json
+{"id":"req-2","action":"list_panels","params":{"workspace_id":"ws-uuid"}}
+```
+
+Success result:
+
+```json
+{
+  "workspace_id": "ws-uuid",
+  "selected_panel_id": "tab-guid",
+  "panels": [ ...panel summaries... ]
+}
+```
+
+### `select_workspace`
+
+Request params:
+
+- `workspace_id` required
+
+Result:
+
+- `selected: true`
+- latest workspace summary
+
+### `create_workspace`
+
+Minimal contract:
+
+- no required params
+- creates a new shell workspace using Tidey's default terminal profile
+- new workspace starts with one terminal panel
+
+Optional params:
+
+- `title`
+- `make_selected` default `true`
+
+Result:
+
+- created workspace summary
+- created panel summary as `panel`
+
+### `close_workspace`
+
+Request params:
+
+- `workspace_id` required
+
+Result:
+
+- `closed: true`
+- closed `workspace_id`
+
+### `rename_workspace`
+
+Request params:
+
+- `workspace_id` required
+- `title` required
+
+Semantics:
+
+- non-empty `title` sets `Workspace.customTitle`
+- empty `title` clears the custom title and falls back to the derived display title
+
+Result:
+
+- updated workspace summary
+
+### `select_panel`
+
+Request params:
+
+- `panel_id` required
+
+Semantics:
+
+- selects the containing workspace if needed
+- updates that workspace's `selectedPanelIndex`
+
+Result:
+
+- updated panel summary
+- updated workspace summary
+
+### `create_panel`
+
+Request params:
+
+- `workspace_id` required
+
+Optional params:
+
+- `make_selected` default `true`
+
+Minimal contract:
+
+- creates a new shell terminal panel in the target workspace
+- uses Tidey's default terminal profile
+- if possible, inherits the current directory from the selected panel in that workspace
+
+Result:
+
+- created panel summary
+- updated workspace summary
+
+### `close_panel`
+
+Request params:
+
+- `panel_id` required
+
+Semantics:
+
+- closes the exact panel
+- if it was the last panel in the workspace, the workspace closes too
+
+Result:
+
+- `closed: true`
+- `panel_id`
+- `workspace_closed: true|false`
+- `workspace_id`
+
+### Panel-Scoped `send_input`
+
+New request shape:
+
+```json
+{"id":"req-3","action":"send_input","params":{"panel_id":"tab-guid","input":"ls\r"}}
+```
+
+Backwards-compatible request shape remains valid:
+
+```json
+{"id":"req-4","action":"send_input","params":{"workspace_id":"ws-uuid","input":"ls\r"}}
+```
+
+Errors:
+
+- `panel_not_found`
+- `workspace_not_found`
+- `panel_not_interactive`
+- `invalid_params`
+
+### Panel-Scoped `get_recent_output`
+
+New request shape:
+
+```json
+{"id":"req-5","action":"get_recent_output","params":{"panel_id":"tab-guid","max_lines":200,"max_chars":12000}}
+```
+
+Success result includes the resolved target:
+
+```json
+{
+  "panel_id": "tab-guid",
+  "workspace_id": "ws-uuid",
+  "output": "..."
+}
+```
+
+## Push Events Contract
+
+Desktop and mobile sync needs server-pushed events on the same socket connection.
+
+### `subscribe_workspace_events`
+
+Request params:
+
+- `workspace_id` optional filter
+
+Success result:
+
+```json
+{"subscribed":true}
+```
+
+### `unsubscribe_workspace_events`
+
+Success result:
+
+```json
+{"subscribed":false}
+```
+
+### Event Envelope
+
+```json
+{
+  "type": "workspace_event",
+  "v": 1,
+  "replay": false,
+  "event": {
+    "event_id": "evt-123",
+    "seq": 42,
+    "timestamp": "2026-04-10T03:15:00Z",
+    "kind": "panel_selected",
+    "window_guid": "pty-uuid",
+    "workspace_id": "ws-uuid",
+    "panel_id": "tab-guid",
+    "workspace": { ...optional workspace summary... },
+    "panel": { ...optional panel summary... }
+  }
+}
+```
+
+### Event Kinds
+
+- `workspace_created`
+- `workspace_updated`
+- `workspace_closed`
+- `workspace_selected`
+- `panel_created`
+- `panel_updated`
+- `panel_closed`
+- `panel_selected`
+- `agent_session_started`
+- `agent_session_updated`
+- `agent_session_ended`
+
+### Agent Session Ownership
+
+Agent ownership is panel-scoped.
+
+Contract:
+
+- Tidey injects `TIDEY_PANEL_ID` into the panel's shell environment
+- Claude/Codex wrappers write `panel_id` into their local registry/session metadata
+- Bridge adapters use `panel_id` as the authoritative mapping key
+- `workspace_id` is only for grouping and fallback targeting
+
+## Fire-and-Forget Commands
 
 ### `report_shell_state`
 

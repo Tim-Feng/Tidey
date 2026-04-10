@@ -220,6 +220,7 @@ extern NSString *const iTermDidCreateTerminalWindowNotification;
 - (void)tideyOpenFileInEditor:(NSString *)path;
 - (BOOL)tideyOpenURLInBrowser:(NSURL *)url;
 - (NSString *)tideyWorkspaceIdentifierForSession:(PTYSession *)session;
+- (nullable NSString *)tideyPanelIdentifierForSession:(PTYSession *)session;
 - (IBAction)selectTideySidebarWorkspaceAtIndexAction:(id)sender;
 - (void)selectTideyWorkspaceByNumber:(NSInteger)number;
 - (BOOL)selectTideyPanelOrEditorTabByNumber:(NSInteger)number;
@@ -252,14 +253,37 @@ extern NSString *const iTermDidCreateTerminalWindowNotification;
 // Returns workspace summaries for socket clients.
 - (NSArray<NSDictionary *> *)tideySocketWorkspaceSummaries;
 
+// Returns the workspace summary for the given workspace identifier, or nil if not found.
+- (nullable NSDictionary *)tideySocketWorkspaceSummaryForWorkspaceIdentifier:(NSString *)workspaceIdentifier;
+
+// Returns the panel summary for the given panel identifier, or nil if not found.
+- (nullable NSDictionary *)tideySocketPanelSummaryForPanelIdentifier:(NSString *)panelIdentifier;
+
+// Returns all panel summaries for the given workspace identifier, or nil if the workspace does not exist.
+- (nullable NSDictionary *)tideySocketPanelListForWorkspaceIdentifier:(NSString *)workspaceIdentifier;
+
 // Returns the selected session for the workspace with the given identifier, if it exists.
 - (nullable PTYSession *)tideySelectedSessionForWorkspaceIdentifier:(NSString *)workspaceIdentifier;
+
+// Sends terminal input to the selected session for the given panel. Returns YES on success.
+- (BOOL)tideySendInput:(NSString *)input toPanelWithIdentifier:(NSString *)panelIdentifier;
 
 // Sends terminal input to the selected session for the given workspace. Returns YES on success.
 - (BOOL)tideySendInput:(NSString *)input toWorkspaceWithIdentifier:(NSString *)workspaceIdentifier;
 
+// Returns recent terminal output for the panel's selected session, or nil if unavailable.
+- (nullable NSString *)tideyRecentOutputForPanelIdentifier:(NSString *)panelIdentifier;
+
 // Returns recent terminal output for the workspace's selected session, or nil if unavailable.
 - (nullable NSString *)tideyRecentOutputForWorkspaceIdentifier:(NSString *)workspaceIdentifier;
+
+// Workspace and panel control used by RemoteBridge.
+- (nullable NSDictionary *)tideyCreateWorkspaceWithCustomTitle:(nullable NSString *)title;
+- (nullable NSDictionary *)tideyCreatePanelInWorkspaceWithIdentifier:(NSString *)workspaceIdentifier;
+- (BOOL)tideyCloseWorkspaceWithIdentifier:(NSString *)workspaceIdentifier;
+- (BOOL)tideyRenameWorkspaceWithIdentifier:(NSString *)workspaceIdentifier title:(NSString *)title;
+- (BOOL)tideySelectPanelWithIdentifier:(NSString *)panelIdentifier;
+- (BOOL)tideyClosePanelWithIdentifier:(NSString *)panelIdentifier;
 
 // A unique number for this window assigned by finishInitializationWithSmartLayout.
 - (NSString *)terminalGuid;

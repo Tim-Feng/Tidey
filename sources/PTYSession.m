@@ -2903,17 +2903,21 @@ ITERM_WEAKLY_REFERENCEABLE
     }
     PseudoTerminal *terminal = [PseudoTerminal castFrom:self.delegate.realParentWindow];
     NSString *workspaceID = [terminal tideyWorkspaceIdentifierForSession:self];
+    NSString *panelID = [terminal tideyPanelIdentifierForSession:self];
     if (workspaceID.length > 0) {
         env[@"TIDEY_WORKSPACE_ID"] = workspaceID;
     }
+    if (panelID.length > 0) {
+        env[@"TIDEY_PANEL_ID"] = panelID;
+    }
     // Set tmux update-environment so tmux sessions inherit Tidey vars.
     // Runs on every new session so it succeeds once tmux server is available.
-    if (tideySocketPath.length > 0 || workspaceID.length > 0) {
+    if (tideySocketPath.length > 0 || workspaceID.length > 0 || panelID.length > 0) {
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
             @autoreleasepool {
                 NSTask *task = [[[NSTask alloc] init] autorelease];
                 task.launchPath = @"/bin/sh";
-                task.arguments = @[@"-c", @"tmux set-option -ga update-environment ' TIDEY_SOCKET_PATH TIDEY_WORKSPACE_ID TIDEY_BIN_DIR CMUX_SOCKET_PATH ITERM_ENABLE_SHELL_INTEGRATION_WITH_TMUX LC_TERMINAL' 2>/dev/null"];
+                task.arguments = @[@"-c", @"tmux set-option -ga update-environment ' TIDEY_SOCKET_PATH TIDEY_WORKSPACE_ID TIDEY_PANEL_ID TIDEY_BIN_DIR CMUX_SOCKET_PATH ITERM_ENABLE_SHELL_INTEGRATION_WITH_TMUX LC_TERMINAL' 2>/dev/null"];
                 @try {
                     [task launch];
                     [task waitUntilExit];
