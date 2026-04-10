@@ -17,6 +17,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     private var didSeeInteractiveEvent = false
     private var unsupportedVersions = Set<String>()
     private var resolvedToolCallIDs = Set<String>()
+    private var publishedAssistantTextKeys = Set<String>()
 
     init(record: AgentSessionRegistryRecord,
          fileManager: FileManager = .default,
@@ -236,16 +237,11 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                 return
             }
             didSeeInteractiveEvent = true
-            publish(kind: .assistantMessage,
-                    eventID: "assistant:\(record.sessionID):\(nextSequence)",
-                    timestamp: timestamp,
-                    role: role,
-                    text: text,
-                    name: nil,
-                    input: nil,
-                    output: nil,
-                    toolCallID: nil,
-                    metadata: nil)
+            publishAssistantText(kind: .assistantMessage,
+                                 eventNamespace: "assistant",
+                                 phase: phase ?? "message",
+                                 timestamp: timestamp,
+                                 text: text)
 
         case "user":
             guard shouldPublishUserMessage(text) else {
@@ -336,30 +332,42 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         let phase = payload["phase"] as? String
         switch phase {
         case "final_answer":
-            publish(kind: .assistantFinal,
-                    eventID: "final:\(record.sessionID):\(nextSequence)",
-                    timestamp: timestamp,
-                    role: "assistant",
-                    text: text,
-                    name: nil,
-                    input: nil,
-                    output: nil,
-                    toolCallID: nil,
-                    metadata: nil)
+            publishAssistantText(kind: .assistantFinal,
+                                 eventNamespace: "final",
+                                 phase: "final_answer",
+                                 timestamp: timestamp,
+                                 text: text)
         case "commentary":
-            publish(kind: .thinking,
-                    eventID: "thinking:\(record.sessionID):\(nextSequence)",
-                    timestamp: timestamp,
-                    role: "assistant",
-                    text: text,
-                    name: nil,
-                    input: nil,
-                    output: nil,
-                    toolCallID: nil,
-                    metadata: nil)
+            publishAssistantText(kind: .assistantMessage,
+                                 eventNamespace: "commentary",
+                                 phase: "commentary",
+                                 timestamp: timestamp,
+                                 text: text)
         default:
             break
         }
+    }
+
+    private func publishAssistantText(kind: AgentEventKind,
+                                      eventNamespace: String,
+                                      phase: String,
+                                      timestamp: String,
+                                      text: String) {
+        let dedupeKey = "\(kind.rawValue)|\(phase)|\(timestamp)|\(text)"
+        guard !publishedAssistantTextKeys.contains(dedupeKey) else {
+            return
+        }
+        publishedAssistantTextKeys.insert(dedupeKey)
+        publish(kind: kind,
+                eventID: "\(eventNamespace):\(record.sessionID):\(nextSequence)",
+                timestamp: timestamp,
+                role: "assistant",
+                text: text,
+                name: nil,
+                input: nil,
+                output: nil,
+                toolCallID: nil,
+                metadata: ["phase": phase])
     }
 
     private func consumeExecCommandEnd(payload: [String: Any], timestamp: String) {
