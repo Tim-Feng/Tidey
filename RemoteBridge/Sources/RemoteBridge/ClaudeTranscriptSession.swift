@@ -489,30 +489,64 @@ final class ClaudeTranscriptSession {
 
     private func consumeUser(object: [String: Any], timestamp: String) {
         guard let uuid = object["uuid"] as? String,
-              let message = object["message"] as? [String: Any],
-              let content = message["content"] as? [[String: Any]] else {
+              let message = object["message"] as? [String: Any] else {
+            return
+        }
+
+        // User messages can have content as a plain string (user input)
+        if let text = message["content"] as? String {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                publish(kind: .userMessage,
+                        eventID: "\(uuid):user-text:0",
+                        timestamp: timestamp,
+                        role: "user",
+                        text: trimmed,
+                        name: nil,
+                        input: nil,
+                        output: nil,
+                        toolCallID: nil,
+                        metadata: nil)
+            }
+            return
+        }
+
+        guard let content = message["content"] as? [[String: Any]] else {
             return
         }
 
         for (index, block) in content.enumerated() {
-            guard block["type"] as? String == "tool_result" else {
-                continue
+            let blockType = block["type"] as? String
+            if blockType == "tool_result" {
+                let output = Self.stringifyToolResultContent(block["content"])
+                let toolCallID = block["tool_use_id"] as? String
+                let metadata = [
+                    "is_error": ((block["is_error"] as? Bool) == true) ? "true" : "false"
+                ]
+                publish(kind: .toolResult,
+                        eventID: "\(uuid):tool-result:\(index)",
+                        timestamp: timestamp,
+                        role: "tool",
+                        text: nil,
+                        name: nil,
+                        input: nil,
+                        output: output,
+                        toolCallID: toolCallID,
+                        metadata: metadata)
+            } else if blockType == "text" {
+                let text = Self.compactString(block["text"])
+                guard !text.isEmpty else { continue }
+                publish(kind: .userMessage,
+                        eventID: "\(uuid):user-text:\(index)",
+                        timestamp: timestamp,
+                        role: "user",
+                        text: text,
+                        name: nil,
+                        input: nil,
+                        output: nil,
+                        toolCallID: nil,
+                        metadata: nil)
             }
-            let output = Self.stringifyToolResultContent(block["content"])
-            let toolCallID = block["tool_use_id"] as? String
-            let metadata = [
-                "is_error": ((block["is_error"] as? Bool) == true) ? "true" : "false"
-            ]
-            publish(kind: .toolResult,
-                    eventID: "\(uuid):tool-result:\(index)",
-                    timestamp: timestamp,
-                    role: "tool",
-                    text: nil,
-                    name: nil,
-                    input: nil,
-                    output: output,
-                    toolCallID: toolCallID,
-                    metadata: metadata)
         }
     }
 

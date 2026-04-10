@@ -8,6 +8,7 @@ enum AgentEventKind: String, Codable, Sendable {
     case thinking
     case toolCall = "tool_call"
     case toolResult = "tool_result"
+    case userMessage = "user_message"
     case status
 }
 
