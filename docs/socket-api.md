@@ -30,8 +30,8 @@ The directory is created with mode `0700` and the socket file with mode `0600` (
 |---|---|
 | `TIDEY_SOCKET_PATH` | Absolute path to the Unix domain socket. |
 | `TIDEY_WORKSPACE_ID` | Identifier for the current workspace (tab/split). Used to scope status, notifications, and titles to a specific pane. |
-| `TIDEY_PANEL_ID` | Planned addition. Stable identifier for the current terminal panel. Agent wrappers should write this into their session registry so ownership is panel-scoped rather than workspace-scoped. |
-| `TIDEY_BIN_DIR` | Directory containing the `tidey` CLI binary and the `claude` wrapper. Prepended to `PATH` by shell integration. |
+| `TIDEY_PANEL_ID` | Stable identifier for the current terminal panel. Agent wrappers write this into their session registry so ownership is panel-scoped rather than workspace-scoped. |
+| `TIDEY_BIN_DIR` | Directory containing the `tidey` CLI binary plus the `claude` and `codex` wrappers. Prepended to `PATH` by shell integration. |
 | `LC_TERMINAL` | Set to `"Tidey"`. Survives SSH forwarding (unlike `TERM_PROGRAM`), so remote shells can detect they are running inside Tidey. |
 
 ### Protocol
@@ -578,7 +578,7 @@ Overrides the tab/workspace title. Send an empty `title` to clear the override.
 {"action":"set_title","workspace_id":"abc123","title":"Claude Code"}
 ```
 
-## Claude Code Integration
+## Agent CLI Integration
 
 ### Claude Wrapper
 
@@ -589,6 +589,36 @@ Overrides the tab/workspace title. Send an empty `title` to clear the override.
 1. If `TIDEY_SOCKET_PATH` is unset or the socket file doesn't exist, the wrapper passes through to the real `claude` binary unchanged.
 2. Subcommands `mcp`, `config`, and `api-key` always pass through (they don't support hooks).
 3. Otherwise, the wrapper injects `--settings` with a JSON hooks configuration and (unless the user specified `--resume`, `--continue`, `-r`, `-c`, or `--session-id`) generates a new `--session-id`.
+
+### Codex Wrapper
+
+`Resources/bin/codex` is a bash wrapper that intercepts `codex` invocations inside Tidey. It is also placed on `PATH` via `TIDEY_BIN_DIR`.
+
+**Behavior:**
+
+1. If `TIDEY_SOCKET_PATH` is unset, the socket file doesn't exist, or `TIDEY_WORKSPACE_ID` is missing, the wrapper passes through to the real `codex` binary unchanged.
+2. Otherwise, it starts a lightweight background monitor, then `exec`s the real `codex` binary so the interactive PTY behavior stays unchanged.
+3. The monitor watches the running `codex` pid, resolves the active rollout JSONL under `~/.codex/sessions/.../rollout-*.jsonl`, and writes a registry file to:
+
+   - `~/Library/Application Support/Tidey Remote Bridge/agent-sessions/codex/codex-<session-id>.json`
+
+Registry shape:
+
+```json
+{
+  "version": 1,
+  "vendor": "codex",
+  "workspace_id": "ws-uuid",
+  "session_id": "019d70fe-fd27-7a12-a3f7-9c89ae5048b6",
+  "panel_id": "tab-guid",
+  "pid": 12345,
+  "cwd": "/Users/timfeng/GitHub/Tidey",
+  "created_at": "2026-04-10T10:00:00Z",
+  "rollout_path": "/Users/timfeng/.codex/sessions/2026/04/10/rollout-2026-04-10T10-00-00-019d70fe-fd27-7a12-a3f7-9c89ae5048b6.jsonl"
+}
+```
+
+The monitor removes this registry file after `codex` exits.
 
 ### Hook Events
 
@@ -624,7 +654,7 @@ tmux set-option -ga update-environment " TIDEY_SOCKET_PATH TIDEY_WORKSPACE_ID TI
 
 ### 2. PATH Injection
 
-When `TIDEY_BIN_DIR` is set, a one-shot `precmd` hook prepends it to `PATH`. This ensures the `claude` wrapper and `tidey` binary take precedence. The hook removes itself after running once (via `add-zsh-hook -d`).
+When `TIDEY_BIN_DIR` is set, a one-shot `precmd` hook prepends it to `PATH`. This ensures the `claude` / `codex` wrappers and `tidey` binary take precedence. The hook removes itself after running once (via `add-zsh-hook -d`).
 
 ### 3. Shell State Reporting
 

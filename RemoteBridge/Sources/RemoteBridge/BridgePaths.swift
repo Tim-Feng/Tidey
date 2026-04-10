@@ -18,9 +18,14 @@ struct BridgePaths {
         agentSessionsDirectory.appendingPathComponent("claude", isDirectory: true)
     }
 
+    var codexAgentSessionsDirectory: URL {
+        agentSessionsDirectory.appendingPathComponent("codex", isDirectory: true)
+    }
+
     func ensureSupportDirectoriesExist(fileManager: FileManager = .default) throws {
         try fileManager.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: agentSessionsDirectory, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: claudeAgentSessionsDirectory, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: codexAgentSessionsDirectory, withIntermediateDirectories: true)
     }
 }

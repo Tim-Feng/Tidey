@@ -1,0 +1,549 @@
+import Foundation
+
+private let codexTranscriptMajorVersion = "0."
+
+final class CodexTranscriptSession: AgentTranscriptSession {
+    private let queue: DispatchQueue
+    private let fileManager: FileManager
+    private let hub: AgentEventHub
+
+    private var record: AgentSessionRegistryRecord
+    private var resolverTimer: DispatchSourceTimer?
+    private var tailer: JSONLFileTailer?
+    private var transcriptURL: URL?
+    private var nextSequence = 1
+    private var didPublishStart = false
+    private var didPublishEnd = false
+    private var didSeeInteractiveEvent = false
+    private var unsupportedVersions = Set<String>()
+    private var resolvedToolCallIDs = Set<String>()
+
+    init(record: AgentSessionRegistryRecord,
+         fileManager: FileManager = .default,
+         hub: AgentEventHub) {
+        self.record = record
+        self.fileManager = fileManager
+        self.hub = hub
+        self.queue = DispatchQueue(label: "com.tidey.remote-bridge.codex-session.\(record.sessionID)")
+    }
+
+    func start() {
+        queue.async {
+            guard !self.didPublishStart else {
+                return
+            }
+            self.didPublishStart = true
+            self.publish(kind: .sessionStarted,
+                         eventID: "session-start:\(self.record.sessionID)",
+                         timestamp: self.record.createdAt,
+                         role: nil,
+                         text: nil,
+                         name: nil,
+                         input: nil,
+                         output: nil,
+                         toolCallID: nil,
+                         metadata: self.baseMetadata(["cwd": self.record.cwd]))
+            self.startResolver()
+        }
+    }
+
+    func update(record: AgentSessionRegistryRecord) {
+        queue.async {
+            self.record = record
+            if self.transcriptURL == nil {
+                self.resolveTranscriptIfPossible()
+            }
+        }
+    }
+
+    func stop() {
+        queue.sync {
+            resolverTimer?.cancel()
+            resolverTimer = nil
+            tailer?.stop()
+            tailer = nil
+            if !didPublishEnd {
+                didPublishEnd = true
+                publish(kind: .sessionEnded,
+                        eventID: "session-end:\(record.sessionID)",
+                        timestamp: ISO8601DateFormatter().string(from: Date()),
+                        role: nil,
+                        text: nil,
+                        name: nil,
+                        input: nil,
+                        output: nil,
+                        toolCallID: nil,
+                        metadata: baseMetadata(nil))
+            }
+        }
+    }
+
+    private func startResolver() {
+        resolveTranscriptIfPossible()
+        if tailer != nil {
+            return
+        }
+
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + .seconds(1), repeating: .seconds(1))
+        timer.setEventHandler { [weak self] in
+            self?.resolveTranscriptIfPossible()
+        }
+        timer.resume()
+        resolverTimer = timer
+    }
+
+    private func resolveTranscriptIfPossible() {
+        guard tailer == nil else {
+            return
+        }
+        guard let transcriptURL = resolveTranscriptURL() else {
+            return
+        }
+
+        let tailer = JSONLFileTailer(fileURL: transcriptURL,
+                                     queue: queue,
+                                     lineHandler: { [weak self] line in
+                                         self?.consume(line: line)
+                                     },
+                                     invalidationHandler: { [weak self] in
+                                         self?.handleTailerInvalidation()
+                                     })
+        do {
+            try tailer.start()
+            self.tailer = tailer
+            self.transcriptURL = transcriptURL
+            resolverTimer?.cancel()
+            resolverTimer = nil
+        } catch {
+            self.transcriptURL = nil
+        }
+    }
+
+    private func handleTailerInvalidation() {
+        transcriptURL = nil
+        tailer = nil
+        if resolverTimer == nil {
+            startResolver()
+        }
+    }
+
+    private func resolveTranscriptURL() -> URL? {
+        if let transcriptPath = record.transcriptPath,
+           !transcriptPath.isEmpty {
+            let url = URL(fileURLWithPath: NSString(string: transcriptPath).expandingTildeInPath)
+            if fileManager.fileExists(atPath: url.path) {
+                return url
+            }
+        }
+
+        let sessionsDirectory = fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/sessions", isDirectory: true)
+
+        guard let enumerator = fileManager.enumerator(at: sessionsDirectory,
+                                                      includingPropertiesForKeys: [.isRegularFileKey],
+                                                      options: [.skipsHiddenFiles]) else {
+            return nil
+        }
+        for case let url as URL in enumerator {
+            guard url.lastPathComponent.hasPrefix("rollout-"),
+                  url.pathExtension == "jsonl",
+                  url.lastPathComponent.contains(record.sessionID) else {
+                continue
+            }
+            return url
+        }
+        return nil
+    }
+
+    private func consume(line: String) {
+        guard let data = line.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let type = object["type"] as? String,
+              let payload = object["payload"] as? [String: Any] else {
+            return
+        }
+
+        let timestamp = (object["timestamp"] as? String) ?? ISO8601DateFormatter().string(from: Date())
+
+        switch type {
+        case "session_meta":
+            consumeSessionMeta(payload: payload, timestamp: timestamp)
+        case "response_item":
+            consumeResponseItem(payload: payload, timestamp: timestamp)
+        case "event_msg":
+            consumeEventMessage(payload: payload, timestamp: timestamp)
+        default:
+            break
+        }
+    }
+
+    private func consumeSessionMeta(payload: [String: Any], timestamp: String) {
+        guard let sessionID = payload["id"] as? String,
+              sessionID == record.sessionID else {
+            return
+        }
+        if let cliVersion = payload["cli_version"] as? String,
+           !cliVersion.hasPrefix(codexTranscriptMajorVersion),
+           !unsupportedVersions.contains(cliVersion) {
+            unsupportedVersions.insert(cliVersion)
+            publish(kind: .status,
+                    eventID: "status:\(record.sessionID):unsupported-version:\(cliVersion)",
+                    timestamp: timestamp,
+                    role: nil,
+                    text: "Unsupported Codex transcript version \(cliVersion)",
+                    name: nil,
+                    input: nil,
+                    output: nil,
+                    toolCallID: nil,
+                    metadata: baseMetadata(["reason": "unsupported_version"]))
+        }
+    }
+
+    private func consumeResponseItem(payload: [String: Any], timestamp: String) {
+        guard let payloadType = payload["type"] as? String else {
+            return
+        }
+
+        switch payloadType {
+        case "message":
+            consumeMessageItem(payload: payload, timestamp: timestamp)
+        case "function_call":
+            consumeFunctionCall(payload: payload, timestamp: timestamp)
+        case "function_call_output":
+            consumeFunctionCallOutput(payload: payload, timestamp: timestamp)
+        case "reasoning":
+            break
+        default:
+            break
+        }
+    }
+
+    private func consumeMessageItem(payload: [String: Any], timestamp: String) {
+        guard let role = payload["role"] as? String else {
+            return
+        }
+
+        let phase = payload["phase"] as? String
+        let text = Self.compactString(Self.extractMessageText(from: payload["content"]))
+        guard !text.isEmpty else {
+            return
+        }
+
+        switch role {
+        case "assistant":
+            if phase == "commentary" || phase == "final_answer" {
+                return
+            }
+            didSeeInteractiveEvent = true
+            publish(kind: .assistantMessage,
+                    eventID: "assistant:\(record.sessionID):\(nextSequence)",
+                    timestamp: timestamp,
+                    role: role,
+                    text: text,
+                    name: nil,
+                    input: nil,
+                    output: nil,
+                    toolCallID: nil,
+                    metadata: nil)
+
+        case "user":
+            guard shouldPublishUserMessage(text) else {
+                return
+            }
+            publish(kind: .userMessage,
+                    eventID: "user:\(record.sessionID):\(nextSequence)",
+                    timestamp: timestamp,
+                    role: role,
+                    text: text,
+                    name: nil,
+                    input: nil,
+                    output: nil,
+                    toolCallID: nil,
+                    metadata: nil)
+
+        default:
+            break
+        }
+    }
+
+    private func consumeFunctionCall(payload: [String: Any], timestamp: String) {
+        guard let callID = payload["call_id"] as? String else {
+            return
+        }
+
+        didSeeInteractiveEvent = true
+        publish(kind: .toolCall,
+                eventID: callID,
+                timestamp: timestamp,
+                role: "assistant",
+                text: nil,
+                name: (payload["name"] as? String) ?? "tool",
+                input: Self.compactString(payload["arguments"] as? String),
+                output: nil,
+                toolCallID: callID,
+                metadata: nil)
+    }
+
+    private func consumeFunctionCallOutput(payload: [String: Any], timestamp: String) {
+        guard let callID = payload["call_id"] as? String,
+              !resolvedToolCallIDs.contains(callID) else {
+            return
+        }
+        let output = Self.compactString(payload["output"] as? String)
+        guard !output.isEmpty else {
+            return
+        }
+
+        didSeeInteractiveEvent = true
+        resolvedToolCallIDs.insert(callID)
+        publish(kind: .toolResult,
+                eventID: "\(callID):function-output",
+                timestamp: timestamp,
+                role: "tool",
+                text: nil,
+                name: nil,
+                input: nil,
+                output: output,
+                toolCallID: callID,
+                metadata: ["source": "function_call_output"])
+    }
+
+    private func consumeEventMessage(payload: [String: Any], timestamp: String) {
+        guard let payloadType = payload["type"] as? String else {
+            return
+        }
+
+        switch payloadType {
+        case "agent_message":
+            consumeAgentMessage(payload: payload, timestamp: timestamp)
+        case "exec_command_end":
+            consumeExecCommandEnd(payload: payload, timestamp: timestamp)
+        case "patch_apply_end":
+            consumePatchApplyEnd(payload: payload, timestamp: timestamp)
+        default:
+            break
+        }
+    }
+
+    private func consumeAgentMessage(payload: [String: Any], timestamp: String) {
+        let text = Self.compactString(payload["message"] as? String)
+        guard !text.isEmpty else {
+            return
+        }
+
+        didSeeInteractiveEvent = true
+        let phase = payload["phase"] as? String
+        switch phase {
+        case "final_answer":
+            publish(kind: .assistantFinal,
+                    eventID: "final:\(record.sessionID):\(nextSequence)",
+                    timestamp: timestamp,
+                    role: "assistant",
+                    text: text,
+                    name: nil,
+                    input: nil,
+                    output: nil,
+                    toolCallID: nil,
+                    metadata: nil)
+        case "commentary":
+            publish(kind: .thinking,
+                    eventID: "thinking:\(record.sessionID):\(nextSequence)",
+                    timestamp: timestamp,
+                    role: "assistant",
+                    text: text,
+                    name: nil,
+                    input: nil,
+                    output: nil,
+                    toolCallID: nil,
+                    metadata: nil)
+        default:
+            break
+        }
+    }
+
+    private func consumeExecCommandEnd(payload: [String: Any], timestamp: String) {
+        guard let callID = payload["call_id"] as? String,
+              !resolvedToolCallIDs.contains(callID) else {
+            return
+        }
+        let output = Self.compactString(
+            (payload["aggregated_output"] as? String) ??
+            (payload["formatted_output"] as? String) ??
+            (payload["stdout"] as? String) ??
+            (payload["stderr"] as? String)
+        )
+        guard !output.isEmpty else {
+            return
+        }
+
+        didSeeInteractiveEvent = true
+        resolvedToolCallIDs.insert(callID)
+        publish(kind: .toolResult,
+                eventID: "\(callID):exec-end",
+                timestamp: timestamp,
+                role: "tool",
+                text: nil,
+                name: nil,
+                input: nil,
+                output: output,
+                toolCallID: callID,
+                metadata: Self.metadata(
+                    source: "exec_command_end",
+                    values: [
+                        "exit_code": Self.stringValue(payload["exit_code"]),
+                        "status": payload["status"] as? String,
+                    ]
+                ))
+    }
+
+    private func consumePatchApplyEnd(payload: [String: Any], timestamp: String) {
+        guard let callID = payload["call_id"] as? String,
+              !resolvedToolCallIDs.contains(callID) else {
+            return
+        }
+        let output = Self.compactString(
+            (payload["stdout"] as? String) ??
+            (payload["stderr"] as? String)
+        )
+        guard !output.isEmpty else {
+            return
+        }
+
+        didSeeInteractiveEvent = true
+        resolvedToolCallIDs.insert(callID)
+        publish(kind: .toolResult,
+                eventID: "\(callID):patch-end",
+                timestamp: timestamp,
+                role: "tool",
+                text: nil,
+                name: nil,
+                input: nil,
+                output: output,
+                toolCallID: callID,
+                metadata: Self.metadata(
+                    source: "patch_apply_end",
+                    values: [
+                        "success": Self.boolString(payload["success"]),
+                        "status": payload["status"] as? String,
+                    ]
+                ))
+    }
+
+    private func shouldPublishUserMessage(_ text: String) -> Bool {
+        guard !text.isEmpty else {
+            return false
+        }
+        if didSeeInteractiveEvent {
+            return true
+        }
+        return !Self.isBootstrapUserMessage(text)
+    }
+
+    private func publish(kind: AgentEventKind,
+                         eventID: String,
+                         timestamp: String,
+                         role: String?,
+                         text: String?,
+                         name: String?,
+                         input: String?,
+                         output: String?,
+                         toolCallID: String?,
+                         metadata: [String: String]?) {
+        let event = AgentEvent(eventID: eventID,
+                               seq: nextSequence,
+                               vendor: "codex",
+                               workspaceID: record.workspaceID,
+                               sessionID: record.sessionID,
+                               timestamp: timestamp,
+                               type: kind,
+                               role: role,
+                               text: text,
+                               name: name,
+                               input: input,
+                               output: output,
+                               toolCallID: toolCallID,
+                               metadata: baseMetadata(metadata))
+        nextSequence += 1
+        hub.publish(event)
+    }
+
+    private func baseMetadata(_ metadata: [String: String]?) -> [String: String]? {
+        var merged = metadata ?? [:]
+        if let panelID = record.panelID, !panelID.isEmpty {
+            merged["panel_id"] = panelID
+        }
+        return merged.isEmpty ? nil : merged
+    }
+
+    private static func extractMessageText(from value: Any?) -> String {
+        if let string = value as? String {
+            return string
+        }
+        guard let blocks = value as? [[String: Any]] else {
+            return ""
+        }
+
+        let parts = blocks.compactMap { block -> String? in
+            guard let type = block["type"] as? String else {
+                return nil
+            }
+            switch type {
+            case "input_text", "output_text", "text", "summary_text":
+                return block["text"] as? String
+            default:
+                return nil
+            }
+        }
+        return parts.joined(separator: "\n\n")
+    }
+
+    private static func isBootstrapUserMessage(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prefixes = [
+            "# AGENTS.md instructions",
+            "<environment_context>",
+            "<permissions instructions>",
+            "<app-context>",
+        ]
+        return prefixes.contains { trimmed.hasPrefix($0) }
+    }
+
+    private static func compactString(_ value: String?) -> String {
+        guard let value else {
+            return ""
+        }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.count <= 8000 {
+            return trimmed
+        }
+        return String(trimmed.prefix(8000)) + "..."
+    }
+
+    private static func stringValue(_ value: Any?) -> String? {
+        if let string = value as? String {
+            return string
+        }
+        if let number = value as? NSNumber {
+            return number.stringValue
+        }
+        return nil
+    }
+
+    private static func boolString(_ value: Any?) -> String? {
+        guard let bool = value as? Bool else {
+            return nil
+        }
+        return bool ? "true" : "false"
+    }
+
+    private static func metadata(source: String, values: [String: String?]) -> [String: String] {
+        var metadata = ["source": source]
+        for (key, value) in values {
+            if let value, !value.isEmpty {
+                metadata[key] = value
+            }
+        }
+        return metadata
+    }
+}

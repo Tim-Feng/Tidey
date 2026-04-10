@@ -14,7 +14,7 @@ This document records the MVP architecture for structured agent transcript strea
 - Claude Code: `~/.claude/projects/<project>/<session-id>.jsonl`
 - Codex: `~/.codex/sessions/<date>/rollout-<id>.jsonl`
 
-MVP implements Claude Code first.
+Current implementation supports both Claude Code and Codex.
 
 ## Unified Event Protocol
 
@@ -46,6 +46,7 @@ Supported event types:
 - `session_ended`
 - `assistant_message`
 - `assistant_final`
+- `user_message`
 - `thinking`
 - `tool_call`
 - `tool_result`
@@ -58,6 +59,7 @@ Bridge does not guess from `cwd` or from Codex sqlite state.
 It reads explicit registry files from:
 
 - `~/Library/Application Support/Tidey Remote Bridge/agent-sessions/claude/*.json`
+- `~/Library/Application Support/Tidey Remote Bridge/agent-sessions/codex/*.json`
 
 Registry record shape:
 
@@ -78,6 +80,13 @@ The Claude wrapper owns this file:
 - create before launching Claude
 - remove after Claude exits
 
+The Codex wrapper owns the Codex registry file:
+
+- start a background monitor before `exec`-ing the real `codex`
+- resolve the active `rollout-*.jsonl` path
+- write `rollout_path` / `transcript_path` plus `panel_id`
+- remove the registry file after `codex` exits
+
 Bridge treats missing or dead `pid` records as stale and drops them.
 
 ## Bridge Components
@@ -89,6 +98,10 @@ Bridge treats missing or dead `pid` records as stale and drops them.
   - resolves `session_id -> transcript path`
   - tails the JSONL incrementally
   - converts Claude transcript lines into normalized events
+- `CodexTranscriptSession`
+  - resolves `session_id -> rollout path`
+  - tails the JSONL incrementally
+  - converts Codex transcript lines into normalized events
 - `AgentEventHub`
   - stores a bounded replay buffer
   - fans out live events to WebSocket subscribers
@@ -124,6 +137,6 @@ Only normalized user-visible events are pushed.
 
 ## Known Gaps
 
-- Codex adapter is not implemented in MVP.
 - Claude resume flows without a concrete `session_id` cannot be mapped reliably.
+- Codex bootstrap `role=user` messages contain injected instructions and are filtered with heuristics.
 - Transcript replay is bounded in memory by the bridge event hub.

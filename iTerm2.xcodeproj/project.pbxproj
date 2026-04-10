@@ -5195,6 +5195,7 @@
 		F7C626F9C65F19A1BEE800DA /* iTermWordExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BF1E9C79C30008CC546F987 /* iTermWordExtractor.swift */; };
 		FB4CEC973C7E9235362E3F26 /* iTermRemotePreferences.h in Headers */ = {isa = PBXBuildFile; fileRef = FB4CECF4AC4392B21E87A07B /* iTermRemotePreferences.h */; };
 		T1DEY00001BIN0CLAUDE0002 /* claude in CopyFiles */ = {isa = PBXBuildFile; fileRef = T1DEY00001BIN0CLAUDE0001 /* claude */; };
+		T1DEY00001BIN0CODEX0002 /* codex in CopyFiles */ = {isa = PBXBuildFile; fileRef = T1DEY00001BIN0CODEX0001 /* codex */; };
 
 /* End PBXBuildFile section */
 
@@ -5470,6 +5471,7 @@
 			dstSubfolderSpec = 7;
 			files = (
 				T1DEY00001BIN0CLAUDE0002 /* claude in CopyFiles */,
+				T1DEY00001BIN0CODEX0002 /* codex in CopyFiles */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -9310,6 +9312,7 @@
 		FBB2EBCD040AC7C201F955DB /* important.png */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; name = important.png; path = images/important.png; sourceTree = "<group>"; };
 		FBD0AD0A0337A5B701F955DB /* PseudoTerminal.m */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 4; lastKnownFileType = sourcecode.c.objc; lineEnding = 0; path = PseudoTerminal.m; sourceTree = "<group>"; tabWidth = 4; xcLanguageSpecificationIdentifier = xcode.lang.objc; };
 		T1DEY00001BIN0CLAUDE0001 /* claude */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = claude; sourceTree = "<group>"; };
+		T1DEY00001BIN0CODEX0001 /* codex */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = codex; sourceTree = "<group>"; };
 
 /* End PBXFileReference section */
 
@@ -11475,6 +11478,7 @@
 			isa = PBXGroup;
 			children = (
 				T1DEY00001BIN0CLAUDE0001 /* claude */,
+				T1DEY00001BIN0CODEX0001 /* codex */,
 			);
 			path = bin;
 			sourceTree = "<group>";

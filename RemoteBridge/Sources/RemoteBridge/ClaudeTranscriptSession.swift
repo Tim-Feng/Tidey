@@ -3,7 +3,13 @@ import Foundation
 
 private let claudeTranscriptMajorVersion = "2."
 
-struct AgentSessionRegistryRecord: Codable, Sendable {
+protocol AgentTranscriptSession: AnyObject {
+    func start()
+    func update(record: AgentSessionRegistryRecord)
+    func stop()
+}
+
+struct AgentSessionRegistryRecord: Decodable, Sendable {
     let version: Int
     let vendor: String
     let workspaceID: String
@@ -24,6 +30,22 @@ struct AgentSessionRegistryRecord: Codable, Sendable {
         case cwd
         case createdAt = "created_at"
         case transcriptPath = "transcript_path"
+        case rolloutPath = "rollout_path"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decode(Int.self, forKey: .version)
+        vendor = try container.decode(String.self, forKey: .vendor)
+        workspaceID = try container.decode(String.self, forKey: .workspaceID)
+        sessionID = try container.decode(String.self, forKey: .sessionID)
+        panelID = try container.decodeIfPresent(String.self, forKey: .panelID)
+        pid = try container.decode(Int32.self, forKey: .pid)
+        cwd = try container.decode(String.self, forKey: .cwd)
+        createdAt = try container.decode(String.self, forKey: .createdAt)
+        transcriptPath =
+            try container.decodeIfPresent(String.self, forKey: .transcriptPath) ??
+            container.decodeIfPresent(String.self, forKey: .rolloutPath)
     }
 }
 
@@ -33,9 +55,10 @@ final class AgentSessionRegistryMonitor {
     private let hub: AgentEventHub
     private let queue = DispatchQueue(label: "com.tidey.remote-bridge.agent-registry")
     private var timer: DispatchSourceTimer?
-    private var watcher: DispatchSourceFileSystemObject?
-    private var watcherFD: Int32 = -1
-    private var sessions = [String: ClaudeTranscriptSession]()
+    private var watchers = [String: DispatchSourceFileSystemObject]()
+    private var watcherFDs = [String: Int32]()
+    private var claudeSessions = [String: ClaudeTranscriptSession]()
+    private var codexSessions = [String: CodexTranscriptSession]()
     private var scanScheduled = false
 
     init(paths: BridgePaths = BridgePaths(),
@@ -49,7 +72,7 @@ final class AgentSessionRegistryMonitor {
     func start() throws {
         try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
         scanRegistry()
-        startWatcher()
+        startWatchers()
 
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + .seconds(2), repeating: .seconds(2))
@@ -61,17 +84,25 @@ final class AgentSessionRegistryMonitor {
     }
 
     deinit {
-        stopWatcher()
+        stopWatchers()
         timer?.cancel()
-        for session in sessions.values {
+        for session in claudeSessions.values {
+            session.stop()
+        }
+        for session in codexSessions.values {
             session.stop()
         }
     }
 
-    private func startWatcher() {
-        stopWatcher()
+    private func startWatchers() {
+        startWatcher(for: "claude", directory: paths.claudeAgentSessionsDirectory)
+        startWatcher(for: "codex", directory: paths.codexAgentSessionsDirectory)
+    }
 
-        let fd = open(paths.claudeAgentSessionsDirectory.path, O_EVTONLY)
+    private func startWatcher(for vendor: String, directory: URL) {
+        stopWatcher(for: vendor)
+
+        let fd = open(directory.path, O_EVTONLY)
         guard fd >= 0 else {
             return
         }
@@ -80,29 +111,34 @@ final class AgentSessionRegistryMonitor {
                                                                eventMask: [.write, .extend, .attrib, .link, .rename, .delete, .revoke],
                                                                queue: queue)
         source.setEventHandler { [weak self] in
-            self?.handleWatcherEvent()
+            self?.handleWatcherEvent(vendor: vendor)
         }
         source.setCancelHandler { [fd] in
             close(fd)
         }
         source.resume()
 
-        watcherFD = fd
-        watcher = source
+        watcherFDs[vendor] = fd
+        watchers[vendor] = source
     }
 
-    private func stopWatcher() {
-        if let watcher {
-            self.watcher = nil
-            watcher.cancel()
-        } else if watcherFD >= 0 {
-            close(watcherFD)
+    private func stopWatchers() {
+        for vendor in Set(watchers.keys).union(watcherFDs.keys) {
+            stopWatcher(for: vendor)
         }
-        watcherFD = -1
     }
 
-    private func handleWatcherEvent() {
-        guard let watcher else {
+    private func stopWatcher(for vendor: String) {
+        if let watcher = watchers.removeValue(forKey: vendor) {
+            watcher.cancel()
+        } else if let fd = watcherFDs[vendor] {
+            close(fd)
+        }
+        watcherFDs[vendor] = nil
+    }
+
+    private func handleWatcherEvent(vendor: String) {
+        guard let watcher = watchers[vendor] else {
             return
         }
         let events = watcher.data
@@ -110,7 +146,8 @@ final class AgentSessionRegistryMonitor {
 
         if events.contains(.rename) || events.contains(.delete) || events.contains(.revoke) {
             try? paths.ensureSupportDirectoriesExist(fileManager: fileManager)
-            startWatcher()
+            let directory = vendor == "codex" ? paths.codexAgentSessionsDirectory : paths.claudeAgentSessionsDirectory
+            startWatcher(for: vendor, directory: directory)
         }
     }
 
@@ -129,27 +166,48 @@ final class AgentSessionRegistryMonitor {
     }
 
     private func scanRegistry() {
-        let records = loadClaudeRecords()
-        let activeSessionIDs = Set(records.map(\.sessionID))
+        syncClaudeRecords(loadRecords(at: paths.claudeAgentSessionsDirectory, vendor: "claude"))
+        syncCodexRecords(loadRecords(at: paths.codexAgentSessionsDirectory, vendor: "codex"))
+    }
 
+    private func syncClaudeRecords(_ records: [AgentSessionRegistryRecord]) {
+        let activeSessionIDs = Set(records.map(\.sessionID))
         for record in records {
-            if let session = sessions[record.sessionID] {
+            if let session = claudeSessions[record.sessionID] {
                 session.update(record: record)
             } else {
                 let session = ClaudeTranscriptSession(record: record, fileManager: fileManager, hub: hub)
-                sessions[record.sessionID] = session
+                claudeSessions[record.sessionID] = session
                 session.start()
             }
         }
 
-        let staleSessionIDs = sessions.keys.filter { !activeSessionIDs.contains($0) }
+        let staleSessionIDs = claudeSessions.keys.filter { !activeSessionIDs.contains($0) }
         for sessionID in staleSessionIDs {
-            sessions.removeValue(forKey: sessionID)?.stop()
+            claudeSessions.removeValue(forKey: sessionID)?.stop()
         }
     }
 
-    private func loadClaudeRecords() -> [AgentSessionRegistryRecord] {
-        guard let enumerator = fileManager.enumerator(at: paths.claudeAgentSessionsDirectory,
+    private func syncCodexRecords(_ records: [AgentSessionRegistryRecord]) {
+        let activeSessionIDs = Set(records.map(\.sessionID))
+        for record in records {
+            if let session = codexSessions[record.sessionID] {
+                session.update(record: record)
+            } else {
+                let session = CodexTranscriptSession(record: record, fileManager: fileManager, hub: hub)
+                codexSessions[record.sessionID] = session
+                session.start()
+            }
+        }
+
+        let staleSessionIDs = codexSessions.keys.filter { !activeSessionIDs.contains($0) }
+        for sessionID in staleSessionIDs {
+            codexSessions.removeValue(forKey: sessionID)?.stop()
+        }
+    }
+
+    private func loadRecords(at directory: URL, vendor: String) -> [AgentSessionRegistryRecord] {
+        guard let enumerator = fileManager.enumerator(at: directory,
                                                       includingPropertiesForKeys: [.isRegularFileKey],
                                                       options: [.skipsHiddenFiles]) else {
             return []
@@ -161,7 +219,7 @@ final class AgentSessionRegistryMonitor {
                   let data = try? Data(contentsOf: url),
                   let record = try? JSONDecoder().decode(AgentSessionRegistryRecord.self, from: data),
                   record.version == 1,
-                  record.vendor == "claude" else {
+                  record.vendor == vendor else {
                 continue
             }
             if processExists(record.pid) {
@@ -181,7 +239,7 @@ final class AgentSessionRegistryMonitor {
     }
 }
 
-private final class JSONLFileTailer {
+final class JSONLFileTailer {
     private let fileURL: URL
     private let queue: DispatchQueue
     private let lineHandler: (String) -> Void
