@@ -27,14 +27,22 @@ write_registry_file() {
     local pid="$4"
     local cwd="$5"
     local created_at="$6"
+    local tmp_path=""
 
     mkdir -p "$REGISTRY_ROOT"
-    printf '{"version":1,"vendor":"claude","workspace_id":"%s","session_id":"%s","pid":%s,"cwd":"%s","created_at":"%s"}\n' \
-        "$(json_escape "$workspace_id")" \
-        "$(json_escape "$session_id")" \
-        "$pid" \
-        "$(json_escape "$cwd")" \
-        "$(json_escape "$created_at")" > "$path"
+    tmp_path="$(mktemp "$REGISTRY_ROOT/.claude-registry.XXXXXX")"
+    {
+        printf '{"version":1,"vendor":"claude","workspace_id":"%s","session_id":"%s","pid":%s,"cwd":"%s","created_at":"%s"}\n' \
+            "$(json_escape "$workspace_id")" \
+            "$(json_escape "$session_id")" \
+            "$pid" \
+            "$(json_escape "$cwd")" \
+            "$(json_escape "$created_at")" > "$tmp_path"
+        mv -f "$tmp_path" "$path"
+    } || {
+        rm -f "$tmp_path"
+        return 1
+    }
 }
 
 shell_quote() {
@@ -127,8 +135,8 @@ if ! SESSION_ID="$(find_explicit_session_id "$@")"; then
     if has_implicit_resume_flag "$@"; then
         SESSION_ID=""
     else
-    SESSION_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
-    set -- --session-id "$SESSION_ID" "$@"
+        SESSION_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
+        set -- --session-id "$SESSION_ID" "$@"
     fi
 fi
 

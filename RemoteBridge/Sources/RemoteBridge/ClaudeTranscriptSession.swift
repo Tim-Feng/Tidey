@@ -31,7 +31,10 @@ final class AgentSessionRegistryMonitor {
     private let hub: AgentEventHub
     private let queue = DispatchQueue(label: "com.tidey.remote-bridge.agent-registry")
     private var timer: DispatchSourceTimer?
+    private var watcher: DispatchSourceFileSystemObject?
+    private var watcherFD: Int32 = -1
     private var sessions = [String: ClaudeTranscriptSession]()
+    private var scanScheduled = false
 
     init(paths: BridgePaths = BridgePaths(),
          fileManager: FileManager = .default,
@@ -44,6 +47,7 @@ final class AgentSessionRegistryMonitor {
     func start() throws {
         try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
         scanRegistry()
+        startWatcher()
 
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + .seconds(2), repeating: .seconds(2))
@@ -55,9 +59,70 @@ final class AgentSessionRegistryMonitor {
     }
 
     deinit {
+        stopWatcher()
         timer?.cancel()
         for session in sessions.values {
             session.stop()
+        }
+    }
+
+    private func startWatcher() {
+        stopWatcher()
+
+        let fd = open(paths.claudeAgentSessionsDirectory.path, O_EVTONLY)
+        guard fd >= 0 else {
+            return
+        }
+
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd,
+                                                               eventMask: [.write, .extend, .attrib, .link, .rename, .delete, .revoke],
+                                                               queue: queue)
+        source.setEventHandler { [weak self] in
+            self?.handleWatcherEvent()
+        }
+        source.setCancelHandler { [fd] in
+            close(fd)
+        }
+        source.resume()
+
+        watcherFD = fd
+        watcher = source
+    }
+
+    private func stopWatcher() {
+        if let watcher {
+            self.watcher = nil
+            watcher.cancel()
+        } else if watcherFD >= 0 {
+            close(watcherFD)
+        }
+        watcherFD = -1
+    }
+
+    private func handleWatcherEvent() {
+        guard let watcher else {
+            return
+        }
+        let events = watcher.data
+        scheduleScan()
+
+        if events.contains(.rename) || events.contains(.delete) || events.contains(.revoke) {
+            try? paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+            startWatcher()
+        }
+    }
+
+    private func scheduleScan() {
+        guard !scanScheduled else {
+            return
+        }
+        scanScheduled = true
+        queue.asyncAfter(deadline: .now() + .milliseconds(100)) { [weak self] in
+            guard let self else {
+                return
+            }
+            self.scanScheduled = false
+            self.scanRegistry()
         }
     }
 
