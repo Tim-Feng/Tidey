@@ -223,7 +223,9 @@ static const NSInteger iTermPathFinderMaxExtendedSuffixChunks = 25;
                                              NSString *const __unsafe_unretained *capturedStrings,
                                              const NSRange *capturedRanges,
                                              volatile BOOL *const stop) {
-                                    [parts addObject:capturedStrings[1]];
+                                    if (capturedStrings[1].length > 0) {
+                                        [parts addObject:capturedStrings[1]];
+                                    }
                                     [parts addObject:capturedStrings[2]];
                                     lastRange = capturedRanges[2];
                                 }];
