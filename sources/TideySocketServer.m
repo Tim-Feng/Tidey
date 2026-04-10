@@ -97,6 +97,8 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
 @interface TideySocketServer ()
 @property(nonatomic, strong) iTermSocket *socket;
 @property(nonatomic, strong) NSMutableSet<TideySocketConnection *> *connections;
+@property(nonatomic, strong) NSMapTable<TideySocketConnection *, NSString *> *workspaceEventSubscriptions;
+@property(nonatomic) long long nextWorkspaceEventSequence;
 @property(nonatomic) BOOL started;
 @end
 
@@ -130,8 +132,18 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
     self = [super init];
     if (self) {
         _connections = [[NSMutableSet alloc] init];
+        _workspaceEventSubscriptions = [NSMapTable strongToStrongObjectsMapTable];
+        _nextWorkspaceEventSequence = 1;
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(handleWorkspaceEventNotification:)
+                                                     name:PseudoTerminalTideyWorkspaceEventNotification
+                                                   object:nil];
     }
     return self;
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 - (BOOL)start {
@@ -217,6 +229,7 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
                                                }
                                                  closeHandler:^(TideySocketConnection *closingConnection) {
                                                      __strong __typeof(weakSelf) strongSelf = weakSelf;
+                                                     [strongSelf removeWorkspaceEventSubscriptionForConnection:closingConnection];
                                                      [strongSelf.connections removeObject:closingConnection];
                                                  }];
     [self.connections addObject:connection];
@@ -245,6 +258,60 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
         return [iTermController sharedInstance].currentTerminal ?: [[[iTermController sharedInstance] terminals] firstObject];
     }
     return [[iTermController sharedInstance] terminalWithGuid:windowGUID];
+}
+
+- (void)setWorkspaceEventSubscriptionForConnection:(TideySocketConnection *)connection
+                                       workspaceID:(NSString *)workspaceID {
+    if (!connection) {
+        return;
+    }
+    [self.workspaceEventSubscriptions setObject:(workspaceID ?: @"") forKey:connection];
+}
+
+- (void)removeWorkspaceEventSubscriptionForConnection:(TideySocketConnection *)connection {
+    if (!connection) {
+        return;
+    }
+    [self.workspaceEventSubscriptions removeObjectForKey:connection];
+}
+
+- (NSDictionary *)workspaceEventEnvelopeForEvent:(NSDictionary *)event {
+    if (event.count == 0) {
+        return nil;
+    }
+    static NSISO8601DateFormatter *formatter;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        formatter = [[NSISO8601DateFormatter alloc] init];
+        formatter.formatOptions = NSISO8601DateFormatWithInternetDateTime;
+    });
+    NSMutableDictionary *payload = [NSMutableDictionary dictionaryWithDictionary:event];
+    payload[@"event_id"] = [[NSUUID UUID] UUIDString];
+    payload[@"seq"] = @(self.nextWorkspaceEventSequence++);
+    payload[@"timestamp"] = [formatter stringFromDate:[NSDate date]];
+    return @{
+        @"type": @"workspace_event",
+        @"v": @1,
+        @"replay": @NO,
+        @"event": payload,
+    };
+}
+
+- (void)handleWorkspaceEventNotification:(NSNotification *)notification {
+    NSDictionary *event = [notification.userInfo isKindOfClass:[NSDictionary class]] ? notification.userInfo : nil;
+    NSDictionary *envelope = [self workspaceEventEnvelopeForEvent:event];
+    if (!envelope) {
+        return;
+    }
+    NSString *workspaceID = [event[@"workspace_id"] isKindOfClass:[NSString class]] ? event[@"workspace_id"] : nil;
+    for (TideySocketConnection *connection in self.workspaceEventSubscriptions) {
+        NSString *filterWorkspaceID = [self.workspaceEventSubscriptions objectForKey:connection];
+        if (filterWorkspaceID.length > 0 &&
+            ![filterWorkspaceID isEqualToString:workspaceID]) {
+            continue;
+        }
+        [connection sendJSONObject:envelope];
+    }
 }
 
 - (void)handleMessage:(NSDictionary *)message onConnection:(TideySocketConnection *)connection {
@@ -315,6 +382,25 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
 
     if ([action isEqualToString:@"list_workspaces"]) {
         [self handleListWorkspacesRequestWithID:requestID onConnection:connection];
+        return;
+    }
+
+    if ([action isEqualToString:@"subscribe_workspace_events"]) {
+        NSString *workspaceID = TideySocketStringParam(source, @"workspace_id");
+        [self setWorkspaceEventSubscriptionForConnection:connection workspaceID:workspaceID];
+        NSMutableDictionary *result = [NSMutableDictionary dictionaryWithObject:@YES forKey:@"subscribed"];
+        if (workspaceID.length > 0) {
+            result[@"workspace_id"] = workspaceID;
+        }
+        [self sendSuccessResponseForRequestID:requestID result:result onConnection:connection];
+        return;
+    }
+
+    if ([action isEqualToString:@"unsubscribe_workspace_events"]) {
+        [self removeWorkspaceEventSubscriptionForConnection:connection];
+        [self sendSuccessResponseForRequestID:requestID
+                                       result:@{ @"subscribed": @NO }
+                                  onConnection:connection];
         return;
     }
 
@@ -785,6 +871,19 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
     NSDictionary *params = [message[@"params"] isKindOfClass:[NSDictionary class]] ? message[@"params"] : nil;
     NSDictionary *source = params ?: message;
 
+    if ([action isEqualToString:@"subscribe_workspace_events"]) {
+        NSString *workspaceID = TideySocketStringParam(source, @"workspace_id");
+        NSMutableDictionary *result = [NSMutableDictionary dictionaryWithObject:@YES forKey:@"subscribed"];
+        if (workspaceID.length > 0) {
+            result[@"workspace_id"] = workspaceID;
+        }
+        return [self tideySuccessResponseForRequestID:requestID result:result];
+    }
+
+    if ([action isEqualToString:@"unsubscribe_workspace_events"]) {
+        return [self tideySuccessResponseForRequestID:requestID result:@{ @"subscribed": @NO }];
+    }
+
     if ([action isEqualToString:@"send_input"]) {
         NSString *workspaceID = TideySocketStringParam(source, @"workspace_id");
         NSString *input = TideySocketStringParam(source, @"input");
@@ -933,6 +1032,7 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
         [connection close];
     }
     [self.connections removeAllObjects];
+    [self.workspaceEventSubscriptions removeAllObjects];
     [self.socket close];
     self.socket = nil;
     unlink(TideySocketServer.socketPath.UTF8String);

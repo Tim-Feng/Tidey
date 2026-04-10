@@ -21,7 +21,7 @@ final class TideySocketClient {
         return try JSONDecoder().decode(BridgeResponse.self, from: line)
     }
 
-    private static func connectUnixSocket(path: String) throws -> Int32 {
+    static func connectUnixSocket(path: String) throws -> Int32 {
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
         let maxLength = MemoryLayout.size(ofValue: addr.sun_path)
@@ -58,7 +58,7 @@ final class TideySocketClient {
         return fd
     }
 
-    private static func writeAll(_ data: Data, to fd: Int32) throws {
+    static func writeAll(_ data: Data, to fd: Int32) throws {
         try data.withUnsafeBytes { rawBuffer in
             guard let baseAddress = rawBuffer.baseAddress else {
                 return
@@ -102,7 +102,7 @@ final class TideySocketClient {
         throw BridgeInternalError.invalidResponse
     }
 
-    private static func currentPOSIXError(defaultCode: POSIXErrorCode) -> POSIXError {
+    static func currentPOSIXError(defaultCode: POSIXErrorCode) -> POSIXError {
         POSIXError(POSIXErrorCode(rawValue: errno) ?? defaultCode)
     }
 }

@@ -10,6 +10,7 @@ final class TideyRemoteBridgeServer {
     private let token: String
     private let socketClient: TideySocketClient
     private let eventHub: AgentEventHub
+    private let workspaceEventHub: WorkspaceEventHub
     private let registryMonitor: AgentSessionRegistryMonitor
     private let group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
 
@@ -18,12 +19,14 @@ final class TideyRemoteBridgeServer {
          token: String,
          socketClient: TideySocketClient,
          eventHub: AgentEventHub,
+         workspaceEventHub: WorkspaceEventHub,
          registryMonitor: AgentSessionRegistryMonitor) {
         self.host = host
         self.port = port
         self.token = token
         self.socketClient = socketClient
         self.eventHub = eventHub
+        self.workspaceEventHub = workspaceEventHub
         self.registryMonitor = registryMonitor
     }
 
@@ -37,8 +40,10 @@ final class TideyRemoteBridgeServer {
                 }
                 return channel.eventLoop.makeSucceededFuture([:])
             },
-            upgradePipelineHandler: { [socketClient, eventHub] channel, _ in
-                channel.pipeline.addHandler(WebSocketFrameHandler(socketClient: socketClient, eventHub: eventHub))
+            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub] channel, _ in
+                channel.pipeline.addHandler(WebSocketFrameHandler(socketClient: socketClient,
+                                                                  eventHub: eventHub,
+                                                                  workspaceEventHub: workspaceEventHub))
             }
         )
 
@@ -91,15 +96,24 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
     typealias InboundIn = WebSocketFrame
     typealias OutboundOut = WebSocketFrame
 
+    private struct LocalRequestResult {
+        let response: BridgeResponse
+        let agentReplayEnvelopes: [AgentEventEnvelope]
+        let workspaceReplayEnvelopes: [WorkspaceEventEnvelope]
+    }
+
     private let socketClient: TideySocketClient
     private let eventHub: AgentEventHub
+    private let workspaceEventHub: WorkspaceEventHub
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
-    private var subscriptionID: UUID?
+    private var agentSubscriptionID: UUID?
+    private var workspaceSubscriptionID: UUID?
 
-    init(socketClient: TideySocketClient, eventHub: AgentEventHub) {
+    init(socketClient: TideySocketClient, eventHub: AgentEventHub, workspaceEventHub: WorkspaceEventHub) {
         self.socketClient = socketClient
         self.eventHub = eventHub
+        self.workspaceEventHub = workspaceEventHub
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
@@ -122,12 +136,14 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
             }
             DispatchQueue.global(qos: .userInitiated).async { [decoder, socketClient] in
                 let response: BridgeResponse
-                var replayEnvelopes = [AgentEventEnvelope]()
+                var agentReplayEnvelopes = [AgentEventEnvelope]()
+                var workspaceReplayEnvelopes = [WorkspaceEventEnvelope]()
                 do {
                     let request = try decoder.decode(BridgeRequest.self, from: Data(text.utf8))
                     if let localResult = self.handleLocalRequest(request, context: context) {
                         response = localResult.response
-                        replayEnvelopes = localResult.replayEnvelopes
+                        agentReplayEnvelopes = localResult.agentReplayEnvelopes
+                        workspaceReplayEnvelopes = localResult.workspaceReplayEnvelopes
                     } else {
                         response = try socketClient.send(request)
                     }
@@ -140,8 +156,11 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                 }
                 context.eventLoop.execute {
                     self.send(response: response, to: context)
-                    for envelope in replayEnvelopes {
+                    for envelope in agentReplayEnvelopes {
                         self.send(envelope: envelope, to: context)
+                    }
+                    for envelope in workspaceReplayEnvelopes {
+                        self.send(workspaceEnvelope: envelope, to: context)
                     }
                 }
             }
@@ -152,11 +171,12 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
 
     func channelInactive(context: ChannelHandlerContext) {
         unsubscribeFromAgentEvents()
+        unsubscribeFromWorkspaceEvents()
         context.fireChannelInactive()
     }
 
     private func handleLocalRequest(_ request: BridgeRequest,
-                                    context: ChannelHandlerContext) -> (response: BridgeResponse, replayEnvelopes: [AgentEventEnvelope])? {
+                                    context: ChannelHandlerContext) -> LocalRequestResult? {
         switch request.action {
         case "subscribe_agent_events":
             let workspaceID = request.params?["workspace_id"]?.stringValue
@@ -170,26 +190,64 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                     self.send(envelope: envelope, to: context)
                 }
             }
-            self.subscriptionID = subscriptionID
-            return (
-                BridgeResponse(id: request.id,
-                               ok: true,
-                               result: [
-                                "subscribed": .bool(true),
-                                "workspace_id": workspaceID.map(JSONValue.string) ?? .null,
-                               ],
-                               error: nil),
-                replayEnvelopes
+            self.agentSubscriptionID = subscriptionID
+            return LocalRequestResult(
+                response: BridgeResponse(id: request.id,
+                                         ok: true,
+                                         result: [
+                                            "subscribed": .bool(true),
+                                            "workspace_id": workspaceID.map(JSONValue.string) ?? .null,
+                                         ],
+                                         error: nil),
+                agentReplayEnvelopes: replayEnvelopes,
+                workspaceReplayEnvelopes: []
             )
 
         case "unsubscribe_agent_events":
             unsubscribeFromAgentEvents()
-            return (
-                BridgeResponse(id: request.id,
-                               ok: true,
-                               result: ["subscribed": .bool(false)],
-                               error: nil),
-                []
+            return LocalRequestResult(
+                response: BridgeResponse(id: request.id,
+                                         ok: true,
+                                         result: ["subscribed": .bool(false)],
+                                         error: nil),
+                agentReplayEnvelopes: [],
+                workspaceReplayEnvelopes: []
+            )
+
+        case "subscribe_workspace_events":
+            let workspaceID = request.params?["workspace_id"]?.stringValue
+            unsubscribeFromWorkspaceEvents()
+
+            let (subscriptionID, replayEnvelopes) = workspaceEventHub.subscribe(workspaceID: workspaceID) { [weak self, weak context] envelope in
+                guard let self, let context else {
+                    return
+                }
+                context.eventLoop.execute {
+                    self.send(workspaceEnvelope: envelope, to: context)
+                }
+            }
+            self.workspaceSubscriptionID = subscriptionID
+            return LocalRequestResult(
+                response: BridgeResponse(id: request.id,
+                                         ok: true,
+                                         result: [
+                                            "subscribed": .bool(true),
+                                            "workspace_id": workspaceID.map(JSONValue.string) ?? .null,
+                                         ],
+                                         error: nil),
+                agentReplayEnvelopes: [],
+                workspaceReplayEnvelopes: replayEnvelopes
+            )
+
+        case "unsubscribe_workspace_events":
+            unsubscribeFromWorkspaceEvents()
+            return LocalRequestResult(
+                response: BridgeResponse(id: request.id,
+                                         ok: true,
+                                         result: ["subscribed": .bool(false)],
+                                         error: nil),
+                agentReplayEnvelopes: [],
+                workspaceReplayEnvelopes: []
             )
 
         default:
@@ -198,9 +256,16 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
     }
 
     private func unsubscribeFromAgentEvents() {
-        if let subscriptionID {
-            eventHub.unsubscribe(subscriptionID)
-            self.subscriptionID = nil
+        if let agentSubscriptionID {
+            eventHub.unsubscribe(agentSubscriptionID)
+            self.agentSubscriptionID = nil
+        }
+    }
+
+    private func unsubscribeFromWorkspaceEvents() {
+        if let workspaceSubscriptionID {
+            workspaceEventHub.unsubscribe(workspaceSubscriptionID)
+            self.workspaceSubscriptionID = nil
         }
     }
 
@@ -219,6 +284,18 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
     private func send(envelope: AgentEventEnvelope, to context: ChannelHandlerContext) {
         do {
             let payload = try encoder.encode(envelope)
+            var buffer = context.channel.allocator.buffer(capacity: payload.count)
+            buffer.writeBytes(payload)
+            let frame = WebSocketFrame(fin: true, opcode: .text, data: buffer)
+            context.writeAndFlush(wrapOutboundOut(frame), promise: nil)
+        } catch {
+            context.close(promise: nil)
+        }
+    }
+
+    private func send(workspaceEnvelope: WorkspaceEventEnvelope, to context: ChannelHandlerContext) {
+        do {
+            let payload = try encoder.encode(workspaceEnvelope)
             var buffer = context.channel.allocator.buffer(capacity: payload.count)
             buffer.writeBytes(payload)
             let frame = WebSocketFrame(fin: true, opcode: .text, data: buffer)
