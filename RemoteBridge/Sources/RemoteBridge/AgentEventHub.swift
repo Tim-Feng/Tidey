@@ -9,6 +9,8 @@ final class AgentEventHub {
     private struct SessionState {
         var seenEventIDs = Set<String>()
         var bufferedEvents = [AgentEvent]()
+        var latestSessionStarted: AgentEvent?
+        var isActive = false
     }
 
     private let queue = DispatchQueue(label: "com.tidey.remote-bridge.agent-event-hub")
@@ -24,7 +26,15 @@ final class AgentEventHub {
             subscribers[subscriberID] = Subscriber(workspaceID: workspaceID, sink: sink)
 
             let replay = sessions.values
-                .flatMap(\.bufferedEvents)
+                .flatMap { state -> [AgentEvent] in
+                    var events = state.bufferedEvents
+                    if state.isActive,
+                       let sessionStarted = state.latestSessionStarted,
+                       !events.contains(where: { $0.eventID == sessionStarted.eventID }) {
+                        events.append(sessionStarted)
+                    }
+                    return events
+                }
                 .filter { event in
                     guard let workspaceID else {
                         return true
@@ -48,6 +58,42 @@ final class AgentEventHub {
         }
     }
 
+    @discardableResult
+    func migrateSession(sessionID: String,
+                        toWorkspaceID workspaceID: String,
+                        panelID: String?) -> Int {
+        queue.sync {
+            guard var state = sessions[sessionID], !state.bufferedEvents.isEmpty else {
+                if sessions[sessionID]?.latestSessionStarted == nil {
+                    return 0
+                }
+                guard var state = sessions[sessionID] else {
+                    return 0
+                }
+                if let sessionStarted = state.latestSessionStarted {
+                    state.latestSessionStarted = Self.rewritten(event: sessionStarted,
+                                                                workspaceID: workspaceID,
+                                                                panelID: panelID)
+                    sessions[sessionID] = state
+                    return 1
+                }
+                return 0
+            }
+
+            state.bufferedEvents = state.bufferedEvents.map { event in
+                Self.rewritten(event: event, workspaceID: workspaceID, panelID: panelID)
+            }
+            if let sessionStarted = state.latestSessionStarted {
+                state.latestSessionStarted = Self.rewritten(event: sessionStarted,
+                                                            workspaceID: workspaceID,
+                                                            panelID: panelID)
+            }
+            let migratedCount = state.bufferedEvents.count
+            sessions[sessionID] = state
+            return migratedCount
+        }
+    }
+
     func publish(_ event: AgentEvent) {
         let deliveries: [Subscriber] = queue.sync {
             var state = sessions[event.sessionID] ?? SessionState()
@@ -64,6 +110,15 @@ final class AgentEventHub {
             if state.bufferedEvents.count > maxBufferedEvents {
                 state.bufferedEvents.removeFirst(state.bufferedEvents.count - maxBufferedEvents)
             }
+            switch event.type {
+            case .sessionStarted:
+                state.latestSessionStarted = event
+                state.isActive = true
+            case .sessionEnded:
+                state.isActive = false
+            default:
+                break
+            }
             sessions[event.sessionID] = state
 
             let deliveries = subscribers.values.filter { subscriber in
@@ -79,5 +134,30 @@ final class AgentEventHub {
         for subscriber in deliveries {
             subscriber.sink(envelope)
         }
+    }
+
+    private static func rewritten(event: AgentEvent,
+                                  workspaceID: String,
+                                  panelID: String?) -> AgentEvent {
+        var metadata = event.metadata ?? [:]
+        if let panelID, !panelID.isEmpty {
+            metadata["panel_id"] = panelID
+        } else {
+            metadata.removeValue(forKey: "panel_id")
+        }
+        return AgentEvent(eventID: event.eventID,
+                          seq: event.seq,
+                          vendor: event.vendor,
+                          workspaceID: workspaceID,
+                          sessionID: event.sessionID,
+                          timestamp: event.timestamp,
+                          type: event.type,
+                          role: event.role,
+                          text: event.text,
+                          name: event.name,
+                          input: event.input,
+                          output: event.output,
+                          toolCallID: event.toolCallID,
+                          metadata: metadata.isEmpty ? nil : metadata)
     }
 }

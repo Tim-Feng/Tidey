@@ -50,7 +50,27 @@ final class CodexTranscriptSession: AgentTranscriptSession {
 
     func update(record: AgentSessionRegistryRecord) {
         queue.async {
+            let previousRecord = self.record
+            let didMigrateWorkspace = previousRecord.workspaceID != record.workspaceID
+            let didMigratePanel = previousRecord.panelID != record.panelID
+            if didMigrateWorkspace || didMigratePanel {
+                self.hub.migrateSession(sessionID: previousRecord.sessionID,
+                                        toWorkspaceID: record.workspaceID,
+                                        panelID: record.panelID)
+            }
             self.record = record
+            if didMigrateWorkspace || didMigratePanel {
+                self.publish(kind: .sessionStarted,
+                             eventID: "session-start:\(record.sessionID):migrated:\(self.nextSequence)",
+                             timestamp: ISO8601DateFormatter().string(from: Date()),
+                             role: nil,
+                             text: nil,
+                             name: nil,
+                             input: nil,
+                             output: nil,
+                             toolCallID: nil,
+                             metadata: self.baseMetadata(["cwd": record.cwd]))
+            }
             if self.transcriptURL == nil {
                 self.resolveTranscriptIfPossible()
             }

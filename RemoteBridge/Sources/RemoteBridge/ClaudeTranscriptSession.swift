@@ -49,6 +49,13 @@ struct AgentSessionRegistryRecord: Decodable, Sendable {
     }
 }
 
+struct ActiveAgentSessionSnapshot: Sendable {
+    let vendor: String
+    let workspaceID: String
+    let sessionID: String
+    let panelID: String?
+}
+
 final class AgentSessionRegistryMonitor {
     private let paths: BridgePaths
     private let fileManager: FileManager
@@ -59,6 +66,7 @@ final class AgentSessionRegistryMonitor {
     private var watcherFDs = [String: Int32]()
     private var claudeSessions = [String: ClaudeTranscriptSession]()
     private var codexSessions = [String: CodexTranscriptSession]()
+    private var activeRecords = [String: AgentSessionRegistryRecord]()
     private var scanScheduled = false
 
     init(paths: BridgePaths = BridgePaths(),
@@ -81,6 +89,39 @@ final class AgentSessionRegistryMonitor {
         }
         timer.resume()
         self.timer = timer
+    }
+
+    func activeSessionForPanel(workspaceID: String, panelID: String) -> ActiveAgentSessionSnapshot? {
+        queue.sync {
+            activeRecords.values
+                .first { $0.workspaceID == workspaceID && $0.panelID == panelID }
+                .map {
+                    ActiveAgentSessionSnapshot(vendor: $0.vendor,
+                                               workspaceID: $0.workspaceID,
+                                               sessionID: $0.sessionID,
+                                               panelID: $0.panelID)
+                }
+        }
+    }
+
+    func activeSessionForWorkspace(workspaceID: String) -> ActiveAgentSessionSnapshot? {
+        queue.sync {
+            activeRecords.values
+                .filter { $0.workspaceID == workspaceID }
+                .sorted {
+                    if $0.createdAt == $1.createdAt {
+                        return $0.sessionID < $1.sessionID
+                    }
+                    return $0.createdAt > $1.createdAt
+                }
+                .first
+                .map {
+                    ActiveAgentSessionSnapshot(vendor: $0.vendor,
+                                               workspaceID: $0.workspaceID,
+                                               sessionID: $0.sessionID,
+                                               panelID: $0.panelID)
+                }
+        }
     }
 
     deinit {
@@ -166,8 +207,11 @@ final class AgentSessionRegistryMonitor {
     }
 
     private func scanRegistry() {
-        syncClaudeRecords(loadRecords(at: paths.claudeAgentSessionsDirectory, vendor: "claude"))
-        syncCodexRecords(loadRecords(at: paths.codexAgentSessionsDirectory, vendor: "codex"))
+        let claudeRecords = loadRecords(at: paths.claudeAgentSessionsDirectory, vendor: "claude")
+        let codexRecords = loadRecords(at: paths.codexAgentSessionsDirectory, vendor: "codex")
+        syncClaudeRecords(claudeRecords)
+        syncCodexRecords(codexRecords)
+        activeRecords = Dictionary(uniqueKeysWithValues: (claudeRecords + codexRecords).map { ($0.sessionID, $0) })
     }
 
     private func syncClaudeRecords(_ records: [AgentSessionRegistryRecord]) {
@@ -388,7 +432,27 @@ final class ClaudeTranscriptSession {
 
     func update(record: AgentSessionRegistryRecord) {
         queue.async {
+            let previousRecord = self.record
+            let didMigrateWorkspace = previousRecord.workspaceID != record.workspaceID
+            let didMigratePanel = previousRecord.panelID != record.panelID
+            if didMigrateWorkspace || didMigratePanel {
+                self.hub.migrateSession(sessionID: previousRecord.sessionID,
+                                        toWorkspaceID: record.workspaceID,
+                                        panelID: record.panelID)
+            }
             self.record = record
+            if didMigrateWorkspace || didMigratePanel {
+                self.publish(kind: .sessionStarted,
+                             eventID: "session-start:\(record.sessionID):migrated:\(self.nextSequence)",
+                             timestamp: ISO8601DateFormatter().string(from: Date()),
+                             role: nil,
+                             text: nil,
+                             name: nil,
+                             input: nil,
+                             output: nil,
+                             toolCallID: nil,
+                             metadata: self.baseMetadata(["cwd": record.cwd]))
+            }
             if self.transcriptURL == nil {
                 self.resolveTranscriptIfPossible()
             }

@@ -40,10 +40,11 @@ final class TideyRemoteBridgeServer {
                 }
                 return channel.eventLoop.makeSucceededFuture([:])
             },
-            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub] channel, _ in
+            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub, registryMonitor] channel, _ in
                 channel.pipeline.addHandler(WebSocketFrameHandler(socketClient: socketClient,
                                                                   eventHub: eventHub,
-                                                                  workspaceEventHub: workspaceEventHub))
+                                                                  workspaceEventHub: workspaceEventHub,
+                                                                  registryMonitor: registryMonitor))
             }
         )
 
@@ -105,15 +106,20 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
     private let socketClient: TideySocketClient
     private let eventHub: AgentEventHub
     private let workspaceEventHub: WorkspaceEventHub
+    private let registryMonitor: AgentSessionRegistryMonitor
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     private var agentSubscriptionID: UUID?
     private var workspaceSubscriptionID: UUID?
 
-    init(socketClient: TideySocketClient, eventHub: AgentEventHub, workspaceEventHub: WorkspaceEventHub) {
+    init(socketClient: TideySocketClient,
+         eventHub: AgentEventHub,
+         workspaceEventHub: WorkspaceEventHub,
+         registryMonitor: AgentSessionRegistryMonitor) {
         self.socketClient = socketClient
         self.eventHub = eventHub
         self.workspaceEventHub = workspaceEventHub
+        self.registryMonitor = registryMonitor
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
@@ -145,7 +151,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                         agentReplayEnvelopes = localResult.agentReplayEnvelopes
                         workspaceReplayEnvelopes = localResult.workspaceReplayEnvelopes
                     } else {
-                        response = try socketClient.send(request)
+                        response = self.augment(response: try socketClient.send(request), for: request)
                     }
                 } catch let error as BridgeInternalError {
                     response = BridgeResponse(id: nil, ok: false, result: nil, error: error.payload)
@@ -269,6 +275,77 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
             workspaceEventHub.unsubscribe(workspaceSubscriptionID)
             self.workspaceSubscriptionID = nil
         }
+    }
+
+    private func augment(response: BridgeResponse, for request: BridgeRequest) -> BridgeResponse {
+        guard response.ok, let result = response.result else {
+            return response
+        }
+        switch request.action {
+        case "list_panels":
+            return BridgeResponse(id: response.id,
+                                  ok: response.ok,
+                                  v: response.v,
+                                  result: augmentPanelListResult(result),
+                                  error: response.error)
+        case "list_workspaces":
+            return BridgeResponse(id: response.id,
+                                  ok: response.ok,
+                                  v: response.v,
+                                  result: augmentWorkspaceListResult(result),
+                                  error: response.error)
+        default:
+            return response
+        }
+    }
+
+    private func augmentPanelListResult(_ result: [String: JSONValue]) -> [String: JSONValue] {
+        guard let workspaceID = result["workspace_id"]?.stringValue,
+              let panels = result["panels"]?.arrayValue else {
+            return result
+        }
+
+        let augmentedPanels = panels.map { panelValue -> JSONValue in
+            guard var panel = panelValue.objectValue,
+                  let panelID = panel["panel_id"]?.stringValue else {
+                return panelValue
+            }
+            if let session = registryMonitor.activeSessionForPanel(workspaceID: workspaceID, panelID: panelID) {
+                panel["agent_session"] = .object([
+                    "vendor": .string(session.vendor),
+                    "session_id": .string(session.sessionID),
+                ])
+            }
+            return .object(panel)
+        }
+
+        var augmented = result
+        augmented["panels"] = .array(augmentedPanels)
+        return augmented
+    }
+
+    private func augmentWorkspaceListResult(_ result: [String: JSONValue]) -> [String: JSONValue] {
+        guard let workspaces = result["workspaces"]?.arrayValue else {
+            return result
+        }
+
+        let augmentedWorkspaces = workspaces.map { workspaceValue -> JSONValue in
+            guard var workspace = workspaceValue.objectValue,
+                  let workspaceID = workspace["workspace_id"]?.stringValue else {
+                return workspaceValue
+            }
+            if let session = registryMonitor.activeSessionForWorkspace(workspaceID: workspaceID) {
+                workspace["has_agent_session"] = .bool(true)
+                if let panelID = session.panelID, !panelID.isEmpty {
+                    workspace["agent_panel_id"] = .string(panelID)
+                }
+            }
+            return .object(workspace)
+        }
+
+        var augmented = result
+        augmented["workspaces"] = .array(augmentedWorkspaces)
+        return augmented
     }
 
     private func send(response: BridgeResponse, to context: ChannelHandlerContext) {
