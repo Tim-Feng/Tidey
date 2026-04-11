@@ -21,8 +21,17 @@ static NSString *TideyDefaultSocketPath(void) {
     return [[TideySocketServer socketDirectory] stringByAppendingPathComponent:@"tidey.sock"];
 }
 
+static NSString *TideyDevelopmentSocketPath(void) {
+    return [[TideySocketServer socketDirectory] stringByAppendingPathComponent:@"tidey-dev.sock"];
+}
+
 static NSString *TideyAlternateSocketPath(void) {
     return [[TideySocketServer socketDirectory] stringByAppendingPathComponent:[NSString stringWithFormat:@"tidey-%d.sock", getpid()]];
+}
+
+static BOOL TideyBundleIdentifierPrefersDevelopmentSocket(void) {
+    NSString *bundleIdentifier = [NSBundle mainBundle].bundleIdentifier ?: @"";
+    return [bundleIdentifier hasSuffix:@".dev"];
 }
 
 static BOOL TideySocketPathHasLiveListener(NSString *path) {
@@ -158,11 +167,22 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
     [self cleanupStaleSockets:directory];
 
     NSString *defaultPath = TideyDefaultSocketPath();
-    NSString *chosenPath = defaultPath;
-    if (TideySocketPathHasLiveListener(defaultPath)) {
-        chosenPath = TideyAlternateSocketPath();
+    NSString *chosenPath = nil;
+    if (TideyBundleIdentifierPrefersDevelopmentSocket()) {
+        NSString *developmentPath = TideyDevelopmentSocketPath();
+        if (TideySocketPathHasLiveListener(developmentPath)) {
+            chosenPath = TideyAlternateSocketPath();
+        } else {
+            unlink(developmentPath.UTF8String);
+            chosenPath = developmentPath;
+        }
     } else {
-        unlink(defaultPath.UTF8String);
+        chosenPath = defaultPath;
+        if (TideySocketPathHasLiveListener(defaultPath)) {
+            chosenPath = TideyAlternateSocketPath();
+        } else {
+            unlink(defaultPath.UTF8String);
+        }
     }
 
     if (![chosenPath isEqualToString:defaultPath]) {

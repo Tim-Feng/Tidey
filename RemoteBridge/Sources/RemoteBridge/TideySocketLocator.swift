@@ -15,11 +15,18 @@ final class TideySocketLocator {
         if Self.pathHasLiveListener(primary) {
             return primary
         }
+        let development = socketDirectory.appendingPathComponent("tidey-dev.sock").path
+        if Self.pathHasLiveListener(development) {
+            return development
+        }
         guard let entries = try? fileManager.contentsOfDirectory(atPath: socketDirectory.path) else {
             return nil
         }
         let candidates = entries
-            .filter { $0.hasPrefix("tidey-") && $0.hasSuffix(".sock") }
+            .filter { entry in
+                guard entry.hasSuffix(".sock") else { return false }
+                return entry != "tidey.sock" && entry != "tidey-dev.sock"
+            }
             .sorted()
         for candidate in candidates {
             let path = socketDirectory.appendingPathComponent(candidate).path

@@ -20,7 +20,11 @@ The sections below also define the next-step contract for panel-scoped control, 
 
 ## Connection
 
-**Socket path:** `~/Library/Application Support/Tidey/tidey.sock`
+**Socket paths:**
+
+- Production Tidey (`com.tidey.app`): `~/Library/Application Support/Tidey/tidey.sock`
+- Development Tidey (`*.dev` bundle identifiers): `~/Library/Application Support/Tidey/tidey-dev.sock`
+- Additional same-flavor fallback instances: `~/Library/Application Support/Tidey/tidey-<pid>.sock`
 
 The directory is created with mode `0700` and the socket file with mode `0600` (owner read/write only).
 
