@@ -150,6 +150,10 @@
   - `report_shell_state` / `set_status` 不能默默落到 broadcast
 - broadcast notification 的 unread state 不能用單一共享 bit
   - read/unread 要按 workspace 分開算
+- stream / subscription protocol 要有 completion signal
+  - `subscribe_agent_events` 如果只回放 replay event、但不告訴 client replay 何時結束，client 只能寫死 timeout 猜「應該送完了」
+  - 這種 timeout 很快會變成產品體感延遲的最大頭，甚至比實際 RTT 還大
+  - 解法是在 protocol 裡明確帶 completion 訊號，例如 `replay_count` 或 `replay_end`，不要把「何時可以 reveal UI」交給 client 猜
 - Claude hook 不要靠 terminal output 猜狀態
   - 用明確事件：`session-start`、`prompt-submit`、`notification`、`stop`、`session-end`
 - hook command 只要含空白路徑就要先 escape
