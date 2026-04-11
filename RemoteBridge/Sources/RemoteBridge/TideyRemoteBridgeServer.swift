@@ -220,12 +220,24 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
         case "subscribe_agent_events":
             let workspaceID = request.params?["workspace_id"]?.stringValue
             let sessionID = request.params?["session_id"]?.stringValue
+            if let rawSinceSeq = request.params?["since_seq"],
+               rawSinceSeq.intValue == nil {
+                return LocalRequestResult(
+                    response: BridgeResponse(id: request.id,
+                                             ok: false,
+                                             result: nil,
+                                             error: BridgeInternalError.invalidRequest("subscribe_agent_events received an unrepresentable since_seq").payload),
+                    agentReplayEnvelopes: [],
+                    workspaceReplayEnvelopes: []
+                )
+            }
             let sinceSeq = request.params?["since_seq"]?.intValue
+            let noReplay = request.params?["no_replay"]?.boolLikeValue ?? false
             unsubscribeFromAgentEvents()
 
             let (subscriptionID, replayEnvelopes) = eventHub.subscribe(workspaceID: workspaceID,
                                                                        sessionID: sessionID,
-                                                                       sinceSeq: sinceSeq) { [weak self, weak context] envelope in
+                                                                       sinceSeq: noReplay ? Int.max : sinceSeq) { [weak self, weak context] envelope in
                 guard let self, let context else {
                     return
                 }
@@ -241,6 +253,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                                             "subscribed": .bool(true),
                                             "workspace_id": workspaceID.map(JSONValue.string) ?? .null,
                                             "session_id": sessionID.map(JSONValue.string) ?? .null,
+                                            "no_replay": .bool(noReplay),
                                             "replay_count": .number(Double(replayEnvelopes.count)),
                                          ],
                                          error: nil),

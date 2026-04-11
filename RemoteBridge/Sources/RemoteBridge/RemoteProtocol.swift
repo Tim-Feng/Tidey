@@ -54,7 +54,12 @@ enum JSONValue: Codable, Sendable {
         case .string(let value):
             return value
         case .number(let value):
-            return value.rounded(.towardZero) == value ? Int(value) : value
+            if value.isFinite,
+               value.rounded(.towardZero) == value,
+               let exact = Int(exactly: value) {
+                return exact
+            }
+            return value
         case .bool(let value):
             return value
         case .object(let value):
@@ -80,9 +85,31 @@ enum JSONValue: Codable, Sendable {
         return nil
     }
 
+    var boolLikeValue: Bool? {
+        switch self {
+        case .bool(let value):
+            return value
+        case .number(let value):
+            return value != 0
+        case .string(let value):
+            switch value.lowercased() {
+            case "true", "1", "yes", "on":
+                return true
+            case "false", "0", "no", "off":
+                return false
+            default:
+                return nil
+            }
+        default:
+            return nil
+        }
+    }
+
     var intValue: Int? {
-        if case .number(let value) = self {
-            return Int(value)
+        if case .number(let value) = self,
+           value.isFinite,
+           value.rounded(.towardZero) == value {
+            return Int(exactly: value)
         }
         return nil
     }
