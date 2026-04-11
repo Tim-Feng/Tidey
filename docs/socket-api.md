@@ -408,7 +408,7 @@ Request params:
 Success result:
 
 ```json
-{"subscribed":true}
+{"subscribed":true,"replay_count":0}
 ```
 
 ### `unsubscribe_workspace_events`

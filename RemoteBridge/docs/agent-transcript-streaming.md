@@ -115,6 +115,16 @@ New actions:
 - `subscribe_agent_events`
 - `unsubscribe_agent_events`
 
+`subscribe_agent_events` responds with:
+
+```json
+{
+  "subscribed": true,
+  "workspace_id": "ws-123",
+  "replay_count": 12
+}
+```
+
 After subscription, bridge sends:
 
 - replayed buffered events with `"replay": true`
