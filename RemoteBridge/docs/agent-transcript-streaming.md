@@ -112,8 +112,27 @@ Existing request/response actions stay intact.
 
 New actions:
 
+- `fetch_agent_events`
 - `subscribe_agent_events`
 - `unsubscribe_agent_events`
+
+`fetch_agent_events` accepts:
+
+- `workspace_id` required
+- `session_id` optional
+- `limit` required
+- `before_seq` optional
+
+It returns:
+
+```json
+{
+  "events": [ ...agent events... ],
+  "oldest_seq": 701,
+  "newest_seq": 1000,
+  "has_more": true
+}
+```
 
 `subscribe_agent_events` responds with:
 
@@ -121,9 +140,15 @@ New actions:
 {
   "subscribed": true,
   "workspace_id": "ws-123",
+  "session_id": "6d22e1a7-...",
   "replay_count": 12
 }
 ```
+
+`subscribe_agent_events` also accepts optional replay filters:
+
+- `session_id`
+- `since_seq`
 
 After subscription, bridge sends:
 
@@ -149,4 +174,4 @@ Only normalized user-visible events are pushed.
 
 - Claude resume flows without a concrete `session_id` cannot be mapped reliably.
 - Codex bootstrap `role=user` messages contain injected instructions and are filtered with heuristics.
-- Transcript replay is bounded in memory by the bridge event hub.
+- Transcript replay and history fetches are bounded in memory by the bridge event hub.

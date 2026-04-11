@@ -184,11 +184,48 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
     private func handleLocalRequest(_ request: BridgeRequest,
                                     context: ChannelHandlerContext) -> LocalRequestResult? {
         switch request.action {
+        case "fetch_agent_events":
+            guard let workspaceID = request.params?["workspace_id"]?.stringValue,
+                  let limit = request.params?["limit"]?.intValue else {
+                return LocalRequestResult(
+                    response: BridgeResponse(id: request.id,
+                                             ok: false,
+                                             result: nil,
+                                             error: BridgeInternalError.invalidRequest("fetch_agent_events requires workspace_id and limit").payload),
+                    agentReplayEnvelopes: [],
+                    workspaceReplayEnvelopes: []
+                )
+            }
+
+            let sessionID = request.params?["session_id"]?.stringValue
+            let beforeSeq = request.params?["before_seq"]?.intValue
+            let fetchResult = eventHub.fetch(workspaceID: workspaceID,
+                                             sessionID: sessionID,
+                                             limit: limit,
+                                             beforeSeq: beforeSeq)
+            return LocalRequestResult(
+                response: BridgeResponse(id: request.id,
+                                         ok: true,
+                                         result: [
+                                            "events": .array(fetchResult.events.map(Self.jsonValue(for:))),
+                                            "oldest_seq": .number(Double(fetchResult.oldestSeq)),
+                                            "newest_seq": .number(Double(fetchResult.newestSeq)),
+                                            "has_more": .bool(fetchResult.hasMore),
+                                         ],
+                                         error: nil),
+                agentReplayEnvelopes: [],
+                workspaceReplayEnvelopes: []
+            )
+
         case "subscribe_agent_events":
             let workspaceID = request.params?["workspace_id"]?.stringValue
+            let sessionID = request.params?["session_id"]?.stringValue
+            let sinceSeq = request.params?["since_seq"]?.intValue
             unsubscribeFromAgentEvents()
 
-            let (subscriptionID, replayEnvelopes) = eventHub.subscribe(workspaceID: workspaceID) { [weak self, weak context] envelope in
+            let (subscriptionID, replayEnvelopes) = eventHub.subscribe(workspaceID: workspaceID,
+                                                                       sessionID: sessionID,
+                                                                       sinceSeq: sinceSeq) { [weak self, weak context] envelope in
                 guard let self, let context else {
                     return
                 }
@@ -203,6 +240,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                                          result: [
                                             "subscribed": .bool(true),
                                             "workspace_id": workspaceID.map(JSONValue.string) ?? .null,
+                                            "session_id": sessionID.map(JSONValue.string) ?? .null,
                                             "replay_count": .number(Double(replayEnvelopes.count)),
                                          ],
                                          error: nil),
@@ -382,5 +420,39 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
         } catch {
             context.close(promise: nil)
         }
+    }
+
+    private static func jsonValue(for event: AgentEvent) -> JSONValue {
+        var object: [String: JSONValue] = [
+            "event_id": .string(event.eventID),
+            "seq": .number(Double(event.seq)),
+            "vendor": .string(event.vendor),
+            "workspace_id": .string(event.workspaceID),
+            "session_id": .string(event.sessionID),
+            "timestamp": .string(event.timestamp),
+            "type": .string(event.type.rawValue),
+        ]
+        if let role = event.role {
+            object["role"] = .string(role)
+        }
+        if let text = event.text {
+            object["text"] = .string(text)
+        }
+        if let name = event.name {
+            object["name"] = .string(name)
+        }
+        if let input = event.input {
+            object["input"] = .string(input)
+        }
+        if let output = event.output {
+            object["output"] = .string(output)
+        }
+        if let toolCallID = event.toolCallID {
+            object["tool_call_id"] = .string(toolCallID)
+        }
+        if let metadata = event.metadata {
+            object["metadata"] = .object(metadata.mapValues(JSONValue.string))
+        }
+        return .object(object)
     }
 }

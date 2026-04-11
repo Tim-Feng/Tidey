@@ -80,6 +80,13 @@ enum JSONValue: Codable, Sendable {
         return nil
     }
 
+    var intValue: Int? {
+        if case .number(let value) = self {
+            return Int(value)
+        }
+        return nil
+    }
+
     var objectValue: [String: JSONValue]? {
         if case .object(let value) = self {
             return value

@@ -1,8 +1,16 @@
 import Foundation
 
 final class AgentEventHub {
+    struct FetchResult {
+        let events: [AgentEvent]
+        let oldestSeq: Int
+        let newestSeq: Int
+        let hasMore: Bool
+    }
+
     private struct Subscriber {
         let workspaceID: String?
+        let sessionID: String?
         let sink: (AgentEventEnvelope) -> Void
     }
 
@@ -16,40 +24,94 @@ final class AgentEventHub {
     private let queue = DispatchQueue(label: "com.tidey.remote-bridge.agent-event-hub")
     private var subscribers = [UUID: Subscriber]()
     private var sessions = [String: SessionState]()
-    private let maxBufferedEvents = 400
+    private let maxBufferedEvents = 2000
     private let maxSeenEventIDs = 4000
 
     func subscribe(workspaceID: String?,
+                   sessionID: String? = nil,
+                   sinceSeq: Int? = nil,
                    sink: @escaping (AgentEventEnvelope) -> Void) -> (UUID, [AgentEventEnvelope]) {
         queue.sync {
             let subscriberID = UUID()
-            subscribers[subscriberID] = Subscriber(workspaceID: workspaceID, sink: sink)
+            subscribers[subscriberID] = Subscriber(workspaceID: workspaceID, sessionID: sessionID, sink: sink)
 
-            let replay = sessions.values
-                .flatMap { state -> [AgentEvent] in
-                    var events = state.bufferedEvents
-                    if state.isActive,
-                       let sessionStarted = state.latestSessionStarted,
-                       !events.contains(where: { $0.eventID == sessionStarted.eventID }) {
-                        events.append(sessionStarted)
-                    }
-                    return events
-                }
-                .filter { event in
-                    guard let workspaceID else {
-                        return true
-                    }
-                    return event.workspaceID == workspaceID
-                }
-                .sorted { lhs, rhs in
-                    if lhs.timestamp == rhs.timestamp {
-                        return lhs.seq < rhs.seq
-                    }
-                    return lhs.timestamp < rhs.timestamp
-                }
+            let replay = replayEvents(workspaceID: workspaceID, sessionID: sessionID, sinceSeq: sinceSeq)
                 .map { AgentEventEnvelope(replay: true, event: $0) }
             return (subscriberID, replay)
         }
+    }
+
+    func fetch(workspaceID: String,
+               sessionID: String? = nil,
+               limit: Int,
+               beforeSeq: Int? = nil) -> FetchResult {
+        queue.sync {
+            let effectiveLimit = max(limit, 1)
+            let matchingEvents: [AgentEvent]
+
+            if let sessionID, let state = sessions[sessionID] {
+                matchingEvents = state.bufferedEvents.filter { event in
+                    event.workspaceID == workspaceID && (beforeSeq == nil || event.seq < beforeSeq!)
+                }
+            } else {
+                matchingEvents = sessions.values
+                    .flatMap(\.bufferedEvents)
+                    .filter { event in
+                        event.workspaceID == workspaceID && (beforeSeq == nil || event.seq < beforeSeq!)
+                    }
+                    .sorted { lhs, rhs in
+                        if lhs.timestamp == rhs.timestamp {
+                            return lhs.seq < rhs.seq
+                        }
+                        return lhs.timestamp < rhs.timestamp
+                    }
+            }
+
+            let slice = Array(matchingEvents.suffix(effectiveLimit))
+            let oldestSeq = slice.first?.seq ?? 0
+            let newestSeq = slice.last?.seq ?? 0
+            let hasMore = matchingEvents.count > slice.count
+            return FetchResult(events: slice, oldestSeq: oldestSeq, newestSeq: newestSeq, hasMore: hasMore)
+        }
+    }
+
+    private func replayEvents(workspaceID: String?, sessionID: String?, sinceSeq: Int?) -> [AgentEvent] {
+        let filteredStates: [SessionState]
+        if let sessionID, let state = sessions[sessionID] {
+            filteredStates = [state]
+        } else {
+            filteredStates = Array(sessions.values)
+        }
+
+        return filteredStates
+            .flatMap { state -> [AgentEvent] in
+                var events = state.bufferedEvents
+                if state.isActive,
+                   let sessionStarted = state.latestSessionStarted,
+                   !events.contains(where: { $0.eventID == sessionStarted.eventID }),
+                   sinceSeq.map({ sessionStarted.seq > $0 }) ?? true {
+                    events.append(sessionStarted)
+                }
+                return events
+            }
+            .filter { event in
+                if let workspaceID, event.workspaceID != workspaceID {
+                    return false
+                }
+                if let sessionID, event.sessionID != sessionID {
+                    return false
+                }
+                if let sinceSeq, event.seq <= sinceSeq {
+                    return false
+                }
+                return true
+            }
+            .sorted { lhs, rhs in
+                if lhs.timestamp == rhs.timestamp {
+                    return lhs.seq < rhs.seq
+                }
+                return lhs.timestamp < rhs.timestamp
+            }
     }
 
     func unsubscribe(_ subscriberID: UUID) {
@@ -122,10 +184,13 @@ final class AgentEventHub {
             sessions[event.sessionID] = state
 
             let deliveries = subscribers.values.filter { subscriber in
-                guard let workspaceID = subscriber.workspaceID else {
-                    return true
+                if let workspaceID = subscriber.workspaceID, workspaceID != event.workspaceID {
+                    return false
                 }
-                return workspaceID == event.workspaceID
+                if let sessionID = subscriber.sessionID, sessionID != event.sessionID {
+                    return false
+                }
+                return true
             }
             return Array(deliveries)
         }
