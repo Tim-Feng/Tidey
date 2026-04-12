@@ -1555,7 +1555,7 @@ ITERM_WEAKLY_REFERENCEABLE
     return YES;
 }
 
-- (NSString *)tideyRecentOutputForSession:(PTYSession *)session {
+- (NSDictionary *)tideyRecentOutputSnapshotForSession:(PTYSession *)session {
     if (!session || session.isBrowserSession) {
         return nil;
     }
@@ -1566,6 +1566,9 @@ ITERM_WEAKLY_REFERENCEABLE
     const VT100GridSize size = [grid size];
     const int width = size.width;
     const int height = size.height;
+    const VT100GridCoord cursor = [grid cursor];
+    const int cursorX = MAX(0, cursor.x);
+    const int cursorY = MAX(0, MIN(height - 1, cursor.y));
 
     NSMutableArray<NSString *> *rows = [NSMutableArray arrayWithCapacity:height];
     for (int y = 0; y < height; y++) {
@@ -1608,7 +1611,8 @@ ITERM_WEAKLY_REFERENCEABLE
         }
 
         NSInteger trimmedLength = row.length;
-        while (trimmedLength > 0 && [row characterAtIndex:trimmedLength - 1] == ' ') {
+        const NSInteger minimumLength = (y == cursorY ? MIN((NSInteger)cursorX, row.length) : 0);
+        while (trimmedLength > minimumLength && [row characterAtIndex:trimmedLength - 1] == ' ') {
             trimmedLength--;
         }
         if (trimmedLength < row.length) {
@@ -1617,11 +1621,19 @@ ITERM_WEAKLY_REFERENCEABLE
         [rows addObject:row];
     }
 
-    while (rows.count > 0 && rows.lastObject.length == 0) {
+    while (rows.count > cursorY + 1 && rows.lastObject.length == 0) {
         [rows removeLastObject];
     }
 
-    return [rows componentsJoinedByString:@"\n"];
+    return @{
+        @"output": [rows componentsJoinedByString:@"\n"],
+        @"cursor_row": @(cursorY),
+        @"cursor_col": @(cursorX),
+    };
+}
+
+- (NSString *)tideyRecentOutputForSession:(PTYSession *)session {
+    return [self tideyRecentOutputSnapshotForSession:session][@"output"];
 }
 
 - (NSString *)tideyRecentOutputForPanelIdentifier:(NSString *)panelIdentifier {
@@ -1630,6 +1642,14 @@ ITERM_WEAKLY_REFERENCEABLE
 
 - (NSString *)tideyRecentOutputForWorkspaceIdentifier:(NSString *)workspaceIdentifier {
     return [self tideyRecentOutputForSession:[self tideySelectedSessionForWorkspaceIdentifier:workspaceIdentifier]];
+}
+
+- (NSDictionary *)tideyRecentOutputSnapshotForPanelIdentifier:(NSString *)panelIdentifier {
+    return [self tideyRecentOutputSnapshotForSession:[self tideySelectedSessionForPanelIdentifier:panelIdentifier]];
+}
+
+- (NSDictionary *)tideyRecentOutputSnapshotForWorkspaceIdentifier:(NSString *)workspaceIdentifier {
+    return [self tideyRecentOutputSnapshotForSession:[self tideySelectedSessionForWorkspaceIdentifier:workspaceIdentifier]];
 }
 
 - (PTYSession *)tideyCreateDefaultSessionWithTargetWorkspaceIndex:(NSInteger)targetWorkspaceIndex

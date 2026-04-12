@@ -278,6 +278,12 @@ extern NSString *const PseudoTerminalTideyWorkspaceEventNotification;
 // Returns recent terminal output for the workspace's selected session, or nil if unavailable.
 - (nullable NSString *)tideyRecentOutputForWorkspaceIdentifier:(NSString *)workspaceIdentifier;
 
+// Returns recent terminal output plus relative cursor position for the panel's selected session.
+- (nullable NSDictionary *)tideyRecentOutputSnapshotForPanelIdentifier:(NSString *)panelIdentifier;
+
+// Returns recent terminal output plus relative cursor position for the workspace's selected session.
+- (nullable NSDictionary *)tideyRecentOutputSnapshotForWorkspaceIdentifier:(NSString *)workspaceIdentifier;
+
 // Workspace and panel control used by RemoteBridge.
 - (nullable NSDictionary *)tideyCreateWorkspaceWithCustomTitle:(nullable NSString *)title;
 - (nullable NSDictionary *)tideyCreatePanelInWorkspaceWithIdentifier:(NSString *)workspaceIdentifier;

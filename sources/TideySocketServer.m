@@ -509,17 +509,19 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
                                        onConnection:connection];
                 return;
             }
-            NSString *output = [term tideyRecentOutputForPanelIdentifier:panelID];
-            if (!output) {
+            NSDictionary *snapshot = [term tideyRecentOutputSnapshotForPanelIdentifier:panelID];
+            if (!snapshot) {
                 [self sendErrorResponseForRequestID:requestID
                                                code:@"panel_not_interactive"
                                             message:@"The panel does not produce terminal output."
                                        onConnection:connection];
                 return;
             }
-            NSString *trimmed = [self trimmedRecentOutput:output maxLines:maxLines maxChars:maxChars];
+            NSDictionary *trimmed = [self trimmedRecentOutputSnapshot:snapshot maxLines:maxLines maxChars:maxChars];
             [self sendSuccessResponseForRequestID:requestID
-                                           result:@{ @"output": trimmed ?: @"",
+                                           result:@{ @"output": trimmed[@"output"] ?: @"",
+                                                     @"cursor_row": trimmed[@"cursor_row"] ?: @0,
+                                                     @"cursor_col": trimmed[@"cursor_col"] ?: @0,
                                                      @"panel_id": panelID,
                                                      @"workspace_id": panelSummary[@"workspace_id"] ?: @"" }
                                       onConnection:connection];
@@ -805,13 +807,15 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
     }
 
     for (PseudoTerminal *term in [[iTermController sharedInstance] terminals]) {
-        NSString *output = [term tideyRecentOutputForWorkspaceIdentifier:workspaceID];
-        if (!output) {
+        NSDictionary *snapshot = [term tideyRecentOutputSnapshotForWorkspaceIdentifier:workspaceID];
+        if (!snapshot) {
             continue;
         }
-        NSString *trimmed = [self trimmedRecentOutput:output maxLines:maxLines maxChars:maxChars];
+        NSDictionary *trimmed = [self trimmedRecentOutputSnapshot:snapshot maxLines:maxLines maxChars:maxChars];
         [self sendSuccessResponseForRequestID:requestID
-                                       result:@{ @"output": trimmed ?: @"",
+                                       result:@{ @"output": trimmed[@"output"] ?: @"",
+                                                 @"cursor_row": trimmed[@"cursor_row"] ?: @0,
+                                                 @"cursor_col": trimmed[@"cursor_col"] ?: @0,
                                                  @"workspace_id": workspaceID }
                                   onConnection:connection];
         return;
@@ -836,6 +840,57 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
         trimmed = [trimmed substringFromIndex:trimmed.length - maxChars];
     }
     return trimmed;
+}
+
+- (NSDictionary *)trimmedRecentOutputSnapshot:(NSDictionary *)snapshot
+                                     maxLines:(NSInteger)maxLines
+                                     maxChars:(NSInteger)maxChars {
+    NSString *output = snapshot[@"output"] ?: @"";
+    NSInteger cursorRow = [snapshot[@"cursor_row"] integerValue];
+    NSInteger cursorCol = [snapshot[@"cursor_col"] integerValue];
+
+    NSArray<NSString *> *lineArray = [output componentsSeparatedByString:@"\n"];
+    NSMutableArray<NSString *> *lines = [lineArray mutableCopy];
+    if (maxLines > 0 && (NSInteger)lines.count > maxLines) {
+        NSInteger droppedLines = lines.count - maxLines;
+        [lines removeObjectsInRange:NSMakeRange(0, droppedLines)];
+        cursorRow = MAX(0, cursorRow - droppedLines);
+    }
+
+    cursorRow = MIN(cursorRow, MAX((NSInteger)lines.count - 1, 0));
+
+    NSInteger cursorOffset = 0;
+    for (NSInteger index = 0; index < cursorRow && index < (NSInteger)lines.count; index++) {
+        cursorOffset += [lines[index] length] + 1;
+    }
+    if (cursorRow < (NSInteger)lines.count) {
+        cursorOffset += MIN(cursorCol, [lines[cursorRow] length]);
+    }
+
+    NSString *trimmed = [lines componentsJoinedByString:@"\n"];
+    if (maxChars > 0 && (NSInteger)trimmed.length > maxChars) {
+        NSInteger droppedChars = trimmed.length - maxChars;
+        trimmed = [trimmed substringFromIndex:droppedChars];
+        cursorOffset = MAX(0, cursorOffset - droppedChars);
+    }
+
+    NSInteger derivedRow = 0;
+    NSInteger derivedCol = 0;
+    NSInteger boundedOffset = MIN(cursorOffset, trimmed.length);
+    for (NSInteger index = 0; index < boundedOffset; index++) {
+        if ([trimmed characterAtIndex:index] == '\n') {
+            derivedRow++;
+            derivedCol = 0;
+        } else {
+            derivedCol++;
+        }
+    }
+
+    return @{
+        @"output": trimmed ?: @"",
+        @"cursor_row": @(derivedRow),
+        @"cursor_col": @(derivedCol),
+    };
 }
 
 + (NSString *)tideyTrimmedRecentOutput:(NSString *)output maxLines:(NSInteger)maxLines maxChars:(NSInteger)maxChars {
