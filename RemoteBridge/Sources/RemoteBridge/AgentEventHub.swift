@@ -44,20 +44,39 @@ final class AgentEventHub {
     func fetch(workspaceID: String,
                sessionID: String? = nil,
                limit: Int,
-               beforeSeq: Int? = nil) -> FetchResult {
+               beforeSeq: Int? = nil,
+               afterSeq: Int? = nil) -> FetchResult {
         queue.sync {
             let effectiveLimit = max(limit, 1)
             let matchingEvents: [AgentEvent]
 
             if let sessionID, let state = sessions[sessionID] {
                 matchingEvents = state.bufferedEvents.filter { event in
-                    event.workspaceID == workspaceID && (beforeSeq == nil || event.seq < beforeSeq!)
+                    guard event.workspaceID == workspaceID else {
+                        return false
+                    }
+                    if let beforeSeq {
+                        return event.seq < beforeSeq
+                    }
+                    if let afterSeq {
+                        return event.seq > afterSeq
+                    }
+                    return true
                 }.sorted { $0.seq < $1.seq }
             } else {
                 matchingEvents = sessions.values
                     .flatMap(\.bufferedEvents)
                     .filter { event in
-                        event.workspaceID == workspaceID && (beforeSeq == nil || event.seq < beforeSeq!)
+                        guard event.workspaceID == workspaceID else {
+                            return false
+                        }
+                        if let beforeSeq {
+                            return event.seq < beforeSeq
+                        }
+                        if let afterSeq {
+                            return event.seq > afterSeq
+                        }
+                        return true
                     }
                     .sorted { lhs, rhs in
                         if lhs.timestamp == rhs.timestamp {
@@ -67,7 +86,12 @@ final class AgentEventHub {
                     }
             }
 
-            let slice = Array(matchingEvents.suffix(effectiveLimit))
+            let slice: [AgentEvent]
+            if afterSeq != nil {
+                slice = Array(matchingEvents.prefix(effectiveLimit))
+            } else {
+                slice = Array(matchingEvents.suffix(effectiveLimit))
+            }
             let oldestSeq = slice.first?.seq ?? 0
             let newestSeq = slice.last?.seq ?? 0
             let hasMore = matchingEvents.count > slice.count
@@ -120,6 +144,14 @@ final class AgentEventHub {
     func unsubscribe(_ subscriberID: UUID) {
         _ = queue.sync {
             subscribers.removeValue(forKey: subscriberID)
+        }
+    }
+
+    func oldestBufferedSeq(sessionID: String) -> Int? {
+        queue.sync {
+            sessions[sessionID]?.bufferedEvents
+                .map(\.seq)
+                .min()
         }
     }
 

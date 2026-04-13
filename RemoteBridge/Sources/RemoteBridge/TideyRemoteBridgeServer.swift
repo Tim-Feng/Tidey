@@ -199,10 +199,22 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
 
             let sessionID = request.params?["session_id"]?.stringValue
             let beforeSeq = request.params?["before_seq"]?.intValue
+            let afterSeq = request.params?["after_seq"]?.intValue
+            if beforeSeq != nil, afterSeq != nil {
+                return LocalRequestResult(
+                    response: BridgeResponse(id: request.id,
+                                             ok: false,
+                                             result: nil,
+                                             error: BridgeInternalError.invalidRequest("fetch_agent_events accepts either before_seq or after_seq, not both").payload),
+                    agentReplayEnvelopes: [],
+                    workspaceReplayEnvelopes: []
+                )
+            }
             var fetchResult = eventHub.fetch(workspaceID: workspaceID,
                                              sessionID: sessionID,
                                              limit: limit,
-                                             beforeSeq: beforeSeq)
+                                             beforeSeq: beforeSeq,
+                                             afterSeq: afterSeq)
             if let sessionID,
                let beforeSeq,
                !fetchResult.hasMore {
@@ -213,7 +225,23 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                     fetchResult = eventHub.fetch(workspaceID: workspaceID,
                                                  sessionID: sessionID,
                                                  limit: limit,
-                                                 beforeSeq: beforeSeq)
+                                                 beforeSeq: beforeSeq,
+                                                 afterSeq: nil)
+                }
+            } else if let sessionID, let afterSeq {
+                while let earliestBufferedSeq = eventHub.oldestBufferedSeq(sessionID: sessionID),
+                      earliestBufferedSeq > afterSeq + 1 {
+                    let didBackfill = registryMonitor.backfillSession(sessionID: sessionID,
+                                                                      beforeSeq: earliestBufferedSeq,
+                                                                      limit: max(limit, transcriptBootstrapLineLimit))
+                    guard didBackfill else {
+                        break
+                    }
+                    fetchResult = eventHub.fetch(workspaceID: workspaceID,
+                                                 sessionID: sessionID,
+                                                 limit: limit,
+                                                 beforeSeq: nil,
+                                                 afterSeq: afterSeq)
                 }
             }
             return LocalRequestResult(

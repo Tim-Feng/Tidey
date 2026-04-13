@@ -41,4 +41,57 @@ final class AgentEventHubTests: XCTestCase {
                                                    sinceSeq: 50) { _ in }
         XCTAssertEqual(incrementalReplay.map(\.event.type), [.assistantMessage])
     }
+
+    func testFetchAfterSeqReturnsEarliestMissingEventsInAscendingOrder() {
+        let hub = AgentEventHub()
+        for seq in 1...5 {
+            hub.publish(makeAssistantEvent(id: "assistant-\(seq)", seq: seq))
+        }
+
+        let result = hub.fetch(workspaceID: "workspace",
+                               sessionID: "session",
+                               limit: 2,
+                               beforeSeq: nil,
+                               afterSeq: 2)
+
+        XCTAssertEqual(result.events.map(\.seq), [3, 4])
+        XCTAssertEqual(result.oldestSeq, 3)
+        XCTAssertEqual(result.newestSeq, 4)
+        XCTAssertTrue(result.hasMore)
+    }
+
+    func testFetchAfterSeqUsesSessionBufferOrderForCatchUpCursor() {
+        let hub = AgentEventHub()
+        for seq in [10, 12, 11] {
+            hub.publish(makeAssistantEvent(id: "assistant-\(seq)", seq: seq))
+        }
+
+        let result = hub.fetch(workspaceID: "workspace",
+                               sessionID: "session",
+                               limit: 10,
+                               beforeSeq: nil,
+                               afterSeq: 10)
+
+        XCTAssertEqual(result.events.map(\.seq), [11, 12])
+        XCTAssertEqual(result.oldestSeq, 11)
+        XCTAssertEqual(result.newestSeq, 12)
+        XCTAssertFalse(result.hasMore)
+    }
+
+    private func makeAssistantEvent(id: String, seq: Int) -> AgentEvent {
+        AgentEvent(eventID: id,
+                   seq: seq,
+                   vendor: "claude",
+                   workspaceID: "workspace",
+                   sessionID: "session",
+                   timestamp: String(format: "2026-01-01T00:00:%02dZ", seq),
+                   type: .assistantMessage,
+                   role: "assistant",
+                   text: id,
+                   name: nil,
+                   input: nil,
+                   output: nil,
+                   toolCallID: nil,
+                   metadata: nil)
+    }
 }
