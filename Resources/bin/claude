@@ -146,10 +146,12 @@ fi
 # Claude Code merges --settings additively with the user's own settings.json.
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 TIDEY_BIN="$(shell_quote "$HOOK_DIR/tidey")"
-SESSION_START_CMD="$(json_escape "$TIDEY_BIN claude-hook session-start")"
+WRAPPER_PID_ENV="TIDEY_CLAUDE_WRAPPER_PID=$(shell_quote "$$")"
+WRAPPER_CWD_ENV="TIDEY_CLAUDE_WRAPPER_CWD=$(shell_quote "$PWD")"
+SESSION_START_CMD="$(json_escape "$WRAPPER_PID_ENV $WRAPPER_CWD_ENV $TIDEY_BIN claude-hook session-start")"
 NOTIFICATION_CMD="$(json_escape "$TIDEY_BIN claude-hook notification")"
 STOP_CMD="$(json_escape "$TIDEY_BIN claude-hook stop")"
-SESSION_END_CMD="$(json_escape "$TIDEY_BIN claude-hook session-end")"
+SESSION_END_CMD="$(json_escape "$WRAPPER_PID_ENV $WRAPPER_CWD_ENV $TIDEY_BIN claude-hook session-end")"
 PROMPT_SUBMIT_CMD="$(json_escape "$TIDEY_BIN claude-hook prompt-submit")"
 HOOKS_JSON="{\"hooks\":{\"SessionStart\":[{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"$SESSION_START_CMD\",\"timeout\":10}]}],\"Notification\":[{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"$NOTIFICATION_CMD\",\"timeout\":10}]}],\"Stop\":[{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"$STOP_CMD\",\"timeout\":10}]}],\"SessionEnd\":[{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"$SESSION_END_CMD\",\"timeout\":1}]}],\"UserPromptSubmit\":[{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"$PROMPT_SUBMIT_CMD\",\"timeout\":10}]}]}}"
 

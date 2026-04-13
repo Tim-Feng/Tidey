@@ -94,3 +94,71 @@ final class PathTests: XCTestCase {
         }
     }
 }
+
+final class ClaudeHookRegistryTests: XCTestCase {
+    func testClaudeHookInputContextReadsSessionIDTranscriptPathAndCWD() throws {
+        let stdinJSON = """
+        {
+          "session_id": "c211f108-d22f-4813-bde4-a72c5241034a",
+          "transcript_path": "~/Library/Application Support/Claude/test.jsonl",
+          "cwd": "/Users/timfeng/GitHub/Tidey",
+          "hook_event_name": "SessionStart"
+        }
+        """
+
+        let context = TideyCLICommandFormatter.claudeHookInputContext(stdinData: stdinJSON.data(using: .utf8))
+
+        XCTAssertEqual(context?.sessionID, "c211f108-d22f-4813-bde4-a72c5241034a")
+        XCTAssertEqual(context?.transcriptPath, "~/Library/Application Support/Claude/test.jsonl")
+        XCTAssertEqual(context?.cwd, "/Users/timfeng/GitHub/Tidey")
+    }
+
+    func testClaudeHookInputContextFallsBackToTranscriptFilenameForSessionID() throws {
+        let stdinJSON = """
+        {
+          "transcript_path": "/Users/timfeng/.claude/projects/-Users-timfeng/c211f108-d22f-4813-bde4-a72c5241034a.jsonl",
+          "cwd": "/Users/timfeng"
+        }
+        """
+
+        let context = TideyCLICommandFormatter.claudeHookInputContext(stdinData: stdinJSON.data(using: .utf8))
+
+        XCTAssertEqual(context?.sessionID, "c211f108-d22f-4813-bde4-a72c5241034a")
+    }
+
+    func testWriteAndRemoveClaudeRegistryFile() throws {
+        let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: tempRoot)
+        }
+
+        let writtenURL = try TideyCLICommandFormatter.writeClaudeRegistryFile(
+            registryRoot: tempRoot,
+            workspaceID: "ws-1",
+            sessionID: "c211f108-d22f-4813-bde4-a72c5241034a",
+            panelID: "panel-1",
+            pid: 12345,
+            cwd: "/Users/timfeng/GitHub/Tidey",
+            createdAt: "2026-04-13T03:35:00Z",
+            transcriptPath: "/Users/timfeng/.claude/projects/-Users-timfeng/c211f108-d22f-4813-bde4-a72c5241034a.jsonl"
+        )
+
+        let data = try Data(contentsOf: writtenURL)
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+        XCTAssertEqual(object?["version"] as? Int, 1)
+        XCTAssertEqual(object?["vendor"] as? String, "claude")
+        XCTAssertEqual(object?["workspace_id"] as? String, "ws-1")
+        XCTAssertEqual(object?["session_id"] as? String, "c211f108-d22f-4813-bde4-a72c5241034a")
+        XCTAssertEqual(object?["panel_id"] as? String, "panel-1")
+        XCTAssertEqual(object?["pid"] as? Int, 12345)
+        XCTAssertEqual(object?["cwd"] as? String, "/Users/timfeng/GitHub/Tidey")
+        XCTAssertEqual(object?["created_at"] as? String, "2026-04-13T03:35:00Z")
+        XCTAssertEqual(object?["transcript_path"] as? String, "/Users/timfeng/.claude/projects/-Users-timfeng/c211f108-d22f-4813-bde4-a72c5241034a.jsonl")
+
+        try TideyCLICommandFormatter.removeClaudeRegistryFile(registryRoot: tempRoot,
+                                                              sessionID: "c211f108-d22f-4813-bde4-a72c5241034a")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: writtenURL.path))
+    }
+}

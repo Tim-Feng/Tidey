@@ -1,5 +1,11 @@
 import Foundation
 
+struct ClaudeHookInputContext: Equatable {
+    let sessionID: String?
+    let transcriptPath: String?
+    let cwd: String?
+}
+
 @objc(TideyCLICommandFormatter)
 final class TideyCLICommandFormatter: NSObject {
     @objc(lastAssistantTextInTranscriptContent:)
@@ -95,19 +101,89 @@ final class TideyCLICommandFormatter: NSObject {
         }
     }
 
-    private static func notificationBodyForStopEvent(stdinData: Data?,
-                                                     transcriptLoader: (String) -> String?) -> String {
-        let defaultBody = "Task completed"
+    static func claudeHookInputContext(stdinData: Data?) -> ClaudeHookInputContext? {
         guard let stdinData,
               let inputJSON = try? JSONSerialization.jsonObject(with: stdinData) as? [String: Any] else {
-            return defaultBody
+            return nil
         }
 
         let transcriptPath = (inputJSON["transcript_path"] as? String)
             ?? (inputJSON["transcriptPath"] as? String)
-            ?? ""
-        guard !transcriptPath.isEmpty,
-              let transcriptContent = transcriptLoader(transcriptPath),
+        let sessionID = (inputJSON["session_id"] as? String)
+            ?? (inputJSON["sessionId"] as? String)
+            ?? transcriptPath.flatMap(sessionID(fromTranscriptPath:))
+        let cwd = inputJSON["cwd"] as? String
+
+        return ClaudeHookInputContext(sessionID: sessionID,
+                                      transcriptPath: transcriptPath,
+                                      cwd: cwd)
+    }
+
+    static func sessionID(fromTranscriptPath transcriptPath: String) -> String? {
+        let expandedPath = NSString(string: transcriptPath).expandingTildeInPath
+        let filename = URL(fileURLWithPath: expandedPath).lastPathComponent
+        guard filename.hasSuffix(".jsonl") else {
+            return nil
+        }
+        let sessionID = String(filename.dropLast(".jsonl".count))
+        return sessionID.isEmpty ? nil : sessionID
+    }
+
+    static func writeClaudeRegistryFile(registryRoot: URL,
+                                        workspaceID: String,
+                                        sessionID: String,
+                                        panelID: String,
+                                        pid: Int32,
+                                        cwd: String,
+                                        createdAt: String,
+                                        transcriptPath: String?,
+                                        fileManager: FileManager = .default) throws -> URL {
+        try fileManager.createDirectory(at: registryRoot, withIntermediateDirectories: true)
+
+        let registryURL = registryRoot.appendingPathComponent("claude-\(sessionID).json", isDirectory: false)
+        let tempURL = registryRoot.appendingPathComponent(".claude-registry.\(UUID().uuidString)", isDirectory: false)
+
+        var payload: [String: Any] = [
+            "version": 1,
+            "vendor": "claude",
+            "workspace_id": workspaceID,
+            "session_id": sessionID,
+            "panel_id": panelID,
+            "pid": pid,
+            "cwd": cwd,
+            "created_at": createdAt,
+        ]
+        if let transcriptPath, !transcriptPath.isEmpty {
+            payload["transcript_path"] = transcriptPath
+        }
+
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        try data.write(to: tempURL, options: .atomic)
+        if fileManager.fileExists(atPath: registryURL.path) {
+            try fileManager.removeItem(at: registryURL)
+        }
+        try fileManager.moveItem(at: tempURL, to: registryURL)
+        return registryURL
+    }
+
+    static func removeClaudeRegistryFile(registryRoot: URL,
+                                         sessionID: String,
+                                         fileManager: FileManager = .default) throws {
+        let registryURL = registryRoot.appendingPathComponent("claude-\(sessionID).json", isDirectory: false)
+        guard fileManager.fileExists(atPath: registryURL.path) else {
+            return
+        }
+        try fileManager.removeItem(at: registryURL)
+    }
+
+    private static func notificationBodyForStopEvent(stdinData: Data?,
+                                                     transcriptLoader: (String) -> String?) -> String {
+        let defaultBody = "Task completed"
+        guard let inputContext = claudeHookInputContext(stdinData: stdinData),
+              let transcriptPath = inputContext.transcriptPath, !transcriptPath.isEmpty else {
+            return defaultBody
+        }
+        guard let transcriptContent = transcriptLoader(transcriptPath),
               let text = lastAssistantText(inTranscriptContent: transcriptContent) else {
             return defaultBody
         }

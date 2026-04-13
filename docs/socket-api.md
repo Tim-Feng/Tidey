@@ -593,6 +593,8 @@ Overrides the tab/workspace title. Send an empty `title` to clear the override.
 1. If `TIDEY_SOCKET_PATH` is unset or the socket file doesn't exist, the wrapper passes through to the real `claude` binary unchanged.
 2. Subcommands `mcp`, `config`, and `api-key` always pass through (they don't support hooks).
 3. Otherwise, the wrapper injects `--settings` with a JSON hooks configuration and (unless the user specified `--resume`, `--continue`, `-r`, `-c`, or `--session-id`) generates a new `--session-id`.
+4. For new sessions and explicit resume (`--resume <id>` / `--session-id <id>`), the wrapper writes the Claude registry file before launching Claude.
+5. For implicit resume (`claude --resume` / `claude -r`), the wrapper cannot know the resolved `session_id` up front, so the `SessionStart` hook writes or refreshes the registry file after Claude supplies `session_id` and `transcript_path` on stdin.
 
 ### Codex Wrapper
 
@@ -630,11 +632,11 @@ The wrapper registers these Claude Code hooks, all handled by `tidey claude-hook
 
 | Hook | Event | What It Does |
 |---|---|---|
-| `SessionStart` | `session-start` | Sets shell state to `prompt`. Sets tab title to "Claude Code". |
+| `SessionStart` | `session-start` | Sets shell state to `prompt`. Sets tab title to "Claude Code". Writes/refreshes the Claude registry file using hook stdin (`session_id`, `transcript_path`, `cwd`) and the wrapper pid. |
 | `UserPromptSubmit` | `prompt-submit` | Sets shell state to `running`. |
 | `Notification` | `notification` | Sets status to "Needs input" with `bell.fill` icon (blue). |
 | `Stop` | `stop` | Creates a notification with the last assistant message (truncated to 200 chars) from the transcript. Resets shell state to `prompt`. |
-| `SessionEnd` | `session-end` | Clears the `shell_state` status entry. Clears the tab title override. |
+| `SessionEnd` | `session-end` | Clears the `shell_state` status entry. Clears the tab title override. Removes the Claude registry file for that `session_id`. |
 
 ### tidey CLI Binary
 

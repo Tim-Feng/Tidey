@@ -10,6 +10,9 @@
 import Foundation
 import Darwin
 
+private let claudeRegistryRoot = URL(fileURLWithPath: NSString(string: "~/Library/Application Support/Tidey Remote Bridge/agent-sessions/claude").expandingTildeInPath,
+                                     isDirectory: true)
+
 // MARK: - Socket
 
 /// Connect to a Unix domain socket, write a newline-terminated message, then close.
@@ -55,11 +58,52 @@ private func handleSend(args: ArraySlice<String>, socketPath: String) {
     sendToSocket(path: socketPath, message: message)
 }
 
+private func handleClaudeRegistryLifecycle(event: String, workspaceID: String, stdinData: Data?) {
+    guard !workspaceID.isEmpty else {
+        return
+    }
+
+    switch event {
+    case "session-start":
+        guard let inputContext = TideyCLICommandFormatter.claudeHookInputContext(stdinData: stdinData),
+              let sessionID = inputContext.sessionID, !sessionID.isEmpty,
+              let panelID = ProcessInfo.processInfo.environment["TIDEY_PANEL_ID"], !panelID.isEmpty,
+              let wrapperPIDString = ProcessInfo.processInfo.environment["TIDEY_CLAUDE_WRAPPER_PID"],
+              let wrapperPID = Int32(wrapperPIDString), wrapperPID > 0 else {
+            return
+        }
+        let cwd = inputContext.cwd
+            ?? ProcessInfo.processInfo.environment["TIDEY_CLAUDE_WRAPPER_CWD"]
+            ?? FileManager.default.currentDirectoryPath
+        let createdAt = ISO8601DateFormatter().string(from: Date())
+        try? TideyCLICommandFormatter.writeClaudeRegistryFile(registryRoot: claudeRegistryRoot,
+                                                              workspaceID: workspaceID,
+                                                              sessionID: sessionID,
+                                                              panelID: panelID,
+                                                              pid: wrapperPID,
+                                                              cwd: cwd,
+                                                              createdAt: createdAt,
+                                                              transcriptPath: inputContext.transcriptPath)
+
+    case "session-end":
+        guard let inputContext = TideyCLICommandFormatter.claudeHookInputContext(stdinData: stdinData),
+              let sessionID = inputContext.sessionID, !sessionID.isEmpty else {
+            return
+        }
+        try? TideyCLICommandFormatter.removeClaudeRegistryFile(registryRoot: claudeRegistryRoot,
+                                                               sessionID: sessionID)
+
+    default:
+        return
+    }
+}
+
 private func handleClaudeHook(event: String, socketPath: String, workspaceID: String) {
     // Claude hooks are workspace-scoped. If the session did not inherit a
     // workspace identifier, fail closed rather than accidentally broadcasting
     // state/notifications to every workspace.
-    let stdinData = event == "stop" ? FileHandle.standardInput.readDataToEndOfFile() : nil
+    let stdinData = FileHandle.standardInput.readDataToEndOfFile()
+    handleClaudeRegistryLifecycle(event: event, workspaceID: workspaceID, stdinData: stdinData)
     let messages = TideyCLICommandFormatter.messages(forClaudeHookEvent: event,
                                                      workspaceID: workspaceID,
                                                      stdinData: stdinData) { transcriptPath in
