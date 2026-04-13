@@ -109,6 +109,8 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
     private let registryMonitor: AgentSessionRegistryMonitor
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
+    private lazy var inputActionHandler = BridgeInputActionHandler(socketSender: socketClient,
+                                                                   sessionResolver: registryMonitor)
     private var agentSubscriptionID: UUID?
     private var workspaceSubscriptionID: UUID?
 
@@ -183,6 +185,28 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
 
     private func handleLocalRequest(_ request: BridgeRequest,
                                     context: ChannelHandlerContext) -> LocalRequestResult? {
+        do {
+            if let response = try inputActionHandler.handle(request) {
+                return LocalRequestResult(response: response,
+                                          agentReplayEnvelopes: [],
+                                          workspaceReplayEnvelopes: [])
+            }
+        } catch let bridgeError as BridgeInternalError {
+            return LocalRequestResult(response: BridgeResponse(id: request.id,
+                                                               ok: false,
+                                                               result: nil,
+                                                               error: bridgeError.payload),
+                                      agentReplayEnvelopes: [],
+                                      workspaceReplayEnvelopes: [])
+        } catch {
+            return LocalRequestResult(response: BridgeResponse(id: request.id,
+                                                               ok: false,
+                                                               result: nil,
+                                                               error: BridgeErrorPayload(code: "bridge_error", message: error.localizedDescription)),
+                                      agentReplayEnvelopes: [],
+                                      workspaceReplayEnvelopes: [])
+        }
+
         switch request.action {
         case "fetch_agent_events":
             guard let workspaceID = request.params?["workspace_id"]?.stringValue,
