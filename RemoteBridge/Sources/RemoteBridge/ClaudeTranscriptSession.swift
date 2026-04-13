@@ -6,6 +6,7 @@ private let claudeTranscriptMajorVersion = "2."
 protocol AgentTranscriptSession: AnyObject {
     func start()
     func update(record: AgentSessionRegistryRecord)
+    func backfill(beforeSeq: Int, limit: Int) -> Bool
     func stop()
 }
 
@@ -122,6 +123,19 @@ final class AgentSessionRegistryMonitor {
                                                panelID: $0.panelID)
                 }
         }
+    }
+
+    func backfillSession(sessionID: String, beforeSeq: Int, limit: Int) -> Bool {
+        let session: AgentTranscriptSession? = queue.sync {
+            if let session = claudeSessions[sessionID] {
+                return session
+            }
+            if let session = codexSessions[sessionID] {
+                return session
+            }
+            return nil
+        }
+        return session?.backfill(beforeSeq: beforeSeq, limit: limit) ?? false
     }
 
     deinit {
@@ -286,19 +300,26 @@ final class AgentSessionRegistryMonitor {
 final class JSONLFileTailer {
     private let fileURL: URL
     private let queue: DispatchQueue
-    private let lineHandler: (String) -> Void
+    private let bootstrapLineLimit: Int
+    private let lineHandler: (Int, String) -> Void
     private let invalidationHandler: () -> Void
 
     private var fd: Int32 = -1
     private var source: DispatchSourceFileSystemObject?
     private var pendingData = Data()
+    private var nextReadOffset = 0
+    private var pendingLineOffset: Int?
+    private(set) var earliestLoadedOffset: Int?
+    private(set) var reachedStartOfFile = false
 
     init(fileURL: URL,
          queue: DispatchQueue,
-         lineHandler: @escaping (String) -> Void,
+         bootstrapLineLimit: Int = transcriptBootstrapLineLimit,
+         lineHandler: @escaping (Int, String) -> Void,
          invalidationHandler: @escaping () -> Void) {
         self.fileURL = fileURL
         self.queue = queue
+        self.bootstrapLineLimit = bootstrapLineLimit
         self.lineHandler = lineHandler
         self.invalidationHandler = invalidationHandler
     }
@@ -309,7 +330,23 @@ final class JSONLFileTailer {
             throw POSIXError(.ENOENT)
         }
         self.fd = fd
-        readAvailableData()
+        let bootstrappedLines = try JSONLFileReader.readTail(fileURL: fileURL, limit: bootstrapLineLimit)
+        for (offset, line) in bootstrappedLines {
+            lineHandler(offset, line)
+        }
+        earliestLoadedOffset = bootstrappedLines.first?.offset
+        reachedStartOfFile = (bootstrappedLines.first?.offset ?? 0) == 0
+
+        let endOffset = lseek(fd, 0, SEEK_END)
+        guard endOffset >= 0 else {
+            let posixCode = POSIXErrorCode(rawValue: errno) ?? .EIO
+            close(fd)
+            self.fd = -1
+            throw POSIXError(posixCode)
+        }
+        nextReadOffset = Int(endOffset)
+        pendingData.removeAll(keepingCapacity: false)
+        pendingLineOffset = nil
 
         let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd,
                                                                eventMask: [.write, .extend, .delete, .rename, .revoke],
@@ -322,6 +359,31 @@ final class JSONLFileTailer {
         }
         source.resume()
         self.source = source
+    }
+
+    func backfill(beforeOffset: Int, limit: Int) throws -> Bool {
+        guard beforeOffset > 0, limit > 0 else {
+            return false
+        }
+        guard !reachedStartOfFile else {
+            return false
+        }
+
+        let targetOffset = min(beforeOffset, earliestLoadedOffset ?? beforeOffset)
+        let lines = try JSONLFileReader.readBefore(fileURL: fileURL,
+                                                   beforeOffset: targetOffset,
+                                                   limit: limit)
+        guard !lines.isEmpty else {
+            reachedStartOfFile = true
+            return false
+        }
+
+        for (offset, line) in lines {
+            lineHandler(offset, line)
+        }
+        earliestLoadedOffset = lines.first?.offset
+        reachedStartOfFile = (lines.first?.offset ?? 0) == 0
+        return true
     }
 
     func stop() {
@@ -357,9 +419,14 @@ final class JSONLFileTailer {
 
         var chunk = [UInt8](repeating: 0, count: 8192)
         while true {
+            let readStartOffset = nextReadOffset
             let bytesRead = read(fd, &chunk, chunk.count)
             if bytesRead > 0 {
+                if pendingData.isEmpty {
+                    pendingLineOffset = readStartOffset
+                }
                 pendingData.append(chunk, count: bytesRead)
+                nextReadOffset += bytesRead
                 continue
             }
             if bytesRead == 0 {
@@ -377,17 +444,24 @@ final class JSONLFileTailer {
     private func drainCompleteLines() {
         while let newlineIndex = pendingData.firstIndex(of: 0x0a) {
             let lineData = pendingData.prefix(upTo: newlineIndex)
+            let lineOffset = pendingLineOffset ?? nextReadOffset
+            let consumedBytes = pendingData.distance(from: pendingData.startIndex, to: newlineIndex) + 1
             pendingData.removeSubrange(...newlineIndex)
+            if pendingData.isEmpty {
+                pendingLineOffset = nil
+            } else {
+                pendingLineOffset = lineOffset + consumedBytes
+            }
             guard !lineData.isEmpty,
                   let line = String(data: lineData, encoding: .utf8) else {
                 continue
             }
-            lineHandler(line)
+            lineHandler(lineOffset, line)
         }
     }
 }
 
-final class ClaudeTranscriptSession {
+final class ClaudeTranscriptSession: AgentTranscriptSession {
     private let queue: DispatchQueue
     private let fileManager: FileManager
     private let hub: AgentEventHub
@@ -396,10 +470,11 @@ final class ClaudeTranscriptSession {
     private var resolverTimer: DispatchSourceTimer?
     private var tailer: JSONLFileTailer?
     private var transcriptURL: URL?
-    private var nextSequence = 1
+    private var maxObservedSeq = transcriptSessionStartedSequence
     private var didPublishStart = false
     private var didPublishEnd = false
     private var unsupportedVersions = Set<String>()
+    private var isBackfillingHistory = false
 
     init(record: AgentSessionRegistryRecord,
          fileManager: FileManager = .default,
@@ -416,16 +491,17 @@ final class ClaudeTranscriptSession {
                 return
             }
             self.didPublishStart = true
-            self.publish(kind: .sessionStarted,
-                         eventID: "session-start:\(self.record.sessionID)",
-                         timestamp: self.record.createdAt,
-                         role: nil,
-                         text: nil,
-                         name: nil,
-                         input: nil,
-                         output: nil,
-                         toolCallID: nil,
-                         metadata: self.baseMetadata(["cwd": self.record.cwd]))
+            self.publishSynthetic(kind: .sessionStarted,
+                                  seq: transcriptSessionStartedSequence,
+                                  eventID: "session-start:\(self.record.sessionID)",
+                                  timestamp: self.record.createdAt,
+                                  role: nil,
+                                  text: nil,
+                                  name: nil,
+                                  input: nil,
+                                  output: nil,
+                                  toolCallID: nil,
+                                  metadata: self.baseMetadata(["cwd": self.record.cwd]))
             self.startResolver()
         }
     }
@@ -442,20 +518,40 @@ final class ClaudeTranscriptSession {
             }
             self.record = record
             if didMigrateWorkspace || didMigratePanel {
-                self.publish(kind: .sessionStarted,
-                             eventID: "session-start:\(record.sessionID):migrated:\(self.nextSequence)",
-                             timestamp: ISO8601DateFormatter().string(from: Date()),
-                             role: nil,
-                             text: nil,
-                             name: nil,
-                             input: nil,
-                             output: nil,
-                             toolCallID: nil,
-                             metadata: self.baseMetadata(["cwd": record.cwd]))
+                let seq = self.nextSyntheticSequence()
+                self.publishSynthetic(kind: .sessionStarted,
+                                      seq: seq,
+                                      eventID: "session-start:\(record.sessionID):migrated:\(seq)",
+                                      timestamp: ISO8601DateFormatter().string(from: Date()),
+                                      role: nil,
+                                      text: nil,
+                                      name: nil,
+                                      input: nil,
+                                      output: nil,
+                                      toolCallID: nil,
+                                      metadata: self.baseMetadata(["cwd": record.cwd]))
             }
             if self.transcriptURL == nil {
                 self.resolveTranscriptIfPossible()
             }
+        }
+    }
+
+    func backfill(beforeSeq: Int, limit: Int) -> Bool {
+        queue.sync {
+            if tailer == nil {
+                resolveTranscriptIfPossible()
+            }
+            guard let tailer else {
+                return false
+            }
+            let beforeOffset = transcriptLineOffset(for: beforeSeq)
+            guard beforeOffset > 0 else {
+                return false
+            }
+            isBackfillingHistory = true
+            defer { isBackfillingHistory = false }
+            return (try? tailer.backfill(beforeOffset: beforeOffset, limit: limit)) ?? false
         }
     }
 
@@ -467,16 +563,18 @@ final class ClaudeTranscriptSession {
             tailer = nil
             if !didPublishEnd {
                 didPublishEnd = true
-                publish(kind: .sessionEnded,
-                        eventID: "session-end:\(record.sessionID)",
-                        timestamp: ISO8601DateFormatter().string(from: Date()),
-                        role: nil,
-                        text: nil,
-                        name: nil,
-                        input: nil,
-                        output: nil,
-                        toolCallID: nil,
-                        metadata: baseMetadata(nil))
+                let seq = nextSyntheticSequence()
+                publishSynthetic(kind: .sessionEnded,
+                                 seq: seq,
+                                 eventID: "session-end:\(record.sessionID)",
+                                 timestamp: ISO8601DateFormatter().string(from: Date()),
+                                 role: nil,
+                                 text: nil,
+                                 name: nil,
+                                 input: nil,
+                                 output: nil,
+                                 toolCallID: nil,
+                                 metadata: baseMetadata(nil))
             }
         }
     }
@@ -506,8 +604,8 @@ final class ClaudeTranscriptSession {
 
         let tailer = JSONLFileTailer(fileURL: transcriptURL,
                                      queue: queue,
-                                     lineHandler: { [weak self] line in
-                                         self?.consume(line: line)
+                                     lineHandler: { [weak self] offset, line in
+                                         self?.consume(line: line, lineOffset: offset)
                                      },
                                      invalidationHandler: { [weak self] in
                                          self?.handleTailerInvalidation()
@@ -568,7 +666,7 @@ final class ClaudeTranscriptSession {
         cwd.replacingOccurrences(of: "/", with: "-")
     }
 
-    private func consume(line: String) {
+    private func consume(line: String, lineOffset: Int) {
         guard let data = line.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return
@@ -584,16 +682,18 @@ final class ClaudeTranscriptSession {
            !version.hasPrefix(claudeTranscriptMajorVersion),
            !unsupportedVersions.contains(version) {
             unsupportedVersions.insert(version)
-            publish(kind: .status,
-                    eventID: "status:\(record.sessionID):unsupported-version:\(version)",
-                    timestamp: timestamp,
-                    role: nil,
-                    text: "Unsupported Claude transcript version \(version)",
-                    name: nil,
-                    input: nil,
-                    output: nil,
-                    toolCallID: nil,
-                    metadata: ["reason": "unsupported_version"])
+            publishFileBacked(kind: .status,
+                              lineOffset: lineOffset,
+                              ordinal: 0,
+                              eventID: "status:\(record.sessionID):unsupported-version:\(version)",
+                              timestamp: timestamp,
+                              role: nil,
+                              text: "Unsupported Claude transcript version \(version)",
+                              name: nil,
+                              input: nil,
+                              output: nil,
+                              toolCallID: nil,
+                              metadata: ["reason": "unsupported_version"])
             return
         }
 
@@ -602,15 +702,15 @@ final class ClaudeTranscriptSession {
         }
         switch type {
         case "assistant":
-            consumeAssistant(object: object, timestamp: timestamp)
+            consumeAssistant(object: object, timestamp: timestamp, lineOffset: lineOffset)
         case "user":
-            consumeUser(object: object, timestamp: timestamp)
+            consumeUser(object: object, timestamp: timestamp, lineOffset: lineOffset)
         default:
             break
         }
     }
 
-    private func consumeAssistant(object: [String: Any], timestamp: String) {
+    private func consumeAssistant(object: [String: Any], timestamp: String, lineOffset: Int) {
         guard let uuid = object["uuid"] as? String,
               let message = object["message"] as? [String: Any],
               message["role"] as? String == "assistant",
@@ -618,6 +718,7 @@ final class ClaudeTranscriptSession {
             return
         }
 
+        var ordinal = 0
         for (index, block) in content.enumerated() {
             guard let contentType = block["type"] as? String else {
                 continue
@@ -628,47 +729,56 @@ final class ClaudeTranscriptSession {
                 guard !text.isEmpty else {
                     continue
                 }
-                publish(kind: .assistantMessage,
-                        eventID: "\(uuid):text:\(index)",
-                        timestamp: timestamp,
-                        role: "assistant",
-                        text: text,
-                        name: nil,
-                        input: nil,
-                        output: nil,
-                        toolCallID: nil,
-                        metadata: nil)
+                publishFileBacked(kind: .assistantMessage,
+                                  lineOffset: lineOffset,
+                                  ordinal: ordinal,
+                                  eventID: "\(uuid):text:\(index)",
+                                  timestamp: timestamp,
+                                  role: "assistant",
+                                  text: text,
+                                  name: nil,
+                                  input: nil,
+                                  output: nil,
+                                  toolCallID: nil,
+                                  metadata: nil)
+                ordinal += 1
 
             case "thinking":
                 let thinking = Self.compactString(block["thinking"])
                 guard !thinking.isEmpty else {
                     continue
                 }
-                publish(kind: .thinking,
-                        eventID: "\(uuid):thinking:\(index)",
-                        timestamp: timestamp,
-                        role: "assistant",
-                        text: thinking,
-                        name: nil,
-                        input: nil,
-                        output: nil,
-                        toolCallID: nil,
-                        metadata: nil)
+                publishFileBacked(kind: .thinking,
+                                  lineOffset: lineOffset,
+                                  ordinal: ordinal,
+                                  eventID: "\(uuid):thinking:\(index)",
+                                  timestamp: timestamp,
+                                  role: "assistant",
+                                  text: thinking,
+                                  name: nil,
+                                  input: nil,
+                                  output: nil,
+                                  toolCallID: nil,
+                                  metadata: nil)
+                ordinal += 1
 
             case "tool_use":
                 let name = (block["name"] as? String) ?? "Tool"
                 let toolCallID = block["id"] as? String
                 let input = Self.stringifyJSON(block["input"])
-                publish(kind: .toolCall,
-                        eventID: toolCallID ?? "\(uuid):tool-use:\(index)",
-                        timestamp: timestamp,
-                        role: "assistant",
-                        text: nil,
-                        name: name,
-                        input: input,
-                        output: nil,
-                        toolCallID: toolCallID,
-                        metadata: nil)
+                publishFileBacked(kind: .toolCall,
+                                  lineOffset: lineOffset,
+                                  ordinal: ordinal,
+                                  eventID: toolCallID ?? "\(uuid):tool-use:\(index)",
+                                  timestamp: timestamp,
+                                  role: "assistant",
+                                  text: nil,
+                                  name: name,
+                                  input: input,
+                                  output: nil,
+                                  toolCallID: toolCallID,
+                                  metadata: nil)
+                ordinal += 1
 
             default:
                 continue
@@ -676,7 +786,7 @@ final class ClaudeTranscriptSession {
         }
     }
 
-    private func consumeUser(object: [String: Any], timestamp: String) {
+    private func consumeUser(object: [String: Any], timestamp: String, lineOffset: Int) {
         guard let uuid = object["uuid"] as? String,
               let message = object["message"] as? [String: Any] else {
             return
@@ -686,16 +796,18 @@ final class ClaudeTranscriptSession {
         if let text = message["content"] as? String {
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty {
-                publish(kind: .userMessage,
-                        eventID: "\(uuid):user-text:0",
-                        timestamp: timestamp,
-                        role: "user",
-                        text: trimmed,
-                        name: nil,
-                        input: nil,
-                        output: nil,
-                        toolCallID: nil,
-                        metadata: nil)
+                publishFileBacked(kind: .userMessage,
+                                  lineOffset: lineOffset,
+                                  ordinal: 0,
+                                  eventID: "\(uuid):user-text:0",
+                                  timestamp: timestamp,
+                                  role: "user",
+                                  text: trimmed,
+                                  name: nil,
+                                  input: nil,
+                                  output: nil,
+                                  toolCallID: nil,
+                                  metadata: nil)
             }
             return
         }
@@ -704,6 +816,7 @@ final class ClaudeTranscriptSession {
             return
         }
 
+        var ordinal = 0
         for (index, block) in content.enumerated() {
             let blockType = block["type"] as? String
             if blockType == "tool_result" {
@@ -712,45 +825,55 @@ final class ClaudeTranscriptSession {
                 let metadata = [
                     "is_error": ((block["is_error"] as? Bool) == true) ? "true" : "false"
                 ]
-                publish(kind: .toolResult,
-                        eventID: "\(uuid):tool-result:\(index)",
-                        timestamp: timestamp,
-                        role: "tool",
-                        text: nil,
-                        name: nil,
-                        input: nil,
-                        output: output,
-                        toolCallID: toolCallID,
-                        metadata: metadata)
+                publishFileBacked(kind: .toolResult,
+                                  lineOffset: lineOffset,
+                                  ordinal: ordinal,
+                                  eventID: "\(uuid):tool-result:\(index)",
+                                  timestamp: timestamp,
+                                  role: "tool",
+                                  text: nil,
+                                  name: nil,
+                                  input: nil,
+                                  output: output,
+                                  toolCallID: toolCallID,
+                                  metadata: metadata)
+                ordinal += 1
             } else if blockType == "text" {
                 let text = Self.compactString(block["text"])
                 guard !text.isEmpty else { continue }
-                publish(kind: .userMessage,
-                        eventID: "\(uuid):user-text:\(index)",
-                        timestamp: timestamp,
-                        role: "user",
-                        text: text,
-                        name: nil,
-                        input: nil,
-                        output: nil,
-                        toolCallID: nil,
-                        metadata: nil)
+                publishFileBacked(kind: .userMessage,
+                                  lineOffset: lineOffset,
+                                  ordinal: ordinal,
+                                  eventID: "\(uuid):user-text:\(index)",
+                                  timestamp: timestamp,
+                                  role: "user",
+                                  text: text,
+                                  name: nil,
+                                  input: nil,
+                                  output: nil,
+                                  toolCallID: nil,
+                                  metadata: nil)
+                ordinal += 1
             }
         }
     }
 
-    private func publish(kind: AgentEventKind,
-                         eventID: String,
-                         timestamp: String,
-                         role: String?,
-                         text: String?,
-                         name: String?,
-                         input: String?,
-                         output: String?,
-                         toolCallID: String?,
-                         metadata: [String: String]?) {
+    private func publishFileBacked(kind: AgentEventKind,
+                                   lineOffset: Int,
+                                   ordinal: Int,
+                                   eventID: String,
+                                   timestamp: String,
+                                   role: String?,
+                                   text: String?,
+                                   name: String?,
+                                   input: String?,
+                                   output: String?,
+                                   toolCallID: String?,
+                                   metadata: [String: String]?) {
+        let seq = transcriptEventSequence(lineOffset: lineOffset, ordinal: ordinal)
+        maxObservedSeq = max(maxObservedSeq, seq)
         let event = AgentEvent(eventID: eventID,
-                               seq: nextSequence,
+                               seq: seq,
                                vendor: "claude",
                                workspaceID: record.workspaceID,
                                sessionID: record.sessionID,
@@ -763,8 +886,41 @@ final class ClaudeTranscriptSession {
                                output: output,
                                toolCallID: toolCallID,
                                metadata: baseMetadata(metadata))
-        nextSequence += 1
-        hub.publish(event)
+        hub.publish(event, deliverToSubscribers: !isBackfillingHistory)
+    }
+
+    private func publishSynthetic(kind: AgentEventKind,
+                                  seq: Int,
+                                  eventID: String,
+                                  timestamp: String,
+                                  role: String?,
+                                  text: String?,
+                                  name: String?,
+                                  input: String?,
+                                  output: String?,
+                                  toolCallID: String?,
+                                  metadata: [String: String]?) {
+        maxObservedSeq = max(maxObservedSeq, seq)
+        let event = AgentEvent(eventID: eventID,
+                               seq: seq,
+                               vendor: "claude",
+                               workspaceID: record.workspaceID,
+                               sessionID: record.sessionID,
+                               timestamp: timestamp,
+                               type: kind,
+                               role: role,
+                               text: text,
+                               name: name,
+                               input: input,
+                               output: output,
+                               toolCallID: toolCallID,
+                               metadata: metadata)
+        hub.publish(event, deliverToSubscribers: !isBackfillingHistory)
+    }
+
+    private func nextSyntheticSequence() -> Int {
+        maxObservedSeq += 1
+        return maxObservedSeq
     }
 
     private func baseMetadata(_ metadata: [String: String]?) -> [String: String]? {

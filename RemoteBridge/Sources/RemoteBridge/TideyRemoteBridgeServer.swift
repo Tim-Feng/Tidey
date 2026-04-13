@@ -199,10 +199,23 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
 
             let sessionID = request.params?["session_id"]?.stringValue
             let beforeSeq = request.params?["before_seq"]?.intValue
-            let fetchResult = eventHub.fetch(workspaceID: workspaceID,
+            var fetchResult = eventHub.fetch(workspaceID: workspaceID,
                                              sessionID: sessionID,
                                              limit: limit,
                                              beforeSeq: beforeSeq)
+            if let sessionID,
+               let beforeSeq,
+               !fetchResult.hasMore {
+                let didBackfill = registryMonitor.backfillSession(sessionID: sessionID,
+                                                                  beforeSeq: beforeSeq,
+                                                                  limit: max(limit, transcriptBootstrapLineLimit))
+                if didBackfill {
+                    fetchResult = eventHub.fetch(workspaceID: workspaceID,
+                                                 sessionID: sessionID,
+                                                 limit: limit,
+                                                 beforeSeq: beforeSeq)
+                }
+            }
             return LocalRequestResult(
                 response: BridgeResponse(id: request.id,
                                          ok: true,

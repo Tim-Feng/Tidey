@@ -52,7 +52,7 @@ final class AgentEventHub {
             if let sessionID, let state = sessions[sessionID] {
                 matchingEvents = state.bufferedEvents.filter { event in
                     event.workspaceID == workspaceID && (beforeSeq == nil || event.seq < beforeSeq!)
-                }
+                }.sorted { $0.seq < $1.seq }
             } else {
                 matchingEvents = sessions.values
                     .flatMap(\.bufferedEvents)
@@ -89,7 +89,7 @@ final class AgentEventHub {
                 if state.isActive,
                    let sessionStarted = state.latestSessionStarted,
                    !events.contains(where: { $0.eventID == sessionStarted.eventID }),
-                   sinceSeq.map({ sessionStarted.seq > $0 }) ?? true {
+                   sinceSeq == nil {
                     events.append(sessionStarted)
                 }
                 return events
@@ -107,6 +107,9 @@ final class AgentEventHub {
                 return true
             }
             .sorted { lhs, rhs in
+                if lhs.sessionID == rhs.sessionID {
+                    return lhs.seq < rhs.seq
+                }
                 if lhs.timestamp == rhs.timestamp {
                     return lhs.seq < rhs.seq
                 }
@@ -156,7 +159,7 @@ final class AgentEventHub {
         }
     }
 
-    func publish(_ event: AgentEvent) {
+    func publish(_ event: AgentEvent, deliverToSubscribers: Bool = true) {
         let deliveries: [Subscriber] = queue.sync {
             var state = sessions[event.sessionID] ?? SessionState()
             if state.seenEventIDs.contains(event.eventID) {
@@ -183,6 +186,9 @@ final class AgentEventHub {
             }
             sessions[event.sessionID] = state
 
+            guard deliverToSubscribers else {
+                return []
+            }
             let deliveries = subscribers.values.filter { subscriber in
                 if let workspaceID = subscriber.workspaceID, workspaceID != event.workspaceID {
                     return false

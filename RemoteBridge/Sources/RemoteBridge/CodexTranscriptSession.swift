@@ -11,13 +11,14 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     private var resolverTimer: DispatchSourceTimer?
     private var tailer: JSONLFileTailer?
     private var transcriptURL: URL?
-    private var nextSequence = 1
+    private var maxObservedSeq = transcriptSessionStartedSequence
     private var didPublishStart = false
     private var didPublishEnd = false
     private var didSeeInteractiveEvent = false
     private var unsupportedVersions = Set<String>()
     private var resolvedToolCallIDs = Set<String>()
     private var publishedAssistantTextKeys = Set<String>()
+    private var isBackfillingHistory = false
 
     init(record: AgentSessionRegistryRecord,
          fileManager: FileManager = .default,
@@ -34,16 +35,17 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                 return
             }
             self.didPublishStart = true
-            self.publish(kind: .sessionStarted,
-                         eventID: "session-start:\(self.record.sessionID)",
-                         timestamp: self.record.createdAt,
-                         role: nil,
-                         text: nil,
-                         name: nil,
-                         input: nil,
-                         output: nil,
-                         toolCallID: nil,
-                         metadata: self.baseMetadata(["cwd": self.record.cwd]))
+            self.publishSynthetic(kind: .sessionStarted,
+                                  seq: transcriptSessionStartedSequence,
+                                  eventID: "session-start:\(self.record.sessionID)",
+                                  timestamp: self.record.createdAt,
+                                  role: nil,
+                                  text: nil,
+                                  name: nil,
+                                  input: nil,
+                                  output: nil,
+                                  toolCallID: nil,
+                                  metadata: self.baseMetadata(["cwd": self.record.cwd]))
             self.startResolver()
         }
     }
@@ -60,20 +62,40 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             }
             self.record = record
             if didMigrateWorkspace || didMigratePanel {
-                self.publish(kind: .sessionStarted,
-                             eventID: "session-start:\(record.sessionID):migrated:\(self.nextSequence)",
-                             timestamp: ISO8601DateFormatter().string(from: Date()),
-                             role: nil,
-                             text: nil,
-                             name: nil,
-                             input: nil,
-                             output: nil,
-                             toolCallID: nil,
-                             metadata: self.baseMetadata(["cwd": record.cwd]))
+                let seq = self.nextSyntheticSequence()
+                self.publishSynthetic(kind: .sessionStarted,
+                                      seq: seq,
+                                      eventID: "session-start:\(record.sessionID):migrated:\(seq)",
+                                      timestamp: ISO8601DateFormatter().string(from: Date()),
+                                      role: nil,
+                                      text: nil,
+                                      name: nil,
+                                      input: nil,
+                                      output: nil,
+                                      toolCallID: nil,
+                                      metadata: self.baseMetadata(["cwd": record.cwd]))
             }
             if self.transcriptURL == nil {
                 self.resolveTranscriptIfPossible()
             }
+        }
+    }
+
+    func backfill(beforeSeq: Int, limit: Int) -> Bool {
+        queue.sync {
+            if tailer == nil {
+                resolveTranscriptIfPossible()
+            }
+            guard let tailer else {
+                return false
+            }
+            let beforeOffset = transcriptLineOffset(for: beforeSeq)
+            guard beforeOffset > 0 else {
+                return false
+            }
+            isBackfillingHistory = true
+            defer { isBackfillingHistory = false }
+            return (try? tailer.backfill(beforeOffset: beforeOffset, limit: limit)) ?? false
         }
     }
 
@@ -85,16 +107,18 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             tailer = nil
             if !didPublishEnd {
                 didPublishEnd = true
-                publish(kind: .sessionEnded,
-                        eventID: "session-end:\(record.sessionID)",
-                        timestamp: ISO8601DateFormatter().string(from: Date()),
-                        role: nil,
-                        text: nil,
-                        name: nil,
-                        input: nil,
-                        output: nil,
-                        toolCallID: nil,
-                        metadata: baseMetadata(nil))
+                let seq = nextSyntheticSequence()
+                publishSynthetic(kind: .sessionEnded,
+                                 seq: seq,
+                                 eventID: "session-end:\(record.sessionID)",
+                                 timestamp: ISO8601DateFormatter().string(from: Date()),
+                                 role: nil,
+                                 text: nil,
+                                 name: nil,
+                                 input: nil,
+                                 output: nil,
+                                 toolCallID: nil,
+                                 metadata: baseMetadata(nil))
             }
         }
     }
@@ -124,8 +148,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
 
         let tailer = JSONLFileTailer(fileURL: transcriptURL,
                                      queue: queue,
-                                     lineHandler: { [weak self] line in
-                                         self?.consume(line: line)
+                                     lineHandler: { [weak self] offset, line in
+                                         self?.consume(line: line, lineOffset: offset)
                                      },
                                      invalidationHandler: { [weak self] in
                                          self?.handleTailerInvalidation()
@@ -177,7 +201,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         return nil
     }
 
-    private func consume(line: String) {
+    private func consume(line: String, lineOffset: Int) {
         guard let data = line.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let type = object["type"] as? String,
@@ -189,17 +213,17 @@ final class CodexTranscriptSession: AgentTranscriptSession {
 
         switch type {
         case "session_meta":
-            consumeSessionMeta(payload: payload, timestamp: timestamp)
+            consumeSessionMeta(payload: payload, timestamp: timestamp, lineOffset: lineOffset)
         case "response_item":
-            consumeResponseItem(payload: payload, timestamp: timestamp)
+            consumeResponseItem(payload: payload, timestamp: timestamp, lineOffset: lineOffset)
         case "event_msg":
-            consumeEventMessage(payload: payload, timestamp: timestamp)
+            consumeEventMessage(payload: payload, timestamp: timestamp, lineOffset: lineOffset)
         default:
             break
         }
     }
 
-    private func consumeSessionMeta(payload: [String: Any], timestamp: String) {
+    private func consumeSessionMeta(payload: [String: Any], timestamp: String, lineOffset: Int) {
         guard let sessionID = payload["id"] as? String,
               sessionID == record.sessionID else {
             return
@@ -208,31 +232,33 @@ final class CodexTranscriptSession: AgentTranscriptSession {
            !cliVersion.hasPrefix(codexTranscriptMajorVersion),
            !unsupportedVersions.contains(cliVersion) {
             unsupportedVersions.insert(cliVersion)
-            publish(kind: .status,
-                    eventID: "status:\(record.sessionID):unsupported-version:\(cliVersion)",
-                    timestamp: timestamp,
-                    role: nil,
-                    text: "Unsupported Codex transcript version \(cliVersion)",
-                    name: nil,
-                    input: nil,
-                    output: nil,
-                    toolCallID: nil,
-                    metadata: baseMetadata(["reason": "unsupported_version"]))
+            publishFileBacked(kind: .status,
+                              lineOffset: lineOffset,
+                              ordinal: 0,
+                              eventID: "status:\(record.sessionID):unsupported-version:\(cliVersion)",
+                              timestamp: timestamp,
+                              role: nil,
+                              text: "Unsupported Codex transcript version \(cliVersion)",
+                              name: nil,
+                              input: nil,
+                              output: nil,
+                              toolCallID: nil,
+                              metadata: baseMetadata(["reason": "unsupported_version"]))
         }
     }
 
-    private func consumeResponseItem(payload: [String: Any], timestamp: String) {
+    private func consumeResponseItem(payload: [String: Any], timestamp: String, lineOffset: Int) {
         guard let payloadType = payload["type"] as? String else {
             return
         }
 
         switch payloadType {
         case "message":
-            consumeMessageItem(payload: payload, timestamp: timestamp)
+            consumeMessageItem(payload: payload, timestamp: timestamp, lineOffset: lineOffset)
         case "function_call":
-            consumeFunctionCall(payload: payload, timestamp: timestamp)
+            consumeFunctionCall(payload: payload, timestamp: timestamp, lineOffset: lineOffset)
         case "function_call_output":
-            consumeFunctionCallOutput(payload: payload, timestamp: timestamp)
+            consumeFunctionCallOutput(payload: payload, timestamp: timestamp, lineOffset: lineOffset)
         case "reasoning":
             break
         default:
@@ -240,7 +266,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         }
     }
 
-    private func consumeMessageItem(payload: [String: Any], timestamp: String) {
+    private func consumeMessageItem(payload: [String: Any], timestamp: String, lineOffset: Int) {
         guard let role = payload["role"] as? String else {
             return
         }
@@ -261,47 +287,53 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                  eventNamespace: "assistant",
                                  phase: phase ?? "message",
                                  timestamp: timestamp,
-                                 text: text)
+                                 text: text,
+                                 lineOffset: lineOffset,
+                                 ordinal: 0)
 
         case "user":
             guard shouldPublishUserMessage(text) else {
                 return
             }
-            publish(kind: .userMessage,
-                    eventID: "user:\(record.sessionID):\(nextSequence)",
-                    timestamp: timestamp,
-                    role: role,
-                    text: text,
-                    name: nil,
-                    input: nil,
-                    output: nil,
-                    toolCallID: nil,
-                    metadata: nil)
+            publishFileBacked(kind: .userMessage,
+                              lineOffset: lineOffset,
+                              ordinal: 0,
+                              eventID: "user:\(record.sessionID):\(transcriptEventSequence(lineOffset: lineOffset, ordinal: 0))",
+                              timestamp: timestamp,
+                              role: role,
+                              text: text,
+                              name: nil,
+                              input: nil,
+                              output: nil,
+                              toolCallID: nil,
+                              metadata: nil)
 
         default:
             break
         }
     }
 
-    private func consumeFunctionCall(payload: [String: Any], timestamp: String) {
+    private func consumeFunctionCall(payload: [String: Any], timestamp: String, lineOffset: Int) {
         guard let callID = payload["call_id"] as? String else {
             return
         }
 
         didSeeInteractiveEvent = true
-        publish(kind: .toolCall,
-                eventID: callID,
-                timestamp: timestamp,
-                role: "assistant",
-                text: nil,
-                name: (payload["name"] as? String) ?? "tool",
-                input: Self.compactString(payload["arguments"] as? String),
-                output: nil,
-                toolCallID: callID,
-                metadata: nil)
+        publishFileBacked(kind: .toolCall,
+                          lineOffset: lineOffset,
+                          ordinal: 0,
+                          eventID: callID,
+                          timestamp: timestamp,
+                          role: "assistant",
+                          text: nil,
+                          name: (payload["name"] as? String) ?? "tool",
+                          input: Self.compactString(payload["arguments"] as? String),
+                          output: nil,
+                          toolCallID: callID,
+                          metadata: nil)
     }
 
-    private func consumeFunctionCallOutput(payload: [String: Any], timestamp: String) {
+    private func consumeFunctionCallOutput(payload: [String: Any], timestamp: String, lineOffset: Int) {
         guard let callID = payload["call_id"] as? String,
               !resolvedToolCallIDs.contains(callID) else {
             return
@@ -313,36 +345,38 @@ final class CodexTranscriptSession: AgentTranscriptSession {
 
         didSeeInteractiveEvent = true
         resolvedToolCallIDs.insert(callID)
-        publish(kind: .toolResult,
-                eventID: "\(callID):function-output",
-                timestamp: timestamp,
-                role: "tool",
-                text: nil,
-                name: nil,
-                input: nil,
-                output: output,
-                toolCallID: callID,
-                metadata: ["source": "function_call_output"])
+        publishFileBacked(kind: .toolResult,
+                          lineOffset: lineOffset,
+                          ordinal: 0,
+                          eventID: "\(callID):function-output",
+                          timestamp: timestamp,
+                          role: "tool",
+                          text: nil,
+                          name: nil,
+                          input: nil,
+                          output: output,
+                          toolCallID: callID,
+                          metadata: ["source": "function_call_output"])
     }
 
-    private func consumeEventMessage(payload: [String: Any], timestamp: String) {
+    private func consumeEventMessage(payload: [String: Any], timestamp: String, lineOffset: Int) {
         guard let payloadType = payload["type"] as? String else {
             return
         }
 
         switch payloadType {
         case "agent_message":
-            consumeAgentMessage(payload: payload, timestamp: timestamp)
+            consumeAgentMessage(payload: payload, timestamp: timestamp, lineOffset: lineOffset)
         case "exec_command_end":
-            consumeExecCommandEnd(payload: payload, timestamp: timestamp)
+            consumeExecCommandEnd(payload: payload, timestamp: timestamp, lineOffset: lineOffset)
         case "patch_apply_end":
-            consumePatchApplyEnd(payload: payload, timestamp: timestamp)
+            consumePatchApplyEnd(payload: payload, timestamp: timestamp, lineOffset: lineOffset)
         default:
             break
         }
     }
 
-    private func consumeAgentMessage(payload: [String: Any], timestamp: String) {
+    private func consumeAgentMessage(payload: [String: Any], timestamp: String, lineOffset: Int) {
         let text = Self.compactString(payload["message"] as? String)
         guard !text.isEmpty else {
             return
@@ -356,13 +390,17 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                  eventNamespace: "final",
                                  phase: "final_answer",
                                  timestamp: timestamp,
-                                 text: text)
+                                 text: text,
+                                 lineOffset: lineOffset,
+                                 ordinal: 0)
         case "commentary":
             publishAssistantText(kind: .assistantMessage,
                                  eventNamespace: "commentary",
                                  phase: "commentary",
                                  timestamp: timestamp,
-                                 text: text)
+                                 text: text,
+                                 lineOffset: lineOffset,
+                                 ordinal: 0)
         default:
             break
         }
@@ -372,25 +410,30 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                       eventNamespace: String,
                                       phase: String,
                                       timestamp: String,
-                                      text: String) {
+                                      text: String,
+                                      lineOffset: Int,
+                                      ordinal: Int) {
         let dedupeKey = "\(kind.rawValue)|\(phase)|\(timestamp)|\(text)"
         guard !publishedAssistantTextKeys.contains(dedupeKey) else {
             return
         }
         publishedAssistantTextKeys.insert(dedupeKey)
-        publish(kind: kind,
-                eventID: "\(eventNamespace):\(record.sessionID):\(nextSequence)",
-                timestamp: timestamp,
-                role: "assistant",
-                text: text,
-                name: nil,
-                input: nil,
-                output: nil,
-                toolCallID: nil,
-                metadata: ["phase": phase])
+        let seq = transcriptEventSequence(lineOffset: lineOffset, ordinal: ordinal)
+        publishFileBacked(kind: kind,
+                          lineOffset: lineOffset,
+                          ordinal: ordinal,
+                          eventID: "\(eventNamespace):\(record.sessionID):\(seq)",
+                          timestamp: timestamp,
+                          role: "assistant",
+                          text: text,
+                          name: nil,
+                          input: nil,
+                          output: nil,
+                          toolCallID: nil,
+                          metadata: ["phase": phase])
     }
 
-    private func consumeExecCommandEnd(payload: [String: Any], timestamp: String) {
+    private func consumeExecCommandEnd(payload: [String: Any], timestamp: String, lineOffset: Int) {
         guard let callID = payload["call_id"] as? String,
               !resolvedToolCallIDs.contains(callID) else {
             return
@@ -407,25 +450,27 @@ final class CodexTranscriptSession: AgentTranscriptSession {
 
         didSeeInteractiveEvent = true
         resolvedToolCallIDs.insert(callID)
-        publish(kind: .toolResult,
-                eventID: "\(callID):exec-end",
-                timestamp: timestamp,
-                role: "tool",
-                text: nil,
-                name: nil,
-                input: nil,
-                output: output,
-                toolCallID: callID,
-                metadata: Self.metadata(
-                    source: "exec_command_end",
-                    values: [
-                        "exit_code": Self.stringValue(payload["exit_code"]),
-                        "status": payload["status"] as? String,
-                    ]
-                ))
+        publishFileBacked(kind: .toolResult,
+                          lineOffset: lineOffset,
+                          ordinal: 0,
+                          eventID: "\(callID):exec-end",
+                          timestamp: timestamp,
+                          role: "tool",
+                          text: nil,
+                          name: nil,
+                          input: nil,
+                          output: output,
+                          toolCallID: callID,
+                          metadata: Self.metadata(
+                              source: "exec_command_end",
+                              values: [
+                                  "exit_code": Self.stringValue(payload["exit_code"]),
+                                  "status": payload["status"] as? String,
+                              ]
+                          ))
     }
 
-    private func consumePatchApplyEnd(payload: [String: Any], timestamp: String) {
+    private func consumePatchApplyEnd(payload: [String: Any], timestamp: String, lineOffset: Int) {
         guard let callID = payload["call_id"] as? String,
               !resolvedToolCallIDs.contains(callID) else {
             return
@@ -440,22 +485,24 @@ final class CodexTranscriptSession: AgentTranscriptSession {
 
         didSeeInteractiveEvent = true
         resolvedToolCallIDs.insert(callID)
-        publish(kind: .toolResult,
-                eventID: "\(callID):patch-end",
-                timestamp: timestamp,
-                role: "tool",
-                text: nil,
-                name: nil,
-                input: nil,
-                output: output,
-                toolCallID: callID,
-                metadata: Self.metadata(
-                    source: "patch_apply_end",
-                    values: [
-                        "success": Self.boolString(payload["success"]),
-                        "status": payload["status"] as? String,
-                    ]
-                ))
+        publishFileBacked(kind: .toolResult,
+                          lineOffset: lineOffset,
+                          ordinal: 0,
+                          eventID: "\(callID):patch-end",
+                          timestamp: timestamp,
+                          role: "tool",
+                          text: nil,
+                          name: nil,
+                          input: nil,
+                          output: output,
+                          toolCallID: callID,
+                          metadata: Self.metadata(
+                              source: "patch_apply_end",
+                              values: [
+                                  "success": Self.boolString(payload["success"]),
+                                  "status": payload["status"] as? String,
+                              ]
+                          ))
     }
 
     private func shouldPublishUserMessage(_ text: String) -> Bool {
@@ -468,18 +515,22 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         return !Self.isBootstrapUserMessage(text)
     }
 
-    private func publish(kind: AgentEventKind,
-                         eventID: String,
-                         timestamp: String,
-                         role: String?,
-                         text: String?,
-                         name: String?,
-                         input: String?,
-                         output: String?,
-                         toolCallID: String?,
-                         metadata: [String: String]?) {
+    private func publishFileBacked(kind: AgentEventKind,
+                                   lineOffset: Int,
+                                   ordinal: Int,
+                                   eventID: String,
+                                   timestamp: String,
+                                   role: String?,
+                                   text: String?,
+                                   name: String?,
+                                   input: String?,
+                                   output: String?,
+                                   toolCallID: String?,
+                                   metadata: [String: String]?) {
+        let seq = transcriptEventSequence(lineOffset: lineOffset, ordinal: ordinal)
+        maxObservedSeq = max(maxObservedSeq, seq)
         let event = AgentEvent(eventID: eventID,
-                               seq: nextSequence,
+                               seq: seq,
                                vendor: "codex",
                                workspaceID: record.workspaceID,
                                sessionID: record.sessionID,
@@ -492,8 +543,41 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                output: output,
                                toolCallID: toolCallID,
                                metadata: baseMetadata(metadata))
-        nextSequence += 1
-        hub.publish(event)
+        hub.publish(event, deliverToSubscribers: !isBackfillingHistory)
+    }
+
+    private func publishSynthetic(kind: AgentEventKind,
+                                  seq: Int,
+                                  eventID: String,
+                                  timestamp: String,
+                                  role: String?,
+                                  text: String?,
+                                  name: String?,
+                                  input: String?,
+                                  output: String?,
+                                  toolCallID: String?,
+                                  metadata: [String: String]?) {
+        maxObservedSeq = max(maxObservedSeq, seq)
+        let event = AgentEvent(eventID: eventID,
+                               seq: seq,
+                               vendor: "codex",
+                               workspaceID: record.workspaceID,
+                               sessionID: record.sessionID,
+                               timestamp: timestamp,
+                               type: kind,
+                               role: role,
+                               text: text,
+                               name: name,
+                               input: input,
+                               output: output,
+                               toolCallID: toolCallID,
+                               metadata: metadata)
+        hub.publish(event, deliverToSubscribers: !isBackfillingHistory)
+    }
+
+    private func nextSyntheticSequence() -> Int {
+        maxObservedSeq += 1
+        return maxObservedSeq
     }
 
     private func baseMetadata(_ metadata: [String: String]?) -> [String: String]? {
