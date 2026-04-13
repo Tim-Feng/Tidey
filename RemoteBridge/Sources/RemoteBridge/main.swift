@@ -8,11 +8,13 @@ let eventHub = AgentEventHub()
 let workspaceEventHub = WorkspaceEventHub()
 let registryMonitor = AgentSessionRegistryMonitor(hub: eventHub)
 let workspaceEventMonitor = TideyWorkspaceEventMonitor(locator: locator, hub: workspaceEventHub)
+let observability = BridgeObservabilityCenter()
 let server = TideyRemoteBridgeServer(token: token,
                                      socketClient: socketClient,
                                      eventHub: eventHub,
                                      workspaceEventHub: workspaceEventHub,
-                                     registryMonitor: registryMonitor)
+                                     registryMonitor: registryMonitor,
+                                     observability: observability)
 
 do {
     workspaceEventMonitor.start()

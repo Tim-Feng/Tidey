@@ -1,6 +1,15 @@
 import Foundation
 
 final class AgentEventHub {
+    struct SessionDebugSnapshot: Equatable {
+        let sessionID: String
+        let workspaceID: String?
+        let bufferedEventCount: Int
+        let oldestSeq: Int?
+        let newestSeq: Int?
+        let isActive: Bool
+    }
+
     struct FetchResult {
         let events: [AgentEvent]
         let oldestSeq: Int
@@ -152,6 +161,20 @@ final class AgentEventHub {
             sessions[sessionID]?.bufferedEvents
                 .map(\.seq)
                 .min()
+        }
+    }
+
+    func debugSnapshots() -> [SessionDebugSnapshot] {
+        queue.sync {
+            sessions.map { sessionID, state in
+                let seqs = state.bufferedEvents.map(\.seq)
+                return SessionDebugSnapshot(sessionID: sessionID,
+                                            workspaceID: state.bufferedEvents.last?.workspaceID ?? state.latestSessionStarted?.workspaceID,
+                                            bufferedEventCount: state.bufferedEvents.count,
+                                            oldestSeq: seqs.min(),
+                                            newestSeq: seqs.max(),
+                                            isActive: state.isActive)
+            }
         }
     }
 

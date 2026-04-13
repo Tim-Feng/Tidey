@@ -125,6 +125,17 @@ final class AgentSessionRegistryMonitor {
         }
     }
 
+    func activeSessionSnapshots() -> [ActiveAgentSessionSnapshot] {
+        queue.sync {
+            activeRecords.values.map {
+                ActiveAgentSessionSnapshot(vendor: $0.vendor,
+                                           workspaceID: $0.workspaceID,
+                                           sessionID: $0.sessionID,
+                                           panelID: $0.panelID)
+            }
+        }
+    }
+
     func backfillSession(sessionID: String, beforeSeq: Int, limit: Int) -> Bool {
         let session: AgentTranscriptSession? = queue.sync {
             if let session = claudeSessions[sessionID] {

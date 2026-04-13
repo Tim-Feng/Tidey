@@ -12,6 +12,7 @@ final class TideyRemoteBridgeServer {
     private let eventHub: AgentEventHub
     private let workspaceEventHub: WorkspaceEventHub
     private let registryMonitor: AgentSessionRegistryMonitor
+    private let observability: BridgeObservabilityCenter
     private let group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
 
     init(host: String = "0.0.0.0",
@@ -20,7 +21,8 @@ final class TideyRemoteBridgeServer {
          socketClient: TideySocketClient,
          eventHub: AgentEventHub,
          workspaceEventHub: WorkspaceEventHub,
-         registryMonitor: AgentSessionRegistryMonitor) {
+         registryMonitor: AgentSessionRegistryMonitor,
+         observability: BridgeObservabilityCenter) {
         self.host = host
         self.port = port
         self.token = token
@@ -28,6 +30,7 @@ final class TideyRemoteBridgeServer {
         self.eventHub = eventHub
         self.workspaceEventHub = workspaceEventHub
         self.registryMonitor = registryMonitor
+        self.observability = observability
     }
 
     func run() throws {
@@ -40,19 +43,23 @@ final class TideyRemoteBridgeServer {
                 }
                 return channel.eventLoop.makeSucceededFuture([:])
             },
-            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub, registryMonitor] channel, _ in
+            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub, registryMonitor, observability] channel, _ in
                 channel.pipeline.addHandler(WebSocketFrameHandler(socketClient: socketClient,
                                                                   eventHub: eventHub,
                                                                   workspaceEventHub: workspaceEventHub,
-                                                                  registryMonitor: registryMonitor))
+                                                                  registryMonitor: registryMonitor,
+                                                                  observability: observability))
             }
         )
 
         let bootstrap = ServerBootstrap(group: group)
             .serverChannelOption(ChannelOptions.backlog, value: 16)
             .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
-            .childChannelInitializer { channel in
-                let httpHandler = HTTPHandler()
+            .childChannelInitializer { [token, registryMonitor, eventHub, observability] channel in
+                let httpHandler = HTTPHandler(token: token,
+                                              registryMonitor: registryMonitor,
+                                              eventHub: eventHub,
+                                              observability: observability)
                 return channel.pipeline.configureHTTPServerPipeline(
                     withServerUpgrade: (
                         upgraders: [upgrader],
@@ -67,8 +74,8 @@ final class TideyRemoteBridgeServer {
             .childChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
 
         let channel = try bootstrap.bind(host: host, port: port).wait()
-        print("Tidey Remote Bridge listening on ws://\(host):\(port)")
-        print("Pair token: \(token)")
+        BridgeLogger.server.info("bridge listening ws_url=ws://\(self.host, privacy: .public):\(self.port) admin_url=http://\(self.host, privacy: .public):\(self.port)/admin/status")
+        BridgeLogger.server.info("pair token hash=\(self.token, privacy: .private(mask: .hash))")
         try channel.closeFuture.wait()
     }
 
@@ -81,15 +88,75 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
     typealias InboundIn = HTTPServerRequestPart
     typealias OutboundOut = HTTPServerResponsePart
 
+    private let token: String
+    private let registryMonitor: AgentSessionRegistryMonitor
+    private let eventHub: AgentEventHub
+    private let observability: BridgeObservabilityCenter
+    private let encoder = JSONEncoder()
+
+    init(token: String,
+         registryMonitor: AgentSessionRegistryMonitor,
+         eventHub: AgentEventHub,
+         observability: BridgeObservabilityCenter) {
+        self.token = token
+        self.registryMonitor = registryMonitor
+        self.eventHub = eventHub
+        self.observability = observability
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys]
+    }
+
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         let part = unwrapInboundIn(data)
-        if case .head(let head) = part, head.uri != "/ws" {
+        if case .head(let head) = part {
+            if head.uri == "/admin/status" {
+                respondToAdminStatus(head: head, context: context)
+                return
+            }
+            if head.uri != "/ws" {
+                var headers = HTTPHeaders()
+                headers.add(name: "content-length", value: "0")
+                let response = HTTPResponseHead(version: head.version, status: .notFound, headers: headers)
+                context.write(wrapOutboundOut(.head(response)), promise: nil)
+                context.writeAndFlush(wrapOutboundOut(.end(nil)), promise: nil)
+            }
+        }
+    }
+
+    private func respondToAdminStatus(head: HTTPRequestHead, context: ChannelHandlerContext) {
+        guard head.headers.first(name: "Authorization") == "Bearer \(token)" else {
             var headers = HTTPHeaders()
             headers.add(name: "content-length", value: "0")
-            let response = HTTPResponseHead(version: head.version, status: .notFound, headers: headers)
+            let response = HTTPResponseHead(version: head.version, status: .unauthorized, headers: headers)
             context.write(wrapOutboundOut(.head(response)), promise: nil)
             context.writeAndFlush(wrapOutboundOut(.end(nil)), promise: nil)
+            return
         }
+
+        let activeSessions = registryMonitor.activeSessionSnapshots()
+        let eventSnapshots = Dictionary(uniqueKeysWithValues: eventHub.debugSnapshots().map { ($0.sessionID, $0) })
+        let status = observability.snapshot(activeSessions: activeSessions.map { session in
+            let eventSnapshot = eventSnapshots[session.sessionID]
+            return BridgeActiveSessionStatus(vendor: session.vendor,
+                                             workspaceID: session.workspaceID,
+                                             sessionID: session.sessionID,
+                                             panelID: session.panelID,
+                                             bufferedEventCount: eventSnapshot?.bufferedEventCount ?? 0,
+                                             oldestSeq: eventSnapshot?.oldestSeq,
+                                             newestSeq: eventSnapshot?.newestSeq,
+                                             isActive: eventSnapshot?.isActive ?? false)
+        })
+        let data = (try? encoder.encode(status)) ?? Data("{}".utf8)
+        var buffer = context.channel.allocator.buffer(capacity: data.count)
+        buffer.writeBytes(data)
+
+        var headers = HTTPHeaders()
+        headers.add(name: "content-type", value: "application/json")
+        headers.add(name: "content-length", value: "\(data.count)")
+        let response = HTTPResponseHead(version: head.version, status: .ok, headers: headers)
+        context.write(wrapOutboundOut(.head(response)), promise: nil)
+        context.write(wrapOutboundOut(.body(.byteBuffer(buffer))), promise: nil)
+        context.writeAndFlush(wrapOutboundOut(.end(nil)), promise: nil)
     }
 }
 
@@ -107,6 +174,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
     private let eventHub: AgentEventHub
     private let workspaceEventHub: WorkspaceEventHub
     private let registryMonitor: AgentSessionRegistryMonitor
+    private let observability: BridgeObservabilityCenter
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     private lazy var inputActionHandler = BridgeInputActionHandler(socketSender: socketClient,
@@ -117,11 +185,13 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
     init(socketClient: TideySocketClient,
          eventHub: AgentEventHub,
          workspaceEventHub: WorkspaceEventHub,
-         registryMonitor: AgentSessionRegistryMonitor) {
+         registryMonitor: AgentSessionRegistryMonitor,
+         observability: BridgeObservabilityCenter) {
         self.socketClient = socketClient
         self.eventHub = eventHub
         self.workspaceEventHub = workspaceEventHub
         self.registryMonitor = registryMonitor
+        self.observability = observability
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
@@ -209,6 +279,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
 
         switch request.action {
         case "fetch_agent_events":
+            let startedAt = CFAbsoluteTimeGetCurrent()
             guard let workspaceID = request.params?["workspace_id"]?.stringValue,
                   let limit = request.params?["limit"]?.intValue else {
                 return LocalRequestResult(
@@ -239,13 +310,15 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                                              limit: limit,
                                              beforeSeq: beforeSeq,
                                              afterSeq: afterSeq)
+            var didBackfill = false
             if let sessionID,
                let beforeSeq,
                !fetchResult.hasMore {
-                let didBackfill = registryMonitor.backfillSession(sessionID: sessionID,
-                                                                  beforeSeq: beforeSeq,
-                                                                  limit: max(limit, transcriptBootstrapLineLimit))
-                if didBackfill {
+                let backfilled = registryMonitor.backfillSession(sessionID: sessionID,
+                                                                 beforeSeq: beforeSeq,
+                                                                 limit: max(limit, transcriptBootstrapLineLimit))
+                if backfilled {
+                    didBackfill = true
                     fetchResult = eventHub.fetch(workspaceID: workspaceID,
                                                  sessionID: sessionID,
                                                  limit: limit,
@@ -255,12 +328,13 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
             } else if let sessionID, let afterSeq {
                 while let earliestBufferedSeq = eventHub.oldestBufferedSeq(sessionID: sessionID),
                       earliestBufferedSeq > afterSeq + 1 {
-                    let didBackfill = registryMonitor.backfillSession(sessionID: sessionID,
-                                                                      beforeSeq: earliestBufferedSeq,
-                                                                      limit: max(limit, transcriptBootstrapLineLimit))
-                    guard didBackfill else {
+                    let backfilled = registryMonitor.backfillSession(sessionID: sessionID,
+                                                                     beforeSeq: earliestBufferedSeq,
+                                                                     limit: max(limit, transcriptBootstrapLineLimit))
+                    guard backfilled else {
                         break
                     }
+                    didBackfill = true
                     fetchResult = eventHub.fetch(workspaceID: workspaceID,
                                                  sessionID: sessionID,
                                                  limit: limit,
@@ -268,6 +342,14 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                                                  afterSeq: afterSeq)
                 }
             }
+            observability.recordFetch(workspaceID: workspaceID,
+                                      sessionID: sessionID,
+                                      limit: limit,
+                                      beforeSeq: beforeSeq,
+                                      afterSeq: afterSeq,
+                                      returnedCount: fetchResult.events.count,
+                                      didBackfill: didBackfill,
+                                      durationMs: (CFAbsoluteTimeGetCurrent() - startedAt) * 1000)
             return LocalRequestResult(
                 response: BridgeResponse(id: request.id,
                                          ok: true,
