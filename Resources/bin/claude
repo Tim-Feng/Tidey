@@ -47,6 +47,65 @@ write_registry_file() {
     }
 }
 
+read_session_id_from_registry_file() {
+    local path="$1"
+    [[ -f "$path" ]] || return 1
+    sed -n 's/.*"session_id":"\([^"]*\)".*/\1/p' "$path" | head -n1
+}
+
+find_registry_file_for_pid() {
+    local pid="$1"
+    local path=""
+    shopt -s nullglob
+    for path in "$REGISTRY_ROOT"/claude-*.json; do
+        if grep -q "\"pid\":$pid" "$path" 2>/dev/null; then
+            printf '%s' "$path"
+            shopt -u nullglob
+            return 0
+        fi
+    done
+    shopt -u nullglob
+    return 1
+}
+
+monitor_registry_file() {
+    local pid="$1"
+    local workspace_id="$2"
+    local panel_id="$3"
+    local cwd="$4"
+    local created_at="$5"
+    local current_session_id="${6:-}"
+    local registry_file="${7:-}"
+
+    while kill -0 "$pid" 2>/dev/null; do
+        if [[ -z "$current_session_id" || -z "$registry_file" || ! -f "$registry_file" ]]; then
+            local discovered_registry=""
+            if discovered_registry="$(find_registry_file_for_pid "$pid")"; then
+                registry_file="$discovered_registry"
+                local discovered_session_id=""
+                discovered_session_id="$(read_session_id_from_registry_file "$registry_file" || true)"
+                if [[ -n "$discovered_session_id" ]]; then
+                    current_session_id="$discovered_session_id"
+                fi
+            fi
+        fi
+
+        if [[ -n "$current_session_id" ]]; then
+            if [[ -z "$registry_file" ]]; then
+                registry_file="$REGISTRY_ROOT/claude-$current_session_id.json"
+            fi
+            if [[ ! -f "$registry_file" ]]; then
+                write_registry_file "$registry_file" "$workspace_id" "$current_session_id" "$panel_id" "$pid" "$cwd" "$created_at"
+            fi
+        fi
+        sleep 2
+    done
+
+    if [[ -n "$registry_file" ]]; then
+        rm -f "$registry_file"
+    fi
+}
+
 shell_quote() {
     local s="${1-}"
     s=${s//\'/\'\\\'\'}
@@ -156,13 +215,25 @@ PROMPT_SUBMIT_CMD="$(json_escape "$TIDEY_BIN claude-hook prompt-submit")"
 HOOKS_JSON="{\"hooks\":{\"SessionStart\":[{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"$SESSION_START_CMD\",\"timeout\":10}]}],\"Notification\":[{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"$NOTIFICATION_CMD\",\"timeout\":10}]}],\"Stop\":[{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"$STOP_CMD\",\"timeout\":10}]}],\"SessionEnd\":[{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"$SESSION_END_CMD\",\"timeout\":1}]}],\"UserPromptSubmit\":[{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"$PROMPT_SUBMIT_CMD\",\"timeout\":10}]}]}}"
 
 REGISTRY_FILE=""
+MONITOR_PID=""
 if [[ -n "${TIDEY_WORKSPACE_ID:-}" && -n "$SESSION_ID" ]]; then
     REGISTRY_FILE="$REGISTRY_ROOT/claude-${SESSION_ID}.json"
     CREATED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     write_registry_file "$REGISTRY_FILE" "$TIDEY_WORKSPACE_ID" "$SESSION_ID" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$CREATED_AT"
+else
+    CREATED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+fi
+
+if [[ -n "${TIDEY_WORKSPACE_ID:-}" ]]; then
+    monitor_registry_file "$$" "$TIDEY_WORKSPACE_ID" "${TIDEY_PANEL_ID:-}" "$PWD" "$CREATED_AT" "$SESSION_ID" "$REGISTRY_FILE" &
+    MONITOR_PID="$!"
 fi
 
 cleanup() {
+    if [[ -n "${MONITOR_PID:-}" ]]; then
+        kill "$MONITOR_PID" 2>/dev/null || true
+        wait "$MONITOR_PID" 2>/dev/null || true
+    fi
     if [[ -n "${REGISTRY_FILE:-}" ]]; then
         rm -f "$REGISTRY_FILE"
     fi
