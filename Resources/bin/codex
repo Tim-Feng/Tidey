@@ -60,6 +60,41 @@ rollout_for_pid() {
     lsof -Fn -p "$pid" 2>/dev/null | sed -n 's/^n//p' | grep -E '/\.codex/sessions/.*/rollout-.*\.jsonl$' | tail -n 1
 }
 
+child_pids_for_pid() {
+    local pid="$1"
+    pgrep -P "$pid" 2>/dev/null || true
+}
+
+rollout_for_pid_tree() {
+    local root_pid="$1"
+    local queue=("$root_pid")
+    local seen=" $root_pid "
+    local pid=""
+    local path=""
+    local child=""
+
+    while ((${#queue[@]} > 0)); do
+        pid="${queue[0]}"
+        queue=("${queue[@]:1}")
+
+        path="$(rollout_for_pid "$pid" || true)"
+        if [[ -n "$path" ]]; then
+            printf '%s' "$path"
+            return 0
+        fi
+
+        while IFS= read -r child; do
+            [[ -n "$child" ]] || continue
+            if [[ "$seen" != *" $child "* ]]; then
+                seen+=" $child "
+                queue+=("$child")
+            fi
+        done < <(child_pids_for_pid "$pid")
+    done
+
+    return 1
+}
+
 derive_session_id_from_rollout() {
     local path="$1"
     local basename="${path##*/}"
@@ -85,7 +120,7 @@ monitor_rollout_and_registry() {
         local current_session_id=""
         local next_registry_file=""
 
-        current_rollout_path="$(rollout_for_pid "$pid" || true)"
+        current_rollout_path="$(rollout_for_pid_tree "$pid" || true)"
         if [[ -n "$current_rollout_path" ]]; then
             current_session_id="$(derive_session_id_from_rollout "$current_rollout_path")"
         fi
