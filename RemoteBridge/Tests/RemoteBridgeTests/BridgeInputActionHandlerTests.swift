@@ -69,7 +69,7 @@ final class BridgeInputActionHandlerTests: XCTestCase {
 
         XCTAssertEqual(response?.ok, true)
         XCTAssertEqual(sender.sentRequests.map { $0.params?["input"]?.stringValue }, ["hello", "\r"])
-        XCTAssertEqual(delayRecorder.recordedDelays, [ChatSubmitPlanner.codexSubmitDelayNanoseconds])
+        XCTAssertEqual(delayRecorder.recordedDelays, [codexChatSubmitDelayNanoseconds])
     }
 
     func testChatSubmitRejectsMismatchedSession() throws {
@@ -95,6 +95,29 @@ final class BridgeInputActionHandlerTests: XCTestCase {
                 return XCTFail("Unexpected error: \(error)")
             }
             XCTAssertTrue(message.contains("session_id"))
+        }
+        XCTAssertTrue(sender.sentRequests.isEmpty)
+    }
+
+    func testChatSubmitRejectsUnsupportedVendor() {
+        let sender = MockTideyRequestSender()
+        let resolver = MockSessionResolver()
+        let handler = BridgeInputActionHandler(socketSender: sender, sessionResolver: resolver)
+
+        XCTAssertThrowsError(
+            try handler.handle(BridgeRequest(id: "request-1",
+                                             action: "chat_submit",
+                                             params: [
+                                                "workspace_id": .string("workspace-1"),
+                                                "panel_id": .string("panel-1"),
+                                                "message": .string("hello"),
+                                                "vendor": .string("unknown-agent"),
+                                             ]))
+        ) { error in
+            guard case BridgeInternalError.invalidRequest(let message) = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+            XCTAssertTrue(message.contains("not supported"))
         }
         XCTAssertTrue(sender.sentRequests.isEmpty)
     }

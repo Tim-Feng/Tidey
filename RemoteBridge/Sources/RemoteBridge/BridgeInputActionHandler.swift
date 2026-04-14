@@ -13,29 +13,6 @@ protocol ActiveAgentSessionResolving {
 
 extension AgentSessionRegistryMonitor: ActiveAgentSessionResolving {}
 
-struct ChatSubmitStep: Equatable {
-    let input: String
-    let delayNanoseconds: UInt64
-}
-
-enum ChatSubmitPlanner {
-    static let codexSubmitDelayNanoseconds: UInt64 = 130_000_000
-
-    static func plan(message: String, vendor: String) -> [ChatSubmitStep] {
-        switch vendor.lowercased() {
-        case "codex":
-            return [
-                ChatSubmitStep(input: message, delayNanoseconds: 0),
-                ChatSubmitStep(input: "\r", delayNanoseconds: codexSubmitDelayNanoseconds),
-            ]
-        default:
-            return [
-                ChatSubmitStep(input: message + "\r", delayNanoseconds: 0),
-            ]
-        }
-    }
-}
-
 struct BridgeInputActionHandler {
     private let socketSender: TideyRequestSending
     private let sessionResolver: ActiveAgentSessionResolving
@@ -103,11 +80,14 @@ struct BridgeInputActionHandler {
             throw BridgeInternalError.invalidRequest("chat_submit vendor does not match the active panel session")
         }
 
-        guard let resolvedVendor = activeSession?.vendor ?? requestedVendor else {
+        guard let resolvedVendorID = activeSession?.vendor ?? requestedVendor else {
             throw BridgeInternalError.invalidRequest("chat_submit requires vendor when no active panel session is registered")
         }
+        guard let vendor = AgentVendorRegistry.resolve(id: resolvedVendorID) else {
+            throw BridgeInternalError.invalidRequest("chat_submit vendor is not supported")
+        }
 
-        for (index, step) in ChatSubmitPlanner.plan(message: message, vendor: resolvedVendor).enumerated() {
+        for (index, step) in vendor.submitMessagePlan(text: message).enumerated() {
             if index > 0 {
                 try sleep(step.delayNanoseconds)
             }
@@ -130,7 +110,7 @@ struct BridgeInputActionHandler {
                               ok: true,
                               result: [
                                 "submitted": .bool(true),
-                                "vendor": .string(resolvedVendor),
+                                "vendor": .string(vendor.id),
                                 "session_id": activeSession.map { .string($0.sessionID) } ?? .null,
                               ],
                               error: nil)

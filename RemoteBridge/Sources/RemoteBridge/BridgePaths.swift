@@ -22,10 +22,16 @@ struct BridgePaths {
         agentSessionsDirectory.appendingPathComponent("codex", isDirectory: true)
     }
 
+    func agentSessionsDirectory(for vendorID: String) -> URL {
+        agentSessionsDirectory.appendingPathComponent(vendorID, isDirectory: true)
+    }
+
     func ensureSupportDirectoriesExist(fileManager: FileManager = .default) throws {
         try fileManager.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: agentSessionsDirectory, withIntermediateDirectories: true)
-        try fileManager.createDirectory(at: claudeAgentSessionsDirectory, withIntermediateDirectories: true)
-        try fileManager.createDirectory(at: codexAgentSessionsDirectory, withIntermediateDirectories: true)
+        for vendor in AgentVendorRegistry.all {
+            try fileManager.createDirectory(at: agentSessionsDirectory(for: vendor.registryDirectoryName),
+                                            withIntermediateDirectories: true)
+        }
     }
 }

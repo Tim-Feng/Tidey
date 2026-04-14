@@ -34,6 +34,26 @@ struct AgentSessionRegistryRecord: Decodable, Sendable {
         case rolloutPath = "rollout_path"
     }
 
+    init(version: Int,
+         vendor: String,
+         workspaceID: String,
+         sessionID: String,
+         panelID: String?,
+         pid: Int32,
+         cwd: String,
+         createdAt: String,
+         transcriptPath: String?) {
+        self.version = version
+        self.vendor = vendor
+        self.workspaceID = workspaceID
+        self.sessionID = sessionID
+        self.panelID = panelID
+        self.pid = pid
+        self.cwd = cwd
+        self.createdAt = createdAt
+        self.transcriptPath = transcriptPath
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         version = try container.decode(Int.self, forKey: .version)
@@ -65,8 +85,7 @@ final class AgentSessionRegistryMonitor {
     private var timer: DispatchSourceTimer?
     private var watchers = [String: DispatchSourceFileSystemObject]()
     private var watcherFDs = [String: Int32]()
-    private var claudeSessions = [String: ClaudeTranscriptSession]()
-    private var codexSessions = [String: CodexTranscriptSession]()
+    private var sessions = [String: AgentTranscriptSession]()
     private var activeRecords = [String: AgentSessionRegistryRecord]()
     private var scanScheduled = false
 
@@ -137,32 +156,23 @@ final class AgentSessionRegistryMonitor {
     }
 
     func backfillSession(sessionID: String, beforeSeq: Int, limit: Int) -> Bool {
-        let session: AgentTranscriptSession? = queue.sync {
-            if let session = claudeSessions[sessionID] {
-                return session
-            }
-            if let session = codexSessions[sessionID] {
-                return session
-            }
-            return nil
-        }
+        let session: AgentTranscriptSession? = queue.sync { sessions[sessionID] }
         return session?.backfill(beforeSeq: beforeSeq, limit: limit) ?? false
     }
 
     deinit {
         stopWatchers()
         timer?.cancel()
-        for session in claudeSessions.values {
-            session.stop()
-        }
-        for session in codexSessions.values {
+        for session in sessions.values {
             session.stop()
         }
     }
 
     private func startWatchers() {
-        startWatcher(for: "claude", directory: paths.claudeAgentSessionsDirectory)
-        startWatcher(for: "codex", directory: paths.codexAgentSessionsDirectory)
+        for vendor in AgentVendorRegistry.all {
+            startWatcher(for: vendor.registryDirectoryName,
+                         directory: paths.agentSessionsDirectory(for: vendor.registryDirectoryName))
+        }
     }
 
     private func startWatcher(for vendor: String, directory: URL) {
@@ -212,7 +222,7 @@ final class AgentSessionRegistryMonitor {
 
         if events.contains(.rename) || events.contains(.delete) || events.contains(.revoke) {
             try? paths.ensureSupportDirectoriesExist(fileManager: fileManager)
-            let directory = vendor == "codex" ? paths.codexAgentSessionsDirectory : paths.claudeAgentSessionsDirectory
+            let directory = paths.agentSessionsDirectory(for: vendor)
             startWatcher(for: vendor, directory: directory)
         }
     }
@@ -232,46 +242,34 @@ final class AgentSessionRegistryMonitor {
     }
 
     private func scanRegistry() {
-        let claudeRecords = loadRecords(at: paths.claudeAgentSessionsDirectory, vendor: "claude")
-        let codexRecords = loadRecords(at: paths.codexAgentSessionsDirectory, vendor: "codex")
-        syncClaudeRecords(claudeRecords)
-        syncCodexRecords(codexRecords)
-        activeRecords = Dictionary(uniqueKeysWithValues: (claudeRecords + codexRecords).map { ($0.sessionID, $0) })
+        let records = AgentVendorRegistry.all.flatMap { vendor in
+            loadRecords(at: paths.agentSessionsDirectory(for: vendor.registryDirectoryName),
+                        vendor: vendor.id)
+        }
+        syncRecords(records)
+        activeRecords = Dictionary(uniqueKeysWithValues: records.map { ($0.sessionID, $0) })
     }
 
-    private func syncClaudeRecords(_ records: [AgentSessionRegistryRecord]) {
+    private func syncRecords(_ records: [AgentSessionRegistryRecord]) {
         let activeSessionIDs = Set(records.map(\.sessionID))
         for record in records {
-            if let session = claudeSessions[record.sessionID] {
+            if let session = sessions[record.sessionID] {
                 session.update(record: record)
-            } else {
-                let session = ClaudeTranscriptSession(record: record, fileManager: fileManager, hub: hub)
-                claudeSessions[record.sessionID] = session
-                session.start()
+                continue
             }
-        }
-
-        let staleSessionIDs = claudeSessions.keys.filter { !activeSessionIDs.contains($0) }
-        for sessionID in staleSessionIDs {
-            claudeSessions.removeValue(forKey: sessionID)?.stop()
-        }
-    }
-
-    private func syncCodexRecords(_ records: [AgentSessionRegistryRecord]) {
-        let activeSessionIDs = Set(records.map(\.sessionID))
-        for record in records {
-            if let session = codexSessions[record.sessionID] {
-                session.update(record: record)
-            } else {
-                let session = CodexTranscriptSession(record: record, fileManager: fileManager, hub: hub)
-                codexSessions[record.sessionID] = session
-                session.start()
+            guard let vendor = AgentVendorRegistry.resolve(id: record.vendor) else {
+                continue
             }
+            let session = vendor.makeTranscriptSession(record: record,
+                                                       fileManager: fileManager,
+                                                       hub: hub)
+            sessions[record.sessionID] = session
+            session.start()
         }
 
-        let staleSessionIDs = codexSessions.keys.filter { !activeSessionIDs.contains($0) }
+        let staleSessionIDs = sessions.keys.filter { !activeSessionIDs.contains($0) }
         for sessionID in staleSessionIDs {
-            codexSessions.removeValue(forKey: sessionID)?.stop()
+            sessions.removeValue(forKey: sessionID)?.stop()
         }
     }
 
