@@ -604,6 +604,22 @@ Overrides the tab/workspace title. Send an empty `title` to clear the override.
 codesign --force --sign -
 ```
 
+For day-to-day RemoteBridge deployment during development, use the one-shot wrapper:
+
+```bash
+make install-bridge
+```
+
+That target runs `RemoteBridge/tools/deploy-bridge.sh`, which:
+
+1. builds the release binary
+2. copies it into `~/Library/Application Support/Tidey Remote Bridge/`
+3. ad-hoc signs it
+4. restarts the launchd service with `launchctl kickstart -k`
+5. checks `http://127.0.0.1:4817/admin/status`
+
+Use `RemoteBridge/install.sh` when adjusting install paths or launchd settings. Use `make install-bridge` for the normal local rebuild-and-restart loop.
+
 This is required because the raw `swift build` output is not signed, and launchd on macOS will reject or kill an unsigned binary copied into the user LaunchAgent path.
 
 ### Codex Wrapper

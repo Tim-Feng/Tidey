@@ -57,7 +57,7 @@ else
   RUST_NATIVE_TARGET = x86_64-apple-darwin
 endif
 
-.PHONY: clean all backup-old-iterm restart sync-production-wrappers sync-production-wrappers-dev
+.PHONY: clean all backup-old-iterm restart sync-production-wrappers sync-production-wrappers-dev install-bridge
 
 all: Development
 dev: Development
@@ -109,6 +109,9 @@ sync-production-wrappers: | Deployment
 
 sync-production-wrappers-dev: | Development
 	tools/sync_wrappers.sh --source-app "$(BUILD_DIR)/Development/Tidey.app" --target-app "$(APPS)/Tidey.app"
+
+install-bridge:
+	RemoteBridge/tools/deploy-bridge.sh
 
 Development:
 	echo "Using PATH for build: $(PATH)"
