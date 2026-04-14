@@ -626,6 +626,20 @@ Registry shape:
 
 The monitor removes this registry file after `codex` exits.
 
+When runtime bin changes need to be pushed into an already-installed production app without reinstalling the full bundle, use:
+
+```bash
+make sync-production-wrappers
+```
+
+If the source of truth is a Development build instead of Deployment, use:
+
+```bash
+make sync-production-wrappers-dev
+```
+
+These targets sync `tidey`, `claude`, and `codex` from the built app bundle into `/Applications/Tidey.app/Contents/Resources/bin/`. The `tidey` binary is included because hook fixes can live in TideyCLI, not only in the wrapper scripts.
+
 ### Hook Events
 
 The wrapper registers these Claude Code hooks, all handled by `tidey claude-hook <event>`:

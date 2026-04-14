@@ -57,7 +57,7 @@ else
   RUST_NATIVE_TARGET = x86_64-apple-darwin
 endif
 
-.PHONY: clean all backup-old-iterm restart
+.PHONY: clean all backup-old-iterm restart sync-production-wrappers sync-production-wrappers-dev
 
 all: Development
 dev: Development
@@ -103,6 +103,12 @@ TAGS:
 
 install: | Deployment backup-old-iterm
 	cp -R $(BUILD_DIR)/Deployment/Tidey.app $(APPS)
+
+sync-production-wrappers: | Deployment
+	tools/sync_wrappers.sh --source-app "$(BUILD_DIR)/Deployment/Tidey.app" --target-app "$(APPS)/Tidey.app"
+
+sync-production-wrappers-dev: | Development
+	tools/sync_wrappers.sh --source-app "$(BUILD_DIR)/Development/Tidey.app" --target-app "$(APPS)/Tidey.app"
 
 Development:
 	echo "Using PATH for build: $(PATH)"
