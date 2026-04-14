@@ -596,6 +596,16 @@ Overrides the tab/workspace title. Send an empty `title` to clear the override.
 4. For new sessions and explicit resume (`--resume <id>` / `--session-id <id>`), the wrapper writes the Claude registry file before launching Claude.
 5. For implicit resume (`claude --resume` / `claude -r`), the wrapper cannot know the resolved `session_id` up front, so the `SessionStart` hook writes or refreshes the registry file after Claude supplies `session_id` and `transcript_path` on stdin.
 
+### Remote Bridge Install Notes
+
+`RemoteBridge/install.sh` now ad-hoc signs the installed `tidey-remote-bridge` binary with:
+
+```bash
+codesign --force --sign -
+```
+
+This is required because the raw `swift build` output is not signed, and launchd on macOS will reject or kill an unsigned binary copied into the user LaunchAgent path.
+
 ### Codex Wrapper
 
 `Resources/bin/codex` is a bash wrapper that intercepts `codex` invocations inside Tidey. It is also placed on `PATH` via `TIDEY_BIN_DIR`.

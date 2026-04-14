@@ -1,32 +1,44 @@
 #!/bin/bash
 set -euo pipefail
 
-LABEL="com.tidey.remote-bridge"
-INSTALL_DIR="$HOME/Library/Application Support/Tidey Remote Bridge"
-LOG_DIR="$HOME/Library/Logs/Tidey"
-PLIST_DIR="$HOME/Library/LaunchAgents"
+LABEL="${LABEL:-com.tidey.remote-bridge}"
+INSTALL_DIR="${INSTALL_DIR:-$HOME/Library/Application Support/Tidey Remote Bridge}"
+LOG_DIR="${LOG_DIR:-$HOME/Library/Logs/Tidey}"
+PLIST_DIR="${PLIST_DIR:-$HOME/Library/LaunchAgents}"
+BUILD_BRIDGE="${BUILD_BRIDGE:-1}"
+LOAD_SERVICE="${LOAD_SERVICE:-1}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SOURCE_BINARY="${SOURCE_BINARY:-$SCRIPT_DIR/.build/release/tidey-remote-bridge}"
+TARGET_BINARY="$INSTALL_DIR/tidey-remote-bridge"
 
-echo "Building release binary..."
-cd "$SCRIPT_DIR"
-swift build -c release 2>&1 | tail -1
+if [[ "$BUILD_BRIDGE" == "1" ]]; then
+  echo "Building release binary..."
+  cd "$SCRIPT_DIR"
+  swift build -c release 2>&1 | tail -1
+fi
 
 echo "Installing binary..."
 mkdir -p "$INSTALL_DIR"
-cp -f .build/release/tidey-remote-bridge "$INSTALL_DIR/tidey-remote-bridge"
-chmod 755 "$INSTALL_DIR/tidey-remote-bridge"
+cp -f "$SOURCE_BINARY" "$TARGET_BINARY"
+chmod 755 "$TARGET_BINARY"
+
+echo "Signing binary..."
+codesign --force --sign - "$TARGET_BINARY" >/dev/null 2>&1
 
 echo "Installing launchd plist..."
 mkdir -p "$LOG_DIR"
 mkdir -p "$PLIST_DIR"
 sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/$LABEL.plist" > "$PLIST_DIR/$LABEL.plist"
 
-echo "Loading service..."
-launchctl unload "$PLIST_DIR/$LABEL.plist" 2>/dev/null || true
-launchctl load "$PLIST_DIR/$LABEL.plist"
+if [[ "$LOAD_SERVICE" == "1" ]]; then
+  echo "Loading service..."
+  launchctl unload "$PLIST_DIR/$LABEL.plist" 2>/dev/null || true
+  launchctl load "$PLIST_DIR/$LABEL.plist"
+fi
 
 echo ""
 echo "Tidey Remote Bridge installed and running."
-echo "  Binary:  $INSTALL_DIR/tidey-remote-bridge"
+echo "  Binary:  $TARGET_BINARY"
 echo "  Plist:   $PLIST_DIR/$LABEL.plist"
 echo "  Log:     $LOG_DIR/remote-bridge.log"
+echo "  Signed:  ad-hoc via codesign --sign -"
