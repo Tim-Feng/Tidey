@@ -96,6 +96,26 @@ final class TmuxStateResolverTests: XCTestCase {
         XCTAssertNil(resolver.clientPIDs(forPaneID: "%1", socketPath: "/tmp/tmux.sock"))
     }
 
+    func testDiscoverTmuxBinaryPathPrefersFirstExecutableCandidate() throws {
+        let fileManager = FileManager.default
+        let tempDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tmux-discovery-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: tempDirectory) }
+
+        let first = tempDirectory.appendingPathComponent("tmux-first")
+        let second = tempDirectory.appendingPathComponent("tmux-second")
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: second)
+        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: second.path)
+
+        XCTAssertEqual(TmuxStateResolver.discoverTmuxBinaryPath(candidates: [first.path, second.path]), second.path)
+
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: first)
+        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: first.path)
+
+        XCTAssertEqual(TmuxStateResolver.discoverTmuxBinaryPath(candidates: [first.path, second.path]), first.path)
+    }
+
     private func makeResolver(panesOutput: String,
                               clientsOutput: String) -> TmuxStateResolver {
         TmuxStateResolver(ttl: 60) { _, arguments in

@@ -14,10 +14,31 @@ struct TmuxSnapshot: Sendable {
 
 final class TmuxStateResolver {
     typealias CommandRunner = @Sendable (_ socketPath: String, _ arguments: [String]) throws -> String
+    private static let tmuxDiscoveryCandidates = [
+        "/opt/homebrew/bin/tmux",
+        "/usr/local/bin/tmux",
+        "/opt/local/bin/tmux",
+        "/usr/bin/tmux",
+    ]
+    private static let resolvedTmuxBinaryPath = discoverTmuxBinaryPath()
+    private static let missingTmuxLogState = DispatchQueue(label: "com.tidey.remote-bridge.tmux-binary-log-state")
+    private static var hasLoggedMissingTmux = false
     private static let liveCommandRunner: CommandRunner = { socketPath, arguments in
+        guard let tmuxBinaryPath = resolvedTmuxBinaryPath else {
+            missingTmuxLogState.sync {
+                if !hasLoggedMissingTmux {
+                    hasLoggedMissingTmux = true
+                    BridgeLogger.server.error("tmux resolver could not find a tmux binary in supported paths")
+                }
+            }
+            throw NSError(domain: "TmuxStateResolver",
+                          code: 127,
+                          userInfo: [NSLocalizedDescriptionKey: "tmux not found"])
+        }
+
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["tmux", "-S", socketPath] + arguments
+        process.executableURL = URL(fileURLWithPath: tmuxBinaryPath)
+        process.arguments = ["-S", socketPath] + arguments
 
         let outputPipe = Pipe()
         let errorPipe = Pipe()
@@ -134,5 +155,10 @@ final class TmuxStateResolver {
             return nil
         }
         return (pid, sessionName)
+    }
+
+    static func discoverTmuxBinaryPath(fileManager: FileManager = .default,
+                                       candidates: [String] = tmuxDiscoveryCandidates) -> String? {
+        candidates.first { fileManager.isExecutableFile(atPath: $0) }
     }
 }
