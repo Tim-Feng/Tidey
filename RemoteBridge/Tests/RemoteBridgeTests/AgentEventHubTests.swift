@@ -78,6 +78,32 @@ final class AgentEventHubTests: XCTestCase {
         XCTAssertFalse(result.hasMore)
     }
 
+    func testReplayUsesMigratedWorkspaceIDAfterSessionBindingChanges() {
+        let hub = AgentEventHub()
+        hub.publish(makeAssistantEvent(id: "assistant-1", seq: 1))
+        _ = hub.migrateSession(sessionID: "session", toWorkspaceID: "current-workspace", panelID: "current-panel")
+
+        let (_, replay) = hub.subscribe(workspaceID: "current-workspace", sessionID: "session", sinceSeq: nil) { _ in }
+
+        XCTAssertEqual(replay.map(\.event.workspaceID), ["current-workspace"])
+        XCTAssertEqual(replay.first?.event.metadata?["panel_id"], "current-panel")
+    }
+
+    func testFetchUsesMigratedWorkspaceIDAfterSessionBindingChanges() {
+        let hub = AgentEventHub()
+        hub.publish(makeAssistantEvent(id: "assistant-1", seq: 1))
+        _ = hub.migrateSession(sessionID: "session", toWorkspaceID: "current-workspace", panelID: "current-panel")
+
+        let result = hub.fetch(workspaceID: "current-workspace",
+                               sessionID: "session",
+                               limit: 10,
+                               beforeSeq: nil,
+                               afterSeq: nil)
+
+        XCTAssertEqual(result.events.map(\.workspaceID), ["current-workspace"])
+        XCTAssertEqual(result.events.first?.metadata?["panel_id"], "current-panel")
+    }
+
     private func makeAssistantEvent(id: String, seq: Int) -> AgentEvent {
         AgentEvent(eventID: id,
                    seq: seq,

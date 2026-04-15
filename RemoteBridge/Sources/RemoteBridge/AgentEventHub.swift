@@ -30,9 +30,15 @@ final class AgentEventHub {
         var isActive = false
     }
 
+    private struct SessionBinding {
+        let workspaceID: String
+        let panelID: String?
+    }
+
     private let queue = DispatchQueue(label: "com.tidey.remote-bridge.agent-event-hub")
     private var subscribers = [UUID: Subscriber]()
     private var sessions = [String: SessionState]()
+    private var sessionBindings = [String: SessionBinding]()
     private let maxBufferedEvents = 2000
     private let maxSeenEventIDs = 4000
 
@@ -55,12 +61,14 @@ final class AgentEventHub {
                limit: Int,
                beforeSeq: Int? = nil,
                afterSeq: Int? = nil) -> FetchResult {
-        queue.sync {
+        queue.sync { () -> FetchResult in
             let effectiveLimit = max(limit, 1)
             let matchingEvents: [AgentEvent]
 
             if let sessionID, let state = sessions[sessionID] {
-                matchingEvents = state.bufferedEvents.filter { event in
+                matchingEvents = state.bufferedEvents
+                    .compactMap { effectiveEvent($0) }
+                    .filter { event in
                     guard event.workspaceID == workspaceID else {
                         return false
                     }
@@ -75,6 +83,7 @@ final class AgentEventHub {
             } else {
                 matchingEvents = sessions.values
                     .flatMap(\.bufferedEvents)
+                    .compactMap { effectiveEvent($0) }
                     .filter { event in
                         guard event.workspaceID == workspaceID else {
                             return false
@@ -127,6 +136,7 @@ final class AgentEventHub {
                 }
                 return events
             }
+            .compactMap { effectiveEvent($0) }
             .filter { event in
                 if let workspaceID, event.workspaceID != workspaceID {
                     return false
@@ -167,9 +177,10 @@ final class AgentEventHub {
     func debugSnapshots() -> [SessionDebugSnapshot] {
         queue.sync {
             sessions.map { sessionID, state in
-                let seqs = state.bufferedEvents.map(\.seq)
+                let effectiveEvents = state.bufferedEvents.compactMap { effectiveEvent($0) }
+                let seqs = effectiveEvents.map(\.seq)
                 return SessionDebugSnapshot(sessionID: sessionID,
-                                            workspaceID: state.bufferedEvents.last?.workspaceID ?? state.latestSessionStarted?.workspaceID,
+                                            workspaceID: effectiveEvents.last?.workspaceID ?? effectiveEvent(state.latestSessionStarted)?.workspaceID,
                                             bufferedEventCount: state.bufferedEvents.count,
                                             oldestSeq: seqs.min(),
                                             newestSeq: seqs.max(),
@@ -183,6 +194,7 @@ final class AgentEventHub {
                         toWorkspaceID workspaceID: String,
                         panelID: String?) -> Int {
         queue.sync {
+            sessionBindings[sessionID] = SessionBinding(workspaceID: workspaceID, panelID: panelID)
             guard var state = sessions[sessionID], !state.bufferedEvents.isEmpty else {
                 if sessions[sessionID]?.latestSessionStarted == nil {
                     return 0
@@ -244,11 +256,14 @@ final class AgentEventHub {
             guard deliverToSubscribers else {
                 return []
             }
+            guard let effectiveEvent = effectiveEvent(event) else {
+                return []
+            }
             let deliveries = subscribers.values.filter { subscriber in
-                if let workspaceID = subscriber.workspaceID, workspaceID != event.workspaceID {
+                if let workspaceID = subscriber.workspaceID, workspaceID != effectiveEvent.workspaceID {
                     return false
                 }
-                if let sessionID = subscriber.sessionID, sessionID != event.sessionID {
+                if let sessionID = subscriber.sessionID, sessionID != effectiveEvent.sessionID {
                     return false
                 }
                 return true
@@ -256,10 +271,22 @@ final class AgentEventHub {
             return Array(deliveries)
         }
 
-        let envelope = AgentEventEnvelope(replay: false, event: event)
+        let envelope = AgentEventEnvelope(replay: false, event: queue.sync { effectiveEvent(event)! })
         for subscriber in deliveries {
             subscriber.sink(envelope)
         }
+    }
+
+    private func effectiveEvent(_ event: AgentEvent?) -> AgentEvent? {
+        guard let event else {
+            return nil
+        }
+        guard let binding = sessionBindings[event.sessionID] else {
+            return event
+        }
+        return Self.rewritten(event: event,
+                              workspaceID: binding.workspaceID,
+                              panelID: binding.panelID)
     }
 
     private static func rewritten(event: AgentEvent,
