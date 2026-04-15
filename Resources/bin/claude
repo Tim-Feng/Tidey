@@ -20,6 +20,35 @@ json_escape() {
     printf '%s' "$s"
 }
 
+tmux_pane_id_from_env() {
+    if [[ -n "${TMUX_PANE:-}" ]]; then
+        printf '%s' "$TMUX_PANE"
+    fi
+}
+
+tmux_socket_path_from_env() {
+    local tmux_env="${TMUX:-}"
+    if [[ -n "$tmux_env" ]]; then
+        printf '%s' "${tmux_env%%,*}"
+    fi
+}
+
+registry_file_matches_tmux_metadata() {
+    local path="$1"
+    local tmux_pane_id="$2"
+    local tmux_socket_path="$3"
+
+    [[ -f "$path" ]] || return 1
+
+    if [[ -n "$tmux_pane_id" ]]; then
+        grep -q "\"tmux_pane_id\":\"$(json_escape "$tmux_pane_id")\"" "$path" 2>/dev/null || return 1
+    fi
+    if [[ -n "$tmux_socket_path" ]]; then
+        grep -q "\"tmux_socket_path\":\"$(json_escape "$tmux_socket_path")\"" "$path" 2>/dev/null || return 1
+    fi
+    return 0
+}
+
 write_registry_file() {
     local path="$1"
     local workspace_id="$2"
@@ -29,17 +58,31 @@ write_registry_file() {
     local cwd="$6"
     local created_at="$7"
     local tmp_path=""
+    local tmux_pane_id=""
+    local tmux_socket_path=""
+    local tmux_fields=""
+
+    tmux_pane_id="$(tmux_pane_id_from_env)"
+    tmux_socket_path="$(tmux_socket_path_from_env)"
+
+    if [[ -n "$tmux_pane_id" ]]; then
+        tmux_fields+=",\"tmux_pane_id\":\"$(json_escape "$tmux_pane_id")\""
+    fi
+    if [[ -n "$tmux_socket_path" ]]; then
+        tmux_fields+=",\"tmux_socket_path\":\"$(json_escape "$tmux_socket_path")\""
+    fi
 
     mkdir -p "$REGISTRY_ROOT"
     tmp_path="$(mktemp "$REGISTRY_ROOT/.claude-registry.XXXXXX")"
     {
-        printf '{"version":1,"vendor":"claude","workspace_id":"%s","session_id":"%s","panel_id":"%s","pid":%s,"cwd":"%s","created_at":"%s"}\n' \
+        printf '{"version":1,"vendor":"claude","workspace_id":"%s","session_id":"%s","panel_id":"%s","pid":%s,"cwd":"%s","created_at":"%s"%s}\n' \
             "$(json_escape "$workspace_id")" \
             "$(json_escape "$session_id")" \
             "$(json_escape "$panel_id")" \
             "$pid" \
             "$(json_escape "$cwd")" \
-            "$(json_escape "$created_at")" > "$tmp_path"
+            "$(json_escape "$created_at")" \
+            "$tmux_fields" > "$tmp_path"
         mv -f "$tmp_path" "$path"
     } || {
         rm -f "$tmp_path"
@@ -94,7 +137,11 @@ monitor_registry_file() {
             if [[ -z "$registry_file" ]]; then
                 registry_file="$REGISTRY_ROOT/claude-$current_session_id.json"
             fi
-            if [[ ! -f "$registry_file" ]]; then
+            local tmux_pane_id=""
+            local tmux_socket_path=""
+            tmux_pane_id="$(tmux_pane_id_from_env)"
+            tmux_socket_path="$(tmux_socket_path_from_env)"
+            if [[ ! -f "$registry_file" ]] || ! registry_file_matches_tmux_metadata "$registry_file" "$tmux_pane_id" "$tmux_socket_path"; then
                 write_registry_file "$registry_file" "$workspace_id" "$current_session_id" "$panel_id" "$pid" "$cwd" "$created_at"
             fi
         fi

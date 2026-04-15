@@ -14,6 +14,19 @@ json_escape() {
     printf '%s' "$s"
 }
 
+tmux_pane_id_from_env() {
+    if [[ -n "${TMUX_PANE:-}" ]]; then
+        printf '%s' "$TMUX_PANE"
+    fi
+}
+
+tmux_socket_path_from_env() {
+    local tmux_env="${TMUX:-}"
+    if [[ -n "$tmux_env" ]]; then
+        printf '%s' "${tmux_env%%,*}"
+    fi
+}
+
 write_registry_file() {
     local path="$1"
     local workspace_id="$2"
@@ -24,11 +37,24 @@ write_registry_file() {
     local created_at="$7"
     local rollout_path="$8"
     local tmp_path=""
+    local tmux_pane_id=""
+    local tmux_socket_path=""
+    local tmux_fields=""
+
+    tmux_pane_id="$(tmux_pane_id_from_env)"
+    tmux_socket_path="$(tmux_socket_path_from_env)"
+
+    if [[ -n "$tmux_pane_id" ]]; then
+        tmux_fields+=",\"tmux_pane_id\":\"$(json_escape "$tmux_pane_id")\""
+    fi
+    if [[ -n "$tmux_socket_path" ]]; then
+        tmux_fields+=",\"tmux_socket_path\":\"$(json_escape "$tmux_socket_path")\""
+    fi
 
     mkdir -p "$REGISTRY_ROOT"
     tmp_path="$(mktemp "$REGISTRY_ROOT/.codex-registry.XXXXXX")"
     {
-        printf '{"version":1,"vendor":"codex","workspace_id":"%s","session_id":"%s","panel_id":"%s","pid":%s,"cwd":"%s","created_at":"%s","rollout_path":"%s","transcript_path":"%s"}\n' \
+        printf '{"version":1,"vendor":"codex","workspace_id":"%s","session_id":"%s","panel_id":"%s","pid":%s,"cwd":"%s","created_at":"%s","rollout_path":"%s","transcript_path":"%s"%s}\n' \
             "$(json_escape "$workspace_id")" \
             "$(json_escape "$session_id")" \
             "$(json_escape "$panel_id")" \
@@ -36,7 +62,8 @@ write_registry_file() {
             "$(json_escape "$cwd")" \
             "$(json_escape "$created_at")" \
             "$(json_escape "$rollout_path")" \
-            "$(json_escape "$rollout_path")" > "$tmp_path"
+            "$(json_escape "$rollout_path")" \
+            "$tmux_fields" > "$tmp_path"
         mv -f "$tmp_path" "$path"
     } || {
         rm -f "$tmp_path"
