@@ -194,4 +194,64 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         XCTAssertTrue(fetched.events.allSatisfy { $0.workspaceID == "new-workspace" })
         XCTAssertTrue(fetched.events.contains { $0.metadata?["panel_id"] == "new-panel" })
     }
+
+    func testDirectPanelMatchAlsoAppliesResolvedBindingToBufferedEvents() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let registryURL = paths.claudeAgentSessionsDirectory.appendingPathComponent("claude-session-direct.json")
+        let recordData = Data("""
+        {
+          "version": 1,
+          "vendor": "claude",
+          "workspace_id": "current-workspace",
+          "session_id": "session-direct",
+          "panel_id": "current-panel",
+          "pid": \(getpid()),
+          "cwd": "/tmp",
+          "created_at": "2026-04-15T00:00:00Z"
+        }
+        """.utf8)
+        try recordData.write(to: registryURL)
+
+        let hub = AgentEventHub()
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: fileManager,
+                                                  hub: hub,
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+                                                  parentPIDLookup: { _ in nil })
+        try monitor.start()
+
+        hub.publish(AgentEvent(eventID: "assistant-direct",
+                               seq: 100,
+                               vendor: "claude",
+                               workspaceID: "stale-workspace",
+                               sessionID: "session-direct",
+                               timestamp: "2026-04-15T00:00:01Z",
+                               type: .assistantMessage,
+                               role: "assistant",
+                               text: "hello",
+                               name: nil,
+                               input: nil,
+                               output: nil,
+                               toolCallID: nil,
+                               metadata: nil))
+
+        let session = monitor.activeSessionForPanel(workspaceID: "current-workspace",
+                                                    panelID: "current-panel",
+                                                    effectiveShellPID: nil)
+        XCTAssertEqual(session?.sessionID, "session-direct")
+
+        let fetched = hub.fetch(workspaceID: "current-workspace",
+                                sessionID: "session-direct",
+                                limit: 10,
+                                beforeSeq: nil,
+                                afterSeq: nil)
+        XCTAssertFalse(fetched.events.isEmpty)
+        XCTAssertTrue(fetched.events.allSatisfy { $0.workspaceID == "current-workspace" })
+    }
 }

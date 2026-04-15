@@ -89,7 +89,7 @@ struct ActiveAgentSessionSnapshot: Sendable {
 
 struct ResolvedPanelBinding: Equatable, Sendable {
     let workspaceID: String
-    let panelID: String
+    let panelID: String?
 }
 
 struct AgentPanelProcessSnapshot: Sendable {
@@ -323,6 +323,11 @@ final class AgentSessionRegistryMonitor {
         let effectiveRecords = sourceRecords.map(effectiveRecord(for:))
         syncRecords(effectiveRecords)
         activeRecords = Dictionary(uniqueKeysWithValues: effectiveRecords.map { ($0.sessionID, $0) })
+        for record in effectiveRecords where resolvedPanelBindings[record.sessionID] != nil {
+            applyResolvedBinding(sessionID: record.sessionID,
+                                 workspaceID: record.workspaceID,
+                                 panelID: record.panelID)
+        }
     }
 
     private func directSessionForWorkspace(workspaceID: String) -> ActiveAgentSessionSnapshot? {
@@ -342,6 +347,9 @@ final class AgentSessionRegistryMonitor {
         BridgeLogger.server.debug("agent panel match start workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) effective_shell_pid=\(panel.effectiveShellPID.map(String.init) ?? "-", privacy: .public)")
         if let direct = activeRecords.values
             .first(where: { $0.workspaceID == panel.workspaceID && $0.panelID == panel.panelID }) {
+            applyResolvedBinding(sessionID: direct.sessionID,
+                                 workspaceID: panel.workspaceID,
+                                 panelID: panel.panelID)
             BridgeLogger.server.debug("agent panel direct match session_id=\(direct.sessionID, privacy: .public) vendor=\(direct.vendor, privacy: .public)")
             return ActiveAgentSessionSnapshot(vendor: direct.vendor,
                                               workspaceID: panel.workspaceID,
@@ -382,9 +390,9 @@ final class AgentSessionRegistryMonitor {
             return nil
         }
 
-        resolveCurrentPanelBindingIfNeeded(for: match.sessionID,
-                                           workspaceID: panel.workspaceID,
-                                           panelID: panel.panelID)
+        applyResolvedBinding(sessionID: match.sessionID,
+                             workspaceID: panel.workspaceID,
+                             panelID: panel.panelID)
         BridgeLogger.server.debug("agent panel matched via tmux vendor=\(match.vendor, privacy: .public) session_id=\(match.sessionID, privacy: .public)")
         return ActiveAgentSessionSnapshot(vendor: match.vendor,
                                           workspaceID: panel.workspaceID,
@@ -440,9 +448,9 @@ final class AgentSessionRegistryMonitor {
                                           tmuxSocketPath: record.tmuxSocketPath)
     }
 
-    private func resolveCurrentPanelBindingIfNeeded(for sessionID: String,
-                                                    workspaceID: String,
-                                                    panelID: String) {
+    private func applyResolvedBinding(sessionID: String,
+                                      workspaceID: String,
+                                      panelID: String?) {
         let binding = ResolvedPanelBinding(workspaceID: workspaceID, panelID: panelID)
         if resolvedPanelBindings[sessionID] == binding {
             return
