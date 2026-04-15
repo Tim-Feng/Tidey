@@ -87,6 +87,11 @@ struct ActiveAgentSessionSnapshot: Sendable {
     let panelID: String?
 }
 
+struct ResolvedPanelBinding: Equatable, Sendable {
+    let workspaceID: String
+    let panelID: String
+}
+
 struct AgentPanelProcessSnapshot: Sendable {
     let workspaceID: String
     let panelID: String
@@ -139,6 +144,7 @@ final class AgentSessionRegistryMonitor {
     private var watcherFDs = [String: Int32]()
     private var sessions = [String: AgentTranscriptSession]()
     private var activeRecords = [String: AgentSessionRegistryRecord]()
+    private var resolvedPanelBindings = [String: ResolvedPanelBinding]()
     private var livePanelsByWorkspace = [String: [AgentPanelProcessSnapshot]]()
     private var scanScheduled = false
 
@@ -308,12 +314,15 @@ final class AgentSessionRegistryMonitor {
     }
 
     private func scanRegistry() {
-        let records = AgentVendorRegistry.all.flatMap { vendor in
+        let sourceRecords = AgentVendorRegistry.all.flatMap { vendor in
             loadRecords(at: paths.agentSessionsDirectory(for: vendor.registryDirectoryName),
                         vendor: vendor.id)
         }
-        syncRecords(records)
-        activeRecords = Dictionary(uniqueKeysWithValues: records.map { ($0.sessionID, $0) })
+        let activeSessionIDs = Set(sourceRecords.map(\.sessionID))
+        resolvedPanelBindings = resolvedPanelBindings.filter { activeSessionIDs.contains($0.key) }
+        let effectiveRecords = sourceRecords.map(effectiveRecord(for:))
+        syncRecords(effectiveRecords)
+        activeRecords = Dictionary(uniqueKeysWithValues: effectiveRecords.map { ($0.sessionID, $0) })
     }
 
     private func directSessionForWorkspace(workspaceID: String) -> ActiveAgentSessionSnapshot? {
@@ -373,6 +382,9 @@ final class AgentSessionRegistryMonitor {
             return nil
         }
 
+        resolveCurrentPanelBindingIfNeeded(for: match.sessionID,
+                                           workspaceID: panel.workspaceID,
+                                           panelID: panel.panelID)
         BridgeLogger.server.debug("agent panel matched via tmux vendor=\(match.vendor, privacy: .public) session_id=\(match.sessionID, privacy: .public)")
         return ActiveAgentSessionSnapshot(vendor: match.vendor,
                                           workspaceID: panel.workspaceID,
@@ -409,6 +421,39 @@ final class AgentSessionRegistryMonitor {
             currentPID = parentPID
         }
         return false
+    }
+
+    private func effectiveRecord(for record: AgentSessionRegistryRecord) -> AgentSessionRegistryRecord {
+        guard let binding = resolvedPanelBindings[record.sessionID] else {
+            return record
+        }
+        return AgentSessionRegistryRecord(version: record.version,
+                                          vendor: record.vendor,
+                                          workspaceID: binding.workspaceID,
+                                          sessionID: record.sessionID,
+                                          panelID: binding.panelID,
+                                          pid: record.pid,
+                                          cwd: record.cwd,
+                                          createdAt: record.createdAt,
+                                          transcriptPath: record.transcriptPath,
+                                          tmuxPaneID: record.tmuxPaneID,
+                                          tmuxSocketPath: record.tmuxSocketPath)
+    }
+
+    private func resolveCurrentPanelBindingIfNeeded(for sessionID: String,
+                                                    workspaceID: String,
+                                                    panelID: String) {
+        let binding = ResolvedPanelBinding(workspaceID: workspaceID, panelID: panelID)
+        if resolvedPanelBindings[sessionID] == binding {
+            return
+        }
+        resolvedPanelBindings[sessionID] = binding
+        guard let sourceRecord = activeRecords[sessionID] else {
+            return
+        }
+        let effective = effectiveRecord(for: sourceRecord)
+        activeRecords[sessionID] = effective
+        sessions[sessionID]?.update(record: effective)
     }
 
     private func syncRecords(_ records: [AgentSessionRegistryRecord]) {

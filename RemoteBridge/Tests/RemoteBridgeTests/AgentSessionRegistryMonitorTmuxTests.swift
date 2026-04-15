@@ -112,5 +112,9 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
                                                     effectiveShellPID: 41163)
         XCTAssertEqual(session?.sessionID, "session-plain-attach")
         XCTAssertEqual(session?.panelID, "new-panel")
+        let workspaceSession = monitor.activeSessionForWorkspace(workspaceID: "new-workspace")
+        XCTAssertEqual(workspaceSession?.sessionID, "session-plain-attach")
+        XCTAssertEqual(workspaceSession?.workspaceID, "new-workspace")
+        XCTAssertEqual(workspaceSession?.panelID, "new-panel")
     }
 }
