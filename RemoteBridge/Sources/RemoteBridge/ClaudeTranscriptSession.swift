@@ -87,24 +87,34 @@ struct ActiveAgentSessionSnapshot: Sendable {
     let panelID: String?
 }
 
+struct AgentPanelProcessSnapshot: Sendable {
+    let workspaceID: String
+    let panelID: String
+    let effectiveShellPID: Int32?
+}
+
 final class AgentSessionRegistryMonitor {
     private let paths: BridgePaths
     private let fileManager: FileManager
     private let hub: AgentEventHub
+    private let tmuxResolver: TmuxStateResolver
     private let queue = DispatchQueue(label: "com.tidey.remote-bridge.agent-registry")
     private var timer: DispatchSourceTimer?
     private var watchers = [String: DispatchSourceFileSystemObject]()
     private var watcherFDs = [String: Int32]()
     private var sessions = [String: AgentTranscriptSession]()
     private var activeRecords = [String: AgentSessionRegistryRecord]()
+    private var livePanelsByWorkspace = [String: [AgentPanelProcessSnapshot]]()
     private var scanScheduled = false
 
     init(paths: BridgePaths = BridgePaths(),
          fileManager: FileManager = .default,
-         hub: AgentEventHub) {
+         hub: AgentEventHub,
+         tmuxResolver: TmuxStateResolver = TmuxStateResolver()) {
         self.paths = paths
         self.fileManager = fileManager
         self.hub = hub
+        self.tmuxResolver = tmuxResolver
     }
 
     func start() throws {
@@ -122,35 +132,31 @@ final class AgentSessionRegistryMonitor {
     }
 
     func activeSessionForPanel(workspaceID: String, panelID: String) -> ActiveAgentSessionSnapshot? {
+        activeSessionForPanel(workspaceID: workspaceID, panelID: panelID, effectiveShellPID: nil)
+    }
+
+    func activeSessionForPanel(workspaceID: String,
+                               panelID: String,
+                               effectiveShellPID: Int32?) -> ActiveAgentSessionSnapshot? {
         queue.sync {
-            activeRecords.values
-                .first { $0.workspaceID == workspaceID && $0.panelID == panelID }
-                .map {
-                    ActiveAgentSessionSnapshot(vendor: $0.vendor,
-                                               workspaceID: $0.workspaceID,
-                                               sessionID: $0.sessionID,
-                                               panelID: $0.panelID)
-                }
+            let panel = AgentPanelProcessSnapshot(workspaceID: workspaceID,
+                                                 panelID: panelID,
+                                                 effectiveShellPID: effectiveShellPID)
+            return matchedSession(for: panel)
         }
     }
 
     func activeSessionForWorkspace(workspaceID: String) -> ActiveAgentSessionSnapshot? {
         queue.sync {
-            activeRecords.values
-                .filter { $0.workspaceID == workspaceID }
-                .sorted {
-                    if $0.createdAt == $1.createdAt {
-                        return $0.sessionID < $1.sessionID
-                    }
-                    return $0.createdAt > $1.createdAt
+            if let direct = directSessionForWorkspace(workspaceID: workspaceID) {
+                return direct
+            }
+            for panel in livePanelsByWorkspace[workspaceID] ?? [] {
+                if let session = matchedSession(for: panel) {
+                    return session
                 }
-                .first
-                .map {
-                    ActiveAgentSessionSnapshot(vendor: $0.vendor,
-                                               workspaceID: $0.workspaceID,
-                                               sessionID: $0.sessionID,
-                                               panelID: $0.panelID)
-                }
+            }
+            return nil
         }
     }
 
@@ -168,6 +174,18 @@ final class AgentSessionRegistryMonitor {
     func backfillSession(sessionID: String, beforeSeq: Int, limit: Int) -> Bool {
         let session: AgentTranscriptSession? = queue.sync { sessions[sessionID] }
         return session?.backfill(beforeSeq: beforeSeq, limit: limit) ?? false
+    }
+
+    func replaceLivePanels(workspaceID: String, panels: [AgentPanelProcessSnapshot]) {
+        queue.sync {
+            livePanelsByWorkspace[workspaceID] = panels
+        }
+    }
+
+    func pruneLivePanels(toWorkspaceIDs workspaceIDs: Set<String>) {
+        queue.sync {
+            livePanelsByWorkspace = livePanelsByWorkspace.filter { workspaceIDs.contains($0.key) }
+        }
     }
 
     deinit {
@@ -228,6 +246,7 @@ final class AgentSessionRegistryMonitor {
             return
         }
         let events = watcher.data
+        tmuxResolver.invalidate()
         scheduleScan()
 
         if events.contains(.rename) || events.contains(.delete) || events.contains(.revoke) {
@@ -258,6 +277,65 @@ final class AgentSessionRegistryMonitor {
         }
         syncRecords(records)
         activeRecords = Dictionary(uniqueKeysWithValues: records.map { ($0.sessionID, $0) })
+    }
+
+    private func directSessionForWorkspace(workspaceID: String) -> ActiveAgentSessionSnapshot? {
+        activeRecords.values
+            .filter { $0.workspaceID == workspaceID }
+            .sorted(by: Self.isRecordPreferred(_:_:))
+            .first
+            .map {
+                ActiveAgentSessionSnapshot(vendor: $0.vendor,
+                                           workspaceID: workspaceID,
+                                           sessionID: $0.sessionID,
+                                           panelID: $0.panelID)
+            }
+    }
+
+    private func matchedSession(for panel: AgentPanelProcessSnapshot) -> ActiveAgentSessionSnapshot? {
+        if let direct = activeRecords.values
+            .first(where: { $0.workspaceID == panel.workspaceID && $0.panelID == panel.panelID }) {
+            return ActiveAgentSessionSnapshot(vendor: direct.vendor,
+                                              workspaceID: panel.workspaceID,
+                                              sessionID: direct.sessionID,
+                                              panelID: panel.panelID)
+        }
+
+        guard let effectiveShellPID = panel.effectiveShellPID, effectiveShellPID > 0 else {
+            return nil
+        }
+
+        let tmuxCandidates = activeRecords.values
+            .filter { record in
+                guard let paneID = record.tmuxPaneID,
+                      !paneID.isEmpty,
+                      let socketPath = record.tmuxSocketPath,
+                      !socketPath.isEmpty else {
+                    return false
+                }
+                if let clientPIDs = tmuxResolver.clientPIDs(forPaneID: paneID, socketPath: socketPath) {
+                    return clientPIDs.contains(effectiveShellPID)
+                }
+                return false
+            }
+            .sorted(by: Self.isRecordPreferred(_:_:))
+
+        guard let match = tmuxCandidates.first else {
+            return nil
+        }
+
+        return ActiveAgentSessionSnapshot(vendor: match.vendor,
+                                          workspaceID: panel.workspaceID,
+                                          sessionID: match.sessionID,
+                                          panelID: panel.panelID)
+    }
+
+    private static func isRecordPreferred(_ lhs: AgentSessionRegistryRecord,
+                                          _ rhs: AgentSessionRegistryRecord) -> Bool {
+        if lhs.createdAt == rhs.createdAt {
+            return lhs.sessionID < rhs.sessionID
+        }
+        return lhs.createdAt > rhs.createdAt
     }
 
     private func syncRecords(_ records: [AgentSessionRegistryRecord]) {

@@ -481,12 +481,14 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
         }
         switch request.action {
         case "list_panels":
+            recordPanelListResult(result)
             return BridgeResponse(id: response.id,
                                   ok: response.ok,
                                   v: response.v,
                                   result: augmentPanelListResult(result),
                                   error: response.error)
         case "list_workspaces":
+            refreshLivePanelsForListedWorkspaces(result)
             return BridgeResponse(id: response.id,
                                   ok: response.ok,
                                   v: response.v,
@@ -495,6 +497,51 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
         default:
             return response
         }
+    }
+
+    private func refreshLivePanelsForListedWorkspaces(_ result: [String: JSONValue]) {
+        guard let workspaces = result["workspaces"]?.arrayValue else {
+            return
+        }
+
+        let workspaceIDs = Set(workspaces.compactMap { $0.objectValue?["workspace_id"]?.stringValue })
+        registryMonitor.pruneLivePanels(toWorkspaceIDs: workspaceIDs)
+
+        for workspaceID in workspaceIDs {
+            let request = BridgeRequest(id: UUID().uuidString,
+                                        action: "list_panels",
+                                        params: ["workspace_id": .string(workspaceID)])
+            let panelResponse = try? socketClient.send(request)
+            guard let panelResult = panelResponse?.result else {
+                registryMonitor.replaceLivePanels(workspaceID: workspaceID, panels: [])
+                continue
+            }
+            recordPanelListResult(panelResult)
+        }
+    }
+
+    private func recordPanelListResult(_ result: [String: JSONValue]) {
+        guard let workspaceID = result["workspace_id"]?.stringValue,
+              let panels = result["panels"]?.arrayValue else {
+            return
+        }
+
+        let snapshots = panels.compactMap { Self.panelProcessSnapshot(from: $0, defaultWorkspaceID: workspaceID) }
+        registryMonitor.replaceLivePanels(workspaceID: workspaceID, panels: snapshots)
+    }
+
+    private static func panelProcessSnapshot(from panelValue: JSONValue,
+                                             defaultWorkspaceID: String) -> AgentPanelProcessSnapshot? {
+        guard let panel = panelValue.objectValue,
+              let panelID = panel["panel_id"]?.stringValue else {
+            return nil
+        }
+
+        let workspaceID = panel["workspace_id"]?.stringValue ?? defaultWorkspaceID
+        let effectiveShellPID = panel["effective_shell_pid"]?.intValue.flatMap(Int32.init)
+        return AgentPanelProcessSnapshot(workspaceID: workspaceID,
+                                         panelID: panelID,
+                                         effectiveShellPID: effectiveShellPID)
     }
 
     private func augmentPanelListResult(_ result: [String: JSONValue]) -> [String: JSONValue] {
@@ -508,7 +555,10 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                   let panelID = panel["panel_id"]?.stringValue else {
                 return panelValue
             }
-            if let session = registryMonitor.activeSessionForPanel(workspaceID: workspaceID, panelID: panelID) {
+            let effectiveShellPID = panel["effective_shell_pid"]?.intValue.flatMap(Int32.init)
+            if let session = registryMonitor.activeSessionForPanel(workspaceID: workspaceID,
+                                                                   panelID: panelID,
+                                                                   effectiveShellPID: effectiveShellPID) {
                 panel["agent_session"] = .object([
                     "vendor": .string(session.vendor),
                     "session_id": .string(session.sessionID),

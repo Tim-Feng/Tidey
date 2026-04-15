@@ -5,13 +5,17 @@ struct BridgePaths {
     let pairTokenFileURL: URL
     let agentSessionsDirectory: URL
 
+    init(supportDirectory: URL) {
+        self.supportDirectory = supportDirectory
+        pairTokenFileURL = supportDirectory.appendingPathComponent("pair-token.json", isDirectory: false)
+        agentSessionsDirectory = supportDirectory.appendingPathComponent("agent-sessions", isDirectory: true)
+    }
+
     init(fileManager: FileManager = .default) {
         let base = fileManager.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support", isDirectory: true)
             .appendingPathComponent("Tidey Remote Bridge", isDirectory: true)
-        supportDirectory = base
-        pairTokenFileURL = base.appendingPathComponent("pair-token.json", isDirectory: false)
-        agentSessionsDirectory = base.appendingPathComponent("agent-sessions", isDirectory: true)
+        self.init(supportDirectory: base)
     }
 
     var claudeAgentSessionsDirectory: URL {
