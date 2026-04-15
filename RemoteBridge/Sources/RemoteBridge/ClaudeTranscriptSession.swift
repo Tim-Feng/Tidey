@@ -448,6 +448,9 @@ final class AgentSessionRegistryMonitor {
             return
         }
         resolvedPanelBindings[sessionID] = binding
+        hub.migrateSession(sessionID: sessionID,
+                           toWorkspaceID: workspaceID,
+                           panelID: panelID)
         guard let sourceRecord = activeRecords[sessionID] else {
             return
         }

@@ -117,4 +117,81 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         XCTAssertEqual(workspaceSession?.workspaceID, "new-workspace")
         XCTAssertEqual(workspaceSession?.panelID, "new-panel")
     }
+
+    func testActiveSessionForPanelImmediatelyMigratesBufferedEventsToCurrentIDs() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let registryURL = paths.claudeAgentSessionsDirectory.appendingPathComponent("claude-session-buffered.json")
+        let recordData = Data("""
+        {
+          "version": 1,
+          "vendor": "claude",
+          "workspace_id": "stale-workspace",
+          "session_id": "session-buffered",
+          "panel_id": "stale-panel",
+          "pid": \(getpid()),
+          "cwd": "/tmp",
+          "created_at": "2026-04-15T00:00:00Z",
+          "tmux_pane_id": "%17",
+          "tmux_socket_path": "/tmp/tmux.sock"
+        }
+        """.utf8)
+        try recordData.write(to: registryURL)
+
+        let hub = AgentEventHub()
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: fileManager,
+                                                  hub: hub,
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, arguments in
+                                                      if arguments.first == "list-panes" {
+                                                          return "%17|tidey-remote-cc\n"
+                                                      }
+                                                      return "41907|tidey-remote-cc\n"
+                                                  },
+                                                  parentPIDLookup: { pid in
+                                                      switch pid {
+                                                      case 41907:
+                                                          return 41163
+                                                      case 41163:
+                                                          return 1
+                                                      default:
+                                                          return nil
+                                                      }
+                                                  })
+        try monitor.start()
+
+        hub.publish(AgentEvent(eventID: "assistant-buffered",
+                               seq: 100,
+                               vendor: "claude",
+                               workspaceID: "stale-workspace",
+                               sessionID: "session-buffered",
+                               timestamp: "2026-04-15T00:00:01Z",
+                               type: .assistantMessage,
+                               role: "assistant",
+                               text: "hello",
+                               name: nil,
+                               input: nil,
+                               output: nil,
+                               toolCallID: nil,
+                               metadata: nil))
+
+        let session = monitor.activeSessionForPanel(workspaceID: "new-workspace",
+                                                    panelID: "new-panel",
+                                                    effectiveShellPID: 41163)
+        XCTAssertEqual(session?.sessionID, "session-buffered")
+
+        let fetched = hub.fetch(workspaceID: "new-workspace",
+                                sessionID: "session-buffered",
+                                limit: 10,
+                                beforeSeq: nil,
+                                afterSeq: nil)
+        XCTAssertFalse(fetched.events.isEmpty)
+        XCTAssertTrue(fetched.events.allSatisfy { $0.workspaceID == "new-workspace" })
+        XCTAssertTrue(fetched.events.contains { $0.metadata?["panel_id"] == "new-panel" })
+    }
 }
