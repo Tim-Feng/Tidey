@@ -1453,6 +1453,10 @@ ITERM_WEAKLY_REFERENCEABLE
         @"panel_index": @(panelIndex),
         @"workspace_index": @(workspaceIndex),
     }];
+    NSNumber *effectiveShellPID = session.shell.tmuxClientProcessID ?: @(session.shell.pid);
+    if (effectiveShellPID.intValue > 0) {
+        summary[@"effective_shell_pid"] = effectiveShellPID;
+    }
     if (session.currentLocalWorkingDirectory.length > 0) {
         summary[@"cwd"] = session.currentLocalWorkingDirectory;
     }

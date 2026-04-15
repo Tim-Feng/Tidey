@@ -81,20 +81,26 @@ final class AgentSessionRegistryMonitor {
     private let paths: BridgePaths
     private let fileManager: FileManager
     private let hub: AgentEventHub
+    private let processParentPIDMapProvider: @Sendable () -> [Int32: Int32]
     private let queue = DispatchQueue(label: "com.tidey.remote-bridge.agent-registry")
     private var timer: DispatchSourceTimer?
     private var watchers = [String: DispatchSourceFileSystemObject]()
     private var watcherFDs = [String: Int32]()
     private var sessions = [String: AgentTranscriptSession]()
-    private var activeRecords = [String: AgentSessionRegistryRecord]()
+    private var activeRecordsBySessionID = [String: AgentSessionRegistryRecord]()
+    private var livePanelsByWorkspaceID = [String: [AgentPanelProcessSnapshot]]()
+    private var resolvedLocationsBySessionID = [String: AgentSessionResolvedLocation]()
+    private var sessionIDByResolvedPanelKey = [ResolvedPanelKey: String]()
     private var scanScheduled = false
 
     init(paths: BridgePaths = BridgePaths(),
          fileManager: FileManager = .default,
-         hub: AgentEventHub) {
+         hub: AgentEventHub,
+         processParentPIDMapProvider: @escaping @Sendable () -> [Int32: Int32] = { AgentSessionLiveResolver.processParentPIDMapFromSystem() }) {
         self.paths = paths
         self.fileManager = fileManager
         self.hub = hub
+        self.processParentPIDMapProvider = processParentPIDMapProvider
     }
 
     func start() throws {
@@ -113,45 +119,61 @@ final class AgentSessionRegistryMonitor {
 
     func activeSessionForPanel(workspaceID: String, panelID: String) -> ActiveAgentSessionSnapshot? {
         queue.sync {
-            activeRecords.values
-                .first { $0.workspaceID == workspaceID && $0.panelID == panelID }
-                .map {
-                    ActiveAgentSessionSnapshot(vendor: $0.vendor,
-                                               workspaceID: $0.workspaceID,
-                                               sessionID: $0.sessionID,
-                                               panelID: $0.panelID)
-                }
+            let panelKey = ResolvedPanelKey(workspaceID: workspaceID, panelID: panelID)
+            if let sessionID = sessionIDByResolvedPanelKey[panelKey],
+               let record = activeRecordsBySessionID[sessionID] {
+                return makeSnapshot(record: record,
+                                    resolvedLocation: resolvedLocationsBySessionID[sessionID])
+            }
+
+            return activeRecordsBySessionID.values
+                .filter { resolvedLocationsBySessionID[$0.sessionID] == nil }
+                .filter { $0.workspaceID == workspaceID && $0.panelID == panelID }
+                .sorted(by: Self.sortRecordsNewestFirst)
+                .first
+                .map { makeSnapshot(record: $0, resolvedLocation: nil) }
         }
     }
 
     func activeSessionForWorkspace(workspaceID: String) -> ActiveAgentSessionSnapshot? {
         queue.sync {
-            activeRecords.values
-                .filter { $0.workspaceID == workspaceID }
-                .sorted {
-                    if $0.createdAt == $1.createdAt {
-                        return $0.sessionID < $1.sessionID
-                    }
-                    return $0.createdAt > $1.createdAt
-                }
+            let resolvedSnapshot = activeRecordsBySessionID.values
+                .filter { resolvedLocationsBySessionID[$0.sessionID]?.workspaceID == workspaceID }
+                .sorted(by: Self.sortRecordsNewestFirst)
                 .first
-                .map {
-                    ActiveAgentSessionSnapshot(vendor: $0.vendor,
-                                               workspaceID: $0.workspaceID,
-                                               sessionID: $0.sessionID,
-                                               panelID: $0.panelID)
-                }
+                .map { makeSnapshot(record: $0, resolvedLocation: resolvedLocationsBySessionID[$0.sessionID]) }
+            if let resolvedSnapshot {
+                return resolvedSnapshot
+            }
+
+            return activeRecordsBySessionID.values
+                .filter { resolvedLocationsBySessionID[$0.sessionID] == nil && $0.workspaceID == workspaceID }
+                .sorted(by: Self.sortRecordsNewestFirst)
+                .first
+                .map { makeSnapshot(record: $0, resolvedLocation: nil) }
         }
     }
 
     func activeSessionSnapshots() -> [ActiveAgentSessionSnapshot] {
         queue.sync {
-            activeRecords.values.map {
-                ActiveAgentSessionSnapshot(vendor: $0.vendor,
-                                           workspaceID: $0.workspaceID,
-                                           sessionID: $0.sessionID,
-                                           panelID: $0.panelID)
+            activeRecordsBySessionID.values.map {
+                makeSnapshot(record: $0,
+                             resolvedLocation: resolvedLocationsBySessionID[$0.sessionID])
             }
+        }
+    }
+
+    func replaceLivePanels(workspaceID: String, panels: [AgentPanelProcessSnapshot]) {
+        queue.sync {
+            livePanelsByWorkspaceID[workspaceID] = panels
+            rebuildLiveResolutionLocked()
+        }
+    }
+
+    func pruneLivePanels(toWorkspaceIDs workspaceIDs: Set<String>) {
+        queue.sync {
+            livePanelsByWorkspaceID = livePanelsByWorkspaceID.filter { workspaceIDs.contains($0.key) }
+            rebuildLiveResolutionLocked()
         }
     }
 
@@ -247,7 +269,8 @@ final class AgentSessionRegistryMonitor {
                         vendor: vendor.id)
         }
         syncRecords(records)
-        activeRecords = Dictionary(uniqueKeysWithValues: records.map { ($0.sessionID, $0) })
+        activeRecordsBySessionID = Dictionary(uniqueKeysWithValues: records.map { ($0.sessionID, $0) })
+        rebuildLiveResolutionLocked()
     }
 
     private func syncRecords(_ records: [AgentSessionRegistryRecord]) {
@@ -303,6 +326,32 @@ final class AgentSessionRegistryMonitor {
             return false
         }
         return kill(pid, 0) == 0 || errno == EPERM
+    }
+
+    private func rebuildLiveResolutionLocked() {
+        let resolution = AgentSessionLiveResolver.resolve(recordsBySessionID: activeRecordsBySessionID,
+                                                          panelsByWorkspaceID: livePanelsByWorkspaceID,
+                                                          processParentPIDMap: processParentPIDMapProvider())
+        resolvedLocationsBySessionID = resolution.resolvedLocationsBySessionID
+        sessionIDByResolvedPanelKey = resolution.sessionIDByResolvedPanelKey
+    }
+
+    private func makeSnapshot(record: AgentSessionRegistryRecord,
+                              resolvedLocation: AgentSessionResolvedLocation?) -> ActiveAgentSessionSnapshot {
+        let workspaceID = resolvedLocation?.workspaceID ?? record.workspaceID
+        let panelID = resolvedLocation?.panelID ?? record.panelID
+        return ActiveAgentSessionSnapshot(vendor: record.vendor,
+                                          workspaceID: workspaceID,
+                                          sessionID: record.sessionID,
+                                          panelID: panelID)
+    }
+
+    private static func sortRecordsNewestFirst(_ lhs: AgentSessionRegistryRecord,
+                                               _ rhs: AgentSessionRegistryRecord) -> Bool {
+        if lhs.createdAt == rhs.createdAt {
+            return lhs.sessionID < rhs.sessionID
+        }
+        return lhs.createdAt > rhs.createdAt
     }
 }
 
