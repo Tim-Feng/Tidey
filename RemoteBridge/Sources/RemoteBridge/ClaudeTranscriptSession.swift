@@ -20,6 +20,8 @@ struct AgentSessionRegistryRecord: Decodable, Sendable {
     let cwd: String
     let createdAt: String
     let transcriptPath: String?
+    let tmuxPaneID: String?
+    let tmuxSocketPath: String?
 
     enum CodingKeys: String, CodingKey {
         case version
@@ -32,6 +34,8 @@ struct AgentSessionRegistryRecord: Decodable, Sendable {
         case createdAt = "created_at"
         case transcriptPath = "transcript_path"
         case rolloutPath = "rollout_path"
+        case tmuxPaneID = "tmux_pane_id"
+        case tmuxSocketPath = "tmux_socket_path"
     }
 
     init(version: Int,
@@ -42,7 +46,9 @@ struct AgentSessionRegistryRecord: Decodable, Sendable {
          pid: Int32,
          cwd: String,
          createdAt: String,
-         transcriptPath: String?) {
+         transcriptPath: String?,
+         tmuxPaneID: String? = nil,
+         tmuxSocketPath: String? = nil) {
         self.version = version
         self.vendor = vendor
         self.workspaceID = workspaceID
@@ -52,6 +58,8 @@ struct AgentSessionRegistryRecord: Decodable, Sendable {
         self.cwd = cwd
         self.createdAt = createdAt
         self.transcriptPath = transcriptPath
+        self.tmuxPaneID = tmuxPaneID
+        self.tmuxSocketPath = tmuxSocketPath
     }
 
     init(from decoder: Decoder) throws {
@@ -67,6 +75,8 @@ struct AgentSessionRegistryRecord: Decodable, Sendable {
         transcriptPath =
             try container.decodeIfPresent(String.self, forKey: .transcriptPath) ??
             container.decodeIfPresent(String.self, forKey: .rolloutPath)
+        tmuxPaneID = try container.decodeIfPresent(String.self, forKey: .tmuxPaneID)
+        tmuxSocketPath = try container.decodeIfPresent(String.self, forKey: .tmuxSocketPath)
     }
 }
 
