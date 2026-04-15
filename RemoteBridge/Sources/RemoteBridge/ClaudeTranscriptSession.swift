@@ -735,20 +735,6 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                         panelID: record.panelID)
             }
             self.record = record
-            if didMigrateWorkspace || didMigratePanel {
-                let seq = self.nextSyntheticSequence()
-                self.publishSynthetic(kind: .sessionStarted,
-                                      seq: seq,
-                                      eventID: "session-start:\(record.sessionID):migrated:\(seq)",
-                                      timestamp: ISO8601DateFormatter().string(from: Date()),
-                                      role: nil,
-                                      text: nil,
-                                      name: nil,
-                                      input: nil,
-                                      output: nil,
-                                      toolCallID: nil,
-                                      metadata: self.baseMetadata(["cwd": record.cwd]))
-            }
             if self.transcriptURL == nil {
                 self.resolveTranscriptIfPossible()
             }
