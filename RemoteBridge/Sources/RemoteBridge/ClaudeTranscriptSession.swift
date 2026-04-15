@@ -94,10 +94,45 @@ struct AgentPanelProcessSnapshot: Sendable {
 }
 
 final class AgentSessionRegistryMonitor {
+    typealias ParentPIDLookup = @Sendable (Int32) -> Int32?
+    private static let liveParentPIDLookup: ParentPIDLookup = { pid in
+        guard pid > 0 else {
+            return nil
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.arguments = ["-o", "ppid=", "-p", String(pid)]
+
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return nil
+        }
+
+        guard process.terminationStatus == 0 else {
+            return nil
+        }
+
+        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        guard let output = String(data: outputData, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              let parentPID = Int32(output) else {
+            return nil
+        }
+        return parentPID
+    }
+
     private let paths: BridgePaths
     private let fileManager: FileManager
     private let hub: AgentEventHub
     private let tmuxResolver: TmuxStateResolver
+    private let parentPIDLookup: ParentPIDLookup
     private let queue = DispatchQueue(label: "com.tidey.remote-bridge.agent-registry")
     private var timer: DispatchSourceTimer?
     private var watchers = [String: DispatchSourceFileSystemObject]()
@@ -110,11 +145,13 @@ final class AgentSessionRegistryMonitor {
     init(paths: BridgePaths = BridgePaths(),
          fileManager: FileManager = .default,
          hub: AgentEventHub,
-         tmuxResolver: TmuxStateResolver = TmuxStateResolver()) {
+         tmuxResolver: TmuxStateResolver = TmuxStateResolver(),
+         parentPIDLookup: @escaping ParentPIDLookup = AgentSessionRegistryMonitor.liveParentPIDLookup) {
         self.paths = paths
         self.fileManager = fileManager
         self.hub = hub
         self.tmuxResolver = tmuxResolver
+        self.parentPIDLookup = parentPIDLookup
     }
 
     func start() throws {
@@ -314,7 +351,9 @@ final class AgentSessionRegistryMonitor {
                     return false
                 }
                 if let clientPIDs = tmuxResolver.clientPIDs(forPaneID: paneID, socketPath: socketPath) {
-                    return clientPIDs.contains(effectiveShellPID)
+                    return clientPIDs.contains { clientPID in
+                        processIsDescendantOrSelf(of: effectiveShellPID, candidate: clientPID)
+                    }
                 }
                 return false
             }
@@ -336,6 +375,29 @@ final class AgentSessionRegistryMonitor {
             return lhs.sessionID < rhs.sessionID
         }
         return lhs.createdAt > rhs.createdAt
+    }
+
+    private func processIsDescendantOrSelf(of ancestorPID: Int32, candidate: Int32) -> Bool {
+        guard ancestorPID > 0, candidate > 0 else {
+            return false
+        }
+        var currentPID = candidate
+        var visited = Set<Int32>()
+
+        for _ in 0..<32 {
+            if currentPID == ancestorPID {
+                return true
+            }
+            if currentPID <= 1 || visited.contains(currentPID) {
+                return false
+            }
+            visited.insert(currentPID)
+            guard let parentPID = parentPIDLookup(currentPID), parentPID > 0 else {
+                return false
+            }
+            currentPID = parentPID
+        }
+        return false
     }
 
     private func syncRecords(_ records: [AgentSessionRegistryRecord]) {
