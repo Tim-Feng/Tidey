@@ -76,11 +76,18 @@ final class TmuxStateResolver {
 
     func clientPIDs(forPaneID paneID: String, socketPath: String) -> [Int32]? {
         queue.sync {
+            BridgeLogger.server.info("tmux resolver request pane_id=\(paneID, privacy: .public) socket=\(socketPath, privacy: .public)")
             if let snapshot = loadSnapshot(socketPath: socketPath, forceRefresh: false),
                let pids = snapshot.clientPIDs(forPaneID: paneID) {
+                let sessionName = snapshot.paneToSessionName[paneID] ?? "-"
+                BridgeLogger.server.info("tmux resolver snapshot pane_count=\(snapshot.paneToSessionName.count, privacy: .public) session_count=\(snapshot.sessionToClientPIDs.count, privacy: .public) pane_session=\(sessionName, privacy: .public) client_pids=\(String(describing: pids), privacy: .public)")
                 return pids
             }
-            return loadSnapshot(socketPath: socketPath, forceRefresh: true)?.clientPIDs(forPaneID: paneID)
+            let refreshedSnapshot = loadSnapshot(socketPath: socketPath, forceRefresh: true)
+            let refreshedPIDs = refreshedSnapshot?.clientPIDs(forPaneID: paneID)
+            let sessionName = refreshedSnapshot?.paneToSessionName[paneID] ?? "-"
+            BridgeLogger.server.info("tmux resolver refreshed pane_count=\(refreshedSnapshot?.paneToSessionName.count ?? 0, privacy: .public) session_count=\(refreshedSnapshot?.sessionToClientPIDs.count ?? 0, privacy: .public) pane_session=\(sessionName, privacy: .public) client_pids=\(String(describing: refreshedPIDs), privacy: .public)")
+            return refreshedPIDs
         }
     }
 
