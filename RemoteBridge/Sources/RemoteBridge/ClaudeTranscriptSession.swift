@@ -330,10 +330,10 @@ final class AgentSessionRegistryMonitor {
     }
 
     private func matchedSession(for panel: AgentPanelProcessSnapshot) -> ActiveAgentSessionSnapshot? {
-        BridgeLogger.server.info("agent panel match start workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) effective_shell_pid=\(panel.effectiveShellPID.map(String.init) ?? "-", privacy: .public)")
+        BridgeLogger.server.debug("agent panel match start workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) effective_shell_pid=\(panel.effectiveShellPID.map(String.init) ?? "-", privacy: .public)")
         if let direct = activeRecords.values
             .first(where: { $0.workspaceID == panel.workspaceID && $0.panelID == panel.panelID }) {
-            BridgeLogger.server.info("agent panel direct match session_id=\(direct.sessionID, privacy: .public) vendor=\(direct.vendor, privacy: .public)")
+            BridgeLogger.server.debug("agent panel direct match session_id=\(direct.sessionID, privacy: .public) vendor=\(direct.vendor, privacy: .public)")
             return ActiveAgentSessionSnapshot(vendor: direct.vendor,
                                               workspaceID: panel.workspaceID,
                                               sessionID: direct.sessionID,
@@ -341,11 +341,11 @@ final class AgentSessionRegistryMonitor {
         }
 
         guard let effectiveShellPID = panel.effectiveShellPID, effectiveShellPID > 0 else {
-            BridgeLogger.server.info("agent panel no direct match and effective_shell_pid unavailable workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public)")
+            BridgeLogger.server.debug("agent panel no direct match and effective_shell_pid unavailable workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public)")
             return nil
         }
 
-        BridgeLogger.server.info("agent panel trying tmux match effective_shell_pid=\(effectiveShellPID, privacy: .public) candidate_records=\(self.activeRecords.count, privacy: .public)")
+        BridgeLogger.server.debug("agent panel trying tmux match effective_shell_pid=\(effectiveShellPID, privacy: .public) candidate_records=\(self.activeRecords.count, privacy: .public)")
         let tmuxCandidates = self.activeRecords.values
             .filter { record in
                 guard let paneID = record.tmuxPaneID,
@@ -354,26 +354,26 @@ final class AgentSessionRegistryMonitor {
                       !socketPath.isEmpty else {
                     return false
                 }
-                BridgeLogger.server.info("agent panel tmux candidate session_id=\(record.sessionID, privacy: .public) pane_id=\(paneID, privacy: .public) socket=\(socketPath, privacy: .public)")
+                BridgeLogger.server.debug("agent panel tmux candidate session_id=\(record.sessionID, privacy: .public) pane_id=\(paneID, privacy: .public) socket=\(socketPath, privacy: .public)")
                 if let clientPIDs = tmuxResolver.clientPIDs(forPaneID: paneID, socketPath: socketPath) {
-                    BridgeLogger.server.info("agent panel tmux candidate session_id=\(record.sessionID, privacy: .public) pane_id=\(paneID, privacy: .public) client_pids=\(String(describing: clientPIDs), privacy: .public)")
+                    BridgeLogger.server.debug("agent panel tmux candidate session_id=\(record.sessionID, privacy: .public) pane_id=\(paneID, privacy: .public) client_pids=\(String(describing: clientPIDs), privacy: .public)")
                     return clientPIDs.contains { clientPID in
                         let result = processIsDescendantOrSelf(of: effectiveShellPID, candidate: clientPID)
-                        BridgeLogger.server.info("agent panel ancestry candidate_pid=\(clientPID, privacy: .public) ancestor_pid=\(effectiveShellPID, privacy: .public) result=\(result, privacy: .public)")
+                        BridgeLogger.server.debug("agent panel ancestry candidate_pid=\(clientPID, privacy: .public) ancestor_pid=\(effectiveShellPID, privacy: .public) result=\(result, privacy: .public)")
                         return result
                     }
                 }
-                BridgeLogger.server.info("agent panel tmux candidate session_id=\(record.sessionID, privacy: .public) pane_id=\(paneID, privacy: .public) client_pids=nil")
+                BridgeLogger.server.debug("agent panel tmux candidate session_id=\(record.sessionID, privacy: .public) pane_id=\(paneID, privacy: .public) client_pids=nil")
                 return false
             }
             .sorted(by: Self.isRecordPreferred(_:_:))
 
         guard let match = tmuxCandidates.first else {
-            BridgeLogger.server.info("agent panel no tmux match workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public)")
+            BridgeLogger.server.debug("agent panel no tmux match workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public)")
             return nil
         }
 
-        BridgeLogger.server.info("agent panel matched via tmux vendor=\(match.vendor, privacy: .public) session_id=\(match.sessionID, privacy: .public)")
+        BridgeLogger.server.debug("agent panel matched via tmux vendor=\(match.vendor, privacy: .public) session_id=\(match.sessionID, privacy: .public)")
         return ActiveAgentSessionSnapshot(vendor: match.vendor,
                                           workspaceID: panel.workspaceID,
                                           sessionID: match.sessionID,

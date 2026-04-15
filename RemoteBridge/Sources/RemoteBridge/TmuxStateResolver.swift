@@ -23,6 +23,8 @@ final class TmuxStateResolver {
     private static let resolvedTmuxBinaryPath = discoverTmuxBinaryPath()
     private static let missingTmuxLogState = DispatchQueue(label: "com.tidey.remote-bridge.tmux-binary-log-state")
     private static var hasLoggedMissingTmux = false
+    private static let envLogState = DispatchQueue(label: "com.tidey.remote-bridge.tmux-env-log-state")
+    private static var hasLoggedRunnerEnv = false
     private static let liveCommandRunner: CommandRunner = { socketPath, arguments in
         guard let tmuxBinaryPath = resolvedTmuxBinaryPath else {
             missingTmuxLogState.sync {
@@ -36,9 +38,21 @@ final class TmuxStateResolver {
                           userInfo: [NSLocalizedDescriptionKey: "tmux not found"])
         }
 
+        envLogState.sync {
+            if !hasLoggedRunnerEnv {
+                hasLoggedRunnerEnv = true
+                let environment = ProcessInfo.processInfo.environment
+                BridgeLogger.server.debug("tmux runner env HOME=\(environment["HOME"] ?? "-", privacy: .public) USER=\(environment["USER"] ?? "-", privacy: .public) TMPDIR=\(environment["TMPDIR"] ?? "-", privacy: .public) PWD=\(environment["PWD"] ?? "-", privacy: .public)")
+            }
+        }
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: tmuxBinaryPath)
         process.arguments = ["-S", socketPath] + arguments
+        var environment = ProcessInfo.processInfo.environment
+        environment["LC_CTYPE"] = "UTF-8"
+        environment["LANG"] = "en_US.UTF-8"
+        process.environment = environment
 
         let outputPipe = Pipe()
         let errorPipe = Pipe()
@@ -49,13 +63,16 @@ final class TmuxStateResolver {
 
         let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
         let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+        let stdoutText = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let stderrText = String(data: errorData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        BridgeLogger.server.debug("tmux command argv=\(process.arguments?.joined(separator: " ") ?? "-", privacy: .public) stdout_bytes=\(outputData.count, privacy: .public) stderr_bytes=\(errorData.count, privacy: .public) stdout=\(String(stdoutText.prefix(500)), privacy: .public) stderr=\(String(stderrText.prefix(500)), privacy: .public)")
         guard process.terminationStatus == 0 else {
-            let stderr = String(data: errorData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "tmux exited \(process.terminationStatus)"
+            let stderr = stderrText.isEmpty ? "tmux exited \(process.terminationStatus)" : stderrText
             throw NSError(domain: "TmuxStateResolver",
                           code: Int(process.terminationStatus),
                           userInfo: [NSLocalizedDescriptionKey: stderr])
         }
-        return String(data: outputData, encoding: .utf8) ?? ""
+        return stdoutText
     }
 
     private struct CacheEntry {
@@ -76,17 +93,17 @@ final class TmuxStateResolver {
 
     func clientPIDs(forPaneID paneID: String, socketPath: String) -> [Int32]? {
         queue.sync {
-            BridgeLogger.server.info("tmux resolver request pane_id=\(paneID, privacy: .public) socket=\(socketPath, privacy: .public)")
+            BridgeLogger.server.debug("tmux resolver request pane_id=\(paneID, privacy: .public) socket=\(socketPath, privacy: .public)")
             if let snapshot = loadSnapshot(socketPath: socketPath, forceRefresh: false),
                let pids = snapshot.clientPIDs(forPaneID: paneID) {
                 let sessionName = snapshot.paneToSessionName[paneID] ?? "-"
-                BridgeLogger.server.info("tmux resolver snapshot pane_count=\(snapshot.paneToSessionName.count, privacy: .public) session_count=\(snapshot.sessionToClientPIDs.count, privacy: .public) pane_session=\(sessionName, privacy: .public) client_pids=\(String(describing: pids), privacy: .public)")
+                BridgeLogger.server.debug("tmux resolver snapshot pane_count=\(snapshot.paneToSessionName.count, privacy: .public) session_count=\(snapshot.sessionToClientPIDs.count, privacy: .public) pane_session=\(sessionName, privacy: .public) client_pids=\(String(describing: pids), privacy: .public)")
                 return pids
             }
             let refreshedSnapshot = loadSnapshot(socketPath: socketPath, forceRefresh: true)
             let refreshedPIDs = refreshedSnapshot?.clientPIDs(forPaneID: paneID)
             let sessionName = refreshedSnapshot?.paneToSessionName[paneID] ?? "-"
-            BridgeLogger.server.info("tmux resolver refreshed pane_count=\(refreshedSnapshot?.paneToSessionName.count ?? 0, privacy: .public) session_count=\(refreshedSnapshot?.sessionToClientPIDs.count ?? 0, privacy: .public) pane_session=\(sessionName, privacy: .public) client_pids=\(String(describing: refreshedPIDs), privacy: .public)")
+            BridgeLogger.server.debug("tmux resolver refreshed pane_count=\(refreshedSnapshot?.paneToSessionName.count ?? 0, privacy: .public) session_count=\(refreshedSnapshot?.sessionToClientPIDs.count ?? 0, privacy: .public) pane_session=\(sessionName, privacy: .public) client_pids=\(String(describing: refreshedPIDs), privacy: .public)")
             return refreshedPIDs
         }
     }
