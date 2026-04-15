@@ -41,8 +41,8 @@ final class TmuxStateResolverTests: XCTestCase {
 
     func testResolvesPaneToClientPIDsAcrossSharedSession() {
         let resolver = makeResolver(
-            panesOutput: "%1\tdev\n%2\tprod\n",
-            clientsOutput: "111\tdev\n222\tdev\n333\tprod\n"
+            panesOutput: "%1|dev\n%2|prod\n",
+            clientsOutput: "111|dev\n222|dev\n333|prod\n"
         )
 
         XCTAssertEqual(resolver.clientPIDs(forPaneID: "%1", socketPath: "/tmp/tmux.sock"), [111, 222])
@@ -50,13 +50,13 @@ final class TmuxStateResolverTests: XCTestCase {
     }
 
     func testMissForcesRefreshBeforeTtlExpires() {
-        let state = LockedState(paneOutputs: ["%1\tdev\n", "%1\tdev\n%2\tprod\n"])
+        let state = LockedState(paneOutputs: ["%1|dev\n", "%1|dev\n%2|prod\n"])
         let resolver = TmuxStateResolver(ttl: 60) { _, arguments in
             state.incrementRunnerCalls()
             if arguments.first == "list-panes" {
                 return state.nextPanesOutput()
             }
-            return "111\tdev\n333\tprod\n"
+            return "111|dev\n333|prod\n"
         }
 
         XCTAssertEqual(resolver.clientPIDs(forPaneID: "%1", socketPath: "/tmp/tmux.sock"), [111])
@@ -65,13 +65,13 @@ final class TmuxStateResolverTests: XCTestCase {
     }
 
     func testCachedSnapshotPreventsRepeatedTmuxQueriesWithinTtl() {
-        let state = LockedState(paneOutputs: ["%1\tdev\n"])
+        let state = LockedState(paneOutputs: ["%1|dev\n"])
         let resolver = TmuxStateResolver(ttl: 60) { _, arguments in
             state.incrementRunnerCalls()
             if arguments.first == "list-panes" {
-                return "%1\tdev\n"
+                return "%1|dev\n"
             }
-            return "111\tdev\n"
+            return "111|dev\n"
         }
 
         XCTAssertEqual(resolver.clientPIDs(forPaneID: "%1", socketPath: "/tmp/tmux.sock"), [111])
@@ -80,19 +80,37 @@ final class TmuxStateResolverTests: XCTestCase {
     }
 
     func testInvalidateClearsSocketSpecificCache() {
-        let state = LockedState(paneOutputs: ["%1\tdev\n"])
+        let state = LockedState(paneOutputs: ["%1|dev\n"])
         let resolver = TmuxStateResolver(ttl: 60) { _, arguments in
             if arguments.first == "list-panes" {
                 state.incrementRunnerCalls()
                 return state.nextPanesOutput()
             }
             state.incrementRunnerCalls()
-            return "111\tdev\n"
+            return "111|dev\n"
         }
 
         XCTAssertEqual(resolver.clientPIDs(forPaneID: "%1", socketPath: "/tmp/tmux.sock"), [111])
-        state.setPanesOutput("%2\tdev\n")
+        state.setPanesOutput("%2|dev\n")
         resolver.invalidate(socketPath: "/tmp/tmux.sock")
+        XCTAssertNil(resolver.clientPIDs(forPaneID: "%1", socketPath: "/tmp/tmux.sock"))
+    }
+
+    func testPipeSeparatedSessionNamePreservesAdditionalPipes() {
+        let resolver = makeResolver(
+            panesOutput: "%1|dev|feature\n",
+            clientsOutput: "111|dev|feature\n"
+        )
+
+        XCTAssertEqual(resolver.clientPIDs(forPaneID: "%1", socketPath: "/tmp/tmux.sock"), [111])
+    }
+
+    func testUnderscoreSanitizedSeparatorDoesNotMisparse() {
+        let resolver = makeResolver(
+            panesOutput: "%1_dev\n",
+            clientsOutput: "111_dev\n"
+        )
+
         XCTAssertNil(resolver.clientPIDs(forPaneID: "%1", socketPath: "/tmp/tmux.sock"))
     }
 

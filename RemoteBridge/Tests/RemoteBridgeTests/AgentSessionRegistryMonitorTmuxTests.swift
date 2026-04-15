@@ -30,9 +30,9 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         let tmuxResolver = TmuxStateResolver(ttl: 60) { socketPath, arguments in
             XCTAssertEqual(socketPath, "/tmp/tmux.sock")
             if arguments.first == "list-panes" {
-                return "%42\tcc\n"
+                return "%42|cc\n"
             }
-            return "12345\tcc\n"
+            return "12345|cc\n"
         }
         let monitor = AgentSessionRegistryMonitor(paths: paths,
                                                   fileManager: fileManager,
@@ -87,9 +87,9 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         let tmuxResolver = TmuxStateResolver(ttl: 60) { socketPath, arguments in
             XCTAssertEqual(socketPath, "/tmp/tmux.sock")
             if arguments.first == "list-panes" {
-                return "%17\ttidey-remote-cc\n"
+                return "%17|tidey-remote-cc\n"
             }
-            return "41907\ttidey-remote-cc\n"
+            return "41907|tidey-remote-cc\n"
         }
         let monitor = AgentSessionRegistryMonitor(paths: paths,
                                                   fileManager: fileManager,

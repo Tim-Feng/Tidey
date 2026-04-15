@@ -126,8 +126,8 @@ final class TmuxStateResolver {
         }
 
         do {
-            let panesOutput = try commandRunner(socketPath, ["list-panes", "-a", "-F", "#{pane_id}\t#{session_name}"])
-            let clientsOutput = try commandRunner(socketPath, ["list-clients", "-F", "#{client_pid}\t#{session_name}"])
+            let panesOutput = try commandRunner(socketPath, ["list-panes", "-a", "-F", "#{pane_id}|#{session_name}"])
+            let clientsOutput = try commandRunner(socketPath, ["list-clients", "-F", "#{client_pid}|#{session_name}"])
             let snapshot = Self.snapshot(panesOutput: panesOutput, clientsOutput: clientsOutput)
             cache[socketPath] = CacheEntry(snapshot: snapshot, loadedAt: Date())
             return snapshot
@@ -156,7 +156,7 @@ final class TmuxStateResolver {
     }
 
     private static func parsePaneLine(_ line: Substring) -> (String, String)? {
-        let parts = line.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
+        let parts = line.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
         guard parts.count == 2 else {
             return nil
         }
@@ -169,7 +169,7 @@ final class TmuxStateResolver {
     }
 
     private static func parseClientLine(_ line: Substring) -> (clientPID: Int32, sessionName: String)? {
-        let parts = line.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
+        let parts = line.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
         guard parts.count == 2,
               let pid = Int32(parts[0]) else {
             return nil
