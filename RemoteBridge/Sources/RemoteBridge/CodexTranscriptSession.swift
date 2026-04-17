@@ -45,7 +45,6 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             guard !self.didPublishStart else {
                 return
             }
-            self.log("start didPublishStart=false pid=\(self.record.pid) transcriptPath=\(self.record.transcriptPath ?? "<nil>")")
             self.didPublishStart = true
             self.publishSynthetic(kind: .sessionStarted,
                                   seq: transcriptSessionStartedSequence,
@@ -140,7 +139,6 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     }
 
     private func startResolver() {
-        log("startResolver tailerNil=\(tailer == nil)")
         resolveTranscriptIfPossible()
         if tailer != nil {
             log("startResolver resolved transcript=\(transcriptURL?.path ?? "<nil>")")
@@ -158,14 +156,11 @@ final class CodexTranscriptSession: AgentTranscriptSession {
 
     private func resolveTranscriptIfPossible() {
         guard tailer == nil else {
-            log("resolveTranscriptIfPossible skipped existingTailer transcript=\(transcriptURL?.path ?? "<nil>")")
             return
         }
         guard let transcriptURL = resolveTranscriptURL() else {
-            log("resolveTranscriptIfPossible noTranscriptFound pid=\(record.pid) sessionID=\(record.sessionID)")
             return
         }
-        log("resolveTranscriptIfPossible resolved transcript=\(transcriptURL.path)")
 
         let tailer = JSONLFileTailer(fileURL: transcriptURL,
                                      queue: queue,
@@ -178,7 +173,6 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         do {
             isBootstrappingSidebarState = true
             bootstrappedShellState = .prompt
-            log("tailer.start bootstrap begin transcript=\(transcriptURL.path)")
             try tailer.start()
             isBootstrappingSidebarState = false
             self.tailer = tailer
@@ -195,7 +189,6 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     }
 
     private func handleTailerInvalidation() {
-        log("handleTailerInvalidation transcript=\(transcriptURL?.path ?? "<nil>")")
         transcriptURL = nil
         tailer = nil
         if resolverTimer == nil {
@@ -208,14 +201,11 @@ final class CodexTranscriptSession: AgentTranscriptSession {
            !transcriptPath.isEmpty {
             let url = URL(fileURLWithPath: NSString(string: transcriptPath).expandingTildeInPath)
             if fileManager.fileExists(atPath: url.path) {
-                log("resolveTranscriptURL using record.transcriptPath=\(url.path)")
                 return url
             }
-            log("resolveTranscriptURL record.transcriptPath missing path=\(url.path)")
         }
 
         if let processTreeResolved = resolveTranscriptURLFromProcessTree() {
-            log("resolveTranscriptURL using processTreeResolved=\(processTreeResolved.path)")
             return processTreeResolved
         }
 
@@ -233,10 +223,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                   url.lastPathComponent.contains(record.sessionID) else {
                 continue
             }
-            log("resolveTranscriptURL using sessionIDMatch=\(url.path)")
             return url
         }
-        log("resolveTranscriptURL noCandidate sessionID=\(record.sessionID)")
         return nil
     }
 
@@ -413,10 +401,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
 
     private func consumeEventMessage(payload: [String: Any], timestamp: String, lineOffset: Int) {
         guard let payloadType = payload["type"] as? String else {
-            log("consumeEventMessage missingType lineOffset=\(lineOffset)")
             return
         }
-        log("consumeEventMessage type=\(payloadType) lineOffset=\(lineOffset) bootstrapping=\(isBootstrappingSidebarState) currentShellState=\(currentShellState)")
 
         switch payloadType {
         case "agent_message":
@@ -437,16 +423,9 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     }
 
     private func consumeTaskStarted(payload: [String: Any]) {
-        guard let turnID = payload["turn_id"] as? String else {
-            log("consumeTaskStarted ignored missingTurnID payload=\(payload)")
-            return
-        }
-        guard !turnID.isEmpty else {
-            log("consumeTaskStarted ignored emptyTurnID")
-            return
-        }
-        guard turnID != lastStartedTurnID else {
-            log("consumeTaskStarted dedup turnID=\(turnID)")
+        guard let turnID = payload["turn_id"] as? String,
+              !turnID.isEmpty,
+              turnID != lastStartedTurnID else {
             return
         }
         lastStartedTurnID = turnID
@@ -454,30 +433,19 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         if isBootstrappingSidebarState {
             bootstrappedShellState = .running
             currentShellState = .running
-            log("consumeTaskStarted bootstrap turnID=\(turnID) shellState=running")
             return
         }
 
-        guard currentShellState != .running else {
-            log("consumeTaskStarted ignored alreadyRunning turnID=\(turnID)")
-            return
-        }
+        guard currentShellState != .running else { return }
         currentShellState = .running
         log("consumeTaskStarted publish running turnID=\(turnID)")
         publishSidebar(messages: CodexSidebarMessages.running(workspaceID: record.workspaceID))
     }
 
     private func consumeTaskComplete(payload: [String: Any]) {
-        guard let turnID = payload["turn_id"] as? String else {
-            log("consumeTaskComplete ignored missingTurnID payload=\(payload)")
-            return
-        }
-        guard !turnID.isEmpty else {
-            log("consumeTaskComplete ignored emptyTurnID")
-            return
-        }
-        guard turnID != lastCompletedTurnID else {
-            log("consumeTaskComplete dedup turnID=\(turnID)")
+        guard let turnID = payload["turn_id"] as? String,
+              !turnID.isEmpty,
+              turnID != lastCompletedTurnID else {
             return
         }
         lastCompletedTurnID = turnID
@@ -486,7 +454,6 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         if isBootstrappingSidebarState {
             bootstrappedShellState = .prompt
             currentShellState = .prompt
-            log("consumeTaskComplete bootstrap turnID=\(turnID) bodyEmpty=\(body.isEmpty)")
             return
         }
 
@@ -502,16 +469,9 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     }
 
     private func consumeTurnAborted(payload: [String: Any]) {
-        guard let turnID = payload["turn_id"] as? String else {
-            log("consumeTurnAborted ignored missingTurnID payload=\(payload)")
-            return
-        }
-        guard !turnID.isEmpty else {
-            log("consumeTurnAborted ignored emptyTurnID")
-            return
-        }
-        guard turnID != lastAbortedTurnID else {
-            log("consumeTurnAborted dedup turnID=\(turnID)")
+        guard let turnID = payload["turn_id"] as? String,
+              !turnID.isEmpty,
+              turnID != lastAbortedTurnID else {
             return
         }
         lastAbortedTurnID = turnID
@@ -519,14 +479,10 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         if isBootstrappingSidebarState {
             bootstrappedShellState = .prompt
             currentShellState = .prompt
-            log("consumeTurnAborted bootstrap turnID=\(turnID)")
             return
         }
 
-        guard currentShellState != .prompt else {
-            log("consumeTurnAborted ignored alreadyPrompt turnID=\(turnID)")
-            return
-        }
+        guard currentShellState != .prompt else { return }
         currentShellState = .prompt
         log("consumeTurnAborted publish prompt turnID=\(turnID)")
         publishSidebar(messages: CodexSidebarMessages.prompt(workspaceID: record.workspaceID))
@@ -733,7 +689,6 @@ final class CodexTranscriptSession: AgentTranscriptSession {
 
     private func publishSidebarSessionActivation(force: Bool) {
         guard force || !didPublishSidebarSessionActivation else {
-            log("publishSidebarSessionActivation skipped force=\(force)")
             return
         }
         didPublishSidebarSessionActivation = true
