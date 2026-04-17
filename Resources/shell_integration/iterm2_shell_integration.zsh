@@ -188,6 +188,7 @@ if [[ -o interactive ]]; then
         local cleaned="${PATH//$TIDEY_BIN_DIR:/}"
         cleaned="${cleaned//:$TIDEY_BIN_DIR/}"
         export PATH="${TIDEY_BIN_DIR}:${cleaned}"
+        rehash 2>/dev/null || true
         add-zsh-hook -d precmd _tidey_inject_path
       }
       autoload -Uz add-zsh-hook
