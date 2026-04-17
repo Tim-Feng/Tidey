@@ -2,6 +2,17 @@
 
 改 UI、layout、shell integration、terminal interaction 前，先掃這份。
 
+## 審閱 marker
+
+**Last reviewed**: `05030c0df` · 2026-04-17
+
+**下次審閱要做的事**：
+1. `git log 05030c0df..HEAD` 列出所有新 commits
+2. 掃 `~/.claude/projects/-Users-timfeng/*.jsonl`（cc sessions）跟 `~/.codex/sessions/**/rollout-*.jsonl` 在 marker 日期之後的記錄
+3. 從 commit message + session 對話中找「原本沒想到 / 踩第二次 / 花超過 1 小時才解的」歸納成 bullet
+4. 把 lesson 補進對應章節（owner／UI／shell integration 等），iOS 側去 `~/GitHub/Tidey-Remote/docs/debug-lessons.md`
+5. 把 marker 的 commit hash 更新成掃完當下的 HEAD，日期同步
+
 ## 先判斷 owner
 
 - `iTermRootTerminalView`
@@ -146,9 +157,18 @@
 - tmux server 的 env 會跨 Tidey 重啟殘留
   - tmux server 第一次起來時抓一份 env snapshot，之後所有新 session / new-window 都繼承
   - Tidey 重啟後 `TIDEY_SOCKET_PATH` / `TIDEY_WORKSPACE_ID` 可能指向已失效的 socket / UUID
-  - Claude wrapper 做法：hook command 執行時從 `tmux show-environment` 即時讀，不用 shell startup 繼承值
+  - Claude wrapper 做法（`4c3e3ebd9`）：hook command 執行時從 `tmux show-environment` 即時讀，不用 shell startup 繼承值
   - 症狀：wrapper 檢查 socket 不存在就 bypass，整條 pipeline 默默失效
   - 特別慘的場景：從 Tidey Dev 切回 prod，socket path 是 `tidey-dev.sock`
+  - Codex wrapper 目前還沒這層 fallback（已知債，見 TODO）
+- zsh 會 cache command 的絕對路徑
+  - Tidey shell integration 把 `TIDEY_BIN_DIR` prepend 到 PATH，但長 live 的 shell 已經把 `codex` / `claude` hash 成舊路徑
+  - 新裝 Tidey 後沒有新開 shell 就測不到新 wrapper
+  - 解法（`6f1b3459e`）：shell integration 裡 PATH 注入後跑 `rehash 2>/dev/null || true`，強制失效 command hash
+- CODEX_HOME overlay 小心 nesting
+  - wrapper 用 `CODEX_HOME` 覆蓋到 `/tmp/tidey-codex-home.XXX` 並塞 hooks.json + config.toml
+  - 如果 wrapper 被 exec 兩次（例如使用者在 codex TUI 裡再開 codex），第二次的 real-home 會指向第一次的 overlay，產生 overlay-of-overlay
+  - 解法（`cb0d4bb8e`）：`resolve_real_codex_home` 偵測 `tidey-codex-home.*` pattern，找回原始 `~/.codex`
 
 ## Socket / Notification / Agent Integration
 
