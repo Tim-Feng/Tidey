@@ -6,15 +6,13 @@ A terminal-first IDE for AI agents. Run agents in workspaces, edit code side by 
 
 ![Tidey main window](docs/screenshots/hero-main.png)
 
-## Latest in 0.2.5
+## Latest in 0.2.6
 
-- **Codex sidebar status and notifications** — Codex sessions show idle/running in the sidebar and notify you when a reply completes.
-- **Panel rename** — right-click a workspace panel to set a custom title.
-- **`cmd+click` fixes** — paths followed by CJK punctuation (`（）「」` etc.) are no longer swallowed into the path or URL.
+- **`cmd+click` opens in Tidey editor panel** — `file://` URLs (including OSC-8 hyperlinks from Claude Code) now route to the built-in editor panel instead of falling through to the macOS default app.
 
 ## Install
 
-**Download:** [Tidey.dmg](https://github.com/Tim-Feng/Tidey/releases/download/v0.2.5/Tidey.dmg) (macOS 12+, Apple Silicon & Intel)
+**Download:** [Tidey.dmg](https://github.com/Tim-Feng/Tidey/releases/download/v0.2.6/Tidey.dmg) (macOS 12+, Apple Silicon & Intel)
 
 1. Open the DMG, drag Tidey to Applications
 2. First launch: right-click → Open
