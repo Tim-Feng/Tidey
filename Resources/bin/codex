@@ -105,6 +105,51 @@ merge_tidey_hooks_into_overlay() {
     node -e "$node_script" "$existing_hooks_path" "$merged_hooks_path" "$dispatch_script"
 }
 
+merge_tidey_config_into_overlay() {
+    local real_codex_home="$1"
+    local overlay_codex_home="$2"
+    local existing_config_path="$real_codex_home/config.toml"
+    local merged_config_path="$overlay_codex_home/config.toml"
+
+    python3 - "$existing_config_path" "$merged_config_path" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+existing_path = Path(sys.argv[1])
+output_path = Path(sys.argv[2])
+text = existing_path.read_text() if existing_path.exists() else ""
+
+if text and not text.endswith("\n"):
+    text += "\n"
+
+pattern = re.compile(r"(?ms)^\[features\]\n(?P<body>.*?)(?=^\[|\Z)")
+match = pattern.search(text)
+if match:
+    body = match.group("body")
+    if re.search(r"(?m)^codex_hooks\s*=\s*true\s*$", body):
+        pass
+    elif re.search(r"(?m)^codex_hooks\s*=\s*false\s*$", body):
+        body = re.sub(r"(?m)^codex_hooks\s*=\s*false\s*$", "codex_hooks = true", body)
+        text = text[:match.start("body")] + body + text[match.end("body"):]
+    else:
+        insertion = "" if body.endswith("\n") or body == "" else "\n"
+        text = text[:match.end("body")] + insertion + "codex_hooks = true\n" + text[match.end("body"):]
+else:
+    if text and not text.endswith("\n\n"):
+        text += "\n"
+    text += "[features]\n"
+    text += "codex_hooks = true\n"
+
+if "suppress_unstable_features_warning" not in text:
+    if text and not text.endswith("\n"):
+        text += "\n"
+    text += "suppress_unstable_features_warning = true\n"
+
+output_path.write_text(text)
+PY
+}
+
 prepare_codex_home_overlay() {
     local real_codex_home="$1"
     local overlay_codex_home="$2"
@@ -116,11 +161,12 @@ prepare_codex_home_overlay() {
     shopt -s dotglob nullglob
     for entry in "$real_codex_home"/*; do
         name="${entry##*/}"
-        [[ "$name" == "." || "$name" == ".." || "$name" == "hooks.json" ]] && continue
+        [[ "$name" == "." || "$name" == ".." || "$name" == "hooks.json" || "$name" == "config.toml" ]] && continue
         ln -s "$entry" "$overlay_codex_home/$name"
     done
     shopt -u dotglob nullglob
 
+    merge_tidey_config_into_overlay "$real_codex_home" "$overlay_codex_home"
     merge_tidey_hooks_into_overlay "$real_codex_home" "$overlay_codex_home" "$dispatch_script"
 }
 
