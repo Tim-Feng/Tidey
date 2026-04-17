@@ -73,6 +73,7 @@ launchProfileInCurrentTerminal:(Profile *)profile
 @property (nonatomic, strong, readonly) iTermSemanticHistoryController *semanticHistoryController;
 @property (nonatomic, weak) id smartSelectionActionTarget;
 
+- (BOOL)shouldOpenFileURLWithSemanticHistory:(NSURL *)url;
 - (instancetype)initWithSemanticHistoryController:(iTermSemanticHistoryController *)semanticHistoryController NS_DESIGNATED_INITIALIZER;
 - (instancetype)init NS_UNAVAILABLE;
 

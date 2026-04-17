@@ -138,6 +138,20 @@ final class PathTests: XCTestCase {
 
         XCTAssertEqual(finder.path, fileURL.path)
     }
+
+    func testFileURLWithoutFragmentUsesSemanticHistoryRoute() {
+        let helper = iTermURLActionHelper(semanticHistoryController: iTermSemanticHistoryController(prefs: [:]))
+        let url = URL(fileURLWithPath: "/Users/timfeng/GitHub/life-system/TODO.md")
+
+        XCTAssertTrue(helper.shouldOpenFileURLWithSemanticHistory(url))
+    }
+
+    func testFileURLWithFragmentUsesSemanticHistoryRoute() {
+        let helper = iTermURLActionHelper(semanticHistoryController: iTermSemanticHistoryController(prefs: [:]))
+        let url = URL(string: "file:///Users/timfeng/GitHub/life-system/TODO.md#12:3")!
+
+        XCTAssertTrue(helper.shouldOpenFileURLWithSemanticHistory(url))
+    }
 }
 
 final class ClaudeHookRegistryTests: XCTestCase {

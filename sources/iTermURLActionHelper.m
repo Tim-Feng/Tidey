@@ -34,6 +34,10 @@
     NSInteger _openTargetGeneration;
 }
 
+- (BOOL)shouldOpenFileURLWithSemanticHistory:(NSURL *)url {
+    return [url.scheme isEqualToString:@"file"] && url.path.length > 0;
+}
+
 - (instancetype)initWithSemanticHistoryController:(iTermSemanticHistoryController *)semanticHistoryController {
     self = [super init];
     if (self) {
@@ -269,8 +273,8 @@ workingDirectory:(NSString *)workingDirectory
                                  style:style];
         return;
     }
-    if ([url.scheme isEqualToString:@"file"] && url.fragment) {
-        NSArray<NSString *> *parts = [url.fragment componentsSeparatedByString:@":"];
+    if ([self shouldOpenFileURLWithSemanticHistory:url]) {
+        NSArray<NSString *> *parts = url.fragment ? [url.fragment componentsSeparatedByString:@":"] : @[];
         NSString *lineNumber = (parts.count > 0) ? parts[0] : nil;
         NSString *columnNumber = (parts.count > 1) ? parts[1] : nil;
         NSDictionary *subs = [self semanticHistorySubstitutionsWithPrefix:@""
@@ -287,7 +291,7 @@ workingDirectory:(NSString *)workingDirectory
                                            scope:[self.delegate urlActionHelperScope:self]
                                       lineNumber:lineNumber
                                     columnNumber:columnNumber
-                                          window:self.delegate.urlActionHelperWindow
+                                           window:self.delegate.urlActionHelperWindow
                                       completion:^(BOOL ignore) {}];
         return;
     }
