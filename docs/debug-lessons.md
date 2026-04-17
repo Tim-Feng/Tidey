@@ -195,7 +195,8 @@
   - 這題要當成一條完整資料流處理：paged history fetch、bootstrap 上限、reconnect catch-up、stream completion / replay_count、以及不重播時的 parser 邏輯一起收
   - 補證：`208595cae` `c48599a47` `f14a0959e` `aea886f8f` `7627e99bf`
 - `security` / `codesign` / `notarytool` 的 keychain 狀態不要用 sandbox 內結果下結論
-  - 這類命令在 agent sandbox 裡可能出現假陰性：`security find-identity` 回 `0 valid identities found`、`codesign` 回參數錯、`notarytool` 回 keychain access error，但同一台機器的互動 shell 實際是正常的
+  - 這條特別是 Codex 這邊的 agent sandbox 問題；同一台機器的互動 shell 與 Claude Code session 不一定會重現
+  - 這類命令在 Codex agent sandbox 裡可能出現假陰性：`security find-identity` 回 `0 valid identities found`、`codesign` 回參數錯、`notarytool` 回 keychain access error，但同一台機器的互動 shell 實際是正常的
   - release / notarization 調查時，先用 unsandboxed interactive shell 驗證 signing identity、notary profile、Apple agreement 狀態，再決定是 cert / private key / profile / 法務同意書哪一層出問題
   - 補證：2026-04-18 release 調查最後在沙盒外確認 `Developer ID Application` identity 正常，真正阻塞是 Apple Developer `403 required agreement is missing or has expired`
 - Claude hook 不要靠 terminal output 猜狀態
