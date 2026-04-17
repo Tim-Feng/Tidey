@@ -71,6 +71,59 @@ write_registry_file() {
     }
 }
 
+shell_quote() {
+    local s="${1-}"
+    s=${s//\'/\'\\\'\'}
+    printf "'%s'" "$s"
+}
+
+merge_tidey_hooks_into_overlay() {
+    local real_codex_home="$1"
+    local overlay_codex_home="$2"
+    local dispatch_script="$3"
+    local existing_hooks_path="$real_codex_home/hooks.json"
+    local merged_hooks_path="$overlay_codex_home/hooks.json"
+    local node_script=""
+
+    node_script+='const fs = require("fs");'
+    node_script+='const [existingPath, outputPath, dispatchPath] = process.argv.slice(1);'
+    node_script+='let root = {};'
+    node_script+='if (fs.existsSync(existingPath)) {'
+    node_script+='  try { root = JSON.parse(fs.readFileSync(existingPath, "utf8")); } catch { root = {}; }'
+    node_script+='}'
+    node_script+='if (!root || typeof root !== "object") root = {};'
+    node_script+='if (!root.hooks || typeof root.hooks !== "object") root.hooks = {};'
+    node_script+='const entries = [["SessionStart","session-start"],["UserPromptSubmit","user-prompt-submit"],["Stop","stop"]];'
+    node_script+='for (const [eventName, tideyEvent] of entries) {'
+    node_script+='  if (!Array.isArray(root.hooks[eventName])) root.hooks[eventName] = [];'
+    node_script+='  const command = `${dispatchPath} ${tideyEvent}`;'
+    node_script+='  const exists = root.hooks[eventName].some(group => Array.isArray(group?.hooks) && group.hooks.some(h => h?.type === "command" && h?.command === command));'
+    node_script+='  if (!exists) root.hooks[eventName].push({ hooks: [{ type: "command", command, timeout: 10 }] });'
+    node_script+='}'
+    node_script+='fs.writeFileSync(outputPath, JSON.stringify(root, null, 2) + "\\n");'
+
+    node -e "$node_script" "$existing_hooks_path" "$merged_hooks_path" "$dispatch_script"
+}
+
+prepare_codex_home_overlay() {
+    local real_codex_home="$1"
+    local overlay_codex_home="$2"
+    local dispatch_script="$3"
+    local entry=""
+    local name=""
+
+    mkdir -p "$overlay_codex_home"
+    shopt -s dotglob nullglob
+    for entry in "$real_codex_home"/*; do
+        name="${entry##*/}"
+        [[ "$name" == "." || "$name" == ".." || "$name" == "hooks.json" ]] && continue
+        ln -s "$entry" "$overlay_codex_home/$name"
+    done
+    shopt -u dotglob nullglob
+
+    merge_tidey_hooks_into_overlay "$real_codex_home" "$overlay_codex_home" "$dispatch_script"
+}
+
 find_real_codex() {
     local self_dir
     self_dir="$(cd "$(dirname "$0")" && pwd)"
@@ -177,7 +230,19 @@ if [[ -z "${TIDEY_SOCKET_PATH:-}" || ! -S "${TIDEY_SOCKET_PATH:-}" || -z "${TIDE
     exec "$REAL_CODEX" "$@"
 fi
 
+HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
+REAL_CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
+OVERLAY_CODEX_HOME="$(mktemp -d "${TMPDIR:-/tmp}/tidey-codex-home.XXXXXX")"
+DISPATCH_SCRIPT="$HOOK_DIR/codex-hook-dispatch"
+prepare_codex_home_overlay "$REAL_CODEX_HOME" "$OVERLAY_CODEX_HOME" "$DISPATCH_SCRIPT"
+
 CREATED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 monitor_rollout_and_registry "$$" "$TIDEY_WORKSPACE_ID" "${TIDEY_PANEL_ID:-}" "$PWD" "$CREATED_AT" &
 
-exec "$REAL_CODEX" "$@"
+cleanup() {
+    rm -rf "$OVERLAY_CODEX_HOME"
+}
+
+trap cleanup EXIT
+
+exec env CODEX_HOME="$OVERLAY_CODEX_HOME" "$REAL_CODEX" "$@"

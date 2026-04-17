@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+EVENT="${1:-}"
+PAYLOAD_JSON="${2:-}"
+
+if [[ -z "$EVENT" ]]; then
+    exit 0
+fi
+
+HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
+TIDEY_BIN="$HOOK_DIR/tidey"
+
+if [[ -n "${TMUX:-}" ]] && command -v tmux >/dev/null 2>&1; then
+    tmux_workspace="$(tmux show-environment TIDEY_WORKSPACE_ID 2>/dev/null || tmux show-environment -g TIDEY_WORKSPACE_ID 2>/dev/null || true)"
+    case "$tmux_workspace" in
+        TIDEY_WORKSPACE_ID=*) export TIDEY_WORKSPACE_ID="${tmux_workspace#TIDEY_WORKSPACE_ID=}" ;;
+        -TIDEY_WORKSPACE_ID) unset TIDEY_WORKSPACE_ID ;;
+    esac
+
+    tmux_panel="$(tmux show-environment TIDEY_PANEL_ID 2>/dev/null || tmux show-environment -g TIDEY_PANEL_ID 2>/dev/null || true)"
+    case "$tmux_panel" in
+        TIDEY_PANEL_ID=*) export TIDEY_PANEL_ID="${tmux_panel#TIDEY_PANEL_ID=}" ;;
+        -TIDEY_PANEL_ID) unset TIDEY_PANEL_ID ;;
+    esac
+fi
+
+if [[ -n "$PAYLOAD_JSON" ]]; then
+    exec "$TIDEY_BIN" codex-hook "$EVENT" "$PAYLOAD_JSON"
+fi
+
+exec "$TIDEY_BIN" codex-hook "$EVENT"

@@ -3,6 +3,7 @@
 //
 // Usage:
 //   tidey claude-hook <session-start|stop|notification|session-end|prompt-submit>
+//   tidey codex-hook <session-start|user-prompt-submit|stop> [payload-json]
 //   tidey send <plaintext message>
 //
 // Deployment target: macOS 12. No external dependencies.
@@ -118,6 +119,16 @@ private func handleClaudeHook(event: String, socketPath: String, workspaceID: St
     }
 }
 
+private func handleCodexHook(event: String, socketPath: String, workspaceID: String, payloadJSON: String?) {
+    guard !workspaceID.isEmpty else { return }
+    let messages = TideyCLICommandFormatter.messages(forCodexHookEvent: event,
+                                                     workspaceID: workspaceID,
+                                                     payloadJSON: payloadJSON)
+    for message in messages {
+        sendToSocket(path: socketPath, message: message)
+    }
+}
+
 // MARK: - Main
 
 let args = CommandLine.arguments          // args[0] = binary path
@@ -141,6 +152,13 @@ case "claude-hook":
     // For events that don't need stdin, avoid blocking on stdin reads.
     // Only "stop" reads stdin.
     handleClaudeHook(event: event, socketPath: socketPath, workspaceID: workspaceID)
+
+case "codex-hook":
+    guard args.count >= 3 else { exit(0) }
+    guard !socketPath.isEmpty else { exit(0) }
+    let event = args[2]
+    let payloadJSON = args.count >= 4 ? args[3] : nil
+    handleCodexHook(event: event, socketPath: socketPath, workspaceID: workspaceID, payloadJSON: payloadJSON)
 
 default:
     // Unknown subcommand — exit silently.

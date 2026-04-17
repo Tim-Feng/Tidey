@@ -57,6 +57,38 @@ final class TideyCLICommandFormatter: NSObject {
         }
     }
 
+    @objc(messagesForCodexHookEvent:workspaceID:payloadJSON:)
+    static func messages(forCodexHookEvent event: String,
+                         workspaceID: String,
+                         payloadJSON: String?) -> [String] {
+        guard !workspaceID.isEmpty else {
+            return []
+        }
+
+        switch event {
+        case "session-start":
+            return [
+                "report_shell_state prompt --workspace_id=\(workspaceID)",
+                "{\"action\":\"set_title\",\"workspace_id\":\"\(jsonEscapedString(workspaceID))\",\"title\":\"Codex\"}"
+            ]
+
+        case "user-prompt-submit":
+            return [
+                "report_shell_state running --workspace_id=\(workspaceID)"
+            ]
+
+        case "stop":
+            let body = notificationBodyForCodexStopEvent(payloadJSON: payloadJSON)
+            return [
+                "{\"action\":\"notification.create\",\"workspace_id\":\"\(jsonEscapedString(workspaceID))\",\"title\":\"Codex\",\"body\":\"\(jsonEscapedString(body))\"}",
+                "report_shell_state prompt --workspace_id=\(workspaceID)"
+            ]
+
+        default:
+            return []
+        }
+    }
+
     static func messages(forClaudeHookEvent event: String,
                          workspaceID: String,
                          stdinData: Data?,
@@ -185,6 +217,29 @@ final class TideyCLICommandFormatter: NSObject {
         }
         guard let transcriptContent = transcriptLoader(transcriptPath),
               let text = lastAssistantText(inTranscriptContent: transcriptContent) else {
+            return defaultBody
+        }
+
+        let truncated = singleLineTruncatedString(text, maxLength: 200)
+        return truncated.isEmpty ? defaultBody : truncated
+    }
+
+    private static func notificationBodyForCodexStopEvent(payloadJSON: String?) -> String {
+        let defaultBody = "Task completed"
+        guard let payloadJSON,
+              let payloadData = payloadJSON.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any] else {
+            return defaultBody
+        }
+
+        let candidates: [String?] = [
+            object["last-assistant-message"] as? String,
+            object["last_assistant_message"] as? String,
+            object["lastAssistantMessage"] as? String,
+        ]
+
+        guard let text = candidates.compactMap({ $0 }).first,
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return defaultBody
         }
 
