@@ -152,6 +152,20 @@ final class PathTests: XCTestCase {
 
         XCTAssertTrue(helper.shouldOpenFileURLWithSemanticHistory(url))
     }
+
+    func testNonFileURLsDoNotUseSemanticHistoryRoute() {
+        let helper = iTermURLActionHelper(semanticHistoryController: iTermSemanticHistoryController(prefs: [:]))
+
+        XCTAssertFalse(helper.shouldOpenFileURLWithSemanticHistory(URL(string: "https://example.com/path")!))
+        XCTAssertFalse(helper.shouldOpenFileURLWithSemanticHistory(URL(string: "iterm2://open?foo=bar")!))
+    }
+
+    func testFileURLsWithoutPathsDoNotUseSemanticHistoryRoute() {
+        let helper = iTermURLActionHelper(semanticHistoryController: iTermSemanticHistoryController(prefs: [:]))
+
+        XCTAssertFalse(helper.shouldOpenFileURLWithSemanticHistory(URL(string: "file://")!))
+        XCTAssertFalse(helper.shouldOpenFileURLWithSemanticHistory(URL(string: "file:///")!))
+    }
 }
 
 final class ClaudeHookRegistryTests: XCTestCase {
