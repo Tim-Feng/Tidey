@@ -143,8 +143,14 @@
 - `LC_TERMINAL` 在 tmux 裡是空的
   - tmux 不自動轉發 `LC_TERMINAL`
   - 用 `tmux show-environment LC_TERMINAL` 查 tmux server 的環境變數作為 fallback
+- tmux server 的 env 會跨 Tidey 重啟殘留
+  - tmux server 第一次起來時抓一份 env snapshot，之後所有新 session / new-window 都繼承
+  - Tidey 重啟後 `TIDEY_SOCKET_PATH` / `TIDEY_WORKSPACE_ID` 可能指向已失效的 socket / UUID
+  - Claude wrapper 做法：hook command 執行時從 `tmux show-environment` 即時讀，不用 shell startup 繼承值
+  - 症狀：wrapper 檢查 socket 不存在就 bypass，整條 pipeline 默默失效
+  - 特別慘的場景：從 Tidey Dev 切回 prod，socket path 是 `tidey-dev.sock`
 
-## Socket / Notification / Claude Hook
+## Socket / Notification / Agent Integration
 
 - `workspace_id` 缺失的 state update 要 fail closed
   - `report_shell_state` / `set_status` 不能默默落到 broadcast
@@ -161,6 +167,34 @@
   - `ChatListModel.append()` 的 early-return 路徑（`.append`、`.commit` 等）用 `createIfNeeded: false`
   - 如果 cache 尚未 init，sidebar `snippet(forChatID:)` 會 fallback 到 DB，讀到舊資料
   - 解法：在 `publish()` 呼叫 `messages(forChat:createIfNeeded: true)` 確保 cache 存在
+- 第三方 agent 的 hook 系統不一定 fire
+  - Codex 0.121.0 的 `codex_hooks` feature 標記 **under development**，即使 config.toml 設 true、hooks.json schema 寫對、dispatch script 可執行——runtime 也不會叫 hook command
+  - 驗證方法：`codex features list | grep <feature>` 看 status（`under development` 不能信）
+  - 別指望 binary 有 `HookEventNameWire` enum 或 `user_prompt_submit.rs` 字串就等於 runtime 會 fire
+  - 改走該 agent 自己穩定會寫的 transcript / rollout 檔
+- rollout / transcript 檔是比 hook 更穩的狀態來源
+  - Codex rollout 格式：`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`，每行 JSON
+  - 外層 `type: event_msg`，有用資訊在 `payload.type`：`task_started` / `task_complete` / `turn_aborted`
+  - Codex `resume` 會 append 到舊 rollout 檔（不是另開新檔），檔名仍帶原 thread UUID
+  - Bridge 端 tail 檔、只看 append 部分：新 prompt 一進來、Codex 一 append event，watcher 就翻成 socket 命令
+- watcher 放 Bridge，不要放 wrapper daemon
+  - wrapper 養 tail daemon 生命週期難管（resume、force-kill、pane 關掉都留殘骸）
+  - Bridge 本來就是 long-running、有 session registry、有 JSONLFileTailer 基礎設施，加 watcher 是擴充現有模組不是新 process
+- Codex wrapper 必須寫 registry 檔
+  - Claude 有 `handleClaudeRegistryLifecycle`，Codex 也要對應寫 `~/Library/Application Support/Tidey Remote Bridge/agent-sessions/codex/codex-<id>.json`
+  - 沒這檔，Bridge `AgentSessionRegistryMonitor` 不知道 Codex 存在，CodexTranscriptSession 從不 spawn，rollout watcher 一次都不跑（症狀：sidebar 從頭到尾沒反應）
+- rollout 檔路徑解析用 lsof process tree
+  - wrapper 寫 registry 時只知道自己的 PID，不知道 Codex 會寫哪個 rollout（檔名用 Codex 內部產的 thread UUID）
+  - 解法：Bridge 端 BFS 走 wrapper PID + 子孫，對每個 PID 跑 `lsof -Fn -p <pid>`，找 `/.codex/sessions/.../rollout-*.jsonl` 被開啟的檔
+  - 多個同時開時取 sorted last（用字典序排序通常對應最新的）
+- `resume` 模式下 rollout 檔可能非常巨大
+  - 實測 252MB（8 天累積）
+  - bootstrap 一定要有 line limit（目前是 500），別一開始就 full-scan
+  - `isBootstrappingSidebarState` 旗標：bootstrap 期間吃 event 但不發 socket，避免回放歷史事件重送通知
+- Bridge 改 code 要重 build、重 deploy、重啟 launchd
+  - `tools/build.sh` 只 build Tidey Mac app，不動 Bridge
+  - Bridge 獨立：`RemoteBridge/tools/deploy-bridge.sh` 會 build release binary + install + sign + `launchctl kickstart`
+  - Tidey prod 的 wrapper 路徑 `/Applications/Tidey.app/Contents/Resources/bin/codex` 是手動 cp，build.sh 也不會自動同步
 
 ## Theme System
 
