@@ -6,6 +6,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     private let queue: DispatchQueue
     private let fileManager: FileManager
     private let hub: AgentEventHub
+    private let socketClient: TideySocketClient?
 
     private var record: AgentSessionRegistryRecord
     private var resolverTimer: DispatchSourceTimer?
@@ -19,13 +20,22 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     private var resolvedToolCallIDs = Set<String>()
     private var publishedAssistantTextKeys = Set<String>()
     private var isBackfillingHistory = false
+    private var isBootstrappingSidebarState = false
+    private var bootstrappedShellState: CodexSidebarShellState = .prompt
+    private var currentShellState: CodexSidebarShellState = .prompt
+    private var didPublishSidebarSessionActivation = false
+    private var lastStartedTurnID: String?
+    private var lastCompletedTurnID: String?
+    private var lastAbortedTurnID: String?
 
     init(record: AgentSessionRegistryRecord,
          fileManager: FileManager = .default,
-         hub: AgentEventHub) {
+         hub: AgentEventHub,
+         socketClient: TideySocketClient? = nil) {
         self.record = record
         self.fileManager = fileManager
         self.hub = hub
+        self.socketClient = socketClient
         self.queue = DispatchQueue(label: "com.tidey.remote-bridge.codex-session.\(record.sessionID)")
     }
 
@@ -47,6 +57,9 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                   toolCallID: nil,
                                   metadata: self.baseMetadata(["cwd": self.record.cwd]))
             self.startResolver()
+            if self.tailer == nil {
+                self.publishSidebarSessionActivation(force: false)
+            }
         }
     }
 
@@ -74,6 +87,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                       output: nil,
                                       toolCallID: nil,
                                       metadata: self.baseMetadata(["cwd": record.cwd]))
+                self.publishSidebarSessionActivation(force: true)
             }
             if self.transcriptURL == nil {
                 self.resolveTranscriptIfPossible()
@@ -155,12 +169,17 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                          self?.handleTailerInvalidation()
                                      })
         do {
+            isBootstrappingSidebarState = true
+            bootstrappedShellState = .prompt
             try tailer.start()
+            isBootstrappingSidebarState = false
             self.tailer = tailer
             self.transcriptURL = transcriptURL
             resolverTimer?.cancel()
             resolverTimer = nil
+            publishSidebarSessionActivation(force: false)
         } catch {
+            isBootstrappingSidebarState = false
             self.transcriptURL = nil
         }
     }
@@ -367,6 +386,12 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         switch payloadType {
         case "agent_message":
             consumeAgentMessage(payload: payload, timestamp: timestamp, lineOffset: lineOffset)
+        case "task_started":
+            consumeTaskStarted(payload: payload)
+        case "task_complete":
+            consumeTaskComplete(payload: payload)
+        case "turn_aborted":
+            consumeTurnAborted(payload: payload)
         case "exec_command_end":
             consumeExecCommandEnd(payload: payload, timestamp: timestamp, lineOffset: lineOffset)
         case "patch_apply_end":
@@ -374,6 +399,72 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         default:
             break
         }
+    }
+
+    private func consumeTaskStarted(payload: [String: Any]) {
+        guard let turnID = payload["turn_id"] as? String,
+              !turnID.isEmpty,
+              turnID != lastStartedTurnID else {
+            return
+        }
+        lastStartedTurnID = turnID
+
+        if isBootstrappingSidebarState {
+            bootstrappedShellState = .running
+            currentShellState = .running
+            return
+        }
+
+        guard currentShellState != .running else {
+            return
+        }
+        currentShellState = .running
+        publishSidebar(messages: CodexSidebarMessages.running(workspaceID: record.workspaceID))
+    }
+
+    private func consumeTaskComplete(payload: [String: Any]) {
+        guard let turnID = payload["turn_id"] as? String,
+              !turnID.isEmpty,
+              turnID != lastCompletedTurnID else {
+            return
+        }
+        lastCompletedTurnID = turnID
+        let body = Self.compactString(payload["last_agent_message"] as? String)
+
+        if isBootstrappingSidebarState {
+            bootstrappedShellState = .prompt
+            currentShellState = .prompt
+            return
+        }
+
+        currentShellState = .prompt
+        if body.isEmpty {
+            publishSidebar(messages: CodexSidebarMessages.prompt(workspaceID: record.workspaceID))
+            return
+        }
+        publishSidebar(messages: CodexSidebarMessages.completed(workspaceID: record.workspaceID,
+                                                               body: body))
+    }
+
+    private func consumeTurnAborted(payload: [String: Any]) {
+        guard let turnID = payload["turn_id"] as? String,
+              !turnID.isEmpty,
+              turnID != lastAbortedTurnID else {
+            return
+        }
+        lastAbortedTurnID = turnID
+
+        if isBootstrappingSidebarState {
+            bootstrappedShellState = .prompt
+            currentShellState = .prompt
+            return
+        }
+
+        guard currentShellState != .prompt else {
+            return
+        }
+        currentShellState = .prompt
+        publishSidebar(messages: CodexSidebarMessages.prompt(workspaceID: record.workspaceID))
     }
 
     private func consumeAgentMessage(payload: [String: Any], timestamp: String, lineOffset: Int) {
@@ -573,6 +664,26 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                toolCallID: toolCallID,
                                metadata: metadata)
         hub.publish(event, deliverToSubscribers: !isBackfillingHistory)
+    }
+
+    private func publishSidebarSessionActivation(force: Bool) {
+        guard force || !didPublishSidebarSessionActivation else {
+            return
+        }
+        didPublishSidebarSessionActivation = true
+        let shellState = isBootstrappingSidebarState ? bootstrappedShellState : currentShellState
+        currentShellState = shellState
+        publishSidebar(messages: CodexSidebarMessages.sessionActive(workspaceID: record.workspaceID,
+                                                                   shellState: shellState))
+    }
+
+    private func publishSidebar(messages: [String]) {
+        guard let socketClient else {
+            return
+        }
+        for message in messages {
+            try? socketClient.send(command: message)
+        }
     }
 
     private func nextSyntheticSequence() -> Int {

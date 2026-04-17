@@ -21,6 +21,17 @@ final class TideySocketClient {
         return try JSONDecoder().decode(BridgeResponse.self, from: line)
     }
 
+    func send(command: String) throws {
+        guard let socketPath = locator.resolveLiveSocketPath() else {
+            throw BridgeInternalError.socketUnavailable
+        }
+        let fd = try Self.connectUnixSocket(path: socketPath)
+        defer { close(fd) }
+        var payload = Data(command.utf8)
+        payload.append(0x0a)
+        try Self.writeAll(payload, to: fd)
+    }
+
     static func connectUnixSocket(path: String) throws -> Int32 {
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)

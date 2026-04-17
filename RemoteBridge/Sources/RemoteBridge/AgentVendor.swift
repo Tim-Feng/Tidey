@@ -15,7 +15,8 @@ protocol AgentVendor {
     func cancelRequestPlan() -> [ChatSubmitStep]?
     func makeTranscriptSession(record: AgentSessionRegistryRecord,
                                fileManager: FileManager,
-                               hub: AgentEventHub) -> AgentTranscriptSession
+                               hub: AgentEventHub,
+                               socketClient: TideySocketClient?) -> AgentTranscriptSession
 }
 
 enum AgentVendorRegistry {
@@ -49,7 +50,8 @@ private struct ClaudeAgentVendor: AgentVendor {
 
     func makeTranscriptSession(record: AgentSessionRegistryRecord,
                                fileManager: FileManager,
-                               hub: AgentEventHub) -> AgentTranscriptSession {
+                               hub: AgentEventHub,
+                               socketClient: TideySocketClient?) -> AgentTranscriptSession {
         ClaudeTranscriptSession(record: record,
                                 fileManager: fileManager,
                                 hub: hub)
@@ -73,9 +75,11 @@ private struct CodexAgentVendor: AgentVendor {
 
     func makeTranscriptSession(record: AgentSessionRegistryRecord,
                                fileManager: FileManager,
-                               hub: AgentEventHub) -> AgentTranscriptSession {
+                               hub: AgentEventHub,
+                               socketClient: TideySocketClient?) -> AgentTranscriptSession {
         CodexTranscriptSession(record: record,
                                fileManager: fileManager,
-                               hub: hub)
+                               hub: hub,
+                               socketClient: socketClient)
     }
 }

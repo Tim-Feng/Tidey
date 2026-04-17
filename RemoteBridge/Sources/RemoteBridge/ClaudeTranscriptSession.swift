@@ -136,6 +136,7 @@ final class AgentSessionRegistryMonitor {
     private let paths: BridgePaths
     private let fileManager: FileManager
     private let hub: AgentEventHub
+    private let socketClient: TideySocketClient?
     private let tmuxResolver: TmuxStateResolver
     private let parentPIDLookup: ParentPIDLookup
     private let queue = DispatchQueue(label: "com.tidey.remote-bridge.agent-registry")
@@ -151,11 +152,13 @@ final class AgentSessionRegistryMonitor {
     init(paths: BridgePaths = BridgePaths(),
          fileManager: FileManager = .default,
          hub: AgentEventHub,
+         socketClient: TideySocketClient? = nil,
          tmuxResolver: TmuxStateResolver = TmuxStateResolver(),
          parentPIDLookup: @escaping ParentPIDLookup = AgentSessionRegistryMonitor.liveParentPIDLookup) {
         self.paths = paths
         self.fileManager = fileManager
         self.hub = hub
+        self.socketClient = socketClient
         self.tmuxResolver = tmuxResolver
         self.parentPIDLookup = parentPIDLookup
     }
@@ -479,7 +482,8 @@ final class AgentSessionRegistryMonitor {
             }
             let session = vendor.makeTranscriptSession(record: record,
                                                        fileManager: fileManager,
-                                                       hub: hub)
+                                                       hub: hub,
+                                                       socketClient: socketClient)
             sessions[record.sessionID] = session
             session.start()
         }
