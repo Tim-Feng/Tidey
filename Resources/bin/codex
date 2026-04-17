@@ -304,4 +304,8 @@ cleanup() {
 
 trap cleanup EXIT
 
+if [[ -n "${TIDEY_SOCKET_PATH:-}" && -n "${TIDEY_WORKSPACE_ID:-}" ]]; then
+    "$HOOK_DIR/tidey" codex-hook session-start || true
+fi
+
 exec env CODEX_HOME="$OVERLAY_CODEX_HOME" "$REAL_CODEX" "$@"
