@@ -170,6 +170,19 @@ prepare_codex_home_overlay() {
     merge_tidey_hooks_into_overlay "$real_codex_home" "$overlay_codex_home" "$dispatch_script"
 }
 
+resolve_real_codex_home() {
+    local candidate="${CODEX_HOME:-$HOME/.codex}"
+    local basename=""
+
+    basename="$(basename "$candidate")"
+    if [[ "$basename" == tidey-codex-home.* ]]; then
+        printf '%s' "$HOME/.codex"
+        return 0
+    fi
+
+    printf '%s' "$candidate"
+}
+
 find_real_codex() {
     local self_dir
     self_dir="$(cd "$(dirname "$0")" && pwd)"
@@ -277,7 +290,7 @@ if [[ -z "${TIDEY_SOCKET_PATH:-}" || ! -S "${TIDEY_SOCKET_PATH:-}" || -z "${TIDE
 fi
 
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
-REAL_CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
+REAL_CODEX_HOME="$(resolve_real_codex_home)"
 OVERLAY_CODEX_HOME="$(mktemp -d "${TMPDIR:-/tmp}/tidey-codex-home.XXXXXX")"
 DISPATCH_SCRIPT="$HOOK_DIR/codex-hook-dispatch"
 prepare_codex_home_overlay "$REAL_CODEX_HOME" "$OVERLAY_CODEX_HOME" "$DISPATCH_SCRIPT"
