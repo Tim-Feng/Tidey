@@ -94,6 +94,50 @@ final class PathTests: XCTestCase {
                           "Scripts path should be under app support or custom folder")
         }
     }
+
+    func testFilenameCharacterSetStopsAtFullWidthParentheticalSuffix() {
+        let source = "~/.claude/skills/skill-creator/SKILL.md（Project Conventions 改成新預設）" as NSString
+        let offset = source.range(of: "SKILL.md").location + "SKILL.md".count - 1
+        let extracted = source.substringIncludingOffset(Int32(offset),
+                                                        from: CharacterSet.filenameCharacterSet(),
+                                                        charsTakenFromPrefix: nil)
+
+        XCTAssertEqual(extracted, "~/.claude/skills/skill-creator/SKILL.md")
+    }
+
+    func testURLCharacterSetStopsAtFullWidthParentheticalSuffix() {
+        let source = "https://example.com/docs/shared-resource-patterns.md（2845 bytes，新）" as NSString
+        let offset = source.range(of: "patterns.md").location + "patterns.md".count - 1
+        let extracted = source.substringIncludingOffset(Int32(offset),
+                                                        from: CharacterSet.urlCharacterSet(),
+                                                        charsTakenFromPrefix: nil)
+
+        XCTAssertEqual(extracted, "https://example.com/docs/shared-resource-patterns.md")
+    }
+
+    func testPathFinderIgnoresFullWidthParentheticalSuffixAfterTildePath() throws {
+        let root = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+            .appendingPathComponent("Library/Caches/TideyPathBoundaryTests", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        let fileURL = root.appendingPathComponent("shared-resource-patterns.md")
+        try "test".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let relativePath = fileURL.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
+        let finder = iTermPathFinder(prefix: relativePath,
+                                     suffix: "（2845 bytes，新）",
+                                     workingDirectory: NSHomeDirectory(),
+                                     trimWhitespace: false,
+                                     ignore: "",
+                                     allowNetworkMounts: false)
+        finder.searchSynchronously()
+
+        XCTAssertEqual(finder.path, fileURL.path)
+    }
 }
 
 final class ClaudeHookRegistryTests: XCTestCase {

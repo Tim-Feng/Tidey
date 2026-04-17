@@ -2400,6 +2400,15 @@ unichar iTermMinimumDefaultEmojiPresentationCodePoint = 0x2300;
     return filenameChars;
 }
 
++ (NSCharacterSet *)it_fullWidthBoundaryPunctuationCharacterSet {
+    static NSCharacterSet *boundaryChars;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        boundaryChars = [NSCharacterSet characterSetWithCharactersInString:@"（）「」『』【】〈〉《》，。、；：！？…—～"];
+    });
+    return boundaryChars;
+}
+
 + (NSCharacterSet *)urlCharacterSet {
     static NSMutableCharacterSet* urlChars;
     static dispatch_once_t onceToken;
@@ -2407,6 +2416,9 @@ unichar iTermMinimumDefaultEmojiPresentationCodePoint = 0x2300;
         NSString *chars = [iTermAdvancedSettingsModel URLCharacterSet];
         urlChars = [NSMutableCharacterSet characterSetWithCharactersInString:chars];
         [urlChars formUnionWithCharacterSet:[NSCharacterSet idnCharacters]];
+        [urlChars formUnionWithCharacterSet:[NSCharacterSet alphanumericCharacterSet]];
+        [urlChars removeCharactersInString:@"（）「」『』【】〈〉《》，。、；：！？…—～"];
+        [urlChars removeCharactersInString:@" \t\r\n"];
         [urlChars removeCharactersInString:[iTermAdvancedSettingsModel URLCharacterSetExclusions]];
     });
 

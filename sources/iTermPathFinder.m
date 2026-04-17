@@ -214,7 +214,7 @@ static const NSInteger iTermPathFinderMaxExtendedSuffixChunks = 25;
 - (NSArray<NSString *> *)splitString:(NSString *)string {
     NSMutableArray<NSString *> *parts = [NSMutableArray array];
     __block NSRange lastRange = NSMakeRange(0, 0);
-    [string enumerateStringsMatchedByRegex:@"([^\t ():\",]*)([\t ():\",])"
+    [string enumerateStringsMatchedByRegex:@"([^\t ():\",（）「」『』【】〈〉《》，。、；：！？…—～]*)([\t ():\",（）「」『』【】〈〉《》，。、；：！？…—～])"
                                    options:0
                                    inRange:NSMakeRange(0, string.length)
                                      error:nil
