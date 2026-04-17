@@ -4,10 +4,21 @@ set -euo pipefail
 
 EVENT="${1:-}"
 PAYLOAD_JSON="${2:-}"
+LOG_PATH="${TMPDIR:-/tmp}/codex-hook-events.log"
 
 if [[ -z "$EVENT" ]]; then
     exit 0
 fi
+
+{
+    printf '%s pid=%s event=%s workspace=%s panel=%s payload=%s\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        "$$" \
+        "$EVENT" \
+        "${TIDEY_WORKSPACE_ID:-}" \
+        "${TIDEY_PANEL_ID:-}" \
+        "${PAYLOAD_JSON:-}"
+} >> "$LOG_PATH" 2>/dev/null || true
 
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 TIDEY_BIN="$HOOK_DIR/tidey"
@@ -27,7 +38,22 @@ if [[ -n "${TMUX:-}" ]] && command -v tmux >/dev/null 2>&1; then
 fi
 
 if [[ -n "$PAYLOAD_JSON" ]]; then
+    {
+        printf '%s pid=%s dispatch=tidey workspace=%s panel=%s\n' \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            "$$" \
+            "${TIDEY_WORKSPACE_ID:-}" \
+            "${TIDEY_PANEL_ID:-}"
+    } >> "$LOG_PATH" 2>/dev/null || true
     exec "$TIDEY_BIN" codex-hook "$EVENT" "$PAYLOAD_JSON"
 fi
+
+{
+    printf '%s pid=%s dispatch=tidey workspace=%s panel=%s\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        "$$" \
+        "${TIDEY_WORKSPACE_ID:-}" \
+        "${TIDEY_PANEL_ID:-}"
+} >> "$LOG_PATH" 2>/dev/null || true
 
 exec "$TIDEY_BIN" codex-hook "$EVENT"

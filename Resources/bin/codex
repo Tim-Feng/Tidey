@@ -87,6 +87,7 @@ merge_tidey_hooks_into_overlay() {
 
     node_script+='const fs = require("fs");'
     node_script+='const [existingPath, outputPath, dispatchPath] = process.argv.slice(1);'
+    node_script+='const shellQuote = (s) => `'\''${String(s).replace(/'\''/g, `'\''\\'\'''\''`)}'\''`;'
     node_script+='let root = {};'
     node_script+='if (fs.existsSync(existingPath)) {'
     node_script+='  try { root = JSON.parse(fs.readFileSync(existingPath, "utf8")); } catch { root = {}; }'
@@ -96,7 +97,7 @@ merge_tidey_hooks_into_overlay() {
     node_script+='const entries = [["SessionStart","session-start"],["UserPromptSubmit","user-prompt-submit"],["Stop","stop"]];'
     node_script+='for (const [eventName, tideyEvent] of entries) {'
     node_script+='  if (!Array.isArray(root.hooks[eventName])) root.hooks[eventName] = [];'
-    node_script+='  const command = `${dispatchPath} ${tideyEvent}`;'
+    node_script+='  const command = `${shellQuote(dispatchPath)} ${tideyEvent}`;'
     node_script+='  const exists = root.hooks[eventName].some(group => Array.isArray(group?.hooks) && group.hooks.some(h => h?.type === "command" && h?.command === command));'
     node_script+='  if (!exists) root.hooks[eventName].push({ hooks: [{ type: "command", command, timeout: 10 }] });'
     node_script+='}'
