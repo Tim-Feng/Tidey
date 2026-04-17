@@ -4,10 +4,10 @@
 
 ## 審閱 marker
 
-**Last reviewed**: `05030c0df` · 2026-04-17
+**Last reviewed**: `c4f3a50b5` · 2026-04-17
 
 **下次審閱要做的事**：
-1. `git log 05030c0df..HEAD` 列出所有新 commits
+1. `git log c4f3a50b5..HEAD` 列出所有新 commits
 2. 掃 `~/.claude/projects/-Users-timfeng/*.jsonl`（cc sessions）跟 `~/.codex/sessions/**/rollout-*.jsonl` 在 marker 日期之後的記錄
 3. 從 commit message + session 對話中找「原本沒想到 / 踩第二次 / 花超過 1 小時才解的」歸納成 bullet
 4. 把 lesson 補進對應章節（owner／UI／shell integration 等），iOS 側去 `~/GitHub/Tidey-Remote/docs/debug-lessons.md`
@@ -161,6 +161,10 @@
   - 症狀：wrapper 檢查 socket 不存在就 bypass，整條 pipeline 默默失效
   - 特別慘的場景：從 Tidey Dev 切回 prod，socket path 是 `tidey-dev.sock`
   - Codex wrapper 目前還沒這層 fallback（已知債，見 TODO）
+- prod / dev socket path 要硬分離，不要靠 fallback 猜
+  - 同機同時有 Tidey prod / dev 時，如果兩邊共用同一個 socket path，wrapper / hook / sidebar 會誤打到另一個 instance
+  - socket naming policy 要在啟動時就決定，不能等 wrapper 檢查失敗再臨時 fallback
+  - 補證：`aa75413df`
 - zsh 會 cache command 的絕對路徑
   - Tidey shell integration 把 `TIDEY_BIN_DIR` prepend 到 PATH，但長 live 的 shell 已經把 `codex` / `claude` hash 成舊路徑
   - 新裝 Tidey 後沒有新開 shell 就測不到新 wrapper
@@ -180,6 +184,16 @@
   - `subscribe_agent_events` 如果只回放 replay event、但不告訴 client replay 何時結束，client 只能寫死 timeout 猜「應該送完了」
   - 這種 timeout 很快會變成產品體感延遲的最大頭，甚至比實際 RTT 還大
   - 解法是在 protocol 裡明確帶 completion 訊號，例如 `replay_count` 或 `replay_end`，不要把「何時可以 reveal UI」交給 client 猜
+- session identity 不能沿用舊 panel / workspace UUID，整條鏈都要改寫成 tmux-resolved current binding
+  - tmux pane matching 只能解出「現在這個 pane 對應哪個 current workspace / panel」，之後 replay / fetch / apply / buffered migrate 都要跟著改寫
+  - 只在入口做一次 old→new 映射不夠，任何還拿舊 UUID 讀 panel summary、抓 transcript、套 event 的路徑都會繼續錯綁
+  - 這類 bug 常在 Tidey 重啟、pane close / reopen、workspace reload 後才出現，因為舊 ID 還在 event / buffer / registry 裡殘留
+  - 補證：`b3d624e3f` `362c04ba2` `3756f4601` `b3d43c1ea` `f48295708` `d941cddf5` `dff5b16ed` `27a62089f` `9ed5ae92c` `552f40a42` `070796160` `85f255bfb` `8e26ad3e6`
+- 大 transcript / reconnect 不是單點修補，要一起做 paging、bootstrap limit、catch-up 和 no-replay aware parsing
+  - transcript 一大，initial load、resume、reconnect 會同時撞到 bootstrap 成本、重播延遲、catch-up 遺漏與 UI reveal 時機
+  - 只加 bootstrap line limit 會留下 reconnect 落後；只補 catch-up 又會被 replay / no-replay 混合路徑打回來
+  - 這題要當成一條完整資料流處理：paged history fetch、bootstrap 上限、reconnect catch-up、stream completion / replay_count、以及不重播時的 parser 邏輯一起收
+  - 補證：`208595cae` `c48599a47` `f14a0959e` `aea886f8f` `7627e99bf`
 - Claude hook 不要靠 terminal output 猜狀態
   - 用明確事件：`session-start`、`prompt-submit`、`notification`、`stop`、`session-end`
 - hook command 只要含空白路徑就要先 escape
@@ -192,17 +206,20 @@
   - 驗證方法：`codex features list | grep <feature>` 看 status（`under development` 不能信）
   - 別指望 binary 有 `HookEventNameWire` enum 或 `user_prompt_submit.rs` 字串就等於 runtime 會 fire
   - 改走該 agent 自己穩定會寫的 transcript / rollout 檔
+  - 補證：`79521530a` `1ee8dac72` `5cd214aed`
 - rollout / transcript 檔是比 hook 更穩的狀態來源
   - Codex rollout 格式：`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`，每行 JSON
   - 外層 `type: event_msg`，有用資訊在 `payload.type`：`task_started` / `task_complete` / `turn_aborted`
   - Codex `resume` 會 append 到舊 rollout 檔（不是另開新檔），檔名仍帶原 thread UUID
   - Bridge 端 tail 檔、只看 append 部分：新 prompt 一進來、Codex 一 append event，watcher 就翻成 socket 命令
+  - 補證：`039cbd47e` `25020e105` `a7177e357` `a4c4eacb1`
 - watcher 放 Bridge，不要放 wrapper daemon
   - wrapper 養 tail daemon 生命週期難管（resume、force-kill、pane 關掉都留殘骸）
   - Bridge 本來就是 long-running、有 session registry、有 JSONLFileTailer 基礎設施，加 watcher 是擴充現有模組不是新 process
 - Codex wrapper 必須寫 registry 檔
   - Claude 有 `handleClaudeRegistryLifecycle`，Codex 也要對應寫 `~/Library/Application Support/Tidey Remote Bridge/agent-sessions/codex/codex-<id>.json`
   - 沒這檔，Bridge `AgentSessionRegistryMonitor` 不知道 Codex 存在，CodexTranscriptSession 從不 spawn，rollout watcher 一次都不跑（症狀：sidebar 從頭到尾沒反應）
+  - 補證：`f580a876f` `87989ffbb` `fe1710bdb` `a942b153e`
 - rollout 檔路徑解析用 lsof process tree
   - wrapper 寫 registry 時只知道自己的 PID，不知道 Codex 會寫哪個 rollout（檔名用 Codex 內部產的 thread UUID）
   - 解法：Bridge 端 BFS 走 wrapper PID + 子孫，對每個 PID 跑 `lsof -Fn -p <pid>`，找 `/.codex/sessions/.../rollout-*.jsonl` 被開啟的檔
