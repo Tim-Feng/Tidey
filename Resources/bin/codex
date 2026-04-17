@@ -284,6 +284,17 @@ monitor_rollout_and_registry() {
     fi
 }
 
+initial_session_id() {
+    if command -v uuidgen >/dev/null 2>&1; then
+        uuidgen | tr '[:upper:]' '[:lower:]'
+        return 0
+    fi
+    python3 - <<'PY'
+import uuid
+print(str(uuid.uuid4()))
+PY
+}
+
 REAL_CODEX="$(find_real_codex)" || { echo "Error: codex not found in PATH" >&2; exit 127; }
 
 if [[ -z "${TIDEY_SOCKET_PATH:-}" || ! -S "${TIDEY_SOCKET_PATH:-}" || -z "${TIDEY_WORKSPACE_ID:-}" ]]; then
@@ -297,7 +308,9 @@ DISPATCH_SCRIPT="$HOOK_DIR/codex-hook-dispatch"
 prepare_codex_home_overlay "$REAL_CODEX_HOME" "$OVERLAY_CODEX_HOME" "$DISPATCH_SCRIPT"
 
 CREATED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-monitor_rollout_and_registry "$$" "$TIDEY_WORKSPACE_ID" "${TIDEY_PANEL_ID:-}" "$PWD" "$CREATED_AT" &
+SESSION_ID="$(initial_session_id)"
+REGISTRY_FILE="$REGISTRY_ROOT/codex-$SESSION_ID.json"
+write_registry_file "$REGISTRY_FILE" "$TIDEY_WORKSPACE_ID" "$SESSION_ID" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$CREATED_AT" ""
 
 cleanup() {
     rm -rf "$OVERLAY_CODEX_HOME"

@@ -201,6 +201,10 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             }
         }
 
+        if let processTreeResolved = resolveTranscriptURLFromProcessTree() {
+            return processTreeResolved
+        }
+
         let sessionsDirectory = fileManager.homeDirectoryForCurrentUser
             .appendingPathComponent(".codex/sessions", isDirectory: true)
 
@@ -218,6 +222,19 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             return url
         }
         return nil
+    }
+
+    private func resolveTranscriptURLFromProcessTree() -> URL? {
+        guard let path = Self.rolloutPathForPIDTree(rootPID: record.pid),
+              !path.isEmpty else {
+            return nil
+        }
+        let expanded = NSString(string: path).expandingTildeInPath
+        let url = URL(fileURLWithPath: expanded)
+        guard fileManager.fileExists(atPath: url.path) else {
+            return nil
+        }
+        return url
     }
 
     private func consume(line: String, lineOffset: Int) {
@@ -768,5 +785,96 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             }
         }
         return metadata
+    }
+
+    private static func rolloutPathForPIDTree(rootPID: Int32) -> String? {
+        guard rootPID > 0 else {
+            return nil
+        }
+
+        var queue = [rootPID]
+        var visited = Set<Int32>([rootPID])
+
+        while !queue.isEmpty {
+            let pid = queue.removeFirst()
+            if let path = rolloutPathForPID(pid), !path.isEmpty {
+                return path
+            }
+            for child in childPIDs(for: pid) where !visited.contains(child) {
+                visited.insert(child)
+                queue.append(child)
+            }
+        }
+
+        return nil
+    }
+
+    private static func rolloutPathForPID(_ pid: Int32) -> String? {
+        guard pid > 0 else {
+            return nil
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        process.arguments = ["-Fn", "-p", String(pid)]
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return nil
+        }
+
+        guard process.terminationStatus == 0,
+              let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(),
+                                  encoding: .utf8) else {
+            return nil
+        }
+
+        return output.split(separator: "\n")
+            .compactMap { line -> String? in
+                guard line.hasPrefix("n") else {
+                    return nil
+                }
+                let path = String(line.dropFirst())
+                guard path.contains("/.codex/sessions/"),
+                      path.contains("/rollout-"),
+                      path.hasSuffix(".jsonl") else {
+                    return nil
+                }
+                return path
+            }
+            .sorted()
+            .last
+    }
+
+    private static func childPIDs(for pid: Int32) -> [Int32] {
+        guard pid > 0 else {
+            return []
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        process.arguments = ["-P", String(pid)]
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return []
+        }
+
+        guard let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(),
+                                  encoding: .utf8) else {
+            return []
+        }
+
+        return output
+            .split(whereSeparator: \.isNewline)
+            .compactMap { Int32($0.trimmingCharacters(in: .whitespaces)) }
     }
 }
