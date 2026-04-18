@@ -400,7 +400,8 @@ final class ClaudeHookRegistryTests: XCTestCase {
           "session_id": "c211f108-d22f-4813-bde4-a72c5241034a",
           "transcript_path": "~/Library/Application Support/Claude/test.jsonl",
           "cwd": "/Users/timfeng/GitHub/Tidey",
-          "hook_event_name": "SessionStart"
+          "hook_event_name": "SessionStart",
+          "last_assistant_message": "Done"
         }
         """
 
@@ -409,6 +410,7 @@ final class ClaudeHookRegistryTests: XCTestCase {
         XCTAssertEqual(context?.sessionID, "c211f108-d22f-4813-bde4-a72c5241034a")
         XCTAssertEqual(context?.transcriptPath, "~/Library/Application Support/Claude/test.jsonl")
         XCTAssertEqual(context?.cwd, "/Users/timfeng/GitHub/Tidey")
+        XCTAssertEqual(context?.lastAssistantMessage, "Done")
     }
 
     func testClaudeHookInputContextFallsBackToTranscriptFilenameForSessionID() throws {
@@ -422,6 +424,57 @@ final class ClaudeHookRegistryTests: XCTestCase {
         let context = TideyCLICommandFormatter.claudeHookInputContext(stdinData: stdinJSON.data(using: .utf8))
 
         XCTAssertEqual(context?.sessionID, "c211f108-d22f-4813-bde4-a72c5241034a")
+    }
+
+    func testClaudeStopNotificationPrefersHookPayloadOverTranscript() throws {
+        let stdinJSON = """
+        {
+          "session_id": "c211f108-d22f-4813-bde4-a72c5241034a",
+          "transcript_path": "/Users/timfeng/.claude/projects/-Users-timfeng/c211f108-d22f-4813-bde4-a72c5241034a.jsonl",
+          "cwd": "/Users/timfeng/GitHub/Tidey",
+          "hook_event_name": "Stop",
+          "last_assistant_message": "Latest assistant reply"
+        }
+        """
+
+        let transcript = """
+        {"message":{"role":"assistant","content":[{"type":"text","text":"Older assistant reply"}]}}
+        """
+
+        let messages = TideyCLICommandFormatter.messages(forClaudeHookEvent: "stop",
+                                                         workspaceID: "ws-1",
+                                                         stdinJSON: stdinJSON,
+                                                         transcriptContent: transcript)
+
+        XCTAssertEqual(messages, [
+            "{\"action\":\"notification.create\",\"workspace_id\":\"ws-1\",\"title\":\"Claude Code\",\"body\":\"Latest assistant reply\"}",
+            "report_shell_state prompt --workspace_id=ws-1"
+        ])
+    }
+
+    func testClaudeStopNotificationFallsBackToTranscriptWhenHookPayloadIsMissing() throws {
+        let stdinJSON = """
+        {
+          "session_id": "c211f108-d22f-4813-bde4-a72c5241034a",
+          "transcript_path": "/Users/timfeng/.claude/projects/-Users-timfeng/c211f108-d22f-4813-bde4-a72c5241034a.jsonl",
+          "cwd": "/Users/timfeng/GitHub/Tidey",
+          "hook_event_name": "Stop"
+        }
+        """
+
+        let transcript = """
+        {"message":{"role":"assistant","content":[{"type":"text","text":"Transcript assistant reply"}]}}
+        """
+
+        let messages = TideyCLICommandFormatter.messages(forClaudeHookEvent: "stop",
+                                                         workspaceID: "ws-1",
+                                                         stdinJSON: stdinJSON,
+                                                         transcriptContent: transcript)
+
+        XCTAssertEqual(messages, [
+            "{\"action\":\"notification.create\",\"workspace_id\":\"ws-1\",\"title\":\"Claude Code\",\"body\":\"Transcript assistant reply\"}",
+            "report_shell_state prompt --workspace_id=ws-1"
+        ])
     }
 
     func testWriteAndRemoveClaudeRegistryFile() throws {

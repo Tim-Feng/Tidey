@@ -4,6 +4,7 @@ struct ClaudeHookInputContext: Equatable {
     let sessionID: String?
     let transcriptPath: String?
     let cwd: String?
+    let lastAssistantMessage: String?
 }
 
 @objc(TideyCLICommandFormatter)
@@ -145,10 +146,13 @@ final class TideyCLICommandFormatter: NSObject {
             ?? (inputJSON["sessionId"] as? String)
             ?? transcriptPath.flatMap(sessionID(fromTranscriptPath:))
         let cwd = inputJSON["cwd"] as? String
+        let lastAssistantMessage = (inputJSON["last_assistant_message"] as? String)
+            ?? (inputJSON["lastAssistantMessage"] as? String)
 
         return ClaudeHookInputContext(sessionID: sessionID,
                                       transcriptPath: transcriptPath,
-                                      cwd: cwd)
+                                      cwd: cwd,
+                                      lastAssistantMessage: lastAssistantMessage)
     }
 
     static func sessionID(fromTranscriptPath transcriptPath: String) -> String? {
@@ -211,8 +215,15 @@ final class TideyCLICommandFormatter: NSObject {
     private static func notificationBodyForStopEvent(stdinData: Data?,
                                                      transcriptLoader: (String) -> String?) -> String {
         let defaultBody = "Task completed"
-        guard let inputContext = claudeHookInputContext(stdinData: stdinData),
-              let transcriptPath = inputContext.transcriptPath, !transcriptPath.isEmpty else {
+        guard let inputContext = claudeHookInputContext(stdinData: stdinData) else {
+            return defaultBody
+        }
+        if let lastAssistantMessage = inputContext.lastAssistantMessage,
+           !lastAssistantMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let truncated = singleLineTruncatedString(lastAssistantMessage, maxLength: 200)
+            return truncated.isEmpty ? defaultBody : truncated
+        }
+        guard let transcriptPath = inputContext.transcriptPath, !transcriptPath.isEmpty else {
             return defaultBody
         }
         guard let transcriptContent = transcriptLoader(transcriptPath),
