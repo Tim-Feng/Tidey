@@ -194,6 +194,30 @@ final class PathTests: XCTestCase {
                         ObjCBool(createWorkspace)).boolValue
     }
 
+    private func scrubbedTerminalIdentityEnvironment(_ environment: [String: String]) -> [String: String] {
+        let selector = NSSelectorFromString("tideyEnvironmentByScrubbingExternalTerminalIdentityFromEnvironment:")
+        guard let method = class_getClassMethod(PTYSession.self, selector) else {
+            XCTFail("Missing PTYSession environment scrub helper")
+            return [:]
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, NSDictionary) -> NSDictionary
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        return function(PTYSession.self, selector, environment as NSDictionary) as? [String: String] ?? [:]
+    }
+
+    private func tmuxEnvironmentCleanupCommand(_ environment: [String: String]) -> String {
+        let selector = NSSelectorFromString("tideyTmuxEnvironmentCleanupCommandForEnvironment:")
+        guard let method = class_getClassMethod(PTYSession.self, selector) else {
+            XCTFail("Missing PTYSession tmux cleanup helper")
+            return ""
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, NSDictionary) -> NSString
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        return function(PTYSession.self, selector, environment as NSDictionary) as String
+    }
+
     // MARK: - Application Support Directory Tests
 
     func testApplicationSupportDirectory_DefaultSuite() {
@@ -440,6 +464,40 @@ final class PathTests: XCTestCase {
                                                                    targetWorkspaceIndex: 0,
                                                                    createWorkspace: false,
                                                                    rebuildingVisibleWorkspace: true))
+    }
+
+    func testTerminalEnvironmentScrubRemovesExternalIdentityMarkers() {
+        let scrubbed = scrubbedTerminalIdentityEnvironment([
+            "CMUX_SURFACE_ID": "surface",
+            "CMUX_PANEL_ID": "panel",
+            "GHOSTTY_BIN_DIR": "/Applications/cmux.app/Contents/MacOS",
+            "__CFBundleIdentifier": "com.cmuxterm.app",
+            "PATH": "/usr/bin:/bin",
+            "TIDEY_SOCKET_PATH": "/tmp/tidey.sock",
+        ])
+
+        XCTAssertNil(scrubbed["CMUX_SURFACE_ID"])
+        XCTAssertNil(scrubbed["CMUX_PANEL_ID"])
+        XCTAssertNil(scrubbed["GHOSTTY_BIN_DIR"])
+        XCTAssertNil(scrubbed["__CFBundleIdentifier"])
+        XCTAssertEqual(scrubbed["PATH"], "/usr/bin:/bin")
+        XCTAssertEqual(scrubbed["TIDEY_SOCKET_PATH"], "/tmp/tidey.sock")
+    }
+
+    func testTmuxEnvironmentCleanupCommandRemovesExternalIdentityVariables() {
+        let command = tmuxEnvironmentCleanupCommand([
+            "CMUX_SURFACE_ID": "surface",
+            "GHOSTTY_BIN_DIR": "/Applications/cmux.app/Contents/MacOS",
+            "__CFBundleIdentifier": "com.cmuxterm.app",
+        ])
+
+        XCTAssertTrue(command.contains("tmux set-environment -gu CMUX_SURFACE_ID"))
+        XCTAssertTrue(command.contains("tmux set-environment -gu GHOSTTY_BIN_DIR"))
+        XCTAssertTrue(command.contains("tmux set-environment -gu __CFBundleIdentifier"))
+        XCTAssertFalse(command.contains("CMUX_SOCKET_PATH"))
+        XCTAssertTrue(command.contains("TIDEY_SOCKET_PATH"))
+        XCTAssertTrue(command.contains("TIDEY_WORKSPACE_ID"))
+        XCTAssertTrue(command.contains("TIDEY_PANEL_ID"))
     }
 }
 

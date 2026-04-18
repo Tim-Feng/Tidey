@@ -686,6 +686,56 @@ typedef NS_ENUM(NSUInteger, PTYSessionTurdType) {
 
 @synthesize isDivorced = _divorced;
 
++ (NSArray<NSString *> *)tideyExternalTerminalIdentityEnvironmentKeysForEnvironment:(NSDictionary<NSString *, NSString *> *)environment {
+    NSMutableOrderedSet<NSString *> *keys = [NSMutableOrderedSet orderedSetWithArray:@[
+        @"CMUX_SURFACE_ID",
+        @"CMUX_WORKSPACE_ID",
+        @"CMUX_TAB_ID",
+        @"CMUX_PANEL_ID",
+        @"CMUX_BUNDLE_ID",
+        @"CMUX_SHELL_INTEGRATION",
+        @"CMUX_SHELL_INTEGRATION_DIR",
+        @"CMUX_PORT",
+        @"CMUX_PORT_END",
+        @"CMUX_PORT_RANGE",
+        @"CMUX_LOAD_GHOSTTY_ZSH_INTEGRATION",
+        @"__CFBundleIdentifier",
+    ]];
+    for (NSString *key in environment) {
+        if ([key hasPrefix:@"CMUX_"] || [key hasPrefix:@"GHOSTTY_"]) {
+            [keys addObject:key];
+        }
+    }
+    return keys.array;
+}
+
++ (NSDictionary<NSString *, NSString *> *)tideyEnvironmentByScrubbingExternalTerminalIdentityFromEnvironment:(NSDictionary<NSString *, NSString *> *)environment {
+    NSMutableDictionary<NSString *, NSString *> *scrubbed = [[environment mutableCopy] autorelease];
+    for (NSString *key in [self tideyExternalTerminalIdentityEnvironmentKeysForEnvironment:environment]) {
+        [scrubbed removeObjectForKey:key];
+    }
+    return scrubbed;
+}
+
++ (NSString *)tideyTmuxEnvironmentCleanupCommandForEnvironment:(NSDictionary<NSString *, NSString *> *)environment {
+    NSArray<NSString *> *keysToUnset = [self tideyExternalTerminalIdentityEnvironmentKeysForEnvironment:environment];
+    NSMutableString *command = [NSMutableString string];
+    for (NSString *key in keysToUnset) {
+        [command appendFormat:@"tmux set-environment -gu %@ 2>/dev/null; ", key];
+    }
+    [command appendString:@"_tidey_update_environment=\"$(tmux show-option -gqv update-environment 2>/dev/null)\"; "];
+    [command appendString:@"_tidey_filtered_update_environment=\"\"; "];
+    [command appendString:@"for _tidey_var in $_tidey_update_environment; do "];
+    [command appendString:@"case \"$_tidey_var\" in "];
+    [command appendString:@"CMUX_*|GHOSTTY_*|__CFBundleIdentifier|TIDEY_SOCKET_PATH|TIDEY_WORKSPACE_ID|TIDEY_PANEL_ID|TIDEY_BIN_DIR|ITERM_ENABLE_SHELL_INTEGRATION_WITH_TMUX|LC_TERMINAL) continue ;; "];
+    [command appendString:@"esac; "];
+    [command appendString:@"_tidey_filtered_update_environment=\"${_tidey_filtered_update_environment} ${_tidey_var}\"; "];
+    [command appendString:@"done; "];
+    [command appendString:@"_tidey_filtered_update_environment=\"${_tidey_filtered_update_environment} TIDEY_SOCKET_PATH TIDEY_WORKSPACE_ID TIDEY_PANEL_ID TIDEY_BIN_DIR ITERM_ENABLE_SHELL_INTEGRATION_WITH_TMUX LC_TERMINAL\"; "];
+    [command appendString:@"tmux set-option -g update-environment \"${_tidey_filtered_update_environment}\" 2>/dev/null"];
+    return command;
+}
+
 + (NSMapTable<NSString *, PTYSession *> *)sessionMap {
     static NSMapTable *map;
     static dispatch_once_t onceToken;
@@ -2890,6 +2940,9 @@ ITERM_WEAKLY_REFERENCEABLE
     DLog(@"Set env[PWD] to trimmed value %@", trimmed);
     env[PWD_ENVNAME] = trimmed;
 
+    env = [[[self class] tideyEnvironmentByScrubbingExternalTerminalIdentityFromEnvironment:env] mutableCopy];
+    [env autorelease];
+
     NSString *itermId = [self sessionId];
     if (!self.isTmuxClient) {
         env[@"TERM_FEATURES"] = [VT100Output encodedTermFeaturesForCapabilities:[self capabilities]];
@@ -2902,7 +2955,6 @@ ITERM_WEAKLY_REFERENCEABLE
     NSString *tideySocketPath = [TideySocketServer socketPath];
     if (tideySocketPath.length > 0) {
         env[@"TIDEY_SOCKET_PATH"] = tideySocketPath;
-        env[@"CMUX_SOCKET_PATH"] = tideySocketPath;
     }
     // Export Tidey's bin/ directory path so shell integration can prepend it to PATH.
     NSString *tideyBinDir = [[[NSBundle mainBundle] resourcePath] stringByAppendingPathComponent:@"bin"];
@@ -2921,17 +2973,19 @@ ITERM_WEAKLY_REFERENCEABLE
     // Set tmux update-environment so tmux sessions inherit Tidey vars.
     // Runs on every new session so it succeeds once tmux server is available.
     if (tideySocketPath.length > 0 || workspaceID.length > 0 || panelID.length > 0) {
+        NSString *tmuxEnvironmentCleanupCommand = [[[self class] tideyTmuxEnvironmentCleanupCommandForEnvironment:env] copy];
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
             @autoreleasepool {
                 NSTask *task = [[[NSTask alloc] init] autorelease];
                 task.launchPath = @"/bin/sh";
-                task.arguments = @[@"-c", @"tmux set-option -ga update-environment ' TIDEY_SOCKET_PATH TIDEY_WORKSPACE_ID TIDEY_PANEL_ID TIDEY_BIN_DIR CMUX_SOCKET_PATH ITERM_ENABLE_SHELL_INTEGRATION_WITH_TMUX LC_TERMINAL' 2>/dev/null"];
+                task.arguments = @[@"-c", tmuxEnvironmentCleanupCommand];
                 @try {
                     [task launch];
                     [task waitUntilExit];
                 } @catch (id e) {
                     // tmux not installed or not running — ignore.
                 }
+                [tmuxEnvironmentCleanupCommand release];
             }
         });
     }
