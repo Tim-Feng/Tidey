@@ -2936,8 +2936,11 @@ ITERM_WEAKLY_REFERENCEABLE
     DLog(@"Set env[PWD] to trimmed value %@", trimmed);
     env[PWD_ENVNAME] = trimmed;
 
-    env = [[[self class] tideyEnvironmentByScrubbingExternalTerminalIdentityFromEnvironment:env] mutableCopy];
-    [env autorelease];
+    NSDictionary<NSString *, id> *tideyPreparedEnvironment =
+        [[self class] tideyPreparedEnvironmentAndTmuxCleanupCommandForEnvironment:env];
+    NSString *tmuxEnvironmentCleanupCommand =
+        [[tideyPreparedEnvironment[@"tmuxCleanupCommand"] copy] autorelease];
+    env = [[tideyPreparedEnvironment[@"environment"] mutableCopy] autorelease];
 
     NSString *itermId = [self sessionId];
     if (!self.isTmuxClient) {
@@ -2969,7 +2972,6 @@ ITERM_WEAKLY_REFERENCEABLE
     // Set tmux update-environment so tmux sessions inherit Tidey vars.
     // Runs on every new session so it succeeds once tmux server is available.
     if (tideySocketPath.length > 0 || workspaceID.length > 0 || panelID.length > 0) {
-        NSString *tmuxEnvironmentCleanupCommand = [[[self class] tideyTmuxEnvironmentCleanupCommandForEnvironment:env] copy];
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
             @autoreleasepool {
                 NSTask *task = [[[NSTask alloc] init] autorelease];
@@ -2981,7 +2983,6 @@ ITERM_WEAKLY_REFERENCEABLE
                 } @catch (id e) {
                     // tmux not installed or not running — ignore.
                 }
-                [tmuxEnvironmentCleanupCommand release];
             }
         });
     }
