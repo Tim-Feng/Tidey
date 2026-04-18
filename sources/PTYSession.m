@@ -2966,6 +2966,11 @@ ITERM_WEAKLY_REFERENCEABLE
     // Set tmux update-environment so tmux sessions inherit Tidey vars.
     // Runs on every new session so it succeeds once tmux server is available.
     if (tideySocketPath.length > 0 || workspaceID.length > 0 || panelID.length > 0) {
+        NSString *cleanupTaskPATH = env[@"PATH"] ?: [[[NSProcessInfo processInfo] environment] objectForKey:@"PATH"];
+        NSDictionary<NSString *, NSString *> *cleanupTaskEnvironment = nil;
+        if (cleanupTaskPATH.length > 0) {
+            cleanupTaskEnvironment = @{ @"PATH": cleanupTaskPATH };
+        }
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
             @autoreleasepool {
                 NSString *inheritedPATH = [[[NSProcessInfo processInfo] environment] objectForKey:@"PATH"] ?: @"<nil>";
@@ -2980,6 +2985,7 @@ ITERM_WEAKLY_REFERENCEABLE
                     NSPipe *whichStderr = [NSPipe pipe];
                     whichTask.launchPath = @"/bin/sh";
                     whichTask.arguments = @[@"-c", @"command -v tmux"];
+                    whichTask.environment = cleanupTaskEnvironment;
                     whichTask.standardOutput = whichStdout;
                     whichTask.standardError = whichStderr;
                     taskPATH = whichTask.environment[@"PATH"];
@@ -3010,6 +3016,7 @@ ITERM_WEAKLY_REFERENCEABLE
                 NSPipe *stderrPipe = [NSPipe pipe];
                 task.launchPath = @"/bin/sh";
                 task.arguments = @[@"-c", tmuxEnvironmentCleanupCommand];
+                task.environment = cleanupTaskEnvironment;
                 task.standardOutput = stdoutPipe;
                 task.standardError = stderrPipe;
                 @try {
