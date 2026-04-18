@@ -4,10 +4,10 @@
 
 ## 審閱 marker
 
-**Last reviewed**: `c4f3a50b5` · 2026-04-17
+**Last reviewed**: `3bf27140e` · 2026-04-19
 
 **下次審閱要做的事**：
-1. `git log c4f3a50b5..HEAD` 列出所有新 commits
+1. `git log 3bf27140e..HEAD` 列出所有新 commits
 2. 掃 `~/.claude/projects/-Users-timfeng/*.jsonl`（cc sessions）跟 `~/.codex/sessions/**/rollout-*.jsonl` 在 marker 日期之後的記錄
 3. 從 commit message + session 對話中找「原本沒想到 / 踩第二次 / 花超過 1 小時才解的」歸納成 bullet
 4. 把 lesson 補進對應章節（owner／UI／shell integration 等），iOS 側去 `~/GitHub/Tidey-Remote/docs/debug-lessons.md`
@@ -45,6 +45,9 @@
   - 先修單一 subview 的 frame / hidden / event routing，不要第一刀就換整條 layout path
 - 一次只改一個假設
   - 同一輪不要同時換 owner、座標系、view hierarchy
+- 跨 process / tmux / launchd 問題第二輪還沒收斂就先加 runtime log
+  - workspace ghost 和 tmux cleanup 這次都先盲修了不只一輪，直到補 `/tmp/tidey-bridge-codex.log` 和 `[TideyTmuxCleanup]` 才看到真正斷點
+  - 先記 command、PATH、socket path、workspace/panel id、exit status、stderr，再決定要改哪條流程
 - 要加 debug 時優先寫 `/tmp/`
   - Tidey `NSLog` 不會進 macOS unified log stream：`log stream --predicate 'process == "Tidey"'` 抓不到任何東西
   - 原因：macOS 對第三方 app log 預設標為 private，被系統 redact 掉
@@ -161,10 +164,26 @@
   - 症狀：wrapper 檢查 socket 不存在就 bypass，整條 pipeline 默默失效
   - 特別慘的場景：從 Tidey Dev 切回 prod，socket path 是 `tidey-dev.sock`
   - Codex wrapper 目前還沒這層 fallback（已知債，見 TODO）
+- tmux server 的 responsible app 跟著第一次 spawn 它的 parent process，不會被後續 env cleanup 改寫
+  - `__CFBundleIdentifier` cleanup 只能防止舊 terminal 身分繼續污染新 session，不能把已經活著的 tmux server 從 `cmux` 改回 Tidey
+  - 真正驗證要先 `tmux kill-server`，再讓 Tidey 重開新的 server；這時 TCC attribution 才會回到 Tidey
+  - 補證：`b97fadf61` `e75c1b6c3` `394a293d1`
 - prod / dev socket path 要硬分離，不要靠 fallback 猜
   - 同機同時有 Tidey prod / dev 時，如果兩邊共用同一個 socket path，wrapper / hook / sidebar 會誤打到另一個 instance
   - socket naming policy 要在啟動時就決定，不能等 wrapper 檢查失敗再臨時 fallback
   - 補證：`aa75413df`
+- GUI app 背景 `NSTask` 不會繼承互動 shell 裡的 Homebrew PATH
+  - Tidey 從 LaunchServices 啟動時只有 `/usr/bin:/bin:/usr/sbin:/sbin`；`/bin/sh -c "tmux ..."` 這類 cleanup job 直接跑會 `command not found`
+  - shell pane 內最後看到的 PATH 常常是 `.zshrc` 補出來的，不能拿來假設 GUI app 的背景 task 也找得到同一支 binary
+  - 解法（`a11942fee` `394a293d1`）：先 resolve tmux 絕對路徑，再把完整路徑寫進 cleanup command
+- 清 tmux server global env 不要看新 job env 裡有沒有那個 key
+  - `__CFBundleIdentifier` 可能已經在 Tidey 的 new-job env 被 scrub 掉，但 tmux server global env 仍然是髒的
+  - cleanup command 的目標是 server state，不是反映新 job env；`tmux set-environment -gu __CFBundleIdentifier` 要固定送
+  - 解法（`b97fadf61` `20a2d3168`）：helper 固定帶 unset，別再從 input env 推導 keysToUnset
+- tmux workspace / panel identity 不要再讀 server global env
+  - `tmux show-environment TIDEY_WORKSPACE_ID` 只代表 server/global state，多 pane、多 workspace 並存時很快 stale
+  - Tidey 端把 `@tidey_workspace_id`、`@tidey_panel_id` 寫到 pane user options，wrapper 再用 `tmux show-options -p -v -t "$TMUX_PANE"` 讀
+  - 補證：`3c0e4f4ad` `d5478d5a4` `4e796c19f`
 - zsh 會 cache command 的絕對路徑
   - Tidey shell integration 把 `TIDEY_BIN_DIR` prepend 到 PATH，但長 live 的 shell 已經把 `codex` / `claude` hash 成舊路徑
   - 新裝 Tidey 後沒有新開 shell 就測不到新 wrapper
@@ -237,6 +256,18 @@
   - `tools/build.sh` 只 build Tidey Mac app，不動 Bridge
   - Bridge 獨立：`RemoteBridge/tools/deploy-bridge.sh` 會 build release binary + install + sign + `launchctl kickstart`
   - Tidey prod 的 wrapper 路徑 `/Applications/Tidey.app/Contents/Resources/bin/codex` 是手動 cp，build.sh 也不會自動同步
+- 新增 `Resources/bin/*` script 時，要同步加進 Xcode CopyFiles phase
+  - 只把檔案加進 repo 不夠，app bundle 沒有這支 script，wrapper 在 bundle 內 `source` / exec 會直接 `No such file or directory`
+  - 這次漏掉 `tidey-tmux-pane-identity`、`codex-hook-dispatch`，build 照樣過，runtime 才炸
+  - 解法（`4e796c19f` `d7bd6c1bb`）：新 script 一律和 `claude` / `codex` 一起檢查 CopyFiles phase 和 bundle 實體檔
+- wrapper function 定義了就要接到 main flow，特別是 registry / monitor 這類生命週期函式
+  - `Resources/bin/codex` 的 `monitor_rollout_and_registry()` 有定義、沒 call site 時，registry `rollout_path` 會永遠是空字串
+  - 後果不是立刻 crash，而是 Bridge 退回 `lsof` race 找 rollout 檔，任務太快就永遠抓不到 `task_complete`
+  - 解法（`ea33c8671` `c23502f26`）：在初始 registry 寫完後、`exec "$REAL_CODEX"` 前明確啟動 monitor
+- 單一 launchd Bridge 搭配全域 socket locator，prod/dev 同開時一定會搶錯 instance
+  - `TideySocketLocator.resolveLiveSocketPath()` 先找 `tidey.sock` 再找 `tidey-dev.sock`，只要 prod 活著，Codex Bridge 就會把 sidebar / notification 更新送到 prod
+  - 症狀：Bridge log 顯示 `notification.create` 正常送出，但 Dev 的 sidebar 和 Dock 完全沒反應；關掉 prod 後 Dev 立刻正常
+  - 這題現在的 workaround 是測 Codex 時先關 prod；真要根治，session registry 就要帶 per-session socket path
 
 ## Theme System
 
