@@ -130,6 +130,46 @@ final class PathTests: XCTestCase {
                         NSNumber(value: fallbackSelection)) as? [String: Any] ?? [:]
     }
 
+    private func tideyShouldInsertPendingPanelIntoVisibleTabs(selectedWorkspaceIndex: Int,
+                                                              targetWorkspaceIndex: Int,
+                                                              createWorkspace: Bool,
+                                                              showingSidebar: Bool = true,
+                                                              rebuildingVisibleWorkspace: Bool = false) -> Bool {
+        let selector = NSSelectorFromString("tideyShouldInsertPanelIntoVisibleTabViewForSelectedWorkspaceIndex:targetWorkspaceIndex:createWorkspace:showingSidebar:rebuildingVisibleWorkspace:")
+        guard let method = class_getClassMethod(PseudoTerminal.self, selector) else {
+            XCTFail("Missing PseudoTerminal visible insert helper")
+            return false
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, Int, Int, ObjCBool, ObjCBool, ObjCBool) -> ObjCBool
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        return function(PseudoTerminal.self,
+                        selector,
+                        selectedWorkspaceIndex,
+                        targetWorkspaceIndex,
+                        ObjCBool(createWorkspace),
+                        ObjCBool(showingSidebar),
+                        ObjCBool(rebuildingVisibleWorkspace)).boolValue
+    }
+
+    private func tideyShouldManagePendingPanelInsert(showingSidebar: Bool = true,
+                                                     pendingWorkspaceIndex: Int,
+                                                     createWorkspace: Bool) -> Bool {
+        let selector = NSSelectorFromString("tideyShouldManagePendingPanelInsertForShowingSidebar:pendingWorkspaceIndex:createWorkspace:")
+        guard let method = class_getClassMethod(PseudoTerminal.self, selector) else {
+            XCTFail("Missing PseudoTerminal pending insert helper")
+            return false
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, ObjCBool, Int, ObjCBool) -> ObjCBool
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        return function(PseudoTerminal.self,
+                        selector,
+                        ObjCBool(showingSidebar),
+                        pendingWorkspaceIndex,
+                        ObjCBool(createWorkspace)).boolValue
+    }
+
     // MARK: - Application Support Directory Tests
 
     func testApplicationSupportDirectory_DefaultSuite() {
@@ -321,6 +361,35 @@ final class PathTests: XCTestCase {
         let selectedPanelIndex = secondState["selectedPanelIndex"] as? NSNumber
         XCTAssertEqual(orderedPanels ?? [], [panelC, panelB, panelA])
         XCTAssertEqual(selectedPanelIndex?.intValue, 0)
+    }
+
+    func testPendingPanelInsertIntoBackgroundWorkspaceDoesNotUseVisibleTabView() {
+        XCTAssertTrue(tideyShouldManagePendingPanelInsert(pendingWorkspaceIndex: 0, createWorkspace: false))
+        XCTAssertFalse(tideyShouldInsertPendingPanelIntoVisibleTabs(selectedWorkspaceIndex: 1,
+                                                                    targetWorkspaceIndex: 0,
+                                                                    createWorkspace: false))
+    }
+
+    func testPendingPanelInsertIntoCurrentWorkspaceUsesVisibleTabView() {
+        XCTAssertTrue(tideyShouldManagePendingPanelInsert(pendingWorkspaceIndex: 1, createWorkspace: false))
+        XCTAssertTrue(tideyShouldInsertPendingPanelIntoVisibleTabs(selectedWorkspaceIndex: 1,
+                                                                   targetWorkspaceIndex: 1,
+                                                                   createWorkspace: false))
+    }
+
+    func testPendingPanelInsertForNewWorkspaceDoesNotUseVisibleTabView() {
+        XCTAssertTrue(tideyShouldManagePendingPanelInsert(pendingWorkspaceIndex: 2, createWorkspace: true))
+        XCTAssertFalse(tideyShouldInsertPendingPanelIntoVisibleTabs(selectedWorkspaceIndex: 1,
+                                                                    targetWorkspaceIndex: 2,
+                                                                    createWorkspace: true))
+    }
+
+    func testVisibleWorkspaceRebuildAlwaysUsesVisibleTabView() {
+        XCTAssertFalse(tideyShouldManagePendingPanelInsert(pendingWorkspaceIndex: -1, createWorkspace: false))
+        XCTAssertTrue(tideyShouldInsertPendingPanelIntoVisibleTabs(selectedWorkspaceIndex: 1,
+                                                                   targetWorkspaceIndex: 0,
+                                                                   createWorkspace: false,
+                                                                   rebuildingVisibleWorkspace: true))
     }
 }
 
