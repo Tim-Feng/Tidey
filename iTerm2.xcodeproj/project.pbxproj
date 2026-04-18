@@ -5196,6 +5196,7 @@
 		FB4CEC973C7E9235362E3F26 /* iTermRemotePreferences.h in Headers */ = {isa = PBXBuildFile; fileRef = FB4CECF4AC4392B21E87A07B /* iTermRemotePreferences.h */; };
 		T1DEY00001BIN0CLAUDE0002 /* claude in CopyFiles */ = {isa = PBXBuildFile; fileRef = T1DEY00001BIN0CLAUDE0001 /* claude */; };
 		T1DEY00001BIN0CODEX0002 /* codex in CopyFiles */ = {isa = PBXBuildFile; fileRef = T1DEY00001BIN0CODEX0001 /* codex */; };
+		T1DEY00001BIN0TMUXID0002 /* tidey-tmux-pane-identity in CopyFiles */ = {isa = PBXBuildFile; fileRef = T1DEY00001BIN0TMUXID0001 /* tidey-tmux-pane-identity */; };
 
 /* End PBXBuildFile section */
 
@@ -5472,6 +5473,7 @@
 			files = (
 				T1DEY00001BIN0CLAUDE0002 /* claude in CopyFiles */,
 				T1DEY00001BIN0CODEX0002 /* codex in CopyFiles */,
+				T1DEY00001BIN0TMUXID0002 /* tidey-tmux-pane-identity in CopyFiles */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -9313,6 +9315,7 @@
 		FBD0AD0A0337A5B701F955DB /* PseudoTerminal.m */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 4; lastKnownFileType = sourcecode.c.objc; lineEnding = 0; path = PseudoTerminal.m; sourceTree = "<group>"; tabWidth = 4; xcLanguageSpecificationIdentifier = xcode.lang.objc; };
 		T1DEY00001BIN0CLAUDE0001 /* claude */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = claude; sourceTree = "<group>"; };
 		T1DEY00001BIN0CODEX0001 /* codex */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = codex; sourceTree = "<group>"; };
+		T1DEY00001BIN0TMUXID0001 /* tidey-tmux-pane-identity */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "tidey-tmux-pane-identity"; sourceTree = "<group>"; };
 
 /* End PBXFileReference section */
 
@@ -11479,6 +11482,7 @@
 			children = (
 				T1DEY00001BIN0CLAUDE0001 /* claude */,
 				T1DEY00001BIN0CODEX0001 /* codex */,
+				T1DEY00001BIN0TMUXID0001 /* tidey-tmux-pane-identity */,
 			);
 			path = bin;
 			sourceTree = "<group>";
