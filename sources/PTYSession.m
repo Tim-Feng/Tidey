@@ -700,12 +700,14 @@ typedef NS_ENUM(NSUInteger, PTYSessionTurdType) {
 
 + (NSDictionary<NSString *, id> *)tideyPreparedEnvironmentAndTmuxCleanupCommandForEnvironment:(NSDictionary<NSString *, NSString *> *)environment {
     NSDictionary<NSString *, NSString *> *originalEnvironment = environment ?: @{};
-    NSString *cleanupCommand = [self tideyTmuxEnvironmentCleanupCommandForEnvironment:originalEnvironment];
     NSDictionary<NSString *, NSString *> *scrubbedEnvironment =
         [self tideyEnvironmentByScrubbingExternalTerminalIdentityFromEnvironment:originalEnvironment];
+    NSString *resolvedTmuxBinaryPath = [self tideyResolvedTmuxBinaryPathForPATH:scrubbedEnvironment[@"PATH"]];
+    NSString *cleanupCommand = [self tideyTmuxEnvironmentCleanupCommandForTmuxBinaryPath:resolvedTmuxBinaryPath];
     return @{
         @"environment": scrubbedEnvironment ?: @{},
         @"tmuxCleanupCommand": cleanupCommand ?: @"",
+        @"tmuxBinaryPath": resolvedTmuxBinaryPath ?: @"",
     };
 }
 
@@ -758,11 +760,25 @@ typedef NS_ENUM(NSUInteger, PTYSessionTurdType) {
                                       fallbackPaths:[self tideyTmuxBinaryFallbackPaths]];
 }
 
++ (NSString *)tideyShellSingleQuotedString:(NSString *)string {
+    NSString *value = string ?: @"";
+    return [NSString stringWithFormat:@"'%@'",
+            [value stringByReplacingOccurrencesOfString:@"'"
+                                             withString:@"'\"'\"'"]];
+}
+
 + (NSString *)tideyTmuxEnvironmentCleanupCommandForEnvironment:(NSDictionary<NSString *, NSString *> *)environment {
-    (void)environment;
+    return [self tideyTmuxEnvironmentCleanupCommandForTmuxBinaryPath:@"tmux"];
+}
+
++ (NSString *)tideyTmuxEnvironmentCleanupCommandForTmuxBinaryPath:(NSString *)tmuxBinaryPath {
+    if (tmuxBinaryPath.length == 0) {
+        return @"";
+    }
+    NSString *quotedTmuxPath = [self tideyShellSingleQuotedString:tmuxBinaryPath];
     NSMutableString *command = [NSMutableString string];
-    [command appendString:@"tmux set-environment -gu __CFBundleIdentifier 2>/dev/null; "];
-    [command appendString:@"_tidey_update_environment=\"$(tmux show-option -gqv update-environment 2>/dev/null)\"; "];
+    [command appendFormat:@"%@ set-environment -gu __CFBundleIdentifier 2>/dev/null; ", quotedTmuxPath];
+    [command appendFormat:@"_tidey_update_environment=\"$(%@ show-option -gqv update-environment 2>/dev/null)\"; ", quotedTmuxPath];
     [command appendString:@"_tidey_filtered_update_environment=\"\"; "];
     [command appendString:@"for _tidey_var in $_tidey_update_environment; do "];
     [command appendString:@"case \"$_tidey_var\" in "];
@@ -771,7 +787,7 @@ typedef NS_ENUM(NSUInteger, PTYSessionTurdType) {
     [command appendString:@"_tidey_filtered_update_environment=\"${_tidey_filtered_update_environment} ${_tidey_var}\"; "];
     [command appendString:@"done; "];
     [command appendString:@"_tidey_filtered_update_environment=\"${_tidey_filtered_update_environment} TIDEY_SOCKET_PATH TIDEY_WORKSPACE_ID TIDEY_PANEL_ID TIDEY_BIN_DIR ITERM_ENABLE_SHELL_INTEGRATION_WITH_TMUX LC_TERMINAL\"; "];
-    [command appendString:@"tmux set-option -g update-environment \"${_tidey_filtered_update_environment}\" 2>/dev/null"];
+    [command appendFormat:@"%@ set-option -g update-environment \"${_tidey_filtered_update_environment}\" 2>/dev/null", quotedTmuxPath];
     return command;
 }
 
@@ -2983,6 +2999,8 @@ ITERM_WEAKLY_REFERENCEABLE
         [[self class] tideyPreparedEnvironmentAndTmuxCleanupCommandForEnvironment:env];
     NSString *tmuxEnvironmentCleanupCommand =
         [[tideyPreparedEnvironment[@"tmuxCleanupCommand"] copy] autorelease];
+    NSString *resolvedTmuxBinaryPath =
+        [[tideyPreparedEnvironment[@"tmuxBinaryPath"] copy] autorelease];
     env = [[tideyPreparedEnvironment[@"environment"] mutableCopy] autorelease];
 
     NSString *itermId = [self sessionId];
@@ -3023,42 +3041,18 @@ ITERM_WEAKLY_REFERENCEABLE
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
             @autoreleasepool {
                 NSString *inheritedPATH = [[[NSProcessInfo processInfo] environment] objectForKey:@"PATH"] ?: @"<nil>";
-                NSString *taskPATH = nil;
-                NSString *whichTmuxOutput = @"";
-                NSString *whichTmuxError = @"";
-                int whichTmuxStatus = -1;
+                NSString *taskPATH = cleanupTaskEnvironment[@"PATH"];
 
-                @try {
-                    NSTask *whichTask = [[[NSTask alloc] init] autorelease];
-                    NSPipe *whichStdout = [NSPipe pipe];
-                    NSPipe *whichStderr = [NSPipe pipe];
-                    whichTask.launchPath = @"/bin/sh";
-                    whichTask.arguments = @[@"-c", @"command -v tmux"];
-                    whichTask.environment = cleanupTaskEnvironment;
-                    whichTask.standardOutput = whichStdout;
-                    whichTask.standardError = whichStderr;
-                    taskPATH = whichTask.environment[@"PATH"];
-                    [whichTask launch];
-                    [whichTask waitUntilExit];
-                    whichTmuxStatus = whichTask.terminationStatus;
-
-                    NSData *whichStdoutData = [[whichStdout fileHandleForReading] readDataToEndOfFile];
-                    NSData *whichStderrData = [[whichStderr fileHandleForReading] readDataToEndOfFile];
-                    NSString *stdoutString = [[[NSString alloc] initWithData:whichStdoutData encoding:NSUTF8StringEncoding] autorelease];
-                    NSString *stderrString = [[[NSString alloc] initWithData:whichStderrData encoding:NSUTF8StringEncoding] autorelease];
-                    whichTmuxOutput = stdoutString ?: @"";
-                    whichTmuxError = stderrString ?: @"";
-                } @catch (id e) {
-                    whichTmuxError = [NSString stringWithFormat:@"exception=%@", e];
-                }
-
-                NSLog(@"[TideyTmuxCleanup] inheritedPATH=%@ taskPATH=%@ whichTmuxStatus=%d whichTmuxOutput=%@ whichTmuxError=%@ cleanupCommand=%@",
+                NSLog(@"[TideyTmuxCleanup] inheritedPATH=%@ taskPATH=%@ resolvedTmuxPath=%@ cleanupCommand=%@",
                       inheritedPATH,
                       taskPATH ?: @"<nil>",
-                      whichTmuxStatus,
-                      whichTmuxOutput,
-                      whichTmuxError,
+                      resolvedTmuxBinaryPath.length > 0 ? resolvedTmuxBinaryPath : @"<nil>",
                       tmuxEnvironmentCleanupCommand);
+
+                if (resolvedTmuxBinaryPath.length == 0) {
+                    NSLog(@"[TideyTmuxCleanup] tmux not found in PATH or fallbacks");
+                    return;
+                }
 
                 NSTask *task = [[[NSTask alloc] init] autorelease];
                 NSPipe *stdoutPipe = [NSPipe pipe];

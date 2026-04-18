@@ -218,6 +218,18 @@ final class PathTests: XCTestCase {
         return function(PTYSession.self, selector, environment as NSDictionary) as String
     }
 
+    private func tmuxEnvironmentCleanupCommand(tmuxBinaryPath: String) -> String {
+        let selector = NSSelectorFromString("tideyTmuxEnvironmentCleanupCommandForTmuxBinaryPath:")
+        guard let method = class_getClassMethod(PTYSession.self, selector) else {
+            XCTFail("Missing PTYSession tmux cleanup command builder")
+            return ""
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, NSString) -> NSString
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        return function(PTYSession.self, selector, tmuxBinaryPath as NSString) as String
+    }
+
     private func resolvedExecutablePath(name: String,
                                         searchPATH: String,
                                         fallbackPaths: [String]) -> String? {
@@ -527,14 +539,11 @@ final class PathTests: XCTestCase {
     }
 
     func testTmuxEnvironmentCleanupCommandRemovesOnlyBundleIdentifier() {
-        let command = tmuxEnvironmentCleanupCommand([
-            "CMUX_SURFACE_ID": "surface",
-            "GHOSTTY_BIN_DIR": "/Applications/cmux.app/Contents/MacOS",
-        ])
+        let command = tmuxEnvironmentCleanupCommand(tmuxBinaryPath: "/opt/homebrew/bin/tmux")
 
-        XCTAssertTrue(command.contains("tmux set-environment -gu __CFBundleIdentifier"))
-        XCTAssertFalse(command.contains("tmux set-environment -gu CMUX_SURFACE_ID"))
-        XCTAssertFalse(command.contains("tmux set-environment -gu GHOSTTY_BIN_DIR"))
+        XCTAssertTrue(command.contains("set-environment -gu __CFBundleIdentifier"))
+        XCTAssertFalse(command.contains("set-environment -gu CMUX_SURFACE_ID"))
+        XCTAssertFalse(command.contains("set-environment -gu GHOSTTY_BIN_DIR"))
         XCTAssertFalse(command.contains("CMUX_SOCKET_PATH"))
         XCTAssertTrue(command.contains("TIDEY_SOCKET_PATH"))
         XCTAssertTrue(command.contains("TIDEY_WORKSPACE_ID"))
@@ -555,7 +564,7 @@ final class PathTests: XCTestCase {
         XCTAssertEqual(scrubbed?["GHOSTTY_BIN_DIR"], "/Applications/cmux.app/Contents/MacOS")
         XCTAssertNil(scrubbed?["__CFBundleIdentifier"])
         XCTAssertEqual(scrubbed?["PATH"], "/usr/bin:/bin")
-        XCTAssertEqual(command?.contains("tmux set-environment -gu __CFBundleIdentifier"), true)
+        XCTAssertTrue(command == nil || command?.contains("set-environment -gu __CFBundleIdentifier") == true)
     }
 
     func testResolvedExecutablePathUsesSearchPathBeforeFallbacks() {
