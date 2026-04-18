@@ -355,6 +355,7 @@ typedef NS_ENUM(int, iTermShouldHaveTitleSeparator) {
 - (NSDictionary *)tideySocketCreationResultForSession:(PTYSession *)session;
 - (void)tideyMarkWorkspaceReadAtIndex:(NSInteger)index;
 - (void)tideyMarkWorkspaceUnreadAtIndex:(NSInteger)index;
+- (void)tideyUpdateNotificationDockBadge;
 - (NSDictionary *)tideyWorkspaceEventForKind:(NSString *)kind
                                  workspaceID:(NSString *)workspaceID
                                      panelID:(NSString *)panelID
@@ -1911,6 +1912,8 @@ ITERM_WEAKLY_REFERENCEABLE
         return;
     }
 
+    [self tideyUpdateNotificationDockBadge];
+
     if (workspaceID.length == 0 || [workspaceID isEqualToString:@"*"]) {
         return;
     }
@@ -1953,6 +1956,16 @@ ITERM_WEAKLY_REFERENCEABLE
     }
 
     [self moveWorkspaceFromIndex:fromIndex toIndex:pinnedCount];
+}
+
+- (void)tideyUpdateNotificationDockBadge {
+    NSDockTile *dockTile = [[NSApplication sharedApplication] dockTile];
+    NSInteger bellCount = dockTile.badgeLabel.integerValue;
+    NSDictionary<NSString *, id> *badgeState =
+        [[self class] tideyDockBadgeStateForBellCount:bellCount
+                              hasUnreadNotifications:[[TideyNotificationStore sharedStore] hasAnyUnreadNotifications]];
+    dockTile.badgeLabel = badgeState[@"label"];
+    dockTile.showsApplicationBadge = [badgeState[@"showsBadge"] boolValue];
 }
 
 - (BOOL)tideyWorkspaceIsInStartupGracePeriod:(Workspace *)workspace {
@@ -5806,6 +5819,9 @@ hidingToolbeltShouldResizeWindow:(BOOL)hidingToolbeltShouldResizeWindow
     DLog(@"Erase badge label");
     [self.window.dockTile setBadgeLabel:@""];
     [self.window.dockTile setShowsApplicationBadge:NO];
+    [[[NSApplication sharedApplication] dockTile] setBadgeLabel:@""];
+    [[[NSApplication sharedApplication] dockTile] setShowsApplicationBadge:NO];
+    [self tideyUpdateNotificationDockBadge];
     if ([[self currentTab] blur]) {
         [self enableBlur:[[self currentTab] blurRadius]];
     } else {
@@ -6070,6 +6086,7 @@ hidingToolbeltShouldResizeWindow:(BOOL)hidingToolbeltShouldResizeWindow
     DLog(@"Erase badge label");
     [[[NSApplication sharedApplication] dockTile] setBadgeLabel:@""];
     [[[NSApplication sharedApplication] dockTile] setShowsApplicationBadge:NO];
+    [self tideyUpdateNotificationDockBadge];
 
     [[iTermController sharedInstance] setCurrentTerminal:self];
     iTermApplicationDelegate *itad = [iTermApplication.sharedApplication delegate];
