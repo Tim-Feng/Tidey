@@ -702,6 +702,17 @@ typedef NS_ENUM(NSUInteger, PTYSessionTurdType) {
     return scrubbed;
 }
 
++ (NSDictionary<NSString *, id> *)tideyPreparedEnvironmentAndTmuxCleanupCommandForEnvironment:(NSDictionary<NSString *, NSString *> *)environment {
+    NSDictionary<NSString *, NSString *> *originalEnvironment = environment ?: @{};
+    NSString *cleanupCommand = [self tideyTmuxEnvironmentCleanupCommandForEnvironment:originalEnvironment];
+    NSDictionary<NSString *, NSString *> *scrubbedEnvironment =
+        [self tideyEnvironmentByScrubbingExternalTerminalIdentityFromEnvironment:originalEnvironment];
+    return @{
+        @"environment": scrubbedEnvironment ?: @{},
+        @"tmuxCleanupCommand": cleanupCommand ?: @"",
+    };
+}
+
 + (NSString *)tideyTmuxEnvironmentCleanupCommandForEnvironment:(NSDictionary<NSString *, NSString *> *)environment {
     NSArray<NSString *> *keysToUnset = [self tideyExternalTerminalIdentityEnvironmentKeysForEnvironment:environment];
     NSMutableString *command = [NSMutableString string];

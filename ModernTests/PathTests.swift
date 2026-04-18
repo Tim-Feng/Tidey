@@ -218,6 +218,18 @@ final class PathTests: XCTestCase {
         return function(PTYSession.self, selector, environment as NSDictionary) as String
     }
 
+    private func preparedTerminalEnvironmentAndCleanup(_ environment: [String: String]) -> [String: Any] {
+        let selector = NSSelectorFromString("tideyPreparedEnvironmentAndTmuxCleanupCommandForEnvironment:")
+        guard let method = class_getClassMethod(PTYSession.self, selector) else {
+            XCTFail("Missing PTYSession prepared environment helper")
+            return [:]
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, NSDictionary) -> NSDictionary
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        return function(PTYSession.self, selector, environment as NSDictionary) as? [String: Any] ?? [:]
+    }
+
     // MARK: - Application Support Directory Tests
 
     func testApplicationSupportDirectory_DefaultSuite() {
@@ -498,6 +510,24 @@ final class PathTests: XCTestCase {
         XCTAssertTrue(command.contains("TIDEY_SOCKET_PATH"))
         XCTAssertTrue(command.contains("TIDEY_WORKSPACE_ID"))
         XCTAssertTrue(command.contains("TIDEY_PANEL_ID"))
+    }
+
+    func testPreparedTerminalEnvironmentUsesPreScrubBundleIdentifierForTmuxCleanup() {
+        let prepared = preparedTerminalEnvironmentAndCleanup([
+            "CMUX_SURFACE_ID": "surface",
+            "GHOSTTY_BIN_DIR": "/Applications/cmux.app/Contents/MacOS",
+            "__CFBundleIdentifier": "com.cmuxterm.app",
+            "PATH": "/usr/bin:/bin",
+        ])
+
+        let scrubbed = prepared["environment"] as? [String: String]
+        let command = prepared["tmuxCleanupCommand"] as? String
+
+        XCTAssertEqual(scrubbed?["CMUX_SURFACE_ID"], "surface")
+        XCTAssertEqual(scrubbed?["GHOSTTY_BIN_DIR"], "/Applications/cmux.app/Contents/MacOS")
+        XCTAssertNil(scrubbed?["__CFBundleIdentifier"])
+        XCTAssertEqual(scrubbed?["PATH"], "/usr/bin:/bin")
+        XCTAssertEqual(command?.contains("tmux set-environment -gu __CFBundleIdentifier"), true)
     }
 }
 
