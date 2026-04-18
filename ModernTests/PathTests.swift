@@ -218,6 +218,36 @@ final class PathTests: XCTestCase {
         return function(PTYSession.self, selector, environment as NSDictionary) as String
     }
 
+    private func resolvedExecutablePath(name: String,
+                                        searchPATH: String,
+                                        fallbackPaths: [String]) -> String? {
+        let selector = NSSelectorFromString("tideyResolvedExecutablePathForName:searchPATH:fallbackPaths:")
+        guard let method = class_getClassMethod(PTYSession.self, selector) else {
+            XCTFail("Missing PTYSession executable path resolver")
+            return nil
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, NSString, NSString, NSArray) -> NSString?
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        return function(PTYSession.self,
+                        selector,
+                        name as NSString,
+                        searchPATH as NSString,
+                        fallbackPaths as NSArray) as String?
+    }
+
+    private func tmuxBinaryFallbackPaths() -> [String] {
+        let selector = NSSelectorFromString("tideyTmuxBinaryFallbackPaths")
+        guard let method = class_getClassMethod(PTYSession.self, selector) else {
+            XCTFail("Missing PTYSession tmux fallback paths helper")
+            return []
+        }
+        typealias Function = @convention(c) (AnyClass, Selector) -> NSArray
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        return function(PTYSession.self, selector) as? [String] ?? []
+    }
+
     private func preparedTerminalEnvironmentAndCleanup(_ environment: [String: String]) -> [String: Any] {
         let selector = NSSelectorFromString("tideyPreparedEnvironmentAndTmuxCleanupCommandForEnvironment:")
         guard let method = class_getClassMethod(PTYSession.self, selector) else {
@@ -526,6 +556,37 @@ final class PathTests: XCTestCase {
         XCTAssertNil(scrubbed?["__CFBundleIdentifier"])
         XCTAssertEqual(scrubbed?["PATH"], "/usr/bin:/bin")
         XCTAssertEqual(command?.contains("tmux set-environment -gu __CFBundleIdentifier"), true)
+    }
+
+    func testResolvedExecutablePathUsesSearchPathBeforeFallbacks() {
+        let resolved = resolvedExecutablePath(name: "sh",
+                                              searchPATH: "/bin:/usr/bin",
+                                              fallbackPaths: ["/definitely/not/here/sh"])
+        XCTAssertEqual(resolved, "/bin/sh")
+    }
+
+    func testResolvedExecutablePathFallsBackToKnownLocations() {
+        let resolved = resolvedExecutablePath(name: "sh",
+                                              searchPATH: "",
+                                              fallbackPaths: ["/definitely/not/here/sh", "/bin/sh"])
+        XCTAssertEqual(resolved, "/bin/sh")
+    }
+
+    func testResolvedExecutablePathReturnsNilWhenNoCandidateIsExecutable() {
+        let resolved = resolvedExecutablePath(name: "missing-binary",
+                                              searchPATH: "/definitely/not/here",
+                                              fallbackPaths: ["/also/missing/binary"])
+        XCTAssertNil(resolved)
+    }
+
+    func testTmuxBinaryFallbackPathsCoverCommonInstallLocations() {
+        let fallbacks = tmuxBinaryFallbackPaths()
+        XCTAssertEqual(fallbacks, [
+            "/opt/homebrew/bin/tmux",
+            "/usr/local/bin/tmux",
+            "/opt/local/bin/tmux",
+            "/usr/bin/tmux",
+        ])
     }
 }
 

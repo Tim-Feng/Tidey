@@ -709,6 +709,55 @@ typedef NS_ENUM(NSUInteger, PTYSessionTurdType) {
     };
 }
 
++ (NSArray<NSString *> *)tideyTmuxBinaryFallbackPaths {
+    return @[
+        @"/opt/homebrew/bin/tmux",
+        @"/usr/local/bin/tmux",
+        @"/opt/local/bin/tmux",
+        @"/usr/bin/tmux",
+    ];
+}
+
++ (NSString *)tideyResolvedExecutablePathForName:(NSString *)name
+                                      searchPATH:(NSString *)searchPATH
+                                   fallbackPaths:(NSArray<NSString *> *)fallbackPaths {
+    if (name.length == 0) {
+        return nil;
+    }
+
+    NSMutableArray<NSString *> *candidates = [NSMutableArray array];
+    for (NSString *directory in [searchPATH componentsSeparatedByString:@":"]) {
+        if (directory.length == 0) {
+            continue;
+        }
+        [candidates addObject:[directory stringByAppendingPathComponent:name]];
+    }
+    for (NSString *path in fallbackPaths) {
+        if (path.length > 0) {
+            [candidates addObject:path];
+        }
+    }
+
+    NSMutableSet<NSString *> *seenPaths = [NSMutableSet set];
+    for (NSString *candidate in candidates) {
+        if ([seenPaths containsObject:candidate]) {
+            continue;
+        }
+        [seenPaths addObject:candidate];
+        if (access(candidate.fileSystemRepresentation, X_OK) == 0) {
+            return candidate;
+        }
+    }
+
+    return nil;
+}
+
++ (NSString *)tideyResolvedTmuxBinaryPathForPATH:(NSString *)searchPATH {
+    return [self tideyResolvedExecutablePathForName:@"tmux"
+                                         searchPATH:searchPATH
+                                      fallbackPaths:[self tideyTmuxBinaryFallbackPaths]];
+}
+
 + (NSString *)tideyTmuxEnvironmentCleanupCommandForEnvironment:(NSDictionary<NSString *, NSString *> *)environment {
     (void)environment;
     NSMutableString *command = [NSMutableString string];
