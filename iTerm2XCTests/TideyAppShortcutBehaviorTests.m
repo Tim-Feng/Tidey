@@ -9,6 +9,7 @@
 + (BOOL)tideyShouldIgnoreCloseCurrentSessionWithTabCount:(NSInteger)tabCount
                                   currentTabSessionCount:(NSInteger)sessionCount
                                  didCloseRightPanelTab:(BOOL)didCloseRightPanelTab;
++ (NSDictionary<NSString *, id> *)tideyDockBadgeStateForHasUnreadNotifications:(BOOL)hasUnreadNotifications;
 @end
 
 @interface iTermApplicationDelegate (TideyAppShortcutBehaviorTests)
@@ -59,6 +60,17 @@
     XCTAssertTrue([PseudoTerminal tideyShouldIgnoreCloseCurrentSessionWithTabCount:2
                                                             currentTabSessionCount:3
                                                            didCloseRightPanelTab:YES]);
+}
+
+- (void)testDockBadgeStateUsesDotForAnyUnreadNotification {
+    NSDictionary<NSString *, id> *badgeState =
+        [PseudoTerminal tideyDockBadgeStateForHasUnreadNotifications:YES];
+    XCTAssertEqualObjects(badgeState[@"label"], @"•");
+    XCTAssertEqualObjects(badgeState[@"showsBadge"], @YES);
+
+    badgeState = [PseudoTerminal tideyDockBadgeStateForHasUnreadNotifications:NO];
+    XCTAssertEqualObjects(badgeState[@"label"], @"");
+    XCTAssertEqualObjects(badgeState[@"showsBadge"], @NO);
 }
 
 - (void)testQuitConfirmationRequiresSecondCommandQWithinTimeout {

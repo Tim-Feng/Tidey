@@ -154,6 +154,30 @@ static id TideyRetainedObject(id object) {
     XCTAssertEqualObjects(latestUnreadWorkspaceItem.title, @"Workspace");
 }
 
+- (void)testHasAnyUnreadNotificationsTracksWorkspaceAndBroadcastState {
+    TestableTideyNotificationStore *store = [self freshStore];
+
+    XCTAssertFalse([store hasAnyUnreadNotifications]);
+
+    [store addNotificationForWorkspaceID:@"workspace-1"
+                                   title:@"Workspace"
+                                subtitle:nil
+                                    body:@"Scoped"];
+    XCTAssertTrue([store hasAnyUnreadNotifications]);
+
+    [store markReadForWorkspaceID:@"workspace-1"];
+    XCTAssertFalse([store hasAnyUnreadNotifications]);
+
+    [store addNotificationForWorkspaceID:nil
+                                   title:@"Broadcast"
+                                subtitle:nil
+                                    body:@"Shared"];
+    XCTAssertTrue([store hasAnyUnreadNotifications]);
+
+    [store markAllRead];
+    XCTAssertFalse([store hasAnyUnreadNotifications]);
+}
+
 - (void)testRemoveNotificationAndClearAllNotifications {
     TestableTideyNotificationStore *store = [self freshStore];
 
