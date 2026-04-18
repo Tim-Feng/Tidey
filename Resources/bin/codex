@@ -298,7 +298,7 @@ start_rollout_monitor_if_needed() {
         return 0
     fi
 
-    monitor_rollout_and_registry "$pid" "$workspace_id" "$panel_id" "$cwd" "$created_at" &
+    monitor_rollout_and_registry "$pid" "$workspace_id" "$panel_id" "$cwd" "$created_at" >/dev/null 2>&1 &
 }
 
 initial_session_id() {
