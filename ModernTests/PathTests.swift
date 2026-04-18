@@ -130,6 +130,28 @@ final class PathTests: XCTestCase {
                         NSNumber(value: fallbackSelection)) as? [String: Any] ?? [:]
     }
 
+    private func tideyShouldInsertPanelIntoVisibleTabView(selectedWorkspaceIndex: Int,
+                                                          targetWorkspaceIndex: Int,
+                                                          createWorkspace: Bool,
+                                                          showingSidebar: Bool,
+                                                          switchingWorkspace: Bool) -> Bool {
+        let selector = NSSelectorFromString("tideyShouldInsertPanelIntoVisibleTabViewForSelectedWorkspaceIndex:targetWorkspaceIndex:createWorkspace:showingSidebar:switchingWorkspace:")
+        guard let method = class_getClassMethod(PseudoTerminal.self, selector) else {
+            XCTFail("Missing PseudoTerminal visible insertion helper")
+            return true
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, Int, Int, ObjCBool, ObjCBool, ObjCBool) -> ObjCBool
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        return function(PseudoTerminal.self,
+                        selector,
+                        selectedWorkspaceIndex,
+                        targetWorkspaceIndex,
+                        ObjCBool(createWorkspace),
+                        ObjCBool(showingSidebar),
+                        ObjCBool(switchingWorkspace)).boolValue
+    }
+
     // MARK: - Application Support Directory Tests
 
     func testApplicationSupportDirectory_DefaultSuite() {
@@ -321,6 +343,30 @@ final class PathTests: XCTestCase {
         let selectedPanelIndex = secondState["selectedPanelIndex"] as? NSNumber
         XCTAssertEqual(orderedPanels ?? [], [panelC, panelB, panelA])
         XCTAssertEqual(selectedPanelIndex?.intValue, 0)
+    }
+
+    func testBackgroundWorkspacePanelInsertionDoesNotUseVisibleTabView() {
+        XCTAssertFalse(tideyShouldInsertPanelIntoVisibleTabView(selectedWorkspaceIndex: 1,
+                                                                targetWorkspaceIndex: 0,
+                                                                createWorkspace: false,
+                                                                showingSidebar: true,
+                                                                switchingWorkspace: false))
+    }
+
+    func testCurrentWorkspacePanelInsertionUsesVisibleTabView() {
+        XCTAssertTrue(tideyShouldInsertPanelIntoVisibleTabView(selectedWorkspaceIndex: 1,
+                                                               targetWorkspaceIndex: 1,
+                                                               createWorkspace: false,
+                                                               showingSidebar: true,
+                                                               switchingWorkspace: false))
+    }
+
+    func testNewWorkspacePanelInsertionDoesNotUseVisibleTabView() {
+        XCTAssertFalse(tideyShouldInsertPanelIntoVisibleTabView(selectedWorkspaceIndex: 1,
+                                                                targetWorkspaceIndex: 2,
+                                                                createWorkspace: true,
+                                                                showingSidebar: true,
+                                                                switchingWorkspace: false))
     }
 }
 
