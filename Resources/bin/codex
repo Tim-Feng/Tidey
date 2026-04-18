@@ -3,7 +3,7 @@
 set -euo pipefail
 
 REGISTRY_ROOT="$HOME/Library/Application Support/Tidey Remote Bridge/agent-sessions/codex"
-HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 # shellcheck source=/dev/null
 source "$HOOK_DIR/tidey-tmux-pane-identity"
 
@@ -287,6 +287,20 @@ monitor_rollout_and_registry() {
     fi
 }
 
+start_rollout_monitor_if_needed() {
+    local pid="$1"
+    local workspace_id="$2"
+    local panel_id="$3"
+    local cwd="$4"
+    local created_at="$5"
+
+    if [[ -z "$workspace_id" ]]; then
+        return 0
+    fi
+
+    monitor_rollout_and_registry "$pid" "$workspace_id" "$panel_id" "$cwd" "$created_at" &
+}
+
 initial_session_id() {
     if command -v uuidgen >/dev/null 2>&1; then
         uuidgen | tr '[:upper:]' '[:lower:]'
@@ -298,31 +312,47 @@ print(str(uuid.uuid4()))
 PY
 }
 
-REAL_CODEX="$(find_real_codex)" || { echo "Error: codex not found in PATH" >&2; exit 127; }
-tidey_hydrate_tmux_pane_identity
+main() {
+    local real_codex=""
+    local real_codex_home=""
+    local overlay_codex_home=""
+    local dispatch_script=""
+    local created_at=""
+    local session_id=""
+    local registry_file=""
 
-if [[ -z "${TIDEY_SOCKET_PATH:-}" || ! -S "${TIDEY_SOCKET_PATH:-}" || -z "${TIDEY_WORKSPACE_ID:-}" ]]; then
-    exec "$REAL_CODEX" "$@"
-fi
+    real_codex="$(find_real_codex)" || { echo "Error: codex not found in PATH" >&2; exit 127; }
+    tidey_hydrate_tmux_pane_identity
 
-REAL_CODEX_HOME="$(resolve_real_codex_home)"
-OVERLAY_CODEX_HOME="$(mktemp -d "${TMPDIR:-/tmp}/tidey-codex-home.XXXXXX")"
-DISPATCH_SCRIPT="$HOOK_DIR/codex-hook-dispatch"
-prepare_codex_home_overlay "$REAL_CODEX_HOME" "$OVERLAY_CODEX_HOME" "$DISPATCH_SCRIPT"
+    if [[ -z "${TIDEY_SOCKET_PATH:-}" || ! -S "${TIDEY_SOCKET_PATH:-}" || -z "${TIDEY_WORKSPACE_ID:-}" ]]; then
+        exec "$real_codex" "$@"
+    fi
 
-CREATED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-SESSION_ID="$(initial_session_id)"
-REGISTRY_FILE="$REGISTRY_ROOT/codex-$SESSION_ID.json"
-write_registry_file "$REGISTRY_FILE" "$TIDEY_WORKSPACE_ID" "$SESSION_ID" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$CREATED_AT" ""
+    real_codex_home="$(resolve_real_codex_home)"
+    overlay_codex_home="$(mktemp -d "${TMPDIR:-/tmp}/tidey-codex-home.XXXXXX")"
+    dispatch_script="$HOOK_DIR/codex-hook-dispatch"
+    prepare_codex_home_overlay "$real_codex_home" "$overlay_codex_home" "$dispatch_script"
 
-cleanup() {
-    rm -rf "$OVERLAY_CODEX_HOME"
+    created_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    session_id="$(initial_session_id)"
+    registry_file="$REGISTRY_ROOT/codex-$session_id.json"
+    write_registry_file "$registry_file" "$TIDEY_WORKSPACE_ID" "$session_id" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$created_at" ""
+
+    cleanup() {
+        rm -rf "$overlay_codex_home"
+    }
+
+    trap cleanup EXIT
+
+    start_rollout_monitor_if_needed "$$" "${TIDEY_WORKSPACE_ID:-}" "${TIDEY_PANEL_ID:-}" "$PWD" "$created_at"
+
+    if [[ -n "${TIDEY_SOCKET_PATH:-}" && -n "${TIDEY_WORKSPACE_ID:-}" ]]; then
+        "$HOOK_DIR/tidey" codex-hook session-start || true
+    fi
+
+    exec env CODEX_HOME="$overlay_codex_home" "$real_codex" "$@"
 }
 
-trap cleanup EXIT
-
-if [[ -n "${TIDEY_SOCKET_PATH:-}" && -n "${TIDEY_WORKSPACE_ID:-}" ]]; then
-    "$HOOK_DIR/tidey" codex-hook session-start || true
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
 fi
-
-exec env CODEX_HOME="$OVERLAY_CODEX_HOME" "$REAL_CODEX" "$@"
