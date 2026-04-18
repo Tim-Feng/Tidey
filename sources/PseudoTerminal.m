@@ -1219,6 +1219,49 @@ ITERM_WEAKLY_REFERENCEABLE
     [self updateSelectedPanelIndexFromVisibleTabSelection];
 }
 
++ (NSDictionary<NSString *, id> *)tideyPanelOrderStateByApplyingVisibleTabOrder:(NSArray<PTYTab *> *)visibleTabs
+                                                               toWorkspacePanels:(NSArray<PTYTab *> *)panels
+                                                                     currentTab:(PTYTab *)currentTab
+                                                              fallbackSelection:(NSInteger)fallbackSelection {
+    NSArray<PTYTab *> *sourcePanels = panels ?: @[];
+    if (sourcePanels.count == 0 || visibleTabs.count == 0) {
+        NSInteger clampedSelection = fallbackSelection;
+        if (clampedSelection < 0 || clampedSelection >= sourcePanels.count) {
+            clampedSelection = sourcePanels.count > 0 ? 0 : -1;
+        }
+        return @{
+            @"panels": sourcePanels,
+            @"selectedPanelIndex": @(clampedSelection),
+        };
+    }
+
+    NSMutableArray<PTYTab *> *remainingPanels = [sourcePanels mutableCopy];
+    NSMutableArray<PTYTab *> *orderedPanels = [NSMutableArray arrayWithCapacity:sourcePanels.count];
+    for (PTYTab *tab in visibleTabs) {
+        NSInteger index = [remainingPanels indexOfObjectIdenticalTo:tab];
+        if (index == NSNotFound) {
+            continue;
+        }
+        [orderedPanels addObject:tab];
+        [remainingPanels removeObjectAtIndex:index];
+    }
+    [orderedPanels addObjectsFromArray:remainingPanels];
+    [remainingPanels release];
+
+    NSInteger selectedPanelIndex = [orderedPanels indexOfObjectIdenticalTo:currentTab];
+    if (selectedPanelIndex == NSNotFound) {
+        selectedPanelIndex = fallbackSelection;
+    }
+    if (selectedPanelIndex < 0 || selectedPanelIndex >= orderedPanels.count) {
+        selectedPanelIndex = orderedPanels.count > 0 ? 0 : -1;
+    }
+
+    return @{
+        @"panels": orderedPanels,
+        @"selectedPanelIndex": @(selectedPanelIndex),
+    };
+}
+
 - (Workspace *)selectedWorkspace {
     return [self workspaceAtIndex:self.selectedWorkspaceIndex];
 }
@@ -9540,6 +9583,51 @@ hidingToolbeltShouldResizeWindow:(BOOL)hidingToolbeltShouldResizeWindow
         }
     }
     [controller setPartialWindowIdOrder:windowIds];
+
+    if (self.isShowingTideySidebar) {
+        Workspace *workspace = self.selectedWorkspace;
+        NSArray<PTYTab *> *visibleTabs = self.tabs;
+        if (workspace && workspace.panels.count == visibleTabs.count) {
+            NSDictionary<NSString *, id> *state =
+                [[self class] tideyPanelOrderStateByApplyingVisibleTabOrder:visibleTabs
+                                                           toWorkspacePanels:workspace.panels
+                                                                 currentTab:self.currentTab
+                                                          fallbackSelection:workspace.selectedPanelIndex];
+            NSArray<PTYTab *> *orderedPanels = state[@"panels"];
+            NSInteger selectedPanelIndex = [state[@"selectedPanelIndex"] integerValue];
+            BOOL orderChanged = ![orderedPanels isEqualToArray:workspace.panels];
+            BOOL selectionChanged = (workspace.selectedPanelIndex != selectedPanelIndex);
+
+            if (orderChanged) {
+                workspace.panels = [NSMutableArray arrayWithArray:orderedPanels];
+            }
+            workspace.selectedPanelIndex = selectedPanelIndex;
+            [_contentView reloadTideySidebar];
+            [_contentView selectTideySidebarWorkspaceAtIndex:self.selectedWorkspaceIndex];
+
+            if (orderChanged || selectionChanged) {
+                NSInteger workspaceIndex = self.selectedWorkspaceIndex;
+                PTYTab *selectedPanel = workspace.selectedPanel;
+                NSDictionary *workspaceSummary = [self tideySocketWorkspaceSummaryForWorkspace:workspace index:workspaceIndex];
+                NSDictionary *panelSummary = nil;
+                if (selectedPanel) {
+                    NSInteger panelIndex = [workspace.panels indexOfObjectIdenticalTo:selectedPanel];
+                    if (panelIndex != NSNotFound) {
+                        panelSummary = [self tideySocketPanelSummaryForPanel:selectedPanel
+                                                                  workspace:workspace
+                                                             workspaceIndex:workspaceIndex
+                                                                 panelIndex:panelIndex];
+                    }
+                }
+                [self tideyPostWorkspaceEventForKind:@"workspace_updated"
+                                         workspaceID:[self tideyWorkspaceIdentifierForWorkspace:workspace]
+                                             panelID:selectedPanel.stringUniqueIdentifier
+                                           workspace:workspaceSummary
+                                               panel:panelSummary];
+            }
+        }
+    }
+
     [[NSNotificationCenter defaultCenter] postNotificationName:iTermTabDidChangePositionInWindowNotification object:nil];
     for (PTYSession *session in self.allSessions) {
         [session didMoveSession];

@@ -8,10 +8,127 @@
 import XCTest
 @testable import iTerm2SharedARC
 import Darwin
+import ObjectiveC.runtime
 
 /// Tests for path methods to verify correct behavior with and without custom suite names.
 /// These tests establish baseline behavior and verify no regressions when --suite is not used.
 final class PathTests: XCTestCase {
+
+    private func objectiveCCharacterSet(named selectorName: String) -> CharacterSet {
+        let selector = NSSelectorFromString(selectorName)
+        guard let method = class_getClassMethod(NSCharacterSet.self, selector) else {
+            XCTFail("Missing NSCharacterSet.\(selectorName)")
+            return CharacterSet()
+        }
+        typealias Function = @convention(c) (AnyClass, Selector) -> AnyObject
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        return function(NSCharacterSet.self, selector) as? CharacterSet ?? CharacterSet()
+    }
+
+    private func semanticHistoryRouteShouldOpen(_ url: URL) -> Bool {
+        let controller = iTermSemanticHistoryController()
+        controller.prefs = [:]
+        let allocSelector = NSSelectorFromString("alloc")
+        guard let allocMethod = class_getClassMethod(iTermURLActionHelper.self, allocSelector) else {
+            XCTFail("Missing iTermURLActionHelper alloc")
+            return false
+        }
+        typealias AllocFunction = @convention(c) (AnyClass, Selector) -> AnyObject
+        let allocImplementation = method_getImplementation(allocMethod)
+        let allocate = unsafeBitCast(allocImplementation, to: AllocFunction.self)
+        let uninitializedHelper = allocate(iTermURLActionHelper.self, allocSelector)
+
+        let selector = NSSelectorFromString("initWithSemanticHistoryController:")
+        guard let method = class_getInstanceMethod(iTermURLActionHelper.self, selector) else {
+            XCTFail("Missing iTermURLActionHelper initializer")
+            return false
+        }
+        typealias InitFunction = @convention(c) (AnyObject, Selector, iTermSemanticHistoryController) -> AnyObject
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: InitFunction.self)
+        let helper = function(uninitializedHelper, selector, controller)
+
+        let shouldOpenSelector = NSSelectorFromString("shouldOpenFileURLWithSemanticHistory:")
+        guard let shouldOpenMethod = class_getInstanceMethod(iTermURLActionHelper.self, shouldOpenSelector) else {
+            XCTFail("Missing semantic history routing helper")
+            return false
+        }
+        typealias ShouldOpenFunction = @convention(c) (AnyObject, Selector, NSURL) -> ObjCBool
+        let shouldOpenImplementation = method_getImplementation(shouldOpenMethod)
+        let shouldOpen = unsafeBitCast(shouldOpenImplementation, to: ShouldOpenFunction.self)
+        return shouldOpen(helper, shouldOpenSelector, url as NSURL).boolValue
+    }
+
+    private func resolvedPath(prefix: String,
+                              suffix: String,
+                              workingDirectory: String,
+                              trimWhitespace: Bool = false,
+                              ignore: String = "",
+                              allowNetworkMounts: Bool = false) -> String? {
+        guard let pathFinderClass = NSClassFromString("iTermPathFinder") as? NSObject.Type else {
+            XCTFail("Missing iTermPathFinder")
+            return nil
+        }
+        let allocSelector = NSSelectorFromString("alloc")
+        guard let allocMethod = class_getClassMethod(pathFinderClass, allocSelector) else {
+            XCTFail("Missing iTermPathFinder alloc")
+            return nil
+        }
+        typealias AllocFunction = @convention(c) (AnyClass, Selector) -> AnyObject
+        let allocImplementation = method_getImplementation(allocMethod)
+        let allocate = unsafeBitCast(allocImplementation, to: AllocFunction.self)
+        let uninitializedFinder = allocate(pathFinderClass, allocSelector)
+
+        let initSelector = NSSelectorFromString("initWithPrefix:suffix:workingDirectory:trimWhitespace:ignore:allowNetworkMounts:")
+        guard let initMethod = class_getInstanceMethod(pathFinderClass, initSelector) else {
+            XCTFail("Missing iTermPathFinder initializer")
+            return nil
+        }
+        typealias InitFunction = @convention(c) (AnyObject, Selector, NSString, NSString, NSString, Bool, NSString, Bool) -> AnyObject
+        let initImplementation = method_getImplementation(initMethod)
+        let initialize = unsafeBitCast(initImplementation, to: InitFunction.self)
+        let finder = initialize(uninitializedFinder,
+                                initSelector,
+                                prefix as NSString,
+                                suffix as NSString,
+                                workingDirectory as NSString,
+                                trimWhitespace,
+                                ignore as NSString,
+                                allowNetworkMounts)
+
+        let searchSelector = NSSelectorFromString("searchSynchronously")
+        guard let searchMethod = class_getInstanceMethod(pathFinderClass, searchSelector) else {
+            XCTFail("Missing iTermPathFinder search")
+            return nil
+        }
+        typealias SearchFunction = @convention(c) (AnyObject, Selector) -> Void
+        let searchImplementation = method_getImplementation(searchMethod)
+        let search = unsafeBitCast(searchImplementation, to: SearchFunction.self)
+        search(finder, searchSelector)
+
+        return finder.value(forKey: "path") as? String
+    }
+
+    private func tideyPanelOrderState(visibleTabs: [NSObject],
+                                      workspacePanels: [NSObject],
+                                      currentTab: NSObject?,
+                                      fallbackSelection: Int) -> [String: Any] {
+        let selector = NSSelectorFromString("tideyPanelOrderStateByApplyingVisibleTabOrder:toWorkspacePanels:currentTab:fallbackSelection:")
+        guard let method = class_getClassMethod(PseudoTerminal.self, selector) else {
+            XCTFail("Missing PseudoTerminal reorder helper")
+            return [:]
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, NSArray, NSArray, AnyObject?, NSNumber) -> NSDictionary
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        return function(PseudoTerminal.self,
+                        selector,
+                        visibleTabs as NSArray,
+                        workspacePanels as NSArray,
+                        currentTab,
+                        NSNumber(value: fallbackSelection)) as? [String: Any] ?? [:]
+    }
 
     // MARK: - Application Support Directory Tests
 
@@ -98,9 +215,9 @@ final class PathTests: XCTestCase {
     func testFilenameCharacterSetStopsAtFullWidthParentheticalSuffix() {
         let source = "~/.claude/skills/skill-creator/SKILL.md（Project Conventions 改成新預設）" as NSString
         let offset = source.range(of: "SKILL.md").location + "SKILL.md".count - 1
-        let extracted = source.substringIncludingOffset(Int32(offset),
-                                                        from: CharacterSet.filenameCharacterSet(),
-                                                        charsTakenFromPrefix: nil)
+        let extracted = source.substring(includingOffset: Int32(offset),
+                                         from: objectiveCCharacterSet(named: "filenameCharacterSet"),
+                                         charsTakenFromPrefix: nil)
 
         XCTAssertEqual(extracted, "~/.claude/skills/skill-creator/SKILL.md")
     }
@@ -108,9 +225,9 @@ final class PathTests: XCTestCase {
     func testURLCharacterSetStopsAtFullWidthParentheticalSuffix() {
         let source = "https://example.com/docs/shared-resource-patterns.md（2845 bytes，新）" as NSString
         let offset = source.range(of: "patterns.md").location + "patterns.md".count - 1
-        let extracted = source.substringIncludingOffset(Int32(offset),
-                                                        from: CharacterSet.urlCharacterSet(),
-                                                        charsTakenFromPrefix: nil)
+        let extracted = source.substring(includingOffset: Int32(offset),
+                                         from: objectiveCCharacterSet(named: "urlCharacterSet"),
+                                         charsTakenFromPrefix: nil)
 
         XCTAssertEqual(extracted, "https://example.com/docs/shared-resource-patterns.md")
     }
@@ -128,43 +245,82 @@ final class PathTests: XCTestCase {
         try "test".write(to: fileURL, atomically: true, encoding: .utf8)
 
         let relativePath = fileURL.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
-        let finder = iTermPathFinder(prefix: relativePath,
-                                     suffix: "（2845 bytes，新）",
-                                     workingDirectory: NSHomeDirectory(),
-                                     trimWhitespace: false,
-                                     ignore: "",
-                                     allowNetworkMounts: false)
-        finder.searchSynchronously()
-
-        XCTAssertEqual(finder.path, fileURL.path)
+        XCTAssertEqual(resolvedPath(prefix: relativePath,
+                                    suffix: "（2845 bytes，新）",
+                                    workingDirectory: NSHomeDirectory()),
+                       fileURL.path)
     }
 
     func testFileURLWithoutFragmentUsesSemanticHistoryRoute() {
-        let helper = iTermURLActionHelper(semanticHistoryController: iTermSemanticHistoryController(prefs: [:]))
         let url = URL(fileURLWithPath: "/Users/timfeng/GitHub/life-system/TODO.md")
 
-        XCTAssertTrue(helper.shouldOpenFileURLWithSemanticHistory(url))
+        XCTAssertTrue(semanticHistoryRouteShouldOpen(url))
     }
 
     func testFileURLWithFragmentUsesSemanticHistoryRoute() {
-        let helper = iTermURLActionHelper(semanticHistoryController: iTermSemanticHistoryController(prefs: [:]))
         let url = URL(string: "file:///Users/timfeng/GitHub/life-system/TODO.md#12:3")!
 
-        XCTAssertTrue(helper.shouldOpenFileURLWithSemanticHistory(url))
+        XCTAssertTrue(semanticHistoryRouteShouldOpen(url))
     }
 
     func testNonFileURLsDoNotUseSemanticHistoryRoute() {
-        let helper = iTermURLActionHelper(semanticHistoryController: iTermSemanticHistoryController(prefs: [:]))
-
-        XCTAssertFalse(helper.shouldOpenFileURLWithSemanticHistory(URL(string: "https://example.com/path")!))
-        XCTAssertFalse(helper.shouldOpenFileURLWithSemanticHistory(URL(string: "iterm2://open?foo=bar")!))
+        XCTAssertFalse(semanticHistoryRouteShouldOpen(URL(string: "https://example.com/path")!))
+        XCTAssertFalse(semanticHistoryRouteShouldOpen(URL(string: "iterm2://open?foo=bar")!))
     }
 
     func testFileURLsWithoutPathsDoNotUseSemanticHistoryRoute() {
-        let helper = iTermURLActionHelper(semanticHistoryController: iTermSemanticHistoryController(prefs: [:]))
+        XCTAssertFalse(semanticHistoryRouteShouldOpen(URL(string: "file://")!))
+        XCTAssertFalse(semanticHistoryRouteShouldOpen(URL(string: "file:///")!))
+    }
 
-        XCTAssertFalse(helper.shouldOpenFileURLWithSemanticHistory(URL(string: "file://")!))
-        XCTAssertFalse(helper.shouldOpenFileURLWithSemanticHistory(URL(string: "file:///")!))
+    func testWorkspacePanelsFollowVisibleTabOrderAfterReorder() {
+        let panelA = NSObject()
+        let panelB = NSObject()
+        let panelC = NSObject()
+
+        let state = tideyPanelOrderState(visibleTabs: [panelB, panelA, panelC],
+                                         workspacePanels: [panelA, panelB, panelC],
+                                         currentTab: panelB,
+                                         fallbackSelection: 1)
+
+        let orderedPanels = state["panels"] as? [NSObject]
+        let selectedPanelIndex = state["selectedPanelIndex"] as? NSNumber
+        XCTAssertEqual(orderedPanels ?? [], [panelB, panelA, panelC])
+        XCTAssertEqual(selectedPanelIndex?.intValue, 0)
+    }
+
+    func testWorkspacePanelSelectionFollowsCurrentTabAfterReorder() {
+        let panelA = NSObject()
+        let panelB = NSObject()
+        let panelC = NSObject()
+
+        let state = tideyPanelOrderState(visibleTabs: [panelB, panelA, panelC],
+                                         workspacePanels: [panelA, panelB, panelC],
+                                         currentTab: panelA,
+                                         fallbackSelection: 0)
+
+        let selectedPanelIndex = state["selectedPanelIndex"] as? NSNumber
+        XCTAssertEqual(selectedPanelIndex?.intValue, 1)
+    }
+
+    func testWorkspacePanelOrderRemainsStableAcrossMultipleReorders() {
+        let panelA = NSObject()
+        let panelB = NSObject()
+        let panelC = NSObject()
+
+        let firstState = tideyPanelOrderState(visibleTabs: [panelB, panelA, panelC],
+                                              workspacePanels: [panelA, panelB, panelC],
+                                              currentTab: panelB,
+                                              fallbackSelection: 1)
+        let secondState = tideyPanelOrderState(visibleTabs: [panelC, panelB, panelA],
+                                               workspacePanels: firstState["panels"] as? [NSObject] ?? [],
+                                               currentTab: panelC,
+                                               fallbackSelection: (firstState["selectedPanelIndex"] as? NSNumber)?.intValue ?? 0)
+
+        let orderedPanels = secondState["panels"] as? [NSObject]
+        let selectedPanelIndex = secondState["selectedPanelIndex"] as? NSNumber
+        XCTAssertEqual(orderedPanels ?? [], [panelC, panelB, panelA])
+        XCTAssertEqual(selectedPanelIndex?.intValue, 0)
     }
 }
 
