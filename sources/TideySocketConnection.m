@@ -68,7 +68,7 @@
     id object = [NSJSONSerialization JSONObjectWithData:lineData options:0 error:&error];
     NSDictionary *dict = [object isKindOfClass:[NSDictionary class]] ? object : nil;
     if (!dict) {
-        // Try the legacy space-delimited plaintext format:
+        // Try space-delimited plaintext format used by cmux:
         //   <action> <state> [--key=value ...]
         dict = [self parsePlaintextLineData:lineData];
         if (!dict) {

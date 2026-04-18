@@ -12298,7 +12298,7 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
         return panel.titleOverride;
     }
 
-    // Use OSC 0/2 window title whenever available (works for shells, Claude Code, etc.)
+    // Use OSC 0/2 window title whenever available (works for shells, cmux, Claude Code, etc.)
     // Skip window names that contain "tmux" (e.g. "tmux attach -t ...") since they are
     // not useful — fall through to cwd instead.
     NSString *windowName = session.variablesScope.windowName;
