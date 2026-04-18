@@ -14,6 +14,8 @@
 + (NSArray<NSString *> *)tideyTmuxPaneIdentityCommandsForPane:(int)pane
                                                   workspaceID:(NSString *)workspaceID
                                                       panelID:(NSString *)panelID;
++ (BOOL)tideyShouldAutoMarkReadWorkspaceOnNotificationArrivalForSelectedWorkspaceID:(NSString *)selectedWorkspaceID
+                                                                notificationWorkspaceID:(NSString *)workspaceID;
 @end
 
 @interface iTermApplicationDelegate (TideyAppShortcutBehaviorTests)
@@ -85,6 +87,15 @@
         [PseudoTerminal tideyDockBadgeStateForBellCount:0 hasUnreadNotifications:NO];
     XCTAssertEqualObjects(badgeState[@"label"], @"");
     XCTAssertEqualObjects(badgeState[@"showsBadge"], @NO);
+}
+
+- (void)testSelectedWorkspaceNotificationDoesNotAutoMarkRead {
+    XCTAssertFalse([PseudoTerminal tideyShouldAutoMarkReadWorkspaceOnNotificationArrivalForSelectedWorkspaceID:@"workspace-1"
+                                                                                       notificationWorkspaceID:@"workspace-1"]);
+    XCTAssertFalse([PseudoTerminal tideyShouldAutoMarkReadWorkspaceOnNotificationArrivalForSelectedWorkspaceID:@"workspace-1"
+                                                                                       notificationWorkspaceID:@"*"]);
+    XCTAssertFalse([PseudoTerminal tideyShouldAutoMarkReadWorkspaceOnNotificationArrivalForSelectedWorkspaceID:@"workspace-1"
+                                                                                       notificationWorkspaceID:nil]);
 }
 
 - (void)testTmuxPaneIdentityCommandIncludesPaneScopedWorkspaceAndPanelOptions {

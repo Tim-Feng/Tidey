@@ -4017,6 +4017,13 @@ ITERM_WEAKLY_REFERENCEABLE
     };
 }
 
++ (BOOL)tideyShouldAutoMarkReadWorkspaceOnNotificationArrivalForSelectedWorkspaceID:(NSString *)selectedWorkspaceID
+                                                             notificationWorkspaceID:(NSString *)workspaceID {
+    (void)selectedWorkspaceID;
+    (void)workspaceID;
+    return NO;
+}
+
 - (BOOL)closeSessionWithConfirmation:(PTYSession *)aSession {
     PTYTab *tab = [self tabForSession:aSession];
     if ([[tab sessions] count] == 1) {
