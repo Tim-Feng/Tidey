@@ -466,7 +466,7 @@ final class PathTests: XCTestCase {
                                                                    rebuildingVisibleWorkspace: true))
     }
 
-    func testTerminalEnvironmentScrubRemovesExternalIdentityMarkers() {
+    func testTerminalEnvironmentScrubRemovesOnlyBundleIdentifier() {
         let scrubbed = scrubbedTerminalIdentityEnvironment([
             "CMUX_SURFACE_ID": "surface",
             "CMUX_PANEL_ID": "panel",
@@ -476,24 +476,24 @@ final class PathTests: XCTestCase {
             "TIDEY_SOCKET_PATH": "/tmp/tidey.sock",
         ])
 
-        XCTAssertNil(scrubbed["CMUX_SURFACE_ID"])
-        XCTAssertNil(scrubbed["CMUX_PANEL_ID"])
-        XCTAssertNil(scrubbed["GHOSTTY_BIN_DIR"])
+        XCTAssertEqual(scrubbed["CMUX_SURFACE_ID"], "surface")
+        XCTAssertEqual(scrubbed["CMUX_PANEL_ID"], "panel")
+        XCTAssertEqual(scrubbed["GHOSTTY_BIN_DIR"], "/Applications/cmux.app/Contents/MacOS")
         XCTAssertNil(scrubbed["__CFBundleIdentifier"])
         XCTAssertEqual(scrubbed["PATH"], "/usr/bin:/bin")
         XCTAssertEqual(scrubbed["TIDEY_SOCKET_PATH"], "/tmp/tidey.sock")
     }
 
-    func testTmuxEnvironmentCleanupCommandRemovesExternalIdentityVariables() {
+    func testTmuxEnvironmentCleanupCommandRemovesOnlyBundleIdentifier() {
         let command = tmuxEnvironmentCleanupCommand([
             "CMUX_SURFACE_ID": "surface",
             "GHOSTTY_BIN_DIR": "/Applications/cmux.app/Contents/MacOS",
             "__CFBundleIdentifier": "com.cmuxterm.app",
         ])
 
-        XCTAssertTrue(command.contains("tmux set-environment -gu CMUX_SURFACE_ID"))
-        XCTAssertTrue(command.contains("tmux set-environment -gu GHOSTTY_BIN_DIR"))
         XCTAssertTrue(command.contains("tmux set-environment -gu __CFBundleIdentifier"))
+        XCTAssertFalse(command.contains("tmux set-environment -gu CMUX_SURFACE_ID"))
+        XCTAssertFalse(command.contains("tmux set-environment -gu GHOSTTY_BIN_DIR"))
         XCTAssertFalse(command.contains("CMUX_SOCKET_PATH"))
         XCTAssertTrue(command.contains("TIDEY_SOCKET_PATH"))
         XCTAssertTrue(command.contains("TIDEY_WORKSPACE_ID"))

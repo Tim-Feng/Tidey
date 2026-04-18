@@ -687,26 +687,11 @@ typedef NS_ENUM(NSUInteger, PTYSessionTurdType) {
 @synthesize isDivorced = _divorced;
 
 + (NSArray<NSString *> *)tideyExternalTerminalIdentityEnvironmentKeysForEnvironment:(NSDictionary<NSString *, NSString *> *)environment {
-    NSMutableOrderedSet<NSString *> *keys = [NSMutableOrderedSet orderedSetWithArray:@[
-        @"CMUX_SURFACE_ID",
-        @"CMUX_WORKSPACE_ID",
-        @"CMUX_TAB_ID",
-        @"CMUX_PANEL_ID",
-        @"CMUX_BUNDLE_ID",
-        @"CMUX_SHELL_INTEGRATION",
-        @"CMUX_SHELL_INTEGRATION_DIR",
-        @"CMUX_PORT",
-        @"CMUX_PORT_END",
-        @"CMUX_PORT_RANGE",
-        @"CMUX_LOAD_GHOSTTY_ZSH_INTEGRATION",
-        @"__CFBundleIdentifier",
-    ]];
-    for (NSString *key in environment) {
-        if ([key hasPrefix:@"CMUX_"] || [key hasPrefix:@"GHOSTTY_"]) {
-            [keys addObject:key];
-        }
+    NSMutableArray<NSString *> *keys = [NSMutableArray array];
+    if (environment[@"__CFBundleIdentifier"]) {
+        [keys addObject:@"__CFBundleIdentifier"];
     }
-    return keys.array;
+    return keys;
 }
 
 + (NSDictionary<NSString *, NSString *> *)tideyEnvironmentByScrubbingExternalTerminalIdentityFromEnvironment:(NSDictionary<NSString *, NSString *> *)environment {
@@ -727,7 +712,7 @@ typedef NS_ENUM(NSUInteger, PTYSessionTurdType) {
     [command appendString:@"_tidey_filtered_update_environment=\"\"; "];
     [command appendString:@"for _tidey_var in $_tidey_update_environment; do "];
     [command appendString:@"case \"$_tidey_var\" in "];
-    [command appendString:@"CMUX_*|GHOSTTY_*|__CFBundleIdentifier|TIDEY_SOCKET_PATH|TIDEY_WORKSPACE_ID|TIDEY_PANEL_ID|TIDEY_BIN_DIR|ITERM_ENABLE_SHELL_INTEGRATION_WITH_TMUX|LC_TERMINAL) continue ;; "];
+    [command appendString:@"__CFBundleIdentifier|TIDEY_SOCKET_PATH|TIDEY_WORKSPACE_ID|TIDEY_PANEL_ID|TIDEY_BIN_DIR|ITERM_ENABLE_SHELL_INTEGRATION_WITH_TMUX|LC_TERMINAL) continue ;; "];
     [command appendString:@"esac; "];
     [command appendString:@"_tidey_filtered_update_environment=\"${_tidey_filtered_update_environment} ${_tidey_var}\"; "];
     [command appendString:@"done; "];
