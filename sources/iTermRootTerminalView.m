@@ -77,9 +77,8 @@ static const CGFloat kTideyEditorTabStripHeight = 34;
 static const CGFloat kTideyDragHandleWidth = 4;
 static const CGFloat kTideyChromeToggleButtonWidth = 18;
 static const CGFloat kTideyChromeToggleButtonHeight = 34;
-static const CGFloat kTideySidebarBadgeSize = 8;
-static const CGFloat kTideySidebarBadgeLeadingInset = 8;
-static const CGFloat kTideySidebarBadgeTextGap = 6;
+static const CGFloat kTideySidebarBadgeSize = 6;
+static const CGFloat kTideySidebarBadgeLeadingInset = 1;
 static const CGFloat kTideySidebarCloseButtonTopInset = 10;
 static const CGFloat kTideyPanelShortcutHintWidth = 28;
 static const CGFloat kTideyPanelShortcutHintHeight = 18;
@@ -6973,8 +6972,8 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         // --- Title row (top) ---
         cellView.textField.stringValue = [self tideySidebarWorkspaceTitleAtIndex:row];
         CGFloat titleY = 51 + sOff;
-        CGFloat titleX = kTideySidebarBadgeLeadingInset + kTideySidebarBadgeSize + kTideySidebarBadgeTextGap;
-        CGFloat titleMaxW = width - titleX - 34;
+        CGFloat titleX = 8;
+        CGFloat titleMaxW = width - 56;
         cellView.textField.frame = NSMakeRect(titleX, titleY, MAX(0, titleMaxW), 14);
 
         CGFloat badgeY = titleY + floor((14.0 - kTideySidebarBadgeSize) / 2.0);
@@ -7014,12 +7013,11 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     } else {
         // Normal layout (60pt row).
         // Only indent for badge when there are unread notifications.
-        CGFloat titleX = kTideySidebarBadgeLeadingInset + kTideySidebarBadgeSize + kTideySidebarBadgeTextGap;
-        CGFloat textMaxW = width - titleX - 34;
+        CGFloat textMaxW = width - 56;
 
         cellView.textField.stringValue = [self tideySidebarWorkspaceTitleAtIndex:row];
         CGFloat titleY = hasStatus ? 38 : 30;
-        cellView.textField.frame = NSMakeRect(titleX, titleY, MAX(0, textMaxW), 14);
+        cellView.textField.frame = NSMakeRect(8, titleY, MAX(0, textMaxW), 14);
 
         NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
         subtitleField.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
