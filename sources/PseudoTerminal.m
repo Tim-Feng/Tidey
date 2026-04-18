@@ -1262,23 +1262,6 @@ ITERM_WEAKLY_REFERENCEABLE
     };
 }
 
-+ (BOOL)tideyShouldInsertPanelIntoVisibleTabViewForSelectedWorkspaceIndex:(NSInteger)selectedWorkspaceIndex
-                                                     targetWorkspaceIndex:(NSInteger)targetWorkspaceIndex
-                                                          createWorkspace:(BOOL)createWorkspace
-                                                           showingSidebar:(BOOL)showingSidebar
-                                                        switchingWorkspace:(BOOL)switchingWorkspace {
-    if (!showingSidebar || switchingWorkspace) {
-        return YES;
-    }
-    if (createWorkspace) {
-        return NO;
-    }
-    if (targetWorkspaceIndex == NSNotFound || targetWorkspaceIndex < 0) {
-        return YES;
-    }
-    return targetWorkspaceIndex == selectedWorkspaceIndex;
-}
-
 - (Workspace *)selectedWorkspace {
     return [self workspaceAtIndex:self.selectedWorkspaceIndex];
 }
@@ -13203,19 +13186,43 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
     assert(aTab);
     [self ensureTideyWorkspacesInitialized];
     if ([_contentView.tabView indexOfTabViewItemWithIdentifier:aTab] == NSNotFound) {
-        const BOOL shouldManageTideyWorkspaceInsert = self.isShowingTideySidebar && !_tideySwitchingWorkspace;
-        NSInteger targetWorkspaceIndex = _pendingWorkspaceIndexForInsertedPanel;
-        const BOOL createWorkspace = _pendingInsertedPanelCreatesWorkspace;
-        BOOL createdWorkspace = NO;
-        Workspace *targetWorkspace = nil;
-        if (shouldManageTideyWorkspaceInsert) {
-            if (createWorkspace) {
-                Workspace *workspace = [[[Workspace alloc] initWithPanel:nil] autorelease];
+        for (PTYSession* aSession in [aTab sessions]) {
+            [aSession setIgnoreResizeNotifications:YES];
+        }
+        NSTabViewItem* aTabViewItem = [[NSTabViewItem alloc] initWithIdentifier:(id)aTab];
+        [aTabViewItem setLabel:@""];
+        assert(aTabViewItem);
+        [aTab setTabViewItem:aTabViewItem];
+        if (self.isShowingTideySidebar && _pendingInsertedPanelShouldAssignInitialTitle) {
+            NSString *const initialTitle = @"Terminal";
+            [aTab setTitleOverride:initialTitle];
+            [aTabViewItem setLabel:initialTitle];
+            __weak __typeof(aTab) weakTab = aTab;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                if ([weakTab.titleOverride isEqualToString:initialTitle]) {
+                    [weakTab setTitleOverride:nil];
+                }
+            });
+        }
+        PtyLog(@"insertTab:atIndex - calling [_contentView.tabView insertTabViewItem:atIndex]");
+        const int safeIndex = MAX(0, MIN(_contentView.tabView.tabViewItems.count, anIndex));
+        [_contentView.tabView insertTabViewItem:aTabViewItem atIndex:safeIndex];
+        [aTabViewItem release];
+        BOOL shouldSelectInsertedTab = (_automaticallySelectNewTabs ||
+                                        _contentView.tabView.tabViewItems.count == 1 ||
+                                        (self.isShowingTideySidebar && !_tideySwitchingWorkspace));
+        if (shouldSelectInsertedTab) {
+            [_contentView.tabView selectTabViewItemAtIndex:safeIndex];
+            [_contentView tideyRecordTerminalInteraction];
+        }
+        if (self.isShowingTideySidebar && !_tideySwitchingWorkspace) {
+            NSInteger targetWorkspaceIndex = _pendingWorkspaceIndexForInsertedPanel;
+            BOOL createdWorkspace = NO;
+            Workspace *targetWorkspace = nil;
+            if (_pendingInsertedPanelCreatesWorkspace) {
+                Workspace *workspace = [[[Workspace alloc] initWithPanel:aTab] autorelease];
                 [self.workspaces insertObject:workspace atIndex:MAX(0, MIN((NSInteger)self.workspaces.count, targetWorkspaceIndex))];
                 targetWorkspaceIndex = [self.workspaces indexOfObjectIdenticalTo:workspace];
-                if (![workspace.panels containsObject:aTab]) {
-                    [workspace.panels addObject:aTab];
-                }
                 workspace.selectedPanelIndex = 0;
                 targetWorkspace = workspace;
                 createdWorkspace = YES;
@@ -13235,56 +13242,12 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
                 targetWorkspaceIndex = self.selectedWorkspaceIndex;
                 targetWorkspace = workspace;
             } else {
-                Workspace *workspace = [[[Workspace alloc] initWithPanel:aTab] autorelease];
-                [self.workspaces addObject:workspace];
+                [self.workspaces addObject:[[[Workspace alloc] initWithPanel:aTab] autorelease]];
                 targetWorkspaceIndex = self.workspaces.count - 1;
-                targetWorkspace = workspace;
+                targetWorkspace = [self workspaceAtIndex:targetWorkspaceIndex];
                 createdWorkspace = YES;
             }
-        }
-        const BOOL shouldInsertVisible = [[self class] tideyShouldInsertPanelIntoVisibleTabViewForSelectedWorkspaceIndex:self.selectedWorkspaceIndex
-                                                                                                      targetWorkspaceIndex:targetWorkspaceIndex
-                                                                                                           createWorkspace:createWorkspace
-                                                                                                            showingSidebar:self.isShowingTideySidebar
-                                                                                                         switchingWorkspace:_tideySwitchingWorkspace];
-        for (PTYSession* aSession in [aTab sessions]) {
-            [aSession setIgnoreResizeNotifications:YES];
-        }
-        if (self.isShowingTideySidebar && _pendingInsertedPanelShouldAssignInitialTitle) {
-            NSString *const initialTitle = @"Terminal";
-            [aTab setTitleOverride:initialTitle];
-            __weak __typeof(aTab) weakTab = aTab;
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                if ([weakTab.titleOverride isEqualToString:initialTitle]) {
-                    [weakTab setTitleOverride:nil];
-                }
-            });
-        }
-        if (shouldInsertVisible) {
-            NSTabViewItem *aTabViewItem = [aTab tabViewItem];
-            BOOL createdTabViewItem = NO;
-            if (!aTabViewItem) {
-                aTabViewItem = [[NSTabViewItem alloc] initWithIdentifier:(id)aTab];
-                assert(aTabViewItem);
-                [aTab setTabViewItem:aTabViewItem];
-                createdTabViewItem = YES;
-            }
-            [aTabViewItem setLabel:aTab.titleOverride ?: @""];
-            PtyLog(@"insertTab:atIndex - calling [_contentView.tabView insertTabViewItem:atIndex]");
-            const int safeIndex = MAX(0, MIN(_contentView.tabView.tabViewItems.count, anIndex));
-            [_contentView.tabView insertTabViewItem:aTabViewItem atIndex:safeIndex];
-            if (createdTabViewItem) {
-                [aTabViewItem release];
-            }
-            BOOL shouldSelectInsertedTab = (_automaticallySelectNewTabs ||
-                                            _contentView.tabView.tabViewItems.count == 1 ||
-                                            (self.isShowingTideySidebar && !_tideySwitchingWorkspace));
-            if (shouldSelectInsertedTab) {
-                [_contentView.tabView selectTabViewItemAtIndex:safeIndex];
-                [_contentView tideyRecordTerminalInteraction];
-            }
-        }
-        if (shouldManageTideyWorkspaceInsert) {
+
             if (targetWorkspace) {
                 NSDictionary *workspaceSummary = [self tideySocketWorkspaceSummaryForWorkspace:targetWorkspace index:targetWorkspaceIndex];
                 NSInteger panelIndex = [targetWorkspace.panels indexOfObject:aTab];
@@ -13307,12 +13270,10 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
             } else {
                 [_contentView reloadTideySidebar];
                 [_contentView selectTideySidebarWorkspaceAtIndex:self.selectedWorkspaceIndex];
-                if (shouldInsertVisible) {
-                    NSInteger visibleIndex = [self indexOfTab:aTab];
-                    if (visibleIndex != NSNotFound) {
-                        [_contentView.tabView selectTabViewItemAtIndex:visibleIndex];
-                        [_contentView tideyRecordTerminalInteraction];
-                    }
+                NSInteger visibleIndex = [self indexOfTab:aTab];
+                if (visibleIndex != NSNotFound) {
+                    [_contentView.tabView selectTabViewItemAtIndex:visibleIndex];
+                    [_contentView tideyRecordTerminalInteraction];
                 }
             }
         }
