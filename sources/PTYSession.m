@@ -686,17 +686,13 @@ typedef NS_ENUM(NSUInteger, PTYSessionTurdType) {
 
 @synthesize isDivorced = _divorced;
 
-+ (NSArray<NSString *> *)tideyExternalTerminalIdentityEnvironmentKeysForEnvironment:(NSDictionary<NSString *, NSString *> *)environment {
-    NSMutableArray<NSString *> *keys = [NSMutableArray array];
-    if (environment[@"__CFBundleIdentifier"]) {
-        [keys addObject:@"__CFBundleIdentifier"];
-    }
-    return keys;
++ (NSArray<NSString *> *)tideyExternalTerminalIdentityEnvironmentKeys {
+    return @[ @"__CFBundleIdentifier" ];
 }
 
 + (NSDictionary<NSString *, NSString *> *)tideyEnvironmentByScrubbingExternalTerminalIdentityFromEnvironment:(NSDictionary<NSString *, NSString *> *)environment {
     NSMutableDictionary<NSString *, NSString *> *scrubbed = [[environment mutableCopy] autorelease];
-    for (NSString *key in [self tideyExternalTerminalIdentityEnvironmentKeysForEnvironment:environment]) {
+    for (NSString *key in [self tideyExternalTerminalIdentityEnvironmentKeys]) {
         [scrubbed removeObjectForKey:key];
     }
     return scrubbed;
@@ -714,11 +710,9 @@ typedef NS_ENUM(NSUInteger, PTYSessionTurdType) {
 }
 
 + (NSString *)tideyTmuxEnvironmentCleanupCommandForEnvironment:(NSDictionary<NSString *, NSString *> *)environment {
-    NSArray<NSString *> *keysToUnset = [self tideyExternalTerminalIdentityEnvironmentKeysForEnvironment:environment];
+    (void)environment;
     NSMutableString *command = [NSMutableString string];
-    for (NSString *key in keysToUnset) {
-        [command appendFormat:@"tmux set-environment -gu %@ 2>/dev/null; ", key];
-    }
+    [command appendString:@"tmux set-environment -gu __CFBundleIdentifier 2>/dev/null; "];
     [command appendString:@"_tidey_update_environment=\"$(tmux show-option -gqv update-environment 2>/dev/null)\"; "];
     [command appendString:@"_tidey_filtered_update_environment=\"\"; "];
     [command appendString:@"for _tidey_var in $_tidey_update_environment; do "];

@@ -500,7 +500,6 @@ final class PathTests: XCTestCase {
         let command = tmuxEnvironmentCleanupCommand([
             "CMUX_SURFACE_ID": "surface",
             "GHOSTTY_BIN_DIR": "/Applications/cmux.app/Contents/MacOS",
-            "__CFBundleIdentifier": "com.cmuxterm.app",
         ])
 
         XCTAssertTrue(command.contains("tmux set-environment -gu __CFBundleIdentifier"))
@@ -516,7 +515,6 @@ final class PathTests: XCTestCase {
         let prepared = preparedTerminalEnvironmentAndCleanup([
             "CMUX_SURFACE_ID": "surface",
             "GHOSTTY_BIN_DIR": "/Applications/cmux.app/Contents/MacOS",
-            "__CFBundleIdentifier": "com.cmuxterm.app",
             "PATH": "/usr/bin:/bin",
         ])
 
