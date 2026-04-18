@@ -48,6 +48,7 @@
 #import "SCEventListenerProtocol.h"
 #import "SCEvents.h"
 #import "TideyNotificationStore.h"
+#include <stdarg.h>
 
 #import <QuartzCore/QuartzCore.h>
 #import <WebKit/WebKit.h>
@@ -1186,6 +1187,31 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     iTermImageView *_backgroundImage NS_AVAILABLE_MAC(10_14);
     NSView *_workaroundView;  // 10.14 only. See issue 8701.
     iTermLayerBackedSolidColorView *_notchMask NS_AVAILABLE_MAC(12_0);
+}
+
+static NSString *const TideyWorkspaceGhostLogPath = @"/tmp/tidey-workspace-ghost.log";
+
+static void TideyWorkspaceGhostRootViewLog(NSString *format, ...) {
+    va_list args;
+    va_start(args, format);
+    NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+
+    NSString *line = [NSString stringWithFormat:@"%@ %@\n", [NSDate date], message];
+    NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
+    if (!data) {
+        return;
+    }
+
+    @synchronized([NSFileManager class]) {
+        if (![[NSFileManager defaultManager] fileExistsAtPath:TideyWorkspaceGhostLogPath]) {
+            [[NSFileManager defaultManager] createFileAtPath:TideyWorkspaceGhostLogPath contents:nil attributes:nil];
+        }
+        NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:TideyWorkspaceGhostLogPath];
+        [handle seekToEndOfFile];
+        [handle writeData:data];
+        [handle closeFile];
+    }
 }
 
 - (NSButton *)newTideyChromeToggleButtonWithAction:(SEL)action {
@@ -5910,6 +5936,8 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         return;
     }
     NSIndexSet *indexSet = [NSIndexSet indexSetWithIndex:index];
+    _tideyIgnoreNextSidebarSelection = YES;
+    TideyWorkspaceGhostRootViewLog(@"sidebar sync selection index=%ld", (long)index);
     [_tideySidebarTableView selectRowIndexes:indexSet byExtendingSelection:NO];
     [_tideySidebarTableView scrollRowToVisible:index];
 }
@@ -7413,6 +7441,8 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         return NO;
     }
     NSIndexSet *indexSet = [NSIndexSet indexSetWithIndex:index];
+    _tideyIgnoreNextSidebarSelection = YES;
+    TideyWorkspaceGhostRootViewLog(@"sidebar programmatic select index=%ld", (long)index);
     [_tideySidebarTableView selectRowIndexes:indexSet byExtendingSelection:NO];
     [_tideySidebarTableView scrollRowToVisible:index];
     return YES;
@@ -7539,8 +7569,10 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     if (notification.object != _tideySidebarTableView) {
         return;
     }
+    TideyWorkspaceGhostRootViewLog(@"sidebar selection did change row=%ld ignore=%d", (long)_tideySidebarTableView.selectedRow, _tideyIgnoreNextSidebarSelection);
     if (_tideyIgnoreNextSidebarSelection) {
         _tideyIgnoreNextSidebarSelection = NO;
+        TideyWorkspaceGhostRootViewLog(@"sidebar selection ignored row=%ld", (long)_tideySidebarTableView.selectedRow);
         [_tideySidebarTableView setNeedsDisplay:YES];
         return;
     }
@@ -7548,6 +7580,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     if (selectedRow < 0 || selectedRow >= self.numberOfTideySidebarWorkspaces) {
         return;
     }
+    TideyWorkspaceGhostRootViewLog(@"sidebar delegate select row=%ld", (long)selectedRow);
     [self.delegate rootTerminalViewSelectTideySidebarWorkspaceAtIndex:selectedRow];
     [_tideySidebarTableView setNeedsDisplay:YES];
     if ([_tideySidebarTableView isKindOfClass:[TideySidebarTableView class]]) {

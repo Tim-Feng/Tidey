@@ -145,6 +145,7 @@
 #import "TideyNotificationStore.h"
 #include "iTermFileDescriptorClient.h"
 #import <QuartzCore/QuartzCore.h>
+#include <stdarg.h>
 #include <unistd.h>
 
 #import "iTerm2SharedARC-Swift.h"
@@ -158,6 +159,43 @@ NSString *const iTermTabDidChangePositionInWindowNotification = @"iTermTabDidCha
 NSString *const iTermSelectedTabDidChange = @"iTermSelectedTabDidChange";
 NSString *const iTermWindowDidCloseNotification = @"iTermWindowDidClose";
 NSString *const iTermTabDidCloseNotification = @"iTermTabDidClose";
+
+static NSString *const TideyWorkspaceGhostLogPath = @"/tmp/tidey-workspace-ghost.log";
+
+static void TideyWorkspaceGhostLog(NSString *format, ...) {
+    va_list args;
+    va_start(args, format);
+    NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+
+    NSString *line = [NSString stringWithFormat:@"%@ %@\n", [NSDate date], message];
+    NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
+    if (!data) {
+        [message release];
+        return;
+    }
+
+    @synchronized([NSFileManager class]) {
+        if (![[NSFileManager defaultManager] fileExistsAtPath:TideyWorkspaceGhostLogPath]) {
+            [[NSFileManager defaultManager] createFileAtPath:TideyWorkspaceGhostLogPath contents:nil attributes:nil];
+        }
+        NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:TideyWorkspaceGhostLogPath];
+        [handle seekToEndOfFile];
+        [handle writeData:data];
+        [handle closeFile];
+    }
+
+    [message release];
+}
+
+static NSString *TideyWorkspaceGhostTabDescription(PTYTab *tab) {
+    if (!tab) {
+        return @"<nil>";
+    }
+    NSString *identifier = tab.stringUniqueIdentifier ?: @"<no-id>";
+    NSString *label = tab.tabViewItem.label ?: @"";
+    return [NSString stringWithFormat:@"<tab:%p id=%@ label=%@>", tab, identifier, label];
+}
 NSString *const iTermDidCreateTerminalWindowNotification = @"iTermDidCreateTerminalWindowNotification";
 NSString *const PseudoTerminalTideyWorkspaceEventNotification = @"PseudoTerminalTideyWorkspaceEventNotification";
 
@@ -2026,6 +2064,14 @@ ITERM_WEAKLY_REFERENCEABLE
 
     Workspace *currentWorkspace = self.selectedWorkspace;
     [self updateSelectedPanelIndexFromVisibleTabSelection];
+    TideyWorkspaceGhostLog(@"showWorkspace begin target=%ld current=%ld currentPanels=%ld targetPanels=%ld switching=%d rebuilding=%d visibleTabs=%ld",
+                           (long)index,
+                           (long)self.selectedWorkspaceIndex,
+                           (long)currentWorkspace.panels.count,
+                           (long)workspace.panels.count,
+                           _tideySwitchingWorkspace,
+                           _tideyRebuildingVisibleWorkspaceTabs,
+                           (long)self.tabs.count);
     self.selectedWorkspaceIndex = index;
 
     NSRect preservedFrame = self.window.frame;
@@ -2036,6 +2082,9 @@ ITERM_WEAKLY_REFERENCEABLE
     NSArray<PTYTab *> *visiblePanels = self.tabs;
     for (PTYTab *panel in [visiblePanels reverseObjectEnumerator]) {
         if (panel.tabViewItem) {
+            TideyWorkspaceGhostLog(@"showWorkspace remove visible tab target=%ld tab=%@",
+                                   (long)index,
+                                   TideyWorkspaceGhostTabDescription(panel));
             [_contentView.tabView removeTabViewItem:panel.tabViewItem];
         }
     }
@@ -2044,6 +2093,10 @@ ITERM_WEAKLY_REFERENCEABLE
     _automaticallySelectNewTabs = NO;
     _tideyRebuildingVisibleWorkspaceTabs = YES;
     for (NSInteger i = 0; i < workspace.panels.count; i++) {
+        TideyWorkspaceGhostLog(@"showWorkspace rebuild insert target=%ld slot=%ld tab=%@",
+                               (long)index,
+                               (long)i,
+                               TideyWorkspaceGhostTabDescription(workspace.panels[i]));
         [self insertTab:workspace.panels[i] atIndex:(int)i];
     }
     _tideyRebuildingVisibleWorkspaceTabs = NO;
@@ -2057,6 +2110,11 @@ ITERM_WEAKLY_REFERENCEABLE
     if (workspace.panels.count > 0) {
         PTYTab *panel = workspace.panels[selectedPanelIndex];
         NSInteger panelIndex = [self indexOfTab:panel];
+        TideyWorkspaceGhostLog(@"showWorkspace select target=%ld panelIndex=%ld visibleIndex=%ld tab=%@",
+                               (long)index,
+                               (long)selectedPanelIndex,
+                               (long)panelIndex,
+                               TideyWorkspaceGhostTabDescription(panel));
         if (panelIndex != NSNotFound) {
             [_contentView.tabView selectTabViewItemAtIndex:panelIndex];
         }
@@ -2072,6 +2130,10 @@ ITERM_WEAKLY_REFERENCEABLE
     [self fitTabsToWindow];
     [_contentView reloadTideySidebar];
     [_contentView selectTideySidebarWorkspaceAtIndex:index];
+    if (!_fullScreen && self.currentTab) {
+        [self.currentTab updateLabelAttributes];
+        [self setWindowTitle];
+    }
     if (self.currentSession.mainResponder) {
         [[self window] makeFirstResponder:self.currentSession.mainResponder];
     }
@@ -2079,6 +2141,10 @@ ITERM_WEAKLY_REFERENCEABLE
     if (currentWorkspace != workspace && workspace.panels.count > 0) {
         [self updateSelectedPanelIndexFromVisibleTabSelection];
     }
+    TideyWorkspaceGhostLog(@"showWorkspace end target=%ld selected=%ld visibleTabs=%ld",
+                           (long)index,
+                           (long)self.selectedWorkspaceIndex,
+                           (long)self.tabs.count);
 }
 
 - (BOOL)selectWorkspaceAtIndex:(NSInteger)index recordHistory:(BOOL)recordHistory {
@@ -4230,6 +4296,13 @@ ITERM_WEAKLY_REFERENCEABLE
 
 - (void)setWindowTitle:(NSString *)title subtitle:(NSString *)subtitle {
     DLog(@"setWindowTitle:%@ for %@", title, self);
+    TideyWorkspaceGhostLog(@"setWindowTitle title=%@ subtitle=%@ selectedWorkspace=%ld currentTab=%@ switching=%d rebuilding=%d",
+                           title ?: @"<nil>",
+                           subtitle ?: @"<nil>",
+                           (long)self.selectedWorkspaceIndex,
+                           TideyWorkspaceGhostTabDescription(self.currentTab),
+                           _tideySwitchingWorkspace,
+                           _tideyRebuildingVisibleWorkspaceTabs);
     if (_deallocing) {
         // This uses -weakSelf and can be called during dealloc. Doing so is a crash.
         DLog(@"deallocing");
@@ -8322,6 +8395,14 @@ hidingToolbeltShouldResizeWindow:(BOOL)hidingToolbeltShouldResizeWindow
         [self hideAutoCommandHistory];
     }
     PTYTab *tab = [tabViewItem identifier];
+    const BOOL tideySuppressWorkspaceTransitionSideEffects = self.isShowingTideySidebar &&
+        (_tideySwitchingWorkspace || _tideyRebuildingVisibleWorkspaceTabs);
+    TideyWorkspaceGhostLog(@"didSelect begin selectedWorkspace=%ld switching=%d rebuilding=%d tab=%@ visibleTabs=%ld",
+                           (long)self.selectedWorkspaceIndex,
+                           _tideySwitchingWorkspace,
+                           _tideyRebuildingVisibleWorkspaceTabs,
+                           TideyWorkspaceGhostTabDescription(tab),
+                           (long)self.tabs.count);
     for (PTYSession *aSession in [tab sessions]) {
         DLog(@"Clear new-output flag in %@", aSession);
         [aSession setNewOutput:NO];
@@ -8344,7 +8425,9 @@ hidingToolbeltShouldResizeWindow:(BOOL)hidingToolbeltShouldResizeWindow
     }
     if (!_fullScreen) {
         [tab updateLabelAttributes];
-        [self setWindowTitle];
+        if (!tideySuppressWorkspaceTransitionSideEffects) {
+            [self setWindowTitle];
+        }
     }
 
     // The web browser is added after a spin of the runloop to dodge auto layout bugs.
@@ -8405,8 +8488,13 @@ hidingToolbeltShouldResizeWindow:(BOOL)hidingToolbeltShouldResizeWindow
     [self updateBackgroundImage];
     [_contentView setCurrentSessionAlpha:self.currentSession.textview.transparencyAlpha];
     [tab didSelectTab];
-    if (self.isShowingTideySidebar) {
+    if (self.isShowingTideySidebar && !tideySuppressWorkspaceTransitionSideEffects) {
         NSInteger workspaceIndex = [self indexOfWorkspaceContainingPanel:tab];
+        TideyWorkspaceGhostLog(@"didSelect ownership tab=%@ workspaceIndex=%ld selectedBefore=%ld switching=%d",
+                               TideyWorkspaceGhostTabDescription(tab),
+                               (long)workspaceIndex,
+                               (long)self.selectedWorkspaceIndex,
+                               _tideySwitchingWorkspace);
         if (workspaceIndex != NSNotFound) {
             self.selectedWorkspaceIndex = workspaceIndex;
             Workspace *workspace = [self workspaceAtIndex:workspaceIndex];
@@ -8414,12 +8502,17 @@ hidingToolbeltShouldResizeWindow:(BOOL)hidingToolbeltShouldResizeWindow
             if (panelIndex != NSNotFound) {
                 workspace.selectedPanelIndex = panelIndex;
             }
+            TideyWorkspaceGhostLog(@"didSelect sidebar select workspace=%ld panelIndex=%ld tab=%@",
+                                   (long)workspaceIndex,
+                                   (long)panelIndex,
+                                   TideyWorkspaceGhostTabDescription(tab));
             [_contentView selectTideySidebarWorkspaceAtIndex:workspaceIndex];
         }
     }
     NSString *currentWorkspaceID = [self tideySelectedWorkspaceIdentifier];
     NSString *currentPanelID = tab.stringUniqueIdentifier;
-    if (currentWorkspaceID.length > 0 &&
+    if (!tideySuppressWorkspaceTransitionSideEffects &&
+        currentWorkspaceID.length > 0 &&
         ![currentWorkspaceID isEqualToString:self.tideyLastBroadcastWorkspaceSelectionIdentifier]) {
         NSDictionary *workspaceSummary = [self tideySocketWorkspaceSummaryForWorkspaceIdentifier:currentWorkspaceID];
         NSDictionary *panelSummary = currentPanelID.length > 0 ? [self tideySocketPanelSummaryForPanelIdentifier:currentPanelID] : nil;
@@ -8430,7 +8523,8 @@ hidingToolbeltShouldResizeWindow:(BOOL)hidingToolbeltShouldResizeWindow
                                        panel:panelSummary];
         self.tideyLastBroadcastWorkspaceSelectionIdentifier = currentWorkspaceID;
     }
-    if (currentPanelID.length > 0 &&
+    if (!tideySuppressWorkspaceTransitionSideEffects &&
+        currentPanelID.length > 0 &&
         ![currentPanelID isEqualToString:self.tideyLastBroadcastPanelSelectionIdentifier]) {
         NSDictionary *workspaceSummary = currentWorkspaceID.length > 0 ? [self tideySocketWorkspaceSummaryForWorkspaceIdentifier:currentWorkspaceID] : nil;
         NSDictionary *panelSummary = [self tideySocketPanelSummaryForPanelIdentifier:currentPanelID];
@@ -8442,6 +8536,10 @@ hidingToolbeltShouldResizeWindow:(BOOL)hidingToolbeltShouldResizeWindow
         self.tideyLastBroadcastPanelSelectionIdentifier = currentPanelID;
     }
     [[NSNotificationCenter defaultCenter] postNotificationName:iTermSelectedTabDidChange object:tab];
+    TideyWorkspaceGhostLog(@"didSelect end selectedWorkspace=%ld suppressed=%d tab=%@",
+                           (long)self.selectedWorkspaceIndex,
+                           tideySuppressWorkspaceTransitionSideEffects,
+                           TideyWorkspaceGhostTabDescription(tab));
     DLog(@"Finished");
 }
 
@@ -13220,6 +13318,16 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
         const BOOL shouldManageTideyWorkspaceInsert = [[self class] tideyShouldManagePendingPanelInsertForShowingSidebar:self.isShowingTideySidebar
                                                                                                   pendingWorkspaceIndex:targetWorkspaceIndex
                                                                                                         createWorkspace:createWorkspace];
+        TideyWorkspaceGhostLog(@"insertTab begin tab=%@ index=%d selectedWorkspace=%ld pendingWorkspace=%ld createWorkspace=%d switching=%d rebuilding=%d managePending=%d visibleTabs=%ld",
+                               TideyWorkspaceGhostTabDescription(aTab),
+                               anIndex,
+                               (long)self.selectedWorkspaceIndex,
+                               (long)targetWorkspaceIndex,
+                               createWorkspace,
+                               _tideySwitchingWorkspace,
+                               _tideyRebuildingVisibleWorkspaceTabs,
+                               shouldManageTideyWorkspaceInsert,
+                               (long)self.tabs.count);
         BOOL createdWorkspace = NO;
         Workspace *targetWorkspace = nil;
         if (shouldManageTideyWorkspaceInsert) {
@@ -13262,6 +13370,12 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
                                                                             createWorkspace:createWorkspace
                                                                              showingSidebar:self.isShowingTideySidebar
                                                                   rebuildingVisibleWorkspace:_tideyRebuildingVisibleWorkspaceTabs];
+        TideyWorkspaceGhostLog(@"insertTab resolved tab=%@ targetWorkspace=%ld createdWorkspace=%d shouldInsertVisible=%d targetWorkspacePanelCount=%ld",
+                               TideyWorkspaceGhostTabDescription(aTab),
+                               (long)targetWorkspaceIndex,
+                               createdWorkspace,
+                               shouldInsertVisible,
+                               (long)targetWorkspace.panels.count);
         for (PTYSession* aSession in [aTab sessions]) {
             [aSession setIgnoreResizeNotifications:YES];
         }
@@ -13288,14 +13402,22 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
         if (shouldInsertVisible) {
             PtyLog(@"insertTab:atIndex - calling [_contentView.tabView insertTabViewItem:atIndex]");
             const int safeIndex = MAX(0, MIN(_contentView.tabView.tabViewItems.count, anIndex));
+            TideyWorkspaceGhostLog(@"insertTab visible insert tab=%@ safeIndex=%d",
+                                   TideyWorkspaceGhostTabDescription(aTab),
+                                   safeIndex);
             [_contentView.tabView insertTabViewItem:aTabViewItem atIndex:safeIndex];
             BOOL shouldSelectInsertedTab = (_automaticallySelectNewTabs ||
                                             _contentView.tabView.tabViewItems.count == 1 ||
                                             (self.isShowingTideySidebar && !_tideySwitchingWorkspace));
             if (shouldSelectInsertedTab) {
+                TideyWorkspaceGhostLog(@"insertTab visible select tab=%@ safeIndex=%d",
+                                       TideyWorkspaceGhostTabDescription(aTab),
+                                       safeIndex);
                 [_contentView.tabView selectTabViewItemAtIndex:safeIndex];
                 [_contentView tideyRecordTerminalInteraction];
             }
+        } else {
+            TideyWorkspaceGhostLog(@"insertTab skip visible tab=%@", TideyWorkspaceGhostTabDescription(aTab));
         }
         if (createdTabViewItem && !shouldInsertVisible) {
             [aTabViewItem release];
@@ -13318,14 +13440,23 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
             if (createdWorkspace) {
                 __weak __typeof(self) weakSelf = self;
                 dispatch_async(dispatch_get_main_queue(), ^{
+                    TideyWorkspaceGhostLog(@"insertTab async select created workspace=%ld tab=%@",
+                                           (long)targetWorkspaceIndex,
+                                           TideyWorkspaceGhostTabDescription(aTab));
                     [weakSelf selectWorkspaceAtIndex:targetWorkspaceIndex recordHistory:YES];
                 });
             } else {
                 [_contentView reloadTideySidebar];
                 if (shouldInsertVisible) {
+                    TideyWorkspaceGhostLog(@"insertTab sidebar refresh currentWorkspace=%ld tab=%@",
+                                           (long)self.selectedWorkspaceIndex,
+                                           TideyWorkspaceGhostTabDescription(aTab));
                     [_contentView selectTideySidebarWorkspaceAtIndex:self.selectedWorkspaceIndex];
                     NSInteger visibleIndex = [self indexOfTab:aTab];
                     if (visibleIndex != NSNotFound) {
+                        TideyWorkspaceGhostLog(@"insertTab reseat visible tab=%@ visibleIndex=%ld",
+                                               TideyWorkspaceGhostTabDescription(aTab),
+                                               (long)visibleIndex);
                         [_contentView.tabView selectTabViewItemAtIndex:visibleIndex];
                         [_contentView tideyRecordTerminalInteraction];
                     }
