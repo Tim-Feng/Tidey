@@ -1909,6 +1909,7 @@ ITERM_WEAKLY_REFERENCEABLE
          [workspaceID isEqualToString:@"*"] ||
          [workspaceID isEqualToString:selectedWorkspaceID])) {
         [[TideyNotificationStore sharedStore] markReadForWorkspaceID:selectedWorkspaceID];
+        [self tideyUpdateNotificationDockBadge];
         return;
     }
 
