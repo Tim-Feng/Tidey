@@ -6960,7 +6960,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     NSTextField *statusField = (NSTextField *)[cellView viewWithTag:1008];
 
     if (hasBody) {
-        // Expanded layout (cmux-style):
+        // Expanded layout:
         //   ① Badge + Workspace Title           ✕   (top row)
         //   Notification body (up to 3 lines, gray)  (middle)
         //   ⊕ Status (if present)                    (bottom, above cwd)
@@ -7074,7 +7074,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
                                                                                   attributes:textAttrs]];
             }
             if (entry.icon.length > 0) {
-                // Use SF Symbol as icon (matching cmux approach).
+                // Use SF Symbol as icon.
                 // Rendered via NSTextAttachment for precise vertical centering with text.
                 // Use hierarchical color config so multi-layer symbols (e.g. pause.circle.fill)
                 // render distinct layers instead of a flat silhouette.
