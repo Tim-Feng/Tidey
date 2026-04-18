@@ -78,6 +78,8 @@ static const CGFloat kTideyDragHandleWidth = 4;
 static const CGFloat kTideyChromeToggleButtonWidth = 18;
 static const CGFloat kTideyChromeToggleButtonHeight = 34;
 static const CGFloat kTideySidebarBadgeSize = 8;
+static const CGFloat kTideySidebarBadgeLeadingInset = 4;
+static const CGFloat kTideySidebarBadgeTopInset = 6;
 static const CGFloat kTideySidebarCloseButtonTopInset = 10;
 static const CGFloat kTideyPanelShortcutHintWidth = 28;
 static const CGFloat kTideyPanelShortcutHintHeight = 18;
@@ -6970,11 +6972,14 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 
         // --- Title row (top) ---
         cellView.textField.stringValue = [self tideySidebarWorkspaceTitleAtIndex:row];
-        CGFloat titleX = (unreadCount > 0) ? 32 : 8;
-        CGFloat titleMaxW = (unreadCount > 0) ? (width - 80) : (width - 56);
+        CGFloat titleX = 8;
+        CGFloat titleMaxW = width - 56;
         cellView.textField.frame = NSMakeRect(titleX, 51 + sOff, MAX(0, titleMaxW), 14);
 
-        badgeView.frame = NSMakeRect(8, 49 + sOff, kTideySidebarBadgeSize, kTideySidebarBadgeSize);
+        badgeView.frame = NSMakeRect(kTideySidebarBadgeLeadingInset,
+                                     NSHeight(cellView.bounds) - kTideySidebarBadgeTopInset - kTideySidebarBadgeSize,
+                                     kTideySidebarBadgeSize,
+                                     kTideySidebarBadgeSize);
         pinView.frame = NSMakeRect(MAX(0, width - 42), 51 + sOff, 12, 12);
 
         NSView *closeView = TideyFindCloseView(cellView);
@@ -7007,8 +7012,8 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     } else {
         // Normal layout (60pt row).
         // Only indent for badge when there are unread notifications.
-        CGFloat textX = (unreadCount > 0) ? 32 : 8;
-        CGFloat textMaxW = (unreadCount > 0) ? (width - 80) : (width - 56);
+        CGFloat textX = 8;
+        CGFloat textMaxW = width - 56;
 
         cellView.textField.stringValue = [self tideySidebarWorkspaceTitleAtIndex:row];
         CGFloat titleY = hasStatus ? 38 : 30;
@@ -7030,8 +7035,10 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         bodyField.stringValue = @"";
 
         pinView.frame = NSMakeRect(MAX(0, width - 42), 34, 12, 12);
-        CGFloat badgeY = titleY + 1;  // vertically center badge (16pt) with title (14pt text in 18pt frame)
-        badgeView.frame = NSMakeRect(8, badgeY, kTideySidebarBadgeSize, kTideySidebarBadgeSize);
+        badgeView.frame = NSMakeRect(kTideySidebarBadgeLeadingInset,
+                                     NSHeight(cellView.bounds) - kTideySidebarBadgeTopInset - kTideySidebarBadgeSize,
+                                     kTideySidebarBadgeSize,
+                                     kTideySidebarBadgeSize);
 
         NSView *closeView = TideyFindCloseView(cellView);
         closeView.frame = NSMakeRect(MAX(0, width - 20),
@@ -7043,6 +7050,8 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         closeView.hidden = !showClose;
         closeView.alphaValue = showClose ? 1.0 : 0.0;
     }
+
+    [cellView addSubview:badgeView positioned:NSWindowAbove relativeTo:nil];
 
     // Configure status field at the bottom of the cell.
     if (hasStatus) {
