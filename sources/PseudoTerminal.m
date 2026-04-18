@@ -1966,16 +1966,14 @@ ITERM_WEAKLY_REFERENCEABLE
 - (void)tideyNotificationStoreDidChange:(NSNotification *)notification {
     NSString *workspaceID = notification.userInfo[@"workspaceID"];
     NSString *selectedWorkspaceID = [self tideySelectedWorkspaceIdentifier];
+    [self tideyUpdateNotificationDockBadge];
+
     if (selectedWorkspaceID.length > 0 &&
-        (workspaceID.length == 0 ||
-         [workspaceID isEqualToString:@"*"] ||
-         [workspaceID isEqualToString:selectedWorkspaceID])) {
+        [[self class] tideyShouldAutoMarkReadWorkspaceOnNotificationArrivalForSelectedWorkspaceID:selectedWorkspaceID
+                                                                           notificationWorkspaceID:workspaceID]) {
         [[TideyNotificationStore sharedStore] markReadForWorkspaceID:selectedWorkspaceID];
         [self tideyUpdateNotificationDockBadge];
-        return;
     }
-
-    [self tideyUpdateNotificationDockBadge];
 
     if (workspaceID.length == 0 || [workspaceID isEqualToString:@"*"]) {
         return;
