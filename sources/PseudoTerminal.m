@@ -6446,6 +6446,11 @@ hidingToolbeltShouldResizeWindow:(BOOL)hidingToolbeltShouldResizeWindow
 
 - (void)applicationDidBecomeActive:(NSNotification *)notification {
     _hasBeenKeySinceActivation = [self.window isKeyWindow];
+    if ([self.window isKeyWindow]) {
+        [self performSelector:@selector(makeCurrentSessionFirstResponderIfNoPreferred)
+                   withObject:nil
+                   afterDelay:0];
+    }
 }
 
 - (void)applicationDidResignActive:(NSNotification *)notification {
