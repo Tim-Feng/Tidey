@@ -60,6 +60,30 @@ final class PathTests: XCTestCase {
         return shouldOpen(helper, shouldOpenSelector, url as NSURL).boolValue
     }
 
+    private func preferredURLLikeCandidate(primaryJoined: String,
+                                           fallbackJoined: String,
+                                           clickIndex: Int,
+                                           respectHardNewlines: Bool) -> String? {
+        guard let factoryClass = NSClassFromString("iTermURLActionFactory") as? AnyClass else {
+            XCTFail("Missing iTermURLActionFactory")
+            return nil
+        }
+        let selector = NSSelectorFromString("tideyPreferredURLLikeCandidateWithPrimaryJoinedString:fallbackJoinedString:clickIndex:respectHardNewlines:")
+        guard let method = class_getClassMethod(factoryClass, selector) else {
+            XCTFail("Missing iTermURLActionFactory URL-like candidate helper")
+            return nil
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, NSString, NSString, Int, ObjCBool) -> NSString?
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        return function(factoryClass,
+                        selector,
+                        primaryJoined as NSString,
+                        fallbackJoined as NSString,
+                        clickIndex,
+                        ObjCBool(respectHardNewlines)) as String?
+    }
+
     private func resolvedPath(prefix: String,
                               suffix: String,
                               workingDirectory: String,
@@ -311,6 +335,32 @@ final class PathTests: XCTestCase {
     func testFileURLsWithoutPathsDoNotUseSemanticHistoryRoute() {
         XCTAssertFalse(semanticHistoryRouteShouldOpen(URL(string: "file://")!))
         XCTAssertFalse(semanticHistoryRouteShouldOpen(URL(string: "file:///")!))
+    }
+
+    func testURLLikeCandidateUsesPrimaryStringWhenRespectingHardNewlines() {
+        let primary = "prefix https://example.com/path\nother text"
+        let fallback = "prefix https://example.com/pathother text"
+        let clickIndex = (primary as NSString).range(of: "example").location
+
+        let candidate = preferredURLLikeCandidate(primaryJoined: primary,
+                                                  fallbackJoined: fallback,
+                                                  clickIndex: clickIndex,
+                                                  respectHardNewlines: true)
+
+        XCTAssertEqual(candidate, "https://example.com/path")
+    }
+
+    func testURLLikeCandidateUsesIgnoringHardNewlineStringWhenConfigured() {
+        let primary = "prefix https://example.com/very/long/\npath?query=1"
+        let fallback = "prefix https://example.com/very/long/path?query=1"
+        let clickIndex = (primary as NSString).range(of: "example").location
+
+        let candidate = preferredURLLikeCandidate(primaryJoined: primary,
+                                                  fallbackJoined: fallback,
+                                                  clickIndex: clickIndex,
+                                                  respectHardNewlines: false)
+
+        XCTAssertEqual(candidate, "https://example.com/very/long/path?query=1")
     }
 
     func testWorkspacePanelsFollowVisibleTabOrderAfterReorder() {

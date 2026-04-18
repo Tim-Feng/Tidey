@@ -58,6 +58,10 @@ typedef enum {
 
 @property (nonatomic, strong) iTermLocatedString *locatedPrefix;
 @property (nonatomic, strong) iTermLocatedString *locatedSuffix;
+@property (nonatomic, strong) iTermLocatedString *locatedPrefixRespectingHardNewlines;
+@property (nonatomic, strong) iTermLocatedString *locatedSuffixRespectingHardNewlines;
+@property (nonatomic, strong) iTermLocatedString *locatedPrefixIgnoringHardNewlines;
+@property (nonatomic, strong) iTermLocatedString *locatedSuffixIgnoringHardNewlines;
 @end
 
 static NSMutableArray<iTermURLActionFactory *> *sFactories;
@@ -283,8 +287,10 @@ static BOOL iTermStringIsASCIIOnly(NSString *string) {
                                       maxChars:[iTermAdvancedSettingsModel maxSemanticHistoryPrefixOrSuffix]
                              continuationChars:[NSMutableIndexSet indexSet]
                            convertNullsToSpace:NO];
-    if (!self.locatedPrefix) {
-        self.locatedPrefix = locatedPrefix;
+    if (respectHardNewlines) {
+        self.locatedPrefixRespectingHardNewlines = locatedPrefix;
+    } else {
+        self.locatedPrefixIgnoringHardNewlines = locatedPrefix;
     }
 
     iTermLocatedString *locatedSuffix =
@@ -294,8 +300,10 @@ static BOOL iTermStringIsASCIIOnly(NSString *string) {
                                       maxChars:[iTermAdvancedSettingsModel maxSemanticHistoryPrefixOrSuffix]
                              continuationChars:[NSMutableIndexSet indexSet]
                            convertNullsToSpace:NO];
-    if (!self.locatedSuffix) {
-        self.locatedSuffix = locatedSuffix;
+    if (respectHardNewlines) {
+        self.locatedSuffixRespectingHardNewlines = locatedSuffix;
+    } else {
+        self.locatedSuffixIgnoringHardNewlines = locatedSuffix;
     }
 
     [self urlActionForExistingFileWithPrefix:locatedPrefix
@@ -337,6 +345,37 @@ static BOOL iTermStringIsASCIIOnly(NSString *string) {
     } else {
         [self fail];
     }
+}
+
+- (iTermLocatedString *)locatedPrefixForURLLikeRespectingHardNewlines:(BOOL)respectHardNewlines {
+    return respectHardNewlines ? self.locatedPrefixRespectingHardNewlines : self.locatedPrefixIgnoringHardNewlines;
+}
+
+- (iTermLocatedString *)locatedSuffixForURLLikeRespectingHardNewlines:(BOOL)respectHardNewlines {
+    return respectHardNewlines ? self.locatedSuffixRespectingHardNewlines : self.locatedSuffixIgnoringHardNewlines;
+}
+
++ (NSString *)tideyURLLikeCandidateInJoinedString:(NSString *)joined clickIndex:(NSInteger)clickIndex {
+    if (!joined || clickIndex < 0 || clickIndex > joined.length) {
+        return nil;
+    }
+    int prefixChars = 0;
+    NSString *possibleUrl = [joined substringIncludingOffset:(int)clickIndex
+                                            fromCharacterSet:[NSCharacterSet urlCharacterSet]
+                                        charsTakenFromPrefix:&prefixChars];
+    NSRange rangeWithoutNearbyPunctuation = [possibleUrl rangeOfURLInString];
+    if (rangeWithoutNearbyPunctuation.location == NSNotFound) {
+        return nil;
+    }
+    return [possibleUrl substringWithRange:rangeWithoutNearbyPunctuation];
+}
+
++ (NSString *)tideyPreferredURLLikeCandidateWithPrimaryJoinedString:(NSString *)primaryJoined
+                                               fallbackJoinedString:(NSString *)fallbackJoined
+                                                         clickIndex:(NSInteger)clickIndex
+                                               respectHardNewlines:(BOOL)respectHardNewlines {
+    NSString *joined = respectHardNewlines ? primaryJoined : fallbackJoined;
+    return [self tideyURLLikeCandidateInJoinedString:joined clickIndex:clickIndex];
 }
 
 - (void)trySecureCopy {
@@ -595,7 +634,13 @@ static BOOL iTermStringIsASCIIOnly(NSString *string) {
     return nil;
 }
 
-- (URLAction *)urlActionForURLLike {
+- (URLAction *)urlActionForURLLikeWithLocatedPrefix:(iTermLocatedString *)locatedPrefix
+                                      locatedSuffix:(iTermLocatedString *)locatedSuffix {
+    if (!locatedPrefix || !locatedSuffix) {
+        return nil;
+    }
+    self.locatedPrefix = locatedPrefix;
+    self.locatedSuffix = locatedSuffix;
     NSString *joined = [self.locatedPrefix.string stringByAppendingString:self.locatedSuffix.string];
     DLog(@"Smart selection found nothing. Look for URL-like things in %@ around offset %d",
          joined, (int)[self.locatedPrefix.string length]);
@@ -693,6 +738,13 @@ static BOOL iTermStringIsASCIIOnly(NSString *string) {
     }
 
     return nil;
+}
+
+- (URLAction *)urlActionForURLLike {
+    iTermLocatedString *primaryPrefix = [self locatedPrefixForURLLikeRespectingHardNewlines:self.respectHardNewlines];
+    iTermLocatedString *primarySuffix = [self locatedSuffixForURLLikeRespectingHardNewlines:self.respectHardNewlines];
+    return [self urlActionForURLLikeWithLocatedPrefix:primaryPrefix
+                                        locatedSuffix:primarySuffix];
 }
 
 - (NSString *)hostnameInSchemelessPossibleURL:(NSString *)url {
