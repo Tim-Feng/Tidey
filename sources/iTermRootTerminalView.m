@@ -77,7 +77,7 @@ static const CGFloat kTideyEditorTabStripHeight = 34;
 static const CGFloat kTideyDragHandleWidth = 4;
 static const CGFloat kTideyChromeToggleButtonWidth = 18;
 static const CGFloat kTideyChromeToggleButtonHeight = 34;
-static const CGFloat kTideySidebarBadgeSize = 16;
+static const CGFloat kTideySidebarBadgeSize = 8;
 static const CGFloat kTideySidebarCloseButtonTopInset = 10;
 static const CGFloat kTideyPanelShortcutHintWidth = 28;
 static const CGFloat kTideyPanelShortcutHintHeight = 18;
@@ -6931,9 +6931,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     NSTextField *badgeLabel = (NSTextField *)[badgeView viewWithTag:1006];
     badgeView.hidden = (unreadCount <= 0);
     if (unreadCount > 0) {
-        badgeView.layer.backgroundColor = (selected
-                                           ? [NSColor colorWithWhite:1 alpha:0.25].CGColor
-                                           : NSColor.controlAccentColor.CGColor);
+        badgeView.layer.backgroundColor = [NSColor systemRedColor].CGColor;
         badgeLabel.stringValue = @"";
     }
     NSImageView *pinView = (NSImageView *)[cellView viewWithTag:1003];
