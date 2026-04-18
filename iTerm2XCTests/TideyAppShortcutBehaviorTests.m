@@ -9,7 +9,8 @@
 + (BOOL)tideyShouldIgnoreCloseCurrentSessionWithTabCount:(NSInteger)tabCount
                                   currentTabSessionCount:(NSInteger)sessionCount
                                  didCloseRightPanelTab:(BOOL)didCloseRightPanelTab;
-+ (NSDictionary<NSString *, id> *)tideyDockBadgeStateForHasUnreadNotifications:(BOOL)hasUnreadNotifications;
++ (NSDictionary<NSString *, id> *)tideyDockBadgeStateForBellCount:(NSInteger)bellCount
+                                           hasUnreadNotifications:(BOOL)hasUnreadNotifications;
 @end
 
 @interface iTermApplicationDelegate (TideyAppShortcutBehaviorTests)
@@ -62,13 +63,23 @@
                                                            didCloseRightPanelTab:YES]);
 }
 
-- (void)testDockBadgeStateUsesDotForAnyUnreadNotification {
+- (void)testDockBadgeStatePrefersBellCountOverUnreadDot {
     NSDictionary<NSString *, id> *badgeState =
-        [PseudoTerminal tideyDockBadgeStateForHasUnreadNotifications:YES];
+        [PseudoTerminal tideyDockBadgeStateForBellCount:3 hasUnreadNotifications:YES];
+    XCTAssertEqualObjects(badgeState[@"label"], @"3");
+    XCTAssertEqualObjects(badgeState[@"showsBadge"], @YES);
+}
+
+- (void)testDockBadgeStateUsesDotOnlyWhenBellCountIsZero {
+    NSDictionary<NSString *, id> *badgeState =
+        [PseudoTerminal tideyDockBadgeStateForBellCount:0 hasUnreadNotifications:YES];
     XCTAssertEqualObjects(badgeState[@"label"], @"•");
     XCTAssertEqualObjects(badgeState[@"showsBadge"], @YES);
+}
 
-    badgeState = [PseudoTerminal tideyDockBadgeStateForHasUnreadNotifications:NO];
+- (void)testDockBadgeStateClearsWhenThereIsNoBellOrUnreadNotification {
+    NSDictionary<NSString *, id> *badgeState =
+        [PseudoTerminal tideyDockBadgeStateForBellCount:0 hasUnreadNotifications:NO];
     XCTAssertEqualObjects(badgeState[@"label"], @"");
     XCTAssertEqualObjects(badgeState[@"showsBadge"], @NO);
 }

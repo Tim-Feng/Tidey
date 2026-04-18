@@ -374,7 +374,8 @@ typedef NS_ENUM(int, iTermShouldHaveTitleSeparator) {
 + (BOOL)tideyShouldIgnoreCloseCurrentSessionWithTabCount:(NSInteger)tabCount
                                   currentTabSessionCount:(NSInteger)sessionCount
                                  didCloseRightPanelTab:(BOOL)didCloseRightPanelTab;
-+ (NSDictionary<NSString *, id> *)tideyDockBadgeStateForHasUnreadNotifications:(BOOL)hasUnreadNotifications;
++ (NSDictionary<NSString *, id> *)tideyDockBadgeStateForBellCount:(NSInteger)bellCount
+                                           hasUnreadNotifications:(BOOL)hasUnreadNotifications;
 @end
 
 @implementation PseudoTerminal {
@@ -3921,7 +3922,14 @@ ITERM_WEAKLY_REFERENCEABLE
     return (tabCount <= 1 && sessionCount <= 1);
 }
 
-+ (NSDictionary<NSString *, id> *)tideyDockBadgeStateForHasUnreadNotifications:(BOOL)hasUnreadNotifications {
++ (NSDictionary<NSString *, id> *)tideyDockBadgeStateForBellCount:(NSInteger)bellCount
+                                           hasUnreadNotifications:(BOOL)hasUnreadNotifications {
+    if (bellCount > 0) {
+        return @{
+            @"label": [NSString stringWithFormat:@"%ld", (long)bellCount],
+            @"showsBadge": @YES,
+        };
+    }
     return @{
         @"label": hasUnreadNotifications ? @"•" : @"",
         @"showsBadge": @(hasUnreadNotifications),
