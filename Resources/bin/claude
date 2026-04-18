@@ -9,6 +9,9 @@
 set -euo pipefail
 
 REGISTRY_ROOT="$HOME/Library/Application Support/Tidey Remote Bridge/agent-sessions/claude"
+HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=/dev/null
+source "$HOOK_DIR/tidey-tmux-pane-identity"
 
 json_escape() {
     local s="${1-}"
@@ -163,18 +166,14 @@ build_hook_command() {
     local event="$1"
     local prefix="${2:-}"
     local tidey_bin_path="$HOOK_DIR/tidey"
+    local pane_helper_path="$HOOK_DIR/tidey-tmux-pane-identity"
     local script=""
 
     if [[ -n "$prefix" ]]; then
         script+="$prefix; "
     fi
 
-    script+='if [ -n "${TMUX:-}" ] && command -v tmux >/dev/null 2>&1; then '
-    script+='_tidey_workspace="$(tmux show-environment TIDEY_WORKSPACE_ID 2>/dev/null || tmux show-environment -g TIDEY_WORKSPACE_ID 2>/dev/null || true)"; '
-    script+='case "$_tidey_workspace" in TIDEY_WORKSPACE_ID=*) export TIDEY_WORKSPACE_ID="${_tidey_workspace#TIDEY_WORKSPACE_ID=}" ;; -TIDEY_WORKSPACE_ID) unset TIDEY_WORKSPACE_ID ;; esac; '
-    script+='_tidey_panel="$(tmux show-environment TIDEY_PANEL_ID 2>/dev/null || tmux show-environment -g TIDEY_PANEL_ID 2>/dev/null || true)"; '
-    script+='case "$_tidey_panel" in TIDEY_PANEL_ID=*) export TIDEY_PANEL_ID="${_tidey_panel#TIDEY_PANEL_ID=}" ;; -TIDEY_PANEL_ID) unset TIDEY_PANEL_ID ;; esac; '
-    script+='fi; '
+    script+=". $(shell_quote "$pane_helper_path"); tidey_hydrate_tmux_pane_identity; "
     script+="exec $(shell_quote "$tidey_bin_path") claude-hook $(shell_quote "$event")"
 
     printf '/bin/sh -c %s' "$(shell_quote "$script")"
@@ -268,10 +267,10 @@ if ! SESSION_ID="$(find_explicit_session_id "$@")"; then
         set -- --session-id "$SESSION_ID" "$@"
     fi
 fi
+tidey_hydrate_tmux_pane_identity
 
 # Build hooks settings JSON.
 # Claude Code merges --settings additively with the user's own settings.json.
-HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 SESSION_HOOK_PREFIX="export TIDEY_CLAUDE_WRAPPER_PID=$(shell_quote "$$"); export TIDEY_CLAUDE_WRAPPER_CWD=$(shell_quote "$PWD")"
 SESSION_START_CMD="$(json_escape "$(build_hook_command "session-start" "$SESSION_HOOK_PREFIX")")"
 NOTIFICATION_CMD="$(json_escape "$(build_hook_command "notification")")"

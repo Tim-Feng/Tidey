@@ -1317,6 +1317,47 @@ ITERM_WEAKLY_REFERENCEABLE
     return [self workspaceAtIndex:self.selectedWorkspaceIndex];
 }
 
+- (void)tideySetTmuxPaneIdentityOptionsForSession:(PTYSession *)session
+                                      workspaceID:(NSString *)workspaceID
+                                          panelID:(NSString *)panelID {
+    if (!session.isTmuxClient || !session.tmuxController || session.tmuxPane <= 0) {
+        return;
+    }
+    NSArray<NSString *> *commands =
+        [[self class] tideyTmuxPaneIdentityCommandsForPane:session.tmuxPane
+                                               workspaceID:workspaceID
+                                                   panelID:panelID];
+    for (NSString *command in commands) {
+        [session.tmuxController.gateway sendCommand:command
+                                     responseTarget:nil
+                                   responseSelector:nil];
+    }
+}
+
+- (void)tideySyncTmuxPaneIdentityOptionsForPanel:(PTYTab *)panel workspace:(Workspace *)workspace {
+    if (!panel || !workspace) {
+        return;
+    }
+    NSString *workspaceID = [self tideyWorkspaceIdentifierForWorkspace:workspace];
+    NSString *panelID = panel.stringUniqueIdentifier;
+    if (workspaceID.length == 0 || panelID.length == 0) {
+        return;
+    }
+    for (PTYSession *session in panel.sessions) {
+        [self tideySetTmuxPaneIdentityOptionsForSession:session
+                                            workspaceID:workspaceID
+                                                panelID:panelID];
+    }
+}
+
+- (void)tideySyncAllTmuxPaneIdentityOptions {
+    for (Workspace *workspace in self.workspaces) {
+        for (PTYTab *panel in workspace.panels) {
+            [self tideySyncTmuxPaneIdentityOptionsForPanel:panel workspace:workspace];
+        }
+    }
+}
+
 - (NSString *)tideyWorkspaceIdentifierForWorkspace:(Workspace *)workspace {
     return workspace.identifier.UUIDString;
 }
@@ -2002,17 +2043,22 @@ ITERM_WEAKLY_REFERENCEABLE
     if (self.workspaces == nil) {
         self.workspaces = [NSMutableArray array];
     }
+    BOOL initializedFromTabs = NO;
     if (self.workspaces.count == 0) {
         for (PTYTab *tab in self.tabs) {
             [self.workspaces addObject:[[[Workspace alloc] initWithPanel:tab] autorelease]];
         }
         self.selectedWorkspaceIndex = self.workspaces.count > 0 ? 0 : -1;
         _lastSelectedWorkspaceIndex = -1;
+        initializedFromTabs = (self.workspaces.count > 0);
     }
     if (self.selectedWorkspaceIndex < 0 && self.workspaces.count > 0) {
         self.selectedWorkspaceIndex = 0;
     } else if (self.selectedWorkspaceIndex >= self.workspaces.count) {
         self.selectedWorkspaceIndex = self.workspaces.count - 1;
+    }
+    if (initializedFromTabs) {
+        [self tideySyncAllTmuxPaneIdentityOptions];
     }
 }
 
@@ -13326,6 +13372,9 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
                 targetWorkspace = workspace;
                 createdWorkspace = YES;
             }
+        }
+        if (shouldManageTideyWorkspaceInsert && targetWorkspace) {
+            [self tideySyncTmuxPaneIdentityOptionsForPanel:aTab workspace:targetWorkspace];
         }
         const BOOL shouldInsertVisible = !shouldManageTideyWorkspaceInsert ||
             [[self class] tideyShouldInsertPanelIntoVisibleTabViewForSelectedWorkspaceIndex:self.selectedWorkspaceIndex
