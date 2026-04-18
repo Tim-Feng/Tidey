@@ -1286,6 +1286,27 @@ ITERM_WEAKLY_REFERENCEABLE
     return targetWorkspaceIndex == selectedWorkspaceIndex;
 }
 
++ (NSString *)tideySingleQuotedTmuxOptionValue:(NSString *)value {
+    NSString *string = value ?: @"";
+    return [NSString stringWithFormat:@"'%@'", [string stringByReplacingOccurrencesOfString:@"'" withString:@"'\\''"]];
+}
+
++ (NSArray<NSString *> *)tideyTmuxPaneIdentityCommandsForPane:(int)pane
+                                                  workspaceID:(NSString *)workspaceID
+                                                      panelID:(NSString *)panelID {
+    if (pane <= 0 || workspaceID.length == 0 || panelID.length == 0) {
+        return @[];
+    }
+    return @[
+        [NSString stringWithFormat:@"set-option -p -t %%%d @tidey_workspace_id %@",
+                                   pane,
+                                   [self tideySingleQuotedTmuxOptionValue:workspaceID]],
+        [NSString stringWithFormat:@"set-option -p -t %%%d @tidey_panel_id %@",
+                                   pane,
+                                   [self tideySingleQuotedTmuxOptionValue:panelID]],
+    ];
+}
+
 + (BOOL)tideyShouldManagePendingPanelInsertForShowingSidebar:(BOOL)showingSidebar
                                        pendingWorkspaceIndex:(NSInteger)pendingWorkspaceIndex
                                              createWorkspace:(BOOL)createWorkspace {

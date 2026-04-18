@@ -11,6 +11,9 @@
                                  didCloseRightPanelTab:(BOOL)didCloseRightPanelTab;
 + (NSDictionary<NSString *, id> *)tideyDockBadgeStateForBellCount:(NSInteger)bellCount
                                            hasUnreadNotifications:(BOOL)hasUnreadNotifications;
++ (NSArray<NSString *> *)tideyTmuxPaneIdentityCommandsForPane:(int)pane
+                                                  workspaceID:(NSString *)workspaceID
+                                                      panelID:(NSString *)panelID;
 @end
 
 @interface iTermApplicationDelegate (TideyAppShortcutBehaviorTests)
@@ -82,6 +85,31 @@
         [PseudoTerminal tideyDockBadgeStateForBellCount:0 hasUnreadNotifications:NO];
     XCTAssertEqualObjects(badgeState[@"label"], @"");
     XCTAssertEqualObjects(badgeState[@"showsBadge"], @NO);
+}
+
+- (void)testTmuxPaneIdentityCommandIncludesPaneScopedWorkspaceAndPanelOptions {
+    NSArray<NSString *> *commands =
+        [PseudoTerminal tideyTmuxPaneIdentityCommandsForPane:42
+                                                 workspaceID:@"workspace-123"
+                                                     panelID:@"panel-456"];
+    XCTAssertEqual(commands.count, 2);
+    XCTAssertEqualObjects(commands[0], @"set-option -p -t %42 @tidey_workspace_id 'workspace-123'");
+    XCTAssertEqualObjects(commands[1], @"set-option -p -t %42 @tidey_panel_id 'panel-456'");
+}
+
+- (void)testTmuxPaneIdentityCommandReturnsEmptyWhenPaneOrIdentifiersAreMissing {
+    XCTAssertEqual([PseudoTerminal tideyTmuxPaneIdentityCommandsForPane:0
+                                                            workspaceID:@"workspace-123"
+                                                                panelID:@"panel-456"].count,
+                   0);
+    XCTAssertEqual([PseudoTerminal tideyTmuxPaneIdentityCommandsForPane:42
+                                                            workspaceID:nil
+                                                                panelID:@"panel-456"].count,
+                   0);
+    XCTAssertEqual([PseudoTerminal tideyTmuxPaneIdentityCommandsForPane:42
+                                                            workspaceID:@"workspace-123"
+                                                                panelID:nil].count,
+                   0);
 }
 
 - (void)testQuitConfirmationRequiresSecondCommandQWithinTimeout {
