@@ -108,6 +108,8 @@ TriggerDelegate> {
 @property(nonatomic, retain) NSColor *activePaneBorderColor;
 @property(nonatomic, copy) NSString *badgeFormat;
 
+- (void)tideyReflowToSize:(VT100GridSize)size;
+
 // Info about what happens when the program is run so it can be restarted after
 // a broken pipe if the user so chooses. Contains $$MACROS$$ pre-substitution.
 @property(nonatomic, copy) NSString *program;

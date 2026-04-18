@@ -177,6 +177,7 @@ extern NSString *const PTYTabArrangementOptionsPendingJumps;
 - (BOOL)isForegroundTab;
 - (NSSize)sessionSizeForViewSize:(PTYSession *)aSession;
 - (BOOL)fitSessionToCurrentViewSize:(PTYSession*)aSession;
+- (void)tideyReflowSessionsToCurrentViewSize;
 // Fit session views to scroll views.
 // This is useful for a tmux tab where scrollviews sizes are not tightly coupled to the
 // SessionView size because autoresizing is turned off. When something changes, such as

@@ -2541,6 +2541,7 @@ ITERM_WEAKLY_REFERENCEABLE
 - (IBAction)toggleTideyEditorPanel:(id)sender {
     _contentView.shouldShowTideyEditorPanel = !_contentView.shouldShowTideyEditorPanel;
     [self repositionWidgets];
+    [self.currentTab tideyReflowSessionsToCurrentViewSize];
     [self notifyTmuxOfWindowResize];
 }
 

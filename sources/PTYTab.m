@@ -44,6 +44,7 @@
 #import "PTYNoteViewController.h"
 #import "PTYScrollView.h"
 #import "PTYSession.h"
+#import "PTYSession+Private.h"
 #import "PTYSession+ARC.h"
 #import "PTYTab+Scripting.h"
 #import "SessionView.h"
@@ -2705,6 +2706,23 @@ static void SetAgainstGrainDim(BOOL isVertical, NSSize *dest, CGFloat value) {
         result = [self resizeSession:aSession toSize:VT100GridSizeMake(temp.width, temp.height)];
     }];
     return result;
+}
+
+- (void)tideyReflowSessionsToCurrentViewSize {
+    for (PTYSession *session in self.sessions) {
+        if (session.ignoreResizeNotifications) {
+            continue;
+        }
+        NSSize size = [self sessionSizeForViewSize:session];
+        VT100GridSize newSize = VT100GridSizeMake(size.width, size.height);
+        if (session.isTmuxClient) {
+            if ([session rows] != newSize.height || [session columns] != newSize.width) {
+                [session tideyReflowToSize:newSize];
+            }
+            continue;
+        }
+        [self resizeSession:session toSize:newSize];
+    }
 }
 
 - (BOOL)resizeSession:(PTYSession *)aSession toSize:(VT100GridSize)newSize {

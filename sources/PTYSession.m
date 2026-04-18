@@ -2410,7 +2410,7 @@ ITERM_WEAKLY_REFERENCEABLE
                                     scaleFactor:scaleFactor];
 }
 
-- (void)setSize:(VT100GridSize)size {
+- (void)_applySize:(VT100GridSize)size sendWindowSizeIOCTL:(BOOL)sendWindowSizeIOCTL {
     ITBetaAssert(size.width > 0, @"Nonpositive width %d", size.width);
     ITBetaAssert(size.height > 0, @"Nonpositive height %d", size.height);
     if (size.width <= 0) {
@@ -2428,7 +2428,7 @@ ITERM_WEAKLY_REFERENCEABLE
     // Sync so that we'll have an updated model as we go forward so that, for example, tail find
     // will be sane.
     [self sync];
-    if (!self.delegate || [self.delegate sessionShouldSendWindowSizeIOCTL:self]) {
+    if (sendWindowSizeIOCTL && (!self.delegate || [self.delegate sessionShouldSendWindowSizeIOCTL:self])) {
         [_shell.winSizeController setGridSize:size
                                      viewSize:_screen.viewSize
                                   scaleFactor:self.backingScaleFactor];
@@ -2449,6 +2449,14 @@ ITERM_WEAKLY_REFERENCEABLE
     if (!self.textview.window.inLiveResize) {
         [self refreshSearchAfterResize];
     }
+}
+
+- (void)setSize:(VT100GridSize)size {
+    [self _applySize:size sendWindowSizeIOCTL:YES];
+}
+
+- (void)tideyReflowToSize:(VT100GridSize)size {
+    [self _applySize:size sendWindowSizeIOCTL:NO];
 }
 
 - (void)startTailFindIfVisible {
