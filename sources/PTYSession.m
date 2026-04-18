@@ -2974,14 +2974,63 @@ ITERM_WEAKLY_REFERENCEABLE
     if (tideySocketPath.length > 0 || workspaceID.length > 0 || panelID.length > 0) {
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
             @autoreleasepool {
+                NSString *inheritedPATH = [[[NSProcessInfo processInfo] environment] objectForKey:@"PATH"] ?: @"<nil>";
+                NSString *taskPATH = nil;
+                NSString *whichTmuxOutput = @"";
+                NSString *whichTmuxError = @"";
+                int whichTmuxStatus = -1;
+
+                @try {
+                    NSTask *whichTask = [[[NSTask alloc] init] autorelease];
+                    NSPipe *whichStdout = [NSPipe pipe];
+                    NSPipe *whichStderr = [NSPipe pipe];
+                    whichTask.launchPath = @"/bin/sh";
+                    whichTask.arguments = @[@"-c", @"command -v tmux"];
+                    whichTask.standardOutput = whichStdout;
+                    whichTask.standardError = whichStderr;
+                    taskPATH = whichTask.environment[@"PATH"];
+                    [whichTask launch];
+                    [whichTask waitUntilExit];
+                    whichTmuxStatus = whichTask.terminationStatus;
+
+                    NSData *whichStdoutData = [[whichStdout fileHandleForReading] readDataToEndOfFile];
+                    NSData *whichStderrData = [[whichStderr fileHandleForReading] readDataToEndOfFile];
+                    NSString *stdoutString = [[[NSString alloc] initWithData:whichStdoutData encoding:NSUTF8StringEncoding] autorelease];
+                    NSString *stderrString = [[[NSString alloc] initWithData:whichStderrData encoding:NSUTF8StringEncoding] autorelease];
+                    whichTmuxOutput = stdoutString ?: @"";
+                    whichTmuxError = stderrString ?: @"";
+                } @catch (id e) {
+                    whichTmuxError = [NSString stringWithFormat:@"exception=%@", e];
+                }
+
+                NSLog(@"[TideyTmuxCleanup] inheritedPATH=%@ taskPATH=%@ whichTmuxStatus=%d whichTmuxOutput=%@ whichTmuxError=%@ cleanupCommand=%@",
+                      inheritedPATH,
+                      taskPATH ?: @"<nil>",
+                      whichTmuxStatus,
+                      whichTmuxOutput,
+                      whichTmuxError,
+                      tmuxEnvironmentCleanupCommand);
+
                 NSTask *task = [[[NSTask alloc] init] autorelease];
+                NSPipe *stdoutPipe = [NSPipe pipe];
+                NSPipe *stderrPipe = [NSPipe pipe];
                 task.launchPath = @"/bin/sh";
                 task.arguments = @[@"-c", tmuxEnvironmentCleanupCommand];
+                task.standardOutput = stdoutPipe;
+                task.standardError = stderrPipe;
                 @try {
                     [task launch];
                     [task waitUntilExit];
+                    NSData *stdoutData = [[stdoutPipe fileHandleForReading] readDataToEndOfFile];
+                    NSData *stderrData = [[stderrPipe fileHandleForReading] readDataToEndOfFile];
+                    NSString *stdoutString = [[[NSString alloc] initWithData:stdoutData encoding:NSUTF8StringEncoding] autorelease];
+                    NSString *stderrString = [[[NSString alloc] initWithData:stderrData encoding:NSUTF8StringEncoding] autorelease];
+                    NSLog(@"[TideyTmuxCleanup] cleanupStatus=%d stdout=%@ stderr=%@",
+                          task.terminationStatus,
+                          stdoutString ?: @"",
+                          stderrString ?: @"");
                 } @catch (id e) {
-                    // tmux not installed or not running — ignore.
+                    NSLog(@"[TideyTmuxCleanup] cleanupException=%@", e);
                 }
             }
         });
