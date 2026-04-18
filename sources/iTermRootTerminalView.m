@@ -6814,6 +6814,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     badgeLabel.font = [NSFont systemFontOfSize:9 weight:NSFontWeightSemibold];
     badgeLabel.textColor = [NSColor whiteColor];
     badgeLabel.alignment = NSTextAlignmentCenter;
+    badgeLabel.hidden = YES;
     [badgeView addSubview:badgeLabel];
     [cellView addSubview:badgeView];
 
@@ -6934,7 +6935,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         badgeView.layer.backgroundColor = (selected
                                            ? [NSColor colorWithWhite:1 alpha:0.25].CGColor
                                            : NSColor.controlAccentColor.CGColor);
-        badgeLabel.stringValue = unreadCount > 9 ? @"9+" : [NSString stringWithFormat:@"%ld", (long)unreadCount];
+        badgeLabel.stringValue = @"";
     }
     NSImageView *pinView = (NSImageView *)[cellView viewWithTag:1003];
     pinView.hidden = ![self tideySidebarWorkspacePinnedAtIndex:row];

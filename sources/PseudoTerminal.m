@@ -1907,8 +1907,11 @@ ITERM_WEAKLY_REFERENCEABLE
          [workspaceID isEqualToString:@"*"] ||
          [workspaceID isEqualToString:selectedWorkspaceID])) {
         [[TideyNotificationStore sharedStore] markReadForWorkspaceID:selectedWorkspaceID];
+        [self tideyUpdateNotificationDockBadge];
         return;
     }
+
+    [self tideyUpdateNotificationDockBadge];
 
     if (workspaceID.length == 0 || [workspaceID isEqualToString:@"*"]) {
         return;
@@ -1952,6 +1955,14 @@ ITERM_WEAKLY_REFERENCEABLE
     }
 
     [self moveWorkspaceFromIndex:fromIndex toIndex:pinnedCount];
+}
+
+- (void)tideyUpdateNotificationDockBadge {
+    NSDictionary<NSString *, id> *badgeState =
+        [[self class] tideyDockBadgeStateForHasUnreadNotifications:[[TideyNotificationStore sharedStore] hasAnyUnreadNotifications]];
+    NSDockTile *dockTile = [[NSApplication sharedApplication] dockTile];
+    dockTile.badgeLabel = badgeState[@"label"];
+    dockTile.showsApplicationBadge = [badgeState[@"showsBadge"] boolValue];
 }
 
 - (BOOL)tideyWorkspaceIsInStartupGracePeriod:(Workspace *)workspace {
@@ -5795,9 +5806,7 @@ hidingToolbeltShouldResizeWindow:(BOOL)hidingToolbeltShouldResizeWindow
 // NSWindow delegate methods
 - (void)windowDidDeminiaturize:(NSNotification *)aNotification {
     DLog(@"windowDidDeminiaturize: %@\n%@", self, [NSThread callStackSymbols]);
-    DLog(@"Erase badge label");
-    [self.window.dockTile setBadgeLabel:@""];
-    [self.window.dockTile setShowsApplicationBadge:NO];
+    [self tideyUpdateNotificationDockBadge];
     if ([[self currentTab] blur]) {
         [self enableBlur:[[self currentTab] blurRadius]];
     } else {
@@ -6059,9 +6068,7 @@ hidingToolbeltShouldResizeWindow:(BOOL)hidingToolbeltShouldResizeWindow
         [[iTermHotKeyController sharedInstance] nonHotKeyWindowDidBecomeKey];
     }
     [[iTermHotKeyController sharedInstance] autoHideHotKeyWindowsExcept:[[iTermHotKeyController sharedInstance] siblingWindowControllersOf:self]];
-    DLog(@"Erase badge label");
-    [[[NSApplication sharedApplication] dockTile] setBadgeLabel:@""];
-    [[[NSApplication sharedApplication] dockTile] setShowsApplicationBadge:NO];
+    [self tideyUpdateNotificationDockBadge];
 
     [[iTermController sharedInstance] setCurrentTerminal:self];
     iTermApplicationDelegate *itad = [iTermApplication.sharedApplication delegate];
