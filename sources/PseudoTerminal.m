@@ -4035,6 +4035,14 @@ ITERM_WEAKLY_REFERENCEABLE
     };
 }
 
++ (NSInteger)tideyBellCountByIncrementingDockBellCount:(NSInteger)bellCount {
+    return MIN(MAX(bellCount, 0) + 1, 999);
+}
+
++ (NSInteger)tideyClearedDockBellCount {
+    return 0;
+}
+
 + (BOOL)tideyShouldAutoMarkReadWorkspaceOnNotificationArrivalForSelectedWorkspaceID:(NSString *)selectedWorkspaceID
                                                              notificationWorkspaceID:(NSString *)workspaceID {
     (void)selectedWorkspaceID;
