@@ -11,8 +11,6 @@
                                  didCloseRightPanelTab:(BOOL)didCloseRightPanelTab;
 + (NSDictionary<NSString *, id> *)tideyDockBadgeStateForBellCount:(NSInteger)bellCount
                                            hasUnreadNotifications:(BOOL)hasUnreadNotifications;
-+ (NSInteger)tideyBellCountByIncrementingDockBellCount:(NSInteger)bellCount;
-+ (NSInteger)tideyClearedDockBellCount;
 + (NSArray<NSString *> *)tideyTmuxPaneIdentityCommandsForPane:(int)pane
                                                   workspaceID:(NSString *)workspaceID
                                                       panelID:(NSString *)panelID;
@@ -77,29 +75,11 @@
     XCTAssertEqualObjects(badgeState[@"showsBadge"], @YES);
 }
 
-- (void)testDockBadgeStatePrefersExplicitBellStateOverUnreadDot {
-    NSDictionary<NSString *, id> *badgeState =
-        [PseudoTerminal tideyDockBadgeStateForBellCount:[PseudoTerminal tideyBellCountByIncrementingDockBellCount:0]
-                                 hasUnreadNotifications:YES];
-    XCTAssertEqualObjects(badgeState[@"label"], @"1");
-    XCTAssertEqualObjects(badgeState[@"showsBadge"], @YES);
-}
-
 - (void)testDockBadgeStateUsesDotOnlyWhenBellCountIsZero {
     NSDictionary<NSString *, id> *badgeState =
         [PseudoTerminal tideyDockBadgeStateForBellCount:0 hasUnreadNotifications:YES];
     XCTAssertEqualObjects(badgeState[@"label"], @"•");
     XCTAssertEqualObjects(badgeState[@"showsBadge"], @YES);
-}
-
-- (void)testDockBellCountIncrementClampsAt999 {
-    XCTAssertEqual([PseudoTerminal tideyBellCountByIncrementingDockBellCount:0], 1);
-    XCTAssertEqual([PseudoTerminal tideyBellCountByIncrementingDockBellCount:998], 999);
-    XCTAssertEqual([PseudoTerminal tideyBellCountByIncrementingDockBellCount:999], 999);
-}
-
-- (void)testDockBellCountClearResetsToZero {
-    XCTAssertEqual([PseudoTerminal tideyClearedDockBellCount], 0);
 }
 
 - (void)testDockBadgeStateClearsWhenThereIsNoBellOrUnreadNotification {
