@@ -6,13 +6,15 @@ A terminal-first IDE for AI agents. Run agents in workspaces, edit code side by 
 
 ![Tidey main window](docs/screenshots/hero-main.png)
 
-## Latest in 0.2.6
+## Latest in 0.2.7
 
-- **`cmd+click` opens in Tidey editor panel** — `file://` URLs (including OSC-8 hyperlinks from Claude Code) now route to the built-in editor panel instead of falling through to the macOS default app.
+- **Unread dots in the sidebar and Dock** — workspaces now show unread notifications as red dots, and the Dock icon mirrors unread state.
+- **tmux / Codex notification stability** — workspace and panel identity in tmux is now pane-scoped, so Codex and Claude notifications land in the right workspace more reliably.
+- **Claude and terminal polish** — Claude sidebar previews now use the actual stop-hook payload, `file://` links open in Tidey's editor panel, and terminal history reflows correctly after closing the editor panel.
 
 ## Install
 
-**Download:** [Tidey.dmg](https://github.com/Tim-Feng/Tidey/releases/download/v0.2.6/Tidey.dmg) (macOS 12+, Apple Silicon & Intel)
+**Download:** [Tidey.dmg](https://github.com/Tim-Feng/Tidey/releases/download/v0.2.7/Tidey.dmg) (macOS 12+, Apple Silicon & Intel)
 
 1. Open the DMG, drag Tidey to Applications
 2. First launch: right-click → Open
