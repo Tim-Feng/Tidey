@@ -1478,8 +1478,8 @@
 		A62A1F771E711BC000363EE9 /* iTermHelpMessageViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = A62A1F741E711BC000363EE9 /* iTermHelpMessageViewController.m */; };
 		A62A1F781E711DCF00363EE9 /* iTermHelpMessageViewController.xib in Resources */ = {isa = PBXBuildFile; fileRef = A62A1F751E711BC000363EE9 /* iTermHelpMessageViewController.xib */; };
 		A62A1F791E711DD000363EE9 /* iTermHelpMessageViewController.xib in Resources */ = {isa = PBXBuildFile; fileRef = A62A1F751E711BC000363EE9 /* iTermHelpMessageViewController.xib */; };
-		A62B04A529B428B60077B955 /* Highlightr.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A6A3D18A2815EF4D00C0C9E0 /* Highlightr.framework */; };
-		A62B04A629B428D30077B955 /* Highlightr.framework in CopyFiles */ = {isa = PBXBuildFile; fileRef = A6A3D18A2815EF4D00C0C9E0 /* Highlightr.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		A62B04A529B428B60077B955 /* Highlightr.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = THGPRDRF000000000000001 /* Highlightr.framework */; };
+		A62B04A629B428D30077B955 /* Highlightr.framework in CopyFiles */ = {isa = PBXBuildFile; fileRef = THGPRDRF000000000000001 /* Highlightr.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		A62B36572D24C1A900FDF15E /* SetNamedMarkTrigger.swift in Sources */ = {isa = PBXBuildFile; fileRef = A62B36562D24C1A600FDF15E /* SetNamedMarkTrigger.swift */; };
 		A62C3A891BCAE03300B5629D /* iTermDirectoryTreeNode.h in Headers */ = {isa = PBXBuildFile; fileRef = A62C3A871BCAE03300B5629D /* iTermDirectoryTreeNode.h */; };
 		A62C3A8A1BCAE03300B5629D /* iTermDirectoryTreeNode.m in Sources */ = {isa = PBXBuildFile; fileRef = A62C3A881BCAE03300B5629D /* iTermDirectoryTreeNode.m */; };
@@ -3034,9 +3034,9 @@
 		A6A3CE142E38313C00710B09 /* log-errors.js in Resources */ = {isa = PBXBuildFile; fileRef = A6A3CE0F2E3830D300710B09 /* log-errors.js */; };
 		A6A3CE152E38313C00710B09 /* console-log.js in Resources */ = {isa = PBXBuildFile; fileRef = A6A3CE0E2E38307900710B09 /* console-log.js */; };
 		A6A3CE172E3844CC00710B09 /* TerminalWindowSizeHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6A3CE162E3844C400710B09 /* TerminalWindowSizeHelper.swift */; };
-		A6A3D18B2815EF4D00C0C9E0 /* Highlightr.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A6A3D18A2815EF4D00C0C9E0 /* Highlightr.framework */; };
+		A6A3D18B2815EF4D00C0C9E0 /* Highlightr.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = THGPRDRF000000000000001 /* Highlightr.framework */; };
 		A6A3D18D2815EF6F00C0C9E0 /* TextViewPortholeRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6A3D18C2815EF6F00C0C9E0 /* TextViewPortholeRenderer.swift */; };
-		A6A3D18E2815F74A00C0C9E0 /* Highlightr.framework in CopyFiles */ = {isa = PBXBuildFile; fileRef = A6A3D18A2815EF4D00C0C9E0 /* Highlightr.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		A6A3D18E2815F74A00C0C9E0 /* Highlightr.framework in CopyFiles */ = {isa = PBXBuildFile; fileRef = THGPRDRF000000000000001 /* Highlightr.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		A6A3D190281663EE00C0C9E0 /* extensions.json in Resources */ = {isa = PBXBuildFile; fileRef = A6A3D18F281663EE00C0C9E0 /* extensions.json */; };
 		A6A3D191281663EE00C0C9E0 /* extensions.json in Resources */ = {isa = PBXBuildFile; fileRef = A6A3D18F281663EE00C0C9E0 /* extensions.json */; };
 		A6A3D192281663EE00C0C9E0 /* extensions.json in Resources */ = {isa = PBXBuildFile; fileRef = A6A3D18F281663EE00C0C9E0 /* extensions.json */; };
@@ -4683,10 +4683,10 @@
 		A6EC804A281B3AF300493544 /* TextViewPortholeRenderer-light.css in Resources */ = {isa = PBXBuildFile; fileRef = A6EC8049281B3AF200493544 /* TextViewPortholeRenderer-light.css */; };
 		A6EC804B281B3AF300493544 /* TextViewPortholeRenderer-light.css in Resources */ = {isa = PBXBuildFile; fileRef = A6EC8049281B3AF200493544 /* TextViewPortholeRenderer-light.css */; };
 		A6EC804C281B3AF300493544 /* TextViewPortholeRenderer-light.css in Resources */ = {isa = PBXBuildFile; fileRef = A6EC8049281B3AF200493544 /* TextViewPortholeRenderer-light.css */; };
-		A6EC8050281BC67900493544 /* SwiftyMarkdown.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A6EC804F281BC67900493544 /* SwiftyMarkdown.framework */; };
-		A6EC8051281BC67900493544 /* SwiftyMarkdown.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A6EC804F281BC67900493544 /* SwiftyMarkdown.framework */; };
-		A6EC8052281BC67900493544 /* SwiftyMarkdown.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A6EC804F281BC67900493544 /* SwiftyMarkdown.framework */; };
-		A6EC8053281C4A6A00493544 /* SwiftyMarkdown.framework in CopyFiles */ = {isa = PBXBuildFile; fileRef = A6EC804F281BC67900493544 /* SwiftyMarkdown.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		A6EC8050281BC67900493544 /* SwiftyMarkdown.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = TSMPRDRF000000000000001 /* SwiftyMarkdown.framework */; };
+		A6EC8051281BC67900493544 /* SwiftyMarkdown.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = TSMPRDRF000000000000001 /* SwiftyMarkdown.framework */; };
+		A6EC8052281BC67900493544 /* SwiftyMarkdown.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = TSMPRDRF000000000000001 /* SwiftyMarkdown.framework */; };
+		A6EC8053281C4A6A00493544 /* SwiftyMarkdown.framework in CopyFiles */ = {isa = PBXBuildFile; fileRef = TSMPRDRF000000000000001 /* SwiftyMarkdown.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		A6EC8055281C852200493544 /* NSAttributedString+iTerm.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6EC8054281C852200493544 /* NSAttributedString+iTerm.swift */; };
 		A6EC8073281F2C2900493544 /* ExternalSearchResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6EC8072281F2C2900493544 /* ExternalSearchResult.swift */; };
 		A6EC8074281F368700493544 /* SearchResult.m in Sources */ = {isa = PBXBuildFile; fileRef = 1DC393C417B59B08000EE0F2 /* SearchResult.m */; };
@@ -5341,6 +5341,34 @@
 			proxyType = 1;
 			remoteGlobalIDString = A66717851DCE36C3000CE608;
 			remoteInfo = iTerm2SharedARC;
+		};
+		THGPRDCP000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = THGPROJ0000000000000001 /* Highlightr.xcodeproj */;
+			proxyType = 2;
+			remoteGlobalIDString = 8CD1AE161F391713000FDA02;
+			remoteInfo = Highlightr.framework;
+		};
+		THGTGTCP000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = THGPROJ0000000000000001 /* Highlightr.xcodeproj */;
+			proxyType = 1;
+			remoteGlobalIDString = 8CD1AE151F391713000FDA02;
+			remoteInfo = "Highlightr-macOS";
+		};
+		TSMPRDCP000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = TSMPROJ0000000000000001 /* SwiftyMarkdown.xcodeproj */;
+			proxyType = 2;
+			remoteGlobalIDString = "SwiftyMarkdown::SwiftyMarkdown::Product";
+			remoteInfo = SwiftyMarkdown.framework;
+		};
+		TSMTGTCP000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = TSMPROJ0000000000000001 /* SwiftyMarkdown.xcodeproj */;
+			proxyType = 1;
+			remoteGlobalIDString = "SwiftyMarkdown::SwiftyMarkdown";
+			remoteInfo = SwiftyMarkdown;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -8018,7 +8046,7 @@
 		A6A3CE0E2E38307900710B09 /* console-log.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "console-log.js"; sourceTree = "<group>"; };
 		A6A3CE0F2E3830D300710B09 /* log-errors.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "log-errors.js"; sourceTree = "<group>"; };
 		A6A3CE162E3844C400710B09 /* TerminalWindowSizeHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalWindowSizeHelper.swift; sourceTree = "<group>"; };
-		A6A3D18A2815EF4D00C0C9E0 /* Highlightr.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Highlightr.framework; path = ThirdParty/Highlightr.framework; sourceTree = "<group>"; };
+		THGPROJ0000000000000001 /* Highlightr.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; name = Highlightr.xcodeproj; path = Highlightr/Highlightr.xcodeproj; sourceTree = "<group>"; };
 		A6A3D18C2815EF6F00C0C9E0 /* TextViewPortholeRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextViewPortholeRenderer.swift; sourceTree = "<group>"; };
 		A6A3D18F281663EE00C0C9E0 /* extensions.json */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.json; name = extensions.json; path = OtherResources/extensions.json; sourceTree = "<group>"; };
 		A6A3D1932816643600C0C9E0 /* FileExtensionDB.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileExtensionDB.swift; sourceTree = "<group>"; };
@@ -8928,7 +8956,7 @@
 		A6EC47CC21ED96F2000E1321 /* iTermLaunchExperienceController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = iTermLaunchExperienceController.m; sourceTree = "<group>"; };
 		A6EC8045281B391900493544 /* TextViewPortholeRenderer-dark.css */ = {isa = PBXFileReference; lastKnownFileType = text.css; name = "TextViewPortholeRenderer-dark.css"; path = "OtherResources/TextViewPortholeRenderer-dark.css"; sourceTree = SOURCE_ROOT; };
 		A6EC8049281B3AF200493544 /* TextViewPortholeRenderer-light.css */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.css; name = "TextViewPortholeRenderer-light.css"; path = "OtherResources/TextViewPortholeRenderer-light.css"; sourceTree = SOURCE_ROOT; };
-		A6EC804F281BC67900493544 /* SwiftyMarkdown.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftyMarkdown.framework; path = ThirdParty/SwiftyMarkdown.framework; sourceTree = "<group>"; };
+		TSMPROJ0000000000000001 /* SwiftyMarkdown.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; name = SwiftyMarkdown.xcodeproj; path = SwiftyMarkdown/SwiftyMarkdown.xcodeproj; sourceTree = "<group>"; };
 		A6EC8054281C852200493544 /* NSAttributedString+iTerm.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NSAttributedString+iTerm.swift"; sourceTree = "<group>"; };
 		A6EC8072281F2C2900493544 /* ExternalSearchResult.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalSearchResult.swift; sourceTree = "<group>"; };
 		A6EC80802828E9F600493544 /* Conductor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Conductor.swift; sourceTree = "<group>"; };
@@ -9539,6 +9567,7 @@
 				0464AB0E006CD2EC7F000001 /* Classes */,
 				0464AB15006CD2EC7F000001 /* Headers */,
 				1D03D42519144B8E0049EB8F /* ThirdParty */,
+				TSUBMODG0000000000000001 /* Submodules */,
 				1D5FD9AD11F61CA900C46BA3 /* Applescript Tests */,
 				0464AB27006CD2EC7F000001 /* Supporting Files */,
 				A6C7641D1B45CB2800E3C992 /* iTerm2XCTests */,
@@ -10044,6 +10073,31 @@
 			);
 			name = ThirdParty;
 			path = ThirdParty/;
+			sourceTree = "<group>";
+		};
+		TSUBMODG0000000000000001 /* Submodules */ = {
+			isa = PBXGroup;
+			children = (
+				THGPROJ0000000000000001 /* Highlightr.xcodeproj */,
+				TSMPROJ0000000000000001 /* SwiftyMarkdown.xcodeproj */,
+			);
+			path = submodules;
+			sourceTree = "<group>";
+		};
+		THGPROD0000000000000001 /* Highlightr Products */ = {
+			isa = PBXGroup;
+			children = (
+				THGPRDRF000000000000001 /* Highlightr.framework */,
+			);
+			name = "Highlightr Products";
+			sourceTree = "<group>";
+		};
+		TSMPROD0000000000000001 /* SwiftyMarkdown Products */ = {
+			isa = PBXGroup;
+			children = (
+				TSMPRDRF000000000000001 /* SwiftyMarkdown.framework */,
+			);
+			name = "SwiftyMarkdown Products";
 			sourceTree = "<group>";
 		};
 		1D03D42619144C140049EB8F /* Property Lists */ = {
@@ -10892,7 +10946,7 @@
 				1DD39AD6180B8118004E56D5 /* Cocoa.framework */,
 				A6184F881BAB3ED70088EF3C /* ColorPicker.framework */,
 				530AB89820AFF21200D2AA08 /* CoreParse.framework */,
-				A6A3D18A2815EF4D00C0C9E0 /* Highlightr.framework */,
+				THGPROD0000000000000001 /* Highlightr Products */,
 				A6588821201708D8006F48DB /* IOKit.framework */,
 				756C32C12597AC9C0047B3A9 /* libaprutil-1.tbd */,
 				A656AE4B1DBBE1CE00CE8448 /* libaprutil-1.tbd */,
@@ -10910,7 +10964,7 @@
 				A6FB633023DE7DEB00026D52 /* SearchableComboListView.framework */,
 				1DFA7C9D1923F77100DF1410 /* Security.framework */,
 				A624230F19CF6B0C00182C08 /* Sparkle.framework */,
-				A6EC804F281BC67900493544 /* SwiftyMarkdown.framework */,
+				TSMPROD0000000000000001 /* SwiftyMarkdown Products */,
 				A608CCF2214DE6E8007A7B87 /* XCTest.framework */,
 				A624231819CF6DE000182C08 /* NMSSH.framework */,
 				1DF0897013DBAF4C00A52AD8 /* Quartz.framework */,
@@ -16242,6 +16296,7 @@
 				A6C763D71B45C5C500E3C992 /* PBXTargetDependency */,
 				1D6ED85319AEA20D005A7799 /* PBXTargetDependency */,
 				A69FEECC2E123B8700AFF7A8 /* PBXTargetDependency */,
+				TSMTDAPS000000000000001 /* PBXTargetDependency */,
 			);
 			name = iTerm2ForApplescriptTesting;
 			packageProductDependencies = (
@@ -16265,6 +16320,8 @@
 			dependencies = (
 				A62B04A829B429A70077B955 /* PBXTargetDependency */,
 				A6C763D51B45C5BE00E3C992 /* PBXTargetDependency */,
+				TSMTDTST000000000000001 /* PBXTargetDependency */,
+				THGTDTST000000000000001 /* PBXTargetDependency */,
 			);
 			name = iTerm2Tests;
 			packageProductDependencies = (
@@ -16363,6 +16420,8 @@
 				A6866B7123CAA10A00ACD94C /* PBXTargetDependency */,
 				759637A42593AE0700E278CC /* PBXTargetDependency */,
 				A69FEECC2E123B8700AFF7A8 /* PBXTargetDependency */,
+				TSMTDAPP000000000000001 /* PBXTargetDependency */,
+				THGTDAPP000000000000001 /* PBXTargetDependency */,
 			);
 			name = iTerm2;
 			packageProductDependencies = (
@@ -16417,7 +16476,6 @@
 			buildRules = (
 			);
 			dependencies = (
-				A6EC804E281BBBE100493544 /* PBXTargetDependency */,
 			);
 			name = iTerm2SharedARC;
 			productName = SSKeychain;
@@ -16631,6 +16689,16 @@
 				Base,
 			);
 			mainGroup = 0464AB0D006CD2EC7F000001;
+			projectReferences = (
+				{
+					ProductGroup = THGPROD0000000000000001 /* Highlightr Products */;
+					ProjectRef = THGPROJ0000000000000001 /* Highlightr.xcodeproj */;
+				},
+				{
+					ProductGroup = TSMPROD0000000000000001 /* SwiftyMarkdown Products */;
+					ProjectRef = TSMPROJ0000000000000001 /* SwiftyMarkdown.xcodeproj */;
+				},
+			);
 			packageReferences = (
 				A62E3BC62E1CC674002DF8C3 /* XCLocalSwiftPackageReference "WebExtensionsFramework" */,
 			);
@@ -16656,6 +16724,23 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXReferenceProxy section */
+		THGPRDRF000000000000001 /* Highlightr.framework */ = {
+			isa = PBXReferenceProxy;
+			fileType = wrapper.framework;
+			path = Highlightr.framework;
+			remoteRef = THGPRDCP000000000000001 /* PBXContainerItemProxy */;
+			sourceTree = BUILT_PRODUCTS_DIR;
+		};
+		TSMPRDRF000000000000001 /* SwiftyMarkdown.framework */ = {
+			isa = PBXReferenceProxy;
+			fileType = wrapper.framework;
+			path = SwiftyMarkdown.framework;
+			remoteRef = TSMPRDCP000000000000001 /* PBXContainerItemProxy */;
+			sourceTree = BUILT_PRODUCTS_DIR;
+		};
+/* End PBXReferenceProxy section */
 
 /* Begin PBXResourcesBuildPhase section */
 		1D6ED97419AEA20D005A7799 /* Resources */ = {
@@ -20740,14 +20825,30 @@
 			target = A66717851DCE36C3000CE608 /* iTerm2SharedARC */;
 			targetProxy = A6E1524E27614A2D00D0F41C /* PBXContainerItemProxy */;
 		};
-		A6EC804E281BBBE100493544 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			productRef = A6EC804D281BBBE100493544 /* SwiftyMarkdown */;
-		};
 		CC48416BE7001BC48B0F9368 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 874206460564169600CFC3F1 /* iTerm2 */;
 			targetProxy = 69D89B58C881DE661DF12C0A /* PBXContainerItemProxy */;
+		};
+		THGTDAPP000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			targetProxy = THGTGTCP000000000000001 /* PBXContainerItemProxy */;
+		};
+		THGTDTST000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			targetProxy = THGTGTCP000000000000001 /* PBXContainerItemProxy */;
+		};
+		TSMTDAPP000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			targetProxy = TSMTGTCP000000000000001 /* PBXContainerItemProxy */;
+		};
+		TSMTDAPS000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			targetProxy = TSMTGTCP000000000000001 /* PBXContainerItemProxy */;
+		};
+		TSMTDTST000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			targetProxy = TSMTGTCP000000000000001 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -25447,26 +25548,10 @@
 		};
 /* End XCLocalSwiftPackageReference section */
 
-/* Begin XCRemoteSwiftPackageReference section */
-		A6891DCC2818621900751F40 /* XCRemoteSwiftPackageReference "SwiftyMarkdown" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/gnachman/SwiftyMarkdown";
-			requirement = {
-				branch = master;
-				kind = branch;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
 /* Begin XCSwiftPackageProductDependency section */
 		A6C7C96C2E172F3E00AA7668 /* WebExtensionsFramework */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = WebExtensionsFramework;
-		};
-		A6EC804D281BBBE100493544 /* SwiftyMarkdown */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = A6891DCC2818621900751F40 /* XCRemoteSwiftPackageReference "SwiftyMarkdown" */;
-			productName = SwiftyMarkdown;
 		};
 /* End XCSwiftPackageProductDependency section */
 
