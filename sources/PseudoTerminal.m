@@ -367,6 +367,7 @@ typedef NS_ENUM(int, iTermShouldHaveTitleSeparator) {
                              workspace:(NSDictionary *)workspaceSummary
                                  panel:(NSDictionary *)panelSummary;
 - (void)tideyNotificationStoreDidChange:(NSNotification *)notification;
+- (void)tideyUpdateNotificationDockBadgeWithSource:(NSString *)source;
 - (void)renameWorkspaceAtIndex:(NSInteger)index;
 - (void)closeWorkspacesAtIndexes:(NSIndexSet *)indexes;
 @end
@@ -1971,13 +1972,17 @@ ITERM_WEAKLY_REFERENCEABLE
 - (void)tideyNotificationStoreDidChange:(NSNotification *)notification {
     NSString *workspaceID = notification.userInfo[@"workspaceID"];
     NSString *selectedWorkspaceID = [self tideySelectedWorkspaceIdentifier];
-    [self tideyUpdateNotificationDockBadge];
+    NSLog(@"[TideyDockBadge] notificationStoreDidChange workspaceID=%@ selectedWorkspaceID=%@ hasAnyUnread=%@",
+          workspaceID ?: @"<nil>",
+          selectedWorkspaceID ?: @"<nil>",
+          [[TideyNotificationStore sharedStore] hasAnyUnreadNotifications] ? @"YES" : @"NO");
+    [self tideyUpdateNotificationDockBadgeWithSource:@"notification_store_change"];
 
     if (selectedWorkspaceID.length > 0 &&
         [[self class] tideyShouldAutoMarkReadWorkspaceOnNotificationArrivalForSelectedWorkspaceID:selectedWorkspaceID
                                                                            notificationWorkspaceID:workspaceID]) {
         [[TideyNotificationStore sharedStore] markReadForWorkspaceID:selectedWorkspaceID];
-        [self tideyUpdateNotificationDockBadge];
+        [self tideyUpdateNotificationDockBadgeWithSource:@"notification_store_change_after_mark_read"];
     }
 
     if (workspaceID.length == 0 || [workspaceID isEqualToString:@"*"]) {
@@ -2025,10 +2030,25 @@ ITERM_WEAKLY_REFERENCEABLE
 }
 
 - (void)tideyUpdateNotificationDockBadge {
+    [self tideyUpdateNotificationDockBadgeWithSource:@"unspecified"];
+}
+
+- (void)tideyUpdateNotificationDockBadgeWithSource:(NSString *)source {
     NSDockTile *dockTile = [[NSApplication sharedApplication] dockTile];
+    BOOL hasUnreadNotifications = [[TideyNotificationStore sharedStore] hasAnyUnreadNotifications];
+    NSString *beforeLabel = dockTile.badgeLabel ?: @"";
+    BOOL beforeShowsBadge = dockTile.showsApplicationBadge;
     NSDictionary<NSString *, id> *badgeState =
         [[self class] tideyDockBadgeStateForBellCount:[[self class] tideyCurrentDockBellCount]
-                              hasUnreadNotifications:[[TideyNotificationStore sharedStore] hasAnyUnreadNotifications]];
+                              hasUnreadNotifications:hasUnreadNotifications];
+    NSLog(@"[TideyDockBadge] update source=%@ hasAnyUnread=%@ currentBellCount=%ld beforeLabel=%@ beforeShowsBadge=%@ nextLabel=%@ nextShowsBadge=%@",
+          source ?: @"<nil>",
+          hasUnreadNotifications ? @"YES" : @"NO",
+          (long)[[self class] tideyCurrentDockBellCount],
+          beforeLabel,
+          beforeShowsBadge ? @"YES" : @"NO",
+          badgeState[@"label"] ?: @"<nil>",
+          [badgeState[@"showsBadge"] boolValue] ? @"YES" : @"NO");
     dockTile.badgeLabel = badgeState[@"label"];
     dockTile.showsApplicationBadge = [badgeState[@"showsBadge"] boolValue];
 }
@@ -5920,7 +5940,7 @@ hidingToolbeltShouldResizeWindow:(BOOL)hidingToolbeltShouldResizeWindow
     [self.window.dockTile setShowsApplicationBadge:NO];
     [[[NSApplication sharedApplication] dockTile] setBadgeLabel:@""];
     [[[NSApplication sharedApplication] dockTile] setShowsApplicationBadge:NO];
-    [self tideyUpdateNotificationDockBadge];
+    [self tideyUpdateNotificationDockBadgeWithSource:@"window_did_deminiaturize"];
     if ([[self currentTab] blur]) {
         [self enableBlur:[[self currentTab] blurRadius]];
     } else {
@@ -6186,7 +6206,7 @@ hidingToolbeltShouldResizeWindow:(BOOL)hidingToolbeltShouldResizeWindow
     [[self class] tideyClearDockBellCount];
     [[[NSApplication sharedApplication] dockTile] setBadgeLabel:@""];
     [[[NSApplication sharedApplication] dockTile] setShowsApplicationBadge:NO];
-    [self tideyUpdateNotificationDockBadge];
+    [self tideyUpdateNotificationDockBadgeWithSource:@"window_did_become_key"];
 
     [[iTermController sharedInstance] setCurrentTerminal:self];
     iTermApplicationDelegate *itad = [iTermApplication.sharedApplication delegate];
