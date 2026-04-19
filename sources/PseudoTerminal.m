@@ -378,12 +378,7 @@ typedef NS_ENUM(int, iTermShouldHaveTitleSeparator) {
                                  didCloseRightPanelTab:(BOOL)didCloseRightPanelTab;
 + (NSDictionary<NSString *, id> *)tideyDockBadgeStateForBellCount:(NSInteger)bellCount
                                            hasUnreadNotifications:(BOOL)hasUnreadNotifications;
-+ (NSInteger)tideyCurrentDockBellCount;
-+ (void)tideyClearDockBellCount;
-+ (NSInteger)tideyIncrementDockBellCount;
 @end
-
-static NSInteger gTideyDockBellCount = 0;
 
 @implementation PseudoTerminal {
     ////////////////////////////////////////////////////////////////////////////
@@ -2038,13 +2033,14 @@ ITERM_WEAKLY_REFERENCEABLE
     BOOL hasUnreadNotifications = [[TideyNotificationStore sharedStore] hasAnyUnreadNotifications];
     NSString *beforeLabel = dockTile.badgeLabel ?: @"";
     BOOL beforeShowsBadge = dockTile.showsApplicationBadge;
+    NSInteger bellCount = dockTile.badgeLabel.integerValue;
     NSDictionary<NSString *, id> *badgeState =
-        [[self class] tideyDockBadgeStateForBellCount:[[self class] tideyCurrentDockBellCount]
+        [[self class] tideyDockBadgeStateForBellCount:bellCount
                               hasUnreadNotifications:hasUnreadNotifications];
     NSLog(@"[TideyDockBadge] update source=%@ hasAnyUnread=%@ currentBellCount=%ld beforeLabel=%@ beforeShowsBadge=%@ nextLabel=%@ nextShowsBadge=%@",
           source ?: @"<nil>",
           hasUnreadNotifications ? @"YES" : @"NO",
-          (long)[[self class] tideyCurrentDockBellCount],
+          (long)bellCount,
           beforeLabel,
           beforeShowsBadge ? @"YES" : @"NO",
           badgeState[@"label"] ?: @"<nil>",
@@ -4047,19 +4043,6 @@ ITERM_WEAKLY_REFERENCEABLE
     return 0;
 }
 
-+ (NSInteger)tideyCurrentDockBellCount {
-    return gTideyDockBellCount;
-}
-
-+ (void)tideyClearDockBellCount {
-    gTideyDockBellCount = [self tideyClearedDockBellCount];
-}
-
-+ (NSInteger)tideyIncrementDockBellCount {
-    gTideyDockBellCount = [self tideyBellCountByIncrementingDockBellCount:gTideyDockBellCount];
-    return gTideyDockBellCount;
-}
-
 + (BOOL)tideyShouldAutoMarkReadWorkspaceOnNotificationArrivalForSelectedWorkspaceID:(NSString *)selectedWorkspaceID
                                                              notificationWorkspaceID:(NSString *)workspaceID {
     (void)selectedWorkspaceID;
@@ -5935,7 +5918,6 @@ hidingToolbeltShouldResizeWindow:(BOOL)hidingToolbeltShouldResizeWindow
 - (void)windowDidDeminiaturize:(NSNotification *)aNotification {
     DLog(@"windowDidDeminiaturize: %@\n%@", self, [NSThread callStackSymbols]);
     DLog(@"Erase badge label");
-    [[self class] tideyClearDockBellCount];
     [self.window.dockTile setBadgeLabel:@""];
     [self.window.dockTile setShowsApplicationBadge:NO];
     [[[NSApplication sharedApplication] dockTile] setBadgeLabel:@""];
@@ -6203,7 +6185,6 @@ hidingToolbeltShouldResizeWindow:(BOOL)hidingToolbeltShouldResizeWindow
     }
     [[iTermHotKeyController sharedInstance] autoHideHotKeyWindowsExcept:[[iTermHotKeyController sharedInstance] siblingWindowControllersOf:self]];
     DLog(@"Erase badge label");
-    [[self class] tideyClearDockBellCount];
     [[[NSApplication sharedApplication] dockTile] setBadgeLabel:@""];
     [[[NSApplication sharedApplication] dockTile] setShowsApplicationBadge:NO];
     [self tideyUpdateNotificationDockBadgeWithSource:@"window_did_become_key"];
@@ -14545,25 +14526,16 @@ typedef NS_ENUM(NSUInteger, iTermBroadcastCommand) {
         DLog(@"Use main app dock tile");
         dockTile = [[NSApplication sharedApplication] dockTile];
     }
-    NSInteger count;
-    if (dockTile == [[NSApplication sharedApplication] dockTile]) {
-        count = [[self class] tideyCurrentDockBellCount];
-    } else {
-        count = dockTile.badgeLabel.integerValue;
-    }
-    DLog(@"Old count was %ld", (long)count);
+    int count = [[dockTile badgeLabel] intValue];
+    DLog(@"Old count was %d", count);
     if (count == 999) {
         DLog(@"Won't go over 999, so stop early");
         return NO;
     }
-    if (dockTile == [[NSApplication sharedApplication] dockTile]) {
-        count = [[self class] tideyIncrementDockBellCount];
-    } else {
-        count = [[self class] tideyBellCountByIncrementingDockBellCount:count];
-    }
+    ++count;
     DLog(@"Set badge label to %@", @(count));
-    [dockTile setBadgeLabel:[NSString stringWithFormat:@"%ld", (long)count]];
-    [dockTile setShowsApplicationBadge:YES];
+    [dockTile setBadgeLabel:[NSString stringWithFormat:@"%d", count]];
+    [self.window.dockTile setShowsApplicationBadge:YES];
     return YES;
 }
 
