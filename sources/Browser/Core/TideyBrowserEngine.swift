@@ -8,8 +8,13 @@ import WebKit
 
 @MainActor
 final class TideyBrowserEngine: NSObject {
-    weak var host: TideyBrowserEngineHost?
+    weak var host: TideyBrowserEngineHost? {
+        didSet {
+            notifyStateDidChange()
+        }
+    }
     let webView: WKWebView
+    private var observations: [NSKeyValueObservation] = []
 
     convenience init(host: TideyBrowserEngineHost? = nil) {
         self.init(configuration: Self.defaultConfiguration(), host: host)
@@ -22,6 +27,7 @@ final class TideyBrowserEngine: NSObject {
         super.init()
         webView.navigationDelegate = self
         webView.uiDelegate = self
+        configureStateObservations()
     }
 
     static func defaultConfiguration() -> WKWebViewConfiguration {
@@ -50,6 +56,14 @@ final class TideyBrowserEngine: NSObject {
         webView.canGoForward
     }
 
+    var state: TideyBrowserEngineState {
+        TideyBrowserEngineState(currentURL: url,
+                                currentTitle: title,
+                                isLoading: isLoading,
+                                canGoBack: canGoBack,
+                                canGoForward: canGoForward)
+    }
+
     func load(_ url: URL) {
         webView.load(URLRequest(url: url))
     }
@@ -64,6 +78,30 @@ final class TideyBrowserEngine: NSObject {
 
     func reload() {
         webView.reload()
+    }
+
+    private func configureStateObservations() {
+        observations = [
+            webView.observe(\.url, options: [.initial, .new]) { [weak self] _, _ in
+                self?.notifyStateDidChange()
+            },
+            webView.observe(\.title, options: [.initial, .new]) { [weak self] _, _ in
+                self?.notifyStateDidChange()
+            },
+            webView.observe(\.isLoading, options: [.initial, .new]) { [weak self] _, _ in
+                self?.notifyStateDidChange()
+            },
+            webView.observe(\.canGoBack, options: [.initial, .new]) { [weak self] _, _ in
+                self?.notifyStateDidChange()
+            },
+            webView.observe(\.canGoForward, options: [.initial, .new]) { [weak self] _, _ in
+                self?.notifyStateDidChange()
+            }
+        ]
+    }
+
+    private func notifyStateDidChange() {
+        host?.browserEngine(self, didUpdateState: state)
     }
 }
 
