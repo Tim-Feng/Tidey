@@ -2,6 +2,7 @@
 #import <WebKit/WebKit.h>
 
 @class TideyEditorTab;
+@class TideyBrowserEngine;
 
 @interface TideyRightPanelPane : NSObject
 
@@ -11,6 +12,7 @@
 @property(nonatomic, strong) NSView *browserContainerView;
 @property(nonatomic, strong) WKWebView *editorWebView;
 @property(nonatomic, strong) WKWebView *browserWebView;
+@property(nonatomic, strong) TideyBrowserEngine *browserEngine;
 @property(nonatomic, strong) NSTextField *browserURLField;
 @property(nonatomic, strong) NSButton *browserBackButton;
 @property(nonatomic, strong) NSButton *browserForwardButton;

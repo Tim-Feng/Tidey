@@ -7,6 +7,7 @@ import Foundation
 import WebKit
 
 @MainActor
+@objcMembers
 final class TideyBrowserEngine: NSObject {
     weak var host: TideyBrowserEngineHost? {
         didSet {
