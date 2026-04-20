@@ -117,9 +117,10 @@ extension TideyBrowserEngine: WKUIDelegate {
         guard let url = navigationAction.request.url else {
             return nil
         }
-        host?.browserEngine(self,
-                            requestOpenNewTabFor: url,
-                            configuration: configuration)
+        let request = TideyBrowserPopupRequest(url: url,
+                                               configuration: configuration,
+                                               opensInNewBrowsingContext: navigationAction.targetFrame == nil)
+        host?.browserEngine(self, requestPopup: request)
         return nil
     }
 }

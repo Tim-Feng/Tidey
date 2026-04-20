@@ -6144,14 +6144,12 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 }
 
 - (void)browserEngine:(TideyBrowserEngine *)engine
- requestOpenNewTabFor:(NSURL *)url
-       configuration:(WKWebViewConfiguration *)configuration {
-    (void)configuration;
-    if (!url) {
+         requestPopup:(TideyBrowserPopupRequest *)request {
+    if (!request.url) {
         return;
     }
     TideyRightPanelPane *pane = [self tideyPaneForBrowserEngine:engine] ?: self.activePane;
-    [self tideyOpenNewBrowserTabWithURL:url inPane:pane];
+    [self tideyOpenNewBrowserTabWithURL:request.url inPane:pane];
 }
 
 - (void)layoutSubviewsTopTabBarVisible:(BOOL)topTabBarVisible forWindow:(NSWindow *)thisWindow {

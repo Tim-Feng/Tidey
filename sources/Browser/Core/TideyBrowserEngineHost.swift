@@ -29,11 +29,26 @@ final class TideyBrowserEngineState: NSObject {
 }
 
 @MainActor
+@objcMembers
+final class TideyBrowserPopupRequest: NSObject {
+    let url: URL
+    let configuration: WKWebViewConfiguration
+    let opensInNewBrowsingContext: Bool
+
+    init(url: URL,
+         configuration: WKWebViewConfiguration,
+         opensInNewBrowsingContext: Bool) {
+        self.url = url
+        self.configuration = configuration
+        self.opensInNewBrowsingContext = opensInNewBrowsingContext
+    }
+}
+
+@MainActor
 @objc
 protocol TideyBrowserEngineHost: AnyObject {
     func browserEngine(_ engine: TideyBrowserEngine,
                        didUpdateState state: TideyBrowserEngineState)
     func browserEngine(_ engine: TideyBrowserEngine,
-                       requestOpenNewTabFor url: URL,
-                       configuration: WKWebViewConfiguration)
+                       requestPopup request: TideyBrowserPopupRequest)
 }
