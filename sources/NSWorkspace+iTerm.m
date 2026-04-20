@@ -61,7 +61,8 @@
     if (!url) {
         return NO;
     }
-    if (![@[ @"http", @"https", @"ftp", @"file" ] containsObject:url.scheme]) {
+    NSString *scheme = url.scheme.lowercaseString;
+    if (![@[ @"http", @"https", @"ftp", @"file" ] containsObject:scheme]) {
         // The browser configured in advanced settings and the built-in browser don't handle this scheme.
         return NO;
     }
@@ -74,10 +75,11 @@
     if (![iTermAdvancedSettingsModel browserProfiles]) {
         return NO;
     }
-    if ([url.scheme isEqualToString:@"file"] && [self it_localBrowserIsCompatibleWithFileURL:url]) {
+    NSString *scheme = url.scheme.lowercaseString;
+    if ([scheme isEqualToString:@"file"] && [self it_localBrowserIsCompatibleWithFileURL:url]) {
         return YES;
     }
-    if (![iTermBrowserMetadata.supportedSchemes containsObject:url.scheme]) {
+    if (![iTermBrowserMetadata.supportedSchemes containsObject:scheme]) {
         return NO;
     }
     return YES;
@@ -195,10 +197,11 @@
                     upsell:(BOOL)upsell
                     window:(NSWindow *)window
                 completion:(void (^)(NSRunningApplication *app, NSError *error))completion {
-    if ([@[ @"http", @"https", @"ftp" ] containsObject:url.scheme]) {
+    NSString *scheme = url.scheme.lowercaseString;
+    if ([@[ @"http", @"https", @"ftp" ] containsObject:scheme]) {
         return NO;
     }
-    if ([url.scheme isEqualToString:@"file"]) {
+    if ([scheme isEqualToString:@"file"]) {
         // Some files could usefully be opened locally, like PDFs.
         if ([self it_tryToOpenFileURLLocally:url
                                configuration:configuration
@@ -232,8 +235,9 @@ completionHandler:^(NSRunningApplication *app, NSError *error) {
     if (!url) {
         return;
     }
+    NSString *scheme = url.scheme.lowercaseString;
     // Intercept http/https URLs for Tidey in-app browser
-    if ([url.scheme isEqualToString:@"http"] || [url.scheme isEqualToString:@"https"]) {
+    if ([scheme isEqualToString:@"http"] || [scheme isEqualToString:@"https"]) {
         iTermRootTerminalView *rootView = nil;
         if ([window.contentView isKindOfClass:[iTermRootTerminalView class]]) {
             rootView = (iTermRootTerminalView *)window.contentView;
