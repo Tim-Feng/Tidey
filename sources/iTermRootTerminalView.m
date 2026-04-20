@@ -272,8 +272,6 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
     TideyLastClickedRegionBrowser = 4,
 };
 
-@class TideyBrowserOpenResult;
-
 @interface iTermRootTerminalView()<
     iTermTabBarControlViewDelegate,
     iTermDragHandleViewDelegate,
@@ -496,12 +494,7 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
                          inContainerView:(NSView *)containerView
                                hintViews:(NSMutableArray<NSView *> *)hintViews;
 + (NSString *)tideyNormalizedBrowserURLString:(NSString *)input;
-+ (NSString *)tideyCanonicalBrowserURLStringForURL:(NSURL *)url;
 + (NSString *)tideyBrowserDisplayNameForURL:(NSURL *)url pageTitle:(NSString *)pageTitle;
-+ (NSInteger)tideyIndexOfExistingBrowserTabForURL:(NSString *)urlString
-                                           inTabs:(NSArray<TideyEditorTab *> *)tabs;
-+ (TideyBrowserOpenResult *)tideyBrowserOpenResultForURLString:(NSString *)input
-                                                        inTabs:(NSArray<TideyEditorTab *> *)tabs;
 + (BOOL)tideyResponder:(NSResponder *)responder isDescendantOfView:(NSView *)view;
 + (BOOL)tideyResponderLooksLikeWebKitResponder:(NSResponder *)responder;
 + (WKWebView *)tideyNearestWebViewForResponder:(NSResponder *)responder;
@@ -863,16 +856,6 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 @end
 
 @implementation TideyRightPanelSelectionState
-@end
-
-@interface TideyBrowserOpenResult : NSObject
-@property(nonatomic, copy) NSString *normalizedURLString;
-@property(nonatomic) NSInteger existingTabIndex;
-@property(nonatomic, copy) NSString *displayName;
-@property(nonatomic) BOOL shouldCreateTab;
-@end
-
-@implementation TideyBrowserOpenResult
 @end
 
 @interface TideyPassthroughView : NSView
@@ -1355,33 +1338,6 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     return [@"https://" stringByAppendingString:trimmed];
 }
 
-+ (NSString *)tideyCanonicalBrowserURLStringForURL:(NSURL *)url {
-    if (!url) {
-        return nil;
-    }
-    NSURLComponents *components = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
-    if (!components) {
-        return url.absoluteString;
-    }
-    NSString *scheme = components.scheme.lowercaseString;
-    if (scheme.length > 0) {
-        components.scheme = scheme;
-    }
-    NSString *host = components.host.lowercaseString;
-    if (host.length > 0) {
-        components.host = host;
-    }
-    NSNumber *port = components.port;
-    if (([scheme isEqualToString:@"http"] && port.integerValue == 80) ||
-        ([scheme isEqualToString:@"https"] && port.integerValue == 443)) {
-        components.port = nil;
-    }
-    if (host.length > 0 && components.percentEncodedPath.length == 0) {
-        components.percentEncodedPath = @"/";
-    }
-    return components.string ?: url.absoluteString;
-}
-
 + (NSString *)tideyBrowserDisplayNameForURL:(NSURL *)url pageTitle:(NSString *)pageTitle {
     if (pageTitle.length > 0) {
         return pageTitle;
@@ -1390,41 +1346,6 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         return url.host;
     }
     return url.absoluteString ?: @"Web";
-}
-
-+ (NSInteger)tideyIndexOfExistingBrowserTabForURL:(NSString *)urlString
-                                           inTabs:(NSArray<TideyEditorTab *> *)tabs {
-    NSString *canonicalURLString = [self tideyCanonicalBrowserURLStringForURL:[NSURL URLWithString:urlString]];
-    if (canonicalURLString.length == 0) {
-        return NSNotFound;
-    }
-    for (NSInteger i = 0; i < (NSInteger)tabs.count; i++) {
-        TideyEditorTab *tab = tabs[i];
-        NSString *canonicalTabURLString = [self tideyCanonicalBrowserURLStringForURL:[NSURL URLWithString:tab.path]];
-        if (tab.kind == TideyRightPanelTabKindBrowser &&
-            [canonicalTabURLString isEqualToString:canonicalURLString]) {
-            return i;
-        }
-    }
-    return NSNotFound;
-}
-
-+ (TideyBrowserOpenResult *)tideyBrowserOpenResultForURLString:(NSString *)input
-                                                        inTabs:(NSArray<TideyEditorTab *> *)tabs {
-    NSString *normalizedURLString = [self tideyNormalizedBrowserURLString:input];
-    if (normalizedURLString.length == 0) {
-        return nil;
-    }
-    NSURL *url = [NSURL URLWithString:normalizedURLString];
-    if (!url) {
-        return nil;
-    }
-    TideyBrowserOpenResult *result = [[TideyBrowserOpenResult alloc] init];
-    result.normalizedURLString = normalizedURLString;
-    result.existingTabIndex = [self tideyIndexOfExistingBrowserTabForURL:normalizedURLString inTabs:tabs];
-    result.displayName = [self tideyBrowserDisplayNameForURL:url pageTitle:nil];
-    result.shouldCreateTab = (result.existingTabIndex == NSNotFound);
-    return result;
 }
 
 + (TideyRightPanelTabKind)tideyResolvedExpandedKindForTabs:(NSArray<TideyEditorTab *> *)tabs
@@ -5229,30 +5150,6 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     pane.browserForwardButton.enabled = state.canGoForward;
 }
 
-- (BOOL)tideySelectExistingBrowserTabWithURL:(NSURL *)url preferredPane:(TideyRightPanelPane *)preferredPane {
-    if (!url) {
-        return NO;
-    }
-    NSString *canonicalURLString = [[self class] tideyCanonicalBrowserURLStringForURL:url];
-    if (canonicalURLString.length == 0) {
-        return NO;
-    }
-    NSMutableArray<TideyRightPanelPane *> *orderedPanes = [[self tideyVisibleRightPanelPanes] mutableCopy];
-    if (preferredPane && [orderedPanes containsObject:preferredPane]) {
-        [orderedPanes removeObject:preferredPane];
-        [orderedPanes insertObject:preferredPane atIndex:0];
-    }
-    for (TideyRightPanelPane *pane in orderedPanes) {
-        NSInteger existingIndex = [[self class] tideyIndexOfExistingBrowserTabForURL:canonicalURLString
-                                                                              inTabs:pane.tabs];
-        if (existingIndex != NSNotFound) {
-            [self selectTideyRightPanelTabAtIndex:existingIndex inPane:pane];
-            return YES;
-        }
-    }
-    return NO;
-}
-
 - (void)tideyOpenBrowserTabWithURL:(NSURL *)url {
     if (!url) {
         return;
@@ -5262,9 +5159,6 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     if (!_shouldShowTideyEditorPanel) {
         [self setShouldShowTideyEditorPanel:YES];
         [self.delegate repositionWidgets];
-    }
-    if ([self tideySelectExistingBrowserTabWithURL:url preferredPane:pane]) {
-        return;
     }
     [self tideyOpenNewBrowserTabWithURL:url inPane:pane];
 }
