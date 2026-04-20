@@ -88,6 +88,7 @@ class iTermBrowserManager: NSObject, WKURLSchemeHandler, WKScriptMessageHandler 
             triggerHandler?.delegate = delegate
         }
     }
+    lazy var navigationEngine: TideyBrowserNavigationEngine = iTermBrowserSessionEngineAdapter(manager: self)
     private(set) var webView: iTermBrowserWebView!
     private var lastFailedURL: URL?
     private var currentPageURL: URL?

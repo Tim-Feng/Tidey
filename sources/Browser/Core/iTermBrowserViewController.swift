@@ -100,6 +100,7 @@ protocol iTermBrowserViewControllerDelegate: AnyObject, iTermBrowserFindManagerD
 @objc(iTermBrowserViewController)
 class iTermBrowserViewController: NSViewController {
     private let browserManager: iTermBrowserManager
+    private let browserEngine: TideyBrowserNavigationEngine
     private var toolbar: iTermBrowserToolbar!
     private var backgroundView: NSVisualEffectView!
     private let historyController: iTermBrowserHistoryController
@@ -144,10 +145,10 @@ class iTermBrowserViewController: NSViewController {
     // 100.0 = 100%
     @objc var zoom: CGFloat {
         get {
-            round(browserManager.webView!.pageZoom * 100.0)
+            round(browserEngine.webView.pageZoom * 100.0)
         }
         set {
-            browserManager.webView!.pageZoom = newValue / 100.0
+            browserEngine.webView.pageZoom = newValue / 100.0
         }
     }
     
@@ -189,6 +190,7 @@ class iTermBrowserViewController: NSViewController {
                                              profileObserver: profileObserver,
                                              profileMutator: profileMutator,
                                              pointerController: pointerController)
+        browserEngine = browserManager.navigationEngine
         suggestionsController = iTermBrowserSuggestionsController(user: user,
                                                                   historyController: historyController,
                                                                   attributes: CompletionsWindow.regularAttributes(font: nil))
@@ -222,7 +224,7 @@ class iTermBrowserViewController: NSViewController {
 @MainActor
 extension iTermBrowserViewController {
     @objc
-    var currentURL: URL? { browserManager.webView.url }
+    var currentURL: URL? { browserEngine.url }
 
     @objc
     func terminate() {

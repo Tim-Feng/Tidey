@@ -5018,6 +5018,7 @@
 		A6F7D4B92E034E2B0065D09C /* iTermBrowserManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6F7D4B82E034E2B0065D09C /* iTermBrowserManager.swift */; };
 		F041A0013C6B4E7A00A1B001 /* TideyBrowserEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = F041A0023C6B4E7A00A1B001 /* TideyBrowserEngine.swift */; };
 		F041A0033C6B4E7A00A1B001 /* TideyBrowserEngineHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = F041A0043C6B4E7A00A1B001 /* TideyBrowserEngineHost.swift */; };
+		F041A0053C6B4E7A00A1B001 /* iTermBrowserSessionEngineAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = F041A0063C6B4E7A00A1B001 /* iTermBrowserSessionEngineAdapter.swift */; };
 		A6F7D4BB2E0373110065D09C /* iTermBrowserErrorHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6F7D4BA2E0373110065D09C /* iTermBrowserErrorHandler.swift */; };
 		A6F7D4BD2E037B4B0065D09C /* iTermBrowserSettingsHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6F7D4BC2E037B4B0065D09C /* iTermBrowserSettingsHandler.swift */; };
 		A6F7D4BF2E037BB20065D09C /* iterm-browser-common.css in Resources */ = {isa = PBXBuildFile; fileRef = A6F7D4BE2E037BB20065D09C /* iterm-browser-common.css */; };
@@ -9132,6 +9133,7 @@
 		A6F7D4B82E034E2B0065D09C /* iTermBrowserManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iTermBrowserManager.swift; sourceTree = "<group>"; };
 		F041A0023C6B4E7A00A1B001 /* TideyBrowserEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TideyBrowserEngine.swift; sourceTree = "<group>"; };
 		F041A0043C6B4E7A00A1B001 /* TideyBrowserEngineHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TideyBrowserEngineHost.swift; sourceTree = "<group>"; };
+		F041A0063C6B4E7A00A1B001 /* iTermBrowserSessionEngineAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iTermBrowserSessionEngineAdapter.swift; sourceTree = "<group>"; };
 		A6F7D4BA2E0373110065D09C /* iTermBrowserErrorHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iTermBrowserErrorHandler.swift; sourceTree = "<group>"; };
 		A6F7D4BC2E037B4B0065D09C /* iTermBrowserSettingsHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iTermBrowserSettingsHandler.swift; sourceTree = "<group>"; };
 		A6F7D4BE2E037BB20065D09C /* iterm-browser-common.css */ = {isa = PBXFileReference; lastKnownFileType = text.css; path = "iterm-browser-common.css"; sourceTree = "<group>"; };
@@ -13969,6 +13971,7 @@
 				A6F7D4B82E034E2B0065D09C /* iTermBrowserManager.swift */,
 				F041A0023C6B4E7A00A1B001 /* TideyBrowserEngine.swift */,
 				F041A0043C6B4E7A00A1B001 /* TideyBrowserEngineHost.swift */,
+				F041A0063C6B4E7A00A1B001 /* iTermBrowserSessionEngineAdapter.swift */,
 				A6A3EDEB2E0DC6A400D711DA /* iTermBrowserMetadata.swift */,
 				A6F7D4FD2E05C4850065D09C /* iTermBrowserNavigationState.swift */,
 				A6A3EDC32E0CDA1D00D711DA /* iTermBrowserPointerActionPerformer.swift */,
@@ -20226,6 +20229,7 @@
 				A6F7D4B92E034E2B0065D09C /* iTermBrowserManager.swift in Sources */,
 				F041A0013C6B4E7A00A1B001 /* TideyBrowserEngine.swift in Sources */,
 				F041A0033C6B4E7A00A1B001 /* TideyBrowserEngineHost.swift in Sources */,
+				F041A0053C6B4E7A00A1B001 /* iTermBrowserSessionEngineAdapter.swift in Sources */,
 				A6F3707A2DAC941600A0A59E /* ChannelClient.swift in Sources */,
 				A605A18B2EAD8CAE0072ED7E /* iTermMetalLayerBox.swift in Sources */,
 				A6F7D4C32E037BC80065D09C /* iTermBrowserCSSLoader.swift in Sources */,

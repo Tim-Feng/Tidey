@@ -7,8 +7,23 @@ import Foundation
 import WebKit
 
 @MainActor
+protocol TideyBrowserNavigationEngine: AnyObject {
+    var webView: WKWebView { get }
+    var url: URL? { get }
+    var title: String? { get }
+    var isLoading: Bool { get }
+    var canGoBack: Bool { get }
+    var canGoForward: Bool { get }
+
+    func load(_ url: URL)
+    func goBack()
+    func goForward()
+    func reload()
+}
+
+@MainActor
 @objcMembers
-final class TideyBrowserEngine: NSObject {
+final class TideyBrowserEngine: NSObject, TideyBrowserNavigationEngine {
     weak var host: TideyBrowserEngineHost? {
         didSet {
             notifyStateDidChange()
