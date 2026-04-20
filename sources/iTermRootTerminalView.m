@@ -31,6 +31,7 @@
 #import "TideyEditorDocumentStore.h"
 #import "TideyEditorExternalChangeWatcher.h"
 #import "TideyRightPanelPane.h"
+#import "iTerm2SharedARC-Swift.h"
 #import "iTermFakeWindowTitleLabel.h"
 #import "iTermGenericStatusBarContainer.h"
 #import "iTermImageView.h"
@@ -284,7 +285,7 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
     NSOutlineViewDelegate,
     SCEventListenerProtocol,
     WKNavigationDelegate,
-    WKUIDelegate>
+    TideyBrowserEngineHost>
 
 @property(nonatomic, strong) PTYTabView *tabView;
 @property(nonatomic, strong) iTermTabBarControlView *tabBarControl;
@@ -511,6 +512,9 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
 - (void)tideyLoadBrowserURL:(NSURL *)url;
 - (void)tideyUpdateBrowserContentVisibility;
 - (void)tideyOpenNewBrowserTabWithURL:(NSURL *)url inPane:(TideyRightPanelPane *)pane;
+- (TideyRightPanelPane *)tideyPaneForBrowserEngine:(TideyBrowserEngine *)engine;
+- (void)tideyUpdateBrowserUIForPane:(TideyRightPanelPane *)pane
+                              state:(TideyBrowserEngineState *)state;
 
 @end
 
@@ -2199,13 +2203,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         if ((id)pane == (id)kCFNull || !pane.browserWebView) {
             continue;
         }
-        [pane.browserWebView removeObserver:self forKeyPath:@"title"];
-        [pane.browserWebView removeObserver:self forKeyPath:@"URL"];
-        [pane.browserWebView removeObserver:self forKeyPath:@"loading"];
-        [pane.browserWebView removeObserver:self forKeyPath:@"canGoBack"];
-        [pane.browserWebView removeObserver:self forKeyPath:@"canGoForward"];
-        pane.browserWebView.navigationDelegate = nil;
-        pane.browserWebView.UIDelegate = nil;
+        pane.browserEngine.host = nil;
     }
     if (_secondaryPane.editorWebView) {
         [_secondaryPane.editorWebView.configuration.userContentController removeScriptMessageHandlerForName:@"tideyEditorReady"];
@@ -2231,39 +2229,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                       ofObject:(id)object
                         change:(NSDictionary<NSKeyValueChangeKey,id> *)change
                        context:(void *)context {
-    TideyRightPanelPane *pane = [self tideyPaneForBrowserWebView:object];
-    if (!pane) {
-        [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
-        return;
-    }
-    if ([keyPath isEqualToString:@"title"]) {
-        NSString *title = pane.browserWebView.title;
-        TideyEditorTab *tab = [self tideyCurrentRightPanelTabInPane:pane];
-        if (tab && tab.kind == TideyRightPanelTabKindBrowser && title.length > 0) {
-            tab.displayName = [[self class] tideyBrowserDisplayNameForURL:pane.browserWebView.URL
-                                                               pageTitle:title];
-            [self reloadTideyRightPanelTabsForPane:pane];
-        }
-    } else if ([keyPath isEqualToString:@"URL"]) {
-        NSURL *url = pane.browserWebView.URL;
-        if (url) {
-            pane.browserURLField.stringValue = url.absoluteString;
-            TideyEditorTab *tab = [self tideyCurrentRightPanelTabInPane:pane];
-            if (tab && tab.kind == TideyRightPanelTabKindBrowser) {
-                tab.path = url.absoluteString;
-            }
-        }
-    } else if ([keyPath isEqualToString:@"loading"]) {
-        if (pane.browserWebView.isLoading) {
-            [pane.browserLoadingIndicator startAnimation:nil];
-        } else {
-            [pane.browserLoadingIndicator stopAnimation:nil];
-        }
-    } else if ([keyPath isEqualToString:@"canGoBack"]) {
-        pane.browserBackButton.enabled = pane.browserWebView.canGoBack;
-    } else if ([keyPath isEqualToString:@"canGoForward"]) {
-        pane.browserForwardButton.enabled = pane.browserWebView.canGoForward;
-    }
+    [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
 }
 
 - (void)pathWatcher:(SCEvents *)pathWatcher eventOccurred:(SCEvent *)event {
@@ -3686,15 +3652,15 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     };
     browserContainerView.tideyReloadHandler = ^{
         [weakSelf tideySetActivePane:pane];
-        [pane.browserWebView reload];
+        [pane.browserEngine reload];
     };
     browserContainerView.tideyBackHandler = ^{
         [weakSelf tideySetActivePane:pane];
-        [pane.browserWebView goBack];
+        [pane.browserEngine goBack];
     };
     browserContainerView.tideyForwardHandler = ^{
         [weakSelf tideySetActivePane:pane];
-        [pane.browserWebView goForward];
+        [pane.browserEngine goForward];
     };
     pane.browserContainerView = browserContainerView;
     pane.browserContainerView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
@@ -3778,10 +3744,11 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     }
     config.preferences = prefs;
 
-    pane.browserWebView = [[WKWebView alloc] initWithFrame:NSZeroRect configuration:config];
+    TideyBrowserEngine *engine = [[TideyBrowserEngine alloc] initWithConfiguration:config
+                                                                              host:nil];
+    pane.browserEngine = engine;
+    pane.browserWebView = engine.webView;
     pane.browserWebView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    pane.browserWebView.navigationDelegate = self;
-    pane.browserWebView.UIDelegate = self;
     pane.browserWebView.allowsBackForwardNavigationGestures = YES;
     if (@available(macOS 13.3, *)) {
         pane.browserWebView.inspectable = YES;
@@ -3791,13 +3758,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     NSView *hostView = pane.containerView ?: _tideyEditorPanelView;
     NSView *relativeView = pane.tabStripView ?: _tideyEditorTabStripView;
     [hostView addSubview:pane.browserContainerView positioned:NSWindowBelow relativeTo:relativeView];
-
-    // KVO for title and loading
-    [pane.browserWebView addObserver:self forKeyPath:@"title" options:NSKeyValueObservingOptionNew context:NULL];
-    [pane.browserWebView addObserver:self forKeyPath:@"URL" options:NSKeyValueObservingOptionNew context:NULL];
-    [pane.browserWebView addObserver:self forKeyPath:@"loading" options:NSKeyValueObservingOptionNew context:NULL];
-    [pane.browserWebView addObserver:self forKeyPath:@"canGoBack" options:NSKeyValueObservingOptionNew context:NULL];
-    [pane.browserWebView addObserver:self forKeyPath:@"canGoForward" options:NSKeyValueObservingOptionNew context:NULL];
+    pane.browserEngine.host = self;
 }
 
 - (void)tideyLoadBrowserURL:(NSURL *)url {
@@ -3805,7 +3766,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 }
 
 - (void)tideyLoadBrowserURL:(NSURL *)url inPane:(TideyRightPanelPane *)pane {
-    [pane.browserWebView loadRequest:[NSURLRequest requestWithURL:url]];
+    [pane.browserEngine load:url];
     pane.browserURLField.stringValue = url.absoluteString;
 }
 
@@ -3905,19 +3866,19 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 - (void)tideyBrowserGoBack:(id)sender {
     TideyRightPanelPane *pane = [self tideyCurrentPaneForSender:sender];
     [self tideySetActivePane:pane];
-    [pane.browserWebView goBack];
+    [pane.browserEngine goBack];
 }
 
 - (void)tideyBrowserGoForward:(id)sender {
     TideyRightPanelPane *pane = [self tideyCurrentPaneForSender:sender];
     [self tideySetActivePane:pane];
-    [pane.browserWebView goForward];
+    [pane.browserEngine goForward];
 }
 
 - (void)tideyBrowserReload:(id)sender {
     TideyRightPanelPane *pane = [self tideyCurrentPaneForSender:sender];
     [self tideySetActivePane:pane];
-    [pane.browserWebView reload];
+    [pane.browserEngine reload];
 }
 
 - (void)tideyBrowserURLFieldAction:(id)sender {
@@ -5222,6 +5183,52 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     [self selectTideyRightPanelTabAtIndex:targetPane.tabs.count - 1 inPane:targetPane];
 }
 
+- (TideyRightPanelPane *)tideyPaneForBrowserEngine:(TideyBrowserEngine *)engine {
+    if (!engine) {
+        return nil;
+    }
+    for (TideyRightPanelPane *pane in [self tideyVisibleRightPanelPanes]) {
+        if (pane.browserEngine == engine) {
+            return pane;
+        }
+    }
+    return nil;
+}
+
+- (void)tideyUpdateBrowserUIForPane:(TideyRightPanelPane *)pane
+                              state:(TideyBrowserEngineState *)state {
+    if (!pane || !state) {
+        return;
+    }
+
+    NSURL *url = state.currentURL;
+    if (url) {
+        pane.browserURLField.stringValue = url.absoluteString;
+        TideyEditorTab *tab = [self tideyCurrentRightPanelTabInPane:pane];
+        if (tab && tab.kind == TideyRightPanelTabKindBrowser) {
+            tab.path = url.absoluteString;
+        }
+    }
+
+    TideyEditorTab *tab = [self tideyCurrentRightPanelTabInPane:pane];
+    if (tab && tab.kind == TideyRightPanelTabKindBrowser) {
+        NSString *displayName = [[self class] tideyBrowserDisplayNameForURL:url
+                                                                  pageTitle:state.currentTitle];
+        if (![tab.displayName isEqualToString:displayName]) {
+            tab.displayName = displayName;
+            [self reloadTideyRightPanelTabsForPane:pane];
+        }
+    }
+
+    if (state.isLoading) {
+        [pane.browserLoadingIndicator startAnimation:nil];
+    } else {
+        [pane.browserLoadingIndicator stopAnimation:nil];
+    }
+    pane.browserBackButton.enabled = state.canGoBack;
+    pane.browserForwardButton.enabled = state.canGoForward;
+}
+
 - (BOOL)tideySelectExistingBrowserTabWithURL:(NSURL *)url preferredPane:(TideyRightPanelPane *)preferredPane {
     if (!url) {
         return NO;
@@ -5568,13 +5575,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         _secondaryPane.editorWebView.navigationDelegate = nil;
     }
     if (_secondaryPane.browserWebView) {
-        [_secondaryPane.browserWebView removeObserver:self forKeyPath:@"title"];
-        [_secondaryPane.browserWebView removeObserver:self forKeyPath:@"URL"];
-        [_secondaryPane.browserWebView removeObserver:self forKeyPath:@"loading"];
-        [_secondaryPane.browserWebView removeObserver:self forKeyPath:@"canGoBack"];
-        [_secondaryPane.browserWebView removeObserver:self forKeyPath:@"canGoForward"];
-        _secondaryPane.browserWebView.navigationDelegate = nil;
-        _secondaryPane.browserWebView.UIDelegate = nil;
+        _secondaryPane.browserEngine.host = nil;
     }
     [_secondaryPane.editorWebView removeFromSuperview];
     [_secondaryPane.browserContainerView removeFromSuperview];
@@ -6239,21 +6240,24 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     }
 }
 
-#pragma mark - WKUIDelegate
-
-- (WKWebView *)webView:(WKWebView *)webView
-createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration
-   forNavigationAction:(WKNavigationAction *)navigationAction
-        windowFeatures:(WKWindowFeatures *)windowFeatures {
-    (void)configuration;
-    (void)windowFeatures;
-    NSURL *url = navigationAction.request.URL;
-    if (!url) {
-        return nil;
+- (void)browserEngine:(TideyBrowserEngine *)engine
+       didUpdateState:(TideyBrowserEngineState *)state {
+    TideyRightPanelPane *pane = [self tideyPaneForBrowserEngine:engine];
+    if (!pane) {
+        return;
     }
-    TideyRightPanelPane *pane = [self tideyPaneForBrowserWebView:webView] ?: self.activePane;
+    [self tideyUpdateBrowserUIForPane:pane state:state];
+}
+
+- (void)browserEngine:(TideyBrowserEngine *)engine
+ requestOpenNewTabFor:(NSURL *)url
+       configuration:(WKWebViewConfiguration *)configuration {
+    (void)configuration;
+    if (!url) {
+        return;
+    }
+    TideyRightPanelPane *pane = [self tideyPaneForBrowserEngine:engine] ?: self.activePane;
     [self tideyOpenNewBrowserTabWithURL:url inPane:pane];
-    return nil;
 }
 
 - (void)layoutSubviewsTopTabBarVisible:(BOOL)topTabBarVisible forWindow:(NSWindow *)thisWindow {
