@@ -3827,6 +3827,30 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 
 #pragma mark - Browser Actions
 
+- (void)browserBack:(id)sender {
+    TideyEditorTab *tab = [self tideyCurrentRightPanelTabInPane:self.activePane];
+    if (tab.kind != TideyRightPanelTabKindBrowser || ![self tideyRightPanelHasFocus]) {
+        return;
+    }
+    [self tideyBrowserGoBack:sender];
+}
+
+- (void)browserForward:(id)sender {
+    TideyEditorTab *tab = [self tideyCurrentRightPanelTabInPane:self.activePane];
+    if (tab.kind != TideyRightPanelTabKindBrowser || ![self tideyRightPanelHasFocus]) {
+        return;
+    }
+    [self tideyBrowserGoForward:sender];
+}
+
+- (void)browserReload:(id)sender {
+    TideyEditorTab *tab = [self tideyCurrentRightPanelTabInPane:self.activePane];
+    if (tab.kind != TideyRightPanelTabKindBrowser || ![self tideyRightPanelHasFocus]) {
+        return;
+    }
+    [self tideyBrowserReload:sender];
+}
+
 - (void)tideyBrowserGoBack:(id)sender {
     TideyRightPanelPane *pane = [self tideyCurrentPaneForSender:sender];
     [self tideySetActivePane:pane];
