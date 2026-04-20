@@ -432,16 +432,7 @@ class iTermBrowserManager: NSObject, WKURLSchemeHandler, WKScriptMessageHandler 
         webView = iTermBrowserWebView(frame: .zero,
                                       configuration: configuration,
                                       pointerController: pointerController)
-        if let safariBundle = Bundle(path: "/Applications/Safari.app"),
-           let safariVersion = safariBundle.infoDictionary?["CFBundleShortVersionString"] as? String {
-            webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
-            "AppleWebKit/605.1.15 (KHTML, like Gecko) " +
-            "Version/\(safariVersion) Safari/605.1.15"
-        } else {
-            webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
-            "AppleWebKit/605.1.15 (KHTML, like Gecko) " +
-            "Version/16.4 Safari/605.1.15"
-        }
+        webView.customUserAgent = TideyBrowserEngine.sessionCompatibleUserAgent()
 
         webView.navigationDelegate = self
         webView.uiDelegate = self

@@ -3669,6 +3669,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
                                                                               host:nil];
     pane.browserEngine = engine;
     pane.browserWebView = engine.webView;
+    pane.browserWebView.customUserAgent = [TideyBrowserEngine sessionCompatibleUserAgent];
     pane.browserWebView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     pane.browserWebView.allowsBackForwardNavigationGestures = YES;
     if (@available(macOS 13.3, *)) {

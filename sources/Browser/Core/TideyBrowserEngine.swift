@@ -52,6 +52,16 @@ final class TideyBrowserEngine: NSObject, TideyBrowserNavigationEngine {
         return configuration
     }
 
+    static func sessionCompatibleUserAgent() -> String {
+        let defaultVersion = "16.4"
+        let safariVersion =
+            (Bundle(path: "/Applications/Safari.app")?.infoDictionary?["CFBundleShortVersionString"] as? String) ??
+            defaultVersion
+        return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
+               "AppleWebKit/605.1.15 (KHTML, like Gecko) " +
+               "Version/\(safariVersion) Safari/605.1.15"
+    }
+
     var url: URL? {
         webView.url
     }
