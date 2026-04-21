@@ -180,6 +180,9 @@ struct BridgeResponse: Codable, Sendable {
 enum BridgeInternalError: Error {
     case unauthorized
     case invalidRequest(String)
+    case notFound(String)
+    case forbidden(String)
+    case conflict(String)
     case invalidResponse
     case socketUnavailable
 }
@@ -191,6 +194,12 @@ extension BridgeInternalError {
             return BridgeErrorPayload(code: "unauthorized", message: "Missing or invalid bearer token.")
         case .invalidRequest(let message):
             return BridgeErrorPayload(code: "invalid_request", message: message)
+        case .notFound(let message):
+            return BridgeErrorPayload(code: "not_found", message: message)
+        case .forbidden(let message):
+            return BridgeErrorPayload(code: "forbidden", message: message)
+        case .conflict(let message):
+            return BridgeErrorPayload(code: "conflict", message: message)
         case .invalidResponse:
             return BridgeErrorPayload(code: "invalid_response", message: "Bridge received an invalid response from Tidey.")
         case .socketUnavailable:
@@ -209,5 +218,50 @@ extension BridgeRequest {
             object["params"] = params.mapValues(\.anyValue)
         }
         return object
+    }
+}
+
+struct BridgeFileReadRequest: Sendable {
+    let workspaceID: String
+    let panelID: String
+    let path: String
+
+    init(params: [String: JSONValue]?) throws {
+        guard let params,
+              let workspaceID = params["workspace_id"]?.stringValue,
+              let panelID = params["panel_id"]?.stringValue,
+              let path = params["path"]?.stringValue,
+              !path.isEmpty else {
+            throw BridgeInternalError.invalidRequest("file_read requires workspace_id, panel_id, and path")
+        }
+        self.workspaceID = workspaceID
+        self.panelID = panelID
+        self.path = path
+    }
+}
+
+struct BridgeFileWriteRequest: Sendable {
+    let workspaceID: String
+    let panelID: String
+    let path: String
+    let content: String
+    let expectedRevisionToken: String
+
+    init(params: [String: JSONValue]?) throws {
+        guard let params,
+              let workspaceID = params["workspace_id"]?.stringValue,
+              let panelID = params["panel_id"]?.stringValue,
+              let path = params["path"]?.stringValue,
+              let content = params["content"]?.stringValue,
+              let expectedRevisionToken = params["expected_revision_token"]?.stringValue,
+              !path.isEmpty,
+              !expectedRevisionToken.isEmpty else {
+            throw BridgeInternalError.invalidRequest("file_write requires workspace_id, panel_id, path, content, and expected_revision_token")
+        }
+        self.workspaceID = workspaceID
+        self.panelID = panelID
+        self.path = path
+        self.content = content
+        self.expectedRevisionToken = expectedRevisionToken
     }
 }

@@ -179,6 +179,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
     private let decoder = JSONDecoder()
     private lazy var inputActionHandler = BridgeInputActionHandler(socketSender: socketClient,
                                                                    sessionResolver: registryMonitor)
+    private lazy var fileActionHandler = BridgeFileActionHandler(rootResolver: TideyPanelFileRootResolver(socketSender: socketClient))
     private var agentSubscriptionID: UUID?
     private var workspaceSubscriptionID: UUID?
 
@@ -257,6 +258,11 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                                     context: ChannelHandlerContext) -> LocalRequestResult? {
         do {
             if let response = try inputActionHandler.handle(request) {
+                return LocalRequestResult(response: response,
+                                          agentReplayEnvelopes: [],
+                                          workspaceReplayEnvelopes: [])
+            }
+            if let response = try fileActionHandler.handle(request) {
                 return LocalRequestResult(response: response,
                                           agentReplayEnvelopes: [],
                                           workspaceReplayEnvelopes: [])
