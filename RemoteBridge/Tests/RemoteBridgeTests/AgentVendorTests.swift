@@ -44,7 +44,8 @@ final class AgentVendorTests: XCTestCase {
         let codexVendor = try XCTUnwrap(AgentVendorRegistry.resolve(id: "codex"))
         let codexSession = codexVendor.makeTranscriptSession(record: record,
                                                              fileManager: .default,
-                                                             hub: hub)
+                                                             hub: hub,
+                                                             socketClient: nil)
         XCTAssertTrue(codexSession is CodexTranscriptSession)
 
         let claudeRecord = AgentSessionRegistryRecord(version: 1,
@@ -59,7 +60,8 @@ final class AgentVendorTests: XCTestCase {
         let claudeVendor = try XCTUnwrap(AgentVendorRegistry.resolve(id: "claude"))
         let claudeSession = claudeVendor.makeTranscriptSession(record: claudeRecord,
                                                                fileManager: .default,
-                                                               hub: hub)
+                                                               hub: hub,
+                                                               socketClient: nil)
         XCTAssertTrue(claudeSession is ClaudeTranscriptSession)
     }
 }
