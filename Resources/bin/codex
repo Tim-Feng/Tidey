@@ -253,10 +253,10 @@ monitor_rollout_and_registry() {
     local panel_id="$3"
     local cwd="$4"
     local created_at="$5"
+    local registry_file="${6:-}"
+    local session_id="${7:-}"
 
-    local registry_file=""
     local rollout_path=""
-    local session_id=""
 
     while kill -0 "$pid" 2>/dev/null; do
         local current_rollout_path=""
@@ -293,12 +293,14 @@ start_rollout_monitor_if_needed() {
     local panel_id="$3"
     local cwd="$4"
     local created_at="$5"
+    local initial_registry_file="${6:-}"
+    local initial_session_id="${7:-}"
 
     if [[ -z "$workspace_id" ]]; then
         return 0
     fi
 
-    monitor_rollout_and_registry "$pid" "$workspace_id" "$panel_id" "$cwd" "$created_at" >/dev/null 2>&1 &
+    monitor_rollout_and_registry "$pid" "$workspace_id" "$panel_id" "$cwd" "$created_at" "$initial_registry_file" "$initial_session_id" >/dev/null 2>&1 &
 }
 
 initial_session_id() {
@@ -344,7 +346,7 @@ main() {
 
     trap cleanup EXIT
 
-    start_rollout_monitor_if_needed "$$" "${TIDEY_WORKSPACE_ID:-}" "${TIDEY_PANEL_ID:-}" "$PWD" "$created_at"
+    start_rollout_monitor_if_needed "$$" "${TIDEY_WORKSPACE_ID:-}" "${TIDEY_PANEL_ID:-}" "$PWD" "$created_at" "$registry_file" "$session_id"
 
     if [[ -n "${TIDEY_SOCKET_PATH:-}" && -n "${TIDEY_WORKSPACE_ID:-}" ]]; then
         "$HOOK_DIR/tidey" codex-hook session-start || true
