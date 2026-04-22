@@ -183,6 +183,8 @@ enum BridgeInternalError: Error {
     case notFound(String)
     case forbidden(String)
     case conflict(String)
+    case fileNeedsConfirmation(String)
+    case fileTooLarge(String)
     case invalidResponse
     case socketUnavailable
 }
@@ -200,6 +202,10 @@ extension BridgeInternalError {
             return BridgeErrorPayload(code: "forbidden", message: message)
         case .conflict(let message):
             return BridgeErrorPayload(code: "conflict", message: message)
+        case .fileNeedsConfirmation(let message):
+            return BridgeErrorPayload(code: "file_needs_confirmation", message: message)
+        case .fileTooLarge(let message):
+            return BridgeErrorPayload(code: "file_too_large", message: message)
         case .invalidResponse:
             return BridgeErrorPayload(code: "invalid_response", message: "Bridge received an invalid response from Tidey.")
         case .socketUnavailable:
@@ -225,6 +231,7 @@ struct BridgeFileReadRequest: Sendable {
     let workspaceID: String
     let panelID: String
     let path: String
+    let allowLargeRead: Bool
 
     init(params: [String: JSONValue]?) throws {
         guard let params,
@@ -237,6 +244,7 @@ struct BridgeFileReadRequest: Sendable {
         self.workspaceID = workspaceID
         self.panelID = panelID
         self.path = path
+        self.allowLargeRead = params["allow_large_read"]?.boolLikeValue ?? false
     }
 }
 
