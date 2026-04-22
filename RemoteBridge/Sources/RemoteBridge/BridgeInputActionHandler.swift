@@ -34,8 +34,10 @@ struct BridgeInputActionHandler {
     func handle(_ request: BridgeRequest) throws -> BridgeResponse? {
         switch request.action {
         case "terminal_input":
+            BridgeLogger.input.info("receive action=terminal_input request_id=\(request.id, privacy: .public)")
             return try forwardTerminalInput(request)
         case "chat_submit":
+            BridgeLogger.input.info("receive action=chat_submit request_id=\(request.id, privacy: .public)")
             return try submitChatMessage(request)
         default:
             return nil
@@ -48,6 +50,11 @@ struct BridgeInputActionHandler {
               params["panel_id"]?.stringValue != nil || params["workspace_id"]?.stringValue != nil else {
             throw BridgeInternalError.invalidRequest("terminal_input requires input and panel_id or workspace_id")
         }
+
+        let input = params["input"]?.stringValue ?? ""
+        let panelID = params["panel_id"]?.stringValue ?? "-"
+        let workspaceID = params["workspace_id"]?.stringValue ?? "-"
+        BridgeLogger.input.info("forward action=terminal_input request_id=\(request.id, privacy: .public) workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) length=\(input.count) has_cr=\(input.contains("\r")) has_lf=\(input.contains("\n")) tail=\(summarizedTail(input), privacy: .public)")
 
         let forwardedRequest = BridgeRequest(id: request.id,
                                              action: "send_input",
@@ -87,10 +94,13 @@ struct BridgeInputActionHandler {
             throw BridgeInternalError.invalidRequest("chat_submit vendor is not supported")
         }
 
+        BridgeLogger.input.info("dispatch action=chat_submit request_id=\(request.id, privacy: .public) workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) session_id=\(activeSession?.sessionID ?? requestedSessionID ?? "-", privacy: .public) vendor=\(vendor.id, privacy: .public) length=\(message.count) has_cr=\(message.contains("\r")) has_lf=\(message.contains("\n")) tail=\(summarizedTail(message), privacy: .public)")
+
         for (index, step) in vendor.submitMessagePlan(text: message).enumerated() {
             if index > 0 {
                 try sleep(step.delayNanoseconds)
             }
+            BridgeLogger.input.info("step action=send_input request_id=\(request.id, privacy: .public) vendor=\(vendor.id, privacy: .public) step_index=\(index) delay_ns=\(step.delayNanoseconds) length=\(step.input.count) has_cr=\(step.input.contains("\r")) has_lf=\(step.input.contains("\n")) tail=\(summarizedTail(step.input), privacy: .public)")
             let stepRequest = BridgeRequest(id: UUID().uuidString,
                                             action: "send_input",
                                             params: [

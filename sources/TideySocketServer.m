@@ -469,6 +469,15 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
             return;
         }
 
+        NSLog(@"[TideyRemoteSubmit] receive action=send_input request_id=%@ workspace_id=%@ panel_id=%@ length=%lu hasCR=%@ hasLF=%@ tail=%@",
+              requestID ?: @"-",
+              workspaceID ?: @"-",
+              panelID ?: @"-",
+              (unsigned long)input.length,
+              [input containsString:@"\r"] ? @"YES" : @"NO",
+              [input containsString:@"\n"] ? @"YES" : @"NO",
+              TideySubmitLogSuffix(input));
+
         if (panelID.length > 0) {
             PseudoTerminal *term = [self tideyTerminalForPanelIdentifier:panelID];
             NSDictionary *panelSummary = [term tideySocketPanelSummaryForPanelIdentifier:panelID];

@@ -1695,6 +1695,13 @@ ITERM_WEAKLY_REFERENCEABLE
     if (!session || session.isBrowserSession) {
         return NO;
     }
+    NSLog(@"[TideyRemoteSubmit] write target=panel panel_id=%@ session_guid=%@ length=%lu hasCR=%@ hasLF=%@ tail=%@",
+          panelIdentifier ?: @"-",
+          session.guid ?: @"-",
+          (unsigned long)input.length,
+          [input containsString:@"\r"] ? @"YES" : @"NO",
+          [input containsString:@"\n"] ? @"YES" : @"NO",
+          TideySubmitLogSuffix(input));
     [session writeTaskNoBroadcast:input];
     return YES;
 }
@@ -1707,6 +1714,13 @@ ITERM_WEAKLY_REFERENCEABLE
     if (!session || session.isBrowserSession) {
         return NO;
     }
+    NSLog(@"[TideyRemoteSubmit] write target=workspace workspace_id=%@ session_guid=%@ length=%lu hasCR=%@ hasLF=%@ tail=%@",
+          workspaceIdentifier ?: @"-",
+          session.guid ?: @"-",
+          (unsigned long)input.length,
+          [input containsString:@"\r"] ? @"YES" : @"NO",
+          [input containsString:@"\n"] ? @"YES" : @"NO",
+          TideySubmitLogSuffix(input));
     [session writeTaskNoBroadcast:input];
     return YES;
 }
