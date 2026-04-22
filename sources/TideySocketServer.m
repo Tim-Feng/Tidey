@@ -100,6 +100,17 @@ static BOOL TideySocketBoolParam(NSDictionary *params, NSString *key, BOOL defau
     return defaultValue;
 }
 
+static NSString *TideySubmitLogSuffix(NSString *input) {
+    if (input.length == 0) {
+        return @"";
+    }
+    NSUInteger start = input.length > 3 ? input.length - 3 : 0;
+    NSString *suffix = [input substringFromIndex:start];
+    suffix = [suffix stringByReplacingOccurrencesOfString:@"\r" withString:@"\\r"];
+    suffix = [suffix stringByReplacingOccurrencesOfString:@"\n" withString:@"\\n"];
+    return suffix;
+}
+
 typedef BOOL (^TideySocketSendInputHandler)(NSString *workspaceID, NSString *input);
 typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *workspaceID);
 

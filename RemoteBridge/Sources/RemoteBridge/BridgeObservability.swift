@@ -96,6 +96,7 @@ struct BridgeAdminStatusSnapshot: Codable, Equatable {
 enum BridgeLogger {
     static let server = Logger(subsystem: "com.tidey.remote-bridge", category: "server")
     static let fetch = Logger(subsystem: "com.tidey.remote-bridge", category: "fetch")
+    static let input = Logger(subsystem: "com.tidey.remote-bridge", category: "input")
 }
 
 final class BridgeObservabilityCenter {

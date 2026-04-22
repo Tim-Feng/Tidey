@@ -115,4 +115,10 @@ struct BridgeInputActionHandler {
                               ],
                               error: nil)
     }
+
+    private func summarizedTail(_ input: String) -> String {
+        String(input.suffix(3))
+            .replacingOccurrences(of: "\r", with: "\\r")
+            .replacingOccurrences(of: "\n", with: "\\n")
+    }
 }

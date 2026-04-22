@@ -236,6 +236,17 @@ typedef NS_ENUM(int, iTermShouldHaveTitleSeparator) {
     iTermShouldHaveTitleSeparatorNo = 2
 };
 
+static NSString *TideySubmitLogSuffix(NSString *input) {
+    if (input.length == 0) {
+        return @"";
+    }
+    NSUInteger start = input.length > 3 ? input.length - 3 : 0;
+    NSString *suffix = [input substringFromIndex:start];
+    suffix = [suffix stringByReplacingOccurrencesOfString:@"\r" withString:@"\\r"];
+    suffix = [suffix stringByReplacingOccurrencesOfString:@"\n" withString:@"\\n"];
+    return suffix;
+}
+
 @interface Workspace : NSObject
 
 @property(nonatomic, retain) NSMutableArray<PTYTab *> *panels;
