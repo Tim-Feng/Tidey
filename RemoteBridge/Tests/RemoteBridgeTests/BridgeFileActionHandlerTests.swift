@@ -120,10 +120,10 @@ final class BridgeFileActionHandlerTests: XCTestCase {
                                                                 "panel_id": .string("panel-1"),
                                                                 "path": .string(outsideURL.path),
                                                               ]))) { error in
-            guard case BridgeInternalError.forbidden(let message) = error else {
+            guard case BridgeInternalError.fileOutsideRoot(let message) = error else {
                 return XCTFail("Unexpected error: \(error)")
             }
-            XCTAssertTrue(message.contains("panel root"))
+            XCTAssertTrue(message.contains("允許編輯"))
         }
     }
 
@@ -142,10 +142,58 @@ final class BridgeFileActionHandlerTests: XCTestCase {
                                                                 "panel_id": .string("panel-1"),
                                                                 "path": .string("script.swift"),
                                                               ]))) { error in
-            guard case BridgeInternalError.forbidden(let message) = error else {
+            guard case BridgeInternalError.fileNotInAllowlist(let message) = error else {
                 return XCTFail("Unexpected error: \(error)")
             }
-            XCTAssertTrue(message.contains("allowlist"))
+            XCTAssertTrue(message.contains("不支援"))
+        }
+    }
+
+    func testFileReadRejectsNonUTF8ContentWithSpecificCode() throws {
+        let fixture = try makeFixture()
+        let fileURL = fixture.rootURL.appendingPathComponent("README.md")
+        let invalidUTF8 = Data([0xff, 0xfe, 0xfd])
+        try invalidUTF8.write(to: fileURL)
+
+        let handler = BridgeFileActionHandler(rootResolver: fixture.rootResolver,
+                                              fileManager: fixture.fileManager)
+
+        XCTAssertThrowsError(try handler.handle(BridgeRequest(id: "request-1",
+                                                              action: "file_read",
+                                                              params: [
+                                                                "workspace_id": .string("workspace-1"),
+                                                                "panel_id": .string("panel-1"),
+                                                                "path": .string("README.md"),
+                                                              ]))) { error in
+            guard case BridgeInternalError.fileEncodingUnsupported(let message) = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+            XCTAssertTrue(message.contains("UTF-8"))
+        }
+    }
+
+    func testFileWriteRejectsNonWritableTargetWithSpecificCode() throws {
+        let fixture = try makeFixture()
+        let fileURL = fixture.rootURL.appendingPathComponent("README.md")
+        try "before".write(to: fileURL, atomically: true, encoding: .utf8)
+        try fixture.fileManager.setAttributes([.posixPermissions: 0o444], ofItemAtPath: fileURL.path)
+
+        let handler = BridgeFileActionHandler(rootResolver: fixture.rootResolver,
+                                              fileManager: fixture.fileManager)
+
+        XCTAssertThrowsError(try handler.handle(BridgeRequest(id: "request-1",
+                                                              action: "file_write",
+                                                              params: [
+                                                                "workspace_id": .string("workspace-1"),
+                                                                "panel_id": .string("panel-1"),
+                                                                "path": .string("README.md"),
+                                                                "content": .string("after"),
+                                                                "expected_revision_token": .string("stale-token"),
+                                                              ]))) { error in
+            guard case BridgeInternalError.fileNotWritable(let message) = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+            XCTAssertTrue(message.contains("寫入權限"))
         }
     }
 

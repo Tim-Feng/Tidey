@@ -29,7 +29,7 @@ struct TideyPanelFileRootResolver: PanelFileRootResolving {
             throw BridgeInternalError.notFound("No panel matched panel_id.")
         }
         guard let cwd = panel["cwd"]?.stringValue, !cwd.isEmpty else {
-            throw BridgeInternalError.invalidRequest("file access requires a panel with cwd.")
+            throw BridgeInternalError.panelContextUnavailable("目前無法判斷這個 panel 的工作目錄。")
         }
         return cwd
     }
@@ -67,6 +67,9 @@ struct BridgeFileActionHandler {
         let resolved = try resolveFile(path: params.path,
                                        workspaceID: params.workspaceID,
                                        panelID: params.panelID)
+        guard fileManager.fileExists(atPath: resolved.targetURL.path) else {
+            throw BridgeInternalError.notFound("file_read target does not exist")
+        }
         let attributes = try fileManager.attributesOfItem(atPath: resolved.targetURL.path)
         let size = (attributes[.size] as? NSNumber)?.int64Value ?? 0
         if size > Self.maximumReadableSizeBytes {
@@ -79,7 +82,7 @@ struct BridgeFileActionHandler {
         let metadata = try readMetadata(at: resolved.targetURL, attributes: attributes)
         let data = try Data(contentsOf: resolved.targetURL)
         guard let content = String(data: data, encoding: .utf8) else {
-            throw BridgeInternalError.invalidRequest("file_read only supports UTF-8 text content")
+            throw BridgeInternalError.fileEncodingUnsupported("這個檔案不是 UTF-8 文字格式，這個版本的編輯器無法開啟。")
         }
 
         let result: [String: JSONValue] = [
@@ -105,7 +108,7 @@ struct BridgeFileActionHandler {
             throw BridgeInternalError.notFound("file_write target does not exist")
         }
         guard fileManager.isWritableFile(atPath: resolved.targetURL.path) else {
-            throw BridgeInternalError.forbidden("file_write target is not writable")
+            throw BridgeInternalError.fileNotWritable("Mac 端這個檔案沒有寫入權限。")
         }
 
         let currentMetadata = try readMetadata(at: resolved.targetURL)
@@ -135,7 +138,7 @@ struct BridgeFileActionHandler {
             .resolvingSymlinksInPath()
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: rootURL.path, isDirectory: &isDirectory), isDirectory.boolValue else {
-            throw BridgeInternalError.invalidRequest("file access root is unavailable")
+            throw BridgeInternalError.panelContextUnavailable("目前無法取得這個 panel 的檔案根目錄。")
         }
 
         let candidateURL: URL
@@ -146,10 +149,10 @@ struct BridgeFileActionHandler {
         }
         let normalizedURL = candidateURL.standardizedFileURL.resolvingSymlinksInPath()
         guard isDescendant(normalizedURL, of: rootURL) else {
-            throw BridgeInternalError.forbidden("file path must stay within the panel root")
+            throw BridgeInternalError.fileOutsideRoot("這個檔案不在允許編輯的範圍內。")
         }
         guard policy.allows(normalizedURL) else {
-            throw BridgeInternalError.forbidden("file path is not in the document allowlist")
+            throw BridgeInternalError.fileNotInAllowlist("這個檔案類型目前不支援在 iPhone 編輯。")
         }
         return ResolvedFileTarget(targetURL: normalizedURL)
     }
