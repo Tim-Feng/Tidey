@@ -36,6 +36,9 @@ struct TideyPanelFileRootResolver: PanelFileRootResolving {
 }
 
 struct BridgeFileActionHandler {
+    private static let warningSizeBytes: Int64 = 512 * 1024
+    private static let maximumReadableSizeBytes: Int64 = 1024 * 1024
+
     private let rootResolver: PanelFileRootResolving
     private let fileManager: FileManager
     private let policy: BridgeDocumentFilePolicy
@@ -64,7 +67,16 @@ struct BridgeFileActionHandler {
         let resolved = try resolveFile(path: params.path,
                                        workspaceID: params.workspaceID,
                                        panelID: params.panelID)
-        let metadata = try readMetadata(at: resolved.targetURL)
+        let attributes = try fileManager.attributesOfItem(atPath: resolved.targetURL.path)
+        let size = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+        if size > Self.maximumReadableSizeBytes {
+            throw BridgeInternalError.fileTooLarge("檔案超過 1MB，這個版本的編輯器不支援開啟。")
+        }
+        if size > Self.warningSizeBytes, !params.allowLargeRead {
+            throw BridgeInternalError.fileNeedsConfirmation("檔案超過 512KB，打開可能會較慢。")
+        }
+
+        let metadata = try readMetadata(at: resolved.targetURL, attributes: attributes)
         let data = try Data(contentsOf: resolved.targetURL)
         guard let content = String(data: data, encoding: .utf8) else {
             throw BridgeInternalError.invalidRequest("file_read only supports UTF-8 text content")
@@ -142,8 +154,8 @@ struct BridgeFileActionHandler {
         return ResolvedFileTarget(targetURL: normalizedURL)
     }
 
-    private func readMetadata(at fileURL: URL) throws -> FileRevisionMetadata {
-        let attributes = try fileManager.attributesOfItem(atPath: fileURL.path)
+    private func readMetadata(at fileURL: URL, attributes: [FileAttributeKey: Any]? = nil) throws -> FileRevisionMetadata {
+        let attributes = try attributes ?? fileManager.attributesOfItem(atPath: fileURL.path)
         let mtime = attributes[.modificationDate] as? Date ?? .distantPast
         let size = (attributes[.size] as? NSNumber)?.int64Value ?? 0
         let data = try Data(contentsOf: fileURL)

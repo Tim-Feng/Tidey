@@ -148,6 +148,71 @@ final class BridgeFileActionHandlerTests: XCTestCase {
             XCTAssertTrue(message.contains("allowlist"))
         }
     }
+
+    func testFileReadRequestsConfirmationForFilesLargerThanWarningThreshold() throws {
+        let fixture = try makeFixture()
+        let fileURL = fixture.rootURL.appendingPathComponent("README.md")
+        try String(repeating: "a", count: 600 * 1024).write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let handler = BridgeFileActionHandler(rootResolver: fixture.rootResolver,
+                                              fileManager: fixture.fileManager)
+
+        XCTAssertThrowsError(try handler.handle(BridgeRequest(id: "request-1",
+                                                              action: "file_read",
+                                                              params: [
+                                                                "workspace_id": .string("workspace-1"),
+                                                                "panel_id": .string("panel-1"),
+                                                                "path": .string("README.md"),
+                                                              ]))) { error in
+            guard case BridgeInternalError.fileNeedsConfirmation(let message) = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+            XCTAssertTrue(message.contains("512KB"))
+        }
+    }
+
+    func testFileReadAllowsLargeFilesAfterConfirmation() throws {
+        let fixture = try makeFixture()
+        let fileURL = fixture.rootURL.appendingPathComponent("README.md")
+        try String(repeating: "a", count: 600 * 1024).write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let handler = BridgeFileActionHandler(rootResolver: fixture.rootResolver,
+                                              fileManager: fixture.fileManager)
+        let response = try XCTUnwrap(handler.handle(BridgeRequest(id: "request-1",
+                                                                  action: "file_read",
+                                                                  params: [
+                                                                    "workspace_id": .string("workspace-1"),
+                                                                    "panel_id": .string("panel-1"),
+                                                                    "path": .string("README.md"),
+                                                                    "allow_large_read": .bool(true),
+                                                                  ])))
+
+        XCTAssertTrue(response.ok)
+        XCTAssertEqual(response.result?["size"]?.intValue, 600 * 1024)
+    }
+
+    func testFileReadRejectsFilesLargerThanMaximumSize() throws {
+        let fixture = try makeFixture()
+        let fileURL = fixture.rootURL.appendingPathComponent("README.md")
+        try String(repeating: "a", count: 1100 * 1024).write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let handler = BridgeFileActionHandler(rootResolver: fixture.rootResolver,
+                                              fileManager: fixture.fileManager)
+
+        XCTAssertThrowsError(try handler.handle(BridgeRequest(id: "request-1",
+                                                              action: "file_read",
+                                                              params: [
+                                                                "workspace_id": .string("workspace-1"),
+                                                                "panel_id": .string("panel-1"),
+                                                                "path": .string("README.md"),
+                                                                "allow_large_read": .bool(true),
+                                                              ]))) { error in
+            guard case BridgeInternalError.fileTooLarge(let message) = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+            XCTAssertTrue(message.contains("1MB"))
+        }
+    }
 }
 
 private struct FileHandlerFixture {
