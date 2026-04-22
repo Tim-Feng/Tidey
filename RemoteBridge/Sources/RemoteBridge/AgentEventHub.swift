@@ -105,12 +105,15 @@ final class AgentEventHub {
                     }
             }
 
-            let slice: [AgentEvent]
+            let countLimitedEvents: [AgentEvent]
             if afterSeq != nil {
-                slice = Array(matchingEvents.prefix(effectiveLimit))
+                countLimitedEvents = Array(matchingEvents.prefix(effectiveLimit))
             } else {
-                slice = Array(matchingEvents.suffix(effectiveLimit))
+                countLimitedEvents = Array(matchingEvents.suffix(effectiveLimit))
             }
+            let slice = budgetLimitedEvents(countLimitedEvents,
+                                            maxBytes: maxBytes,
+                                            prefersNewestEvents: afterSeq == nil)
             let oldestSeq = slice.first?.seq ?? 0
             let newestSeq = slice.last?.seq ?? 0
             let hasMore = matchingEvents.count > slice.count
@@ -313,5 +316,40 @@ final class AgentEventHub {
                           output: event.output,
                           toolCallID: event.toolCallID,
                           metadata: metadata.isEmpty ? nil : metadata)
+    }
+
+    private func budgetLimitedEvents(_ events: [AgentEvent],
+                                     maxBytes: Int?,
+                                     prefersNewestEvents: Bool) -> [AgentEvent] {
+        guard let maxBytes, maxBytes > 0, events.count > 1 else {
+            return events
+        }
+
+        let encoder = JSONEncoder()
+        if prefersNewestEvents {
+            var selected = [AgentEvent]()
+            var accumulatedBytes = 0
+            for event in events.reversed() {
+                let estimatedBytes = (try? encoder.encode(event).count) ?? 0
+                if !selected.isEmpty, accumulatedBytes + estimatedBytes > maxBytes {
+                    break
+                }
+                selected.append(event)
+                accumulatedBytes += estimatedBytes
+            }
+            return selected.reversed()
+        } else {
+            var selected = [AgentEvent]()
+            var accumulatedBytes = 0
+            for event in events {
+                let estimatedBytes = (try? encoder.encode(event).count) ?? 0
+                if !selected.isEmpty, accumulatedBytes + estimatedBytes > maxBytes {
+                    break
+                }
+                selected.append(event)
+                accumulatedBytes += estimatedBytes
+            }
+            return selected
+        }
     }
 }

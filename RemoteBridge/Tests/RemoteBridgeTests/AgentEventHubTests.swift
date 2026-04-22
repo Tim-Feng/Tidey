@@ -104,7 +104,49 @@ final class AgentEventHubTests: XCTestCase {
         XCTAssertEqual(result.events.first?.metadata?["panel_id"], "current-panel")
     }
 
-    private func makeAssistantEvent(id: String, seq: Int) -> AgentEvent {
+    func testFetchHonorsMaxBytesForLatestSlice() {
+        let hub = AgentEventHub()
+        let event1 = makeAssistantEvent(id: "assistant-1", seq: 1, text: String(repeating: "a", count: 32))
+        let event2 = makeAssistantEvent(id: "assistant-2", seq: 2, text: String(repeating: "b", count: 32))
+        let event3 = makeAssistantEvent(id: "assistant-3", seq: 3, text: String(repeating: "c", count: 32))
+        hub.publish(event1)
+        hub.publish(event2)
+        hub.publish(event3)
+
+        let maxBytes = estimatedBytes(for: event2) + estimatedBytes(for: event3)
+
+        let result = hub.fetch(workspaceID: "workspace",
+                               sessionID: "session",
+                               limit: 10,
+                               maxBytes: maxBytes,
+                               beforeSeq: nil,
+                               afterSeq: nil)
+
+        XCTAssertEqual(result.events.map(\.seq), [2, 3])
+        XCTAssertEqual(result.oldestSeq, 2)
+        XCTAssertEqual(result.newestSeq, 3)
+        XCTAssertTrue(result.hasMore)
+    }
+
+    func testFetchAlwaysReturnsLatestEventWhenMaxBytesIsTooSmall() {
+        let hub = AgentEventHub()
+        hub.publish(makeAssistantEvent(id: "assistant-1", seq: 1, text: String(repeating: "a", count: 256)))
+        hub.publish(makeAssistantEvent(id: "assistant-2", seq: 2, text: String(repeating: "b", count: 256)))
+
+        let result = hub.fetch(workspaceID: "workspace",
+                               sessionID: "session",
+                               limit: 10,
+                               maxBytes: 16,
+                               beforeSeq: nil,
+                               afterSeq: nil)
+
+        XCTAssertEqual(result.events.map(\.seq), [2])
+        XCTAssertEqual(result.oldestSeq, 2)
+        XCTAssertEqual(result.newestSeq, 2)
+        XCTAssertTrue(result.hasMore)
+    }
+
+    private func makeAssistantEvent(id: String, seq: Int, text: String? = nil) -> AgentEvent {
         AgentEvent(eventID: id,
                    seq: seq,
                    vendor: "claude",
@@ -113,11 +155,16 @@ final class AgentEventHubTests: XCTestCase {
                    timestamp: String(format: "2026-01-01T00:00:%02dZ", seq),
                    type: .assistantMessage,
                    role: "assistant",
-                   text: id,
+                   text: text ?? id,
                    name: nil,
                    input: nil,
                    output: nil,
                    toolCallID: nil,
                    metadata: nil)
+    }
+
+    private func estimatedBytes(for event: AgentEvent) -> Int {
+        let encoder = JSONEncoder()
+        return try! encoder.encode(event).count
     }
 }
