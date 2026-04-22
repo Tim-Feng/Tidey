@@ -59,6 +59,7 @@ final class AgentEventHub {
     func fetch(workspaceID: String,
                sessionID: String? = nil,
                limit: Int,
+               maxBytes: Int? = nil,
                beforeSeq: Int? = nil,
                afterSeq: Int? = nil) -> FetchResult {
         queue.sync { () -> FetchResult in

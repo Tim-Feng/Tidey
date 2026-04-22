@@ -301,6 +301,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
             let sessionID = request.params?["session_id"]?.stringValue
             let beforeSeq = request.params?["before_seq"]?.intValue
             let afterSeq = request.params?["after_seq"]?.intValue
+            let maxBytes = request.params?["max_bytes"]?.intValue
             if beforeSeq != nil, afterSeq != nil {
                 return LocalRequestResult(
                     response: BridgeResponse(id: request.id,
@@ -314,6 +315,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
             var fetchResult = eventHub.fetch(workspaceID: workspaceID,
                                              sessionID: sessionID,
                                              limit: limit,
+                                             maxBytes: maxBytes,
                                              beforeSeq: beforeSeq,
                                              afterSeq: afterSeq)
             var didBackfill = false
@@ -328,6 +330,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                     fetchResult = eventHub.fetch(workspaceID: workspaceID,
                                                  sessionID: sessionID,
                                                  limit: limit,
+                                                 maxBytes: maxBytes,
                                                  beforeSeq: beforeSeq,
                                                  afterSeq: nil)
                 }
@@ -344,6 +347,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                     fetchResult = eventHub.fetch(workspaceID: workspaceID,
                                                  sessionID: sessionID,
                                                  limit: limit,
+                                                 maxBytes: maxBytes,
                                                  beforeSeq: nil,
                                                  afterSeq: afterSeq)
                 }
