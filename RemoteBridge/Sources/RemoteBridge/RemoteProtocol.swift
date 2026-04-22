@@ -180,8 +180,13 @@ struct BridgeResponse: Codable, Sendable {
 enum BridgeInternalError: Error {
     case unauthorized
     case invalidRequest(String)
+    case panelContextUnavailable(String)
     case notFound(String)
     case forbidden(String)
+    case fileOutsideRoot(String)
+    case fileNotInAllowlist(String)
+    case fileNotWritable(String)
+    case fileEncodingUnsupported(String)
     case conflict(String)
     case fileNeedsConfirmation(String)
     case fileTooLarge(String)
@@ -196,10 +201,20 @@ extension BridgeInternalError {
             return BridgeErrorPayload(code: "unauthorized", message: "Missing or invalid bearer token.")
         case .invalidRequest(let message):
             return BridgeErrorPayload(code: "invalid_request", message: message)
+        case .panelContextUnavailable(let message):
+            return BridgeErrorPayload(code: "panel_context_unavailable", message: message)
         case .notFound(let message):
             return BridgeErrorPayload(code: "not_found", message: message)
         case .forbidden(let message):
             return BridgeErrorPayload(code: "forbidden", message: message)
+        case .fileOutsideRoot(let message):
+            return BridgeErrorPayload(code: "file_outside_root", message: message)
+        case .fileNotInAllowlist(let message):
+            return BridgeErrorPayload(code: "file_not_in_allowlist", message: message)
+        case .fileNotWritable(let message):
+            return BridgeErrorPayload(code: "file_not_writable", message: message)
+        case .fileEncodingUnsupported(let message):
+            return BridgeErrorPayload(code: "file_encoding_unsupported", message: message)
         case .conflict(let message):
             return BridgeErrorPayload(code: "conflict", message: message)
         case .fileNeedsConfirmation(let message):
