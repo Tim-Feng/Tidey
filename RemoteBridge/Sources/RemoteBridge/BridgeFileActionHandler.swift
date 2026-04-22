@@ -97,7 +97,7 @@ struct BridgeFileActionHandler {
         }
 
         let currentMetadata = try readMetadata(at: resolved.targetURL)
-        guard currentMetadata.revisionToken == params.expectedRevisionToken else {
+        guard params.force || currentMetadata.revisionToken == params.expectedRevisionToken else {
             throw BridgeInternalError.conflict("file_write expected_revision_token does not match the current file version")
         }
 

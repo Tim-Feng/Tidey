@@ -246,6 +246,7 @@ struct BridgeFileWriteRequest: Sendable {
     let path: String
     let content: String
     let expectedRevisionToken: String
+    let force: Bool
 
     init(params: [String: JSONValue]?) throws {
         guard let params,
@@ -263,5 +264,6 @@ struct BridgeFileWriteRequest: Sendable {
         self.path = path
         self.content = content
         self.expectedRevisionToken = expectedRevisionToken
+        self.force = params["force"]?.boolLikeValue ?? false
     }
 }

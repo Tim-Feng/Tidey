@@ -81,6 +81,30 @@ final class BridgeFileActionHandlerTests: XCTestCase {
         }
     }
 
+    func testFileWriteAllowsForcedOverwriteWithStaleRevisionToken() throws {
+        let fixture = try makeFixture()
+        let fileURL = fixture.rootURL.appendingPathComponent("README.md")
+        try "before".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let handler = BridgeFileActionHandler(rootResolver: fixture.rootResolver,
+                                              fileManager: fixture.fileManager)
+
+        let response = try XCTUnwrap(handler.handle(BridgeRequest(id: "request-1",
+                                                                  action: "file_write",
+                                                                  params: [
+                                                                    "workspace_id": .string("workspace-1"),
+                                                                    "panel_id": .string("panel-1"),
+                                                                    "path": .string("README.md"),
+                                                                    "content": .string("after"),
+                                                                    "expected_revision_token": .string("stale-token"),
+                                                                    "force": .bool(true),
+                                                                  ])))
+
+        XCTAssertTrue(response.ok)
+        XCTAssertEqual(try String(contentsOf: fileURL), "after")
+        XCTAssertEqual(response.result?["did_write"]?.boolValue, true)
+    }
+
     func testFileReadRejectsPathOutsideRoot() throws {
         let fixture = try makeFixture()
         let outsideURL = fixture.tempDirectory.appendingPathComponent("outside.md")
