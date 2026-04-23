@@ -1011,7 +1011,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         // User messages can have content as a plain string (user input)
         if let text = message["content"] as? String {
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
+            if shouldPublishUserMessage(trimmed) {
                 publishFileBacked(kind: .userMessage,
                                   lineOffset: lineOffset,
                                   ordinal: 0,
@@ -1056,7 +1056,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 ordinal += 1
             } else if blockType == "text" {
                 let text = Self.compactString(block["text"])
-                guard !text.isEmpty else { continue }
+                guard shouldPublishUserMessage(text) else { continue }
                 publishFileBacked(kind: .userMessage,
                                   lineOffset: lineOffset,
                                   ordinal: ordinal,
@@ -1072,6 +1072,32 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 ordinal += 1
             }
         }
+    }
+
+    private func shouldPublishUserMessage(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return false
+        }
+
+        if trimmed.contains("<task-notification>") {
+            return false
+        }
+
+        if trimmed.hasPrefix("This session is being continued from a previous conversation") {
+            return false
+        }
+
+        let withoutSystemReminders = trimmed
+            .replacingOccurrences(of: "<system-reminder>[\\s\\S]*?</system-reminder>",
+                                  with: "",
+                                  options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if withoutSystemReminders.isEmpty {
+            return false
+        }
+
+        return true
     }
 
     private func publishFileBacked(kind: AgentEventKind,
