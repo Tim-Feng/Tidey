@@ -784,11 +784,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         guard let value else {
             return ""
         }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.count <= 8000 {
-            return trimmed
-        }
-        return String(trimmed.prefix(8000)) + "..."
+        return value.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func stringValue(_ value: Any?) -> String? {

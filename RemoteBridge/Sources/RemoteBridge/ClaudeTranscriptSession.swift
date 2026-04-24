@@ -1181,11 +1181,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         guard let string = value as? String else {
             return ""
         }
-        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.count <= 8000 {
-            return trimmed
-        }
-        return String(trimmed.prefix(8000)) + "…"
+        return string.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func stringifyToolResultContent(_ value: Any?) -> String? {
@@ -1204,11 +1200,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         }
         guard JSONSerialization.isValidJSONObject(value),
               let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]),
-              var string = String(data: data, encoding: .utf8) else {
+              let string = String(data: data, encoding: .utf8) else {
             return nil
-        }
-        if string.count > 8000 {
-            string = String(string.prefix(8000)) + "…"
         }
         return string
     }
