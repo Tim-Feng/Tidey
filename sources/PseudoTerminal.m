@@ -353,6 +353,7 @@ static NSString *TideySubmitLogSuffix(NSString *input) {
 - (void)setCustomTitle:(NSString *)title forWorkspaceAtIndex:(NSInteger)index;
 - (void)clearCustomTitleForWorkspaceAtIndex:(NSInteger)index;
 - (NSString *)tideyWorkspaceIdentifierForWorkspace:(Workspace *)workspace;
+- (void)tideyAssignWorkspaceIdentifierToPanel:(PTYTab *)panel workspace:(Workspace *)workspace;
 - (Workspace *)tideyWorkspaceWithIdentifier:(NSString *)workspaceIdentifier index:(NSInteger *)index;
 - (PTYTab *)tideyPanelWithIdentifier:(NSString *)panelIdentifier
                            workspace:(Workspace **)workspace
@@ -1365,6 +1366,7 @@ ITERM_WEAKLY_REFERENCEABLE
     if (workspaceID.length == 0 || panelID.length == 0) {
         return;
     }
+    [self tideyAssignWorkspaceIdentifierToPanel:panel workspace:workspace];
     for (PTYSession *session in panel.sessions) {
         [self tideySetTmuxPaneIdentityOptionsForSession:session
                                             workspaceID:workspaceID
@@ -1382,6 +1384,17 @@ ITERM_WEAKLY_REFERENCEABLE
 
 - (NSString *)tideyWorkspaceIdentifierForWorkspace:(Workspace *)workspace {
     return workspace.identifier.UUIDString;
+}
+
+- (void)tideyAssignWorkspaceIdentifierToPanel:(PTYTab *)panel workspace:(Workspace *)workspace {
+    if (!panel || !workspace) {
+        return;
+    }
+    NSString *workspaceID = [self tideyWorkspaceIdentifierForWorkspace:workspace];
+    if (workspaceID.length == 0) {
+        return;
+    }
+    panel.tideyWorkspaceIdentifier = workspaceID;
 }
 
 - (void)tideyMarkWorkspaceReadAtIndex:(NSInteger)index {
@@ -2097,10 +2110,32 @@ ITERM_WEAKLY_REFERENCEABLE
     }
     BOOL initializedFromTabs = NO;
     if (self.workspaces.count == 0) {
+        PTYTab *currentTab = self.currentTab;
+        Workspace *selectedWorkspace = nil;
+        NSMutableDictionary<NSString *, Workspace *> *workspaceMap = [NSMutableDictionary dictionary];
         for (PTYTab *tab in self.tabs) {
-            [self.workspaces addObject:[[[Workspace alloc] initWithPanel:tab] autorelease]];
+            NSString *workspaceID = tab.tideyWorkspaceIdentifier;
+            Workspace *workspace = nil;
+            if (workspaceID.length > 0) {
+                workspace = workspaceMap[workspaceID];
+            }
+            if (!workspace) {
+                NSUUID *identifier = workspaceID.length > 0 ? [[[NSUUID alloc] initWithUUIDString:workspaceID] autorelease] : nil;
+                workspace = [[[Workspace alloc] initWithPanel:nil identifier:identifier] autorelease];
+                [self.workspaces addObject:workspace];
+                workspaceMap[workspace.identifier.UUIDString] = workspace;
+            }
+            if (![workspace.panels containsObject:tab]) {
+                [workspace.panels addObject:tab];
+            }
+            if (tab == currentTab) {
+                selectedWorkspace = workspace;
+                workspace.selectedPanelIndex = [workspace.panels indexOfObjectIdenticalTo:tab];
+            }
+            [self tideyAssignWorkspaceIdentifierToPanel:tab workspace:workspace];
         }
-        self.selectedWorkspaceIndex = self.workspaces.count > 0 ? 0 : -1;
+        NSInteger selectedWorkspaceIndex = selectedWorkspace ? [self.workspaces indexOfObjectIdenticalTo:selectedWorkspace] : NSNotFound;
+        self.selectedWorkspaceIndex = selectedWorkspaceIndex != NSNotFound ? selectedWorkspaceIndex : (self.workspaces.count > 0 ? 0 : -1);
         _lastSelectedWorkspaceIndex = -1;
         initializedFromTabs = (self.workspaces.count > 0);
     }
