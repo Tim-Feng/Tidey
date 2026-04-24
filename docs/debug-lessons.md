@@ -4,10 +4,10 @@
 
 ## 審閱 marker
 
-**Last reviewed**: `3bf27140e` · 2026-04-19
+**Last reviewed**: `4842b41e1` · 2026-04-25
 
 **下次審閱要做的事**：
-1. `git log 3bf27140e..HEAD` 列出所有新 commits
+1. `git log 4842b41e1..HEAD` 列出所有新 commits
 2. 掃 `~/.claude/projects/-Users-timfeng/*.jsonl`（cc sessions）跟 `~/.codex/sessions/**/rollout-*.jsonl` 在 marker 日期之後的記錄
 3. 從 commit message + session 對話中找「原本沒想到 / 踩第二次 / 花超過 1 小時才解的」歸納成 bullet
 4. 把 lesson 補進對應章節（owner／UI／shell integration 等），iOS 側去 `~/GitHub/Tidey-Remote/docs/debug-lessons.md`
@@ -106,6 +106,16 @@
 - split 後 browser host 只能用 pane-local bounds
   - browser container / webview 不能 fallback 回 whole-panel bounds
   - primary pane 如果直接用 `_tideyEditorPanelView.bounds`，左 pane 開 web 會橫跨兩欄
+- 需要跨切換保留的 state，要綁在 item，不要綁在共享 container
+  - 只要一切換就要 detach / reattach 的 view，如果 state 掛在 pane 這種共享容器，切 item 時就會被迫 reload 或重建
+  - browser tab 之前把 `WKWebView` 綁在 pane，共用一個 webview；切 tab 直接 `loadURL`，scroll position、form state、SPA state 全丟
+  - 解法不是補 cache，而是把 browser engine 綁回 tab；pane 只 attach 目前選中的 webview
+  - 補證：`89a44bb5f` `604c9eac2`
+- 動態重排之後，不要再用位置或 subview 順序當 lookup
+  - 只要 view hierarchy 會因 reattach / insert / reorder 改變，`subviews.firstObject` 這類 positional lookup 遲早會指錯
+  - browser panel 這次把 webview 改成可重 attach 之後，toolbar 不再穩定是 `browserContainerView.subviews.firstObject`，網址列整段直接消失
+  - 解法是顯式持有 reference，例如 `pane.browserToolbarView`
+  - 補證：`007585964`
 
 ## Terminal Selection / Mouse
 
@@ -184,6 +194,13 @@
   - `tmux show-environment TIDEY_WORKSPACE_ID` 只代表 server/global state，多 pane、多 workspace 並存時很快 stale
   - Tidey 端把 `@tidey_workspace_id`、`@tidey_panel_id` 寫到 pane user options，wrapper 再用 `tmux show-options -p -v -t "$TMUX_PANE"` 讀
   - 補證：`3c0e4f4ad` `d5478d5a4` `4e796c19f`
+- 共享長壽 service 繼承到的 early env，會污染所有後續 client
+  - 只要 service 生命週期比 client 長，而且會保存 global env，第一個 client 帶進去的值就可能污染後面所有 attach / new session
+  - 這次是從 prod shell 開 `tmux new -s tidey-cc`，prod 的 `TIDEY_*` 被繼承進 tmux server global env；之後 Dev shell attach 到同一個 default socket，wrapper fallback 讀到的還是 prod UUID / socket path
+  - 症狀是：Dev 的 Claude hook 送 prod `workspace_id`，sidebar 永遠 no-match，紅點 / status 一起失效
+  - 先驗：`tmux show-environment -g | grep TIDEY_`
+  - 臨時解：`tmux set-environment -gu TIDEY_WORKSPACE_ID TIDEY_PANEL_ID TIDEY_SOCKET_PATH TIDEY_BIN_DIR`
+  - 長期解：不要把 tmux server global env 當 identity source；pane option 才是 Tidey 自己寫入、可相信的來源
 - zsh 會 cache command 的絕對路徑
   - Tidey shell integration 把 `TIDEY_BIN_DIR` prepend 到 PATH，但長 live 的 shell 已經把 `codex` / `claude` hash 成舊路徑
   - 新裝 Tidey 後沒有新開 shell 就測不到新 wrapper
@@ -208,6 +225,12 @@
   - 只在入口做一次 old→new 映射不夠，任何還拿舊 UUID 讀 panel summary、抓 transcript、套 event 的路徑都會繼續錯綁
   - 這類 bug 常在 Tidey 重啟、pane close / reopen、workspace reload 後才出現，因為舊 ID 還在 event / buffer / registry 裡殘留
   - 補證：`b3d624e3f` `362c04ba2` `3756f4601` `b3d43c1ea` `f48295708` `d941cddf5` `dff5b16ed` `27a62089f` `9ed5ae92c` `552f40a42` `070796160` `85f255bfb` `8e26ad3e6`
+- 同一個 identity 如果分散在不同生命週期的 storage，遲早會 drift
+  - UI model、restore snapshot、shell env 只要不是同一個 source of truth，就不能假設它們會自己同步
+  - 這次是 `Workspace.identifier` 每次 relaunch 都新生，但 `SESSION_ARRANGEMENT_ENVIRONMENT` 會把舊 shell env 原封 restore 回來；結果 sidebar 查新 UUID，hook 送舊 UUID，notification/status 永遠 no-match
+  - 看到「store 裡明明有寫進去，但 UI 永遠查不到」時，先檢查是不是兩邊拿的其實不是同一個 identity
+  - 解法（Fix A）是把 workspace UUID 持久化到 tab arrangement，workspace 重建時 reuse；舊 arrangement 沒欄位時才 fallback 新生
+  - 補證：`7a8c479f4` `17b5c94a3` `4842b41e1`
 - 大 transcript / reconnect 不是單點修補，要一起做 paging、bootstrap limit、catch-up 和 no-replay aware parsing
   - transcript 一大，initial load、resume、reconnect 會同時撞到 bootstrap 成本、重播延遲、catch-up 遺漏與 UI reveal 時機
   - 只加 bootstrap line limit 會留下 reconnect 落後；只補 catch-up 又會被 replay / no-replay 混合路徑打回來
@@ -220,6 +243,11 @@
   - 補證：2026-04-18 release 調查最後在沙盒外確認 `Developer ID Application` identity 正常，真正阻塞是 Apple Developer `403 required agreement is missing or has expired`
 - Claude hook 不要靠 terminal output 猜狀態
   - 用明確事件：`session-start`、`prompt-submit`、`notification`、`stop`、`session-end`
+- pipeline debug 先在 seam 插 mock，把 producer / consumer 兩半切開
+  - 一條鏈太長時，不要一開始就往 app 內加 log；先找最窄的 seam，換成可控制的假端點，先判斷問題在寫出端還是接收端
+  - 這次把 `TIDEY_SOCKET_PATH` 暫時指到 `/tmp/tidey-hook-probe.sock`，起一個最小的 Unix socket listener，就能直接看到 wrapper / hook / CLI 寫出的完整事件序列和 `workspace_id`
+  - 先驗 fake socket（Claude → wrapper → CLI → socket write），再驗真 socket（Tidey app → store → sidebar），比直接在 Tidey binary 裡亂塞 probe 快很多
+  - 這個方法在 hook、socket、notification、IPC 都適用，不只 Tidey
 - hook command 只要含空白路徑就要先 escape
 - `ChatBroker.publish()` 要在 `append()` 前先 init cache
   - `ChatListModel.append()` 的 early-return 路徑（`.append`、`.commit` 等）用 `createIfNeeded: false`
