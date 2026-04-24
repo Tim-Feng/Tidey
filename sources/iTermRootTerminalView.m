@@ -433,6 +433,10 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
 - (void)tideySetActivePane:(TideyRightPanelPane *)pane;
 - (void)tideyHandleEditorPanelClick:(NSGestureRecognizer *)recognizer;
 - (void)tideyEnsureBrowserWebViewForPane:(TideyRightPanelPane *)pane;
+- (void)tideyEnsureBrowserEngineForTab:(TideyEditorTab *)tab;
+- (void)tideyAttachBrowserTab:(TideyEditorTab *)tab toPane:(TideyRightPanelPane *)pane;
+- (TideyEditorTab *)tideyBrowserTabForEngine:(TideyBrowserEngine *)engine
+                                      inPane:(TideyRightPanelPane *)pane;
 - (void)tideyLoadBrowserURL:(NSURL *)url inPane:(TideyRightPanelPane *)pane;
 - (void)tideyUpdateBrowserContentVisibilityForPane:(TideyRightPanelPane *)pane;
 - (void)tideyLayoutBrowserContainerForPane:(TideyRightPanelPane *)pane;
@@ -944,6 +948,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 @interface TideyEditorTab : NSObject
 @property(nonatomic, copy) NSString *identifier;
 @property(nonatomic, strong, nullable) TideyEditorDocument *document;
+@property(nonatomic, strong, nullable) TideyBrowserEngine *browserEngine;
 @property(nonatomic, copy) NSString *path;
 @property(nonatomic, copy) NSString *displayName;
 @property(nonatomic, copy) NSString *language;
@@ -2121,10 +2126,14 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     [self tideyStopWatchingCurrentEditorFile];
     [self tideyStopWatchingEditorFileTree];
     for (TideyRightPanelPane *pane in @[ _primaryPane, _secondaryPane ?: (id)kCFNull ]) {
-        if ((id)pane == (id)kCFNull || !pane.browserWebView) {
+        if ((id)pane == (id)kCFNull) {
             continue;
         }
-        pane.browserEngine.host = nil;
+        for (TideyEditorTab *tab in pane.tabs) {
+            if (tab.kind == TideyRightPanelTabKindBrowser) {
+                tab.browserEngine.host = nil;
+            }
+        }
     }
     if (_secondaryPane.editorWebView) {
         [_secondaryPane.editorWebView.configuration.userContentController removeScriptMessageHandlerForName:@"tideyEditorReady"];
@@ -3561,7 +3570,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 }
 
 - (void)tideyEnsureBrowserWebViewForPane:(TideyRightPanelPane *)pane {
-    if (!pane || pane.browserWebView != nil) {
+    if (!pane || pane.browserContainerView != nil) {
         return;
     }
     // Container holds toolbar + webview
@@ -3652,7 +3661,20 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 
     [pane.browserContainerView addSubview:toolbar];
 
-    // WKWebView
+    NSView *hostView = pane.containerView ?: _tideyEditorPanelView;
+    NSView *relativeView = pane.tabStripView ?: _tideyEditorTabStripView;
+    [hostView addSubview:pane.browserContainerView positioned:NSWindowBelow relativeTo:relativeView];
+}
+
+- (void)tideyEnsureBrowserEngineForTab:(TideyEditorTab *)tab {
+    if (!tab || tab.kind != TideyRightPanelTabKindBrowser) {
+        return;
+    }
+    if (tab.browserEngine != nil) {
+        tab.browserEngine.host = self;
+        return;
+    }
+
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
     config.applicationNameForUserAgent = @"Tidey";
     config.websiteDataStore = [WKWebsiteDataStore defaultDataStore];
@@ -3666,21 +3688,47 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     config.preferences = prefs;
 
     TideyBrowserEngine *engine = [[TideyBrowserEngine alloc] initWithConfiguration:config
-                                                                              host:nil];
-    pane.browserEngine = engine;
-    pane.browserWebView = engine.webView;
-    pane.browserWebView.customUserAgent = [TideyBrowserEngine sessionCompatibleUserAgent];
-    pane.browserWebView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    pane.browserWebView.allowsBackForwardNavigationGestures = YES;
+                                                                              host:self];
+    WKWebView *webView = engine.webView;
+    webView.customUserAgent = [TideyBrowserEngine sessionCompatibleUserAgent];
+    webView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    webView.allowsBackForwardNavigationGestures = YES;
     if (@available(macOS 13.3, *)) {
-        pane.browserWebView.inspectable = YES;
+        webView.inspectable = YES;
     }
-    [pane.browserContainerView addSubview:pane.browserWebView];
 
-    NSView *hostView = pane.containerView ?: _tideyEditorPanelView;
-    NSView *relativeView = pane.tabStripView ?: _tideyEditorTabStripView;
-    [hostView addSubview:pane.browserContainerView positioned:NSWindowBelow relativeTo:relativeView];
+    tab.browserEngine = engine;
+}
+
+- (void)tideyAttachBrowserTab:(TideyEditorTab *)tab toPane:(TideyRightPanelPane *)pane {
+    if (!pane || !tab || tab.kind != TideyRightPanelTabKindBrowser) {
+        return;
+    }
+    [self tideyEnsureBrowserWebViewForPane:pane];
+    [self tideyEnsureBrowserEngineForTab:tab];
+
+    WKWebView *webView = tab.browserEngine.webView;
+    if (pane.browserWebView != webView) {
+        [pane.browserWebView removeFromSuperview];
+        pane.browserEngine = tab.browserEngine;
+        pane.browserWebView = webView;
+        NSView *toolbar = pane.browserContainerView.subviews.firstObject;
+        [pane.browserContainerView addSubview:webView positioned:NSWindowBelow relativeTo:toolbar];
+    }
     pane.browserEngine.host = self;
+}
+
+- (TideyEditorTab *)tideyBrowserTabForEngine:(TideyBrowserEngine *)engine
+                                      inPane:(TideyRightPanelPane *)pane {
+    if (!engine || !pane) {
+        return nil;
+    }
+    for (TideyEditorTab *tab in pane.tabs) {
+        if (tab.kind == TideyRightPanelTabKindBrowser && tab.browserEngine == engine) {
+            return tab;
+        }
+    }
+    return nil;
 }
 
 - (void)tideyLoadBrowserURL:(NSURL *)url {
@@ -3688,6 +3736,9 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
 }
 
 - (void)tideyLoadBrowserURL:(NSURL *)url inPane:(TideyRightPanelPane *)pane {
+    if (!pane) {
+        return;
+    }
     [pane.browserEngine load:url];
     pane.browserURLField.stringValue = url.absoluteString;
 }
@@ -3710,6 +3761,11 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     BOOL isBrowser = (tab != nil && tab.kind == TideyRightPanelTabKindBrowser);
     pane.browserContainerView.hidden = !isBrowser;
     pane.editorWebView.hidden = isBrowser || tab == nil;
+    if (!isBrowser && pane.browserWebView.superview == pane.browserContainerView) {
+        [pane.browserWebView removeFromSuperview];
+        pane.browserEngine = nil;
+        pane.browserWebView = nil;
+    }
 }
 
 - (void)tideyLayoutBrowserContainer {
@@ -4824,8 +4880,9 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         if (pane == self.activePane) {
             [self tideyStopWatchingCurrentEditorFile];
         }
-        [self tideyEnsureBrowserWebViewForPane:pane];
+        [self tideyAttachBrowserTab:tab toPane:pane];
         [self tideyLayoutBrowserContainerForPane:pane];
+        [self tideyUpdateBrowserUIForPane:pane state:pane.browserEngine.state];
         if (!sameTab) {
             NSURL *url = [NSURL URLWithString:tab.path];
             if (url) {
@@ -5110,7 +5167,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         return nil;
     }
     for (TideyRightPanelPane *pane in [self tideyVisibleRightPanelPanes]) {
-        if (pane.browserEngine == engine) {
+        if ([self tideyBrowserTabForEngine:engine inPane:pane] != nil) {
             return pane;
         }
     }
@@ -5123,22 +5180,27 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         return;
     }
 
+    TideyEditorTab *tab = [self tideyBrowserTabForEngine:pane.browserEngine inPane:pane];
+    if (!tab) {
+        tab = [self tideyCurrentRightPanelTabInPane:pane];
+    }
+
     NSURL *url = state.currentURL;
     if (url) {
         pane.browserURLField.stringValue = url.absoluteString;
-        TideyEditorTab *tab = [self tideyCurrentRightPanelTabInPane:pane];
         if (tab && tab.kind == TideyRightPanelTabKindBrowser) {
             tab.path = url.absoluteString;
         }
     }
 
-    TideyEditorTab *tab = [self tideyCurrentRightPanelTabInPane:pane];
     if (tab && tab.kind == TideyRightPanelTabKindBrowser) {
         NSString *displayName = [[self class] tideyBrowserDisplayNameForURL:url
                                                                   pageTitle:state.currentTitle];
         if (![tab.displayName isEqualToString:displayName]) {
             tab.displayName = displayName;
-            [self reloadTideyRightPanelTabsForPane:pane];
+            if (tab == [self tideyCurrentRightPanelTabInPane:pane]) {
+                [self reloadTideyRightPanelTabsForPane:pane];
+            }
         }
     }
 
@@ -5469,8 +5531,10 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         [_secondaryPane.editorWebView.configuration.userContentController removeScriptMessageHandlerForName:@"tideyEditorOpenLink"];
         _secondaryPane.editorWebView.navigationDelegate = nil;
     }
-    if (_secondaryPane.browserWebView) {
-        _secondaryPane.browserEngine.host = nil;
+    for (TideyEditorTab *tab in _secondaryPane.tabs) {
+        if (tab.kind == TideyRightPanelTabKindBrowser) {
+            tab.browserEngine.host = nil;
+        }
     }
     [_secondaryPane.editorWebView removeFromSuperview];
     [_secondaryPane.browserContainerView removeFromSuperview];
@@ -6141,7 +6205,23 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     if (!pane) {
         return;
     }
-    [self tideyUpdateBrowserUIForPane:pane state:state];
+    TideyEditorTab *tab = [self tideyBrowserTabForEngine:engine inPane:pane];
+    if (state.currentURL && tab.kind == TideyRightPanelTabKindBrowser) {
+        tab.path = state.currentURL.absoluteString;
+    }
+    if (tab.kind == TideyRightPanelTabKindBrowser) {
+        NSString *displayName = [[self class] tideyBrowserDisplayNameForURL:state.currentURL
+                                                                  pageTitle:state.currentTitle];
+        if (![tab.displayName isEqualToString:displayName]) {
+            tab.displayName = displayName;
+            if (tab == [self tideyCurrentRightPanelTabInPane:pane]) {
+                [self reloadTideyRightPanelTabsForPane:pane];
+            }
+        }
+    }
+    if (pane.browserEngine == engine) {
+        [self tideyUpdateBrowserUIForPane:pane state:state];
+    }
 }
 
 - (void)browserEngine:(TideyBrowserEngine *)engine
