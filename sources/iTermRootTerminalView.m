@@ -3601,6 +3601,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     toolbar.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
     toolbar.wantsLayer = YES;
     toolbar.layer.backgroundColor = [NSColor colorWithWhite:0.15 alpha:1].CGColor;
+    pane.browserToolbarView = toolbar;
 
     // Back button
     pane.browserBackButton = [NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:@"chevron.left" accessibilityDescription:@"Back"]
@@ -3712,8 +3713,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         [pane.browserWebView removeFromSuperview];
         pane.browserEngine = tab.browserEngine;
         pane.browserWebView = webView;
-        NSView *toolbar = pane.browserContainerView.subviews.firstObject;
-        [pane.browserContainerView addSubview:webView positioned:NSWindowBelow relativeTo:toolbar];
+        [pane.browserContainerView addSubview:webView positioned:NSWindowBelow relativeTo:pane.browserToolbarView];
     }
     pane.browserEngine.host = self;
 }
@@ -3793,7 +3793,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     pane.browserContainerView.frame = contentBounds;
 
     // Toolbar at top of container
-    NSView *toolbar = pane.browserContainerView.subviews.firstObject;
+    NSView *toolbar = pane.browserToolbarView;
     toolbar.frame = NSMakeRect(0, contentHeight - kTideyBrowserToolbarHeight, contentWidth, kTideyBrowserToolbarHeight);
 
     // URL field fills remaining width after buttons
