@@ -201,6 +201,9 @@ static NSButton *TideyMakeEditorChromeIconButton(NSString *symbolName,
 @property(nonatomic, copy) void (^tideyReloadHandler)(void);
 @property(nonatomic, copy) void (^tideyBackHandler)(void);
 @property(nonatomic, copy) void (^tideyForwardHandler)(void);
+@property(nonatomic, copy) void (^tideyZoomInHandler)(void);
+@property(nonatomic, copy) void (^tideyZoomOutHandler)(void);
+@property(nonatomic, copy) void (^tideyResetZoomHandler)(void);
 @end
 
 @implementation TideyBrowserContainerView
@@ -223,6 +226,18 @@ static NSButton *TideyMakeEditorChromeIconButton(NSString *symbolName,
         }
         if ([key isEqualToString:@"]"] && self.tideyForwardHandler) {
             self.tideyForwardHandler();
+            return YES;
+        }
+        if (([key isEqualToString:@"="] || [key isEqualToString:@"+"]) && self.tideyZoomInHandler) {
+            self.tideyZoomInHandler();
+            return YES;
+        }
+        if ([key isEqualToString:@"-"] && self.tideyZoomOutHandler) {
+            self.tideyZoomOutHandler();
+            return YES;
+        }
+        if ([key isEqualToString:@"0"] && self.tideyResetZoomHandler) {
+            self.tideyResetZoomHandler();
             return YES;
         }
     }
@@ -440,6 +455,8 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
 - (void)tideyLoadBrowserURL:(NSURL *)url inPane:(TideyRightPanelPane *)pane;
 - (void)tideyUpdateBrowserContentVisibilityForPane:(TideyRightPanelPane *)pane;
 - (void)tideyLayoutBrowserContainerForPane:(TideyRightPanelPane *)pane;
+- (CGFloat)tideyNormalizedBrowserZoomFactor:(CGFloat)zoomFactor;
+- (void)tideyApplyBrowserZoomForTab:(TideyEditorTab *)tab inPane:(TideyRightPanelPane *)pane;
 - (void)tideyEditorSetValue:(NSString *)content forPane:(TideyRightPanelPane *)pane;
 - (void)tideyEditorSetLanguage:(NSString *)language forPane:(TideyRightPanelPane *)pane;
 - (void)tideyEditorSetEditable:(BOOL)editable forPane:(TideyRightPanelPane *)pane;
@@ -953,6 +970,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 @property(nonatomic, copy) NSString *displayName;
 @property(nonatomic, copy) NSString *language;
 @property(nonatomic, copy) NSString *content;
+@property(nonatomic) CGFloat browserZoom;
 @property(nonatomic) BOOL dirty;
 @property(nonatomic) BOOL preview;
 @property(nonatomic) TideyRightPanelTabKind kind;
@@ -990,6 +1008,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     tab.displayName = url.host ?: url.absoluteString;
     tab.language = @"html";
     tab.content = @"";
+    tab.browserZoom = 1.0;
     tab.dirty = NO;
     tab.preview = NO;
     tab.kind = TideyRightPanelTabKindBrowser;
