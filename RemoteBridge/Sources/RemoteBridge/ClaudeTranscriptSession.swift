@@ -1084,6 +1084,10 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             return false
         }
 
+        if trimmed.contains("<turn_aborted>") || trimmed.contains("<tool_aborted>") {
+            return false
+        }
+
         if trimmed.hasPrefix("This session is being continued from a previous conversation") {
             return false
         }
