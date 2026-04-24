@@ -4860,7 +4860,6 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         return;
     }
     [self tideySetActivePane:pane];
-    BOOL sameTab = (pane.selectedTabIndex == index);
     pane.selectedTabIndex = index;
     TideyEditorTab *tab = pane.tabs[index];
     pane.expandedTabKind = tab.kind;
@@ -4883,7 +4882,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
         [self tideyAttachBrowserTab:tab toPane:pane];
         [self tideyLayoutBrowserContainerForPane:pane];
         [self tideyUpdateBrowserUIForPane:pane state:pane.browserEngine.state];
-        if (!sameTab) {
+        if (tab.browserEngine.url == nil) {
             NSURL *url = [NSURL URLWithString:tab.path];
             if (url) {
                 [self tideyLoadBrowserURL:url inPane:pane];
