@@ -93,6 +93,7 @@ static NSString* TAB_ARRANGEMENT_COLOR = @"Tab color";  // DEPRECATED - Each PTY
 static NSString* TAB_ARRANGEMENT_TITLE_OVERRIDE = @"Title Override";
 static NSString* TAB_GUID = @"Tab GUID";
 static NSString* TAB_ARRANGEMENT_PINNED = @"Pinned";
+static NSString* TAB_ARRANGEMENT_TIDEY_WORKSPACE_ID = @"Tidey Workspace ID";
 
 static const BOOL USE_THIN_SPLITTERS = YES;
 
@@ -226,6 +227,7 @@ static void SetAgainstGrainDim(BOOL isVertical, NSSize *dest, CGFloat value) {
     // If YES then force metal off. Does a hard reset when changing screens.
     BOOL _bounceMetal;
     NSString *_temporarilyUnmaximizedSessionGUID;
+    NSString *_tideyWorkspaceIdentifier;
 
     NSMutableArray<PTYSession *> *_sessionsWithDeferredFontChanges;
     iTermVariableScope<iTermTabScope> *_variablesScope;
@@ -513,6 +515,7 @@ static void SetAgainstGrainDim(BOOL isVertical, NSSize *dest, CGFloat value) {
 
     root_ = nil;
     flexibleView_ = nil;
+    [_tideyWorkspaceIdentifier release];
 }
 
 - (NSString *)description {
@@ -3424,6 +3427,7 @@ static void SetAgainstGrainDim(BOOL isVertical, NSSize *dest, CGFloat value) {
                                                        options:options]];
     theTab.titleOverride = [arrangement[TAB_ARRANGEMENT_TITLE_OVERRIDE] nilIfNull];
     theTab->_pinned = [arrangement[TAB_ARRANGEMENT_PINNED] boolValue];
+    theTab.tideyWorkspaceIdentifier = [arrangement[TAB_ARRANGEMENT_TIDEY_WORKSPACE_ID] nilIfNull];
     NSString *guid = arrangement[TAB_GUID];
     if (guid) {
         if ([[iTermController sharedInstance] tabWithGUID:guid] ||
@@ -3759,6 +3763,9 @@ NSString *const PTYTabArrangementOptionsPendingJumps = @"PTYTabArrangementOption
                    options:(NSDictionary *)options {
     DLog(@"Encode tab %@", self);
     encoder[TAB_ARRANGEMENT_PINNED] = @(self.isPinned);
+    if (_tideyWorkspaceIdentifier.length > 0) {
+        encoder[TAB_ARRANGEMENT_TIDEY_WORKSPACE_ID] = _tideyWorkspaceIdentifier;
+    }
     // If in screenshot mode, encode the live session instead of the synthetic one
     PTYSession *sessionToEncode = self.activeSession;
     BOOL inScreenshotMode = (sessionToEncode.liveSession != nil);
@@ -3801,6 +3808,7 @@ NSString *const PTYTabArrangementOptionsPendingJumps = @"PTYTabArrangementOption
 - (NSDictionary *)arrangementForDuplication {
     NSMutableDictionary *arrangement = [[self arrangementConstructingIdMap:NO contents:NO options:@{ PTYSessionArrangementOptionsForDuplication: @YES }] mutableCopy];
     arrangement[TAB_GUID] = [[NSUUID UUID] UUIDString];
+    [arrangement removeObjectForKey:TAB_ARRANGEMENT_TIDEY_WORKSPACE_ID];
     return arrangement;
 }
 
@@ -5778,6 +5786,20 @@ typedef struct {
 
 - (BOOL)isPinned {
     return _pinned;
+}
+
+- (void)setTideyWorkspaceIdentifier:(NSString *)tideyWorkspaceIdentifier {
+    NSString *sanitized = tideyWorkspaceIdentifier.length > 0 ? tideyWorkspaceIdentifier : nil;
+    if ([NSObject object:_tideyWorkspaceIdentifier isEqualToObject:sanitized]) {
+        return;
+    }
+    [_tideyWorkspaceIdentifier autorelease];
+    _tideyWorkspaceIdentifier = [sanitized copy];
+    [realParentWindow_ invalidateRestorableState];
+}
+
+- (NSString *)tideyWorkspaceIdentifier {
+    return [[_tideyWorkspaceIdentifier retain] autorelease];
 }
 
 - (void)setTitleOverride:(NSString *)titleOverride {

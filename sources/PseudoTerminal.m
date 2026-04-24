@@ -257,6 +257,7 @@ static NSString *TideySubmitLogSuffix(NSString *input) {
 @property(nonatomic) BOOL pinned;
 
 - (instancetype)initWithPanel:(PTYTab *)panel;
+- (instancetype)initWithPanel:(PTYTab *)panel identifier:(NSUUID *)identifier;
 - (PTYTab *)selectedPanel;
 
 @end
@@ -264,10 +265,14 @@ static NSString *TideySubmitLogSuffix(NSString *input) {
 @implementation Workspace
 
 - (instancetype)initWithPanel:(PTYTab *)panel {
+    return [self initWithPanel:panel identifier:nil];
+}
+
+- (instancetype)initWithPanel:(PTYTab *)panel identifier:(NSUUID *)identifier {
     self = [super init];
     if (self) {
         _panels = [[NSMutableArray alloc] init];
-        _identifier = [[NSUUID UUID] retain];
+        _identifier = [(identifier ?: [NSUUID UUID]) retain];
         if (panel) {
             [_panels addObject:panel];
         }
