@@ -515,7 +515,6 @@ static void SetAgainstGrainDim(BOOL isVertical, NSSize *dest, CGFloat value) {
 
     root_ = nil;
     flexibleView_ = nil;
-    [_tideyWorkspaceIdentifier release];
 }
 
 - (NSString *)description {
@@ -5793,13 +5792,12 @@ typedef struct {
     if ([NSObject object:_tideyWorkspaceIdentifier isEqualToObject:sanitized]) {
         return;
     }
-    [_tideyWorkspaceIdentifier autorelease];
     _tideyWorkspaceIdentifier = [sanitized copy];
     [realParentWindow_ invalidateRestorableState];
 }
 
 - (NSString *)tideyWorkspaceIdentifier {
-    return [[_tideyWorkspaceIdentifier retain] autorelease];
+    return _tideyWorkspaceIdentifier;
 }
 
 - (void)setTitleOverride:(NSString *)titleOverride {
