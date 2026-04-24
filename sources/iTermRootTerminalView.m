@@ -3583,6 +3583,9 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 
 static const CGFloat kTideyBrowserToolbarHeight = 28;
+static const CGFloat kTideyBrowserZoomStep = 0.1;
+static const CGFloat kTideyBrowserZoomMinimum = 0.5;
+static const CGFloat kTideyBrowserZoomMaximum = 3.0;
 
 - (void)tideyEnsureBrowserWebView {
     [self tideyEnsureBrowserWebViewForPane:self.activePane];
@@ -3610,6 +3613,15 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     browserContainerView.tideyForwardHandler = ^{
         [weakSelf tideySetActivePane:pane];
         [pane.browserEngine goForward];
+    };
+    browserContainerView.tideyZoomInHandler = ^{
+        [weakSelf tideyBrowserZoomIn:nil];
+    };
+    browserContainerView.tideyZoomOutHandler = ^{
+        [weakSelf tideyBrowserZoomOut:nil];
+    };
+    browserContainerView.tideyResetZoomHandler = ^{
+        [weakSelf tideyBrowserResetZoom:nil];
     };
     pane.browserContainerView = browserContainerView;
     pane.browserContainerView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
@@ -3762,6 +3774,22 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     pane.browserURLField.stringValue = url.absoluteString;
 }
 
+- (CGFloat)tideyNormalizedBrowserZoomFactor:(CGFloat)zoomFactor {
+    if (!isfinite(zoomFactor) || zoomFactor <= 0) {
+        return 1.0;
+    }
+    return MIN(kTideyBrowserZoomMaximum, MAX(kTideyBrowserZoomMinimum, zoomFactor));
+}
+
+- (void)tideyApplyBrowserZoomForTab:(TideyEditorTab *)tab inPane:(TideyRightPanelPane *)pane {
+    if (!pane || !tab || tab.kind != TideyRightPanelTabKindBrowser || !pane.browserWebView) {
+        return;
+    }
+    CGFloat zoomFactor = [self tideyNormalizedBrowserZoomFactor:tab.browserZoom];
+    tab.browserZoom = zoomFactor;
+    pane.browserWebView.pageZoom = zoomFactor;
+}
+
 - (void)tideyUpdateBrowserContentVisibility {
     for (TideyRightPanelPane *pane in [self tideyVisibleRightPanelPanes]) {
         [self tideyUpdateBrowserContentVisibilityForPane:pane];
@@ -3876,6 +3904,39 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
     TideyRightPanelPane *pane = [self tideyCurrentPaneForSender:sender];
     [self tideySetActivePane:pane];
     [pane.browserEngine reload];
+}
+
+- (void)tideyBrowserZoomIn:(id)sender {
+    TideyRightPanelPane *pane = [self tideyCurrentPaneForSender:sender];
+    [self tideySetActivePane:pane];
+    TideyEditorTab *tab = [self tideyCurrentRightPanelTabInPane:pane];
+    if (tab.kind != TideyRightPanelTabKindBrowser || ![self tideyBrowserHasFocus]) {
+        return;
+    }
+    tab.browserZoom = [self tideyNormalizedBrowserZoomFactor:tab.browserZoom + kTideyBrowserZoomStep];
+    [self tideyApplyBrowserZoomForTab:tab inPane:pane];
+}
+
+- (void)tideyBrowserZoomOut:(id)sender {
+    TideyRightPanelPane *pane = [self tideyCurrentPaneForSender:sender];
+    [self tideySetActivePane:pane];
+    TideyEditorTab *tab = [self tideyCurrentRightPanelTabInPane:pane];
+    if (tab.kind != TideyRightPanelTabKindBrowser || ![self tideyBrowserHasFocus]) {
+        return;
+    }
+    tab.browserZoom = [self tideyNormalizedBrowserZoomFactor:tab.browserZoom - kTideyBrowserZoomStep];
+    [self tideyApplyBrowserZoomForTab:tab inPane:pane];
+}
+
+- (void)tideyBrowserResetZoom:(id)sender {
+    TideyRightPanelPane *pane = [self tideyCurrentPaneForSender:sender];
+    [self tideySetActivePane:pane];
+    TideyEditorTab *tab = [self tideyCurrentRightPanelTabInPane:pane];
+    if (tab.kind != TideyRightPanelTabKindBrowser || ![self tideyBrowserHasFocus]) {
+        return;
+    }
+    tab.browserZoom = 1.0;
+    [self tideyApplyBrowserZoomForTab:tab inPane:pane];
 }
 
 - (void)tideyBrowserURLFieldAction:(id)sender {
@@ -4899,6 +4960,7 @@ static const CGFloat kTideyBrowserToolbarHeight = 28;
             [self tideyStopWatchingCurrentEditorFile];
         }
         [self tideyAttachBrowserTab:tab toPane:pane];
+        [self tideyApplyBrowserZoomForTab:tab inPane:pane];
         [self tideyLayoutBrowserContainerForPane:pane];
         [self tideyUpdateBrowserUIForPane:pane state:pane.browserEngine.state];
         if (tab.browserEngine.url == nil) {
