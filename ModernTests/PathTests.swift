@@ -84,6 +84,50 @@ final class PathTests: XCTestCase {
                         ObjCBool(respectHardNewlines)) as String?
     }
 
+    private func urlHitCandidate(logicalString: String,
+                                 clickIndex: Int,
+                                 columns: [Int],
+                                 rows: [Int],
+                                 allowHardNewlineRecovery: Bool = false) -> [String: Any]? {
+        guard let factoryClass = NSClassFromString("iTermURLActionFactory") as? AnyClass else {
+            XCTFail("Missing iTermURLActionFactory")
+            return nil
+        }
+        let selector = NSSelectorFromString("tideyURLHitCandidateDictionaryForLogicalString:clickIndex:columns:rows:allowHardNewlineRecovery:")
+        guard let method = class_getClassMethod(factoryClass, selector) else {
+            XCTFail("Missing iTermURLActionFactory URL hit candidate helper")
+            return nil
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, NSString, Int, NSArray, NSArray, ObjCBool) -> NSDictionary?
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        return function(factoryClass,
+                        selector,
+                        logicalString as NSString,
+                        clickIndex,
+                        columns.map(NSNumber.init(value:)) as NSArray,
+                        rows.map(NSNumber.init(value:)) as NSArray,
+                        ObjCBool(allowHardNewlineRecovery)) as? [String: Any]
+    }
+
+    private func gridCoordinates(for string: String, width: Int) -> (columns: [Int], rows: [Int]) {
+        var columns: [Int] = []
+        var rows: [Int] = []
+        var x = 0
+        var y = 0
+        let length = (string as NSString).length
+        for _ in 0..<length {
+            columns.append(x)
+            rows.append(y)
+            x += 1
+            if x >= width {
+                x = 0
+                y += 1
+            }
+        }
+        return (columns, rows)
+    }
+
     private func resolvedPath(prefix: String,
                               suffix: String,
                               workingDirectory: String,
@@ -439,6 +483,59 @@ final class PathTests: XCTestCase {
                                                   respectHardNewlines: false)
 
         XCTAssertEqual(candidate, "https://example.com/very/long/path?query=1")
+    }
+
+    func testURLHitCandidateKeepsSoftWrappedHostTogether() {
+        let url = "https://api.somelongverylongsubdomain.example.com/v1/users/12345/repos"
+        let coordinates = gridCoordinates(for: url, width: 44)
+        let clickIndex = (url as NSString).range(of: "example").location
+
+        let candidate = urlHitCandidate(logicalString: url,
+                                        clickIndex: clickIndex,
+                                        columns: coordinates.columns,
+                                        rows: coordinates.rows)
+
+        XCTAssertEqual(candidate?["url"] as? String, url)
+        XCTAssertEqual(candidate?["startX"] as? Int, 0)
+        XCTAssertEqual(candidate?["startY"] as? Int, 0)
+        XCTAssertGreaterThan(candidate?["endY"] as? Int ?? 0, 0)
+    }
+
+    func testURLHitCandidateKeepsLogicalURLStableAcrossResizeMappings() {
+        let url = "https://api.somelongverylongsubdomain.example.com/v1/users/12345/repos"
+        let clickIndex = (url as NSString).range(of: "example").location
+        let narrowCoordinates = gridCoordinates(for: url, width: 32)
+        let wideCoordinates = gridCoordinates(for: url, width: 120)
+
+        let narrow = urlHitCandidate(logicalString: url,
+                                     clickIndex: clickIndex,
+                                     columns: narrowCoordinates.columns,
+                                     rows: narrowCoordinates.rows)
+        let wide = urlHitCandidate(logicalString: url,
+                                   clickIndex: clickIndex,
+                                   columns: wideCoordinates.columns,
+                                   rows: wideCoordinates.rows)
+
+        XCTAssertEqual(narrow?["url"] as? String, url)
+        XCTAssertEqual(wide?["url"] as? String, url)
+        XCTAssertGreaterThan(narrow?["endY"] as? Int ?? 0, 0)
+        XCTAssertEqual(wide?["endY"] as? Int, 0)
+    }
+
+    func testURLHitCandidateRecoversHostSplitByHardNewline() {
+        let text = "prefix https://git\nhub.com/org/repo suffix"
+        let coordinates = gridCoordinates(for: text, width: 200)
+        let clickIndex = (text as NSString).range(of: "git").location
+
+        let candidate = urlHitCandidate(logicalString: text,
+                                        clickIndex: clickIndex,
+                                        columns: coordinates.columns,
+                                        rows: coordinates.rows,
+                                        allowHardNewlineRecovery: true)
+
+        XCTAssertEqual(candidate?["url"] as? String, "https://github.com/org/repo")
+        XCTAssertEqual(candidate?["startX"] as? Int, (text as NSString).range(of: "https").location)
+        XCTAssertEqual(candidate?["endX"] as? Int, (text as NSString).range(of: "repo").location + 3)
     }
 
     func testWorkspacePanelsFollowVisibleTabOrderAfterReorder() {

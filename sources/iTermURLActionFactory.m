@@ -378,6 +378,14 @@ static BOOL iTermStringIsASCIIOnly(NSString *string) {
     return [self tideyURLLikeCandidateInJoinedString:joined clickIndex:clickIndex];
 }
 
++ (NSDictionary *)tideyURLHitCandidateDictionaryForLogicalString:(NSString *)logicalString
+                                                      clickIndex:(NSInteger)clickIndex
+                                                         columns:(NSArray<NSNumber *> *)columns
+                                                            rows:(NSArray<NSNumber *> *)rows
+                                        allowHardNewlineRecovery:(BOOL)allowHardNewlineRecovery {
+    return nil;
+}
+
 - (void)trySecureCopy {
     // TODO: We usually don't get here because "foo.txt" looks enough like a URL that we do a DNS
     // lookup and fail. It'd be nice to fallback to an SCP file path.
