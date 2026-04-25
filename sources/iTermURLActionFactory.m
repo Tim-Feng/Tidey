@@ -102,6 +102,9 @@ static BOOL iTermStringIsASCIIOnly(NSString *string) {
 + (instancetype)candidateInLocatedString:(iTermLocatedString *)locatedString
                               clickIndex:(NSInteger)clickIndex
                 allowHardNewlineRecovery:(BOOL)allowHardNewlineRecovery;
++ (instancetype)candidateWithLocatedPrefix:(iTermLocatedString *)locatedPrefix
+                              locatedSuffix:(iTermLocatedString *)locatedSuffix
+                   allowHardNewlineRecovery:(BOOL)allowHardNewlineRecovery;
 - (NSDictionary *)dictionaryRepresentation;
 @end
 
@@ -158,6 +161,21 @@ static BOOL iTermStringIsASCIIOnly(NSString *string) {
                         clickIndex:clickIndex
                             coords:[self coordsForLocatedString:locatedString]
           allowHardNewlineRecovery:allowHardNewlineRecovery];
+}
+
++ (instancetype)candidateWithLocatedPrefix:(iTermLocatedString *)locatedPrefix
+                              locatedSuffix:(iTermLocatedString *)locatedSuffix
+                   allowHardNewlineRecovery:(BOOL)allowHardNewlineRecovery {
+    if (!locatedPrefix || !locatedSuffix) {
+        return nil;
+    }
+
+    iTermLocatedString *joined = [[iTermLocatedString alloc] init];
+    [joined appendLocatedString:locatedPrefix];
+    [joined appendLocatedString:locatedSuffix];
+    return [self candidateInLocatedString:joined
+                               clickIndex:locatedPrefix.string.length
+                 allowHardNewlineRecovery:allowHardNewlineRecovery];
 }
 
 + (instancetype)candidateInString:(NSString *)string
@@ -917,9 +935,51 @@ static BOOL iTermStringIsASCIIOnly(NSString *string) {
     return nil;
 }
 
+- (URLAction *)urlActionForURLHitCandidate:(iTermURLHitCandidate *)candidate {
+    if (!candidate.URLString.length ||
+        [candidate.URLString rangeOfString:@"://"].location == NSNotFound) {
+        return nil;
+    }
+
+    NSURL *url = [NSURL URLWithUserSuppliedString:candidate.URLString];
+    if (!url || [[NSWorkspace sharedWorkspace] URLForApplicationToOpenURL:url] == nil) {
+        return nil;
+    }
+
+    VT100GridWindowedRange range;
+    range.coordRange.start = candidate.startCoord;
+    range.coordRange.end = [self.extractor successorOfCoord:candidate.endCoord];
+    range.columnWindow = self.extractor.logicalWindow;
+
+    URLAction *action = [URLAction urlActionToOpenURL:candidate.URLString];
+    action.logicalRange = range;
+    action.visualRange = [self.extractor visualWindowedRangeForLogical:action.logicalRange];
+    return action;
+}
+
 - (URLAction *)urlActionForURLLike {
     iTermLocatedString *primaryPrefix = [self locatedPrefixForURLLikeRespectingHardNewlines:self.respectHardNewlines];
     iTermLocatedString *primarySuffix = [self locatedSuffixForURLLikeRespectingHardNewlines:self.respectHardNewlines];
+    iTermURLHitCandidate *primaryCandidate =
+        [iTermURLHitCandidate candidateWithLocatedPrefix:primaryPrefix
+                                           locatedSuffix:primarySuffix
+                                allowHardNewlineRecovery:YES];
+    URLAction *primaryAction = [self urlActionForURLHitCandidate:primaryCandidate];
+    if (primaryAction) {
+        return primaryAction;
+    }
+
+    iTermLocatedString *fallbackPrefix = [self locatedPrefixForURLLikeRespectingHardNewlines:!self.respectHardNewlines];
+    iTermLocatedString *fallbackSuffix = [self locatedSuffixForURLLikeRespectingHardNewlines:!self.respectHardNewlines];
+    iTermURLHitCandidate *fallbackCandidate =
+        [iTermURLHitCandidate candidateWithLocatedPrefix:fallbackPrefix
+                                           locatedSuffix:fallbackSuffix
+                                allowHardNewlineRecovery:YES];
+    URLAction *fallbackAction = [self urlActionForURLHitCandidate:fallbackCandidate];
+    if (fallbackAction) {
+        return fallbackAction;
+    }
+
     return [self urlActionForURLLikeWithLocatedPrefix:primaryPrefix
                                         locatedSuffix:primarySuffix];
 }
