@@ -29,6 +29,12 @@ static const NSUInteger kDragPaneModifiers = (NSEventModifierFlagOption | NSEven
 static const NSUInteger kRectangularSelectionModifiers = (NSEventModifierFlagCommand | NSEventModifierFlagOption);
 static const NSUInteger kRectangularSelectionModifierMask = (kRectangularSelectionModifiers | NSEventModifierFlagControl);
 
+typedef NS_ENUM(NSInteger, iTermTideyURLClickOpenPolicy) {
+    iTermTideyURLClickOpenPolicyNone,
+    iTermTideyURLClickOpenPolicyInAppBrowser,
+    iTermTideyURLClickOpenPolicyExternalDefaultBrowser
+};
+
 static double Square(double n) {
     return n * n;
 }
@@ -92,6 +98,15 @@ static double EuclideanDistance(NSPoint p1, NSPoint p2) {
     // should not be reported. Issue 10960.
     BOOL _disableScrollReportingUntilMomentumEnds;
     BOOL _overBlock;
+}
+
++ (NSInteger)tideyURLClickOpenPolicyForClickCount:(NSInteger)clickCount
+                                     mouseDragged:(BOOL)mouseDragged
+                                    modifierFlags:(NSEventModifierFlags)modifierFlags
+                                  cmdClickEnabled:(BOOL)cmdClickEnabled
+                                       cmdPressed:(BOOL)cmdPressed
+                                   mouseReporting:(BOOL)mouseReporting {
+    return iTermTideyURLClickOpenPolicyNone;
 }
 
 - (instancetype)initWithSelectionScrollHelper:(iTermSelectionScrollHelper *)selectionScrollHelper

@@ -14,3 +14,7 @@ typedef NS_ENUM(NSUInteger, iTermOpenStyle) {
     iTermOpenStyleHorizontalSplit
 };
 
+typedef NS_ENUM(NSUInteger, iTermWebURLOpenPolicy) {
+    iTermWebURLOpenPolicyAutomatic,
+    iTermWebURLOpenPolicyExternalDefaultBrowser
+};

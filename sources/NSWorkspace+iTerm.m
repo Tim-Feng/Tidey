@@ -69,6 +69,14 @@
     return YES;
 }
 
++ (BOOL)tideyShouldOpenWebURLInAppForURL:(NSURL *)url
+                                webPolicy:(iTermWebURLOpenPolicy)webPolicy
+                              hasRootView:(BOOL)hasRootView {
+    NSString *scheme = url.scheme.lowercaseString;
+    return (hasRootView &&
+            ([scheme isEqualToString:@"http"] || [scheme isEqualToString:@"https"]));
+}
+
 // A very weak check of whether the URL is openable by the built-in browser. This can be used to
 // check if it's worth nagging the user to install the plugin to open this URL.
 - (BOOL)it_localBrowserCouldHypotheticallyHandleURL:(NSURL *)url {

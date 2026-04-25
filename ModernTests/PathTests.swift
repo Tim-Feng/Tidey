@@ -13,6 +13,63 @@ import ObjectiveC.runtime
 /// Tests for path methods to verify correct behavior with and without custom suite names.
 /// These tests establish baseline behavior and verify no regressions when --suite is not used.
 final class PathTests: XCTestCase {
+    private enum TideyURLClickOpenPolicy: Int {
+        case none = 0
+        case inAppBrowser = 1
+        case externalDefaultBrowser = 2
+    }
+
+    private enum TideyWebURLOpenPolicy: UInt {
+        case automatic = 0
+        case externalDefaultBrowser = 1
+    }
+
+    private func urlClickOpenPolicy(clickCount: Int = 1,
+                                    mouseDragged: Bool = false,
+                                    modifierFlags: NSEvent.ModifierFlags = [],
+                                    cmdClickEnabled: Bool = true,
+                                    cmdPressed: Bool = false,
+                                    mouseReporting: Bool = false) -> TideyURLClickOpenPolicy {
+        guard let mouseHandlerClass = NSClassFromString("PTYMouseHandler") as? AnyClass else {
+            XCTFail("Missing PTYMouseHandler")
+            return .none
+        }
+        let selector = NSSelectorFromString("tideyURLClickOpenPolicyForClickCount:mouseDragged:modifierFlags:cmdClickEnabled:cmdPressed:mouseReporting:")
+        guard let method = class_getClassMethod(mouseHandlerClass, selector) else {
+            XCTFail("Missing URL click open policy helper")
+            return .none
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, Int, ObjCBool, UInt, ObjCBool, ObjCBool, ObjCBool) -> Int
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        let raw = function(mouseHandlerClass,
+                           selector,
+                           clickCount,
+                           ObjCBool(mouseDragged),
+                           modifierFlags.rawValue,
+                           ObjCBool(cmdClickEnabled),
+                           ObjCBool(cmdPressed),
+                           ObjCBool(mouseReporting))
+        return TideyURLClickOpenPolicy(rawValue: raw) ?? .none
+    }
+
+    private func shouldOpenWebURLInApp(_ string: String,
+                                       webPolicy: TideyWebURLOpenPolicy,
+                                       hasRootView: Bool) -> Bool {
+        let selector = NSSelectorFromString("tideyShouldOpenWebURLInAppForURL:webPolicy:hasRootView:")
+        guard let method = class_getClassMethod(NSWorkspace.self, selector) else {
+            XCTFail("Missing NSWorkspace web URL policy helper")
+            return false
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, NSURL, UInt, ObjCBool) -> ObjCBool
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        return function(NSWorkspace.self,
+                        selector,
+                        NSURL(string: string)!,
+                        webPolicy.rawValue,
+                        ObjCBool(hasRootView)).boolValue
+    }
 
     private func objectiveCCharacterSet(named selectorName: String) -> CharacterSet {
         let selector = NSSelectorFromString(selectorName)
@@ -536,6 +593,33 @@ final class PathTests: XCTestCase {
         XCTAssertEqual(candidate?["url"] as? String, "https://github.com/org/repo")
         XCTAssertEqual(candidate?["startX"] as? Int, (text as NSString).range(of: "https").location)
         XCTAssertEqual(candidate?["endX"] as? Int, (text as NSString).range(of: "repo").location + 3)
+    }
+
+    func testPlainURLClickPolicyOpensExternalDefaultBrowser() {
+        XCTAssertEqual(urlClickOpenPolicy(), .externalDefaultBrowser)
+    }
+
+    func testURLClickPolicyKeepsCommandClickInApp() {
+        XCTAssertEqual(urlClickOpenPolicy(modifierFlags: .command, cmdPressed: true), .inAppBrowser)
+    }
+
+    func testURLClickPolicyRejectsDragSelectionAndMouseReporting() {
+        XCTAssertEqual(urlClickOpenPolicy(mouseDragged: true), .none)
+        XCTAssertEqual(urlClickOpenPolicy(mouseReporting: true), .none)
+        XCTAssertEqual(urlClickOpenPolicy(modifierFlags: .shift), .none)
+        XCTAssertEqual(urlClickOpenPolicy(clickCount: 2), .none)
+    }
+
+    func testExternalDefaultBrowserPolicyBypassesInAppBrowserInterception() {
+        XCTAssertTrue(shouldOpenWebURLInApp("https://example.com",
+                                            webPolicy: .automatic,
+                                            hasRootView: true))
+        XCTAssertFalse(shouldOpenWebURLInApp("https://example.com",
+                                             webPolicy: .externalDefaultBrowser,
+                                             hasRootView: true))
+        XCTAssertFalse(shouldOpenWebURLInApp("https://example.com",
+                                             webPolicy: .automatic,
+                                             hasRootView: false))
     }
 
     func testWorkspacePanelsFollowVisibleTabOrderAfterReorder() {
