@@ -386,6 +386,7 @@ static NSString *TideySubmitLogSuffix(NSString *input) {
 - (void)tideyNotificationStoreDidChange:(NSNotification *)notification;
 - (void)tideyUpdateNotificationDockBadgeWithSource:(NSString *)source;
 - (void)tideyAutoMarkReadSelectedWorkspaceOnFocusGainWithSource:(NSString *)source;
++ (NSSet<NSString *> *)tideyKnownWorkspaceIdentifiersForDockBadge;
 + (void)tideySetApplicationIconUnreadIndicatorVisible:(BOOL)visible;
 + (NSImage *)tideyApplicationIconImageByAddingUnreadIndicatorToImage:(NSImage *)baseImage;
 - (void)renameWorkspaceAtIndex:(NSInteger)index;
@@ -2017,14 +2018,35 @@ ITERM_WEAKLY_REFERENCEABLE
     return YES;
 }
 
++ (NSSet<NSString *> *)tideyKnownWorkspaceIdentifiersForDockBadge {
+    NSMutableSet<NSString *> *workspaceIDs = [NSMutableSet set];
+    for (PseudoTerminal *terminal in [iTermController sharedInstance].terminals) {
+        if (![terminal isKindOfClass:[PseudoTerminal class]]) {
+            continue;
+        }
+        [terminal ensureTideyWorkspacesInitialized];
+        for (Workspace *workspace in terminal.workspaces) {
+            NSString *workspaceID = [terminal tideyWorkspaceIdentifierForWorkspace:workspace];
+            if (workspaceID.length > 0) {
+                [workspaceIDs addObject:workspaceID];
+            }
+        }
+    }
+    return workspaceIDs;
+}
+
 - (void)tideyNotificationStoreDidChange:(NSNotification *)notification {
     NSString *workspaceID = notification.userInfo[@"workspaceID"];
     NSString *notificationID = notification.userInfo[@"notificationID"];
     NSString *selectedWorkspaceID = [self tideySelectedWorkspaceIdentifier];
-    NSLog(@"[TideyDockBadge] notificationStoreDidChange workspaceID=%@ selectedWorkspaceID=%@ hasAnyUnread=%@",
+    NSSet<NSString *> *knownWorkspaceIDs = [[self class] tideyKnownWorkspaceIdentifiersForDockBadge];
+    BOOL hasKnownWorkspaceUnread =
+        [[TideyNotificationStore sharedStore] hasUnreadNotificationsForKnownWorkspaceIDs:knownWorkspaceIDs];
+    NSLog(@"[TideyDockBadge] notificationStoreDidChange workspaceID=%@ selectedWorkspaceID=%@ knownWorkspaceCount=%lu hasKnownWorkspaceUnread=%@",
           workspaceID ?: @"<nil>",
           selectedWorkspaceID ?: @"<nil>",
-          [[TideyNotificationStore sharedStore] hasAnyUnreadNotifications] ? @"YES" : @"NO");
+          (unsigned long)knownWorkspaceIDs.count,
+          hasKnownWorkspaceUnread ? @"YES" : @"NO");
     [self tideyUpdateNotificationDockBadgeWithSource:@"notification_store_change"];
 
     if ([[self class] tideyShouldProcessAutoMarkReadForNotificationArrivalWithNotificationID:notificationID] &&
@@ -2088,14 +2110,17 @@ ITERM_WEAKLY_REFERENCEABLE
 
 - (void)tideyUpdateNotificationDockBadgeWithSource:(NSString *)source {
     NSDockTile *dockTile = [[NSApplication sharedApplication] dockTile];
-    BOOL hasUnreadNotifications = [[TideyNotificationStore sharedStore] hasAnyUnreadNotifications];
+    NSSet<NSString *> *knownWorkspaceIDs = [[self class] tideyKnownWorkspaceIdentifiersForDockBadge];
+    BOOL hasUnreadNotifications =
+        [[TideyNotificationStore sharedStore] hasUnreadNotificationsForKnownWorkspaceIDs:knownWorkspaceIDs];
     NSString *beforeLabel = dockTile.badgeLabel ?: @"";
     BOOL beforeShowsBadge = dockTile.showsApplicationBadge;
     NSDictionary<NSString *, id> *badgeState =
         [[self class] tideyDockBadgeStateForBellCount:[[self class] tideyCurrentDockBellCount]
                               hasUnreadNotifications:hasUnreadNotifications];
-    NSLog(@"[TideyDockBadge] update source=%@ hasAnyUnread=%@ currentBellCount=%ld beforeLabel=%@ beforeShowsBadge=%@ nextLabel=%@ nextShowsBadge=%@",
+    NSLog(@"[TideyDockBadge] update source=%@ knownWorkspaceCount=%lu hasKnownWorkspaceUnread=%@ currentBellCount=%ld beforeLabel=%@ beforeShowsBadge=%@ nextLabel=%@ nextShowsBadge=%@",
           source ?: @"<nil>",
+          (unsigned long)knownWorkspaceIDs.count,
           hasUnreadNotifications ? @"YES" : @"NO",
           (long)[[self class] tideyCurrentDockBellCount],
           beforeLabel,

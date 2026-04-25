@@ -122,7 +122,25 @@ static NSString *const kTideySystemNotificationCategoryIdentifier = @"TIDEY_WORK
 }
 
 - (BOOL)hasUnreadNotificationsForKnownWorkspaceIDs:(NSSet<NSString *> *)workspaceIDs {
-    return [self hasAnyUnreadNotifications];
+    if (workspaceIDs.count == 0) {
+        return [self hasAnyUnreadNotifications];
+    }
+
+    for (TideyNotificationItem *item in self.notifications) {
+        if ([self tideyNotificationItemIsBroadcast:item]) {
+            for (NSString *workspaceID in workspaceIDs) {
+                if (![self tideyNotificationItem:item isReadForWorkspaceID:workspaceID]) {
+                    return YES;
+                }
+            }
+            continue;
+        }
+
+        if (!item.isRead && [workspaceIDs containsObject:item.workspaceID]) {
+            return YES;
+        }
+    }
+    return NO;
 }
 
 - (TideyNotificationItem *)addNotificationForWorkspaceID:(NSString *)workspaceID
