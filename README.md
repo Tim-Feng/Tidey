@@ -6,15 +6,16 @@ A terminal-first IDE for AI agents. Run agents in workspaces, edit code side by 
 
 ![Tidey main window](docs/screenshots/hero-main.png)
 
-## Latest in 0.2.8
+## Latest in 0.3.0
 
-- **Built-in browser reliability** — links that request a new window now open in a new Tidey browser tab, and browser shortcuts for reload, back, and forward now work from the menu and keyboard.
-- **Dock badge behavior** — Dock unread dots and terminal bell state now use an explicit badge source, so notification dots no longer disappear behind stale badge values.
-- **Shared browser groundwork** — the right-panel browser now runs through a shared engine seam, reducing duplicated browser logic and preparing Tidey for future browser capabilities.
+- **Click URLs to open in default browser** — A plain click on an HTTP/HTTPS URL opens it in your default browser; ⌘-click keeps using the in-app browser. Hovering shows the underline + pointing-hand cursor in both native and tmux panes.
+- **Wrapped URL detection** — URLs that wrap across terminal lines now resolve to the full URL on click, with logical-buffer extraction that survives window resize.
+- **Dock icon unread indicator** — Workspaces with unread notifications show a red dot overlay on the Dock icon, alongside the sidebar indicator.
+- **Right-panel browser polish** — Per-tab web view state preservation, persistent toolbar, and ⌘+/⌘- zoom shortcuts.
 
 ## Install
 
-**Download:** [Tidey.dmg](https://github.com/Tim-Feng/Tidey/releases/download/v0.2.8/Tidey.dmg) (macOS 12+, Apple Silicon & Intel)
+**Download:** [Tidey.dmg](https://github.com/Tim-Feng/Tidey/releases/download/v0.3.0/Tidey.dmg) (macOS 12+, Apple Silicon & Intel)
 
 1. Open the DMG, drag Tidey to Applications
 2. First launch: right-click → Open
