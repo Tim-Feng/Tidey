@@ -88,6 +88,171 @@ static BOOL iTermStringIsASCIIOnly(NSString *string) {
     return YES;
 }
 
+@interface iTermURLHitCandidate : NSObject
+@property (nonatomic, copy, readonly) NSString *URLString;
+@property (nonatomic, readonly) NSRange rangeInSourceString;
+@property (nonatomic, readonly) VT100GridCoord startCoord;
+@property (nonatomic, readonly) VT100GridCoord endCoord;
+
++ (instancetype)candidateInString:(NSString *)string
+                        clickIndex:(NSInteger)clickIndex
+                           columns:(NSArray<NSNumber *> *)columns
+                              rows:(NSArray<NSNumber *> *)rows
+          allowHardNewlineRecovery:(BOOL)allowHardNewlineRecovery;
++ (instancetype)candidateInLocatedString:(iTermLocatedString *)locatedString
+                              clickIndex:(NSInteger)clickIndex
+                allowHardNewlineRecovery:(BOOL)allowHardNewlineRecovery;
+- (NSDictionary *)dictionaryRepresentation;
+@end
+
+@implementation iTermURLHitCandidate
+
+- (instancetype)initWithURLString:(NSString *)URLString
+              rangeInSourceString:(NSRange)rangeInSourceString
+                        startCoord:(VT100GridCoord)startCoord
+                          endCoord:(VT100GridCoord)endCoord {
+    self = [super init];
+    if (self) {
+        _URLString = [URLString copy];
+        _rangeInSourceString = rangeInSourceString;
+        _startCoord = startCoord;
+        _endCoord = endCoord;
+    }
+    return self;
+}
+
++ (NSArray<NSValue *> *)coordsForColumns:(NSArray<NSNumber *> *)columns rows:(NSArray<NSNumber *> *)rows {
+    if (columns.count != rows.count) {
+        return nil;
+    }
+
+    NSMutableArray<NSValue *> *coords = [NSMutableArray arrayWithCapacity:columns.count];
+    for (NSUInteger i = 0; i < columns.count; i++) {
+        VT100GridCoord coord = VT100GridCoordMake(columns[i].intValue, rows[i].intValue);
+        [coords addObject:[NSValue valueWithBytes:&coord objCType:@encode(VT100GridCoord)]];
+    }
+    return coords;
+}
+
++ (NSArray<NSValue *> *)coordsForLocatedString:(iTermLocatedString *)locatedString {
+    NSMutableArray<NSValue *> *coords = [NSMutableArray arrayWithCapacity:locatedString.gridCoords.count];
+    for (NSUInteger i = 0; i < locatedString.gridCoords.count; i++) {
+        VT100GridCoord coord = [locatedString.gridCoords coordAt:i];
+        [coords addObject:[NSValue valueWithBytes:&coord objCType:@encode(VT100GridCoord)]];
+    }
+    return coords;
+}
+
++ (BOOL)characterIsHardNewline:(unichar)c {
+    return c == '\n' || c == '\r';
+}
+
++ (BOOL)characterIsHardNewlineContinuationWhitespace:(unichar)c {
+    return c == ' ' || c == '\t';
+}
+
++ (instancetype)candidateInLocatedString:(iTermLocatedString *)locatedString
+                              clickIndex:(NSInteger)clickIndex
+                allowHardNewlineRecovery:(BOOL)allowHardNewlineRecovery {
+    return [self candidateInString:locatedString.string
+                        clickIndex:clickIndex
+                            coords:[self coordsForLocatedString:locatedString]
+          allowHardNewlineRecovery:allowHardNewlineRecovery];
+}
+
++ (instancetype)candidateInString:(NSString *)string
+                        clickIndex:(NSInteger)clickIndex
+                           columns:(NSArray<NSNumber *> *)columns
+                              rows:(NSArray<NSNumber *> *)rows
+          allowHardNewlineRecovery:(BOOL)allowHardNewlineRecovery {
+    return [self candidateInString:string
+                        clickIndex:clickIndex
+                            coords:[self coordsForColumns:columns rows:rows]
+          allowHardNewlineRecovery:allowHardNewlineRecovery];
+}
+
++ (instancetype)candidateInString:(NSString *)string
+                        clickIndex:(NSInteger)clickIndex
+                            coords:(NSArray<NSValue *> *)coords
+          allowHardNewlineRecovery:(BOOL)allowHardNewlineRecovery {
+    if (!string || clickIndex < 0 || clickIndex >= (NSInteger)string.length || coords.count < string.length) {
+        return nil;
+    }
+
+    NSMutableString *searchString = [NSMutableString stringWithCapacity:string.length];
+    NSMutableArray<NSNumber *> *searchIndexToSourceIndex = [NSMutableArray arrayWithCapacity:string.length];
+    NSMutableArray<NSNumber *> *sourceIndexToSearchIndex = [NSMutableArray arrayWithCapacity:string.length];
+    for (NSUInteger i = 0; i < string.length; i++) {
+        [sourceIndexToSearchIndex addObject:@(-1)];
+    }
+
+    for (NSUInteger i = 0; i < string.length; i++) {
+        unichar c = [string characterAtIndex:i];
+        if (allowHardNewlineRecovery && [self characterIsHardNewline:c]) {
+            while (i + 1 < string.length &&
+                   [self characterIsHardNewlineContinuationWhitespace:[string characterAtIndex:i + 1]]) {
+                i++;
+            }
+            continue;
+        }
+
+        NSUInteger searchIndex = searchString.length;
+        [searchString appendString:[NSString stringWithCharacters:&c length:1]];
+        [searchIndexToSourceIndex addObject:@(i)];
+        sourceIndexToSearchIndex[i] = @(searchIndex);
+    }
+
+    NSInteger searchClickIndex = sourceIndexToSearchIndex[clickIndex].integerValue;
+    if (searchClickIndex < 0) {
+        return nil;
+    }
+
+    int prefixChars = 0;
+    NSString *possibleURL = [searchString substringIncludingOffset:(int)searchClickIndex
+                                                 fromCharacterSet:[NSCharacterSet urlCharacterSet]
+                                             charsTakenFromPrefix:&prefixChars];
+    NSRange URLRangeInPossibleURL = [possibleURL rangeOfURLInString];
+    if (URLRangeInPossibleURL.location == NSNotFound) {
+        return nil;
+    }
+
+    NSInteger possibleURLStart = searchClickIndex - prefixChars;
+    NSRange URLRangeInSearchString =
+        NSMakeRange(possibleURLStart + URLRangeInPossibleURL.location,
+                    URLRangeInPossibleURL.length);
+    if (searchClickIndex < (NSInteger)URLRangeInSearchString.location ||
+        searchClickIndex >= (NSInteger)NSMaxRange(URLRangeInSearchString) ||
+        NSMaxRange(URLRangeInSearchString) > searchIndexToSourceIndex.count) {
+        return nil;
+    }
+
+    NSUInteger sourceStart = searchIndexToSourceIndex[URLRangeInSearchString.location].unsignedIntegerValue;
+    NSUInteger sourceEnd = searchIndexToSourceIndex[NSMaxRange(URLRangeInSearchString) - 1].unsignedIntegerValue;
+    VT100GridCoord startCoord;
+    VT100GridCoord endCoord;
+    [coords[sourceStart] getValue:&startCoord];
+    [coords[sourceEnd] getValue:&endCoord];
+    NSString *URLString = [possibleURL substringWithRange:URLRangeInPossibleURL];
+    return [[self alloc] initWithURLString:URLString
+                       rangeInSourceString:NSMakeRange(sourceStart, sourceEnd - sourceStart + 1)
+                                startCoord:startCoord
+                                  endCoord:endCoord];
+}
+
+- (NSDictionary *)dictionaryRepresentation {
+    return @{
+        @"url": self.URLString ?: @"",
+        @"startX": @(self.startCoord.x),
+        @"startY": @(self.startCoord.y),
+        @"endX": @(self.endCoord.x),
+        @"endY": @(self.endCoord.y),
+        @"sourceLocation": @(self.rangeInSourceString.location),
+        @"sourceLength": @(self.rangeInSourceString.length),
+    };
+}
+
+@end
+
 @implementation iTermURLActionFactory {
     BOOL _finished;
     id<iTermCancelable> _pathFinderCanceler;
@@ -383,7 +548,11 @@ static BOOL iTermStringIsASCIIOnly(NSString *string) {
                                                          columns:(NSArray<NSNumber *> *)columns
                                                             rows:(NSArray<NSNumber *> *)rows
                                         allowHardNewlineRecovery:(BOOL)allowHardNewlineRecovery {
-    return nil;
+    return [[iTermURLHitCandidate candidateInString:logicalString
+                                         clickIndex:clickIndex
+                                            columns:columns
+                                               rows:rows
+                           allowHardNewlineRecovery:allowHardNewlineRecovery] dictionaryRepresentation];
 }
 
 - (void)trySecureCopy {
