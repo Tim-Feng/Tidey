@@ -465,7 +465,8 @@ iTermCommandInfoViewControllerDelegate>
 }
 
 + (BOOL)tideyShouldTrackMouseMovementForURLHoverWithModifierFlags:(NSEventModifierFlags)modifierFlags {
-    return (modifierFlags & NSEventModifierFlagCommand) != 0;
+    return [self tideyShouldShowURLHoverAffordanceForActionType:kURLActionOpenURL
+                                                  modifierFlags:modifierFlags];
 }
 
 - (BOOL)shouldUnderlineLinkUnderCursorForEvent:(NSEvent *)event {

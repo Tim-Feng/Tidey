@@ -1196,9 +1196,8 @@ static NSString *iTermStringForEventPhase(NSEventPhase eventPhase) {
         return YES;
     }
     const NSEventModifierFlags flags = [[iTermApplication sharedApplication] it_modifierFlags];
-    const BOOL commandPressed = (flags & NSEventModifierFlagCommand) != 0;
-    if (commandPressed) {
-        DLog(@"cmd pressed so track mouse moved");
+    if ([self.class tideyShouldTrackMouseMovementForURLHoverWithModifierFlags:flags]) {
+        DLog(@"URL hover affordance can need mouse moved events");
         return YES;
     }
     if ([self hasUnderline]) {

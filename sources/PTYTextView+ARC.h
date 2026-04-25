@@ -61,6 +61,7 @@ iTermURLActionHelperDelegate>
 
 #pragma mark - Underlined Actions
 
++ (BOOL)tideyShouldTrackMouseMovementForURLHoverWithModifierFlags:(NSEventModifierFlags)modifierFlags;
 - (void)updateUnderlinedURLs:(NSEvent *)event;
 
 #pragma mark - Context Menu
