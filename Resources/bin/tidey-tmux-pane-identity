@@ -5,7 +5,6 @@ tidey_tmux_resolve_env_var_from_pane_option() {
     pane_option="$2"
     tmux_pane="${TMUX_PANE:-}"
     pane_value=""
-    global_value=""
 
     if [ -z "$tmux_pane" ] || ! command -v tmux >/dev/null 2>&1; then
         return 0
@@ -16,16 +15,6 @@ tidey_tmux_resolve_env_var_from_pane_option() {
         export "$env_name=$pane_value"
         return 0
     fi
-
-    global_value="$(tmux show-environment "$env_name" 2>/dev/null || tmux show-environment -g "$env_name" 2>/dev/null || true)"
-    case "$global_value" in
-        "$env_name="*)
-            export "$env_name=${global_value#"$env_name="}"
-            ;;
-        "-$env_name")
-            unset "$env_name"
-            ;;
-    esac
 }
 
 tidey_hydrate_tmux_pane_identity() {
