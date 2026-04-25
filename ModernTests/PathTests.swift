@@ -91,6 +91,24 @@ final class PathTests: XCTestCase {
                         modifierFlags.rawValue).boolValue
     }
 
+    private func urlHoverMouseMovementTracking(modifierFlags: NSEvent.ModifierFlags = []) -> Bool {
+        guard let textViewClass = NSClassFromString("PTYTextView") as? AnyClass else {
+            XCTFail("Missing PTYTextView")
+            return false
+        }
+        let selector = NSSelectorFromString("tideyShouldTrackMouseMovementForURLHoverWithModifierFlags:")
+        guard let method = class_getClassMethod(textViewClass, selector) else {
+            XCTFail("Missing URL hover mouse movement tracking helper")
+            return false
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, UInt) -> ObjCBool
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        return function(textViewClass,
+                        selector,
+                        modifierFlags.rawValue).boolValue
+    }
+
     private func objectiveCCharacterSet(named selectorName: String) -> CharacterSet {
         let selector = NSSelectorFromString(selectorName)
         guard let method = class_getClassMethod(NSCharacterSet.self, selector) else {
@@ -651,6 +669,17 @@ final class PathTests: XCTestCase {
         XCTAssertFalse(urlHoverAffordance(actionType: 2))
         XCTAssertFalse(urlHoverAffordance(actionType: 0, modifierFlags: .shift))
         XCTAssertFalse(urlHoverAffordance(actionType: 0, modifierFlags: .option))
+    }
+
+    func testURLHoverMouseMovementTrackingAllowsPlainAndCommandHover() {
+        XCTAssertTrue(urlHoverMouseMovementTracking())
+        XCTAssertTrue(urlHoverMouseMovementTracking(modifierFlags: .command))
+    }
+
+    func testURLHoverMouseMovementTrackingRejectsSelectionModifiers() {
+        XCTAssertFalse(urlHoverMouseMovementTracking(modifierFlags: .shift))
+        XCTAssertFalse(urlHoverMouseMovementTracking(modifierFlags: .option))
+        XCTAssertFalse(urlHoverMouseMovementTracking(modifierFlags: .control))
     }
 
     func testWorkspacePanelsFollowVisibleTabOrderAfterReorder() {

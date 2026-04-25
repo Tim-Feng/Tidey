@@ -464,6 +464,10 @@ iTermCommandInfoViewControllerDelegate>
     return actionType == kURLActionOpenURL;
 }
 
++ (BOOL)tideyShouldTrackMouseMovementForURLHoverWithModifierFlags:(NSEventModifierFlags)modifierFlags {
+    return (modifierFlags & NSEventModifierFlagCommand) != 0;
+}
+
 - (BOOL)shouldUnderlineLinkUnderCursorForEvent:(NSEvent *)event {
     const NSEventModifierFlags modifierFlags = event.it_modifierFlags;
     const BOOL commandPressed = ([event it_modifierFlags] & NSEventModifierFlagCommand) != 0;
