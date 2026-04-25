@@ -4214,6 +4214,14 @@ ITERM_WEAKLY_REFERENCEABLE
     return [workspaceID isEqualToString:selectedWorkspaceID] || [workspaceID isEqualToString:@"*"];
 }
 
++ (BOOL)tideyShouldAutoMarkReadWorkspaceOnFocusGainForSelectedWorkspaceID:(NSString *)selectedWorkspaceID
+                                            selectedWorkspaceHasUnreadNotifications:(BOOL)hasUnreadNotifications
+                                                                        appIsActive:(BOOL)appIsActive
+                                                                   isCurrentTerminal:(BOOL)isCurrentTerminal
+                                                                         isKeyWindow:(BOOL)isKeyWindow {
+    return NO;
+}
+
 + (BOOL)tideyShouldProcessAutoMarkReadForNotificationArrivalWithNotificationID:(NSString *)notificationID {
     return notificationID.length > 0;
 }

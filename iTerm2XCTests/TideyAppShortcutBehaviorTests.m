@@ -21,6 +21,11 @@
                                                                          appIsActive:(BOOL)appIsActive
                                                                     isCurrentTerminal:(BOOL)isCurrentTerminal
                                                                           isKeyWindow:(BOOL)isKeyWindow;
++ (BOOL)tideyShouldAutoMarkReadWorkspaceOnFocusGainForSelectedWorkspaceID:(NSString *)selectedWorkspaceID
+                                            selectedWorkspaceHasUnreadNotifications:(BOOL)hasUnreadNotifications
+                                                                        appIsActive:(BOOL)appIsActive
+                                                                   isCurrentTerminal:(BOOL)isCurrentTerminal
+                                                                         isKeyWindow:(BOOL)isKeyWindow;
 + (BOOL)tideyShouldProcessAutoMarkReadForNotificationArrivalWithNotificationID:(NSString *)notificationID;
 @end
 
@@ -165,6 +170,54 @@
     XCTAssertFalse([PseudoTerminal tideyShouldProcessAutoMarkReadForNotificationArrivalWithNotificationID:nil]);
     XCTAssertFalse([PseudoTerminal tideyShouldProcessAutoMarkReadForNotificationArrivalWithNotificationID:@""]);
     XCTAssertTrue([PseudoTerminal tideyShouldProcessAutoMarkReadForNotificationArrivalWithNotificationID:@"notification-1"]);
+}
+
+- (void)testFocusGainAutoMarkReadDecisionRequiresFocusedSelectedWorkspaceWithUnread {
+    XCTAssertTrue([PseudoTerminal tideyShouldAutoMarkReadWorkspaceOnFocusGainForSelectedWorkspaceID:@"workspace-1"
+                                                      selectedWorkspaceHasUnreadNotifications:YES
+                                                                                  appIsActive:YES
+                                                                             isCurrentTerminal:YES
+                                                                                   isKeyWindow:YES]);
+}
+
+- (void)testFocusGainAutoMarkReadDecisionRejectsMissingUnread {
+    XCTAssertFalse([PseudoTerminal tideyShouldAutoMarkReadWorkspaceOnFocusGainForSelectedWorkspaceID:@"workspace-1"
+                                                       selectedWorkspaceHasUnreadNotifications:NO
+                                                                                   appIsActive:YES
+                                                                              isCurrentTerminal:YES
+                                                                                    isKeyWindow:YES]);
+}
+
+- (void)testFocusGainAutoMarkReadDecisionRejectsBackgroundApp {
+    XCTAssertFalse([PseudoTerminal tideyShouldAutoMarkReadWorkspaceOnFocusGainForSelectedWorkspaceID:@"workspace-1"
+                                                       selectedWorkspaceHasUnreadNotifications:YES
+                                                                                   appIsActive:NO
+                                                                              isCurrentTerminal:YES
+                                                                                    isKeyWindow:YES]);
+}
+
+- (void)testFocusGainAutoMarkReadDecisionRejectsNonCurrentTerminal {
+    XCTAssertFalse([PseudoTerminal tideyShouldAutoMarkReadWorkspaceOnFocusGainForSelectedWorkspaceID:@"workspace-1"
+                                                       selectedWorkspaceHasUnreadNotifications:YES
+                                                                                   appIsActive:YES
+                                                                              isCurrentTerminal:NO
+                                                                                    isKeyWindow:YES]);
+}
+
+- (void)testFocusGainAutoMarkReadDecisionRejectsNonKeyWindow {
+    XCTAssertFalse([PseudoTerminal tideyShouldAutoMarkReadWorkspaceOnFocusGainForSelectedWorkspaceID:@"workspace-1"
+                                                       selectedWorkspaceHasUnreadNotifications:YES
+                                                                                   appIsActive:YES
+                                                                              isCurrentTerminal:YES
+                                                                                    isKeyWindow:NO]);
+}
+
+- (void)testFocusGainAutoMarkReadDecisionRejectsMissingSelectedWorkspace {
+    XCTAssertFalse([PseudoTerminal tideyShouldAutoMarkReadWorkspaceOnFocusGainForSelectedWorkspaceID:@""
+                                                       selectedWorkspaceHasUnreadNotifications:YES
+                                                                                   appIsActive:YES
+                                                                              isCurrentTerminal:YES
+                                                                                    isKeyWindow:YES]);
 }
 
 - (void)testTmuxPaneIdentityCommandIncludesPaneScopedWorkspaceAndPanelOptions {
