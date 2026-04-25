@@ -48,6 +48,8 @@ iTermURLActionHelperDelegate>
 - (VT100GridCoord)coordForPointInWindow:(NSPoint)point;
 - (VT100GridCoord)coordForEvent:(NSEvent *)event;
 - (VT100GridCoord)coordForMouseLocation:(NSPoint)screenPoint;
+- (VT100GridCoord)tideyURLCoordForEvent:(NSEvent *)event
+                allowRightMarginOverflow:(BOOL)allowRightMarginOverflow;
 
 #pragma mark - Inline Images
 

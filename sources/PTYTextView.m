@@ -84,6 +84,7 @@
 #import "iTermTextExtractor.h"
 #import "iTermTextViewAccessibilityHelper.h"
 #import "iTermURLActionHelper.h"
+#import "iTermURLActionFactory.h"
 #import "iTermURLStore.h"
 #import "iTermUserDefaults.h"
 #import "iTermVirtualOffset.h"
@@ -7056,6 +7057,14 @@ static NSString *iTermStringFromRange(NSRange range) {
 - (BOOL)mouseHandlerInUnderlinedRangeForEvent:(NSEvent *)event {
     const VT100GridCoord coord = [self coordForEvent:event];
     return [self isInUnderlinedRangeAtCoord:coord];
+}
+
+- (VT100GridWindowedRange)mouseHandlerOpenURLRangeForEvent:(NSEvent *)event {
+    const VT100GridCoord coord = [self tideyURLCoordForEvent:event allowRightMarginOverflow:NO];
+    iTermTextExtractor *extractor = [iTermTextExtractor textExtractorWithDataSource:self.dataSource];
+    return [iTermURLActionFactory tideyOpenURLWindowedRangeAtCoord:coord
+                                                         extractor:extractor
+                                              respectHardNewlines:![_urlActionHelper ignoreHardNewlinesInURLs]];
 }
 
 - (BOOL)isInUnderlinedRangeAtCoord:(VT100GridCoord)coord {

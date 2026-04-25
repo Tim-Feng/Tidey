@@ -35,4 +35,8 @@
                      pathFactory:(SCPPath *(^)(NSString *, int))pathFactory
                       completion:(void (^)(URLAction *))completion;
 
++ (VT100GridWindowedRange)tideyOpenURLWindowedRangeAtCoord:(VT100GridCoord)coord
+                                                  extractor:(iTermTextExtractor *)extractor
+                                       respectHardNewlines:(BOOL)respectHardNewlines;
+
 @end

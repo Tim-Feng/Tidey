@@ -43,6 +43,14 @@ static double EuclideanDistance(NSPoint p1, NSPoint p2) {
     return sqrt(Square(p1.x - p2.x) + Square(p1.y - p2.y));
 }
 
+static VT100GridWindowedRange iTermTideyInvalidWindowedRange(void) {
+    return VT100GridWindowedRangeMake(VT100GridCoordRangeInvalid, -1, -1);
+}
+
+static BOOL iTermTideyWindowedRangeIsValid(VT100GridWindowedRange range) {
+    return !VT100GridCoordRangeEqualsCoordRange(range.coordRange, VT100GridCoordRangeInvalid);
+}
+
 @interface PTYMouseHandler()<iTermAltScreenMouseScrollInferrerDelegate, iTermSwipeTrackerDelegate>
 @end
 
@@ -98,6 +106,10 @@ static double EuclideanDistance(NSPoint p1, NSPoint p2) {
     // should not be reported. Issue 10960.
     BOOL _disableScrollReportingUntilMomentumEnds;
     BOOL _overBlock;
+
+    BOOL _tideySuppressedMouseReportingForExternalURLClick;
+    BOOL _tideyPendingExternalURLClick;
+    VT100GridWindowedRange _tideyPendingExternalURLClickRange;
 }
 
 + (NSInteger)tideyURLClickOpenPolicyForClickCount:(NSInteger)clickCount
@@ -134,7 +146,18 @@ static double EuclideanDistance(NSPoint p1, NSPoint p2) {
                                                             modifierFlags:(NSEventModifierFlags)modifierFlags
                                                            mouseReporting:(BOOL)mouseReporting
                                                                    urlHit:(BOOL)urlHit {
-    return NO;
+    if (!mouseReporting || !urlHit) {
+        return NO;
+    }
+    if (clickCount != 1 || mouseDragged) {
+        return NO;
+    }
+    const NSEventModifierFlags blockers =
+        (NSEventModifierFlagCommand |
+         NSEventModifierFlagOption |
+         NSEventModifierFlagControl |
+         NSEventModifierFlagShift);
+    return (modifierFlags & blockers) == 0;
 }
 
 - (instancetype)initWithSelectionScrollHelper:(iTermSelectionScrollHelper *)selectionScrollHelper
@@ -157,6 +180,43 @@ static double EuclideanDistance(NSPoint p1, NSPoint p2) {
         _swipeTracker.delegate = self;
     }
     return self;
+}
+
+- (void)tideyClearPendingExternalURLClick {
+    _tideySuppressedMouseReportingForExternalURLClick = NO;
+    _tideyPendingExternalURLClick = NO;
+    _tideyPendingExternalURLClickRange = iTermTideyInvalidWindowedRange();
+}
+
+- (BOOL)tideyPrepareExternalURLClickSuppressionForEvent:(NSEvent *)event
+                                         mouseReporting:(BOOL)mouseReporting {
+    if (![self.class tideyShouldSuppressMouseReportingForPlainURLClickWithClickCount:event.clickCount
+                                                                        mouseDragged:NO
+                                                                       modifierFlags:event.it_modifierFlags
+                                                                      mouseReporting:mouseReporting
+                                                                              urlHit:YES]) {
+        return NO;
+    }
+
+    const VT100GridWindowedRange URLRange = [self.mouseDelegate mouseHandlerOpenURLRangeForEvent:event];
+    if (!iTermTideyWindowedRangeIsValid(URLRange)) {
+        return NO;
+    }
+
+    _tideySuppressedMouseReportingForExternalURLClick = YES;
+    _tideyPendingExternalURLClick = YES;
+    _tideyPendingExternalURLClickRange = URLRange;
+    return YES;
+}
+
+- (BOOL)tideyPendingExternalURLClickMatchesEvent:(NSEvent *)event {
+    if (!_tideyPendingExternalURLClick) {
+        return NO;
+    }
+
+    const VT100GridWindowedRange URLRange = [self.mouseDelegate mouseHandlerOpenURLRangeForEvent:event];
+    return (iTermTideyWindowedRangeIsValid(URLRange) &&
+            VT100GridWindowsRangeEqualsWindowedRange(URLRange, _tideyPendingExternalURLClickRange));
 }
 
 #pragma mark - Left mouse
@@ -193,6 +253,7 @@ static double EuclideanDistance(NSPoint p1, NSPoint p2) {
 - (BOOL)mouseDownImpl:(NSEvent *)event
           sideEffects:(iTermClickSideEffects *)sideEffects {
     DLog(@"mouseDownImpl: called %@", event);
+    [self tideyClearPendingExternalURLClick];
     _lastMouseDownRemovedSelection = NO;
     if ([self.mouseDelegate mouseHandlerMouseDownAt:event.locationInWindow]) {
         return NO;  // Don't call super because we handled it.
@@ -350,9 +411,13 @@ static double EuclideanDistance(NSPoint p1, NSPoint p2) {
     DLog(@"Set mouseDown=YES.");
     _mouseDown = YES;
 
+    const BOOL mouseDownIsReportable = [self mouseEventIsReportable:event];
+    const BOOL suppressReportingForExternalURLClick =
+        [self tideyPrepareExternalURLClickSuppressionForEvent:event
+                                               mouseReporting:mouseDownIsReportable];
     [_mouseReportingFrustrationDetector mouseDown:event
-                                         reported:[self mouseEventIsReportable:event]];
-    if ([self reportMouseEvent:event]) {
+                                         reported:(mouseDownIsReportable && !suppressReportingForExternalURLClick)];
+    if (!suppressReportingForExternalURLClick && [self reportMouseEvent:event]) {
         DLog(@"Returning because mouse event reported.");
         [self.selection clearSelection];
         *sideEffects = iTermClickSideEffectsModifySelection;
@@ -528,6 +593,17 @@ static double EuclideanDistance(NSPoint p1, NSPoint p2) {
     [_selectionScrollHelper mouseUp];
     const BOOL mouseDragged = (_mouseDragged && _committedToDrag);
     _committedToDrag = NO;
+    const BOOL suppressedReportingForExternalURLClick = _tideySuppressedMouseReportingForExternalURLClick;
+    const BOOL pendingExternalURLClick =
+        [self.class tideyShouldSuppressMouseReportingForPlainURLClickWithClickCount:event.clickCount
+                                                                       mouseDragged:mouseDragged
+                                                                      modifierFlags:event.it_modifierFlags
+                                                                     mouseReporting:YES
+                                                                             urlHit:YES] &&
+        [self tideyPendingExternalURLClickMatchesEvent:event];
+    if (suppressedReportingForExternalURLClick) {
+        [self tideyClearPendingExternalURLClick];
+    }
 
     BOOL isUnshiftedSingleClick = ([event clickCount] < 2 &&
                                    !mouseDragged &&
@@ -536,8 +612,10 @@ static double EuclideanDistance(NSPoint p1, NSPoint p2) {
                                  !mouseDragged &&
                                  ([event it_modifierFlags] & NSEventModifierFlagShift));
     const BOOL cmdClickEnabled = [iTermPreferences boolForKey:kPreferenceKeyCmdClickOpensURLs];
-    const BOOL mouseEventIsReportable = [self reportMouseEvent:event];
-    const iTermTideyURLClickOpenPolicy urlClickOpenPolicy =
+    const BOOL mouseEventIsReportable =
+        suppressedReportingForExternalURLClick ? NO : [self reportMouseEvent:event];
+    iTermTideyURLClickOpenPolicy urlClickOpenPolicy =
+        pendingExternalURLClick ? iTermTideyURLClickOpenPolicyExternalDefaultBrowser :
         [self.class tideyURLClickOpenPolicyForClickCount:event.clickCount
                                              mouseDragged:mouseDragged
                                             modifierFlags:event.it_modifierFlags
@@ -554,7 +632,8 @@ static double EuclideanDistance(NSPoint p1, NSPoint p2) {
     // issue 3766.
     _mouseDragged = NO;
 
-    [_mouseReportingFrustrationDetector mouseUp:event reported:[self mouseEventIsReportable:event]];
+    [_mouseReportingFrustrationDetector mouseUp:event
+                                       reported:(mouseEventIsReportable && !suppressedReportingForExternalURLClick)];
     // Send mouse up event to host if xterm mouse reporting is on
     iTermClickSideEffects result = iTermClickSideEffectsNone;
     if (mouseEventIsReportable) {
@@ -774,6 +853,7 @@ static double EuclideanDistance(NSPoint p1, NSPoint p2) {
     if (dragDistance >= kDragThreshold) {
         dragThresholdMet = YES;
         _committedToDrag = YES;
+        _tideyPendingExternalURLClick = NO;
     }
     if ([event eventNumber] == _firstMouseEventNumber) {
         // We accept first mouse for the purposes of focusing or dragging a
@@ -785,8 +865,10 @@ static double EuclideanDistance(NSPoint p1, NSPoint p2) {
         return iTermClickSideEffectsIgnore;
     }
 
-    [_mouseReportingFrustrationDetector mouseDragged:event reported:[self mouseEventIsReportable:event]];
-    if ([self reportMouseEvent:event]) {
+    const BOOL dragIsReportable = [self mouseEventIsReportable:event];
+    [_mouseReportingFrustrationDetector mouseDragged:event
+                                            reported:(dragIsReportable && !_tideySuppressedMouseReportingForExternalURLClick)];
+    if (!_tideySuppressedMouseReportingForExternalURLClick && [self reportMouseEvent:event]) {
         DLog(@"Reported drag");
         _committedToDrag = YES;
         return iTermClickSideEffectsReport;

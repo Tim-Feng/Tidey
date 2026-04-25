@@ -88,6 +88,10 @@ static BOOL iTermStringIsASCIIOnly(NSString *string) {
     return YES;
 }
 
+static VT100GridWindowedRange iTermURLActionFactoryInvalidWindowedRange(void) {
+    return VT100GridWindowedRangeMake(VT100GridCoordRangeInvalid, -1, -1);
+}
+
 @interface iTermURLHitCandidate : NSObject
 @property (nonatomic, copy, readonly) NSString *URLString;
 @property (nonatomic, readonly) NSRange rangeInSourceString;
@@ -571,6 +575,55 @@ static BOOL iTermStringIsASCIIOnly(NSString *string) {
                                             columns:columns
                                                rows:rows
                            allowHardNewlineRecovery:allowHardNewlineRecovery] dictionaryRepresentation];
+}
+
++ (VT100GridWindowedRange)tideyOpenURLWindowedRangeAtCoord:(VT100GridCoord)visualCoord
+                                                  extractor:(iTermTextExtractor *)extractor
+                                       respectHardNewlines:(BOOL)respectHardNewlines {
+    if (!extractor.dataSource || visualCoord.y < 0) {
+        return iTermURLActionFactoryInvalidWindowedRange();
+    }
+
+    extractor.supportBidi = [iTermPreferences bidiEnabled];
+    VT100GridCoord logicalCoord = [extractor logicalCoordForVisualCoord:visualCoord];
+    if ([extractor characterAt:logicalCoord].code == 0) {
+        return iTermURLActionFactoryInvalidWindowedRange();
+    }
+    [extractor restrictToLogicalWindowIncludingCoord:visualCoord];
+
+    iTermLocatedString *prefix =
+        [extractor wrappedLocatedStringAt:logicalCoord
+                                  forward:NO
+                      respectHardNewlines:respectHardNewlines
+                                 maxChars:[iTermAdvancedSettingsModel maxSemanticHistoryPrefixOrSuffix]
+                        continuationChars:[NSMutableIndexSet indexSet]
+                      convertNullsToSpace:NO];
+    iTermLocatedString *suffix =
+        [extractor wrappedLocatedStringAt:logicalCoord
+                                  forward:YES
+                      respectHardNewlines:respectHardNewlines
+                                 maxChars:[iTermAdvancedSettingsModel maxSemanticHistoryPrefixOrSuffix]
+                        continuationChars:[NSMutableIndexSet indexSet]
+                      convertNullsToSpace:NO];
+    iTermURLHitCandidate *candidate =
+        [iTermURLHitCandidate candidateWithLocatedPrefix:prefix
+                                           locatedSuffix:suffix
+                                allowHardNewlineRecovery:YES];
+    if (!candidate.URLString.length ||
+        [candidate.URLString rangeOfString:@"://"].location == NSNotFound) {
+        return iTermURLActionFactoryInvalidWindowedRange();
+    }
+
+    NSURL *url = [NSURL URLWithUserSuppliedString:candidate.URLString];
+    if (!url || [[NSWorkspace sharedWorkspace] URLForApplicationToOpenURL:url] == nil) {
+        return iTermURLActionFactoryInvalidWindowedRange();
+    }
+
+    VT100GridWindowedRange logicalRange;
+    logicalRange.coordRange.start = candidate.startCoord;
+    logicalRange.coordRange.end = [extractor successorOfCoord:candidate.endCoord];
+    logicalRange.columnWindow = extractor.logicalWindow;
+    return [extractor visualWindowedRangeForLogical:logicalRange];
 }
 
 - (void)trySecureCopy {
