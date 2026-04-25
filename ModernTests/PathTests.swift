@@ -71,6 +71,26 @@ final class PathTests: XCTestCase {
                         ObjCBool(hasRootView)).boolValue
     }
 
+    private func urlHoverAffordance(actionType: Int,
+                                    modifierFlags: NSEvent.ModifierFlags = []) -> Bool {
+        guard let textViewClass = NSClassFromString("PTYTextView") as? AnyClass else {
+            XCTFail("Missing PTYTextView")
+            return false
+        }
+        let selector = NSSelectorFromString("tideyShouldShowURLHoverAffordanceForActionType:modifierFlags:")
+        guard let method = class_getClassMethod(textViewClass, selector) else {
+            XCTFail("Missing URL hover affordance helper")
+            return false
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, Int, UInt) -> ObjCBool
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        return function(textViewClass,
+                        selector,
+                        actionType,
+                        modifierFlags.rawValue).boolValue
+    }
+
     private func objectiveCCharacterSet(named selectorName: String) -> CharacterSet {
         let selector = NSSelectorFromString(selectorName)
         guard let method = class_getClassMethod(NSCharacterSet.self, selector) else {
@@ -620,6 +640,17 @@ final class PathTests: XCTestCase {
         XCTAssertFalse(shouldOpenWebURLInApp("https://example.com",
                                              webPolicy: .automatic,
                                              hasRootView: false))
+    }
+
+    func testURLHoverAffordanceAllowsPlainURLAndCommandSemanticHistory() {
+        XCTAssertTrue(urlHoverAffordance(actionType: 0))
+        XCTAssertTrue(urlHoverAffordance(actionType: 2, modifierFlags: .command))
+    }
+
+    func testURLHoverAffordanceRejectsPlainNonURLAndSelectionModifiers() {
+        XCTAssertFalse(urlHoverAffordance(actionType: 2))
+        XCTAssertFalse(urlHoverAffordance(actionType: 0, modifierFlags: .shift))
+        XCTAssertFalse(urlHoverAffordance(actionType: 0, modifierFlags: .option))
     }
 
     func testWorkspacePanelsFollowVisibleTabOrderAfterReorder() {
