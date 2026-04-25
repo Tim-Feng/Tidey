@@ -2023,7 +2023,10 @@ ITERM_WEAKLY_REFERENCEABLE
 
     if (selectedWorkspaceID.length > 0 &&
         [[self class] tideyShouldAutoMarkReadWorkspaceOnNotificationArrivalForSelectedWorkspaceID:selectedWorkspaceID
-                                                                           notificationWorkspaceID:workspaceID]) {
+                                                                           notificationWorkspaceID:workspaceID
+                                                                                       appIsActive:NSApp.isActive
+                                                                                  isCurrentTerminal:(self == [iTermController sharedInstance].currentTerminal)
+                                                                                        isKeyWindow:self.window.isKeyWindow]) {
         [[TideyNotificationStore sharedStore] markReadForWorkspaceID:selectedWorkspaceID];
         [self tideyUpdateNotificationDockBadgeWithSource:@"notification_store_change_after_mark_read"];
     }
@@ -4126,9 +4129,20 @@ ITERM_WEAKLY_REFERENCEABLE
 }
 
 + (BOOL)tideyShouldAutoMarkReadWorkspaceOnNotificationArrivalForSelectedWorkspaceID:(NSString *)selectedWorkspaceID
-                                                             notificationWorkspaceID:(NSString *)workspaceID {
+                                                             notificationWorkspaceID:(NSString *)workspaceID
+                                                                         appIsActive:(BOOL)appIsActive
+                                                                    isCurrentTerminal:(BOOL)isCurrentTerminal
+                                                                          isKeyWindow:(BOOL)isKeyWindow {
     (void)selectedWorkspaceID;
     (void)workspaceID;
+    (void)appIsActive;
+    (void)isCurrentTerminal;
+    (void)isKeyWindow;
+    return NO;
+}
+
++ (BOOL)tideyShouldProcessAutoMarkReadForNotificationArrivalWithNotificationID:(NSString *)notificationID {
+    (void)notificationID;
     return NO;
 }
 

@@ -17,7 +17,11 @@
                                                   workspaceID:(NSString *)workspaceID
                                                       panelID:(NSString *)panelID;
 + (BOOL)tideyShouldAutoMarkReadWorkspaceOnNotificationArrivalForSelectedWorkspaceID:(NSString *)selectedWorkspaceID
-                                                                notificationWorkspaceID:(NSString *)workspaceID;
+                                                             notificationWorkspaceID:(NSString *)workspaceID
+                                                                         appIsActive:(BOOL)appIsActive
+                                                                    isCurrentTerminal:(BOOL)isCurrentTerminal
+                                                                          isKeyWindow:(BOOL)isKeyWindow;
++ (BOOL)tideyShouldProcessAutoMarkReadForNotificationArrivalWithNotificationID:(NSString *)notificationID;
 @end
 
 @interface iTermApplicationDelegate (TideyAppShortcutBehaviorTests)
@@ -109,13 +113,58 @@
     XCTAssertEqualObjects(badgeState[@"showsBadge"], @NO);
 }
 
-- (void)testSelectedWorkspaceNotificationDoesNotAutoMarkRead {
+- (void)testFocusedSelectedWorkspaceNotificationAutoMarkReadDecision {
+    XCTAssertTrue([PseudoTerminal tideyShouldAutoMarkReadWorkspaceOnNotificationArrivalForSelectedWorkspaceID:@"workspace-1"
+                                                                              notificationWorkspaceID:@"workspace-1"
+                                                                                          appIsActive:YES
+                                                                                     isCurrentTerminal:YES
+                                                                                           isKeyWindow:YES]);
+}
+
+- (void)testBackgroundSelectedWorkspaceNotificationDoesNotAutoMarkRead {
     XCTAssertFalse([PseudoTerminal tideyShouldAutoMarkReadWorkspaceOnNotificationArrivalForSelectedWorkspaceID:@"workspace-1"
-                                                                                       notificationWorkspaceID:@"workspace-1"]);
+                                                                               notificationWorkspaceID:@"workspace-1"
+                                                                                           appIsActive:NO
+                                                                                      isCurrentTerminal:YES
+                                                                                            isKeyWindow:YES]);
+}
+
+- (void)testNonKeyWindowSelectedWorkspaceNotificationDoesNotAutoMarkRead {
     XCTAssertFalse([PseudoTerminal tideyShouldAutoMarkReadWorkspaceOnNotificationArrivalForSelectedWorkspaceID:@"workspace-1"
-                                                                                       notificationWorkspaceID:@"*"]);
+                                                                               notificationWorkspaceID:@"workspace-1"
+                                                                                           appIsActive:YES
+                                                                                      isCurrentTerminal:YES
+                                                                                            isKeyWindow:NO]);
+}
+
+- (void)testNonCurrentTerminalSelectedWorkspaceNotificationDoesNotAutoMarkRead {
     XCTAssertFalse([PseudoTerminal tideyShouldAutoMarkReadWorkspaceOnNotificationArrivalForSelectedWorkspaceID:@"workspace-1"
-                                                                                       notificationWorkspaceID:nil]);
+                                                                               notificationWorkspaceID:@"workspace-1"
+                                                                                           appIsActive:YES
+                                                                                      isCurrentTerminal:NO
+                                                                                            isKeyWindow:YES]);
+}
+
+- (void)testOtherWorkspaceNotificationDoesNotAutoMarkRead {
+    XCTAssertFalse([PseudoTerminal tideyShouldAutoMarkReadWorkspaceOnNotificationArrivalForSelectedWorkspaceID:@"workspace-1"
+                                                                               notificationWorkspaceID:@"workspace-2"
+                                                                                           appIsActive:YES
+                                                                                      isCurrentTerminal:YES
+                                                                                            isKeyWindow:YES]);
+}
+
+- (void)testFocusedBroadcastNotificationAutoMarkReadDecision {
+    XCTAssertTrue([PseudoTerminal tideyShouldAutoMarkReadWorkspaceOnNotificationArrivalForSelectedWorkspaceID:@"workspace-1"
+                                                                              notificationWorkspaceID:@"*"
+                                                                                          appIsActive:YES
+                                                                                     isCurrentTerminal:YES
+                                                                                           isKeyWindow:YES]);
+}
+
+- (void)testNotificationStoreChangeWithoutNotificationIDDoesNotCountAsArrival {
+    XCTAssertFalse([PseudoTerminal tideyShouldProcessAutoMarkReadForNotificationArrivalWithNotificationID:nil]);
+    XCTAssertFalse([PseudoTerminal tideyShouldProcessAutoMarkReadForNotificationArrivalWithNotificationID:@""]);
+    XCTAssertTrue([PseudoTerminal tideyShouldProcessAutoMarkReadForNotificationArrivalWithNotificationID:@"notification-1"]);
 }
 
 - (void)testTmuxPaneIdentityCommandIncludesPaneScopedWorkspaceAndPanelOptions {
