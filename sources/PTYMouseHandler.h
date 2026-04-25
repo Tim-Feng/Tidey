@@ -51,6 +51,10 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)mouseHandlerOpenTargetWithEvent:(NSEvent *)event
                            inBackground:(BOOL)inBackground
                                   style:(iTermOpenStyle)style;
+- (void)mouseHandlerOpenTargetWithEvent:(NSEvent *)event
+                           inBackground:(BOOL)inBackground
+                                  style:(iTermOpenStyle)style
+                              webPolicy:(iTermWebURLOpenPolicy)webPolicy;
 - (BOOL)mouseHandlerIsScrolledToBottom:(PTYMouseHandler *)handler;
 - (VT100GridCoord)mouseHandlerCoordForPointInWindow:(NSPoint)point;
 - (VT100GridCoord)mouseHandlerCoordForPointInView:(NSPoint)point;

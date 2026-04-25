@@ -7129,6 +7129,16 @@ static NSString *iTermStringFromRange(NSRange range) {
                                     style:style];
 }
 
+- (void)mouseHandlerOpenTargetWithEvent:(NSEvent *)event
+                           inBackground:(BOOL)inBackground
+                                  style:(iTermOpenStyle)style
+                              webPolicy:(iTermWebURLOpenPolicy)webPolicy {
+    [_urlActionHelper openTargetWithEvent:event
+                             inBackground:inBackground
+                                    style:style
+                                webPolicy:webPolicy];
+}
+
 - (BOOL)mouseHandlerIsScrolledToBottom:(PTYMouseHandler *)handler {
     return [self scrolledToBottom];
 }

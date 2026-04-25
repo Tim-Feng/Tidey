@@ -117,6 +117,16 @@
 - (void)openTargetWithEvent:(NSEvent *)event
                inBackground:(BOOL)openInBackground
                       style:(iTermOpenStyle)style {
+    [self openTargetWithEvent:event
+                 inBackground:openInBackground
+                        style:style
+                    webPolicy:iTermWebURLOpenPolicyAutomatic];
+}
+
+- (void)openTargetWithEvent:(NSEvent *)event
+               inBackground:(BOOL)openInBackground
+                      style:(iTermOpenStyle)style
+                  webPolicy:(iTermWebURLOpenPolicy)webPolicy {
     // Command click in place.
     const VT100GridCoord coord = [self.delegate urlActionHelper:self coordForEvent:event allowRightMarginOverflow:NO];
     __weak __typeof(self) weakSelf = self;
@@ -132,6 +142,7 @@
                                                              coord:coord
                                                       inBackground:openInBackground
                                                              style:style
+                                                         webPolicy:webPolicy
                                                             action:action
                                                         generation:generation];
                         }];
@@ -263,7 +274,38 @@
    inBackground:(BOOL)background
 workingDirectory:(NSString *)workingDirectory
           style:(iTermOpenStyle)style {
+    [self openURL:url
+           target:target
+     inBackground:background
+ workingDirectory:workingDirectory
+            style:style
+        webPolicy:iTermWebURLOpenPolicyAutomatic];
+}
+
+- (void)openURL:(NSURL *)url
+         target:(NSString *)target
+   inBackground:(BOOL)background
+workingDirectory:(NSString *)workingDirectory
+          style:(iTermOpenStyle)style
+      webPolicy:(iTermWebURLOpenPolicy)webPolicy {
     DLog(@"openURL:%@ inBackground:%@", url, @(background));
+
+    if (webPolicy == iTermWebURLOpenPolicyExternalDefaultBrowser) {
+        NSString *scheme = url.scheme.lowercaseString;
+        if (![scheme isEqualToString:@"http"] && ![scheme isEqualToString:@"https"]) {
+            return;
+        }
+        NSWorkspaceOpenConfiguration *config = [NSWorkspaceOpenConfiguration configuration];
+        config.activates = !background;
+        [[NSWorkspace sharedWorkspace] it_openURL:url
+                                           target:target
+                                    configuration:config
+                                            style:style
+                                           upsell:NO
+                                           window:self.delegate.urlActionHelperWindow
+                                        webPolicy:iTermWebURLOpenPolicyExternalDefaultBrowser];
+        return;
+    }
 
     Profile *profile = [[iTermLaunchServices sharedInstance] profileForScheme:[url scheme]];
     if (profile) {
@@ -333,6 +375,7 @@ workingDirectory:(NSString *)workingDirectory
                                coord:(VT100GridCoord)coord
                         inBackground:(BOOL)openInBackground
                                style:(iTermOpenStyle)style
+                           webPolicy:(iTermWebURLOpenPolicy)webPolicy
                               action:(URLAction *)action
                           generation:(NSInteger)generation {
     if (generation != _openTargetGeneration) {
@@ -347,6 +390,10 @@ workingDirectory:(NSString *)workingDirectory
 
     DLog(@"openTargetWithEvent generation %@ has action=%@", @(generation), action);
     if (action) {
+        if (webPolicy == iTermWebURLOpenPolicyExternalDefaultBrowser &&
+            action.actionType != kURLActionOpenURL) {
+            return;
+        }
         switch (action.actionType) {
             case kURLActionOpenExistingFile: {
                 iTermLocatedString *locatedPrefix = [extractor wrappedLocatedStringAt:coord
@@ -405,7 +452,8 @@ workingDirectory:(NSString *)workingDirectory
                            target:action.target
                      inBackground:openInBackground
                  workingDirectory:action.workingDirectory
-                            style:style];
+                            style:style
+                        webPolicy:webPolicy];
                 }
                 break;
             }

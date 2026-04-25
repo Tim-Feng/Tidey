@@ -449,9 +449,26 @@ iTermCommandInfoViewControllerDelegate>
 
 #pragma mark - Underlined Actions
 
++ (BOOL)tideyShouldShowURLHoverAffordanceForActionType:(NSInteger)actionType
+                                         modifierFlags:(NSEventModifierFlags)modifierFlags {
+    const NSEventModifierFlags selectionOrAlternateActionModifiers =
+        (NSEventModifierFlagShift |
+         NSEventModifierFlagOption |
+         NSEventModifierFlagControl);
+    if ((modifierFlags & selectionOrAlternateActionModifiers) != 0) {
+        return NO;
+    }
+    if ((modifierFlags & NSEventModifierFlagCommand) != 0) {
+        return YES;
+    }
+    return actionType == kURLActionOpenURL;
+}
+
 - (BOOL)shouldUnderlineLinkUnderCursorForEvent:(NSEvent *)event {
+    const NSEventModifierFlags modifierFlags = event.it_modifierFlags;
     const BOOL commandPressed = ([event it_modifierFlags] & NSEventModifierFlagCommand) != 0;
-    if (!commandPressed) {
+    if (![self.class tideyShouldShowURLHoverAffordanceForActionType:kURLActionOpenURL
+                                                      modifierFlags:modifierFlags]) {
         return NO;
     }
     const VT100GridCoord coord = [self tideyURLCoordForEvent:event allowRightMarginOverflow:NO];
@@ -463,7 +480,7 @@ iTermCommandInfoViewControllerDelegate>
     if (VT100GridCoordEquals(coord, VT100GridCoordInvalid)) {
         return NO;
     }
-    if (![iTermPreferences boolForKey:kPreferenceKeyCmdClickOpensURLs]) {
+    if (commandPressed && ![iTermPreferences boolForKey:kPreferenceKeyCmdClickOpensURLs]) {
         return NO;
     }
     if (coord.y < 0) {
@@ -472,16 +489,16 @@ iTermCommandInfoViewControllerDelegate>
     return YES;
 }
 
-// Update range of underlined chars indicating cmd-clickable url.
+// Update range of underlined chars indicating clickable urls.
 - (void)updateUnderlinedURLs:(NSEvent *)event {
-    const BOOL commandPressed = ([event it_modifierFlags] & NSEventModifierFlagCommand) != 0;
-    DLog(@"command pressed=%@ flags=%llx", @(commandPressed), (unsigned long long)event.it_modifierFlags);
+    const BOOL shouldQueryLink = [self shouldUnderlineLinkUnderCursorForEvent:event];
+    DLog(@"should query link=%@ flags=%llx", @(shouldQueryLink), (unsigned long long)event.it_modifierFlags);
     // Optimization
-    if (!commandPressed && ![self hasUnderline]) {
-        DLog(@"Command not pressed AND I don't have an underline");
+    if (!shouldQueryLink && ![self hasUnderline]) {
+        DLog(@"No link hover query AND I don't have an underline");
         return;
     }
-    if (!commandPressed || ![self shouldUnderlineLinkUnderCursorForEvent:event]) {
+    if (!shouldQueryLink) {
         const BOOL changedUnderline = [self removeUnderline];
         const BOOL cursorChanged = [self updateCursor:event action:nil];
         DLog(@"Don't want an underline. changedUnderline=%@ cursorChanged=%@", @(changedUnderline), @(cursorChanged));
@@ -526,6 +543,13 @@ iTermCommandInfoViewControllerDelegate>
     const VT100GridCoord visualCoord = [self tideyURLCoordForMouseLocation:[NSEvent mouseLocation]];
     if (!VT100GridWindowedRangeContainsCoord(action.visualRange, visualCoord)) {
         DLog(@"Mouse not in action's range");
+        return;
+    }
+    if (![self.class tideyShouldShowURLHoverAffordanceForActionType:action.actionType
+                                                      modifierFlags:event.it_modifierFlags]) {
+        DLog(@"Action is not eligible for hover affordance");
+        [self removeUnderline];
+        [self updateCursor:event action:nil];
         return;
     }
 
@@ -710,12 +734,14 @@ iTermCommandInfoViewControllerDelegate>
     NSString *hover = nil;
     VT100GridWindowedRange anchorRange = VT100GridWindowedRangeMake(VT100GridCoordRangeMake(-1, -1, -1, -1), -1, -1);
     BOOL changed = NO;
+    const NSEventModifierFlags modifierFlags = [[iTermApplication sharedApplication] it_modifierFlags];
     if (([[iTermApplication sharedApplication] it_modifierFlags] & kDragPaneModifiers) == kDragPaneModifiers) {
         changed = [self setCursor:[NSCursor openHandCursor]];
     } else if (([[iTermApplication sharedApplication] it_modifierFlags] & kRectangularSelectionModifierMask) == kRectangularSelectionModifiers) {
         changed = [self setCursor:[NSCursor crosshairCursor]];
     } else if (action &&
-               ([[iTermApplication sharedApplication] it_modifierFlags] & (NSEventModifierFlagOption | NSEventModifierFlagCommand)) == NSEventModifierFlagCommand) {
+               [self.class tideyShouldShowURLHoverAffordanceForActionType:action.actionType
+                                                             modifierFlags:modifierFlags]) {
         changed = [self setCursor:[NSCursor pointingHandCursor]];
         if (action.hover && action.string.length && ([iTermAdvancedSettingsModel showURLPreviewForSemanticHistory] || action.osc8)) {
             NSDictionary *meta = [NSDictionary castFrom:action.representedObject];

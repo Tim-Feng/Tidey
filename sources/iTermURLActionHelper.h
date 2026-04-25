@@ -90,6 +90,10 @@ launchProfileInCurrentTerminal:(Profile *)profile
 - (void)openTargetWithEvent:(NSEvent *)event
                inBackground:(BOOL)openInBackground
                       style:(iTermOpenStyle)style;
+- (void)openTargetWithEvent:(NSEvent *)event
+               inBackground:(BOOL)openInBackground
+                      style:(iTermOpenStyle)style
+                  webPolicy:(iTermWebURLOpenPolicy)webPolicy;
 
 - (void)findUrlInString:(NSString *)aURLString andOpenInBackground:(BOOL)background style:(iTermOpenStyle)style;
 

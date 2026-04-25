@@ -72,6 +72,9 @@
 + (BOOL)tideyShouldOpenWebURLInAppForURL:(NSURL *)url
                                 webPolicy:(iTermWebURLOpenPolicy)webPolicy
                               hasRootView:(BOOL)hasRootView {
+    if (webPolicy == iTermWebURLOpenPolicyExternalDefaultBrowser) {
+        return NO;
+    }
     NSString *scheme = url.scheme.lowercaseString;
     return (hasRootView &&
             ([scheme isEqualToString:@"http"] || [scheme isEqualToString:@"https"]));
@@ -239,21 +242,43 @@ completionHandler:^(NSRunningApplication *app, NSError *error) {
              style:(iTermOpenStyle)style
             upsell:(BOOL)upsell
             window:(NSWindow *)window {
+    [self it_openURL:url
+              target:target
+       configuration:configuration
+               style:style
+              upsell:upsell
+              window:window
+           webPolicy:iTermWebURLOpenPolicyAutomatic];
+}
+
+- (void)it_openURL:(NSURL *)url
+            target:(NSString *)target
+     configuration:(NSWorkspaceOpenConfiguration *)configuration
+             style:(iTermOpenStyle)style
+            upsell:(BOOL)upsell
+            window:(NSWindow *)window
+         webPolicy:(iTermWebURLOpenPolicy)webPolicy {
     DLog(@"%@", url);
     if (!url) {
         return;
     }
     NSString *scheme = url.scheme.lowercaseString;
-    // Intercept http/https URLs for Tidey in-app browser
-    if ([scheme isEqualToString:@"http"] || [scheme isEqualToString:@"https"]) {
-        iTermRootTerminalView *rootView = nil;
-        if ([window.contentView isKindOfClass:[iTermRootTerminalView class]]) {
-            rootView = (iTermRootTerminalView *)window.contentView;
-        }
-        if (rootView) {
-            [rootView tideyOpenBrowserTabWithURL:url];
-            return;
-        }
+    iTermRootTerminalView *rootView = nil;
+    if ([window.contentView isKindOfClass:[iTermRootTerminalView class]]) {
+        rootView = (iTermRootTerminalView *)window.contentView;
+    }
+    if ([self.class tideyShouldOpenWebURLInAppForURL:url
+                                           webPolicy:webPolicy
+                                         hasRootView:(rootView != nil)]) {
+        [rootView tideyOpenBrowserTabWithURL:url];
+        return;
+    }
+    if (webPolicy == iTermWebURLOpenPolicyExternalDefaultBrowser &&
+        ([scheme isEqualToString:@"http"] || [scheme isEqualToString:@"https"])) {
+        [self it_openURLWithDefaultBrowser:url
+                             configuration:configuration
+                                completion:^(NSRunningApplication *app, NSError *error) {}];
+        return;
     }
     if ([self it_openIfNonWebURL:url configuration:configuration style:style upsell:upsell window:window completion:nil]) {
         return;

@@ -8,6 +8,7 @@
 
 #import <Cocoa/Cocoa.h>
 #import "iTermController.h"
+#import "iTermOpenStyle.h"
 
 @interface NSWorkspace (iTerm)
 
@@ -30,6 +31,13 @@
              style:(iTermOpenStyle)style
             upsell:(BOOL)upsell
             window:(NSWindow *)window;
+- (void)it_openURL:(NSURL *)url
+            target:(NSString *)target
+     configuration:(NSWorkspaceOpenConfiguration *)configuration
+             style:(iTermOpenStyle)style
+            upsell:(BOOL)upsell
+            window:(NSWindow *)window
+         webPolicy:(iTermWebURLOpenPolicy)webPolicy;
 
 - (void)it_asyncOpenURL:(NSURL *)url
                  target:(NSString *)target

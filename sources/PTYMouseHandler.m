@@ -106,6 +106,26 @@ static double EuclideanDistance(NSPoint p1, NSPoint p2) {
                                   cmdClickEnabled:(BOOL)cmdClickEnabled
                                        cmdPressed:(BOOL)cmdPressed
                                    mouseReporting:(BOOL)mouseReporting {
+    if (clickCount != 1 || mouseDragged) {
+        return iTermTideyURLClickOpenPolicyNone;
+    }
+    if ((modifierFlags & NSEventModifierFlagShift) != 0) {
+        return iTermTideyURLClickOpenPolicyNone;
+    }
+    if (cmdPressed && cmdClickEnabled) {
+        return iTermTideyURLClickOpenPolicyInAppBrowser;
+    }
+    if (mouseReporting) {
+        return iTermTideyURLClickOpenPolicyNone;
+    }
+    const NSEventModifierFlags plainClickBlockers =
+        (NSEventModifierFlagCommand |
+         NSEventModifierFlagOption |
+         NSEventModifierFlagControl |
+         NSEventModifierFlagShift);
+    if ((modifierFlags & plainClickBlockers) == 0) {
+        return iTermTideyURLClickOpenPolicyExternalDefaultBrowser;
+    }
     return iTermTideyURLClickOpenPolicyNone;
 }
 
@@ -507,9 +527,17 @@ static double EuclideanDistance(NSPoint p1, NSPoint p2) {
     BOOL isShiftedSingleClick = ([event clickCount] == 1 &&
                                  !mouseDragged &&
                                  ([event it_modifierFlags] & NSEventModifierFlagShift));
-    BOOL willFollowLink = (isUnshiftedSingleClick &&
-                           cmdPressed &&
-                           [iTermPreferences boolForKey:kPreferenceKeyCmdClickOpensURLs]);
+    const BOOL cmdClickEnabled = [iTermPreferences boolForKey:kPreferenceKeyCmdClickOpensURLs];
+    const BOOL mouseEventIsReportable = [self reportMouseEvent:event];
+    const iTermTideyURLClickOpenPolicy urlClickOpenPolicy =
+        [self.class tideyURLClickOpenPolicyForClickCount:event.clickCount
+                                             mouseDragged:mouseDragged
+                                            modifierFlags:event.it_modifierFlags
+                                          cmdClickEnabled:cmdClickEnabled
+                                               cmdPressed:cmdPressed
+                                           mouseReporting:mouseEventIsReportable];
+    BOOL willFollowLink = (urlClickOpenPolicy == iTermTideyURLClickOpenPolicyInAppBrowser);
+    BOOL willOpenURLExternally = (urlClickOpenPolicy == iTermTideyURLClickOpenPolicyExternalDefaultBrowser);
 
     if (event.clickCount > 1) {
         [self.mouseDelegate mouseHandlerCancelSingleClick:self];
@@ -521,7 +549,7 @@ static double EuclideanDistance(NSPoint p1, NSPoint p2) {
     [_mouseReportingFrustrationDetector mouseUp:event reported:[self mouseEventIsReportable:event]];
     // Send mouse up event to host if xterm mouse reporting is on
     iTermClickSideEffects result = iTermClickSideEffectsNone;
-    if ([self reportMouseEvent:event]) {
+    if (mouseEventIsReportable) {
         result |= iTermClickSideEffectsReport;
         if (willFollowLink) {
             // This is a special case. Cmd-click is treated like alt-click at the protocol
@@ -611,6 +639,13 @@ static double EuclideanDistance(NSPoint p1, NSPoint p2) {
             if (clickCoord.x >= 0 && clickCoord.y >= 0) {
                 [self.mouseDelegate mouseHandlerSetFindOnPageCursorCoord:clickCoord];
                 result |= iTermClickSideEffectsMoveFindOnPageCursor;
+            }
+            if (willOpenURLExternally) {
+                [self.mouseDelegate mouseHandlerOpenTargetWithEvent:event
+                                                       inBackground:NO
+                                                              style:iTermOpenStyleTab
+                                                          webPolicy:iTermWebURLOpenPolicyExternalDefaultBrowser];
+                result |= iTermClickSideEffectsOpenTarget;
             }
         }
         if ([self.mouseDelegate mouseHandlerAtPasswordPrompt:self] &&
