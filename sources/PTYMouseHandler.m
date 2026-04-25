@@ -129,6 +129,14 @@ static double EuclideanDistance(NSPoint p1, NSPoint p2) {
     return iTermTideyURLClickOpenPolicyNone;
 }
 
++ (BOOL)tideyShouldSuppressMouseReportingForPlainURLClickWithClickCount:(NSInteger)clickCount
+                                                             mouseDragged:(BOOL)mouseDragged
+                                                            modifierFlags:(NSEventModifierFlags)modifierFlags
+                                                           mouseReporting:(BOOL)mouseReporting
+                                                                   urlHit:(BOOL)urlHit {
+    return NO;
+}
+
 - (instancetype)initWithSelectionScrollHelper:(iTermSelectionScrollHelper *)selectionScrollHelper
               threeFingerTapGestureRecognizer:(ThreeFingerTapGestureRecognizer *)threeFingerTapGestureRecognizer
                     pointerControllerDelegate:(id<PointerControllerDelegate>)pointerControllerDelegate

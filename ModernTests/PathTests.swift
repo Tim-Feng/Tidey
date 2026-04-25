@@ -53,6 +53,32 @@ final class PathTests: XCTestCase {
         return TideyURLClickOpenPolicy(rawValue: raw) ?? .none
     }
 
+    private func shouldSuppressMouseReportingForPlainURLClick(clickCount: Int = 1,
+                                                              mouseDragged: Bool = false,
+                                                              modifierFlags: NSEvent.ModifierFlags = [],
+                                                              mouseReporting: Bool = true,
+                                                              urlHit: Bool = true) -> Bool {
+        guard let mouseHandlerClass = NSClassFromString("PTYMouseHandler") as? AnyClass else {
+            XCTFail("Missing PTYMouseHandler")
+            return false
+        }
+        let selector = NSSelectorFromString("tideyShouldSuppressMouseReportingForPlainURLClickWithClickCount:mouseDragged:modifierFlags:mouseReporting:urlHit:")
+        guard let method = class_getClassMethod(mouseHandlerClass, selector) else {
+            XCTFail("Missing tmux URL click mouse reporting helper")
+            return false
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, Int, ObjCBool, UInt, ObjCBool, ObjCBool) -> ObjCBool
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        return function(mouseHandlerClass,
+                        selector,
+                        clickCount,
+                        ObjCBool(mouseDragged),
+                        modifierFlags.rawValue,
+                        ObjCBool(mouseReporting),
+                        ObjCBool(urlHit)).boolValue
+    }
+
     private func shouldOpenWebURLInApp(_ string: String,
                                        webPolicy: TideyWebURLOpenPolicy,
                                        hasRootView: Bool) -> Bool {
@@ -639,6 +665,9 @@ final class PathTests: XCTestCase {
 
     func testURLClickPolicyKeepsCommandClickInApp() {
         XCTAssertEqual(urlClickOpenPolicy(modifierFlags: .command, cmdPressed: true), .inAppBrowser)
+        XCTAssertEqual(urlClickOpenPolicy(modifierFlags: .command,
+                                          cmdPressed: true,
+                                          mouseReporting: true), .inAppBrowser)
     }
 
     func testURLClickPolicyRejectsDragSelectionAndMouseReporting() {
@@ -646,6 +675,23 @@ final class PathTests: XCTestCase {
         XCTAssertEqual(urlClickOpenPolicy(mouseReporting: true), .none)
         XCTAssertEqual(urlClickOpenPolicy(modifierFlags: .shift), .none)
         XCTAssertEqual(urlClickOpenPolicy(clickCount: 2), .none)
+    }
+
+    func testTmuxURLClickDecisionSuppressesMouseReportingForPlainURLHit() {
+        XCTAssertTrue(shouldSuppressMouseReportingForPlainURLClick())
+    }
+
+    func testTmuxURLClickDecisionReportsPlainNonURLClicksToHost() {
+        XCTAssertFalse(shouldSuppressMouseReportingForPlainURLClick(urlHit: false))
+    }
+
+    func testTmuxURLClickDecisionDoesNotSuppressDragModifierOrMultiClick() {
+        XCTAssertFalse(shouldSuppressMouseReportingForPlainURLClick(mouseDragged: true))
+        XCTAssertFalse(shouldSuppressMouseReportingForPlainURLClick(modifierFlags: .command))
+        XCTAssertFalse(shouldSuppressMouseReportingForPlainURLClick(modifierFlags: .shift))
+        XCTAssertFalse(shouldSuppressMouseReportingForPlainURLClick(modifierFlags: .option))
+        XCTAssertFalse(shouldSuppressMouseReportingForPlainURLClick(modifierFlags: .control))
+        XCTAssertFalse(shouldSuppressMouseReportingForPlainURLClick(clickCount: 2))
     }
 
     func testExternalDefaultBrowserPolicyBypassesInAppBrowserInterception() {
