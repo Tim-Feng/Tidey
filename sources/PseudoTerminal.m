@@ -2014,6 +2014,7 @@ ITERM_WEAKLY_REFERENCEABLE
 
 - (void)tideyNotificationStoreDidChange:(NSNotification *)notification {
     NSString *workspaceID = notification.userInfo[@"workspaceID"];
+    NSString *notificationID = notification.userInfo[@"notificationID"];
     NSString *selectedWorkspaceID = [self tideySelectedWorkspaceIdentifier];
     NSLog(@"[TideyDockBadge] notificationStoreDidChange workspaceID=%@ selectedWorkspaceID=%@ hasAnyUnread=%@",
           workspaceID ?: @"<nil>",
@@ -2021,7 +2022,8 @@ ITERM_WEAKLY_REFERENCEABLE
           [[TideyNotificationStore sharedStore] hasAnyUnreadNotifications] ? @"YES" : @"NO");
     [self tideyUpdateNotificationDockBadgeWithSource:@"notification_store_change"];
 
-    if (selectedWorkspaceID.length > 0 &&
+    if ([[self class] tideyShouldProcessAutoMarkReadForNotificationArrivalWithNotificationID:notificationID] &&
+        selectedWorkspaceID.length > 0 &&
         [[self class] tideyShouldAutoMarkReadWorkspaceOnNotificationArrivalForSelectedWorkspaceID:selectedWorkspaceID
                                                                            notificationWorkspaceID:workspaceID
                                                                                        appIsActive:NSApp.isActive
@@ -4133,17 +4135,20 @@ ITERM_WEAKLY_REFERENCEABLE
                                                                          appIsActive:(BOOL)appIsActive
                                                                     isCurrentTerminal:(BOOL)isCurrentTerminal
                                                                           isKeyWindow:(BOOL)isKeyWindow {
-    (void)selectedWorkspaceID;
-    (void)workspaceID;
-    (void)appIsActive;
-    (void)isCurrentTerminal;
-    (void)isKeyWindow;
-    return NO;
+    if (selectedWorkspaceID.length == 0) {
+        return NO;
+    }
+    if (!appIsActive || !isCurrentTerminal || !isKeyWindow) {
+        return NO;
+    }
+    if (workspaceID.length == 0) {
+        return NO;
+    }
+    return [workspaceID isEqualToString:selectedWorkspaceID] || [workspaceID isEqualToString:@"*"];
 }
 
 + (BOOL)tideyShouldProcessAutoMarkReadForNotificationArrivalWithNotificationID:(NSString *)notificationID {
-    (void)notificationID;
-    return NO;
+    return notificationID.length > 0;
 }
 
 - (BOOL)closeSessionWithConfirmation:(PTYSession *)aSession {
