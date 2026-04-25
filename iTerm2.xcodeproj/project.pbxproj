@@ -1006,6 +1006,7 @@
 		A603A96829B12CEA000E9E98 /* SearchTests.m in Sources */ = {isa = PBXBuildFile; fileRef = A603A96729B12CEA000E9E98 /* SearchTests.m */; };
 		F0A10D1E3A28000100000004 /* TideyStatusStoreTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000003 /* TideyStatusStoreTests.m */; };
 		F0A10D1E3A28000100000002 /* TideyNotificationStoreTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000001 /* TideyNotificationStoreTests.m */; };
+		F0A10D1E3A28000100000022 /* TideyNotificationStoreTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000001 /* TideyNotificationStoreTests.m */; settings = {COMPILER_FLAGS = "-fno-objc-arc"; }; };
 		F0A10D1E3A28000100000006 /* TideyCLICommandFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000005 /* TideyCLICommandFormatter.swift */; };
 		F0A10D1E3A28000100000008 /* TideyCLICommandFormatterTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000007 /* TideyCLICommandFormatterTests.m */; };
 		F0A10D1E3A2800010000000A /* TideyShellIntegrationConfigWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000009 /* TideyShellIntegrationConfigWriter.swift */; };
@@ -20335,6 +20336,7 @@
 				TIDEMOUSE0001A00000000002 /* PTYMouseHandlerSelectionTests.m in Sources */,
 				TIDESOCK0001A00000000002 /* TideySocketServerTests.m in Sources */,
 				TIDECFG0001A00000000002 /* TideyReleaseConfigTests.m in Sources */,
+				F0A10D1E3A28000100000022 /* TideyNotificationStoreTests.m in Sources */,
 				A6C811F42DCFD5E40088E628 /* SearchEngineTests.swift in Sources */,
 				A77D8D50729267B406541654 /* AccessibilityDeletionDetectionTests.swift in Sources */,
 				92738CD9A08C339E8F473394 /* IntervalTreeGraphEncodingTests.swift in Sources */,

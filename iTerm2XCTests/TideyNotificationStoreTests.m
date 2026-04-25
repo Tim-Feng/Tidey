@@ -178,6 +178,92 @@ static id TideyRetainedObject(id object) {
     XCTAssertFalse([store hasAnyUnreadNotifications]);
 }
 
+- (void)testKnownWorkspaceUnreadIgnoresUnknownWorkspaceUnread {
+    TestableTideyNotificationStore *store = [self freshStore];
+
+    [store addNotificationForWorkspaceID:@"orphan-workspace"
+                                   title:@"Ghost"
+                                subtitle:nil
+                                    body:@"Stale session"];
+
+    XCTAssertTrue([store hasAnyUnreadNotifications]);
+    XCTAssertFalse([store hasUnreadNotificationsForKnownWorkspaceIDs:[NSSet setWithObject:@"workspace-1"]]);
+}
+
+- (void)testKnownWorkspaceUnreadCountsKnownWorkspaceUnread {
+    TestableTideyNotificationStore *store = [self freshStore];
+
+    [store addNotificationForWorkspaceID:@"workspace-1"
+                                   title:@"Known"
+                                subtitle:nil
+                                    body:@"Visible"];
+
+    XCTAssertTrue([store hasUnreadNotificationsForKnownWorkspaceIDs:[NSSet setWithObject:@"workspace-1"]]);
+}
+
+- (void)testKnownWorkspaceUnreadStaysClearAfterKnownWorkspaceReadWithUnknownUnread {
+    TestableTideyNotificationStore *store = [self freshStore];
+
+    [store addNotificationForWorkspaceID:@"orphan-workspace"
+                                   title:@"Ghost"
+                                subtitle:nil
+                                    body:@"Stale session"];
+    [store addNotificationForWorkspaceID:@"workspace-1"
+                                   title:@"Known"
+                                subtitle:nil
+                                    body:@"Visible"];
+
+    XCTAssertTrue([store hasUnreadNotificationsForKnownWorkspaceIDs:[NSSet setWithObject:@"workspace-1"]]);
+
+    [store markReadForWorkspaceID:@"workspace-1"];
+
+    XCTAssertFalse([store hasUnreadNotificationsForKnownWorkspaceIDs:[NSSet setWithObject:@"workspace-1"]]);
+    XCTAssertTrue([store hasAnyUnreadNotifications]);
+}
+
+- (void)testKnownWorkspaceUnreadCountsBroadcastUnread {
+    TestableTideyNotificationStore *store = [self freshStore];
+
+    [store addNotificationForWorkspaceID:nil
+                                   title:@"Broadcast"
+                                subtitle:nil
+                                    body:@"All workspaces"];
+
+    NSSet *knownWorkspaceIDs = [NSSet setWithObjects:@"workspace-1", @"workspace-2", nil];
+    XCTAssertTrue([store hasUnreadNotificationsForKnownWorkspaceIDs:knownWorkspaceIDs]);
+}
+
+- (void)testKnownWorkspaceUnreadClearsBroadcastAfterAllKnownWorkspacesRead {
+    TestableTideyNotificationStore *store = [self freshStore];
+
+    [store addNotificationForWorkspaceID:nil
+                                   title:@"Broadcast"
+                                subtitle:nil
+                                    body:@"All workspaces"];
+
+    NSSet *knownWorkspaceIDs = [NSSet setWithObjects:@"workspace-1", @"workspace-2", nil];
+    XCTAssertTrue([store hasUnreadNotificationsForKnownWorkspaceIDs:knownWorkspaceIDs]);
+
+    [store markReadForWorkspaceID:@"workspace-1"];
+    XCTAssertTrue([store hasUnreadNotificationsForKnownWorkspaceIDs:knownWorkspaceIDs]);
+
+    [store markReadForWorkspaceID:@"workspace-2"];
+    XCTAssertFalse([store hasUnreadNotificationsForKnownWorkspaceIDs:knownWorkspaceIDs]);
+}
+
+- (void)testKnownWorkspaceUnreadFallsBackToAnyUnreadWhenKnownWorkspaceSetIsEmpty {
+    TestableTideyNotificationStore *store = [self freshStore];
+
+    XCTAssertFalse([store hasUnreadNotificationsForKnownWorkspaceIDs:[NSSet set]]);
+
+    [store addNotificationForWorkspaceID:@"orphan-workspace"
+                                   title:@"Ghost"
+                                subtitle:nil
+                                    body:@"Stale session"];
+
+    XCTAssertTrue([store hasUnreadNotificationsForKnownWorkspaceIDs:[NSSet set]]);
+}
+
 - (void)testRemoveNotificationAndClearAllNotifications {
     TestableTideyNotificationStore *store = [self freshStore];
 

@@ -35,6 +35,7 @@ extern NSNotificationName const TideyStatusStoreDidChangeNotification;
 - (NSArray<TideyNotificationItem *> *)notificationsForWorkspaceID:(NSString *)workspaceID;
 - (NSInteger)unreadCountForWorkspaceID:(NSString *)workspaceID;
 - (BOOL)hasAnyUnreadNotifications;
+- (BOOL)hasUnreadNotificationsForKnownWorkspaceIDs:(NSSet<NSString *> *)workspaceIDs;
 
 - (TideyNotificationItem *)addNotificationForWorkspaceID:(NSString *)workspaceID
                                                    title:(NSString *)title
