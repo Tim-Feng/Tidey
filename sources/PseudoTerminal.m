@@ -385,6 +385,7 @@ static NSString *TideySubmitLogSuffix(NSString *input) {
                                  panel:(NSDictionary *)panelSummary;
 - (void)tideyNotificationStoreDidChange:(NSNotification *)notification;
 - (void)tideyUpdateNotificationDockBadgeWithSource:(NSString *)source;
+- (void)tideyAutoMarkReadSelectedWorkspaceOnFocusGainWithSource:(NSString *)source;
 + (void)tideySetApplicationIconUnreadIndicatorVisible:(BOOL)visible;
 + (NSImage *)tideyApplicationIconImageByAddingUnreadIndicatorToImage:(NSImage *)baseImage;
 - (void)renameWorkspaceAtIndex:(NSInteger)index;
@@ -2104,6 +2105,23 @@ ITERM_WEAKLY_REFERENCEABLE
     dockTile.badgeLabel = badgeState[@"label"];
     dockTile.showsApplicationBadge = [badgeState[@"showsBadge"] boolValue];
     [[self class] tideySetApplicationIconUnreadIndicatorVisible:hasUnreadNotifications];
+}
+
+- (void)tideyAutoMarkReadSelectedWorkspaceOnFocusGainWithSource:(NSString *)source {
+    NSString *selectedWorkspaceID = [self tideySelectedWorkspaceIdentifier];
+    BOOL selectedWorkspaceHasUnreadNotifications =
+        selectedWorkspaceID.length > 0 &&
+        ([[TideyNotificationStore sharedStore] unreadCountForWorkspaceID:selectedWorkspaceID] > 0);
+    if (![[self class] tideyShouldAutoMarkReadWorkspaceOnFocusGainForSelectedWorkspaceID:selectedWorkspaceID
+                                                           selectedWorkspaceHasUnreadNotifications:selectedWorkspaceHasUnreadNotifications
+                                                                                       appIsActive:NSApp.isActive
+                                                                                  isCurrentTerminal:(self == [iTermController sharedInstance].currentTerminal)
+                                                                                        isKeyWindow:self.window.isKeyWindow]) {
+        return;
+    }
+
+    [[TideyNotificationStore sharedStore] markReadForWorkspaceID:selectedWorkspaceID];
+    [self tideyUpdateNotificationDockBadgeWithSource:source];
 }
 
 - (BOOL)tideyWorkspaceIsInStartupGracePeriod:(Workspace *)workspace {
@@ -4219,7 +4237,13 @@ ITERM_WEAKLY_REFERENCEABLE
                                                                         appIsActive:(BOOL)appIsActive
                                                                    isCurrentTerminal:(BOOL)isCurrentTerminal
                                                                          isKeyWindow:(BOOL)isKeyWindow {
-    return NO;
+    if (selectedWorkspaceID.length == 0) {
+        return NO;
+    }
+    if (!hasUnreadNotifications) {
+        return NO;
+    }
+    return appIsActive && isCurrentTerminal && isKeyWindow;
 }
 
 + (BOOL)tideyShouldProcessAutoMarkReadForNotificationArrivalWithNotificationID:(NSString *)notificationID {
@@ -6100,6 +6124,7 @@ hidingToolbeltShouldResizeWindow:(BOOL)hidingToolbeltShouldResizeWindow
     [[[NSApplication sharedApplication] dockTile] setBadgeLabel:@""];
     [[[NSApplication sharedApplication] dockTile] setShowsApplicationBadge:NO];
     [self tideyUpdateNotificationDockBadgeWithSource:@"window_did_deminiaturize"];
+    [self tideyAutoMarkReadSelectedWorkspaceOnFocusGainWithSource:@"window_did_deminiaturize_after_focus_mark_read"];
     if ([[self currentTab] blur]) {
         [self enableBlur:[[self currentTab] blurRadius]];
     } else {
@@ -6368,6 +6393,7 @@ hidingToolbeltShouldResizeWindow:(BOOL)hidingToolbeltShouldResizeWindow
     [self tideyUpdateNotificationDockBadgeWithSource:@"window_did_become_key"];
 
     [[iTermController sharedInstance] setCurrentTerminal:self];
+    [self tideyAutoMarkReadSelectedWorkspaceOnFocusGainWithSource:@"window_did_become_key_after_focus_mark_read"];
     iTermApplicationDelegate *itad = [iTermApplication.sharedApplication delegate];
     [itad updateMaximizePaneMenuItem];
     [itad updateUseTransparencyMenuItem];
