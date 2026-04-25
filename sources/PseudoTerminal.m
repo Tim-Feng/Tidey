@@ -385,6 +385,8 @@ static NSString *TideySubmitLogSuffix(NSString *input) {
                                  panel:(NSDictionary *)panelSummary;
 - (void)tideyNotificationStoreDidChange:(NSNotification *)notification;
 - (void)tideyUpdateNotificationDockBadgeWithSource:(NSString *)source;
++ (void)tideySetApplicationIconUnreadIndicatorVisible:(BOOL)visible;
++ (NSImage *)tideyApplicationIconImageByAddingUnreadIndicatorToImage:(NSImage *)baseImage;
 - (void)renameWorkspaceAtIndex:(NSInteger)index;
 - (void)closeWorkspacesAtIndexes:(NSIndexSet *)indexes;
 @end
@@ -401,6 +403,8 @@ static NSString *TideySubmitLogSuffix(NSString *input) {
 @end
 
 static NSInteger gTideyDockBellCount = 0;
+static BOOL gTideyApplicationIconUnreadIndicatorVisible = NO;
+static NSImage *gTideyApplicationIconBaseImage = nil;
 
 @implementation PseudoTerminal {
     ////////////////////////////////////////////////////////////////////////////
@@ -2099,6 +2103,7 @@ ITERM_WEAKLY_REFERENCEABLE
           [badgeState[@"showsBadge"] boolValue] ? @"YES" : @"NO");
     dockTile.badgeLabel = badgeState[@"label"];
     dockTile.showsApplicationBadge = [badgeState[@"showsBadge"] boolValue];
+    [[self class] tideySetApplicationIconUnreadIndicatorVisible:hasUnreadNotifications];
 }
 
 - (BOOL)tideyWorkspaceIsInStartupGracePeriod:(Workspace *)workspace {
@@ -4107,6 +4112,68 @@ ITERM_WEAKLY_REFERENCEABLE
         @"label": hasUnreadNotifications ? @"•" : @"",
         @"showsBadge": @(hasUnreadNotifications),
     };
+}
+
++ (NSImage *)tideyApplicationIconImageByAddingUnreadIndicatorToImage:(NSImage *)baseImage {
+    if (!baseImage) {
+        return nil;
+    }
+
+    NSSize imageSize = baseImage.size;
+    if (imageSize.width <= 0 || imageSize.height <= 0) {
+        imageSize = NSMakeSize(512, 512);
+    }
+
+    NSImage *image = [[[NSImage alloc] initWithSize:imageSize] autorelease];
+    [image lockFocus];
+    [baseImage drawInRect:NSMakeRect(0, 0, imageSize.width, imageSize.height)
+                 fromRect:NSZeroRect
+                operation:NSCompositingOperationSourceOver
+                 fraction:1.0
+           respectFlipped:NO
+                    hints:nil];
+
+    CGFloat diameter = floor(MIN(imageSize.width, imageSize.height) * 0.30);
+    CGFloat margin = floor(MIN(imageSize.width, imageSize.height) * 0.06);
+    CGFloat strokeWidth = MAX(2, floor(MIN(imageSize.width, imageSize.height) * 0.035));
+    NSRect redDotRect = NSMakeRect(imageSize.width - diameter - margin,
+                                   imageSize.height - diameter - margin,
+                                   diameter,
+                                   diameter);
+    NSRect borderRect = NSInsetRect(redDotRect, -strokeWidth, -strokeWidth);
+    [[NSColor whiteColor] setFill];
+    [[NSBezierPath bezierPathWithOvalInRect:borderRect] fill];
+    [[NSColor colorWithCalibratedRed:1.0 green:0.18 blue:0.12 alpha:1.0] setFill];
+    [[NSBezierPath bezierPathWithOvalInRect:redDotRect] fill];
+    [image unlockFocus];
+    return image;
+}
+
++ (void)tideySetApplicationIconUnreadIndicatorVisible:(BOOL)visible {
+    if (gTideyApplicationIconUnreadIndicatorVisible == visible) {
+        return;
+    }
+
+    if (!visible) {
+        [NSApp setApplicationIconImage:nil];
+        gTideyApplicationIconUnreadIndicatorVisible = NO;
+        return;
+    }
+
+    if (!gTideyApplicationIconBaseImage) {
+        NSImage *baseImage = [NSApp applicationIconImage];
+        if (!baseImage) {
+            baseImage = [[NSWorkspace sharedWorkspace] iconForFile:[[NSBundle mainBundle] bundlePath]];
+        }
+        gTideyApplicationIconBaseImage = [baseImage copy];
+    }
+
+    NSImage *badgedImage = [self tideyApplicationIconImageByAddingUnreadIndicatorToImage:gTideyApplicationIconBaseImage];
+    if (!badgedImage) {
+        return;
+    }
+    [NSApp setApplicationIconImage:badgedImage];
+    gTideyApplicationIconUnreadIndicatorVisible = YES;
 }
 
 + (NSInteger)tideyBellCountByIncrementingDockBellCount:(NSInteger)bellCount {
