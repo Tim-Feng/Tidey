@@ -53,7 +53,7 @@ final class TideyRemoteBridgeServer {
             shouldUpgrade: { [authenticator] channel, head in
                 let authHeader = head.headers.first(name: "Authorization")
                 guard authenticator.isAuthorized(authorizationHeader: authHeader) else {
-                    return channel.eventLoop.makeFailedFuture(BridgeInternalError.unauthorized)
+                    return channel.eventLoop.makeSucceededFuture(nil)
                 }
                 return channel.eventLoop.makeSucceededFuture([:])
             },
@@ -208,10 +208,22 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
         case "/pair/exchange":
             respondToPairExchange(head: head, body: body, context: context)
         case "/ws":
-            return
+            respondToWebSocketHTTPFallback(head: head, context: context)
         default:
             respond(status: .notFound, data: Data(), context: context, version: head.version)
         }
+    }
+
+    private func respondToWebSocketHTTPFallback(head: HTTPRequestHead, context: ChannelHandlerContext) {
+        guard head.method == .GET else {
+            respond(status: .methodNotAllowed, data: Data(), context: context, version: head.version)
+            return
+        }
+        guard authenticator.isAuthorized(authorizationHeader: head.headers.first(name: "Authorization")) else {
+            respond(status: .unauthorized, data: Data(), context: context, version: head.version)
+            return
+        }
+        respond(status: .badRequest, data: Data(), context: context, version: head.version)
     }
 
     private func respondToPairPayload(head: HTTPRequestHead, context: ChannelHandlerContext) {

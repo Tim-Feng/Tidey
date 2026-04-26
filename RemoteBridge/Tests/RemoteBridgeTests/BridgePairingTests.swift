@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import XCTest
 @testable import RemoteBridge
 
@@ -132,6 +133,40 @@ final class BridgePairingTests: XCTestCase {
 
         XCTAssertTrue(authenticator.isAuthorized(authorizationHeader: "Bearer legacy-token"))
         XCTAssertFalse(authenticator.isAuthorized(authorizationHeader: "Bearer \(credential.token)"))
+    }
+
+    func testWebSocketUpgradeWithRevokedCredentialReturnsHTTPUnauthorized() throws {
+        let fixture = try PairingFixture()
+        let credential = try fixture.deviceCredentialStore.issueCredential(deviceName: "Tim's iPhone")
+        XCTAssertTrue(try fixture.deviceCredentialStore.revokeDevice(deviceID: credential.deviceID))
+
+        let eventHub = AgentEventHub()
+        let socketClient = TideySocketClient(locator: TideySocketLocator())
+        let authenticator = BridgeAuthenticator(legacyPairToken: "legacy-token",
+                                                deviceCredentialStore: fixture.deviceCredentialStore)
+        let registryMonitor = AgentSessionRegistryMonitor(paths: fixture.paths,
+                                                           fileManager: fixture.fileManager,
+                                                           hub: eventHub,
+                                                           socketClient: socketClient,
+                                                           parentPIDLookup: { _ in nil })
+        let server = TideyRemoteBridgeServer(host: "127.0.0.1",
+                                             port: 0,
+                                             token: "legacy-token",
+                                             authenticator: authenticator,
+                                             pairingController: fixture.controller,
+                                             socketClient: socketClient,
+                                             eventHub: eventHub,
+                                             workspaceEventHub: WorkspaceEventHub(),
+                                             registryMonitor: registryMonitor,
+                                             observability: BridgeObservabilityCenter())
+        let handle = try server.start()
+        defer { try? handle.close() }
+
+        let response = try sendWebSocketUpgradeRequest(port: handle.port,
+                                                       authorizationHeader: "Bearer \(credential.token)")
+
+        XCTAssertTrue(response.hasPrefix("HTTP/1.1 401 Unauthorized"),
+                      "Expected HTTP 401, got: \(response)")
     }
 
     func testPairSessionsRejectExpiredSecretButPruneAfterGracePeriod() throws {
@@ -309,5 +344,82 @@ private final class MutableClock {
 
     init(now: Date) {
         self.now = now
+    }
+}
+
+private func sendWebSocketUpgradeRequest(port: Int, authorizationHeader: String) throws -> String {
+    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    guard fd >= 0 else {
+        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+    }
+    defer { close(fd) }
+
+    var timeout = timeval(tv_sec: 3, tv_usec: 0)
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+
+    var address = sockaddr_in()
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_port = in_port_t(port).bigEndian
+    inet_pton(AF_INET, "127.0.0.1", &address.sin_addr)
+    let connectResult = withUnsafePointer(to: &address) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
+            connect(fd, sockaddrPointer, socklen_t(MemoryLayout<sockaddr_in>.size))
+        }
+    }
+    guard connectResult == 0 else {
+        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .ECONNREFUSED)
+    }
+
+    let request = [
+        "GET /ws HTTP/1.1",
+        "Host: 127.0.0.1:\(port)",
+        "Connection: Upgrade",
+        "Upgrade: websocket",
+        "Sec-WebSocket-Version: 13",
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+        "Authorization: \(authorizationHeader)",
+        "",
+        "",
+    ].joined(separator: "\r\n")
+    try writeAll(Data(request.utf8), to: fd)
+
+    var response = Data()
+    let terminator = Data("\r\n\r\n".utf8)
+    var buffer = [UInt8](repeating: 0, count: 4096)
+    while response.range(of: terminator) == nil {
+        let count = read(fd, &buffer, buffer.count)
+        if count > 0 {
+            response.append(buffer, count: count)
+            continue
+        }
+        if count == 0 {
+            break
+        }
+        if errno == EINTR {
+            continue
+        }
+        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+    }
+    return String(decoding: response, as: UTF8.self)
+}
+
+private func writeAll(_ data: Data, to fd: Int32) throws {
+    try data.withUnsafeBytes { rawBuffer in
+        guard let baseAddress = rawBuffer.baseAddress else {
+            return
+        }
+        var written = 0
+        while written < rawBuffer.count {
+            let result = write(fd, baseAddress.advanced(by: written), rawBuffer.count - written)
+            if result > 0 {
+                written += result
+                continue
+            }
+            if result == -1 && errno == EINTR {
+                continue
+            }
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
     }
 }
