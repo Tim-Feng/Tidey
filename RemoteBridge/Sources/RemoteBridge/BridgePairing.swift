@@ -1,0 +1,324 @@
+import CryptoKit
+import Foundation
+import Security
+
+struct BridgeHostIdentity: Codable, Equatable, Sendable {
+    let hostID: String
+    let displayName: String
+    let createdAt: Date
+}
+
+struct BridgePairEndpoint: Codable, Equatable, Sendable {
+    let scheme: String
+    let host: String
+    let port: Int?
+    let path: String
+}
+
+struct BridgePairPayload: Codable, Equatable, Sendable {
+    let type: String
+    let version: Int
+    let hostID: String
+    let displayName: String
+    let lanEndpoints: [BridgePairEndpoint]
+    let tunnelEndpoint: BridgePairEndpoint?
+    let pairSecret: String
+    let issuedAt: Date
+    let expiresAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case version
+        case hostID = "host_id"
+        case displayName = "display_name"
+        case lanEndpoints = "lan_endpoints"
+        case tunnelEndpoint = "tunnel_endpoint"
+        case pairSecret = "pair_secret"
+        case issuedAt = "issued_at"
+        case expiresAt = "expires_at"
+    }
+}
+
+struct BridgePairExchangeRequest: Codable, Equatable, Sendable {
+    let action: String
+    let hostID: String
+    let pairSecret: String
+    let deviceName: String
+    let devicePublicKey: String?
+
+    enum CodingKeys: String, CodingKey {
+        case action
+        case hostID = "host_id"
+        case pairSecret = "pair_secret"
+        case deviceName = "device_name"
+        case devicePublicKey = "device_public_key"
+    }
+}
+
+struct BridgePairExchangeResult: Codable, Equatable, Sendable {
+    let hostID: String
+    let displayName: String
+    let deviceCredential: String
+    let credentialType: String
+
+    enum CodingKeys: String, CodingKey {
+        case hostID = "host_id"
+        case displayName = "display_name"
+        case deviceCredential = "device_credential"
+        case credentialType = "credential_type"
+    }
+}
+
+struct BridgeIssuedDeviceCredential: Equatable, Sendable {
+    let deviceID: String
+    let token: String
+}
+
+final class BridgeHostIdentityStore {
+    private let paths: BridgePaths
+    private let fileManager: FileManager
+    private let idProvider: () -> String
+    private let displayNameProvider: () -> String
+    private let nowProvider: () -> Date
+
+    init(paths: BridgePaths = BridgePaths(),
+         fileManager: FileManager = .default,
+         idProvider: @escaping () -> String = { UUID().uuidString },
+         displayNameProvider: @escaping () -> String = {
+             Host.current().localizedName ?? "Tidey Mac"
+         },
+         nowProvider: @escaping () -> Date = Date.init) {
+        self.paths = paths
+        self.fileManager = fileManager
+        self.idProvider = idProvider
+        self.displayNameProvider = displayNameProvider
+        self.nowProvider = nowProvider
+    }
+
+    func loadOrCreateIdentity() throws -> BridgeHostIdentity {
+        if fileManager.fileExists(atPath: paths.hostIdentityFileURL.path) {
+            let data = try Data(contentsOf: paths.hostIdentityFileURL)
+            return try JSONDecoder().decode(BridgeHostIdentity.self, from: data)
+        }
+        try fileManager.createDirectory(at: paths.supportDirectory, withIntermediateDirectories: true)
+        let identity = BridgeHostIdentity(hostID: idProvider(),
+                                          displayName: displayNameProvider(),
+                                          createdAt: nowProvider())
+        let data = try JSONEncoder().encode(identity)
+        try data.write(to: paths.hostIdentityFileURL, options: .atomic)
+        return identity
+    }
+}
+
+final class BridgePairSessionStore {
+    private struct Session {
+        let hostID: String
+        let secret: String
+        let expiresAt: Date
+    }
+
+    private var sessionsBySecret = [String: Session]()
+    private let secretGenerator: () -> String
+    private let nowProvider: () -> Date
+    private let lifetime: TimeInterval
+
+    init(secretGenerator: @escaping () -> String = BridgeSecureTokenGenerator.generateToken,
+         nowProvider: @escaping () -> Date = Date.init,
+         lifetime: TimeInterval = 5 * 60) {
+        self.secretGenerator = secretGenerator
+        self.nowProvider = nowProvider
+        self.lifetime = lifetime
+    }
+
+    func createPayload(hostIdentity: BridgeHostIdentity,
+                       lanEndpoints: [BridgePairEndpoint],
+                       tunnelEndpoint: BridgePairEndpoint? = nil) throws -> BridgePairPayload {
+        pruneExpired()
+        let issuedAt = nowProvider()
+        let expiresAt = issuedAt.addingTimeInterval(lifetime)
+        let secret = secretGenerator()
+        sessionsBySecret[secret] = Session(hostID: hostIdentity.hostID,
+                                           secret: secret,
+                                           expiresAt: expiresAt)
+        return BridgePairPayload(type: "tidey_remote_pair",
+                                 version: 1,
+                                 hostID: hostIdentity.hostID,
+                                 displayName: hostIdentity.displayName,
+                                 lanEndpoints: lanEndpoints,
+                                 tunnelEndpoint: tunnelEndpoint,
+                                 pairSecret: secret,
+                                 issuedAt: issuedAt,
+                                 expiresAt: expiresAt)
+    }
+
+    func consume(pairSecret: String, hostID: String) throws {
+        pruneExpired()
+        guard let session = sessionsBySecret[pairSecret],
+              session.hostID == hostID,
+              session.expiresAt > nowProvider() else {
+            throw BridgeInternalError.unauthorized
+        }
+        sessionsBySecret[pairSecret] = nil
+    }
+
+    private func pruneExpired() {
+        let now = nowProvider()
+        sessionsBySecret = sessionsBySecret.filter { _, session in
+            session.expiresAt > now
+        }
+    }
+}
+
+final class BridgeDeviceCredentialStore {
+    private struct FileRecord: Codable {
+        var devices: [DeviceRecord]
+    }
+
+    private struct DeviceRecord: Codable {
+        let deviceID: String
+        let deviceName: String
+        let tokenHash: String
+        let createdAt: Date
+
+        enum CodingKeys: String, CodingKey {
+            case deviceID = "device_id"
+            case deviceName = "device_name"
+            case tokenHash = "token_hash"
+            case createdAt = "created_at"
+        }
+    }
+
+    private let paths: BridgePaths
+    private let fileManager: FileManager
+    private let tokenGenerator: () -> String
+    private let nowProvider: () -> Date
+
+    init(paths: BridgePaths = BridgePaths(),
+         fileManager: FileManager = .default,
+         tokenGenerator: @escaping () -> String = BridgeSecureTokenGenerator.generateToken,
+         nowProvider: @escaping () -> Date = Date.init) {
+        self.paths = paths
+        self.fileManager = fileManager
+        self.tokenGenerator = tokenGenerator
+        self.nowProvider = nowProvider
+    }
+
+    func issueCredential(deviceName: String) throws -> BridgeIssuedDeviceCredential {
+        let token = tokenGenerator()
+        let deviceID = UUID().uuidString
+        var record = try loadRecord()
+        record.devices.append(DeviceRecord(deviceID: deviceID,
+                                           deviceName: deviceName,
+                                           tokenHash: Self.hash(token),
+                                           createdAt: nowProvider()))
+        try save(record)
+        return BridgeIssuedDeviceCredential(deviceID: deviceID, token: token)
+    }
+
+    func isValidCredential(_ token: String) throws -> Bool {
+        let tokenHash = Self.hash(token)
+        return try loadRecord().devices.contains { $0.tokenHash == tokenHash }
+    }
+
+    private func loadRecord() throws -> FileRecord {
+        guard fileManager.fileExists(atPath: paths.deviceCredentialsFileURL.path) else {
+            return FileRecord(devices: [])
+        }
+        let data = try Data(contentsOf: paths.deviceCredentialsFileURL)
+        return try JSONDecoder().decode(FileRecord.self, from: data)
+    }
+
+    private func save(_ record: FileRecord) throws {
+        try fileManager.createDirectory(at: paths.supportDirectory, withIntermediateDirectories: true)
+        let data = try JSONEncoder().encode(record)
+        try data.write(to: paths.deviceCredentialsFileURL, options: .atomic)
+    }
+
+    private static func hash(_ token: String) -> String {
+        SHA256.hash(data: Data(token.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+final class BridgePairingController {
+    private let hostIdentityStore: BridgeHostIdentityStore
+    private let pairSessionStore: BridgePairSessionStore
+    private let deviceCredentialStore: BridgeDeviceCredentialStore
+
+    init(hostIdentityStore: BridgeHostIdentityStore,
+         pairSessionStore: BridgePairSessionStore,
+         deviceCredentialStore: BridgeDeviceCredentialStore) {
+        self.hostIdentityStore = hostIdentityStore
+        self.pairSessionStore = pairSessionStore
+        self.deviceCredentialStore = deviceCredentialStore
+    }
+
+    func createPairPayload(lanEndpoints: [BridgePairEndpoint]) throws -> BridgePairPayload {
+        let identity = try hostIdentityStore.loadOrCreateIdentity()
+        return try pairSessionStore.createPayload(hostIdentity: identity,
+                                                  lanEndpoints: lanEndpoints)
+    }
+
+    func exchange(_ request: BridgePairExchangeRequest) throws -> BridgePairExchangeResult {
+        guard request.action == "pair.exchange" else {
+            throw BridgeInternalError.invalidRequest("pair.exchange requires action=pair.exchange")
+        }
+        let identity = try hostIdentityStore.loadOrCreateIdentity()
+        guard request.hostID == identity.hostID else {
+            throw BridgeInternalError.unauthorized
+        }
+        try pairSessionStore.consume(pairSecret: request.pairSecret,
+                                     hostID: request.hostID)
+        let credential = try deviceCredentialStore.issueCredential(deviceName: request.deviceName)
+        return BridgePairExchangeResult(hostID: identity.hostID,
+                                        displayName: identity.displayName,
+                                        deviceCredential: credential.token,
+                                        credentialType: "bearer")
+    }
+}
+
+final class BridgeAuthenticator {
+    private let legacyPairToken: String
+    private let deviceCredentialStore: BridgeDeviceCredentialStore
+
+    init(legacyPairToken: String,
+         deviceCredentialStore: BridgeDeviceCredentialStore) {
+        self.legacyPairToken = legacyPairToken
+        self.deviceCredentialStore = deviceCredentialStore
+    }
+
+    func isAuthorized(authorizationHeader: String?) -> Bool {
+        guard let token = bearerToken(from: authorizationHeader) else {
+            return false
+        }
+        if token == legacyPairToken {
+            return true
+        }
+        return (try? deviceCredentialStore.isValidCredential(token)) == true
+    }
+
+    func isLegacyTokenAuthorized(authorizationHeader: String?) -> Bool {
+        bearerToken(from: authorizationHeader) == legacyPairToken
+    }
+
+    private func bearerToken(from authorizationHeader: String?) -> String? {
+        guard let authorizationHeader,
+              authorizationHeader.hasPrefix("Bearer ") else {
+            return nil
+        }
+        return String(authorizationHeader.dropFirst("Bearer ".count))
+    }
+}
+
+enum BridgeSecureTokenGenerator {
+    static func generateToken() -> String {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        if status == errSecSuccess {
+            return Data(bytes).base64EncodedString()
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "=", with: "")
+        }
+        return UUID().uuidString + UUID().uuidString
+    }
+}

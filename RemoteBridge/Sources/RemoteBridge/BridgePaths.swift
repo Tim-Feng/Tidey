@@ -3,11 +3,15 @@ import Foundation
 struct BridgePaths {
     let supportDirectory: URL
     let pairTokenFileURL: URL
+    let hostIdentityFileURL: URL
+    let deviceCredentialsFileURL: URL
     let agentSessionsDirectory: URL
 
     init(supportDirectory: URL) {
         self.supportDirectory = supportDirectory
         pairTokenFileURL = supportDirectory.appendingPathComponent("pair-token.json", isDirectory: false)
+        hostIdentityFileURL = supportDirectory.appendingPathComponent("host-identity.json", isDirectory: false)
+        deviceCredentialsFileURL = supportDirectory.appendingPathComponent("device-credentials.json", isDirectory: false)
         agentSessionsDirectory = supportDirectory.appendingPathComponent("agent-sessions", isDirectory: true)
     }
 
