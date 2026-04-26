@@ -237,15 +237,33 @@ final class BridgeHostIdentityStore {
     func loadOrCreateIdentity() throws -> BridgeHostIdentity {
         if fileManager.fileExists(atPath: paths.hostIdentityFileURL.path) {
             let data = try Data(contentsOf: paths.hostIdentityFileURL)
-            return try JSONDecoder().decode(BridgeHostIdentity.self, from: data)
+            let identity = try JSONDecoder().decode(BridgeHostIdentity.self, from: data)
+            let normalizedDisplayName = Self.normalizedDisplayName(identity.displayName)
+            guard normalizedDisplayName != identity.displayName else {
+                return identity
+            }
+            let normalizedIdentity = BridgeHostIdentity(hostID: identity.hostID,
+                                                        displayName: normalizedDisplayName,
+                                                        createdAt: identity.createdAt)
+            try save(normalizedIdentity)
+            return normalizedIdentity
         }
         try fileManager.createDirectory(at: paths.supportDirectory, withIntermediateDirectories: true)
         let identity = BridgeHostIdentity(hostID: idProvider(),
-                                          displayName: displayNameProvider(),
+                                          displayName: Self.normalizedDisplayName(displayNameProvider()),
                                           createdAt: nowProvider())
+        try save(identity)
+        return identity
+    }
+
+    private func save(_ identity: BridgeHostIdentity) throws {
         let data = try JSONEncoder().encode(identity)
         try data.write(to: paths.hostIdentityFileURL, options: .atomic)
-        return identity
+    }
+
+    private static func normalizedDisplayName(_ displayName: String) -> String {
+        let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Tidey Mac" : trimmed
     }
 }
 
