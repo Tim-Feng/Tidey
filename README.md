@@ -6,13 +6,15 @@ A terminal-first IDE for AI agents. Run agents in workspaces, edit code side by 
 
 ![Tidey main window](docs/screenshots/hero-main.png)
 
-## Latest in 0.3.1
+## Latest in 0.3.2
 
-- **Dock icon red dot no longer sticks** — After upgrade or attach to old shell sessions with stale workspace IDs, the Dock unread overlay no longer gets stuck. Notifications from unknown workspace UUIDs are excluded from the Dock badge unread count, while sidebar behavior is unchanged.
+- **Click file paths to open** — Plain-clicking a resolvable file path in the terminal now opens it via Semantic History, matching the existing ⌘-click behavior.
+- **In-app browser auto-focus** — ⌘-clicking a URL opens the in-app browser tab and automatically focuses it. ⌘-W closes the browser tab instead of the panel.
+- **Plain click works on styled terminal links** — Plain-clicking rendered link labels now opens the underlying URL, including OSC 8 hyperlinks and tools that render markdown links with the URL hidden in terminal cells.
 
 ## Install
 
-**Download:** [Tidey.dmg](https://github.com/Tim-Feng/Tidey/releases/download/v0.3.1/Tidey.dmg) (macOS 12+, Apple Silicon & Intel)
+**Download:** [Tidey.dmg](https://github.com/Tim-Feng/Tidey/releases/download/v0.3.2/Tidey.dmg) (macOS 12+, Apple Silicon & Intel)
 
 1. Open the DMG, drag Tidey to Applications
 2. First launch: right-click → Open
