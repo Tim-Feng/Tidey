@@ -180,6 +180,8 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
     private lazy var inputActionHandler = BridgeInputActionHandler(socketSender: socketClient,
                                                                    sessionResolver: registryMonitor)
     private lazy var fileActionHandler = BridgeFileActionHandler(rootResolver: TideyPanelFileRootResolver(socketSender: socketClient))
+    private lazy var imageUploadHandler = BridgeImageUploadHandler(destinationResolver: DownloadsImageUploadDestinationResolver(),
+                                                                   filenameGenerator: TimestampedImageUploadFilenameGenerator())
     private var agentSubscriptionID: UUID?
     private var workspaceSubscriptionID: UUID?
 
@@ -263,6 +265,11 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                                           workspaceReplayEnvelopes: [])
             }
             if let response = try fileActionHandler.handle(request) {
+                return LocalRequestResult(response: response,
+                                          agentReplayEnvelopes: [],
+                                          workspaceReplayEnvelopes: [])
+            }
+            if let response = try imageUploadHandler.handle(request) {
                 return LocalRequestResult(response: response,
                                           agentReplayEnvelopes: [],
                                           workspaceReplayEnvelopes: [])
