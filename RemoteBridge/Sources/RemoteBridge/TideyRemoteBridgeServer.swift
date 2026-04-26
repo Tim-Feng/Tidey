@@ -173,8 +173,8 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
             return
         }
         do {
-            let endpoint = BridgePairEndpoint(scheme: "ws", host: "127.0.0.1", port: bridgePort, path: "/")
-            let payload = try pairingController.createPairPayload(lanEndpoints: [endpoint])
+            let endpoints = BridgeLANEndpointResolver.resolve(port: bridgePort)
+            let payload = try pairingController.createPairPayload(lanEndpoints: endpoints)
             let data = try encoder.encode(payload)
             respond(status: .ok,
                     data: data,
