@@ -33,6 +33,7 @@
 #import "PTYTask.h"
 #import "PTYTextView+ARC.h"
 #import "PTYTextView+Private.h"
+#import "URLAction.h"
 #import "PTYWindow.h"
 #import "PasteboardHistory.h"
 #import "PointerController.h"
@@ -429,6 +430,7 @@ const CGFloat PTYTextViewMarginClickGraceWidth = 2.0;
     [_indicatorMessagePopoverViewController release];
     [_notes release];
     [_lastUrlActionCanceler release];
+    [_tideyCachedHoverURLAction release];
     [_portholes release];
     [_portholesNeedUpdatesJoiner release];
     [_trackingChildWindows release];
@@ -7068,6 +7070,15 @@ static NSString *iTermStringFromRange(NSRange range) {
 }
 
 - (URLAction *)mouseHandlerOpenURLActionForEvent:(NSEvent *)event {
+    const VT100GridCoord cachedCoord = [self tideyURLCoordForEvent:event allowRightMarginOverflow:NO];
+    URLAction *cachedAction = self.tideyCachedHoverURLAction;
+    if (cachedAction &&
+        (cachedAction.actionType == kURLActionOpenURL ||
+         cachedAction.actionType == kURLActionOpenExistingFile) &&
+        VT100GridWindowedRangeContainsCoord(cachedAction.visualRange, cachedCoord)) {
+        return cachedAction;
+    }
+
     const VT100GridCoord coord = [self tideyURLCoordForEvent:event allowRightMarginOverflow:NO];
     iTermTextExtractor *extractor = [iTermTextExtractor textExtractorWithDataSource:self.dataSource];
     return [iTermURLActionFactory tideyOpenURLActionAtCoord:coord

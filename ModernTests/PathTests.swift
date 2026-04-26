@@ -971,15 +971,16 @@ final class PathTests: XCTestCase {
                                                         hasRootView: false))
     }
 
-    func testURLHoverAffordanceAllowsPlainURLAndCommandSemanticHistory() {
+    func testURLHoverAffordanceAllowsPlainURLAndPlainFilePath() {
         XCTAssertTrue(urlHoverAffordance(actionType: 0))
+        XCTAssertTrue(urlHoverAffordance(actionType: 2))
         XCTAssertTrue(urlHoverAffordance(actionType: 2, modifierFlags: .command))
     }
 
-    func testURLHoverAffordanceRejectsPlainNonURLAndSelectionModifiers() {
-        XCTAssertFalse(urlHoverAffordance(actionType: 2))
+    func testURLHoverAffordanceRejectsOtherActionsAndSelectionModifiers() {
+        XCTAssertFalse(urlHoverAffordance(actionType: 1))
         XCTAssertFalse(urlHoverAffordance(actionType: 0, modifierFlags: .shift))
-        XCTAssertFalse(urlHoverAffordance(actionType: 0, modifierFlags: .option))
+        XCTAssertFalse(urlHoverAffordance(actionType: 2, modifierFlags: .option))
     }
 
     func testURLHoverMouseMovementTrackingAllowsPlainAndCommandHover() {

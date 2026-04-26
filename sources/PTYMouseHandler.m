@@ -152,15 +152,48 @@ static BOOL iTermTideyWindowedRangeIsValid(VT100GridWindowedRange range) {
                                       mouseReporting:(BOOL)mouseReporting
                                           actionType:(NSInteger)actionType
                                 hasCachedHoverAction:(BOOL)hasCachedHoverAction {
-    if (actionType != kURLActionOpenURL) {
+    if (clickCount != 1 || mouseDragged) {
         return iTermTideyURLClickOpenPolicyNone;
     }
-    return [self tideyURLClickOpenPolicyForClickCount:clickCount
-                                         mouseDragged:mouseDragged
-                                        modifierFlags:modifierFlags
-                                      cmdClickEnabled:cmdClickEnabled
-                                           cmdPressed:cmdPressed
-                                       mouseReporting:mouseReporting];
+
+    const NSEventModifierFlags selectionModifiers =
+        (NSEventModifierFlagShift |
+         NSEventModifierFlagOption |
+         NSEventModifierFlagControl);
+    if ((modifierFlags & selectionModifiers) != 0) {
+        return iTermTideyURLClickOpenPolicyNone;
+    }
+
+    if (cmdPressed && cmdClickEnabled) {
+        if (actionType == kURLActionOpenURL) {
+            return iTermTideyURLClickOpenPolicyInAppBrowser;
+        }
+        if (actionType == kURLActionOpenExistingFile) {
+            return iTermTideyURLClickOpenPolicySemanticHistory;
+        }
+        return iTermTideyURLClickOpenPolicyNone;
+    }
+
+    const NSEventModifierFlags plainClickBlockers =
+        (NSEventModifierFlagCommand |
+         NSEventModifierFlagOption |
+         NSEventModifierFlagControl |
+         NSEventModifierFlagShift);
+    if ((modifierFlags & plainClickBlockers) != 0) {
+        return iTermTideyURLClickOpenPolicyNone;
+    }
+
+    if (mouseReporting && !hasCachedHoverAction) {
+        return iTermTideyURLClickOpenPolicyNone;
+    }
+
+    if (actionType == kURLActionOpenURL) {
+        return iTermTideyURLClickOpenPolicyExternalDefaultBrowser;
+    }
+    if (actionType == kURLActionOpenExistingFile) {
+        return iTermTideyURLClickOpenPolicySemanticHistory;
+    }
+    return iTermTideyURLClickOpenPolicyNone;
 }
 
 + (BOOL)tideyShouldSuppressMouseReportingForPlainURLClickWithClickCount:(NSInteger)clickCount

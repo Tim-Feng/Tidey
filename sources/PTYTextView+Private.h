@@ -31,6 +31,7 @@
 @protocol Porthole;
 @class PTYMouseHandler;
 @protocol PTYTrackingChildWindow;
+@class URLAction;
 
 @interface PTYTextView () <
 PTYNoteViewControllerDelegate,
@@ -65,6 +66,7 @@ NSPopoverDelegate> {
 @property(strong, readwrite) NSTouchBar *touchBar NS_AVAILABLE_MAC(10_12_2);
 @property(nonatomic, readonly) BOOL hasUnderline;
 @property(nonatomic, strong) id<iTermCancelable> lastUrlActionCanceler;
+@property(nonatomic, strong) URLAction *tideyCachedHoverURLAction;
 @property(nonatomic, readonly, strong) NSMutableArray<id<Porthole>> *portholes;
 @property(nonatomic, strong) iTermIdempotentOperationJoiner *portholesNeedUpdatesJoiner;
 @property(nonatomic) int lastPortholeWidth;  // in cells
@@ -99,4 +101,3 @@ NSPopoverDelegate> {
 - (iTermTextDrawingHelper *)newDrawingHelperForOffscreenRendering;
 
 @end
-

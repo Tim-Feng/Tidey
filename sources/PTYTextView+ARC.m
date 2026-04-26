@@ -461,7 +461,8 @@ iTermCommandInfoViewControllerDelegate>
     if ((modifierFlags & NSEventModifierFlagCommand) != 0) {
         return YES;
     }
-    return actionType == kURLActionOpenURL;
+    return (actionType == kURLActionOpenURL ||
+            actionType == kURLActionOpenExistingFile);
 }
 
 + (BOOL)tideyShouldTrackMouseMovementForURLHoverWithModifierFlags:(NSEventModifierFlags)modifierFlags {
@@ -501,10 +502,12 @@ iTermCommandInfoViewControllerDelegate>
     // Optimization
     if (!shouldQueryLink && ![self hasUnderline]) {
         DLog(@"No link hover query AND I don't have an underline");
+        self.tideyCachedHoverURLAction = nil;
         return;
     }
     if (!shouldQueryLink) {
         const BOOL changedUnderline = [self removeUnderline];
+        self.tideyCachedHoverURLAction = nil;
         const BOOL cursorChanged = [self updateCursor:event action:nil];
         DLog(@"Don't want an underline. changedUnderline=%@ cursorChanged=%@", @(changedUnderline), @(cursorChanged));
         if (changedUnderline || cursorChanged) {
@@ -541,6 +544,7 @@ iTermCommandInfoViewControllerDelegate>
     if (!action) {
         DLog(@"No action: remove underline");
         [self removeUnderline];
+        self.tideyCachedHoverURLAction = nil;
         [self updateCursor:event action:action];
         return;
     }
@@ -548,15 +552,19 @@ iTermCommandInfoViewControllerDelegate>
     const VT100GridCoord visualCoord = [self tideyURLCoordForMouseLocation:[NSEvent mouseLocation]];
     if (!VT100GridWindowedRangeContainsCoord(action.visualRange, visualCoord)) {
         DLog(@"Mouse not in action's range");
+        self.tideyCachedHoverURLAction = nil;
         return;
     }
     if (![self.class tideyShouldShowURLHoverAffordanceForActionType:action.actionType
                                                       modifierFlags:event.it_modifierFlags]) {
         DLog(@"Action is not eligible for hover affordance");
         [self removeUnderline];
+        self.tideyCachedHoverURLAction = nil;
         [self updateCursor:event action:nil];
         return;
     }
+
+    self.tideyCachedHoverURLAction = action;
 
     if ([iTermAdvancedSettingsModel enableUnderlineSemanticHistoryOnCmdHover]) {
         DLog(@"Setting underlined range to %@", VT100GridWindowedRangeDescription(action.logicalRange));
