@@ -62,9 +62,11 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 @property(nonatomic, strong) NSStackView *devicesStackView;
 @property(nonatomic, strong) NSTextField *devicesStatusLabel;
 @property(nonatomic, strong) NSTimer *countdownTimer;
+@property(nonatomic, strong) NSTimer *devicesRefreshTimer;
 @property(nonatomic, strong) NSDate *expiresAt;
 
 - (void)remotePageDidBecomeVisible;
+- (void)remotePageDidBecomeHidden;
 
 @end
 
@@ -72,6 +74,7 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 
 - (void)dealloc {
     [self.countdownTimer invalidate];
+    [self.devicesRefreshTimer invalidate];
 }
 
 - (void)loadView {
@@ -175,7 +178,17 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 }
 
 - (void)remotePageDidBecomeVisible {
+    [self startDevicesRefreshTimer];
     [self refreshPairedDevices];
+}
+
+- (void)remotePageDidBecomeHidden {
+    [self stopDevicesRefreshTimer];
+}
+
+- (void)viewWillDisappear {
+    [super viewWillDisappear];
+    [self stopDevicesRefreshTimer];
 }
 
 - (NSTextField *)labelWithFrame:(NSRect)frame string:(NSString *)string font:(NSFont *)font color:(NSColor *)color {
@@ -237,8 +250,18 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 }
 
 - (void)refreshPairedDevices {
-    self.devicesStatusLabel.stringValue = @"Loading paired devices...";
-    [self clearDeviceRows];
+    [self refreshPairedDevicesShowingLoading:YES];
+}
+
+- (void)pollPairedDevices {
+    [self refreshPairedDevicesShowingLoading:NO];
+}
+
+- (void)refreshPairedDevicesShowingLoading:(BOOL)showLoading {
+    if (showLoading) {
+        self.devicesStatusLabel.stringValue = @"Loading paired devices...";
+        [self clearDeviceRows];
+    }
 
     NSError *tokenError = nil;
     NSString *token = [self legacyPairTokenWithError:&tokenError];
@@ -273,6 +296,23 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
         });
     }];
     [task resume];
+}
+
+- (void)startDevicesRefreshTimer {
+    if (self.devicesRefreshTimer) {
+        return;
+    }
+    self.devicesRefreshTimer = [NSTimer scheduledTimerWithTimeInterval:4
+                                                                target:self
+                                                              selector:@selector(pollPairedDevices)
+                                                              userInfo:nil
+                                                               repeats:YES];
+    [[NSRunLoop mainRunLoop] addTimer:self.devicesRefreshTimer forMode:NSRunLoopCommonModes];
+}
+
+- (void)stopDevicesRefreshTimer {
+    [self.devicesRefreshTimer invalidate];
+    self.devicesRefreshTimer = nil;
 }
 
 - (void)handlePairedDevicesData:(NSData *)data {
@@ -643,11 +683,15 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
             break;
     }
     BOOL isRemotePage = (page == TideySettingsPageRemote);
+    BOOL wasRemotePage = (self.currentViewController == self.remoteViewController);
     if (self.currentViewController == nextViewController) {
         if (isRemotePage) {
             [self.remoteViewController remotePageDidBecomeVisible];
         }
         return;
+    }
+    if (wasRemotePage && !isRemotePage) {
+        [self.remoteViewController remotePageDidBecomeHidden];
     }
     [self.currentViewController.view removeFromSuperview];
     self.currentViewController = nextViewController;
