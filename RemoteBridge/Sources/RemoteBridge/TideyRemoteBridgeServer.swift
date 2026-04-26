@@ -10,6 +10,8 @@ final class TideyRemoteBridgeServer {
     private let host: String
     private let port: Int
     private let token: String
+    private let authenticator: BridgeAuthenticator
+    private let pairingController: BridgePairingController
     private let socketClient: TideySocketClient
     private let eventHub: AgentEventHub
     private let workspaceEventHub: WorkspaceEventHub
@@ -20,6 +22,8 @@ final class TideyRemoteBridgeServer {
     init(host: String = "0.0.0.0",
          port: Int = 4817,
          token: String,
+         authenticator: BridgeAuthenticator,
+         pairingController: BridgePairingController,
          socketClient: TideySocketClient,
          eventHub: AgentEventHub,
          workspaceEventHub: WorkspaceEventHub,
@@ -28,6 +32,8 @@ final class TideyRemoteBridgeServer {
         self.host = host
         self.port = port
         self.token = token
+        self.authenticator = authenticator
+        self.pairingController = pairingController
         self.socketClient = socketClient
         self.eventHub = eventHub
         self.workspaceEventHub = workspaceEventHub
@@ -39,9 +45,9 @@ final class TideyRemoteBridgeServer {
         try registryMonitor.start()
         let upgrader = NIOWebSocketServerUpgrader(
             maxFrameSize: Self.maximumWebSocketFrameSizeBytes,
-            shouldUpgrade: { [token] channel, head in
+            shouldUpgrade: { [authenticator] channel, head in
                 let authHeader = head.headers.first(name: "Authorization")
-                guard authHeader == "Bearer \(token)" else {
+                guard authenticator.isAuthorized(authorizationHeader: authHeader) else {
                     return channel.eventLoop.makeFailedFuture(BridgeInternalError.unauthorized)
                 }
                 return channel.eventLoop.makeSucceededFuture([:])
@@ -58,8 +64,11 @@ final class TideyRemoteBridgeServer {
         let bootstrap = ServerBootstrap(group: group)
             .serverChannelOption(ChannelOptions.backlog, value: 16)
             .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
-            .childChannelInitializer { [token, registryMonitor, eventHub, observability] channel in
-                let httpHandler = HTTPHandler(token: token,
+            .childChannelInitializer { [token, authenticator, pairingController, port, registryMonitor, eventHub, observability] channel in
+                let httpHandler = HTTPHandler(legacyPairToken: token,
+                                              authenticator: authenticator,
+                                              pairingController: pairingController,
+                                              bridgePort: port,
                                               registryMonitor: registryMonitor,
                                               eventHub: eventHub,
                                               observability: observability)
@@ -91,48 +100,143 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
     typealias InboundIn = HTTPServerRequestPart
     typealias OutboundOut = HTTPServerResponsePart
 
-    private let token: String
+    private let legacyPairToken: String
+    private let authenticator: BridgeAuthenticator
+    private let pairingController: BridgePairingController
+    private let bridgePort: Int
     private let registryMonitor: AgentSessionRegistryMonitor
     private let eventHub: AgentEventHub
     private let observability: BridgeObservabilityCenter
     private let encoder = JSONEncoder()
+    private let decoder = JSONDecoder()
+    private var pendingHead: HTTPRequestHead?
+    private var pendingBody: ByteBuffer?
 
-    init(token: String,
+    init(legacyPairToken: String,
+         authenticator: BridgeAuthenticator,
+         pairingController: BridgePairingController,
+         bridgePort: Int,
          registryMonitor: AgentSessionRegistryMonitor,
          eventHub: AgentEventHub,
          observability: BridgeObservabilityCenter) {
-        self.token = token
+        self.legacyPairToken = legacyPairToken
+        self.authenticator = authenticator
+        self.pairingController = pairingController
+        self.bridgePort = bridgePort
         self.registryMonitor = registryMonitor
         self.eventHub = eventHub
         self.observability = observability
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys]
+        decoder.dateDecodingStrategy = .iso8601
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         let part = unwrapInboundIn(data)
-        if case .head(let head) = part {
+        switch part {
+        case .head(let head):
+            pendingHead = head
+            pendingBody = context.channel.allocator.buffer(capacity: 0)
             if head.uri == "/admin/status" {
                 respondToAdminStatus(head: head, context: context)
+                clearPendingRequest()
                 return
             }
-            if head.uri != "/ws" {
-                var headers = HTTPHeaders()
-                headers.add(name: "content-length", value: "0")
-                let response = HTTPResponseHead(version: head.version, status: .notFound, headers: headers)
-                context.write(wrapOutboundOut(.head(response)), promise: nil)
-                context.writeAndFlush(wrapOutboundOut(.end(nil)), promise: nil)
+            if requestPath(from: head.uri) == "/ws" {
+                return
             }
+        case .body(var body):
+            pendingBody?.writeBuffer(&body)
+        case .end:
+            guard let head = pendingHead else { return }
+            defer { clearPendingRequest() }
+            handleHTTP(head: head, body: pendingBody, context: context)
+        }
+    }
+
+    private func handleHTTP(head: HTTPRequestHead, body: ByteBuffer?, context: ChannelHandlerContext) {
+        switch requestPath(from: head.uri) {
+        case "/admin/pair_payload":
+            respondToPairPayload(head: head, context: context)
+        case "/pair/exchange":
+            respondToPairExchange(head: head, body: body, context: context)
+        case "/ws":
+            return
+        default:
+            respond(status: .notFound, data: Data(), context: context, version: head.version)
+        }
+    }
+
+    private func respondToPairPayload(head: HTTPRequestHead, context: ChannelHandlerContext) {
+        guard authenticator.isLegacyTokenAuthorized(authorizationHeader: head.headers.first(name: "Authorization")) else {
+            respond(status: .unauthorized, data: Data(), context: context, version: head.version)
+            return
+        }
+        do {
+            let endpoint = BridgePairEndpoint(scheme: "ws", host: "127.0.0.1", port: bridgePort, path: "/")
+            let payload = try pairingController.createPairPayload(lanEndpoints: [endpoint])
+            let data = try encoder.encode(payload)
+            respond(status: .ok,
+                    data: data,
+                    context: context,
+                    version: head.version,
+                    contentType: "application/json")
+        } catch {
+            respond(error: BridgeInternalError.invalidRequest(error.localizedDescription).payload,
+                    status: .badRequest,
+                    context: context,
+                    version: head.version)
+        }
+    }
+
+    private func respondToPairExchange(head: HTTPRequestHead, body: ByteBuffer?, context: ChannelHandlerContext) {
+        guard head.method == .POST else {
+            respond(status: .methodNotAllowed, data: Data(), context: context, version: head.version)
+            return
+        }
+        do {
+            var body = body ?? context.channel.allocator.buffer(capacity: 0)
+            guard let text = body.readString(length: body.readableBytes),
+                  let data = text.data(using: .utf8) else {
+                throw BridgeInternalError.invalidRequest("pair.exchange requires a JSON request body")
+            }
+            let request = try decoder.decode(BridgePairExchangeRequest.self, from: data)
+            let result = try pairingController.exchange(request)
+            let response = BridgeResponse(id: nil,
+                                          ok: true,
+                                          result: [
+                                            "host_id": .string(result.hostID),
+                                            "display_name": .string(result.displayName),
+                                            "device_credential": .string(result.deviceCredential),
+                                            "credential_type": .string(result.credentialType),
+                                          ],
+                                          error: nil)
+            respond(status: .ok,
+                    data: try encoder.encode(response),
+                    context: context,
+                    version: head.version,
+                    contentType: "application/json")
+        } catch let error as BridgeInternalError {
+            let status: HTTPResponseStatus = {
+                switch error {
+                case .unauthorized:
+                    return .unauthorized
+                default:
+                    return .badRequest
+                }
+            }()
+            respond(error: error.payload, status: status, context: context, version: head.version)
+        } catch {
+            respond(error: BridgeInternalError.invalidRequest(error.localizedDescription).payload,
+                    status: .badRequest,
+                    context: context,
+                    version: head.version)
         }
     }
 
     private func respondToAdminStatus(head: HTTPRequestHead, context: ChannelHandlerContext) {
-        guard head.headers.first(name: "Authorization") == "Bearer \(token)" else {
-            var headers = HTTPHeaders()
-            headers.add(name: "content-length", value: "0")
-            let response = HTTPResponseHead(version: head.version, status: .unauthorized, headers: headers)
-            context.write(wrapOutboundOut(.head(response)), promise: nil)
-            context.writeAndFlush(wrapOutboundOut(.end(nil)), promise: nil)
+        guard authenticator.isLegacyTokenAuthorized(authorizationHeader: head.headers.first(name: "Authorization")) else {
+            respond(status: .unauthorized, data: Data(), context: context, version: head.version)
             return
         }
 
@@ -150,16 +254,53 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
                                              isActive: eventSnapshot?.isActive ?? false)
         })
         let data = (try? encoder.encode(status)) ?? Data("{}".utf8)
+        respond(status: .ok,
+                data: data,
+                context: context,
+                version: head.version,
+                contentType: "application/json")
+    }
+
+    private func respond(error: BridgeErrorPayload,
+                         status: HTTPResponseStatus,
+                         context: ChannelHandlerContext,
+                         version: HTTPVersion) {
+        let response = BridgeResponse(id: nil, ok: false, result: nil, error: error)
+        let data = (try? encoder.encode(response)) ?? Data()
+        respond(status: status,
+                data: data,
+                context: context,
+                version: version,
+                contentType: "application/json")
+    }
+
+    private func respond(status: HTTPResponseStatus,
+                         data: Data,
+                         context: ChannelHandlerContext,
+                         version: HTTPVersion,
+                         contentType: String? = nil) {
         var buffer = context.channel.allocator.buffer(capacity: data.count)
         buffer.writeBytes(data)
-
         var headers = HTTPHeaders()
-        headers.add(name: "content-type", value: "application/json")
+        if let contentType {
+            headers.add(name: "content-type", value: contentType)
+        }
         headers.add(name: "content-length", value: "\(data.count)")
-        let response = HTTPResponseHead(version: head.version, status: .ok, headers: headers)
+        let response = HTTPResponseHead(version: version, status: status, headers: headers)
         context.write(wrapOutboundOut(.head(response)), promise: nil)
-        context.write(wrapOutboundOut(.body(.byteBuffer(buffer))), promise: nil)
+        if data.isEmpty == false {
+            context.write(wrapOutboundOut(.body(.byteBuffer(buffer))), promise: nil)
+        }
         context.writeAndFlush(wrapOutboundOut(.end(nil)), promise: nil)
+    }
+
+    private func clearPendingRequest() {
+        pendingHead = nil
+        pendingBody = nil
+    }
+
+    private func requestPath(from uri: String) -> String {
+        String(uri.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first ?? "")
     }
 }
 

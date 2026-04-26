@@ -2,6 +2,15 @@ import Foundation
 
 let tokenStore = PairTokenStore()
 let token = try tokenStore.loadOrCreateToken()
+let bridgePaths = BridgePaths()
+let deviceCredentialStore = BridgeDeviceCredentialStore(paths: bridgePaths)
+let hostIdentityStore = BridgeHostIdentityStore(paths: bridgePaths)
+let pairSessionStore = BridgePairSessionStore()
+let pairingController = BridgePairingController(hostIdentityStore: hostIdentityStore,
+                                                pairSessionStore: pairSessionStore,
+                                                deviceCredentialStore: deviceCredentialStore)
+let authenticator = BridgeAuthenticator(legacyPairToken: token,
+                                        deviceCredentialStore: deviceCredentialStore)
 let locator = TideySocketLocator()
 let socketClient = TideySocketClient(locator: locator)
 let eventHub = AgentEventHub()
@@ -10,6 +19,8 @@ let registryMonitor = AgentSessionRegistryMonitor(hub: eventHub, socketClient: s
 let workspaceEventMonitor = TideyWorkspaceEventMonitor(locator: locator, hub: workspaceEventHub)
 let observability = BridgeObservabilityCenter()
 let server = TideyRemoteBridgeServer(token: token,
+                                     authenticator: authenticator,
+                                     pairingController: pairingController,
                                      socketClient: socketClient,
                                      eventHub: eventHub,
                                      workspaceEventHub: workspaceEventHub,
