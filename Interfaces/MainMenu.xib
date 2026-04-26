@@ -36,6 +36,11 @@
                                     <action selector="checkForUpdatesFromMenu:" target="201" id="vmh-LD-TwW"/>
                                 </connections>
                             </menuItem>
+                            <menuItem title="Sync to your phone" identifier="Sync to your phone" id="Tdy-SR-Phone">
+                                <connections>
+                                    <action selector="syncToRemote:" target="201" id="Tdy-SR-Action"/>
+                                </connections>
+                            </menuItem>
                             <menuItem isSeparatorItem="YES" id="Dpc-y9-dq3">
                                 <modifierMask key="keyEquivalentModifierMask" command="YES"/>
                             </menuItem>

@@ -3,5 +3,6 @@
 @interface TideySettingsWindowController : NSWindowController
 
 - (void)showWindowSelectingAppearance;
+- (void)showWindowSelectingRemote;
 
 @end

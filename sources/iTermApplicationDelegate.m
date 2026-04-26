@@ -3091,11 +3091,22 @@ static iTermKeyEventReplayer *gReplayer;
     [self showTideySettingsWindow];
 }
 
+- (IBAction)syncToRemote:(id)sender {
+    [self showTideyRemoteSettingsWindow];
+}
+
 - (void)showTideySettingsWindow {
     if (!_tideySettingsWindowController) {
         _tideySettingsWindowController = [[TideySettingsWindowController alloc] init];
     }
     [_tideySettingsWindowController showWindowSelectingAppearance];
+}
+
+- (void)showTideyRemoteSettingsWindow {
+    if (!_tideySettingsWindowController) {
+        _tideySettingsWindowController = [[TideySettingsWindowController alloc] init];
+    }
+    [_tideySettingsWindowController showWindowSelectingRemote];
 }
 
 - (IBAction)showBookmarkWindow:(id)sender {
