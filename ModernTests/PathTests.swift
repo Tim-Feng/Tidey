@@ -184,6 +184,24 @@ final class PathTests: XCTestCase {
                         ObjCBool(hasRootView)).boolValue
     }
 
+    private func shouldFocusInAppBrowserAfterOpen(webPolicy: TideyWebURLOpenPolicy,
+                                                  inBackground: Bool,
+                                                  hasRootView: Bool) -> Bool {
+        let selector = NSSelectorFromString("tideyShouldFocusInAppBrowserAfterOpeningWebURLWithWebPolicy:inBackground:hasRootView:")
+        guard let method = class_getClassMethod(NSWorkspace.self, selector) else {
+            XCTFail("Missing NSWorkspace browser focus decision helper")
+            return false
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, UInt, ObjCBool, ObjCBool) -> ObjCBool
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        return function(NSWorkspace.self,
+                        selector,
+                        webPolicy.rawValue,
+                        ObjCBool(inBackground),
+                        ObjCBool(hasRootView)).boolValue
+    }
+
     private func urlHoverAffordance(actionType: Int,
                                     modifierFlags: NSEvent.ModifierFlags = []) -> Bool {
         guard let textViewClass = NSClassFromString("PTYTextView") as? AnyClass else {
@@ -849,6 +867,24 @@ final class PathTests: XCTestCase {
         XCTAssertFalse(shouldOpenWebURLInApp("https://example.com",
                                              webPolicy: .automatic,
                                              hasRootView: false))
+    }
+
+    func testBrowserFocusDecisionAllowsAutomaticForegroundInAppOpen() {
+        XCTAssertTrue(shouldFocusInAppBrowserAfterOpen(webPolicy: .automatic,
+                                                       inBackground: false,
+                                                       hasRootView: true))
+    }
+
+    func testBrowserFocusDecisionRejectsBackgroundExternalAndMissingRootView() {
+        XCTAssertFalse(shouldFocusInAppBrowserAfterOpen(webPolicy: .automatic,
+                                                        inBackground: true,
+                                                        hasRootView: true))
+        XCTAssertFalse(shouldFocusInAppBrowserAfterOpen(webPolicy: .externalDefaultBrowser,
+                                                        inBackground: false,
+                                                        hasRootView: true))
+        XCTAssertFalse(shouldFocusInAppBrowserAfterOpen(webPolicy: .automatic,
+                                                        inBackground: false,
+                                                        hasRootView: false))
     }
 
     func testURLHoverAffordanceAllowsPlainURLAndCommandSemanticHistory() {

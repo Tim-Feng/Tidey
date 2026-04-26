@@ -80,6 +80,12 @@
             ([scheme isEqualToString:@"http"] || [scheme isEqualToString:@"https"]));
 }
 
++ (BOOL)tideyShouldFocusInAppBrowserAfterOpeningWebURLWithWebPolicy:(iTermWebURLOpenPolicy)webPolicy
+                                                        inBackground:(BOOL)inBackground
+                                                          hasRootView:(BOOL)hasRootView {
+    return NO;
+}
+
 // A very weak check of whether the URL is openable by the built-in browser. This can be used to
 // check if it's worth nagging the user to install the plugin to open this URL.
 - (BOOL)it_localBrowserCouldHypotheticallyHandleURL:(NSURL *)url {

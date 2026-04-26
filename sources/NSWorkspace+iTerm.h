@@ -52,5 +52,8 @@
 - (void)it_revealInFinder:(NSString *)path;
 - (BOOL)it_urlIsConditionallyLocallyOpenable:(NSURL *)url;
 - (BOOL)it_urlIsLocallyOpenableWithUpsell:(NSURL *)url;
++ (BOOL)tideyShouldFocusInAppBrowserAfterOpeningWebURLWithWebPolicy:(iTermWebURLOpenPolicy)webPolicy
+                                                        inBackground:(BOOL)inBackground
+                                                          hasRootView:(BOOL)hasRootView;
 
 @end
