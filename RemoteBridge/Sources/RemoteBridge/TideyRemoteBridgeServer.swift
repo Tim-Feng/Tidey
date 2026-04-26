@@ -221,6 +221,9 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                 var workspaceReplayEnvelopes = [WorkspaceEventEnvelope]()
                 do {
                     let request = try decoder.decode(BridgeRequest.self, from: Data(text.utf8))
+                    if request.action == "image_upload" {
+                        BridgeImageUploadDiagnostics.log("server received request_id=\(request.id) action=\(request.action) params_keys=\(request.params?.keys.sorted().joined(separator: ",") ?? "-") base64_length=\(request.params?["data_base64"]?.stringValue?.count ?? 0)")
+                    }
                     if let localResult = self.handleLocalRequest(request, context: context) {
                         response = localResult.response
                         agentReplayEnvelopes = localResult.agentReplayEnvelopes
@@ -259,22 +262,35 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
     private func handleLocalRequest(_ request: BridgeRequest,
                                     context: ChannelHandlerContext) -> LocalRequestResult? {
         do {
+            if request.action == "image_upload" {
+                BridgeImageUploadDiagnostics.log("local dispatch enter request_id=\(request.id)")
+            }
             if let response = try inputActionHandler.handle(request) {
+                if request.action == "image_upload" {
+                    BridgeImageUploadDiagnostics.log("local dispatch handled_by=input request_id=\(request.id)")
+                }
                 return LocalRequestResult(response: response,
                                           agentReplayEnvelopes: [],
                                           workspaceReplayEnvelopes: [])
             }
             if let response = try fileActionHandler.handle(request) {
+                if request.action == "image_upload" {
+                    BridgeImageUploadDiagnostics.log("local dispatch handled_by=file request_id=\(request.id)")
+                }
                 return LocalRequestResult(response: response,
                                           agentReplayEnvelopes: [],
                                           workspaceReplayEnvelopes: [])
             }
             if let response = try imageUploadHandler.handle(request) {
+                BridgeImageUploadDiagnostics.log("local dispatch handled_by=image_upload request_id=\(request.id) ok=\(response.ok)")
                 return LocalRequestResult(response: response,
                                           agentReplayEnvelopes: [],
                                           workspaceReplayEnvelopes: [])
             }
         } catch let bridgeError as BridgeInternalError {
+            if request.action == "image_upload" {
+                BridgeImageUploadDiagnostics.log("local dispatch bridge_error request_id=\(request.id) code=\(bridgeError.payload.code) message=\(bridgeError.payload.message)")
+            }
             return LocalRequestResult(response: BridgeResponse(id: request.id,
                                                                ok: false,
                                                                result: nil,
@@ -282,6 +298,9 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                                       agentReplayEnvelopes: [],
                                       workspaceReplayEnvelopes: [])
         } catch {
+            if request.action == "image_upload" {
+                BridgeImageUploadDiagnostics.log("local dispatch error request_id=\(request.id) error=\(error)")
+            }
             return LocalRequestResult(response: BridgeResponse(id: request.id,
                                                                ok: false,
                                                                result: nil,

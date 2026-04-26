@@ -1,6 +1,15 @@
 import CryptoKit
 import Foundation
 
+enum BridgeImageUploadDiagnostics {
+    static func log(_ message: String) {
+        BridgeLogger.server.info("[image_upload] \(message, privacy: .public)")
+        if let data = "[image_upload] \(message)\n".data(using: .utf8) {
+            FileHandle.standardError.write(data)
+        }
+    }
+}
+
 protocol BridgeImageUploadDestinationResolving {
     func uploadDirectory() throws -> URL
 }
@@ -29,21 +38,34 @@ struct BridgeImageUploadHandler {
         guard request.action == "image_upload" else {
             return nil
         }
-        let params = try BridgeImageUploadRequest(params: request.params)
+        BridgeImageUploadDiagnostics.log("handler enter request_id=\(request.id) action=\(request.action) has_params=\(request.params != nil)")
+        let params: BridgeImageUploadRequest
+        do {
+            params = try BridgeImageUploadRequest(params: request.params)
+            BridgeImageUploadDiagnostics.log("params parsed request_id=\(request.id) workspace_id=\(params.workspaceID) panel_id=\(params.panelID) mime=\(params.mimeType) base64_length=\(params.base64Data.count)")
+        } catch {
+            BridgeImageUploadDiagnostics.log("params rejected request_id=\(request.id) error=\(error)")
+            throw error
+        }
         guard params.mimeType == Self.allowedMimeType else {
+            BridgeImageUploadDiagnostics.log("mime rejected request_id=\(request.id) mime=\(params.mimeType)")
             throw BridgeInternalError.invalidRequest("image_upload only accepts image/jpeg")
         }
         guard let data = Data(base64Encoded: params.base64Data) else {
+            BridgeImageUploadDiagnostics.log("base64 rejected request_id=\(request.id) base64_length=\(params.base64Data.count)")
             throw BridgeInternalError.invalidRequest("image_upload data_base64 is not valid base64")
         }
         guard data.count <= Self.maximumUploadSizeBytes else {
+            BridgeImageUploadDiagnostics.log("size rejected request_id=\(request.id) bytes=\(data.count) limit=\(Self.maximumUploadSizeBytes)")
             throw BridgeInternalError.fileTooLarge("圖片超過 10MB，無法上傳。")
         }
 
         let directory = try destinationResolver.uploadDirectory()
+        BridgeImageUploadDiagnostics.log("write start request_id=\(request.id) directory=\(directory.path) bytes=\(data.count)")
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         let targetURL = directory.appendingPathComponent(filenameGenerator.nextFilename(), isDirectory: false)
         try data.write(to: targetURL, options: .atomic)
+        BridgeImageUploadDiagnostics.log("write success request_id=\(request.id) path=\(targetURL.path) bytes=\(data.count)")
 
         return BridgeResponse(id: request.id,
                               ok: true,
