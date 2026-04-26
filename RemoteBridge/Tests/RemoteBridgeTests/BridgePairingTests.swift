@@ -63,6 +63,24 @@ final class BridgePairingTests: XCTestCase {
         }
     }
 
+    func testPairExchangeAddsDeviceToPairedDeviceList() throws {
+        let fixture = try PairingFixture()
+        let payload = try fixture.controller.createPairPayload(lanEndpoints: [])
+
+        _ = try fixture.controller.exchange(BridgePairExchangeRequest(action: "pair.exchange",
+                                                                      hostID: payload.hostID,
+                                                                      pairSecret: payload.pairSecret,
+                                                                      deviceName: "Tim's iPhone",
+                                                                      devicePublicKey: nil))
+
+        let devices = try fixture.controller.listDevices()
+
+        XCTAssertEqual(devices.count, 1)
+        XCTAssertEqual(devices.first?.deviceName, "Tim's iPhone")
+        XCTAssertEqual(devices.first?.pairedAt, fixture.startDate)
+        XCTAssertNil(devices.first?.lastConnectedAt)
+    }
+
     func testPairExchangeRejectsWrongOrExpiredSecret() throws {
         let fixture = try PairingFixture()
         let payload = try fixture.controller.createPairPayload(lanEndpoints: [])
