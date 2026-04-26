@@ -118,7 +118,7 @@ private func makeImageUploadFixture(createDirectory: Bool = true) throws -> Imag
     } else {
         try fileManager.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
     }
-    let handler = BridgeImageUploadHandler(destinationResolver: FixedImageUploadDestinationResolver(uploadDirectory: uploadDirectory),
+    let handler = BridgeImageUploadHandler(destinationResolver: FixedImageUploadDestinationResolver(directoryURL: uploadDirectory),
                                            filenameGenerator: FixedImageUploadFilenameGenerator(filename: "20260426-120000-abcdef.jpg"),
                                            fileManager: fileManager)
     return ImageUploadFixture(tempDirectory: tempDirectory,
@@ -128,10 +128,10 @@ private func makeImageUploadFixture(createDirectory: Bool = true) throws -> Imag
 }
 
 private struct FixedImageUploadDestinationResolver: BridgeImageUploadDestinationResolving {
-    let uploadDirectory: URL
+    let directoryURL: URL
 
     func uploadDirectory() throws -> URL {
-        uploadDirectory
+        directoryURL
     }
 }
 
