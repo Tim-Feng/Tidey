@@ -99,6 +99,68 @@ final class BridgePairingTests: XCTestCase {
         XCTAssertFalse(authenticator.isAuthorized(authorizationHeader: "Bearer unknown-token"))
         XCTAssertFalse(authenticator.isAuthorized(authorizationHeader: nil))
     }
+
+    func testLANEndpointResolverFiltersLoopbackAndLinkLocalAddresses() {
+        let candidates = [
+            BridgeLANEndpointCandidate(interfaceName: "lo0",
+                                       host: "127.0.0.1",
+                                       addressFamily: .ipv4,
+                                       isUp: true,
+                                       isLoopback: true),
+            BridgeLANEndpointCandidate(interfaceName: "en0",
+                                       host: "169.254.12.10",
+                                       addressFamily: .ipv4,
+                                       isUp: true,
+                                       isLoopback: false),
+            BridgeLANEndpointCandidate(interfaceName: "en0",
+                                       host: "192.168.1.23",
+                                       addressFamily: .ipv4,
+                                       isUp: true,
+                                       isLoopback: false),
+            BridgeLANEndpointCandidate(interfaceName: "en1",
+                                       host: "10.0.0.42",
+                                       addressFamily: .ipv4,
+                                       isUp: false,
+                                       isLoopback: false),
+            BridgeLANEndpointCandidate(interfaceName: "en0",
+                                       host: "fe80::1",
+                                       addressFamily: .ipv6,
+                                       isUp: true,
+                                       isLoopback: false),
+            BridgeLANEndpointCandidate(interfaceName: "en0",
+                                       host: "fd12:3456:789a::1",
+                                       addressFamily: .ipv6,
+                                       isUp: true,
+                                       isLoopback: false),
+        ]
+
+        let endpoints = BridgeLANEndpointResolver.endpoints(from: candidates, port: 4817)
+
+        XCTAssertEqual(endpoints, [
+            BridgePairEndpoint(scheme: "ws", host: "192.168.1.23", port: 4817, path: "/"),
+            BridgePairEndpoint(scheme: "ws", host: "fd12:3456:789a::1", port: 4817, path: "/"),
+        ])
+    }
+
+    func testPairPayloadQRCodeStringDecodesToRawPairPayload() throws {
+        let fixture = try PairingFixture()
+        let endpoint = BridgePairEndpoint(scheme: "ws",
+                                          host: "192.168.1.23",
+                                          port: 4817,
+                                          path: "/")
+        let payload = try fixture.controller.createPairPayload(lanEndpoints: [endpoint])
+
+        let qrPayload = try BridgePairPayloadQRCodeEncoder.qrPayloadString(for: payload)
+        let data = try XCTUnwrap(BridgePairPayloadQRCodeEncoder.decodeQRCodePayloadString(qrPayload))
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(BridgePairPayload.self, from: data)
+
+        XCTAssertEqual(decoded, payload)
+        XCTAssertFalse(qrPayload.contains("+"))
+        XCTAssertFalse(qrPayload.contains("/"))
+        XCTAssertFalse(qrPayload.contains("="))
+    }
 }
 
 private final class PairingFixture {

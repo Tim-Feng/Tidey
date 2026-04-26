@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 import Security
 
@@ -36,6 +37,133 @@ struct BridgePairPayload: Codable, Equatable, Sendable {
         case pairSecret = "pair_secret"
         case issuedAt = "issued_at"
         case expiresAt = "expires_at"
+    }
+}
+
+enum BridgeLANEndpointAddressFamily: Sendable {
+    case ipv4
+    case ipv6
+}
+
+struct BridgeLANEndpointCandidate: Equatable, Sendable {
+    let interfaceName: String
+    let host: String
+    let addressFamily: BridgeLANEndpointAddressFamily
+    let isUp: Bool
+    let isLoopback: Bool
+}
+
+enum BridgeLANEndpointResolver {
+    static func resolve(port: Int) -> [BridgePairEndpoint] {
+        endpoints(from: currentInterfaceCandidates(), port: port)
+    }
+
+    static func endpoints(from candidates: [BridgeLANEndpointCandidate],
+                          port: Int) -> [BridgePairEndpoint] {
+        var seenHosts = Set<String>()
+        return candidates
+            .filter { candidate in
+                candidate.isUp &&
+                !candidate.isLoopback &&
+                !isLinkLocalOrLoopbackHost(candidate.host)
+            }
+            .sorted { lhs, rhs in
+                if lhs.addressFamily != rhs.addressFamily {
+                    return lhs.addressFamily == .ipv4
+                }
+                return lhs.host.localizedStandardCompare(rhs.host) == .orderedAscending
+            }
+            .compactMap { candidate in
+                guard seenHosts.insert(candidate.host).inserted else {
+                    return nil
+                }
+                return BridgePairEndpoint(scheme: "ws",
+                                          host: candidate.host,
+                                          port: port,
+                                          path: "/")
+            }
+    }
+
+    private static func currentInterfaceCandidates() -> [BridgeLANEndpointCandidate] {
+        var interfaceList: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&interfaceList) == 0, let firstInterface = interfaceList else {
+            return []
+        }
+        defer { freeifaddrs(interfaceList) }
+
+        var candidates = [BridgeLANEndpointCandidate]()
+        var cursor: UnsafeMutablePointer<ifaddrs>? = firstInterface
+        while let interface = cursor {
+            defer { cursor = interface.pointee.ifa_next }
+            guard let address = interface.pointee.ifa_addr else {
+                continue
+            }
+            let family = Int32(address.pointee.sa_family)
+            let addressFamily: BridgeLANEndpointAddressFamily
+            switch family {
+            case AF_INET:
+                addressFamily = .ipv4
+            case AF_INET6:
+                addressFamily = .ipv6
+            default:
+                continue
+            }
+
+            var hostBuffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            let result = getnameinfo(address,
+                                     socklen_t(address.pointee.sa_len),
+                                     &hostBuffer,
+                                     socklen_t(hostBuffer.count),
+                                     nil,
+                                     0,
+                                     NI_NUMERICHOST)
+            guard result == 0 else {
+                continue
+            }
+            let flags = Int32(interface.pointee.ifa_flags)
+            candidates.append(BridgeLANEndpointCandidate(interfaceName: String(cString: interface.pointee.ifa_name),
+                                                        host: String(cString: hostBuffer),
+                                                        addressFamily: addressFamily,
+                                                        isUp: (flags & IFF_UP) != 0,
+                                                        isLoopback: (flags & IFF_LOOPBACK) != 0))
+        }
+        return candidates
+    }
+
+    private static func isLinkLocalOrLoopbackHost(_ host: String) -> Bool {
+        let lowercaseHost = host.lowercased()
+        return host == "0.0.0.0" ||
+               host.hasPrefix("127.") ||
+               host.hasPrefix("169.254.") ||
+               lowercaseHost == "::1" ||
+               lowercaseHost.hasPrefix("fe80:")
+    }
+}
+
+enum BridgePairPayloadQRCodeEncoder {
+    static func qrPayloadString(for payload: BridgePairPayload) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys]
+        return base64URLEncoded(try encoder.encode(payload))
+    }
+
+    static func decodeQRCodePayloadString(_ string: String) -> Data? {
+        var base64 = string
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        let remainder = base64.count % 4
+        if remainder > 0 {
+            base64 += String(repeating: "=", count: 4 - remainder)
+        }
+        return Data(base64Encoded: base64)
+    }
+
+    private static func base64URLEncoded(_ data: Data) -> String {
+        data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
     }
 }
 
