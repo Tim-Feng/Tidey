@@ -33,7 +33,8 @@ static const NSUInteger kRectangularSelectionModifierMask = (kRectangularSelecti
 typedef NS_ENUM(NSInteger, iTermTideyURLClickOpenPolicy) {
     iTermTideyURLClickOpenPolicyNone,
     iTermTideyURLClickOpenPolicyInAppBrowser,
-    iTermTideyURLClickOpenPolicyExternalDefaultBrowser
+    iTermTideyURLClickOpenPolicyExternalDefaultBrowser,
+    iTermTideyURLClickOpenPolicySemanticHistory
 };
 
 static double Square(double n) {
@@ -141,6 +142,25 @@ static BOOL iTermTideyWindowedRangeIsValid(VT100GridWindowedRange range) {
         return iTermTideyURLClickOpenPolicyExternalDefaultBrowser;
     }
     return iTermTideyURLClickOpenPolicyNone;
+}
+
++ (NSInteger)tideyActionClickOpenPolicyForClickCount:(NSInteger)clickCount
+                                        mouseDragged:(BOOL)mouseDragged
+                                       modifierFlags:(NSEventModifierFlags)modifierFlags
+                                     cmdClickEnabled:(BOOL)cmdClickEnabled
+                                          cmdPressed:(BOOL)cmdPressed
+                                      mouseReporting:(BOOL)mouseReporting
+                                          actionType:(NSInteger)actionType
+                                hasCachedHoverAction:(BOOL)hasCachedHoverAction {
+    if (actionType != kURLActionOpenURL) {
+        return iTermTideyURLClickOpenPolicyNone;
+    }
+    return [self tideyURLClickOpenPolicyForClickCount:clickCount
+                                         mouseDragged:mouseDragged
+                                        modifierFlags:modifierFlags
+                                      cmdClickEnabled:cmdClickEnabled
+                                           cmdPressed:cmdPressed
+                                       mouseReporting:mouseReporting];
 }
 
 + (BOOL)tideyShouldSuppressMouseReportingForPlainURLClickWithClickCount:(NSInteger)clickCount

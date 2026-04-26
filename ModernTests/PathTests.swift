@@ -104,6 +104,14 @@ final class PathTests: XCTestCase {
         case none = 0
         case inAppBrowser = 1
         case externalDefaultBrowser = 2
+        case semanticHistory = 3
+    }
+
+    private enum TideyURLActionType: Int {
+        case openURL = 0
+        case smartSelectionAction = 1
+        case openExistingFile = 2
+        case openImage = 3
     }
 
     private enum TideyWebURLOpenPolicy: UInt {
@@ -137,6 +145,39 @@ final class PathTests: XCTestCase {
                            ObjCBool(cmdClickEnabled),
                            ObjCBool(cmdPressed),
                            ObjCBool(mouseReporting))
+        return TideyURLClickOpenPolicy(rawValue: raw) ?? .none
+    }
+
+    private func actionClickOpenPolicy(clickCount: Int = 1,
+                                       mouseDragged: Bool = false,
+                                       modifierFlags: NSEvent.ModifierFlags = [],
+                                       cmdClickEnabled: Bool = true,
+                                       cmdPressed: Bool = false,
+                                       mouseReporting: Bool = false,
+                                       actionType: TideyURLActionType,
+                                       hasCachedHoverAction: Bool = false) -> TideyURLClickOpenPolicy {
+        guard let mouseHandlerClass = NSClassFromString("PTYMouseHandler") as? AnyClass else {
+            XCTFail("Missing PTYMouseHandler")
+            return .none
+        }
+        let selector = NSSelectorFromString("tideyActionClickOpenPolicyForClickCount:mouseDragged:modifierFlags:cmdClickEnabled:cmdPressed:mouseReporting:actionType:hasCachedHoverAction:")
+        guard let method = class_getClassMethod(mouseHandlerClass, selector) else {
+            XCTFail("Missing generic action click open policy helper")
+            return .none
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, Int, ObjCBool, UInt, ObjCBool, ObjCBool, ObjCBool, Int, ObjCBool) -> Int
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        let raw = function(mouseHandlerClass,
+                           selector,
+                           clickCount,
+                           ObjCBool(mouseDragged),
+                           modifierFlags.rawValue,
+                           ObjCBool(cmdClickEnabled),
+                           ObjCBool(cmdPressed),
+                           ObjCBool(mouseReporting),
+                           actionType.rawValue,
+                           ObjCBool(hasCachedHoverAction))
         return TideyURLClickOpenPolicy(rawValue: raw) ?? .none
     }
 
@@ -838,6 +879,49 @@ final class PathTests: XCTestCase {
         XCTAssertEqual(urlClickOpenPolicy(mouseReporting: true), .none)
         XCTAssertEqual(urlClickOpenPolicy(modifierFlags: .shift), .none)
         XCTAssertEqual(urlClickOpenPolicy(clickCount: 2), .none)
+    }
+
+    func testGenericURLActionClickPolicyOpensURLAndFileActions() {
+        XCTAssertEqual(actionClickOpenPolicy(actionType: .openURL), .externalDefaultBrowser)
+        XCTAssertEqual(actionClickOpenPolicy(modifierFlags: .command,
+                                             cmdPressed: true,
+                                             actionType: .openURL), .inAppBrowser)
+
+        XCTAssertEqual(actionClickOpenPolicy(actionType: .openExistingFile), .semanticHistory)
+        XCTAssertEqual(actionClickOpenPolicy(modifierFlags: .command,
+                                             cmdPressed: true,
+                                             actionType: .openExistingFile), .semanticHistory)
+    }
+
+    func testGenericURLActionClickPolicyProtectsMouseReportingWithoutCachedHoverAction() {
+        XCTAssertEqual(actionClickOpenPolicy(mouseReporting: true,
+                                             actionType: .openURL,
+                                             hasCachedHoverAction: false), .none)
+        XCTAssertEqual(actionClickOpenPolicy(mouseReporting: true,
+                                             actionType: .openExistingFile,
+                                             hasCachedHoverAction: false), .none)
+
+        XCTAssertEqual(actionClickOpenPolicy(mouseReporting: true,
+                                             actionType: .openURL,
+                                             hasCachedHoverAction: true), .externalDefaultBrowser)
+        XCTAssertEqual(actionClickOpenPolicy(mouseReporting: true,
+                                             actionType: .openExistingFile,
+                                             hasCachedHoverAction: true), .semanticHistory)
+    }
+
+    func testGenericURLActionClickPolicyRejectsDragSelectionModifiersAndOtherActions() {
+        XCTAssertEqual(actionClickOpenPolicy(mouseDragged: true,
+                                             actionType: .openExistingFile), .none)
+        XCTAssertEqual(actionClickOpenPolicy(clickCount: 2,
+                                             actionType: .openExistingFile), .none)
+        XCTAssertEqual(actionClickOpenPolicy(modifierFlags: .shift,
+                                             actionType: .openExistingFile), .none)
+        XCTAssertEqual(actionClickOpenPolicy(modifierFlags: .option,
+                                             actionType: .openExistingFile), .none)
+        XCTAssertEqual(actionClickOpenPolicy(modifierFlags: .control,
+                                             actionType: .openExistingFile), .none)
+        XCTAssertEqual(actionClickOpenPolicy(actionType: .smartSelectionAction), .none)
+        XCTAssertEqual(actionClickOpenPolicy(actionType: .openImage), .none)
     }
 
     func testTmuxURLClickDecisionSuppressesMouseReportingForPlainURLHit() {
