@@ -59,6 +59,8 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 @property(nonatomic, strong) NSTextField *statusLabel;
 @property(nonatomic, strong) NSImageView *qrImageView;
 @property(nonatomic, strong) NSButton *refreshButton;
+@property(nonatomic, strong) NSStackView *devicesStackView;
+@property(nonatomic, strong) NSTextField *devicesStatusLabel;
 @property(nonatomic, strong) NSTimer *countdownTimer;
 @property(nonatomic, strong) NSDate *expiresAt;
 
@@ -75,20 +77,20 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     view.wantsLayer = YES;
     view.layer.backgroundColor = [NSColor colorWithSRGBRed:0x1a/255.0 green:0x1a/255.0 blue:0x1a/255.0 alpha:1.0].CGColor;
 
-    NSTextField *titleLabel = [self labelWithFrame:NSMakeRect(32, 460, 496, 28)
+    NSTextField *titleLabel = [self labelWithFrame:NSMakeRect(32, 468, 496, 28)
                                              string:@"Sync to Remote"
                                                font:[NSFont systemFontOfSize:22 weight:NSFontWeightSemibold]
                                               color:[NSColor colorWithSRGBRed:0xf4/255.0 green:0xf4/255.0 blue:0xf4/255.0 alpha:1.0]];
     [view addSubview:titleLabel];
 
-    NSTextField *bodyLabel = [self labelWithFrame:NSMakeRect(32, 414, 496, 42)
+    NSTextField *bodyLabel = [self labelWithFrame:NSMakeRect(32, 424, 496, 38)
                                             string:@"Pair Tidey Remote on your phone with this Mac. The LAN QR code will appear here once the Bridge is available."
                                               font:[NSFont systemFontOfSize:13 weight:NSFontWeightRegular]
                                              color:[NSColor colorWithSRGBRed:0x9a/255.0 green:0x9a/255.0 blue:0x9a/255.0 alpha:1.0]];
     bodyLabel.maximumNumberOfLines = 2;
     [view addSubview:bodyLabel];
 
-    NSView *cardView = [[NSView alloc] initWithFrame:NSMakeRect(32, 80, 496, 310)];
+    NSView *cardView = [[NSView alloc] initWithFrame:NSMakeRect(32, 224, 496, 186)];
     cardView.wantsLayer = YES;
     cardView.layer.backgroundColor = [NSColor colorWithSRGBRed:0x22/255.0 green:0x22/255.0 blue:0x22/255.0 alpha:1.0].CGColor;
     cardView.layer.cornerRadius = 12;
@@ -96,44 +98,71 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     cardView.layer.borderColor = [NSColor colorWithSRGBRed:0x33/255.0 green:0x33/255.0 blue:0x33/255.0 alpha:1.0].CGColor;
     [view addSubview:cardView];
 
-    self.qrImageView = [[NSImageView alloc] initWithFrame:NSMakeRect(32, 72, 180, 180)];
+    self.qrImageView = [[NSImageView alloc] initWithFrame:NSMakeRect(24, 24, 138, 138)];
     self.qrImageView.imageScaling = NSImageScaleProportionallyUpOrDown;
     self.qrImageView.wantsLayer = YES;
     self.qrImageView.layer.backgroundColor = NSColor.whiteColor.CGColor;
     self.qrImageView.layer.cornerRadius = 10;
     [cardView addSubview:self.qrImageView];
 
-    NSTextField *endpointTitleLabel = [self labelWithFrame:NSMakeRect(240, 220, 220, 20)
+    NSTextField *endpointTitleLabel = [self labelWithFrame:NSMakeRect(188, 138, 276, 20)
                                                     string:@"LAN endpoint"
                                                       font:[NSFont systemFontOfSize:12 weight:NSFontWeightMedium]
                                                      color:[NSColor colorWithSRGBRed:0x88/255.0 green:0x88/255.0 blue:0x88/255.0 alpha:1.0]];
     [cardView addSubview:endpointTitleLabel];
 
-    self.endpointValueLabel = [self labelWithFrame:NSMakeRect(240, 192, 220, 24)
+    self.endpointValueLabel = [self labelWithFrame:NSMakeRect(188, 112, 276, 24)
                                             string:@"Loading..."
                                               font:[NSFont monospacedSystemFontOfSize:13 weight:NSFontWeightRegular]
                                              color:[NSColor colorWithSRGBRed:0xf4/255.0 green:0xf4/255.0 blue:0xf4/255.0 alpha:1.0]];
     [cardView addSubview:self.endpointValueLabel];
 
-    self.countdownLabel = [self labelWithFrame:NSMakeRect(240, 154, 220, 22)
+    self.countdownLabel = [self labelWithFrame:NSMakeRect(188, 82, 276, 22)
                                         string:@""
                                           font:[NSFont systemFontOfSize:13 weight:NSFontWeightRegular]
                                          color:[NSColor colorWithSRGBRed:88/255.0 green:178/255.0 blue:220/255.0 alpha:1.0]];
     [cardView addSubview:self.countdownLabel];
 
-    self.statusLabel = [self labelWithFrame:NSMakeRect(240, 92, 220, 46)
+    self.statusLabel = [self labelWithFrame:NSMakeRect(188, 44, 276, 34)
                                      string:@""
                                        font:[NSFont systemFontOfSize:12 weight:NSFontWeightRegular]
                                       color:[NSColor colorWithSRGBRed:0xaa/255.0 green:0xaa/255.0 blue:0xaa/255.0 alpha:1.0]];
-    self.statusLabel.maximumNumberOfLines = 3;
+    self.statusLabel.maximumNumberOfLines = 2;
     [cardView addSubview:self.statusLabel];
 
     self.refreshButton = [NSButton buttonWithTitle:@"Refresh"
                                             target:self
                                             action:@selector(refreshPairPayload:)];
-    self.refreshButton.frame = NSMakeRect(240, 44, 120, 28);
+    self.refreshButton.frame = NSMakeRect(188, 12, 120, 28);
     self.refreshButton.bezelStyle = NSBezelStyleRounded;
     [cardView addSubview:self.refreshButton];
+
+    NSView *devicesCardView = [[NSView alloc] initWithFrame:NSMakeRect(32, 36, 496, 164)];
+    devicesCardView.wantsLayer = YES;
+    devicesCardView.layer.backgroundColor = [NSColor colorWithSRGBRed:0x22/255.0 green:0x22/255.0 blue:0x22/255.0 alpha:1.0].CGColor;
+    devicesCardView.layer.cornerRadius = 12;
+    devicesCardView.layer.borderWidth = 1;
+    devicesCardView.layer.borderColor = [NSColor colorWithSRGBRed:0x33/255.0 green:0x33/255.0 blue:0x33/255.0 alpha:1.0].CGColor;
+    [view addSubview:devicesCardView];
+
+    NSTextField *devicesTitleLabel = [self labelWithFrame:NSMakeRect(20, 126, 220, 22)
+                                                   string:@"Paired devices"
+                                                     font:[NSFont systemFontOfSize:14 weight:NSFontWeightSemibold]
+                                                    color:[NSColor colorWithSRGBRed:0xf4/255.0 green:0xf4/255.0 blue:0xf4/255.0 alpha:1.0]];
+    [devicesCardView addSubview:devicesTitleLabel];
+
+    self.devicesStatusLabel = [self labelWithFrame:NSMakeRect(20, 100, 456, 20)
+                                            string:@"Loading paired devices..."
+                                              font:[NSFont systemFontOfSize:12 weight:NSFontWeightRegular]
+                                             color:[NSColor colorWithSRGBRed:0xaa/255.0 green:0xaa/255.0 blue:0xaa/255.0 alpha:1.0]];
+    [devicesCardView addSubview:self.devicesStatusLabel];
+
+    self.devicesStackView = [[NSStackView alloc] initWithFrame:NSMakeRect(20, 16, 456, 78)];
+    self.devicesStackView.orientation = NSUserInterfaceLayoutOrientationVertical;
+    self.devicesStackView.alignment = NSLayoutAttributeLeading;
+    self.devicesStackView.distribution = NSStackViewDistributionFillEqually;
+    self.devicesStackView.spacing = 8;
+    [devicesCardView addSubview:self.devicesStackView];
 
     self.view = view;
 }
@@ -141,6 +170,7 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 - (void)viewDidLoad {
     [super viewDidLoad];
     [self refreshPairPayload:nil];
+    [self refreshPairedDevices];
 }
 
 - (NSTextField *)labelWithFrame:(NSRect)frame string:(NSString *)string font:(NSFont *)font color:(NSColor *)color {
@@ -196,6 +226,166 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
                 return;
             }
             [strongSelf handlePairPayloadData:data];
+        });
+    }];
+    [task resume];
+}
+
+- (void)refreshPairedDevices {
+    self.devicesStatusLabel.stringValue = @"Loading paired devices...";
+    [self clearDeviceRows];
+
+    NSError *tokenError = nil;
+    NSString *token = [self legacyPairTokenWithError:&tokenError];
+    if (!token.length) {
+        self.devicesStatusLabel.stringValue = [NSString stringWithFormat:@"Pair token unavailable: %@", tokenError.localizedDescription ?: @"unknown error"];
+        return;
+    }
+
+    NSURL *url = [NSURL URLWithString:@"http://127.0.0.1:4817/admin/devices"];
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+    request.timeoutInterval = 8;
+    [request setValue:[NSString stringWithFormat:@"Bearer %@", token] forHTTPHeaderField:@"Authorization"];
+
+    __weak __typeof(self) weakSelf = self;
+    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request
+                                                                 completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            __strong __typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf) {
+                return;
+            }
+            if (error) {
+                strongSelf.devicesStatusLabel.stringValue = [NSString stringWithFormat:@"Device list failed: %@", error.localizedDescription];
+                return;
+            }
+            NSInteger statusCode = [(NSHTTPURLResponse *)response statusCode];
+            if (statusCode != 200 || !data.length) {
+                strongSelf.devicesStatusLabel.stringValue = [NSString stringWithFormat:@"Bridge returned HTTP %ld.", (long)statusCode];
+                return;
+            }
+            [strongSelf handlePairedDevicesData:data];
+        });
+    }];
+    [task resume];
+}
+
+- (void)handlePairedDevicesData:(NSData *)data {
+    NSError *jsonError = nil;
+    NSDictionary *payload = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
+    NSArray *devices = [payload isKindOfClass:NSDictionary.class] && [payload[@"devices"] isKindOfClass:NSArray.class] ? payload[@"devices"] : nil;
+    if (!devices) {
+        self.devicesStatusLabel.stringValue = [NSString stringWithFormat:@"Invalid device list: %@", jsonError.localizedDescription ?: @"not a JSON object"];
+        return;
+    }
+    [self clearDeviceRows];
+    if (!devices.count) {
+        self.devicesStatusLabel.stringValue = @"No paired devices yet.";
+        return;
+    }
+    self.devicesStatusLabel.stringValue = [NSString stringWithFormat:@"%lu paired device%@", (unsigned long)devices.count, devices.count == 1 ? @"" : @"s"];
+    for (NSDictionary *device in devices) {
+        if (![device isKindOfClass:NSDictionary.class]) {
+            continue;
+        }
+        [self.devicesStackView addArrangedSubview:[self rowViewForDevice:device]];
+    }
+}
+
+- (void)clearDeviceRows {
+    for (NSView *view in self.devicesStackView.arrangedSubviews.copy) {
+        [self.devicesStackView removeArrangedSubview:view];
+        [view removeFromSuperview];
+    }
+}
+
+- (NSView *)rowViewForDevice:(NSDictionary *)device {
+    NSView *row = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 456, 34)];
+    NSString *deviceID = [device[@"device_id"] isKindOfClass:NSString.class] ? device[@"device_id"] : @"";
+    NSString *deviceName = [device[@"device_name"] isKindOfClass:NSString.class] ? device[@"device_name"] : @"Unknown device";
+    NSDate *pairedAt = [self dateFromISOString:[device[@"paired_at"] isKindOfClass:NSString.class] ? device[@"paired_at"] : nil];
+    NSDate *lastSeenAt = [self dateFromISOString:[device[@"last_connected_at"] isKindOfClass:NSString.class] ? device[@"last_connected_at"] : nil];
+
+    NSTextField *nameLabel = [self labelWithFrame:NSMakeRect(0, 16, 330, 18)
+                                           string:deviceName
+                                             font:[NSFont systemFontOfSize:12 weight:NSFontWeightMedium]
+                                            color:[NSColor colorWithSRGBRed:0xf4/255.0 green:0xf4/255.0 blue:0xf4/255.0 alpha:1.0]];
+    [row addSubview:nameLabel];
+
+    NSString *detail = [NSString stringWithFormat:@"Paired %@ · Last seen %@",
+                        [self shortStringForDate:pairedAt] ?: @"unknown",
+                        [self shortStringForDate:lastSeenAt] ?: @"never"];
+    NSTextField *detailLabel = [self labelWithFrame:NSMakeRect(0, 0, 330, 16)
+                                             string:detail
+                                               font:[NSFont systemFontOfSize:11 weight:NSFontWeightRegular]
+                                              color:[NSColor colorWithSRGBRed:0x99/255.0 green:0x99/255.0 blue:0x99/255.0 alpha:1.0]];
+    [row addSubview:detailLabel];
+
+    NSButton *revokeButton = [NSButton buttonWithTitle:@"Revoke"
+                                                target:self
+                                                action:@selector(revokeDevice:)];
+    revokeButton.frame = NSMakeRect(356, 4, 96, 26);
+    revokeButton.bezelStyle = NSBezelStyleRounded;
+    revokeButton.identifier = deviceID ?: @"";
+    revokeButton.enabled = deviceID.length > 0;
+    [row addSubview:revokeButton];
+
+    return row;
+}
+
+- (NSString *)shortStringForDate:(NSDate *)date {
+    if (!date) {
+        return nil;
+    }
+    NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+    formatter.dateStyle = NSDateFormatterShortStyle;
+    formatter.timeStyle = NSDateFormatterShortStyle;
+    return [formatter stringFromDate:date];
+}
+
+- (void)revokeDevice:(NSButton *)sender {
+    NSString *deviceID = sender.identifier;
+    if (!deviceID.length) {
+        return;
+    }
+    sender.enabled = NO;
+
+    NSError *tokenError = nil;
+    NSString *token = [self legacyPairTokenWithError:&tokenError];
+    if (!token.length) {
+        sender.enabled = YES;
+        self.devicesStatusLabel.stringValue = [NSString stringWithFormat:@"Pair token unavailable: %@", tokenError.localizedDescription ?: @"unknown error"];
+        return;
+    }
+
+    NSURL *url = [NSURL URLWithString:@"http://127.0.0.1:4817/admin/devices/revoke"];
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+    request.HTTPMethod = @"POST";
+    request.timeoutInterval = 8;
+    [request setValue:[NSString stringWithFormat:@"Bearer %@", token] forHTTPHeaderField:@"Authorization"];
+    [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+    request.HTTPBody = [NSJSONSerialization dataWithJSONObject:@{ @"device_id": deviceID } options:0 error:nil];
+
+    __weak __typeof(self) weakSelf = self;
+    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request
+                                                                 completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            __strong __typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf) {
+                return;
+            }
+            if (error) {
+                sender.enabled = YES;
+                strongSelf.devicesStatusLabel.stringValue = [NSString stringWithFormat:@"Revoke failed: %@", error.localizedDescription];
+                return;
+            }
+            NSInteger statusCode = [(NSHTTPURLResponse *)response statusCode];
+            if (statusCode != 200) {
+                sender.enabled = YES;
+                strongSelf.devicesStatusLabel.stringValue = [NSString stringWithFormat:@"Revoke returned HTTP %ld.", (long)statusCode];
+                return;
+            }
+            [strongSelf refreshPairedDevices];
         });
     }];
     [task resume];
