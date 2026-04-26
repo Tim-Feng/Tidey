@@ -104,7 +104,7 @@ merge_tidey_hooks_into_overlay() {
     node_script+='  const exists = root.hooks[eventName].some(group => Array.isArray(group?.hooks) && group.hooks.some(h => h?.type === "command" && h?.command === command));'
     node_script+='  if (!exists) root.hooks[eventName].push({ hooks: [{ type: "command", command, timeout: 10 }] });'
     node_script+='}'
-    node_script+='fs.writeFileSync(outputPath, JSON.stringify(root, null, 2) + "\\n");'
+    node_script+='fs.writeFileSync(outputPath, JSON.stringify(root, null, 2) + "\n");'
 
     node -e "$node_script" "$existing_hooks_path" "$merged_hooks_path" "$dispatch_script"
 }
