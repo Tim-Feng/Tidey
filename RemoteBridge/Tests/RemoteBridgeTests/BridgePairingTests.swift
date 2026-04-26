@@ -36,6 +36,28 @@ final class BridgePairingTests: XCTestCase {
         XCTAssertEqual(reloadedIdentity.displayName, "Tim's Mac")
     }
 
+    func testHostIdentityTrimsProvidedDisplayName() throws {
+        let fixture = try PairingFixture(displayName: "  Tim Feng's Mac mini  ")
+
+        let identity = try fixture.hostIdentityStore.loadOrCreateIdentity()
+
+        XCTAssertEqual(identity.displayName, "Tim Feng's Mac mini")
+    }
+
+    func testHostIdentityTrimsPersistedDisplayName() throws {
+        let fixture = try PairingFixture(displayName: "  Tim Feng's Mac mini  ")
+        _ = try fixture.hostIdentityStore.loadOrCreateIdentity()
+
+        let reloadedStore = BridgeHostIdentityStore(paths: fixture.paths,
+                                                    fileManager: fixture.fileManager,
+                                                    idProvider: { "host-2" },
+                                                    displayNameProvider: { "Other Mac" })
+        let reloadedIdentity = try reloadedStore.loadOrCreateIdentity()
+
+        XCTAssertEqual(reloadedIdentity.hostID, "host-1")
+        XCTAssertEqual(reloadedIdentity.displayName, "Tim Feng's Mac mini")
+    }
+
     func testPairExchangeIssuesDeviceCredentialAndConsumesSecret() throws {
         let fixture = try PairingFixture()
         let payload = try fixture.controller.createPairPayload(lanEndpoints: [])
@@ -329,7 +351,7 @@ private final class PairingFixture {
     let deviceCredentialStore: BridgeDeviceCredentialStore
     let controller: BridgePairingController
 
-    init() throws {
+    init(displayName: String = "Tim's Mac") throws {
         tempDirectory = fileManager.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         paths = BridgePaths(supportDirectory: tempDirectory)
@@ -338,7 +360,7 @@ private final class PairingFixture {
         hostIdentityStore = BridgeHostIdentityStore(paths: paths,
                                                     fileManager: fileManager,
                                                     idProvider: { "host-1" },
-                                                    displayNameProvider: { "Tim's Mac" })
+                                                    displayNameProvider: { displayName })
         pairSessionStore = BridgePairSessionStore(secretGenerator: { "pair-secret-1" },
                                                   nowProvider: { clock.now },
                                                   lifetime: 300)
