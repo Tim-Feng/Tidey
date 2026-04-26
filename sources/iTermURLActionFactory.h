@@ -39,4 +39,13 @@
                                                   extractor:(iTermTextExtractor *)extractor
                                        respectHardNewlines:(BOOL)respectHardNewlines;
 
++ (URLAction * _Nullable)tideyOpenURLActionAtCoord:(VT100GridCoord)coord
+                                         extractor:(iTermTextExtractor *)extractor
+                              respectHardNewlines:(BOOL)respectHardNewlines;
+
++ (NSDictionary * _Nullable)tideyOpenURLActionDictionaryAtX:(int)x
+                                                          y:(int)y
+                                                  extractor:(iTermTextExtractor *)extractor
+                                       respectHardNewlines:(BOOL)respectHardNewlines;
+
 @end

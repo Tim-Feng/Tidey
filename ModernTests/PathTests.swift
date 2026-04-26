@@ -10,6 +10,93 @@ import XCTest
 import Darwin
 import ObjectiveC.runtime
 
+fileprivate final class URLActionTextDataSource: NSObject, iTermTextDataSource {
+    private let line: ScreenCharArray
+    private let widthValue: Int32
+    private let externalAttributes: iTermExternalAttributeIndex?
+
+    init(text: String,
+         width: Int32,
+         externalURL: String? = nil,
+         externalRange: NSRange? = nil) {
+        widthValue = width
+        var buffer = [screen_char_t](repeating: screen_char_t(), count: Int(width) + 1)
+        for (index, scalar) in text.unicodeScalars.enumerated() where index < Int(width) {
+            buffer[index].code = unichar(scalar.value)
+            buffer[index].complexChar = 0
+        }
+        var eol = screen_char_t()
+        eol.code = unichar(EOL_HARD)
+        line = ScreenCharArray(copyOfLine: buffer,
+                               length: width,
+                               continuation: eol)
+
+        if let externalURL,
+           let externalRange,
+           let url = URL(string: externalURL) {
+            let link = iTermURL(url: url, identifier: nil, target: nil)
+            let attribute = iTermExternalAttribute(underlineColor: VT100TerminalColorValue(),
+                                                   url: link,
+                                                   blockIDList: nil,
+                                                   controlCode: nil)
+            let index = iTermExternalAttributeIndex()
+            index.setAttributes(attribute,
+                                at: Int32(externalRange.location),
+                                count: Int32(externalRange.length))
+            externalAttributes = index
+        } else {
+            externalAttributes = nil
+        }
+        super.init()
+    }
+
+    func width() -> Int32 {
+        return widthValue
+    }
+
+    func numberOfLines() -> Int32 {
+        return 1
+    }
+
+    func totalScrollbackOverflow() -> Int64 {
+        return 0
+    }
+
+    func screenCharArray(forLine line: Int32) -> ScreenCharArray {
+        return self.line
+    }
+
+    func screenCharArray(atScreenIndex index: Int32) -> ScreenCharArray {
+        return line
+    }
+
+    func externalAttributeIndex(forLine y: Int32) -> (any iTermExternalAttributeIndexReading)? {
+        return externalAttributes
+    }
+
+    func fetchLine(_ line: Int32, block: (ScreenCharArray) -> Any?) -> Any? {
+        return block(self.line)
+    }
+
+    func date(forLine line: Int32) -> Date? {
+        return nil
+    }
+
+    func commandMark(at coord: VT100GridCoord,
+                     mustHaveCommand: Bool,
+                     range: UnsafeMutablePointer<VT100GridWindowedRange>?) -> (any VT100ScreenMarkReading)? {
+        return nil
+    }
+
+    func metadata(onLine lineNumber: Int32) -> iTermImmutableMetadata {
+        return iTermImmutableMetadataDefault()
+    }
+
+    func isFirstLine(ofBlock lineNumber: Int32) -> Bool {
+        return false
+    }
+}
+
 /// Tests for path methods to verify correct behavior with and without custom suite names.
 /// These tests establish baseline behavior and verify no regressions when --suite is not used.
 final class PathTests: XCTestCase {
@@ -229,6 +316,36 @@ final class PathTests: XCTestCase {
                         columns.map(NSNumber.init(value:)) as NSArray,
                         rows.map(NSNumber.init(value:)) as NSArray,
                         ObjCBool(allowHardNewlineRecovery)) as? [String: Any]
+    }
+
+    private func openURLAction(text: String,
+                               clickIndex: Int,
+                               externalURL: String? = nil,
+                               externalRange: NSRange? = nil) -> [String: Any]? {
+        guard let factoryClass = NSClassFromString("iTermURLActionFactory") as? AnyClass else {
+            XCTFail("Missing iTermURLActionFactory")
+            return nil
+        }
+        let selector = NSSelectorFromString("tideyOpenURLActionDictionaryAtX:y:extractor:respectHardNewlines:")
+        guard let method = class_getClassMethod(factoryClass, selector) else {
+            XCTFail("Missing Tidey open URL action helper")
+            return nil
+        }
+        let width = Int32(max(80, (text as NSString).length + 1))
+        let dataSource = URLActionTextDataSource(text: text,
+                                                 width: width,
+                                                 externalURL: externalURL,
+                                                 externalRange: externalRange)
+        let extractor = iTermTextExtractor(dataSource: dataSource)
+        typealias Function = @convention(c) (AnyClass, Selector, Int32, Int32, iTermTextExtractor, ObjCBool) -> NSDictionary?
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        return function(factoryClass,
+                        selector,
+                        Int32(clickIndex),
+                        0,
+                        extractor,
+                        true) as? [String: Any]
     }
 
     private func gridCoordinates(for string: String, width: Int) -> (columns: [Int], rows: [Int]) {
@@ -657,6 +774,34 @@ final class PathTests: XCTestCase {
         XCTAssertEqual(candidate?["url"] as? String, "https://github.com/org/repo")
         XCTAssertEqual(candidate?["startX"] as? Int, (text as NSString).range(of: "https").location)
         XCTAssertEqual(candidate?["endX"] as? Int, (text as NSString).range(of: "repo").location + 3)
+    }
+
+    func testOSC8LabelPlainClickCandidateOpensExternalURL() {
+        let text = "download DMG"
+        let url = "https://github.com/Tim-Feng/Tidey/releases/download/v0.3.1/Tidey.dmg"
+        let action = openURLAction(text: text,
+                                   clickIndex: 2,
+                                   externalURL: url,
+                                   externalRange: NSRange(location: 0, length: (text as NSString).length))
+
+        XCTAssertEqual(action?["url"] as? String, url)
+        XCTAssertEqual(action?["osc8"] as? Bool, true)
+        XCTAssertEqual(action?["startX"] as? Int, 0)
+    }
+
+    func testVisibleURLPlainClickCandidateStillOpensExternalURL() {
+        let text = "visit https://github.com now"
+        let clickIndex = (text as NSString).range(of: "github").location
+        let action = openURLAction(text: text, clickIndex: clickIndex)
+
+        XCTAssertEqual(action?["url"] as? String, "https://github.com")
+        XCTAssertEqual(action?["osc8"] as? Bool, false)
+    }
+
+    func testPlainClickCandidateRejectsNonURLLabelWithoutOSC8() {
+        let action = openURLAction(text: "download DMG", clickIndex: 2)
+
+        XCTAssertNil(action)
     }
 
     func testPlainURLClickPolicyOpensExternalDefaultBrowser() {

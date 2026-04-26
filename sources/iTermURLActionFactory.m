@@ -92,6 +92,20 @@ static VT100GridWindowedRange iTermURLActionFactoryInvalidWindowedRange(void) {
     return VT100GridWindowedRangeMake(VT100GridCoordRangeInvalid, -1, -1);
 }
 
+static NSDictionary *iTermURLActionFactoryTideyDictionaryForAction(URLAction *action) {
+    if (!action) {
+        return nil;
+    }
+    return @{
+        @"url": action.string ?: @"",
+        @"startX": @(action.visualRange.coordRange.start.x),
+        @"startY": @(action.visualRange.coordRange.start.y),
+        @"endX": @(action.visualRange.coordRange.end.x),
+        @"endY": @(action.visualRange.coordRange.end.y),
+        @"osc8": @(action.osc8)
+    };
+}
+
 @interface iTermURLHitCandidate : NSObject
 @property (nonatomic, copy, readonly) NSString *URLString;
 @property (nonatomic, readonly) NSRange rangeInSourceString;
@@ -580,14 +594,26 @@ static VT100GridWindowedRange iTermURLActionFactoryInvalidWindowedRange(void) {
 + (VT100GridWindowedRange)tideyOpenURLWindowedRangeAtCoord:(VT100GridCoord)visualCoord
                                                   extractor:(iTermTextExtractor *)extractor
                                        respectHardNewlines:(BOOL)respectHardNewlines {
-    if (!extractor.dataSource || visualCoord.y < 0) {
+    URLAction *action = [self tideyOpenURLActionAtCoord:visualCoord
+                                              extractor:extractor
+                                   respectHardNewlines:respectHardNewlines];
+    if (!action) {
         return iTermURLActionFactoryInvalidWindowedRange();
+    }
+    return action.visualRange;
+}
+
++ (URLAction *)tideyOpenURLActionAtCoord:(VT100GridCoord)visualCoord
+                               extractor:(iTermTextExtractor *)extractor
+                    respectHardNewlines:(BOOL)respectHardNewlines {
+    if (!extractor.dataSource || visualCoord.y < 0) {
+        return nil;
     }
 
     extractor.supportBidi = [iTermPreferences bidiEnabled];
     VT100GridCoord logicalCoord = [extractor logicalCoordForVisualCoord:visualCoord];
     if ([extractor characterAt:logicalCoord].code == 0) {
-        return iTermURLActionFactoryInvalidWindowedRange();
+        return nil;
     }
     [extractor restrictToLogicalWindowIncludingCoord:visualCoord];
 
@@ -611,19 +637,27 @@ static VT100GridWindowedRange iTermURLActionFactoryInvalidWindowedRange(void) {
                                 allowHardNewlineRecovery:YES];
     if (!candidate.URLString.length ||
         [candidate.URLString rangeOfString:@"://"].location == NSNotFound) {
-        return iTermURLActionFactoryInvalidWindowedRange();
+        return nil;
     }
 
     NSURL *url = [NSURL URLWithUserSuppliedString:candidate.URLString];
     if (!url || [[NSWorkspace sharedWorkspace] URLForApplicationToOpenURL:url] == nil) {
-        return iTermURLActionFactoryInvalidWindowedRange();
+        return nil;
     }
 
-    VT100GridWindowedRange logicalRange;
-    logicalRange.coordRange.start = candidate.startCoord;
-    logicalRange.coordRange.end = [extractor successorOfCoord:candidate.endCoord];
-    logicalRange.columnWindow = extractor.logicalWindow;
-    return [extractor visualWindowedRangeForLogical:logicalRange];
+    iTermURLActionFactory *factory = [[iTermURLActionFactory alloc] init];
+    factory.extractor = extractor;
+    return [factory urlActionForURLHitCandidate:candidate];
+}
+
++ (NSDictionary *)tideyOpenURLActionDictionaryAtX:(int)x
+                                                y:(int)y
+                                        extractor:(iTermTextExtractor *)extractor
+                             respectHardNewlines:(BOOL)respectHardNewlines {
+    URLAction *action = [self tideyOpenURLActionAtCoord:VT100GridCoordMake(x, y)
+                                              extractor:extractor
+                                   respectHardNewlines:respectHardNewlines];
+    return iTermURLActionFactoryTideyDictionaryForAction(action);
 }
 
 - (void)trySecureCopy {
