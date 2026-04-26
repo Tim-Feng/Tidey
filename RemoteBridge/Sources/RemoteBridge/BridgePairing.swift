@@ -260,13 +260,16 @@ final class BridgePairSessionStore {
     private let secretGenerator: () -> String
     private let nowProvider: () -> Date
     private let lifetime: TimeInterval
+    private let cleanupGracePeriod: TimeInterval
 
     init(secretGenerator: @escaping () -> String = BridgeSecureTokenGenerator.generateToken,
          nowProvider: @escaping () -> Date = Date.init,
-         lifetime: TimeInterval = 5 * 60) {
+         lifetime: TimeInterval = 5 * 60,
+         cleanupGracePeriod: TimeInterval = 30) {
         self.secretGenerator = secretGenerator
         self.nowProvider = nowProvider
         self.lifetime = lifetime
+        self.cleanupGracePeriod = cleanupGracePeriod
     }
 
     func createPayload(hostIdentity: BridgeHostIdentity,
@@ -300,11 +303,30 @@ final class BridgePairSessionStore {
         sessionsBySecret[pairSecret] = nil
     }
 
+    func activeSessionCount() -> Int {
+        pruneExpired()
+        return sessionsBySecret.count
+    }
+
     private func pruneExpired() {
         let now = nowProvider()
         sessionsBySecret = sessionsBySecret.filter { _, session in
-            session.expiresAt > now
+            session.expiresAt.addingTimeInterval(cleanupGracePeriod) > now
         }
+    }
+}
+
+struct BridgePairedDevice: Codable, Equatable, Sendable {
+    let deviceID: String
+    let deviceName: String
+    let pairedAt: Date
+    let lastConnectedAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case deviceID = "device_id"
+        case deviceName = "device_name"
+        case pairedAt = "paired_at"
+        case lastConnectedAt = "last_connected_at"
     }
 }
 
@@ -318,12 +340,14 @@ final class BridgeDeviceCredentialStore {
         let deviceName: String
         let tokenHash: String
         let createdAt: Date
+        var lastConnectedAt: Date?
 
         enum CodingKeys: String, CodingKey {
             case deviceID = "device_id"
             case deviceName = "device_name"
             case tokenHash = "token_hash"
             case createdAt = "created_at"
+            case lastConnectedAt = "last_connected_at"
         }
     }
 
@@ -349,14 +373,42 @@ final class BridgeDeviceCredentialStore {
         record.devices.append(DeviceRecord(deviceID: deviceID,
                                            deviceName: deviceName,
                                            tokenHash: Self.hash(token),
-                                           createdAt: nowProvider()))
+                                           createdAt: nowProvider(),
+                                           lastConnectedAt: nil))
         try save(record)
         return BridgeIssuedDeviceCredential(deviceID: deviceID, token: token)
     }
 
     func isValidCredential(_ token: String) throws -> Bool {
         let tokenHash = Self.hash(token)
-        return try loadRecord().devices.contains { $0.tokenHash == tokenHash }
+        var record = try loadRecord()
+        guard let index = record.devices.firstIndex(where: { $0.tokenHash == tokenHash }) else {
+            return false
+        }
+        record.devices[index].lastConnectedAt = nowProvider()
+        try save(record)
+        return true
+    }
+
+    func listDevices() throws -> [BridgePairedDevice] {
+        try loadRecord().devices.map { device in
+            BridgePairedDevice(deviceID: device.deviceID,
+                               deviceName: device.deviceName,
+                               pairedAt: device.createdAt,
+                               lastConnectedAt: device.lastConnectedAt)
+        }
+    }
+
+    @discardableResult
+    func revokeDevice(deviceID: String) throws -> Bool {
+        var record = try loadRecord()
+        let originalCount = record.devices.count
+        record.devices.removeAll { $0.deviceID == deviceID }
+        guard record.devices.count != originalCount else {
+            return false
+        }
+        try save(record)
+        return true
     }
 
     private func loadRecord() throws -> FileRecord {
@@ -412,6 +464,15 @@ final class BridgePairingController {
                                         displayName: identity.displayName,
                                         deviceCredential: credential.token,
                                         credentialType: "bearer")
+    }
+
+    func listDevices() throws -> [BridgePairedDevice] {
+        try deviceCredentialStore.listDevices()
+    }
+
+    @discardableResult
+    func revokeDevice(deviceID: String) throws -> Bool {
+        try deviceCredentialStore.revokeDevice(deviceID: deviceID)
     }
 }
 

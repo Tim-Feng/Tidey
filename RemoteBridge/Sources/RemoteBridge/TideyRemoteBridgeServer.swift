@@ -100,6 +100,26 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
     typealias InboundIn = HTTPServerRequestPart
     typealias OutboundOut = HTTPServerResponsePart
 
+    private struct BridgeAdminPairedDevicesResponse: Codable {
+        let devices: [BridgePairedDevice]
+    }
+
+    private struct BridgeAdminRevokeDeviceRequest: Codable {
+        let deviceID: String
+
+        enum CodingKeys: String, CodingKey {
+            case deviceID = "device_id"
+        }
+    }
+
+    private struct BridgeAdminRevokeDeviceResponse: Codable {
+        let revokedDeviceID: String
+
+        enum CodingKeys: String, CodingKey {
+            case revokedDeviceID = "revoked_device_id"
+        }
+    }
+
     private let legacyPairToken: String
     private let authenticator: BridgeAuthenticator
     private let pairingController: BridgePairingController
@@ -158,6 +178,10 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
         switch requestPath(from: head.uri) {
         case "/admin/pair_payload":
             respondToPairPayload(head: head, context: context)
+        case "/admin/devices":
+            respondToDeviceList(head: head, context: context)
+        case "/admin/devices/revoke":
+            respondToDeviceRevoke(head: head, body: body, context: context)
         case "/pair/exchange":
             respondToPairExchange(head: head, body: body, context: context)
         case "/ws":
@@ -181,6 +205,80 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
                     context: context,
                     version: head.version,
                     contentType: "application/json")
+        } catch {
+            respond(error: BridgeInternalError.invalidRequest(error.localizedDescription).payload,
+                    status: .badRequest,
+                    context: context,
+                    version: head.version)
+        }
+    }
+
+    private func respondToDeviceList(head: HTTPRequestHead, context: ChannelHandlerContext) {
+        guard head.method == .GET else {
+            respond(status: .methodNotAllowed, data: Data(), context: context, version: head.version)
+            return
+        }
+        guard authenticator.isLegacyTokenAuthorized(authorizationHeader: head.headers.first(name: "Authorization")) else {
+            respond(status: .unauthorized, data: Data(), context: context, version: head.version)
+            return
+        }
+
+        do {
+            let response = BridgeAdminPairedDevicesResponse(devices: try pairingController.listDevices())
+            respond(status: .ok,
+                    data: try encoder.encode(response),
+                    context: context,
+                    version: head.version,
+                    contentType: "application/json")
+        } catch {
+            respond(error: BridgeInternalError.invalidRequest(error.localizedDescription).payload,
+                    status: .badRequest,
+                    context: context,
+                    version: head.version)
+        }
+    }
+
+    private func respondToDeviceRevoke(head: HTTPRequestHead,
+                                       body: ByteBuffer?,
+                                       context: ChannelHandlerContext) {
+        guard head.method == .POST else {
+            respond(status: .methodNotAllowed, data: Data(), context: context, version: head.version)
+            return
+        }
+        guard authenticator.isLegacyTokenAuthorized(authorizationHeader: head.headers.first(name: "Authorization")) else {
+            respond(status: .unauthorized, data: Data(), context: context, version: head.version)
+            return
+        }
+
+        do {
+            var body = body ?? context.channel.allocator.buffer(capacity: 0)
+            guard let text = body.readString(length: body.readableBytes),
+                  let data = text.data(using: .utf8) else {
+                throw BridgeInternalError.invalidRequest("device revoke requires a JSON request body")
+            }
+            let request = try decoder.decode(BridgeAdminRevokeDeviceRequest.self, from: data)
+            guard request.deviceID.isEmpty == false else {
+                throw BridgeInternalError.invalidRequest("device revoke requires device_id")
+            }
+            guard try pairingController.revokeDevice(deviceID: request.deviceID) else {
+                throw BridgeInternalError.notFound("No paired device exists for device_id \(request.deviceID)")
+            }
+            let response = BridgeAdminRevokeDeviceResponse(revokedDeviceID: request.deviceID)
+            respond(status: .ok,
+                    data: try encoder.encode(response),
+                    context: context,
+                    version: head.version,
+                    contentType: "application/json")
+        } catch let error as BridgeInternalError {
+            let status: HTTPResponseStatus = {
+                switch error {
+                case .notFound:
+                    return .notFound
+                default:
+                    return .badRequest
+                }
+            }()
+            respond(error: error.payload, status: status, context: context, version: head.version)
         } catch {
             respond(error: BridgeInternalError.invalidRequest(error.localizedDescription).payload,
                     status: .badRequest,

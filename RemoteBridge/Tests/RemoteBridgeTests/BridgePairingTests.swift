@@ -100,6 +100,58 @@ final class BridgePairingTests: XCTestCase {
         XCTAssertFalse(authenticator.isAuthorized(authorizationHeader: nil))
     }
 
+    func testDeviceCredentialStoreListsTouchesAndRevokesPairedDevices() throws {
+        let fixture = try PairingFixture()
+        let credential = try fixture.deviceCredentialStore.issueCredential(deviceName: "Tim's iPhone")
+
+        var devices = try fixture.deviceCredentialStore.listDevices()
+        let device = try XCTUnwrap(devices.first)
+        XCTAssertEqual(devices.count, 1)
+        XCTAssertEqual(device.deviceID, credential.deviceID)
+        XCTAssertEqual(device.deviceName, "Tim's iPhone")
+        XCTAssertEqual(device.pairedAt, fixture.startDate)
+        XCTAssertNil(device.lastConnectedAt)
+
+        fixture.now = fixture.startDate.addingTimeInterval(42)
+        XCTAssertTrue(try fixture.deviceCredentialStore.isValidCredential(credential.token))
+        devices = try fixture.deviceCredentialStore.listDevices()
+        XCTAssertEqual(devices.first?.lastConnectedAt, fixture.now)
+
+        XCTAssertTrue(try fixture.deviceCredentialStore.revokeDevice(deviceID: credential.deviceID))
+        XCTAssertTrue(try fixture.deviceCredentialStore.listDevices().isEmpty)
+        XCTAssertFalse(try fixture.deviceCredentialStore.isValidCredential(credential.token))
+    }
+
+    func testRevokingDeviceCredentialDoesNotInvalidateLegacyPairToken() throws {
+        let fixture = try PairingFixture()
+        let credential = try fixture.deviceCredentialStore.issueCredential(deviceName: "Tim's iPhone")
+        let authenticator = BridgeAuthenticator(legacyPairToken: "legacy-token",
+                                                deviceCredentialStore: fixture.deviceCredentialStore)
+
+        XCTAssertTrue(try fixture.deviceCredentialStore.revokeDevice(deviceID: credential.deviceID))
+
+        XCTAssertTrue(authenticator.isAuthorized(authorizationHeader: "Bearer legacy-token"))
+        XCTAssertFalse(authenticator.isAuthorized(authorizationHeader: "Bearer \(credential.token)"))
+    }
+
+    func testPairSessionsRejectExpiredSecretButPruneAfterGracePeriod() throws {
+        let fixture = try PairingFixture()
+        let identity = try fixture.hostIdentityStore.loadOrCreateIdentity()
+        let payload = try fixture.pairSessionStore.createPayload(hostIdentity: identity, lanEndpoints: [])
+
+        fixture.now = payload.expiresAt.addingTimeInterval(1)
+        XCTAssertThrowsError(try fixture.pairSessionStore.consume(pairSecret: payload.pairSecret,
+                                                                  hostID: payload.hostID)) { error in
+            guard case BridgeInternalError.unauthorized = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+        XCTAssertEqual(fixture.pairSessionStore.activeSessionCount(), 1)
+
+        fixture.now = payload.expiresAt.addingTimeInterval(31)
+        XCTAssertEqual(fixture.pairSessionStore.activeSessionCount(), 0)
+    }
+
     func testLANEndpointResolverIncludesReachableIPv4Interfaces() {
         let candidates = [
             BridgeLANEndpointCandidate(interfaceName: "lo0",
