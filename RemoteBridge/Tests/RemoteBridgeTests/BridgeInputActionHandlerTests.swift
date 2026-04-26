@@ -21,29 +21,31 @@ final class BridgeInputActionHandlerTests: XCTestCase {
         XCTAssertEqual(sender.sentRequests.first?.params?["input"]?.stringValue, "ls\r")
     }
 
-    func testChatSubmitForClaudeSendsSingleCombinedInput() throws {
+    func testChatSubmitForClaudeSplitsMultilineTextAndEnterWithDelay() throws {
         let sender = MockTideyRequestSender()
         let resolver = MockSessionResolver(session: ActiveAgentSessionSnapshot(vendor: "claude",
                                                                               workspaceID: "workspace-1",
                                                                               sessionID: "session-1",
                                                                               panelID: "panel-1"))
+        let delayRecorder = DelayRecorder()
         let handler = BridgeInputActionHandler(socketSender: sender,
                                                sessionResolver: resolver,
-                                               sleep: { _ in XCTFail("Claude submit should not sleep") })
+                                               sleep: { delayRecorder.record($0) })
+        let message = "@/Users/timfeng/Downloads/Tidey-Remote/a.jpg\n\n拍照ok"
 
         let response = try handler.handle(BridgeRequest(id: "request-1",
                                                         action: "chat_submit",
                                                         params: [
                                                             "workspace_id": .string("workspace-1"),
                                                             "panel_id": .string("panel-1"),
-                                                            "message": .string("hello"),
+                                                            "message": .string(message),
                                                             "session_id": .string("session-1"),
                                                             "vendor": .string("claude"),
                                                         ]))
 
         XCTAssertEqual(response?.ok, true)
-        XCTAssertEqual(sender.sentRequests.count, 1)
-        XCTAssertEqual(sender.sentRequests.first?.params?["input"]?.stringValue, "hello\r")
+        XCTAssertEqual(sender.sentRequests.map { $0.params?["input"]?.stringValue }, [message, "\r"])
+        XCTAssertEqual(delayRecorder.recordedDelays, [chatSubmitEnterDelayNanoseconds])
     }
 
     func testChatSubmitForCodexSplitsTextAndEnterWithDelay() throws {
@@ -69,7 +71,7 @@ final class BridgeInputActionHandlerTests: XCTestCase {
 
         XCTAssertEqual(response?.ok, true)
         XCTAssertEqual(sender.sentRequests.map { $0.params?["input"]?.stringValue }, ["hello", "\r"])
-        XCTAssertEqual(delayRecorder.recordedDelays, [codexChatSubmitDelayNanoseconds])
+        XCTAssertEqual(delayRecorder.recordedDelays, [chatSubmitEnterDelayNanoseconds])
     }
 
     func testChatSubmitRejectsMismatchedSession() throws {

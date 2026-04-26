@@ -2,13 +2,14 @@ import XCTest
 @testable import RemoteBridge
 
 final class AgentVendorTests: XCTestCase {
-    func testResolveClaudeVendorProvidesSingleStepSubmitPlan() throws {
+    func testResolveClaudeVendorProvidesSplitSubmitPlan() throws {
         let vendor = try XCTUnwrap(AgentVendorRegistry.resolve(id: "claude"))
 
         XCTAssertEqual(vendor.id, "claude")
         XCTAssertEqual(vendor.registryDirectoryName, "claude")
         XCTAssertEqual(vendor.submitMessagePlan(text: "hello"), [
-            ChatSubmitStep(input: "hello\r", delayNanoseconds: 0),
+            ChatSubmitStep(input: "hello", delayNanoseconds: 0),
+            ChatSubmitStep(input: "\r", delayNanoseconds: chatSubmitEnterDelayNanoseconds),
         ])
         XCTAssertNil(vendor.cancelRequestPlan())
     }
@@ -20,7 +21,7 @@ final class AgentVendorTests: XCTestCase {
         XCTAssertEqual(vendor.registryDirectoryName, "codex")
         XCTAssertEqual(vendor.submitMessagePlan(text: "hello"), [
             ChatSubmitStep(input: "hello", delayNanoseconds: 0),
-            ChatSubmitStep(input: "\r", delayNanoseconds: codexChatSubmitDelayNanoseconds),
+            ChatSubmitStep(input: "\r", delayNanoseconds: chatSubmitEnterDelayNanoseconds),
         ])
         XCTAssertNil(vendor.cancelRequestPlan())
     }

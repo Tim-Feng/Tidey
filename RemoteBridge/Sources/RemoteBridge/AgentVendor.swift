@@ -1,6 +1,6 @@
 import Foundation
 
-let codexChatSubmitDelayNanoseconds: UInt64 = 130_000_000
+let chatSubmitEnterDelayNanoseconds: UInt64 = 130_000_000
 
 struct ChatSubmitStep: Equatable {
     let input: String
@@ -40,7 +40,8 @@ private struct ClaudeAgentVendor: AgentVendor {
 
     func submitMessagePlan(text: String) -> [ChatSubmitStep] {
         [
-            ChatSubmitStep(input: text + "\r", delayNanoseconds: 0),
+            ChatSubmitStep(input: text, delayNanoseconds: 0),
+            ChatSubmitStep(input: "\r", delayNanoseconds: chatSubmitEnterDelayNanoseconds),
         ]
     }
 
@@ -65,7 +66,7 @@ private struct CodexAgentVendor: AgentVendor {
     func submitMessagePlan(text: String) -> [ChatSubmitStep] {
         [
             ChatSubmitStep(input: text, delayNanoseconds: 0),
-            ChatSubmitStep(input: "\r", delayNanoseconds: codexChatSubmitDelayNanoseconds),
+            ChatSubmitStep(input: "\r", delayNanoseconds: chatSubmitEnterDelayNanoseconds),
         ]
     }
 
