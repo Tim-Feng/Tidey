@@ -42,6 +42,11 @@ final class TideyRemoteBridgeServer {
     }
 
     func run() throws {
+        let handle = try start()
+        try handle.waitUntilClosed()
+    }
+
+    func start() throws -> TideyRemoteBridgeServerHandle {
         try registryMonitor.start()
         let upgrader = NIOWebSocketServerUpgrader(
             maxFrameSize: Self.maximumWebSocketFrameSizeBytes,
@@ -88,11 +93,29 @@ final class TideyRemoteBridgeServer {
         let channel = try bootstrap.bind(host: host, port: port).wait()
         BridgeLogger.server.info("bridge listening ws_url=ws://\(self.host, privacy: .public):\(self.port) admin_url=http://\(self.host, privacy: .public):\(self.port)/admin/status")
         BridgeLogger.server.info("pair token hash=\(self.token, privacy: .private(mask: .hash))")
-        try channel.closeFuture.wait()
+        return TideyRemoteBridgeServerHandle(channel: channel)
     }
 
     deinit {
         try? group.syncShutdownGracefully()
+    }
+}
+
+struct TideyRemoteBridgeServerHandle {
+    let port: Int
+    private let channel: Channel
+
+    fileprivate init(channel: Channel) {
+        self.channel = channel
+        self.port = channel.localAddress?.port ?? 0
+    }
+
+    func close() throws {
+        try channel.close().wait()
+    }
+
+    func waitUntilClosed() throws {
+        try channel.closeFuture.wait()
     }
 }
 
