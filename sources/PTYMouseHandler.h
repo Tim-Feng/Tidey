@@ -56,11 +56,12 @@ NS_ASSUME_NONNULL_BEGIN
                            inBackground:(BOOL)inBackground
                                   style:(iTermOpenStyle)style
                               webPolicy:(iTermWebURLOpenPolicy)webPolicy;
-- (URLAction * _Nullable)mouseHandlerOpenURLActionForEvent:(NSEvent *)event;
-- (void)mouseHandlerOpenURLAction:(URLAction *)action
-                     inBackground:(BOOL)inBackground
-                            style:(iTermOpenStyle)style
-                        webPolicy:(iTermWebURLOpenPolicy)webPolicy;
+- (URLAction * _Nullable)mouseHandlerCachedHoverActionForEvent:(NSEvent *)event;
+- (URLAction * _Nullable)mouseHandlerOpenActionForEvent:(NSEvent *)event;
+- (void)mouseHandlerOpenAction:(URLAction *)action
+                   inBackground:(BOOL)inBackground
+                          style:(iTermOpenStyle)style
+                      webPolicy:(iTermWebURLOpenPolicy)webPolicy;
 - (BOOL)mouseHandlerIsScrolledToBottom:(PTYMouseHandler *)handler;
 - (VT100GridCoord)mouseHandlerCoordForPointInWindow:(NSPoint)point;
 - (VT100GridCoord)mouseHandlerCoordForPointInView:(NSPoint)point;

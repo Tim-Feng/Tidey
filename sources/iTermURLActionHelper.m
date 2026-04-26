@@ -167,6 +167,39 @@
         webPolicy:webPolicy];
 }
 
+- (void)openAction:(URLAction *)action
+      inBackground:(BOOL)openInBackground
+             style:(iTermOpenStyle)style
+         webPolicy:(iTermWebURLOpenPolicy)webPolicy {
+    switch (action.actionType) {
+        case kURLActionOpenURL:
+            [self openURLAction:action
+                    inBackground:openInBackground
+                           style:style
+                       webPolicy:webPolicy];
+            return;
+
+        case kURLActionOpenExistingFile:
+            if (action.fullPath.length == 0 && action.rawFilename.length == 0) {
+                return;
+            }
+            [self openSemanticHistoryPath:action.fullPath
+                            orRawFilename:action.rawFilename
+                                 fragment:nil
+                                   target:nil
+                         workingDirectory:action.workingDirectory
+                               lineNumber:action.lineNumber
+                             columnNumber:action.columnNumber
+                                   prefix:@""
+                                   suffix:@""
+                               completion:^(BOOL ok) {}];
+            return;
+
+        default:
+            return;
+    }
+}
+
 - (void)findUrlInString:(NSString *)aURLString
     andOpenInBackground:(BOOL)background
                   style:(iTermOpenStyle)style {
@@ -413,7 +446,8 @@ workingDirectory:(NSString *)workingDirectory
     DLog(@"openTargetWithEvent generation %@ has action=%@", @(generation), action);
     if (action) {
         if (webPolicy == iTermWebURLOpenPolicyExternalDefaultBrowser &&
-            action.actionType != kURLActionOpenURL) {
+            action.actionType != kURLActionOpenURL &&
+            action.actionType != kURLActionOpenExistingFile) {
             return;
         }
         switch (action.actionType) {

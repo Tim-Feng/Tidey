@@ -7069,13 +7069,21 @@ static NSString *iTermStringFromRange(NSRange range) {
                                               respectHardNewlines:![_urlActionHelper ignoreHardNewlinesInURLs]];
 }
 
-- (URLAction *)mouseHandlerOpenURLActionForEvent:(NSEvent *)event {
+- (URLAction *)mouseHandlerCachedHoverActionForEvent:(NSEvent *)event {
     const VT100GridCoord cachedCoord = [self tideyURLCoordForEvent:event allowRightMarginOverflow:NO];
     URLAction *cachedAction = self.tideyCachedHoverURLAction;
     if (cachedAction &&
         (cachedAction.actionType == kURLActionOpenURL ||
          cachedAction.actionType == kURLActionOpenExistingFile) &&
         VT100GridWindowedRangeContainsCoord(cachedAction.visualRange, cachedCoord)) {
+        return cachedAction;
+    }
+    return nil;
+}
+
+- (URLAction *)mouseHandlerOpenActionForEvent:(NSEvent *)event {
+    URLAction *cachedAction = [self mouseHandlerCachedHoverActionForEvent:event];
+    if (cachedAction) {
         return cachedAction;
     }
 
@@ -7166,14 +7174,14 @@ static NSString *iTermStringFromRange(NSRange range) {
                                 webPolicy:webPolicy];
 }
 
-- (void)mouseHandlerOpenURLAction:(URLAction *)action
-                     inBackground:(BOOL)inBackground
-                            style:(iTermOpenStyle)style
-                        webPolicy:(iTermWebURLOpenPolicy)webPolicy {
-    [_urlActionHelper openURLAction:action
-                       inBackground:inBackground
-                              style:style
-                          webPolicy:webPolicy];
+- (void)mouseHandlerOpenAction:(URLAction *)action
+                   inBackground:(BOOL)inBackground
+                          style:(iTermOpenStyle)style
+                      webPolicy:(iTermWebURLOpenPolicy)webPolicy {
+    [_urlActionHelper openAction:action
+                    inBackground:inBackground
+                           style:style
+                       webPolicy:webPolicy];
 }
 
 - (BOOL)mouseHandlerIsScrolledToBottom:(PTYMouseHandler *)handler {

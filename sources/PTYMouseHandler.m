@@ -109,10 +109,10 @@ static BOOL iTermTideyWindowedRangeIsValid(VT100GridWindowedRange range) {
     BOOL _disableScrollReportingUntilMomentumEnds;
     BOOL _overBlock;
 
-    BOOL _tideySuppressedMouseReportingForExternalURLClick;
-    BOOL _tideyPendingExternalURLClick;
-    VT100GridWindowedRange _tideyPendingExternalURLClickRange;
-    URLAction *_tideyPendingExternalURLClickAction;
+    BOOL _tideySuppressedMouseReportingForActionClick;
+    BOOL _tideyPendingActionClick;
+    VT100GridWindowedRange _tideyPendingActionClickRange;
+    URLAction *_tideyPendingActionClickAction;
 }
 
 + (NSInteger)tideyURLClickOpenPolicyForClickCount:(NSInteger)clickCount
@@ -237,48 +237,51 @@ static BOOL iTermTideyWindowedRangeIsValid(VT100GridWindowedRange range) {
     return self;
 }
 
-- (void)tideyClearPendingExternalURLClick {
-    _tideySuppressedMouseReportingForExternalURLClick = NO;
-    _tideyPendingExternalURLClick = NO;
-    _tideyPendingExternalURLClickRange = iTermTideyInvalidWindowedRange();
-    _tideyPendingExternalURLClickAction = nil;
+- (void)tideyClearPendingActionClick {
+    _tideySuppressedMouseReportingForActionClick = NO;
+    _tideyPendingActionClick = NO;
+    _tideyPendingActionClickRange = iTermTideyInvalidWindowedRange();
+    _tideyPendingActionClickAction = nil;
 }
 
-- (BOOL)tideyPrepareExternalURLClickSuppressionForEvent:(NSEvent *)event
-                                         mouseReporting:(BOOL)mouseReporting {
-    if (![self.class tideyShouldSuppressMouseReportingForPlainURLClickWithClickCount:event.clickCount
-                                                                        mouseDragged:NO
-                                                                       modifierFlags:event.it_modifierFlags
-                                                                      mouseReporting:mouseReporting
-                                                                              urlHit:YES]) {
+- (BOOL)tideyPrepareActionClickSuppressionForEvent:(NSEvent *)event
+                                    mouseReporting:(BOOL)mouseReporting {
+    URLAction *action = [self.mouseDelegate mouseHandlerCachedHoverActionForEvent:event];
+    if (!action || !iTermTideyWindowedRangeIsValid(action.visualRange)) {
         return NO;
     }
 
-    URLAction *action = [self.mouseDelegate mouseHandlerOpenURLActionForEvent:event];
-    if (!action ||
-        action.actionType != kURLActionOpenURL ||
-        !iTermTideyWindowedRangeIsValid(action.visualRange)) {
+    const iTermTideyURLClickOpenPolicy policy =
+        [self.class tideyActionClickOpenPolicyForClickCount:event.clickCount
+                                               mouseDragged:NO
+                                              modifierFlags:event.it_modifierFlags
+                                            cmdClickEnabled:[iTermPreferences boolForKey:kPreferenceKeyCmdClickOpensURLs]
+                                                 cmdPressed:NO
+                                             mouseReporting:mouseReporting
+                                                 actionType:action.actionType
+                                       hasCachedHoverAction:YES];
+    if (policy == iTermTideyURLClickOpenPolicyNone) {
         return NO;
     }
 
-    _tideySuppressedMouseReportingForExternalURLClick = YES;
-    _tideyPendingExternalURLClick = YES;
-    _tideyPendingExternalURLClickRange = action.visualRange;
-    _tideyPendingExternalURLClickAction = action;
+    _tideySuppressedMouseReportingForActionClick = YES;
+    _tideyPendingActionClick = YES;
+    _tideyPendingActionClickRange = action.visualRange;
+    _tideyPendingActionClickAction = action;
     return YES;
 }
 
-- (BOOL)tideyPendingExternalURLClickMatchesEvent:(NSEvent *)event {
-    if (!_tideyPendingExternalURLClick) {
+- (BOOL)tideyPendingActionClickMatchesEvent:(NSEvent *)event {
+    if (!_tideyPendingActionClick) {
         return NO;
     }
 
-    URLAction *action = [self.mouseDelegate mouseHandlerOpenURLActionForEvent:event];
+    URLAction *action = [self.mouseDelegate mouseHandlerCachedHoverActionForEvent:event];
     return (action &&
-            action.actionType == kURLActionOpenURL &&
-            [action.string isEqualToString:_tideyPendingExternalURLClickAction.string] &&
+            action.actionType == _tideyPendingActionClickAction.actionType &&
+            [action.string isEqualToString:_tideyPendingActionClickAction.string] &&
             iTermTideyWindowedRangeIsValid(action.visualRange) &&
-            VT100GridWindowsRangeEqualsWindowedRange(action.visualRange, _tideyPendingExternalURLClickRange));
+            VT100GridWindowsRangeEqualsWindowedRange(action.visualRange, _tideyPendingActionClickRange));
 }
 
 #pragma mark - Left mouse
@@ -315,7 +318,7 @@ static BOOL iTermTideyWindowedRangeIsValid(VT100GridWindowedRange range) {
 - (BOOL)mouseDownImpl:(NSEvent *)event
           sideEffects:(iTermClickSideEffects *)sideEffects {
     DLog(@"mouseDownImpl: called %@", event);
-    [self tideyClearPendingExternalURLClick];
+    [self tideyClearPendingActionClick];
     _lastMouseDownRemovedSelection = NO;
     if ([self.mouseDelegate mouseHandlerMouseDownAt:event.locationInWindow]) {
         return NO;  // Don't call super because we handled it.
@@ -474,12 +477,12 @@ static BOOL iTermTideyWindowedRangeIsValid(VT100GridWindowedRange range) {
     _mouseDown = YES;
 
     const BOOL mouseDownIsReportable = [self mouseEventIsReportable:event];
-    const BOOL suppressReportingForExternalURLClick =
-        [self tideyPrepareExternalURLClickSuppressionForEvent:event
-                                               mouseReporting:mouseDownIsReportable];
+    const BOOL suppressReportingForActionClick =
+        [self tideyPrepareActionClickSuppressionForEvent:event
+                                          mouseReporting:mouseDownIsReportable];
     [_mouseReportingFrustrationDetector mouseDown:event
-                                         reported:(mouseDownIsReportable && !suppressReportingForExternalURLClick)];
-    if (!suppressReportingForExternalURLClick && [self reportMouseEvent:event]) {
+                                         reported:(mouseDownIsReportable && !suppressReportingForActionClick)];
+    if (!suppressReportingForActionClick && [self reportMouseEvent:event]) {
         DLog(@"Returning because mouse event reported.");
         [self.selection clearSelection];
         *sideEffects = iTermClickSideEffectsModifySelection;
@@ -655,17 +658,22 @@ static BOOL iTermTideyWindowedRangeIsValid(VT100GridWindowedRange range) {
     [_selectionScrollHelper mouseUp];
     const BOOL mouseDragged = (_mouseDragged && _committedToDrag);
     _committedToDrag = NO;
-    const BOOL suppressedReportingForExternalURLClick = _tideySuppressedMouseReportingForExternalURLClick;
-    const BOOL pendingExternalURLClick =
-        [self.class tideyShouldSuppressMouseReportingForPlainURLClickWithClickCount:event.clickCount
-                                                                       mouseDragged:mouseDragged
-                                                                      modifierFlags:event.it_modifierFlags
-                                                                     mouseReporting:YES
-                                                                             urlHit:YES] &&
-        [self tideyPendingExternalURLClickMatchesEvent:event];
-    URLAction *pendingExternalURLClickAction = pendingExternalURLClick ? _tideyPendingExternalURLClickAction : nil;
-    if (suppressedReportingForExternalURLClick) {
-        [self tideyClearPendingExternalURLClick];
+    const BOOL suppressedReportingForActionClick = _tideySuppressedMouseReportingForActionClick;
+    const BOOL pendingActionClick = [self tideyPendingActionClickMatchesEvent:event];
+    URLAction *pendingActionClickAction = pendingActionClick ? _tideyPendingActionClickAction : nil;
+    const iTermTideyURLClickOpenPolicy pendingActionClickPolicy =
+        pendingActionClick ?
+        [self.class tideyActionClickOpenPolicyForClickCount:event.clickCount
+                                               mouseDragged:mouseDragged
+                                              modifierFlags:event.it_modifierFlags
+                                            cmdClickEnabled:[iTermPreferences boolForKey:kPreferenceKeyCmdClickOpensURLs]
+                                                 cmdPressed:NO
+                                             mouseReporting:YES
+                                                 actionType:pendingActionClickAction.actionType
+                                       hasCachedHoverAction:YES] :
+        iTermTideyURLClickOpenPolicyNone;
+    if (suppressedReportingForActionClick) {
+        [self tideyClearPendingActionClick];
     }
 
     BOOL isUnshiftedSingleClick = ([event clickCount] < 2 &&
@@ -676,9 +684,9 @@ static BOOL iTermTideyWindowedRangeIsValid(VT100GridWindowedRange range) {
                                  ([event it_modifierFlags] & NSEventModifierFlagShift));
     const BOOL cmdClickEnabled = [iTermPreferences boolForKey:kPreferenceKeyCmdClickOpensURLs];
     const BOOL mouseEventIsReportable =
-        suppressedReportingForExternalURLClick ? NO : [self reportMouseEvent:event];
+        suppressedReportingForActionClick ? NO : [self reportMouseEvent:event];
     iTermTideyURLClickOpenPolicy urlClickOpenPolicy =
-        pendingExternalURLClick ? iTermTideyURLClickOpenPolicyExternalDefaultBrowser :
+        pendingActionClickPolicy != iTermTideyURLClickOpenPolicyNone ? pendingActionClickPolicy :
         [self.class tideyURLClickOpenPolicyForClickCount:event.clickCount
                                              mouseDragged:mouseDragged
                                             modifierFlags:event.it_modifierFlags
@@ -687,6 +695,7 @@ static BOOL iTermTideyWindowedRangeIsValid(VT100GridWindowedRange range) {
                                            mouseReporting:mouseEventIsReportable];
     BOOL willFollowLink = (urlClickOpenPolicy == iTermTideyURLClickOpenPolicyInAppBrowser);
     BOOL willOpenURLExternally = (urlClickOpenPolicy == iTermTideyURLClickOpenPolicyExternalDefaultBrowser);
+    BOOL willOpenSemanticHistory = (urlClickOpenPolicy == iTermTideyURLClickOpenPolicySemanticHistory);
 
     if (event.clickCount > 1) {
         [self.mouseDelegate mouseHandlerCancelSingleClick:self];
@@ -696,7 +705,7 @@ static BOOL iTermTideyWindowedRangeIsValid(VT100GridWindowedRange range) {
     _mouseDragged = NO;
 
     [_mouseReportingFrustrationDetector mouseUp:event
-                                       reported:(mouseEventIsReportable && !suppressedReportingForExternalURLClick)];
+                                       reported:(mouseEventIsReportable && !suppressedReportingForActionClick)];
     // Send mouse up event to host if xterm mouse reporting is on
     iTermClickSideEffects result = iTermClickSideEffectsNone;
     if (mouseEventIsReportable) {
@@ -790,12 +799,14 @@ static BOOL iTermTideyWindowedRangeIsValid(VT100GridWindowedRange range) {
                 [self.mouseDelegate mouseHandlerSetFindOnPageCursorCoord:clickCoord];
                 result |= iTermClickSideEffectsMoveFindOnPageCursor;
             }
-            if (willOpenURLExternally) {
-                if (pendingExternalURLClickAction) {
-                    [self.mouseDelegate mouseHandlerOpenURLAction:pendingExternalURLClickAction
-                                                     inBackground:NO
-                                                            style:iTermOpenStyleTab
-                                                        webPolicy:iTermWebURLOpenPolicyExternalDefaultBrowser];
+            if (willOpenURLExternally || willOpenSemanticHistory) {
+                if (pendingActionClickAction) {
+                    [self.mouseDelegate mouseHandlerOpenAction:pendingActionClickAction
+                                                  inBackground:NO
+                                                         style:iTermOpenStyleTab
+                                                     webPolicy:(willOpenURLExternally ?
+                                                                iTermWebURLOpenPolicyExternalDefaultBrowser :
+                                                                iTermWebURLOpenPolicyAutomatic)];
                 } else {
                     [self.mouseDelegate mouseHandlerOpenTargetWithEvent:event
                                                            inBackground:NO
@@ -923,7 +934,7 @@ static BOOL iTermTideyWindowedRangeIsValid(VT100GridWindowedRange range) {
     if (dragDistance >= kDragThreshold) {
         dragThresholdMet = YES;
         _committedToDrag = YES;
-        _tideyPendingExternalURLClick = NO;
+        _tideyPendingActionClick = NO;
     }
     if ([event eventNumber] == _firstMouseEventNumber) {
         // We accept first mouse for the purposes of focusing or dragging a
@@ -937,8 +948,8 @@ static BOOL iTermTideyWindowedRangeIsValid(VT100GridWindowedRange range) {
 
     const BOOL dragIsReportable = [self mouseEventIsReportable:event];
     [_mouseReportingFrustrationDetector mouseDragged:event
-                                            reported:(dragIsReportable && !_tideySuppressedMouseReportingForExternalURLClick)];
-    if (!_tideySuppressedMouseReportingForExternalURLClick && [self reportMouseEvent:event]) {
+                                            reported:(dragIsReportable && !_tideySuppressedMouseReportingForActionClick)];
+    if (!_tideySuppressedMouseReportingForActionClick && [self reportMouseEvent:event]) {
         DLog(@"Reported drag");
         _committedToDrag = YES;
         return iTermClickSideEffectsReport;
