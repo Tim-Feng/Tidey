@@ -617,6 +617,14 @@ static NSDictionary *iTermURLActionFactoryTideyDictionaryForAction(URLAction *ac
     }
     [extractor restrictToLogicalWindowIncludingCoord:visualCoord];
 
+    iTermURLActionFactory *factory = [[iTermURLActionFactory alloc] init];
+    factory.coord = visualCoord;
+    factory.extractor = extractor;
+    URLAction *hypertextAction = [factory urlActionForHypertextLink];
+    if (hypertextAction) {
+        return hypertextAction;
+    }
+
     iTermLocatedString *prefix =
         [extractor wrappedLocatedStringAt:logicalCoord
                                   forward:NO
@@ -645,7 +653,6 @@ static NSDictionary *iTermURLActionFactoryTideyDictionaryForAction(URLAction *ac
         return nil;
     }
 
-    iTermURLActionFactory *factory = [[iTermURLActionFactory alloc] init];
     factory.extractor = extractor;
     return [factory urlActionForURLHitCandidate:candidate];
 }

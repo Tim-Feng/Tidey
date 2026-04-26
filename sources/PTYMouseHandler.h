@@ -21,6 +21,7 @@ NS_ASSUME_NONNULL_BEGIN
 @class iTermSelectionScrollHelper;
 @class PTYMouseHandler;
 @class ThreeFingerTapGestureRecognizer;
+@class URLAction;
 
 @protocol PTYMouseHandlerDelegate<NSObject>
 - (BOOL)mouseHandlerViewHasFocus:(PTYMouseHandler *)handler;
@@ -55,6 +56,11 @@ NS_ASSUME_NONNULL_BEGIN
                            inBackground:(BOOL)inBackground
                                   style:(iTermOpenStyle)style
                               webPolicy:(iTermWebURLOpenPolicy)webPolicy;
+- (URLAction * _Nullable)mouseHandlerOpenURLActionForEvent:(NSEvent *)event;
+- (void)mouseHandlerOpenURLAction:(URLAction *)action
+                     inBackground:(BOOL)inBackground
+                            style:(iTermOpenStyle)style
+                        webPolicy:(iTermWebURLOpenPolicy)webPolicy;
 - (BOOL)mouseHandlerIsScrolledToBottom:(PTYMouseHandler *)handler;
 - (VT100GridCoord)mouseHandlerCoordForPointInWindow:(NSPoint)point;
 - (VT100GridCoord)mouseHandlerCoordForPointInView:(NSPoint)point;

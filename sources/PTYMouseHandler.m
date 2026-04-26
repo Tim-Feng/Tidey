@@ -10,6 +10,7 @@
 #import "DebugLogging.h"
 #import "NSEvent+iTerm.h"
 #import "ThreeFingerTapGestureRecognizer.h"
+#import "URLAction.h"
 #import "iTermAdvancedSettingsModel.h"
 #import "iTermAltScreenMouseScrollInferrer.h"
 #import "iTermController.h"
@@ -110,6 +111,7 @@ static BOOL iTermTideyWindowedRangeIsValid(VT100GridWindowedRange range) {
     BOOL _tideySuppressedMouseReportingForExternalURLClick;
     BOOL _tideyPendingExternalURLClick;
     VT100GridWindowedRange _tideyPendingExternalURLClickRange;
+    URLAction *_tideyPendingExternalURLClickAction;
 }
 
 + (NSInteger)tideyURLClickOpenPolicyForClickCount:(NSInteger)clickCount
@@ -186,6 +188,7 @@ static BOOL iTermTideyWindowedRangeIsValid(VT100GridWindowedRange range) {
     _tideySuppressedMouseReportingForExternalURLClick = NO;
     _tideyPendingExternalURLClick = NO;
     _tideyPendingExternalURLClickRange = iTermTideyInvalidWindowedRange();
+    _tideyPendingExternalURLClickAction = nil;
 }
 
 - (BOOL)tideyPrepareExternalURLClickSuppressionForEvent:(NSEvent *)event
@@ -198,14 +201,17 @@ static BOOL iTermTideyWindowedRangeIsValid(VT100GridWindowedRange range) {
         return NO;
     }
 
-    const VT100GridWindowedRange URLRange = [self.mouseDelegate mouseHandlerOpenURLRangeForEvent:event];
-    if (!iTermTideyWindowedRangeIsValid(URLRange)) {
+    URLAction *action = [self.mouseDelegate mouseHandlerOpenURLActionForEvent:event];
+    if (!action ||
+        action.actionType != kURLActionOpenURL ||
+        !iTermTideyWindowedRangeIsValid(action.visualRange)) {
         return NO;
     }
 
     _tideySuppressedMouseReportingForExternalURLClick = YES;
     _tideyPendingExternalURLClick = YES;
-    _tideyPendingExternalURLClickRange = URLRange;
+    _tideyPendingExternalURLClickRange = action.visualRange;
+    _tideyPendingExternalURLClickAction = action;
     return YES;
 }
 
@@ -214,9 +220,12 @@ static BOOL iTermTideyWindowedRangeIsValid(VT100GridWindowedRange range) {
         return NO;
     }
 
-    const VT100GridWindowedRange URLRange = [self.mouseDelegate mouseHandlerOpenURLRangeForEvent:event];
-    return (iTermTideyWindowedRangeIsValid(URLRange) &&
-            VT100GridWindowsRangeEqualsWindowedRange(URLRange, _tideyPendingExternalURLClickRange));
+    URLAction *action = [self.mouseDelegate mouseHandlerOpenURLActionForEvent:event];
+    return (action &&
+            action.actionType == kURLActionOpenURL &&
+            [action.string isEqualToString:_tideyPendingExternalURLClickAction.string] &&
+            iTermTideyWindowedRangeIsValid(action.visualRange) &&
+            VT100GridWindowsRangeEqualsWindowedRange(action.visualRange, _tideyPendingExternalURLClickRange));
 }
 
 #pragma mark - Left mouse
@@ -601,6 +610,7 @@ static BOOL iTermTideyWindowedRangeIsValid(VT100GridWindowedRange range) {
                                                                      mouseReporting:YES
                                                                              urlHit:YES] &&
         [self tideyPendingExternalURLClickMatchesEvent:event];
+    URLAction *pendingExternalURLClickAction = pendingExternalURLClick ? _tideyPendingExternalURLClickAction : nil;
     if (suppressedReportingForExternalURLClick) {
         [self tideyClearPendingExternalURLClick];
     }
@@ -728,10 +738,17 @@ static BOOL iTermTideyWindowedRangeIsValid(VT100GridWindowedRange range) {
                 result |= iTermClickSideEffectsMoveFindOnPageCursor;
             }
             if (willOpenURLExternally) {
-                [self.mouseDelegate mouseHandlerOpenTargetWithEvent:event
-                                                       inBackground:NO
-                                                              style:iTermOpenStyleTab
-                                                          webPolicy:iTermWebURLOpenPolicyExternalDefaultBrowser];
+                if (pendingExternalURLClickAction) {
+                    [self.mouseDelegate mouseHandlerOpenURLAction:pendingExternalURLClickAction
+                                                     inBackground:NO
+                                                            style:iTermOpenStyleTab
+                                                        webPolicy:iTermWebURLOpenPolicyExternalDefaultBrowser];
+                } else {
+                    [self.mouseDelegate mouseHandlerOpenTargetWithEvent:event
+                                                           inBackground:NO
+                                                                  style:iTermOpenStyleTab
+                                                              webPolicy:iTermWebURLOpenPolicyExternalDefaultBrowser];
+                }
                 result |= iTermClickSideEffectsOpenTarget;
             }
         }

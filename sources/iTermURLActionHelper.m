@@ -148,6 +148,25 @@
                         }];
 }
 
+- (void)openURLAction:(URLAction *)action
+         inBackground:(BOOL)openInBackground
+                style:(iTermOpenStyle)style
+            webPolicy:(iTermWebURLOpenPolicy)webPolicy {
+    if (action.actionType != kURLActionOpenURL) {
+        return;
+    }
+    NSURL *url = [NSURL URLWithUserSuppliedString:action.string];
+    if (!url) {
+        return;
+    }
+    [self openURL:url
+           target:action.target
+     inBackground:openInBackground
+ workingDirectory:action.workingDirectory
+            style:style
+        webPolicy:webPolicy];
+}
+
 - (void)findUrlInString:(NSString *)aURLString
     andOpenInBackground:(BOOL)background
                   style:(iTermOpenStyle)style {

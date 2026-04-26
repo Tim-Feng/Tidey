@@ -7067,6 +7067,14 @@ static NSString *iTermStringFromRange(NSRange range) {
                                               respectHardNewlines:![_urlActionHelper ignoreHardNewlinesInURLs]];
 }
 
+- (URLAction *)mouseHandlerOpenURLActionForEvent:(NSEvent *)event {
+    const VT100GridCoord coord = [self tideyURLCoordForEvent:event allowRightMarginOverflow:NO];
+    iTermTextExtractor *extractor = [iTermTextExtractor textExtractorWithDataSource:self.dataSource];
+    return [iTermURLActionFactory tideyOpenURLActionAtCoord:coord
+                                                  extractor:extractor
+                                       respectHardNewlines:![_urlActionHelper ignoreHardNewlinesInURLs]];
+}
+
 - (BOOL)isInUnderlinedRangeAtCoord:(VT100GridCoord)coord {
     DLog(@"coord=%@", VT100GridCoordDescription(coord));
     if (VT100GridCoordEquals(coord, VT100GridCoordInvalid)) {
@@ -7145,6 +7153,16 @@ static NSString *iTermStringFromRange(NSRange range) {
                              inBackground:inBackground
                                     style:style
                                 webPolicy:webPolicy];
+}
+
+- (void)mouseHandlerOpenURLAction:(URLAction *)action
+                     inBackground:(BOOL)inBackground
+                            style:(iTermOpenStyle)style
+                        webPolicy:(iTermWebURLOpenPolicy)webPolicy {
+    [_urlActionHelper openURLAction:action
+                       inBackground:inBackground
+                              style:style
+                          webPolicy:webPolicy];
 }
 
 - (BOOL)mouseHandlerIsScrolledToBottom:(PTYMouseHandler *)handler {

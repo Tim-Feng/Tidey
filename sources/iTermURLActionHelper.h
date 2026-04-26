@@ -95,6 +95,11 @@ launchProfileInCurrentTerminal:(Profile *)profile
                       style:(iTermOpenStyle)style
                   webPolicy:(iTermWebURLOpenPolicy)webPolicy;
 
+- (void)openURLAction:(URLAction *)action
+         inBackground:(BOOL)openInBackground
+                style:(iTermOpenStyle)style
+            webPolicy:(iTermWebURLOpenPolicy)webPolicy;
+
 - (void)findUrlInString:(NSString *)aURLString andOpenInBackground:(BOOL)background style:(iTermOpenStyle)style;
 
 - (void)downloadFileAtSecureCopyPath:(SCPPath *)scpPath
