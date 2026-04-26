@@ -50,6 +50,7 @@ struct BridgeLANEndpointCandidate: Equatable, Sendable {
     let host: String
     let addressFamily: BridgeLANEndpointAddressFamily
     let isUp: Bool
+    let isRunning: Bool
     let isLoopback: Bool
 }
 
@@ -64,14 +65,11 @@ enum BridgeLANEndpointResolver {
         return candidates
             .filter { candidate in
                 candidate.isUp &&
+                candidate.isRunning &&
                 !candidate.isLoopback &&
+                candidate.addressFamily == .ipv4 &&
+                isAllowedInterfaceName(candidate.interfaceName) &&
                 !isLinkLocalOrLoopbackHost(candidate.host)
-            }
-            .sorted { lhs, rhs in
-                if lhs.addressFamily != rhs.addressFamily {
-                    return lhs.addressFamily == .ipv4
-                }
-                return lhs.host.localizedStandardCompare(rhs.host) == .orderedAscending
             }
             .compactMap { candidate in
                 guard seenHosts.insert(candidate.host).inserted else {
@@ -125,9 +123,22 @@ enum BridgeLANEndpointResolver {
                                                         host: String(cString: hostBuffer),
                                                         addressFamily: addressFamily,
                                                         isUp: (flags & IFF_UP) != 0,
+                                                        isRunning: (flags & IFF_RUNNING) != 0,
                                                         isLoopback: (flags & IFF_LOOPBACK) != 0))
         }
         return candidates
+    }
+
+    private static func isAllowedInterfaceName(_ name: String) -> Bool {
+        guard name.hasPrefix("anpi") == false,
+              name.hasPrefix("awdl") == false,
+              name.hasPrefix("gif") == false,
+              name.hasPrefix("stf") == false else {
+            return false
+        }
+        return name.hasPrefix("en") ||
+               name.hasPrefix("bridge") ||
+               name.hasPrefix("utun")
     }
 
     private static func isLinkLocalOrLoopbackHost(_ host: String) -> Bool {
