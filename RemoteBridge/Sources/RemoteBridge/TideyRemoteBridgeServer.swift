@@ -5,6 +5,8 @@ import NIOPosix
 import NIOWebSocket
 
 final class TideyRemoteBridgeServer {
+    private static let maximumWebSocketFrameSizeBytes = 16 * 1024 * 1024
+
     private let host: String
     private let port: Int
     private let token: String
@@ -36,6 +38,7 @@ final class TideyRemoteBridgeServer {
     func run() throws {
         try registryMonitor.start()
         let upgrader = NIOWebSocketServerUpgrader(
+            maxFrameSize: Self.maximumWebSocketFrameSizeBytes,
             shouldUpgrade: { [token] channel, head in
                 let authHeader = head.headers.first(name: "Authorization")
                 guard authHeader == "Bearer \(token)" else {
