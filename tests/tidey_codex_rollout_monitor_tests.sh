@@ -101,4 +101,52 @@ run_placeholder_cleanup_test() {
 
 run_placeholder_cleanup_test
 
+run_hook_overlay_json_test() {
+    local tmpdir
+
+    tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/tidey-codex-hooks-tests.XXXXXX")"
+
+    HOOK_TEST_DIR="$tmpdir" CODEX_UNDER_TEST="$CODEX_UNDER_TEST" bash -c '
+        set -euo pipefail
+        source "$CODEX_UNDER_TEST"
+
+        real_home="$HOOK_TEST_DIR/real-home"
+        overlay_home="$HOOK_TEST_DIR/overlay-home"
+        dispatch_script="/tmp/Tidey Dev.app/Contents/Resources/bin/codex-hook-dispatch"
+        mkdir -p "$real_home" "$overlay_home"
+        printf "%s\n" "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"/tmp/user-hook\"}]}]}}" > "$real_home/hooks.json"
+
+        merge_tidey_hooks_into_overlay "$real_home" "$overlay_home" "$dispatch_script"
+
+        python3 - "$overlay_home/hooks.json" "$dispatch_script" <<'"'"'PY'"'"'
+from pathlib import Path
+import json
+import sys
+
+path = Path(sys.argv[1])
+dispatch_script = sys.argv[2]
+raw = path.read_bytes()
+if raw.endswith(b"\\n"):
+    raise SystemExit("hooks.json ended with a literal \\n")
+
+root = json.loads(raw.decode())
+expected = f"'\''{dispatch_script}'\'' stop"
+stop_hooks = root["hooks"]["Stop"]
+commands = [
+    hook.get("command")
+    for group in stop_hooks
+    for hook in group.get("hooks", [])
+]
+if "/tmp/user-hook" not in commands:
+    raise SystemExit("existing user hook was not preserved")
+if expected not in commands:
+    raise SystemExit("Tidey hook command was not added")
+PY
+    '
+
+    rm -rf "$tmpdir"
+}
+
+run_hook_overlay_json_test
+
 echo "PASS"
