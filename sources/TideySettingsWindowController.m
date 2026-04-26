@@ -64,6 +64,8 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 @property(nonatomic, strong) NSTimer *countdownTimer;
 @property(nonatomic, strong) NSDate *expiresAt;
 
+- (void)remotePageDidBecomeVisible;
+
 @end
 
 @implementation TideyRemoteSettingsViewController
@@ -170,6 +172,9 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 - (void)viewDidLoad {
     [super viewDidLoad];
     [self refreshPairPayload:nil];
+}
+
+- (void)remotePageDidBecomeVisible {
     [self refreshPairedDevices];
 }
 
@@ -637,7 +642,11 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
             nextViewController = self.remoteViewController;
             break;
     }
+    BOOL isRemotePage = (page == TideySettingsPageRemote);
     if (self.currentViewController == nextViewController) {
+        if (isRemotePage) {
+            [self.remoteViewController remotePageDidBecomeVisible];
+        }
         return;
     }
     [self.currentViewController.view removeFromSuperview];
@@ -646,6 +655,9 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     view.frame = self.contentContainerView.bounds;
     view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     [self.contentContainerView addSubview:view];
+    if (isRemotePage) {
+        [self.remoteViewController remotePageDidBecomeVisible];
+    }
 }
 
 @end
