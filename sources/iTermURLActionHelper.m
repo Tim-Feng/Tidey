@@ -370,7 +370,10 @@ workingDirectory:(NSString *)workingDirectory
             rootView = (iTermRootTerminalView *)window.contentView;
         }
         if (rootView) {
-            [rootView tideyOpenBrowserTabWithURL:url];
+            BOOL focus = [NSWorkspace tideyShouldFocusInAppBrowserAfterOpeningWebURLWithWebPolicy:webPolicy
+                                                                                      inBackground:background
+                                                                                        hasRootView:YES];
+            [rootView tideyOpenBrowserTabWithURL:url focus:focus];
             return;
         }
     }

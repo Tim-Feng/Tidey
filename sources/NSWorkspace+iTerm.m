@@ -83,7 +83,9 @@
 + (BOOL)tideyShouldFocusInAppBrowserAfterOpeningWebURLWithWebPolicy:(iTermWebURLOpenPolicy)webPolicy
                                                         inBackground:(BOOL)inBackground
                                                           hasRootView:(BOOL)hasRootView {
-    return NO;
+    return (hasRootView &&
+            !inBackground &&
+            webPolicy != iTermWebURLOpenPolicyExternalDefaultBrowser);
 }
 
 // A very weak check of whether the URL is openable by the built-in browser. This can be used to
@@ -276,7 +278,11 @@ completionHandler:^(NSRunningApplication *app, NSError *error) {
     if ([self.class tideyShouldOpenWebURLInAppForURL:url
                                            webPolicy:webPolicy
                                          hasRootView:(rootView != nil)]) {
-        [rootView tideyOpenBrowserTabWithURL:url];
+        BOOL inBackground = (configuration != nil && !configuration.activates);
+        BOOL focus = [self.class tideyShouldFocusInAppBrowserAfterOpeningWebURLWithWebPolicy:webPolicy
+                                                                                inBackground:inBackground
+                                                                                  hasRootView:YES];
+        [rootView tideyOpenBrowserTabWithURL:url focus:focus];
         return;
     }
     if (webPolicy == iTermWebURLOpenPolicyExternalDefaultBrowser &&

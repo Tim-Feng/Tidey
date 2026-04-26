@@ -455,6 +455,7 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
 - (void)tideyLoadBrowserURL:(NSURL *)url inPane:(TideyRightPanelPane *)pane;
 - (void)tideyUpdateBrowserContentVisibilityForPane:(TideyRightPanelPane *)pane;
 - (void)tideyLayoutBrowserContainerForPane:(TideyRightPanelPane *)pane;
+- (void)tideyFocusBrowserInPane:(TideyRightPanelPane *)pane;
 - (CGFloat)tideyNormalizedBrowserZoomFactor:(CGFloat)zoomFactor;
 - (void)tideyApplyBrowserZoomForTab:(TideyEditorTab *)tab inPane:(TideyRightPanelPane *)pane;
 - (void)tideyEditorSetValue:(NSString *)content forPane:(TideyRightPanelPane *)pane;
@@ -5294,6 +5295,10 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
 }
 
 - (void)tideyOpenBrowserTabWithURL:(NSURL *)url {
+    [self tideyOpenBrowserTabWithURL:url focus:NO];
+}
+
+- (void)tideyOpenBrowserTabWithURL:(NSURL *)url focus:(BOOL)focus {
     if (!url) {
         return;
     }
@@ -5304,6 +5309,32 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         [self.delegate repositionWidgets];
     }
     [self tideyOpenNewBrowserTabWithURL:url inPane:pane];
+    if (focus) {
+        [self tideyFocusBrowserInPane:pane];
+        __weak typeof(self) weakSelf = self;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [weakSelf tideyFocusBrowserInPane:pane];
+        });
+    }
+}
+
+- (void)tideyFocusBrowserInPane:(TideyRightPanelPane *)pane {
+    if (!pane) {
+        return;
+    }
+    [self tideySetActivePane:pane];
+    TideyEditorTab *tab = [self tideyCurrentRightPanelTabInPane:pane];
+    if (!tab || tab.kind != TideyRightPanelTabKindBrowser) {
+        return;
+    }
+    [self tideyAttachBrowserTab:tab toPane:pane];
+    [self tideyApplyBrowserZoomForTab:tab inPane:pane];
+    [self tideyUpdateBrowserContentVisibilityForPane:pane];
+    [self tideyLayoutBrowserContainerForPane:pane];
+    [self tideySetLastClickedRegion:TideyLastClickedRegionBrowser];
+    if (pane.browserWebView) {
+        [self.window makeFirstResponder:pane.browserWebView];
+    }
 }
 
 - (NSString *)tideyEditorPreferredRootPathForFileAtPath:(NSString *)path {
