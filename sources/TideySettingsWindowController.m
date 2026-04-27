@@ -162,12 +162,19 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
                                              color:[NSColor colorWithSRGBRed:0xaa/255.0 green:0xaa/255.0 blue:0xaa/255.0 alpha:1.0]];
     [devicesCardView addSubview:self.devicesStatusLabel];
 
-    self.devicesStackView = [[NSStackView alloc] initWithFrame:NSMakeRect(20, 16, 456, 78)];
+    NSScrollView *devicesScrollView = [[NSScrollView alloc] initWithFrame:NSMakeRect(20, 16, 456, 78)];
+    devicesScrollView.drawsBackground = NO;
+    devicesScrollView.hasVerticalScroller = YES;
+    devicesScrollView.autohidesScrollers = YES;
+    devicesScrollView.borderType = NSNoBorder;
+    [devicesCardView addSubview:devicesScrollView];
+
+    self.devicesStackView = [[NSStackView alloc] initWithFrame:NSMakeRect(0, 0, 456, 78)];
     self.devicesStackView.orientation = NSUserInterfaceLayoutOrientationVertical;
     self.devicesStackView.alignment = NSLayoutAttributeLeading;
     self.devicesStackView.distribution = NSStackViewDistributionFill;
     self.devicesStackView.spacing = 8;
-    [devicesCardView addSubview:self.devicesStackView];
+    devicesScrollView.documentView = self.devicesStackView;
 
     self.view = view;
 }
@@ -354,11 +361,11 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     static const CGFloat rowSpacing = 8;
     static const CGFloat stackTopY = 94;
     if (count == 0) {
-        self.devicesStackView.frame = NSMakeRect(20, 16, 456, 0);
+        self.devicesStackView.frame = NSMakeRect(0, 0, 456, 0);
         return;
     }
     CGFloat height = rowHeight * count + rowSpacing * (count - 1);
-    self.devicesStackView.frame = NSMakeRect(20, stackTopY - height, 456, height);
+    self.devicesStackView.frame = NSMakeRect(0, MAX(0, stackTopY - height), 456, height);
 }
 
 - (NSView *)rowViewForDevice:(NSDictionary *)device {
