@@ -2,15 +2,18 @@
 set -euo pipefail
 
 LABEL="${LABEL:-com.tidey.remote-bridge}"
+SUPERVISOR_LABEL="${SUPERVISOR_LABEL:-$LABEL.cloudflared}"
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-4817}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BRIDGE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 INSTALL_SCRIPT="$BRIDGE_DIR/install.sh"
 PLIST_PATH="${PLIST_PATH:-$HOME/Library/LaunchAgents/$LABEL.plist}"
+SUPERVISOR_PLIST_PATH="${SUPERVISOR_PLIST_PATH:-$HOME/Library/LaunchAgents/$SUPERVISOR_LABEL.plist}"
 HEALTH_URL="${HEALTH_URL:-http://$HOST:$PORT/admin/status}"
 LAUNCHCTL_DOMAIN="gui/$(id -u)"
 SERVICE_TARGET="$LAUNCHCTL_DOMAIN/$LABEL"
+SUPERVISOR_TARGET="$LAUNCHCTL_DOMAIN/$SUPERVISOR_LABEL"
 
 usage() {
   cat <<EOF
@@ -25,6 +28,7 @@ Environment overrides:
   PORT         admin endpoint port (default: 4817)
   HEALTH_URL   full admin health URL (default: http://127.0.0.1:4817/admin/status)
   PLIST_PATH   launchd plist path (default: ~/Library/LaunchAgents/\$LABEL.plist)
+  SUPERVISOR_LABEL supervisor launchd label (default: \$LABEL.cloudflared)
 EOF
 }
 
@@ -43,6 +47,13 @@ echo "Deploying Tidey Remote Bridge..."
 BUILD_BRIDGE=1 LOAD_SERVICE=0 "$INSTALL_SCRIPT"
 
 echo "Restarting launchd service..."
+echo "Ensuring cloudflared supervisor..."
+if launchctl print "$SUPERVISOR_TARGET" >/dev/null 2>&1; then
+  launchctl kickstart "$SUPERVISOR_TARGET" >/dev/null 2>&1 || true
+else
+  launchctl bootstrap "$LAUNCHCTL_DOMAIN" "$SUPERVISOR_PLIST_PATH"
+fi
+
 if launchctl print "$SERVICE_TARGET" >/dev/null 2>&1; then
   launchctl kickstart -k "$SERVICE_TARGET"
 else

@@ -1,5 +1,9 @@
 import Foundation
 
+if CommandLine.arguments.contains("--cloudflared-supervisor") {
+    BridgeCloudflaredSupervisor().run()
+}
+
 let tokenStore = PairTokenStore()
 let token = try tokenStore.loadOrCreateToken()
 let bridgePaths = BridgePaths()
@@ -18,7 +22,8 @@ let workspaceEventHub = WorkspaceEventHub()
 let registryMonitor = AgentSessionRegistryMonitor(hub: eventHub, socketClient: socketClient)
 let workspaceEventMonitor = TideyWorkspaceEventMonitor(locator: locator, hub: workspaceEventHub)
 let observability = BridgeObservabilityCenter()
-let cloudflaredManager = BridgeCloudflaredManager()
+let cloudflaredManager = BridgeCloudflaredManager(statusStore: BridgeCloudflaredStatusStore(),
+                                                  supervisorController: BridgeCloudflaredLaunchAgentController())
 let server = TideyRemoteBridgeServer(token: token,
                                      authenticator: authenticator,
                                      pairingController: pairingController,

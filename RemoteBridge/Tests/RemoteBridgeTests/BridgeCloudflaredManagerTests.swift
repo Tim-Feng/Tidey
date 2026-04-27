@@ -160,6 +160,7 @@ private final class FakeCloudflaredRunner: BridgeCloudflaredProcessRunning {
 
 private final class FakeCloudflaredProcess: BridgeCloudflaredManagedProcess {
     private(set) var didTerminate = false
+    let processID: Int32? = 9001
 
     func terminate() {
         didTerminate = true

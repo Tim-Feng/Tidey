@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 struct BridgeCloudflaredCommand: Equatable, Sendable {
     let executablePath: String
@@ -80,6 +81,7 @@ struct BridgeCloudflaredNoopSupervisorController: BridgeCloudflaredSupervisorCon
 }
 
 protocol BridgeCloudflaredManagedProcess: AnyObject {
+    var processID: Int32? { get }
     func terminate()
 }
 
@@ -132,6 +134,21 @@ final class BridgeCloudflaredManager {
     }
 
     func startAndWaitForEndpoint(timeout: TimeInterval) -> BridgeCloudflaredStatus {
+        if statusStore != nil {
+            ensureSupervisorRunning()
+            let deadline = Date().addingTimeInterval(timeout)
+            repeat {
+                let current = currentStatus()
+                switch current.state {
+                case .online, .error:
+                    return current
+                case .off, .starting:
+                    Thread.sleep(forTimeInterval: 0.05)
+                }
+            } while Date() < deadline
+            return currentStatus()
+        }
+
         let semaphore: DispatchSemaphore
         lock.lock()
         switch status.state {
@@ -193,6 +210,16 @@ final class BridgeCloudflaredManager {
     }
 
     func currentStatus() -> BridgeCloudflaredStatus {
+        if let statusStore {
+            do {
+                return try statusStore.readStatus()
+            } catch {
+                return BridgeCloudflaredStatus(state: .error,
+                                              endpoint: nil,
+                                              errorMessage: "cloudflared state read failed: \(error.localizedDescription)")
+            }
+        }
+
         lock.lock()
         let current = status
         lock.unlock()
@@ -200,6 +227,10 @@ final class BridgeCloudflaredManager {
     }
 
     func stop() {
+        guard statusStore == nil else {
+            return
+        }
+
         lock.lock()
         let process = managedProcess
         managedProcess = nil
@@ -246,6 +277,228 @@ final class BridgeCloudflaredManager {
         }
         lock.unlock()
         semaphore?.signal()
+    }
+}
+
+struct BridgeCloudflaredLaunchAgentController: BridgeCloudflaredSupervisorControlling {
+    let label: String
+    let plistURL: URL
+    let processRunner: ([String]) -> Bool
+
+    init(label: String = "com.tidey.remote-bridge.cloudflared",
+         plistURL: URL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents/com.tidey.remote-bridge.cloudflared.plist"),
+         processRunner: @escaping ([String]) -> Bool = BridgeCloudflaredLaunchAgentController.runLaunchctl(arguments:)) {
+        self.label = label
+        self.plistURL = plistURL
+        self.processRunner = processRunner
+    }
+
+    func ensureRunning() {
+        let domain = "gui/\(getuid())"
+        let serviceTarget = "\(domain)/\(label)"
+        if processRunner(["print", serviceTarget]) {
+            _ = processRunner(["kickstart", serviceTarget])
+            return
+        }
+        guard FileManager.default.fileExists(atPath: plistURL.path) else {
+            return
+        }
+        _ = processRunner(["bootstrap", domain, plistURL.path])
+    }
+
+    private static func runLaunchctl(arguments: [String]) -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = arguments
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus == 0
+        } catch {
+            return false
+        }
+    }
+}
+
+final class BridgeCloudflaredSupervisor {
+    private let binaryResolver: () -> String?
+    private let processRunner: BridgeCloudflaredProcessRunning
+    private let statusStore: BridgeCloudflaredStatusStore
+    private let retryDelay: TimeInterval
+    private let lock = NSLock()
+    private let terminationSemaphore = DispatchSemaphore(value: 0)
+    private var currentProcess: BridgeCloudflaredManagedProcess?
+    private var isTerminating = false
+    private var signalSources = [DispatchSourceSignal]()
+
+    init(binaryResolver: @escaping () -> String? = BridgeCloudflaredBinaryResolver.resolve,
+         processRunner: BridgeCloudflaredProcessRunning = BridgeCloudflaredProcessRunner(),
+         statusStore: BridgeCloudflaredStatusStore = BridgeCloudflaredStatusStore(),
+         retryDelay: TimeInterval = 5) {
+        self.binaryResolver = binaryResolver
+        self.processRunner = processRunner
+        self.statusStore = statusStore
+        self.retryDelay = retryDelay
+    }
+
+    func run() -> Never {
+        installSignalHandlers()
+        while true {
+            if shouldTerminate() {
+                writeStatus(BridgeCloudflaredStatus(state: .off,
+                                                    endpoint: nil,
+                                                    errorMessage: nil,
+                                                    updatedAt: Date()))
+                exit(0)
+            }
+
+            guard let executablePath = binaryResolver() else {
+                writeStatus(BridgeCloudflaredStatus(state: .error,
+                                                    endpoint: nil,
+                                                    errorMessage: "cloudflared not found in PATH",
+                                                    updatedAt: Date()))
+                waitBeforeRestart()
+                continue
+            }
+
+            writeStatus(BridgeCloudflaredStatus(state: .starting,
+                                                endpoint: nil,
+                                                errorMessage: nil,
+                                                updatedAt: Date()))
+
+            let exitSemaphore = DispatchSemaphore(value: 0)
+            let exitCodeBox = BridgeCloudflaredExitCodeBox()
+            do {
+                let command = BridgeCloudflaredCommand(executablePath: executablePath,
+                                                      arguments: [
+                                                        "tunnel",
+                                                        "--no-autoupdate",
+                                                        "--url",
+                                                        "http://localhost:4817",
+                                                      ])
+                let process = try processRunner.start(command: command,
+                                                      onOutput: { [weak self] output in
+                                                          self?.handleOutput(output)
+                                                      },
+                                                      onExit: { code in
+                                                          exitCodeBox.exitCode = code
+                                                          exitSemaphore.signal()
+                                                      })
+                setCurrentProcess(process)
+                _ = exitSemaphore.wait(timeout: .distantFuture)
+                clearCurrentProcess(process)
+                if shouldTerminate() {
+                    continue
+                }
+                writeStatus(BridgeCloudflaredStatus(state: .error,
+                                                    endpoint: nil,
+                                                    errorMessage: "cloudflared exited with status \(exitCodeBox.exitCode ?? -1)",
+                                                    updatedAt: Date()))
+            } catch {
+                writeStatus(BridgeCloudflaredStatus(state: .error,
+                                                    endpoint: nil,
+                                                    errorMessage: error.localizedDescription,
+                                                    updatedAt: Date()))
+            }
+
+            waitBeforeRestart()
+        }
+    }
+
+    private func handleOutput(_ output: String) {
+        guard let endpoint = BridgeCloudflaredOutputParser.firstTunnelEndpoint(in: output) else {
+            return
+        }
+        writeStatus(BridgeCloudflaredStatus(state: .online,
+                                            endpoint: endpoint,
+                                            errorMessage: nil,
+                                            updatedAt: Date(),
+                                            processID: currentProcessID()))
+    }
+
+    private func installSignalHandlers() {
+        for signalNumber in [SIGTERM, SIGINT] {
+            signal(signalNumber, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .global())
+            source.setEventHandler { [weak self] in
+                self?.requestTermination()
+            }
+            source.resume()
+            signalSources.append(source)
+        }
+    }
+
+    private func requestTermination() {
+        let process: BridgeCloudflaredManagedProcess?
+        lock.lock()
+        isTerminating = true
+        process = currentProcess
+        lock.unlock()
+
+        process?.terminate()
+        terminationSemaphore.signal()
+    }
+
+    private func shouldTerminate() -> Bool {
+        lock.lock()
+        let value = isTerminating
+        lock.unlock()
+        return value
+    }
+
+    private func setCurrentProcess(_ process: BridgeCloudflaredManagedProcess) {
+        lock.lock()
+        currentProcess = process
+        lock.unlock()
+    }
+
+    private func clearCurrentProcess(_ process: BridgeCloudflaredManagedProcess) {
+        lock.lock()
+        if currentProcess === process {
+            currentProcess = nil
+        }
+        lock.unlock()
+    }
+
+    private func currentProcessID() -> Int32? {
+        lock.lock()
+        let processID = currentProcess?.processID
+        lock.unlock()
+        return processID
+    }
+
+    private func waitBeforeRestart() {
+        _ = terminationSemaphore.wait(timeout: .now() + retryDelay)
+    }
+
+    private func writeStatus(_ status: BridgeCloudflaredStatus) {
+        do {
+            try statusStore.writeStatus(status)
+        } catch {
+            BridgeLogger.server.error("cloudflared supervisor failed to write state error=\(error.localizedDescription, privacy: .public)")
+        }
+    }
+}
+
+private final class BridgeCloudflaredExitCodeBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Int32?
+
+    var exitCode: Int32? {
+        get {
+            lock.lock()
+            let current = value
+            lock.unlock()
+            return current
+        }
+        set {
+            lock.lock()
+            value = newValue
+            lock.unlock()
+        }
     }
 }
 
@@ -329,6 +582,10 @@ private final class BridgeCloudflaredProcess: BridgeCloudflaredManagedProcess {
 
     init(process: Process) {
         self.process = process
+    }
+
+    var processID: Int32? {
+        process.processIdentifier
     }
 
     func terminate() {

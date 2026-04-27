@@ -2,6 +2,7 @@
 set -euo pipefail
 
 LABEL="${LABEL:-com.tidey.remote-bridge}"
+SUPERVISOR_LABEL="${SUPERVISOR_LABEL:-$LABEL.cloudflared}"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/Library/Application Support/Tidey Remote Bridge}"
 LOG_DIR="${LOG_DIR:-$HOME/Library/Logs/Tidey}"
 PLIST_DIR="${PLIST_DIR:-$HOME/Library/LaunchAgents}"
@@ -29,16 +30,22 @@ echo "Installing launchd plist..."
 mkdir -p "$LOG_DIR"
 mkdir -p "$PLIST_DIR"
 sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/$LABEL.plist" > "$PLIST_DIR/$LABEL.plist"
+sed -e "s|__HOME__|$HOME|g" \
+    -e "s|__LABEL__|$SUPERVISOR_LABEL|g" \
+    "$SCRIPT_DIR/com.tidey.remote-bridge.cloudflared.plist" > "$PLIST_DIR/$SUPERVISOR_LABEL.plist"
 
 if [[ "$LOAD_SERVICE" == "1" ]]; then
   echo "Loading service..."
   launchctl unload "$PLIST_DIR/$LABEL.plist" 2>/dev/null || true
   launchctl load "$PLIST_DIR/$LABEL.plist"
+  launchctl unload "$PLIST_DIR/$SUPERVISOR_LABEL.plist" 2>/dev/null || true
+  launchctl load "$PLIST_DIR/$SUPERVISOR_LABEL.plist"
 fi
 
 echo ""
 echo "Tidey Remote Bridge installed and running."
 echo "  Binary:  $TARGET_BINARY"
 echo "  Plist:   $PLIST_DIR/$LABEL.plist"
+echo "  Tunnel:  $PLIST_DIR/$SUPERVISOR_LABEL.plist"
 echo "  Log:     $LOG_DIR/remote-bridge.log"
 echo "  Signed:  ad-hoc via codesign --sign -"

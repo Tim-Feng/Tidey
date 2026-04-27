@@ -51,6 +51,7 @@ final class TideyRemoteBridgeServer {
 
     func start() throws -> TideyRemoteBridgeServerHandle {
         try registryMonitor.start()
+        cloudflaredManager.ensureSupervisorRunning()
         let upgrader = NIOWebSocketServerUpgrader(
             maxFrameSize: Self.maximumWebSocketFrameSizeBytes,
             shouldUpgrade: { [authenticator] channel, head in
@@ -243,7 +244,8 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
         }
         do {
             let endpoints = BridgeLANEndpointResolver.resolve(port: bridgePort)
-            let tunnelStatus = cloudflaredManager.startAndWaitForEndpoint(timeout: 10)
+            cloudflaredManager.ensureSupervisorRunning()
+            let tunnelStatus = cloudflaredManager.currentStatus()
             let payload = try pairingController.createPairPayload(lanEndpoints: endpoints,
                                                                   tunnelEndpoint: tunnelStatus.endpoint)
             let data = try encoder.encode(payload)

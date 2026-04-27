@@ -572,16 +572,26 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
             NSString *state = [payload[@"state"] isKindOfClass:NSString.class] ? payload[@"state"] : @"off";
             NSDictionary *endpoint = [payload[@"endpoint"] isKindOfClass:NSDictionary.class] ? payload[@"endpoint"] : nil;
             NSString *errorMessage = [payload[@"error_message"] isKindOfClass:NSString.class] ? payload[@"error_message"] : nil;
+            NSString *updatedAtString = [payload[@"updated_at"] isKindOfClass:NSString.class] ? payload[@"updated_at"] : nil;
+            NSDate *updatedAt = [strongSelf dateFromISOString:updatedAtString];
+            NSString *age = [strongSelf ageStringSinceDate:updatedAt];
             if ([state isEqualToString:@"online"] && endpoint) {
                 [strongSelf setTunnelEndpointString:[strongSelf displayStringForEndpoint:endpoint]];
+                strongSelf.statusLabel.stringValue = age.length ? [NSString stringWithFormat:@"Scan this code with Tidey Remote. Tunnel updated %@.", age] : @"Scan this code with Tidey Remote.";
+                strongSelf.statusLabel.toolTip = strongSelf.statusLabel.stringValue;
             } else if ([state isEqualToString:@"starting"]) {
                 [strongSelf setTunnelEndpointString:@"Starting..."];
+                strongSelf.statusLabel.stringValue = @"Tunnel starting. Scan code still works on LAN.";
+                strongSelf.statusLabel.toolTip = strongSelf.statusLabel.stringValue;
             } else if ([state isEqualToString:@"error"] && [errorMessage containsString:@"cloudflared not found"]) {
                 [strongSelf setTunnelEndpointString:@"LAN only (install cloudflared)"];
+                strongSelf.statusLabel.stringValue = @"Tunnel unavailable: install cloudflared.";
+                strongSelf.statusLabel.toolTip = errorMessage;
             } else {
                 [strongSelf setTunnelEndpointString:@"LAN only"];
+                strongSelf.statusLabel.stringValue = errorMessage.length ? [NSString stringWithFormat:@"Tunnel unavailable: %@", errorMessage] : @"Scan this code with Tidey Remote.";
+                strongSelf.statusLabel.toolTip = errorMessage;
             }
-            strongSelf.statusLabel.stringValue = @"Scan this code with Tidey Remote.";
         });
     }];
     [task resume];
@@ -665,6 +675,23 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     NSImage *image = [[NSImage alloc] initWithSize:representation.size];
     [image addRepresentation:representation];
     return image;
+}
+
+- (NSString *)ageStringSinceDate:(NSDate *)date {
+    if (!date) {
+        return nil;
+    }
+    NSTimeInterval age = [[NSDate date] timeIntervalSinceDate:date];
+    if (age < 0) {
+        age = 0;
+    }
+    if (age < 60) {
+        return [NSString stringWithFormat:@"%lds ago", (long)round(age)];
+    }
+    if (age < 3600) {
+        return [NSString stringWithFormat:@"%ldm ago", (long)round(age / 60.0)];
+    }
+    return [NSString stringWithFormat:@"%ldh ago", (long)round(age / 3600.0)];
 }
 
 - (void)showError:(NSString *)message {
