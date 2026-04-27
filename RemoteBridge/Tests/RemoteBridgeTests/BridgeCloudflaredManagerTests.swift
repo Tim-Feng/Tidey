@@ -32,6 +32,27 @@ final class BridgeCloudflaredManagerTests: XCTestCase {
         XCTAssertEqual(runner.startedCommands.count, 0)
     }
 
+    func testBinaryResolverFindsHomebrewCloudflaredWhenLaunchdPathIsNarrow() throws {
+        let temporaryDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let homebrewBin = temporaryDirectory.appendingPathComponent("opt/homebrew/bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: homebrewBin, withIntermediateDirectories: true)
+        let cloudflared = homebrewBin.appendingPathComponent("cloudflared")
+        try "#!/bin/sh\n".write(to: cloudflared, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                              ofItemAtPath: cloudflared.path)
+        defer {
+            try? FileManager.default.removeItem(at: temporaryDirectory)
+        }
+
+        let resolved = BridgeCloudflaredBinaryResolver.resolve(
+            environment: ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"],
+            additionalSearchDirectories: [homebrewBin.path]
+        )
+
+        XCTAssertEqual(resolved, cloudflared.path)
+    }
+
     func testManagerPublishesTunnelEndpointFromProcessOutput() {
         let runner = FakeCloudflaredRunner(output: "INF https://blue-bird-7.trycloudflare.com\n")
         let manager = BridgeCloudflaredManager(binaryResolver: { "/usr/local/bin/cloudflared" },

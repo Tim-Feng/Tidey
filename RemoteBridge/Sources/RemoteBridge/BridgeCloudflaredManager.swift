@@ -185,13 +185,21 @@ final class BridgeCloudflaredManager {
 }
 
 enum BridgeCloudflaredBinaryResolver {
+    private static let fallbackSearchDirectories = [
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+        "/bin",
+    ]
+
     static func resolve() -> String? {
         resolve(environment: ProcessInfo.processInfo.environment)
     }
 
-    static func resolve(environment: [String: String]) -> String? {
-        let path = environment["PATH"] ?? "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-        return resolve(searchDirectories: path.split(separator: ":").map(String.init))
+    static func resolve(environment: [String: String],
+                        additionalSearchDirectories: [String] = fallbackSearchDirectories) -> String? {
+        let pathDirectories = (environment["PATH"] ?? "").split(separator: ":").map(String.init)
+        return resolve(searchDirectories: orderedUnique(pathDirectories + additionalSearchDirectories))
     }
 
     private static func resolve(searchDirectories: [String]) -> String? {
@@ -202,6 +210,17 @@ enum BridgeCloudflaredBinaryResolver {
             }
         }
         return nil
+    }
+
+    private static func orderedUnique(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        return values.filter { value in
+            guard seen.contains(value) == false else {
+                return false
+            }
+            seen.insert(value)
+            return true
+        }
     }
 }
 
