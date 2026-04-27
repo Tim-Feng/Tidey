@@ -133,12 +133,14 @@ enum BridgeLANEndpointResolver {
         guard name.hasPrefix("anpi") == false,
               name.hasPrefix("awdl") == false,
               name.hasPrefix("gif") == false,
-              name.hasPrefix("stf") == false else {
+              name.hasPrefix("stf") == false,
+              name.hasPrefix("utun") == false,
+              name.hasPrefix("utap") == false,
+              name.hasPrefix("ipsec") == false else {
             return false
         }
         return name.hasPrefix("en") ||
-               name.hasPrefix("bridge") ||
-               name.hasPrefix("utun")
+               name.hasPrefix("bridge")
     }
 
     private static func isLinkLocalOrLoopbackHost(_ host: String) -> Bool {
