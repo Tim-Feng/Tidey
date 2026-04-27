@@ -329,6 +329,7 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
         return;
     }
     self.devicesStatusLabel.stringValue = [NSString stringWithFormat:@"%lu paired device%@", (unsigned long)devices.count, devices.count == 1 ? @"" : @"s"];
+    [self updateDeviceRowsFrameForCount:devices.count];
     for (NSDictionary *device in devices) {
         if (![device isKindOfClass:NSDictionary.class]) {
             continue;
@@ -342,6 +343,22 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
         [self.devicesStackView removeArrangedSubview:view];
         [view removeFromSuperview];
     }
+    for (NSView *view in self.devicesStackView.subviews.copy) {
+        [view removeFromSuperview];
+    }
+    [self updateDeviceRowsFrameForCount:0];
+}
+
+- (void)updateDeviceRowsFrameForCount:(NSUInteger)count {
+    static const CGFloat rowHeight = 34;
+    static const CGFloat rowSpacing = 8;
+    static const CGFloat stackTopY = 94;
+    if (count == 0) {
+        self.devicesStackView.frame = NSMakeRect(20, 16, 456, 0);
+        return;
+    }
+    CGFloat height = rowHeight * count + rowSpacing * (count - 1);
+    self.devicesStackView.frame = NSMakeRect(20, stackTopY - height, 456, height);
 }
 
 - (NSView *)rowViewForDevice:(NSDictionary *)device {
