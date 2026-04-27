@@ -3,6 +3,69 @@ import XCTest
 @testable import RemoteBridge
 
 final class BridgeCloudflaredManagerTests: XCTestCase {
+    func testStatusStorePersistsTunnelStatusForBridgeReaders() throws {
+        let fixture = try CloudflaredStatusStoreFixture()
+        let endpoint = BridgePairEndpoint(scheme: "wss",
+                                          host: "stable-state.trycloudflare.com",
+                                          port: nil,
+                                          path: "/")
+        let status = BridgeCloudflaredStatus(state: .online,
+                                             endpoint: endpoint,
+                                             errorMessage: nil,
+                                             updatedAt: Date(timeIntervalSince1970: 1_775_000_000),
+                                             processID: 12345)
+
+        try fixture.store.writeStatus(status)
+
+        XCTAssertEqual(try fixture.store.readStatus(), status)
+    }
+
+    func testManagerReadsTunnelStatusFromStateFileWithoutStartingProcess() throws {
+        let fixture = try CloudflaredStatusStoreFixture()
+        let endpoint = BridgePairEndpoint(scheme: "wss",
+                                          host: "state-reader.trycloudflare.com",
+                                          port: nil,
+                                          path: "/")
+        try fixture.store.writeStatus(BridgeCloudflaredStatus(state: .online,
+                                                              endpoint: endpoint,
+                                                              errorMessage: nil,
+                                                              updatedAt: Date(timeIntervalSince1970: 1_775_000_100),
+                                                              processID: 456))
+        let runner = FakeCloudflaredRunner()
+        let manager = BridgeCloudflaredManager(binaryResolver: { "/usr/local/bin/cloudflared" },
+                                               processRunner: runner,
+                                               statusStore: fixture.store)
+
+        let status = manager.currentStatus()
+
+        XCTAssertEqual(status.state, .online)
+        XCTAssertEqual(status.endpoint, endpoint)
+        XCTAssertEqual(runner.startedCommands, [])
+    }
+
+    func testStartAndWaitReadsTunnelStatusFromStateFileWithoutStartingProcess() throws {
+        let fixture = try CloudflaredStatusStoreFixture()
+        let endpoint = BridgePairEndpoint(scheme: "wss",
+                                          host: "state-wait.trycloudflare.com",
+                                          port: nil,
+                                          path: "/")
+        try fixture.store.writeStatus(BridgeCloudflaredStatus(state: .online,
+                                                              endpoint: endpoint,
+                                                              errorMessage: nil,
+                                                              updatedAt: Date(timeIntervalSince1970: 1_775_000_200),
+                                                              processID: 789))
+        let runner = FakeCloudflaredRunner()
+        let manager = BridgeCloudflaredManager(binaryResolver: { "/usr/local/bin/cloudflared" },
+                                               processRunner: runner,
+                                               statusStore: fixture.store)
+
+        let status = manager.startAndWaitForEndpoint(timeout: 0.1)
+
+        XCTAssertEqual(status.state, .online)
+        XCTAssertEqual(status.endpoint, endpoint)
+        XCTAssertEqual(runner.startedCommands, [])
+    }
+
     func testOutputParserExtractsTryCloudflareURLFromStderrNoise() {
         let output = """
         2026-04-27T09:00:00Z INF Requesting new quick Tunnel on trycloudflare.com...
@@ -100,5 +163,21 @@ private final class FakeCloudflaredProcess: BridgeCloudflaredManagedProcess {
 
     func terminate() {
         didTerminate = true
+    }
+}
+
+private final class CloudflaredStatusStoreFixture {
+    let temporaryDirectory: URL
+    let store: BridgeCloudflaredStatusStore
+
+    init() throws {
+        temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let fileURL = temporaryDirectory.appendingPathComponent("cloudflared-state.json")
+        store = BridgeCloudflaredStatusStore(fileURL: fileURL)
+    }
+
+    deinit {
+        try? FileManager.default.removeItem(at: temporaryDirectory)
     }
 }

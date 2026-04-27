@@ -5,6 +5,7 @@ struct BridgePaths {
     let pairTokenFileURL: URL
     let hostIdentityFileURL: URL
     let deviceCredentialsFileURL: URL
+    let cloudflaredStateFileURL: URL
     let agentSessionsDirectory: URL
 
     init(supportDirectory: URL) {
@@ -12,6 +13,7 @@ struct BridgePaths {
         pairTokenFileURL = supportDirectory.appendingPathComponent("pair-token.json", isDirectory: false)
         hostIdentityFileURL = supportDirectory.appendingPathComponent("host-identity.json", isDirectory: false)
         deviceCredentialsFileURL = supportDirectory.appendingPathComponent("device-credentials.json", isDirectory: false)
+        cloudflaredStateFileURL = supportDirectory.appendingPathComponent("cloudflared-state.json", isDirectory: false)
         agentSessionsDirectory = supportDirectory.appendingPathComponent("agent-sessions", isDirectory: true)
     }
 

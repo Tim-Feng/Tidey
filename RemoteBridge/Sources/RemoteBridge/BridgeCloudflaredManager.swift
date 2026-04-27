@@ -16,12 +16,67 @@ struct BridgeCloudflaredStatus: Codable, Equatable, Sendable {
     let state: BridgeCloudflaredState
     let endpoint: BridgePairEndpoint?
     let errorMessage: String?
+    let updatedAt: Date?
+    let processID: Int32?
+
+    init(state: BridgeCloudflaredState,
+         endpoint: BridgePairEndpoint?,
+         errorMessage: String?,
+         updatedAt: Date? = nil,
+         processID: Int32? = nil) {
+        self.state = state
+        self.endpoint = endpoint
+        self.errorMessage = errorMessage
+        self.updatedAt = updatedAt
+        self.processID = processID
+    }
 
     enum CodingKeys: String, CodingKey {
         case state
         case endpoint
         case errorMessage = "error_message"
+        case updatedAt = "updated_at"
+        case processID = "process_id"
     }
+}
+
+final class BridgeCloudflaredStatusStore {
+    private let fileURL: URL
+    private let fileManager: FileManager
+    private let encoder = JSONEncoder()
+    private let decoder = JSONDecoder()
+
+    init(fileURL: URL = BridgePaths().cloudflaredStateFileURL,
+         fileManager: FileManager = .default) {
+        self.fileURL = fileURL
+        self.fileManager = fileManager
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys]
+        decoder.dateDecodingStrategy = .iso8601
+    }
+
+    func readStatus() throws -> BridgeCloudflaredStatus {
+        guard fileManager.fileExists(atPath: fileURL.path) else {
+            return BridgeCloudflaredStatus(state: .off, endpoint: nil, errorMessage: nil)
+        }
+        let data = try Data(contentsOf: fileURL)
+        return try decoder.decode(BridgeCloudflaredStatus.self, from: data)
+    }
+
+    func writeStatus(_ status: BridgeCloudflaredStatus) throws {
+        try fileManager.createDirectory(at: fileURL.deletingLastPathComponent(),
+                                        withIntermediateDirectories: true)
+        let data = try encoder.encode(status)
+        try data.write(to: fileURL, options: [.atomic])
+    }
+}
+
+protocol BridgeCloudflaredSupervisorControlling {
+    func ensureRunning()
+}
+
+struct BridgeCloudflaredNoopSupervisorController: BridgeCloudflaredSupervisorControlling {
+    func ensureRunning() {}
 }
 
 protocol BridgeCloudflaredManagedProcess: AnyObject {
@@ -53,6 +108,8 @@ enum BridgeCloudflaredOutputParser {
 final class BridgeCloudflaredManager {
     private let binaryResolver: () -> String?
     private let processRunner: BridgeCloudflaredProcessRunning
+    private let statusStore: BridgeCloudflaredStatusStore?
+    private let supervisorController: BridgeCloudflaredSupervisorControlling
     private let lock = NSLock()
     private var managedProcess: BridgeCloudflaredManagedProcess?
     private var status = BridgeCloudflaredStatus(state: .off,
@@ -61,9 +118,17 @@ final class BridgeCloudflaredManager {
     private var endpointReadySemaphore: DispatchSemaphore?
 
     init(binaryResolver: @escaping () -> String? = BridgeCloudflaredBinaryResolver.resolve,
-         processRunner: BridgeCloudflaredProcessRunning = BridgeCloudflaredProcessRunner()) {
+         processRunner: BridgeCloudflaredProcessRunning = BridgeCloudflaredProcessRunner(),
+         statusStore: BridgeCloudflaredStatusStore? = nil,
+         supervisorController: BridgeCloudflaredSupervisorControlling = BridgeCloudflaredNoopSupervisorController()) {
         self.binaryResolver = binaryResolver
         self.processRunner = processRunner
+        self.statusStore = statusStore
+        self.supervisorController = supervisorController
+    }
+
+    func ensureSupervisorRunning() {
+        supervisorController.ensureRunning()
     }
 
     func startAndWaitForEndpoint(timeout: TimeInterval) -> BridgeCloudflaredStatus {
