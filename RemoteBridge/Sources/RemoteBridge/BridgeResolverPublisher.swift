@@ -32,6 +32,91 @@ protocol BridgeResolverClient {
     func publish(_ request: BridgeResolverPublishRequest) throws
 }
 
+enum BridgeResolverConfiguration {
+    static let defaultBaseURL = URL(string: "https://tidey-remote-resolver.fsjforever26.workers.dev")!
+
+    static func resolverBaseURL(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
+        guard let override = environment["TIDEY_REMOTE_RESOLVER_ENDPOINT"],
+              let url = URL(string: override),
+              url.scheme?.hasPrefix("http") == true else {
+            return defaultBaseURL
+        }
+        return url
+    }
+}
+
+final class BridgeURLSessionResolverClient: BridgeResolverClient {
+    private let session: URLSession
+    private let encoder: JSONEncoder
+
+    init(session: URLSession = .shared) {
+        self.session = session
+        encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys]
+    }
+
+    func publish(_ request: BridgeResolverPublishRequest) throws {
+        var urlRequest = URLRequest(url: request.url)
+        urlRequest.httpMethod = "POST"
+        urlRequest.timeoutInterval = 10
+        urlRequest.setValue("Bearer \(request.bearerToken)", forHTTPHeaderField: "Authorization")
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.httpBody = try encoder.encode(request.payload)
+
+        let semaphore = DispatchSemaphore(value: 0)
+        let resultBox = BridgeResolverPublishResultBox()
+        session.dataTask(with: urlRequest) { _, response, error in
+            defer { semaphore.signal() }
+            if let error {
+                resultBox.result = .failure(.transport(error.localizedDescription))
+                return
+            }
+            guard let httpResponse = response as? HTTPURLResponse else {
+                resultBox.result = .failure(.transport("resolver response was not HTTP"))
+                return
+            }
+            switch httpResponse.statusCode {
+            case 200..<300:
+                resultBox.result = .success(())
+            case 401, 403:
+                resultBox.result = .failure(.unauthorized)
+            default:
+                resultBox.result = .failure(.badStatus(httpResponse.statusCode))
+            }
+        }.resume()
+        semaphore.wait()
+
+        switch resultBox.result {
+        case .success:
+            return
+        case .failure(let error):
+            throw error
+        case nil:
+            throw BridgeResolverPublishError.transport("resolver request finished without result")
+        }
+    }
+}
+
+private final class BridgeResolverPublishResultBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Result<Void, BridgeResolverPublishError>?
+
+    var result: Result<Void, BridgeResolverPublishError>? {
+        get {
+            lock.lock()
+            let current = value
+            lock.unlock()
+            return current
+        }
+        set {
+            lock.lock()
+            value = newValue
+            lock.unlock()
+        }
+    }
+}
+
 final class BridgeResolverPublishSecretStore {
     private struct SecretRecord: Codable {
         let publishSecret: String

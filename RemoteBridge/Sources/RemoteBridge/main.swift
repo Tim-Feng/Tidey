@@ -22,8 +22,15 @@ let workspaceEventHub = WorkspaceEventHub()
 let registryMonitor = AgentSessionRegistryMonitor(hub: eventHub, socketClient: socketClient)
 let workspaceEventMonitor = TideyWorkspaceEventMonitor(locator: locator, hub: workspaceEventHub)
 let observability = BridgeObservabilityCenter()
-let cloudflaredManager = BridgeCloudflaredManager(statusStore: BridgeCloudflaredStatusStore(),
+let cloudflaredStatusStore = BridgeCloudflaredStatusStore(fileURL: bridgePaths.cloudflaredStateFileURL)
+let cloudflaredManager = BridgeCloudflaredManager(statusStore: cloudflaredStatusStore,
                                                   supervisorController: BridgeCloudflaredLaunchAgentController())
+let resolverPublisher = BridgeResolverPublisher(resolverBaseURL: BridgeResolverConfiguration.resolverBaseURL(),
+                                                hostIdentityStore: hostIdentityStore,
+                                                publishSecretStore: BridgeResolverPublishSecretStore(paths: bridgePaths),
+                                                client: BridgeURLSessionResolverClient())
+let resolverPublicationMonitor = BridgeResolverPublicationMonitor(statusReader: cloudflaredStatusStore,
+                                                                  publisher: resolverPublisher)
 let server = TideyRemoteBridgeServer(token: token,
                                      authenticator: authenticator,
                                      pairingController: pairingController,
@@ -36,6 +43,7 @@ let server = TideyRemoteBridgeServer(token: token,
 
 do {
     workspaceEventMonitor.start()
+    resolverPublicationMonitor.start()
     try server.run()
 } catch {
     fputs("RemoteBridge failed: \(error)\n", stderr)
