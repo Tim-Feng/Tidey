@@ -258,12 +258,39 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
                                                    __strong __typeof(weakSelf) strongSelf = weakSelf;
                                                    [strongSelf handleMessage:message onConnection:connection];
                                                }
-                                                 closeHandler:^(TideySocketConnection *closingConnection) {
-                                                     __strong __typeof(weakSelf) strongSelf = weakSelf;
-                                                     [strongSelf removeWorkspaceEventSubscriptionForConnection:closingConnection];
-                                                     [strongSelf.connections removeObject:closingConnection];
+                                                  closeHandler:^(TideySocketConnection *closingConnection) {
+                                                      __strong __typeof(weakSelf) strongSelf = weakSelf;
+                                                      [strongSelf connectionDidClose:closingConnection];
                                                  }];
+    [self registerAcceptedConnection:connection];
+}
+
+- (void)registerAcceptedConnection:(TideySocketConnection *)connection {
+    if (!connection) {
+        return;
+    }
+    if (![NSThread isMainThread]) {
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            [self registerAcceptedConnection:connection];
+        });
+        return;
+    }
     [self.connections addObject:connection];
+    [connection startReading];
+}
+
+- (void)connectionDidClose:(TideySocketConnection *)connection {
+    if (!connection) {
+        return;
+    }
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self connectionDidClose:connection];
+        });
+        return;
+    }
+    [self.workspaceEventSubscriptions removeObjectForKey:connection];
+    [self.connections removeObject:connection];
 }
 
 - (PseudoTerminal *)tideyTerminalForWorkspaceIdentifier:(NSString *)workspaceIdentifier {
@@ -296,11 +323,23 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
     if (!connection) {
         return;
     }
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self setWorkspaceEventSubscriptionForConnection:connection workspaceID:workspaceID];
+        });
+        return;
+    }
     [self.workspaceEventSubscriptions setObject:(workspaceID ?: @"") forKey:connection];
 }
 
 - (void)removeWorkspaceEventSubscriptionForConnection:(TideySocketConnection *)connection {
     if (!connection) {
+        return;
+    }
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self removeWorkspaceEventSubscriptionForConnection:connection];
+        });
         return;
     }
     [self.workspaceEventSubscriptions removeObjectForKey:connection];
@@ -329,13 +368,20 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
 }
 
 - (void)handleWorkspaceEventNotification:(NSNotification *)notification {
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self handleWorkspaceEventNotification:notification];
+        });
+        return;
+    }
     NSDictionary *event = [notification.userInfo isKindOfClass:[NSDictionary class]] ? notification.userInfo : nil;
     NSDictionary *envelope = [self workspaceEventEnvelopeForEvent:event];
     if (!envelope) {
         return;
     }
     NSString *workspaceID = [event[@"workspace_id"] isKindOfClass:[NSString class]] ? event[@"workspace_id"] : nil;
-    for (TideySocketConnection *connection in self.workspaceEventSubscriptions) {
+    NSArray<TideySocketConnection *> *connections = self.workspaceEventSubscriptions.keyEnumerator.allObjects;
+    for (TideySocketConnection *connection in connections) {
         NSString *filterWorkspaceID = [self.workspaceEventSubscriptions objectForKey:connection];
         if (filterWorkspaceID.length > 0 &&
             ![filterWorkspaceID isEqualToString:workspaceID]) {
@@ -1120,19 +1166,37 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
 }
 
 - (void)stop {
+    if (![NSThread isMainThread]) {
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            [self stop];
+        });
+        return;
+    }
     if (!self.started) {
         return;
     }
-    for (TideySocketConnection *connection in self.connections.allObjects) {
-        [connection close];
-    }
+    NSArray<TideySocketConnection *> *connections = self.connections.allObjects;
     [self.connections removeAllObjects];
     [self.workspaceEventSubscriptions removeAllObjects];
+    for (TideySocketConnection *connection in connections) {
+        [connection close];
+    }
     [self.socket close];
     self.socket = nil;
     unlink(TideySocketServer.socketPath.UTF8String);
     gTideyActiveSocketPath = nil;
     self.started = NO;
+}
+
+- (NSUInteger)tideyTestingConnectionCount {
+    if (![NSThread isMainThread]) {
+        __block NSUInteger count = 0;
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            count = [self tideyTestingConnectionCount];
+        });
+        return count;
+    }
+    return self.connections.count;
 }
 
 @end

@@ -21,7 +21,6 @@
         _buffer = [[NSMutableData alloc] init];
         _messageHandler = [messageHandler copy];
         _closeHandler = [closeHandler copy];
-        [self startReading];
     }
     return self;
 }

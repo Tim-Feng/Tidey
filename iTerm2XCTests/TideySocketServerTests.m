@@ -12,7 +12,9 @@
                               workspaceSummaries:(NSArray<NSDictionary *> *)workspaceSummaries
                                 sendInputHandler:(BOOL (^)(NSString *workspaceID, NSString *input))sendInputHandler
                             recentOutputProvider:(NSString * _Nullable (^)(NSString *workspaceID))recentOutputProvider;
+- (void)acceptFileDescriptor:(int)fd;
 - (void)cleanupStaleSockets:(NSString *)directory;
+- (NSUInteger)tideyTestingConnectionCount;
 @end
 
 @interface TideySocketServerTests : XCTestCase
@@ -119,6 +121,34 @@
     close(fd);
     unlink(socketPath.UTF8String);
     [[NSFileManager defaultManager] removeItemAtPath:directory error:nil];
+}
+
+- (void)testConnectionSetSurvivesRapidAcceptAndClose {
+    TideySocketServer *server = [[TideySocketServer alloc] init];
+    dispatch_queue_t closeQueue = dispatch_queue_create("com.tidey.tests.socket-close", DISPATCH_QUEUE_CONCURRENT);
+
+    for (NSUInteger i = 0; i < 200; i++) {
+        int fds[2] = { -1, -1 };
+        XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, fds), 0);
+        [server acceptFileDescriptor:fds[0]];
+        dispatch_async(closeQueue, ^{
+            close(fds[1]);
+        });
+    }
+
+    XCTAssertTrue([self waitForServer:server connectionCount:0 timeout:3]);
+}
+
+- (BOOL)waitForServer:(TideySocketServer *)server connectionCount:(NSUInteger)expected timeout:(NSTimeInterval)timeout {
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:timeout];
+    while ([deadline timeIntervalSinceNow] > 0) {
+        if ([server tideyTestingConnectionCount] == expected) {
+            return YES;
+        }
+        [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
+                                 beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+    }
+    return [server tideyTestingConnectionCount] == expected;
 }
 
 - (NSString *)temporarySocketDirectory {
