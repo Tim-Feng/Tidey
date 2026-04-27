@@ -165,7 +165,7 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     self.devicesStackView = [[NSStackView alloc] initWithFrame:NSMakeRect(20, 16, 456, 78)];
     self.devicesStackView.orientation = NSUserInterfaceLayoutOrientationVertical;
     self.devicesStackView.alignment = NSLayoutAttributeLeading;
-    self.devicesStackView.distribution = NSStackViewDistributionFillEqually;
+    self.devicesStackView.distribution = NSStackViewDistributionFill;
     self.devicesStackView.spacing = 8;
     [devicesCardView addSubview:self.devicesStackView];
 
@@ -346,6 +346,7 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 
 - (NSView *)rowViewForDevice:(NSDictionary *)device {
     NSView *row = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 456, 34)];
+    [row.heightAnchor constraintEqualToConstant:34].active = YES;
     NSString *deviceID = [device[@"device_id"] isKindOfClass:NSString.class] ? device[@"device_id"] : @"";
     NSString *deviceName = [device[@"device_name"] isKindOfClass:NSString.class] ? device[@"device_name"] : @"Unknown device";
     NSDate *pairedAt = [self dateFromISOString:[device[@"paired_at"] isKindOfClass:NSString.class] ? device[@"paired_at"] : nil];
