@@ -17,6 +17,7 @@ final class TideyRemoteBridgeServer {
     private let workspaceEventHub: WorkspaceEventHub
     private let registryMonitor: AgentSessionRegistryMonitor
     private let observability: BridgeObservabilityCenter
+    private let cloudflaredManager: BridgeCloudflaredManager
     private let group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
 
     init(host: String = "0.0.0.0",
@@ -28,7 +29,8 @@ final class TideyRemoteBridgeServer {
          eventHub: AgentEventHub,
          workspaceEventHub: WorkspaceEventHub,
          registryMonitor: AgentSessionRegistryMonitor,
-         observability: BridgeObservabilityCenter) {
+         observability: BridgeObservabilityCenter,
+         cloudflaredManager: BridgeCloudflaredManager = BridgeCloudflaredManager()) {
         self.host = host
         self.port = port
         self.token = token
@@ -39,6 +41,7 @@ final class TideyRemoteBridgeServer {
         self.workspaceEventHub = workspaceEventHub
         self.registryMonitor = registryMonitor
         self.observability = observability
+        self.cloudflaredManager = cloudflaredManager
     }
 
     func run() throws {
@@ -69,14 +72,15 @@ final class TideyRemoteBridgeServer {
         let bootstrap = ServerBootstrap(group: group)
             .serverChannelOption(ChannelOptions.backlog, value: 16)
             .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
-            .childChannelInitializer { [token, authenticator, pairingController, port, registryMonitor, eventHub, observability] channel in
+            .childChannelInitializer { [token, authenticator, pairingController, port, registryMonitor, eventHub, observability, cloudflaredManager] channel in
                 let httpHandler = HTTPHandler(legacyPairToken: token,
                                               authenticator: authenticator,
                                               pairingController: pairingController,
                                               bridgePort: port,
                                               registryMonitor: registryMonitor,
                                               eventHub: eventHub,
-                                              observability: observability)
+                                              observability: observability,
+                                              cloudflaredManager: cloudflaredManager)
                 return channel.pipeline.configureHTTPServerPipeline(
                     withServerUpgrade: (
                         upgraders: [upgrader],
@@ -97,6 +101,7 @@ final class TideyRemoteBridgeServer {
     }
 
     deinit {
+        cloudflaredManager.stop()
         try? group.syncShutdownGracefully()
     }
 }
@@ -150,6 +155,7 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
     private let registryMonitor: AgentSessionRegistryMonitor
     private let eventHub: AgentEventHub
     private let observability: BridgeObservabilityCenter
+    private let cloudflaredManager: BridgeCloudflaredManager
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     private var pendingHead: HTTPRequestHead?
@@ -161,7 +167,8 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
          bridgePort: Int,
          registryMonitor: AgentSessionRegistryMonitor,
          eventHub: AgentEventHub,
-         observability: BridgeObservabilityCenter) {
+         observability: BridgeObservabilityCenter,
+         cloudflaredManager: BridgeCloudflaredManager) {
         self.legacyPairToken = legacyPairToken
         self.authenticator = authenticator
         self.pairingController = pairingController
@@ -169,6 +176,7 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
         self.registryMonitor = registryMonitor
         self.eventHub = eventHub
         self.observability = observability
+        self.cloudflaredManager = cloudflaredManager
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys]
         decoder.dateDecodingStrategy = .iso8601
@@ -201,6 +209,8 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
         switch requestPath(from: head.uri) {
         case "/admin/pair_payload":
             respondToPairPayload(head: head, context: context)
+        case "/admin/tunnel_status":
+            respondToTunnelStatus(head: head, context: context)
         case "/admin/devices":
             respondToDeviceList(head: head, context: context)
         case "/admin/devices/revoke":
@@ -233,10 +243,35 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
         }
         do {
             let endpoints = BridgeLANEndpointResolver.resolve(port: bridgePort)
-            let payload = try pairingController.createPairPayload(lanEndpoints: endpoints)
+            let tunnelStatus = cloudflaredManager.startAndWaitForEndpoint(timeout: 10)
+            let payload = try pairingController.createPairPayload(lanEndpoints: endpoints,
+                                                                  tunnelEndpoint: tunnelStatus.endpoint)
             let data = try encoder.encode(payload)
             respond(status: .ok,
                     data: data,
+                    context: context,
+                    version: head.version,
+                    contentType: "application/json")
+        } catch {
+            respond(error: BridgeInternalError.invalidRequest(error.localizedDescription).payload,
+                    status: .badRequest,
+                    context: context,
+                    version: head.version)
+        }
+    }
+
+    private func respondToTunnelStatus(head: HTTPRequestHead, context: ChannelHandlerContext) {
+        guard head.method == .GET else {
+            respond(status: .methodNotAllowed, data: Data(), context: context, version: head.version)
+            return
+        }
+        guard authenticator.isLegacyTokenAuthorized(authorizationHeader: head.headers.first(name: "Authorization")) else {
+            respond(status: .unauthorized, data: Data(), context: context, version: head.version)
+            return
+        }
+        do {
+            respond(status: .ok,
+                    data: try encoder.encode(cloudflaredManager.currentStatus()),
                     context: context,
                     version: head.version,
                     contentType: "application/json")

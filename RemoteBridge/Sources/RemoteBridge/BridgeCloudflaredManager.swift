@@ -70,7 +70,7 @@ final class BridgeCloudflaredManager {
         let semaphore: DispatchSemaphore
         lock.lock()
         switch status.state {
-        case .online, .error:
+        case .online:
             let current = status
             lock.unlock()
             return current
@@ -78,7 +78,7 @@ final class BridgeCloudflaredManager {
             semaphore = endpointReadySemaphore ?? DispatchSemaphore(value: 0)
             endpointReadySemaphore = semaphore
             lock.unlock()
-        case .off:
+        case .off, .error:
             guard let executablePath = binaryResolver() else {
                 status = BridgeCloudflaredStatus(state: .error,
                                                 endpoint: nil,

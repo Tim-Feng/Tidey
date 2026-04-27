@@ -18,6 +18,7 @@ let workspaceEventHub = WorkspaceEventHub()
 let registryMonitor = AgentSessionRegistryMonitor(hub: eventHub, socketClient: socketClient)
 let workspaceEventMonitor = TideyWorkspaceEventMonitor(locator: locator, hub: workspaceEventHub)
 let observability = BridgeObservabilityCenter()
+let cloudflaredManager = BridgeCloudflaredManager()
 let server = TideyRemoteBridgeServer(token: token,
                                      authenticator: authenticator,
                                      pairingController: pairingController,
@@ -25,7 +26,8 @@ let server = TideyRemoteBridgeServer(token: token,
                                      eventHub: eventHub,
                                      workspaceEventHub: workspaceEventHub,
                                      registryMonitor: registryMonitor,
-                                     observability: observability)
+                                     observability: observability,
+                                     cloudflaredManager: cloudflaredManager)
 
 do {
     workspaceEventMonitor.start()

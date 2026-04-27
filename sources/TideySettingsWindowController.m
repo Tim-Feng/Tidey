@@ -512,11 +512,59 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     }
 
     self.endpointValueLabel.stringValue = [self displayStringForEndpoint:endpoints.firstObject];
+    NSDictionary *tunnelEndpoint = [payload[@"tunnel_endpoint"] isKindOfClass:NSDictionary.class] ? payload[@"tunnel_endpoint"] : nil;
     NSString *expiresAtString = [payload[@"expires_at"] isKindOfClass:NSString.class] ? payload[@"expires_at"] : nil;
     self.expiresAt = [self dateFromISOString:expiresAtString];
     self.qrImageView.image = [self qrImageForString:[self base64URLStringForData:data]];
-    self.statusLabel.stringValue = @"Scan this code with Tidey Remote on your phone.";
+    if (tunnelEndpoint) {
+        self.statusLabel.stringValue = [NSString stringWithFormat:@"Scan this code with Tidey Remote on your phone.\nTunnel: %@", [self displayStringForEndpoint:tunnelEndpoint]];
+    } else {
+        self.statusLabel.stringValue = @"Scan this code with Tidey Remote on your phone.\nTunnel: LAN only";
+    }
     [self startCountdownTimer];
+    [self refreshTunnelStatus];
+}
+
+- (void)refreshTunnelStatus {
+    NSError *tokenError = nil;
+    NSString *token = [self legacyPairTokenWithError:&tokenError];
+    if (!token.length) {
+        return;
+    }
+
+    NSURL *url = [NSURL URLWithString:@"http://127.0.0.1:4817/admin/tunnel_status"];
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+    request.timeoutInterval = 4;
+    [request setValue:[NSString stringWithFormat:@"Bearer %@", token] forHTTPHeaderField:@"Authorization"];
+
+    __weak __typeof(self) weakSelf = self;
+    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request
+                                                                 completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            __strong __typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf || error || !data.length) {
+                return;
+            }
+            NSDictionary *payload = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+            if (![payload isKindOfClass:NSDictionary.class]) {
+                return;
+            }
+            NSString *state = [payload[@"state"] isKindOfClass:NSString.class] ? payload[@"state"] : @"off";
+            NSDictionary *endpoint = [payload[@"endpoint"] isKindOfClass:NSDictionary.class] ? payload[@"endpoint"] : nil;
+            NSString *errorMessage = [payload[@"error_message"] isKindOfClass:NSString.class] ? payload[@"error_message"] : nil;
+            NSString *base = @"Scan this code with Tidey Remote on your phone.";
+            if ([state isEqualToString:@"online"] && endpoint) {
+                strongSelf.statusLabel.stringValue = [NSString stringWithFormat:@"%@\nTunnel: %@", base, [strongSelf displayStringForEndpoint:endpoint]];
+            } else if ([state isEqualToString:@"starting"]) {
+                strongSelf.statusLabel.stringValue = [NSString stringWithFormat:@"%@\nTunnel: starting...", base];
+            } else if ([state isEqualToString:@"error"] && [errorMessage containsString:@"cloudflared not found"]) {
+                strongSelf.statusLabel.stringValue = [NSString stringWithFormat:@"%@\nTunnel: LAN only. Install with brew install cloudflared.", base];
+            } else {
+                strongSelf.statusLabel.stringValue = [NSString stringWithFormat:@"%@\nTunnel: LAN only", base];
+            }
+        });
+    }];
+    [task resume];
 }
 
 - (NSString *)displayStringForEndpoint:(NSDictionary *)endpoint {
