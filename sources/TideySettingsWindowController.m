@@ -52,6 +52,17 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 
 @end
 
+@interface TideyFlippedView : NSView
+@end
+
+@implementation TideyFlippedView
+
+- (BOOL)isFlipped {
+    return YES;
+}
+
+@end
+
 @interface TideyRemoteSettingsViewController : NSViewController
 
 @property(nonatomic, strong) NSTextField *endpointValueLabel;
@@ -59,6 +70,8 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 @property(nonatomic, strong) NSTextField *statusLabel;
 @property(nonatomic, strong) NSImageView *qrImageView;
 @property(nonatomic, strong) NSButton *refreshButton;
+@property(nonatomic, strong) NSScrollView *devicesScrollView;
+@property(nonatomic, strong) NSView *devicesDocumentView;
 @property(nonatomic, strong) NSStackView *devicesStackView;
 @property(nonatomic, strong) NSTextField *devicesStatusLabel;
 @property(nonatomic, strong) NSTimer *countdownTimer;
@@ -162,19 +175,22 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
                                              color:[NSColor colorWithSRGBRed:0xaa/255.0 green:0xaa/255.0 blue:0xaa/255.0 alpha:1.0]];
     [devicesCardView addSubview:self.devicesStatusLabel];
 
-    NSScrollView *devicesScrollView = [[NSScrollView alloc] initWithFrame:NSMakeRect(20, 16, 456, 78)];
-    devicesScrollView.drawsBackground = NO;
-    devicesScrollView.hasVerticalScroller = YES;
-    devicesScrollView.autohidesScrollers = YES;
-    devicesScrollView.borderType = NSNoBorder;
-    [devicesCardView addSubview:devicesScrollView];
+    self.devicesScrollView = [[NSScrollView alloc] initWithFrame:NSMakeRect(20, 16, 456, 78)];
+    self.devicesScrollView.drawsBackground = NO;
+    self.devicesScrollView.hasVerticalScroller = YES;
+    self.devicesScrollView.autohidesScrollers = YES;
+    self.devicesScrollView.borderType = NSNoBorder;
+    [devicesCardView addSubview:self.devicesScrollView];
 
-    self.devicesStackView = [[NSStackView alloc] initWithFrame:NSMakeRect(0, 0, 456, 78)];
+    self.devicesDocumentView = [[TideyFlippedView alloc] initWithFrame:NSMakeRect(0, 0, 456, 78)];
+    self.devicesScrollView.documentView = self.devicesDocumentView;
+
+    self.devicesStackView = [[NSStackView alloc] initWithFrame:NSMakeRect(0, 0, 456, 0)];
     self.devicesStackView.orientation = NSUserInterfaceLayoutOrientationVertical;
     self.devicesStackView.alignment = NSLayoutAttributeLeading;
     self.devicesStackView.distribution = NSStackViewDistributionFill;
     self.devicesStackView.spacing = 8;
-    devicesScrollView.documentView = self.devicesStackView;
+    [self.devicesDocumentView addSubview:self.devicesStackView];
 
     self.view = view;
 }
@@ -359,13 +375,14 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 - (void)updateDeviceRowsFrameForCount:(NSUInteger)count {
     static const CGFloat rowHeight = 34;
     static const CGFloat rowSpacing = 8;
-    static const CGFloat stackTopY = 94;
-    if (count == 0) {
-        self.devicesStackView.frame = NSMakeRect(0, 0, 456, 0);
-        return;
-    }
-    CGFloat height = rowHeight * count + rowSpacing * (count - 1);
-    self.devicesStackView.frame = NSMakeRect(0, MAX(0, stackTopY - height), 456, height);
+    static const CGFloat width = 456;
+    static const CGFloat visibleHeight = 78;
+    CGFloat contentHeight = count == 0 ? 0 : rowHeight * count + rowSpacing * (count - 1);
+    CGFloat documentHeight = MAX(visibleHeight, contentHeight);
+    self.devicesDocumentView.frame = NSMakeRect(0, 0, width, documentHeight);
+    self.devicesStackView.frame = NSMakeRect(0, 0, width, contentHeight);
+    [self.devicesScrollView.contentView scrollToPoint:NSMakePoint(0, 0)];
+    [self.devicesScrollView reflectScrolledClipView:self.devicesScrollView.contentView];
 }
 
 - (NSView *)rowViewForDevice:(NSDictionary *)device {
