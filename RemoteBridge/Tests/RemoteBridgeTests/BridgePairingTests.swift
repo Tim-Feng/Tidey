@@ -226,8 +226,8 @@ final class BridgePairingTests: XCTestCase {
         let payload = try fixture.pairSessionStore.createPayload(hostIdentity: identity, lanEndpoints: [])
 
         fixture.now = payload.expiresAt.addingTimeInterval(1)
-        XCTAssertThrowsError(try fixture.pairSessionStore.consume(pairSecret: payload.pairSecret,
-                                                                  hostID: payload.hostID)) { error in
+        XCTAssertThrowsError(try fixture.pairSessionStore.validate(pairSecret: payload.pairSecret,
+                                                                   hostID: payload.hostID)) { error in
             guard case BridgeInternalError.unauthorized = error else {
                 return XCTFail("Unexpected error: \(error)")
             }
@@ -386,9 +386,13 @@ private final class PairingFixture {
         pairSessionStore = BridgePairSessionStore(secretGenerator: { "pair-secret-1" },
                                                   nowProvider: { clock.now },
                                                   lifetime: 300)
+        var tokenCounter = 0
         deviceCredentialStore = BridgeDeviceCredentialStore(paths: paths,
                                                             fileManager: fileManager,
-                                                            tokenGenerator: { "device-token-1" },
+                                                            tokenGenerator: {
+                                                                tokenCounter += 1
+                                                                return "device-token-\(tokenCounter)"
+                                                            },
                                                             nowProvider: { clock.now })
         controller = BridgePairingController(hostIdentityStore: hostIdentityStore,
                                              pairSessionStore: pairSessionStore,

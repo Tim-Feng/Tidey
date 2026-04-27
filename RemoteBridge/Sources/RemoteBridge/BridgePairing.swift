@@ -313,14 +313,13 @@ final class BridgePairSessionStore {
                                  expiresAt: expiresAt)
     }
 
-    func consume(pairSecret: String, hostID: String) throws {
+    func validate(pairSecret: String, hostID: String) throws {
         pruneExpired()
         guard let session = sessionsBySecret[pairSecret],
               session.hostID == hostID,
               session.expiresAt > nowProvider() else {
             throw BridgeInternalError.unauthorized
         }
-        sessionsBySecret[pairSecret] = nil
     }
 
     func activeSessionCount() -> Int {
@@ -477,8 +476,8 @@ final class BridgePairingController {
         guard request.hostID == identity.hostID else {
             throw BridgeInternalError.unauthorized
         }
-        try pairSessionStore.consume(pairSecret: request.pairSecret,
-                                     hostID: request.hostID)
+        try pairSessionStore.validate(pairSecret: request.pairSecret,
+                                      hostID: request.hostID)
         let credential = try deviceCredentialStore.issueCredential(deviceName: request.deviceName)
         return BridgePairExchangeResult(hostID: identity.hostID,
                                         displayName: identity.displayName,
