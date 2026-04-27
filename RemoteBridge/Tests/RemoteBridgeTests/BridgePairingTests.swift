@@ -65,6 +65,7 @@ final class BridgePairingTests: XCTestCase {
         let result = try fixture.controller.exchange(BridgePairExchangeRequest(action: "pair.exchange",
                                                                                hostID: payload.hostID,
                                                                                pairSecret: payload.pairSecret,
+                                                                               deviceID: "device-1",
                                                                                deviceName: "Tim's iPhone",
                                                                                devicePublicKey: "public-key"))
 
@@ -82,11 +83,13 @@ final class BridgePairingTests: XCTestCase {
         let first = try fixture.controller.exchange(BridgePairExchangeRequest(action: "pair.exchange",
                                                                               hostID: payload.hostID,
                                                                               pairSecret: payload.pairSecret,
+                                                                              deviceID: "device-1",
                                                                               deviceName: "Tim's iPhone",
                                                                               devicePublicKey: nil))
         let second = try fixture.controller.exchange(BridgePairExchangeRequest(action: "pair.exchange",
                                                                                hostID: payload.hostID,
                                                                                pairSecret: payload.pairSecret,
+                                                                               deviceID: "device-2",
                                                                                deviceName: "Tim's iPhone",
                                                                                devicePublicKey: nil))
 
@@ -96,6 +99,33 @@ final class BridgePairingTests: XCTestCase {
         XCTAssertTrue(try fixture.deviceCredentialStore.isValidCredential("device-token-2"))
     }
 
+    func testPairExchangeReplacesCredentialForSameDeviceID() throws {
+        let fixture = try PairingFixture()
+        let payload = try fixture.controller.createPairPayload(lanEndpoints: [])
+
+        let first = try fixture.controller.exchange(BridgePairExchangeRequest(action: "pair.exchange",
+                                                                              hostID: payload.hostID,
+                                                                              pairSecret: payload.pairSecret,
+                                                                              deviceID: "device-1",
+                                                                              deviceName: "Tim's iPhone",
+                                                                              devicePublicKey: nil))
+        fixture.now = fixture.startDate.addingTimeInterval(10)
+        let second = try fixture.controller.exchange(BridgePairExchangeRequest(action: "pair.exchange",
+                                                                               hostID: payload.hostID,
+                                                                               pairSecret: payload.pairSecret,
+                                                                               deviceID: "device-1",
+                                                                               deviceName: "Tim's iPhone",
+                                                                               devicePublicKey: nil))
+
+        let devices = try fixture.controller.listDevices()
+        XCTAssertEqual(devices.count, 1)
+        XCTAssertEqual(devices.first?.deviceID, "device-1")
+        XCTAssertEqual(devices.first?.deviceName, "Tim's iPhone")
+        XCTAssertEqual(devices.first?.pairedAt, fixture.now)
+        XCTAssertTrue(try fixture.deviceCredentialStore.isValidCredential(second.deviceCredential))
+        XCTAssertFalse(try fixture.deviceCredentialStore.isValidCredential(first.deviceCredential))
+    }
+
     func testPairExchangeAddsDeviceToPairedDeviceList() throws {
         let fixture = try PairingFixture()
         let payload = try fixture.controller.createPairPayload(lanEndpoints: [])
@@ -103,12 +133,14 @@ final class BridgePairingTests: XCTestCase {
         _ = try fixture.controller.exchange(BridgePairExchangeRequest(action: "pair.exchange",
                                                                       hostID: payload.hostID,
                                                                       pairSecret: payload.pairSecret,
+                                                                      deviceID: "device-1",
                                                                       deviceName: "Tim's iPhone",
                                                                       devicePublicKey: nil))
 
         let devices = try fixture.controller.listDevices()
 
         XCTAssertEqual(devices.count, 1)
+        XCTAssertEqual(devices.first?.deviceID, "device-1")
         XCTAssertEqual(devices.first?.deviceName, "Tim's iPhone")
         XCTAssertEqual(devices.first?.pairedAt, fixture.startDate)
         XCTAssertNil(devices.first?.lastConnectedAt)
@@ -121,6 +153,7 @@ final class BridgePairingTests: XCTestCase {
         XCTAssertThrowsError(try fixture.controller.exchange(BridgePairExchangeRequest(action: "pair.exchange",
                                                                                       hostID: payload.hostID,
                                                                                       pairSecret: "wrong-secret",
+                                                                                      deviceID: "device-1",
                                                                                       deviceName: "Tim's iPhone",
                                                                                       devicePublicKey: nil))) { error in
             guard case BridgeInternalError.unauthorized = error else {
@@ -132,6 +165,7 @@ final class BridgePairingTests: XCTestCase {
         XCTAssertThrowsError(try fixture.controller.exchange(BridgePairExchangeRequest(action: "pair.exchange",
                                                                                       hostID: payload.hostID,
                                                                                       pairSecret: payload.pairSecret,
+                                                                                      deviceID: "device-1",
                                                                                       deviceName: "Tim's iPhone",
                                                                                       devicePublicKey: nil))) { error in
             guard case BridgeInternalError.unauthorized = error else {
