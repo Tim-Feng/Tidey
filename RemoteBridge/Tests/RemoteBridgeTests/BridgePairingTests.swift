@@ -253,6 +253,18 @@ final class BridgePairingTests: XCTestCase {
                                        isUp: true,
                                        isRunning: true,
                                        isLoopback: false),
+            BridgeLANEndpointCandidate(interfaceName: "utap0",
+                                       host: "100.74.239.5",
+                                       addressFamily: .ipv4,
+                                       isUp: true,
+                                       isRunning: true,
+                                       isLoopback: false),
+            BridgeLANEndpointCandidate(interfaceName: "ipsec0",
+                                       host: "100.74.239.6",
+                                       addressFamily: .ipv4,
+                                       isUp: true,
+                                       isRunning: true,
+                                       isLoopback: false),
             BridgeLANEndpointCandidate(interfaceName: "bridge100",
                                        host: "172.16.0.2",
                                        addressFamily: .ipv4,
@@ -314,7 +326,6 @@ final class BridgePairingTests: XCTestCase {
         XCTAssertEqual(endpoints, [
             BridgePairEndpoint(scheme: "ws", host: "10.0.1.7", port: 4817, path: "/"),
             BridgePairEndpoint(scheme: "ws", host: "192.168.1.112", port: 4817, path: "/"),
-            BridgePairEndpoint(scheme: "ws", host: "100.74.239.4", port: 4817, path: "/"),
             BridgePairEndpoint(scheme: "ws", host: "172.16.0.2", port: 4817, path: "/"),
         ])
     }
