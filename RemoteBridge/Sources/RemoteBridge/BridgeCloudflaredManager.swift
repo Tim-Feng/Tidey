@@ -186,10 +186,17 @@ final class BridgeCloudflaredManager {
 
 enum BridgeCloudflaredBinaryResolver {
     static func resolve() -> String? {
-        let environment = ProcessInfo.processInfo.environment
+        resolve(environment: ProcessInfo.processInfo.environment)
+    }
+
+    static func resolve(environment: [String: String]) -> String? {
         let path = environment["PATH"] ?? "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-        for directory in path.split(separator: ":") {
-            let candidate = URL(fileURLWithPath: String(directory)).appendingPathComponent("cloudflared").path
+        return resolve(searchDirectories: path.split(separator: ":").map(String.init))
+    }
+
+    private static func resolve(searchDirectories: [String]) -> String? {
+        for directory in searchDirectories {
+            let candidate = URL(fileURLWithPath: directory).appendingPathComponent("cloudflared").path
             if FileManager.default.isExecutableFile(atPath: candidate) {
                 return candidate
             }
