@@ -398,6 +398,19 @@ final class BridgePairingTests: XCTestCase {
         XCTAssertFalse(qrPayload.contains("/"))
         XCTAssertFalse(qrPayload.contains("="))
     }
+
+    func testPairPayloadIncludesTunnelEndpointWhenProvided() throws {
+        let fixture = try PairingFixture()
+        let tunnelEndpoint = BridgePairEndpoint(scheme: "wss",
+                                                host: "blue-bird-7.trycloudflare.com",
+                                                port: nil,
+                                                path: "/")
+
+        let payload = try fixture.controller.createPairPayload(lanEndpoints: [],
+                                                               tunnelEndpoint: tunnelEndpoint)
+
+        XCTAssertEqual(payload.tunnelEndpoint, tunnelEndpoint)
+    }
 }
 
 private final class PairingFixture {

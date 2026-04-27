@@ -468,10 +468,12 @@ final class BridgePairingController {
         self.deviceCredentialStore = deviceCredentialStore
     }
 
-    func createPairPayload(lanEndpoints: [BridgePairEndpoint]) throws -> BridgePairPayload {
+    func createPairPayload(lanEndpoints: [BridgePairEndpoint],
+                           tunnelEndpoint: BridgePairEndpoint? = nil) throws -> BridgePairPayload {
         let identity = try hostIdentityStore.loadOrCreateIdentity()
         return try pairSessionStore.createPayload(hostIdentity: identity,
-                                                  lanEndpoints: lanEndpoints)
+                                                  lanEndpoints: lanEndpoints,
+                                                  tunnelEndpoint: tunnelEndpoint)
     }
 
     func exchange(_ request: BridgePairExchangeRequest) throws -> BridgePairExchangeResult {
