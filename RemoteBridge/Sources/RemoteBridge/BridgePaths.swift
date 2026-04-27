@@ -6,6 +6,7 @@ struct BridgePaths {
     let hostIdentityFileURL: URL
     let deviceCredentialsFileURL: URL
     let cloudflaredStateFileURL: URL
+    let resolverPublishSecretFileURL: URL
     let agentSessionsDirectory: URL
 
     init(supportDirectory: URL) {
@@ -14,6 +15,7 @@ struct BridgePaths {
         hostIdentityFileURL = supportDirectory.appendingPathComponent("host-identity.json", isDirectory: false)
         deviceCredentialsFileURL = supportDirectory.appendingPathComponent("device-credentials.json", isDirectory: false)
         cloudflaredStateFileURL = supportDirectory.appendingPathComponent("cloudflared-state.json", isDirectory: false)
+        resolverPublishSecretFileURL = supportDirectory.appendingPathComponent("resolver-publish-secret.json", isDirectory: false)
         agentSessionsDirectory = supportDirectory.appendingPathComponent("agent-sessions", isDirectory: true)
     }
 
