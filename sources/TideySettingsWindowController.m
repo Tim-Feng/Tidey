@@ -66,6 +66,7 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 @interface TideyRemoteSettingsViewController : NSViewController
 
 @property(nonatomic, strong) NSTextField *endpointValueLabel;
+@property(nonatomic, strong) NSTextField *tunnelValueLabel;
 @property(nonatomic, strong) NSTextField *countdownLabel;
 @property(nonatomic, strong) NSTextField *statusLabel;
 @property(nonatomic, strong) NSImageView *qrImageView;
@@ -108,7 +109,7 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     bodyLabel.maximumNumberOfLines = 2;
     [view addSubview:bodyLabel];
 
-    NSView *cardView = [[NSView alloc] initWithFrame:NSMakeRect(32, 224, 496, 186)];
+    NSView *cardView = [[NSView alloc] initWithFrame:NSMakeRect(32, 200, 496, 210)];
     cardView.wantsLayer = YES;
     cardView.layer.backgroundColor = [NSColor colorWithSRGBRed:0x22/255.0 green:0x22/255.0 blue:0x22/255.0 alpha:1.0].CGColor;
     cardView.layer.cornerRadius = 12;
@@ -116,46 +117,60 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     cardView.layer.borderColor = [NSColor colorWithSRGBRed:0x33/255.0 green:0x33/255.0 blue:0x33/255.0 alpha:1.0].CGColor;
     [view addSubview:cardView];
 
-    self.qrImageView = [[NSImageView alloc] initWithFrame:NSMakeRect(24, 24, 138, 138)];
+    self.qrImageView = [[NSImageView alloc] initWithFrame:NSMakeRect(24, 48, 138, 138)];
     self.qrImageView.imageScaling = NSImageScaleProportionallyUpOrDown;
     self.qrImageView.wantsLayer = YES;
     self.qrImageView.layer.backgroundColor = NSColor.whiteColor.CGColor;
     self.qrImageView.layer.cornerRadius = 10;
     [cardView addSubview:self.qrImageView];
 
-    NSTextField *endpointTitleLabel = [self labelWithFrame:NSMakeRect(188, 138, 276, 20)
+    NSTextField *endpointTitleLabel = [self labelWithFrame:NSMakeRect(188, 166, 276, 18)
                                                     string:@"LAN endpoint"
                                                       font:[NSFont systemFontOfSize:12 weight:NSFontWeightMedium]
                                                      color:[NSColor colorWithSRGBRed:0x88/255.0 green:0x88/255.0 blue:0x88/255.0 alpha:1.0]];
     [cardView addSubview:endpointTitleLabel];
 
-    self.endpointValueLabel = [self labelWithFrame:NSMakeRect(188, 112, 276, 24)
+    self.endpointValueLabel = [self labelWithFrame:NSMakeRect(188, 144, 276, 20)
                                             string:@"Loading..."
-                                              font:[NSFont monospacedSystemFontOfSize:13 weight:NSFontWeightRegular]
+                                              font:[NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular]
                                              color:[NSColor colorWithSRGBRed:0xf4/255.0 green:0xf4/255.0 blue:0xf4/255.0 alpha:1.0]];
     [cardView addSubview:self.endpointValueLabel];
 
-    self.countdownLabel = [self labelWithFrame:NSMakeRect(188, 82, 276, 22)
+    NSTextField *tunnelTitleLabel = [self labelWithFrame:NSMakeRect(188, 112, 276, 18)
+                                                  string:@"Tunnel endpoint"
+                                                    font:[NSFont systemFontOfSize:12 weight:NSFontWeightMedium]
+                                                   color:[NSColor colorWithSRGBRed:0x88/255.0 green:0x88/255.0 blue:0x88/255.0 alpha:1.0]];
+    [cardView addSubview:tunnelTitleLabel];
+
+    self.tunnelValueLabel = [self labelWithFrame:NSMakeRect(188, 78, 276, 32)
+                                          string:@"LAN only"
+                                            font:[NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular]
+                                           color:[NSColor colorWithSRGBRed:0xf4/255.0 green:0xf4/255.0 blue:0xf4/255.0 alpha:1.0]];
+    self.tunnelValueLabel.maximumNumberOfLines = 2;
+    self.tunnelValueLabel.usesSingleLineMode = NO;
+    self.tunnelValueLabel.lineBreakMode = NSLineBreakByCharWrapping;
+    [cardView addSubview:self.tunnelValueLabel];
+
+    self.countdownLabel = [self labelWithFrame:NSMakeRect(188, 56, 276, 20)
                                         string:@""
                                           font:[NSFont systemFontOfSize:13 weight:NSFontWeightRegular]
                                          color:[NSColor colorWithSRGBRed:88/255.0 green:178/255.0 blue:220/255.0 alpha:1.0]];
     [cardView addSubview:self.countdownLabel];
 
-    self.statusLabel = [self labelWithFrame:NSMakeRect(188, 44, 276, 34)
+    self.statusLabel = [self labelWithFrame:NSMakeRect(188, 36, 276, 18)
                                      string:@""
                                        font:[NSFont systemFontOfSize:12 weight:NSFontWeightRegular]
                                       color:[NSColor colorWithSRGBRed:0xaa/255.0 green:0xaa/255.0 blue:0xaa/255.0 alpha:1.0]];
-    self.statusLabel.maximumNumberOfLines = 2;
     [cardView addSubview:self.statusLabel];
 
     self.refreshButton = [NSButton buttonWithTitle:@"Refresh"
                                             target:self
                                             action:@selector(refreshPairPayload:)];
-    self.refreshButton.frame = NSMakeRect(188, 12, 120, 28);
+    self.refreshButton.frame = NSMakeRect(188, 8, 120, 28);
     self.refreshButton.bezelStyle = NSBezelStyleRounded;
     [cardView addSubview:self.refreshButton];
 
-    NSView *devicesCardView = [[NSView alloc] initWithFrame:NSMakeRect(32, 36, 496, 164)];
+    NSView *devicesCardView = [[NSView alloc] initWithFrame:NSMakeRect(32, 20, 496, 164)];
     devicesCardView.wantsLayer = YES;
     devicesCardView.layer.backgroundColor = [NSColor colorWithSRGBRed:0x22/255.0 green:0x22/255.0 blue:0x22/255.0 alpha:1.0].CGColor;
     devicesCardView.layer.cornerRadius = 12;
@@ -232,6 +247,8 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     self.expiresAt = nil;
     self.refreshButton.enabled = NO;
     self.endpointValueLabel.stringValue = @"Loading...";
+    self.tunnelValueLabel.stringValue = @"Loading...";
+    self.tunnelValueLabel.toolTip = nil;
     self.countdownLabel.stringValue = @"";
     self.statusLabel.stringValue = @"Requesting a new pairing code from the Bridge.";
     self.qrImageView.image = nil;
@@ -505,6 +522,8 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     NSArray *endpoints = [payload[@"lan_endpoints"] isKindOfClass:NSArray.class] ? payload[@"lan_endpoints"] : @[];
     if (!endpoints.count) {
         self.endpointValueLabel.stringValue = @"No LAN endpoint";
+        self.tunnelValueLabel.stringValue = @"LAN only";
+        self.tunnelValueLabel.toolTip = nil;
         self.countdownLabel.stringValue = @"";
         self.statusLabel.stringValue = @"No active LAN endpoint found. Connect this Mac to Wi-Fi or Ethernet, then refresh.";
         self.qrImageView.image = nil;
@@ -517,10 +536,11 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     self.expiresAt = [self dateFromISOString:expiresAtString];
     self.qrImageView.image = [self qrImageForString:[self base64URLStringForData:data]];
     if (tunnelEndpoint) {
-        self.statusLabel.stringValue = [NSString stringWithFormat:@"Scan this code with Tidey Remote on your phone.\nTunnel: %@", [self displayStringForEndpoint:tunnelEndpoint]];
+        [self setTunnelEndpointString:[self displayStringForEndpoint:tunnelEndpoint]];
     } else {
-        self.statusLabel.stringValue = @"Scan this code with Tidey Remote on your phone.\nTunnel: LAN only";
+        [self setTunnelEndpointString:@"LAN only"];
     }
+    self.statusLabel.stringValue = @"Scan this code with Tidey Remote.";
     [self startCountdownTimer];
     [self refreshTunnelStatus];
 }
@@ -552,19 +572,24 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
             NSString *state = [payload[@"state"] isKindOfClass:NSString.class] ? payload[@"state"] : @"off";
             NSDictionary *endpoint = [payload[@"endpoint"] isKindOfClass:NSDictionary.class] ? payload[@"endpoint"] : nil;
             NSString *errorMessage = [payload[@"error_message"] isKindOfClass:NSString.class] ? payload[@"error_message"] : nil;
-            NSString *base = @"Scan this code with Tidey Remote on your phone.";
             if ([state isEqualToString:@"online"] && endpoint) {
-                strongSelf.statusLabel.stringValue = [NSString stringWithFormat:@"%@\nTunnel: %@", base, [strongSelf displayStringForEndpoint:endpoint]];
+                [strongSelf setTunnelEndpointString:[strongSelf displayStringForEndpoint:endpoint]];
             } else if ([state isEqualToString:@"starting"]) {
-                strongSelf.statusLabel.stringValue = [NSString stringWithFormat:@"%@\nTunnel: starting...", base];
+                [strongSelf setTunnelEndpointString:@"Starting..."];
             } else if ([state isEqualToString:@"error"] && [errorMessage containsString:@"cloudflared not found"]) {
-                strongSelf.statusLabel.stringValue = [NSString stringWithFormat:@"%@\nTunnel: LAN only. Install with brew install cloudflared.", base];
+                [strongSelf setTunnelEndpointString:@"LAN only (install cloudflared)"];
             } else {
-                strongSelf.statusLabel.stringValue = [NSString stringWithFormat:@"%@\nTunnel: LAN only", base];
+                [strongSelf setTunnelEndpointString:@"LAN only"];
             }
+            strongSelf.statusLabel.stringValue = @"Scan this code with Tidey Remote.";
         });
     }];
     [task resume];
+}
+
+- (void)setTunnelEndpointString:(NSString *)value {
+    self.tunnelValueLabel.stringValue = value ?: @"LAN only";
+    self.tunnelValueLabel.toolTip = value;
 }
 
 - (NSString *)displayStringForEndpoint:(NSDictionary *)endpoint {
@@ -645,6 +670,8 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 - (void)showError:(NSString *)message {
     self.refreshButton.enabled = YES;
     self.endpointValueLabel.stringValue = @"Unavailable";
+    self.tunnelValueLabel.stringValue = @"Unavailable";
+    self.tunnelValueLabel.toolTip = nil;
     self.countdownLabel.stringValue = @"";
     self.statusLabel.stringValue = message ?: @"Unable to create a pairing code.";
     self.qrImageView.image = nil;
