@@ -176,7 +176,8 @@ final class BridgePairingTests: XCTestCase {
 
     func testBridgeAuthenticatorAcceptsLegacyTokenAndDeviceCredential() throws {
         let fixture = try PairingFixture()
-        _ = try fixture.deviceCredentialStore.issueCredential(deviceName: "Tim's iPhone")
+        _ = try fixture.deviceCredentialStore.issueCredential(deviceID: "device-1",
+                                                              deviceName: "Tim's iPhone")
         let authenticator = BridgeAuthenticator(legacyPairToken: "legacy-token",
                                                 deviceCredentialStore: fixture.deviceCredentialStore)
 
@@ -188,7 +189,8 @@ final class BridgePairingTests: XCTestCase {
 
     func testDeviceCredentialStoreListsTouchesAndRevokesPairedDevices() throws {
         let fixture = try PairingFixture()
-        let credential = try fixture.deviceCredentialStore.issueCredential(deviceName: "Tim's iPhone")
+        let credential = try fixture.deviceCredentialStore.issueCredential(deviceID: "device-1",
+                                                                           deviceName: "Tim's iPhone")
 
         var devices = try fixture.deviceCredentialStore.listDevices()
         let device = try XCTUnwrap(devices.first)
@@ -210,7 +212,8 @@ final class BridgePairingTests: XCTestCase {
 
     func testRevokingDeviceCredentialDoesNotInvalidateLegacyPairToken() throws {
         let fixture = try PairingFixture()
-        let credential = try fixture.deviceCredentialStore.issueCredential(deviceName: "Tim's iPhone")
+        let credential = try fixture.deviceCredentialStore.issueCredential(deviceID: "device-1",
+                                                                           deviceName: "Tim's iPhone")
         let authenticator = BridgeAuthenticator(legacyPairToken: "legacy-token",
                                                 deviceCredentialStore: fixture.deviceCredentialStore)
 
@@ -222,7 +225,8 @@ final class BridgePairingTests: XCTestCase {
 
     func testWebSocketUpgradeWithRevokedCredentialReturnsHTTPUnauthorized() throws {
         let fixture = try PairingFixture()
-        let credential = try fixture.deviceCredentialStore.issueCredential(deviceName: "Tim's iPhone")
+        let credential = try fixture.deviceCredentialStore.issueCredential(deviceID: "device-1",
+                                                                           deviceName: "Tim's iPhone")
         XCTAssertTrue(try fixture.deviceCredentialStore.revokeDevice(deviceID: credential.deviceID))
 
         let eventHub = AgentEventHub()

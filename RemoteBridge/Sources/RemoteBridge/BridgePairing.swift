@@ -184,6 +184,7 @@ struct BridgePairExchangeRequest: Codable, Equatable, Sendable {
     let action: String
     let hostID: String
     let pairSecret: String
+    let deviceID: String
     let deviceName: String
     let devicePublicKey: String?
 
@@ -191,6 +192,7 @@ struct BridgePairExchangeRequest: Codable, Equatable, Sendable {
         case action
         case hostID = "host_id"
         case pairSecret = "pair_secret"
+        case deviceID = "device_id"
         case deviceName = "device_name"
         case devicePublicKey = "device_public_key"
     }
@@ -385,15 +387,19 @@ final class BridgeDeviceCredentialStore {
         self.nowProvider = nowProvider
     }
 
-    func issueCredential(deviceName: String) throws -> BridgeIssuedDeviceCredential {
+    func issueCredential(deviceID: String, deviceName: String) throws -> BridgeIssuedDeviceCredential {
         let token = tokenGenerator()
-        let deviceID = UUID().uuidString
         var record = try loadRecord()
-        record.devices.append(DeviceRecord(deviceID: deviceID,
-                                           deviceName: deviceName,
-                                           tokenHash: Self.hash(token),
-                                           createdAt: nowProvider(),
-                                           lastConnectedAt: nil))
+        let deviceRecord = DeviceRecord(deviceID: deviceID,
+                                        deviceName: deviceName,
+                                        tokenHash: Self.hash(token),
+                                        createdAt: nowProvider(),
+                                        lastConnectedAt: nil)
+        if let index = record.devices.firstIndex(where: { $0.deviceID == deviceID }) {
+            record.devices[index] = deviceRecord
+        } else {
+            record.devices.append(deviceRecord)
+        }
         try save(record)
         return BridgeIssuedDeviceCredential(deviceID: deviceID, token: token)
     }
@@ -478,7 +484,8 @@ final class BridgePairingController {
         }
         try pairSessionStore.validate(pairSecret: request.pairSecret,
                                       hostID: request.hostID)
-        let credential = try deviceCredentialStore.issueCredential(deviceName: request.deviceName)
+        let credential = try deviceCredentialStore.issueCredential(deviceID: request.deviceID,
+                                                                   deviceName: request.deviceName)
         return BridgePairExchangeResult(hostID: identity.hostID,
                                         displayName: identity.displayName,
                                         deviceCredential: credential.token,
