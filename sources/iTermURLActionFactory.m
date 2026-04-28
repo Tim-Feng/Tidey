@@ -88,6 +88,18 @@ static BOOL iTermStringIsASCIIOnly(NSString *string) {
     return YES;
 }
 
+static NSRange iTermURLRangeByTrimmingFullWidthBoundaryPunctuation(NSString *string, NSRange range) {
+    if (range.location == NSNotFound || range.length == 0 || NSMaxRange(range) > string.length) {
+        return range;
+    }
+    NSString *candidate = [string substringWithRange:range];
+    NSString *trimmed = [candidate stringByTrimmingTrailingCharactersFromCharacterSet:[NSCharacterSet it_fullWidthBoundaryPunctuationCharacterSet]];
+    if (trimmed.length == candidate.length) {
+        return range;
+    }
+    return NSMakeRange(range.location, trimmed.length);
+}
+
 static VT100GridWindowedRange iTermURLActionFactoryInvalidWindowedRange(void) {
     return VT100GridWindowedRangeMake(VT100GridCoordRangeInvalid, -1, -1);
 }
@@ -251,6 +263,7 @@ static NSDictionary *iTermURLActionFactoryTideyDictionaryForAction(URLAction *ac
     if (URLRangeInPossibleURL.location == NSNotFound) {
         return nil;
     }
+    URLRangeInPossibleURL = iTermURLRangeByTrimmingFullWidthBoundaryPunctuation(possibleURL, URLRangeInPossibleURL);
 
     NSInteger possibleURLStart = searchClickIndex - prefixChars;
     NSRange URLRangeInSearchString =
@@ -568,6 +581,7 @@ static NSDictionary *iTermURLActionFactoryTideyDictionaryForAction(URLAction *ac
     if (rangeWithoutNearbyPunctuation.location == NSNotFound) {
         return nil;
     }
+    rangeWithoutNearbyPunctuation = iTermURLRangeByTrimmingFullWidthBoundaryPunctuation(possibleUrl, rangeWithoutNearbyPunctuation);
     return [possibleUrl substringWithRange:rangeWithoutNearbyPunctuation];
 }
 
@@ -945,6 +959,7 @@ static NSDictionary *iTermURLActionFactoryTideyDictionaryForAction(URLAction *ac
         DLog(@"No URL found");
         return nil;
     }
+    rangeWithoutNearbyPunctuation = iTermURLRangeByTrimmingFullWidthBoundaryPunctuation(possibleUrl, rangeWithoutNearbyPunctuation);
     prefixChars -= rangeWithoutNearbyPunctuation.location;
     DLog(@"Range excluding punctuation is %@. Adjust prefixChars down to %d", NSStringFromRange(rangeWithoutNearbyPunctuation), prefixChars);
     NSString *stringWithoutNearbyPunctuation = [possibleUrl substringWithRange:rangeWithoutNearbyPunctuation];
