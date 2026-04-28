@@ -100,6 +100,13 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     view.wantsLayer = YES;
     view.layer.backgroundColor = [NSColor colorWithSRGBRed:0x1a/255.0 green:0x1a/255.0 blue:0x1a/255.0 alpha:1.0].CGColor;
 
+    NSRect titleFrame = NSMakeRect(32, 24, 496, 28);
+    NSRect bodyFrame = NSMakeRect(32, 58, 496, 38);
+    NSRect pairCardFrame = NSMakeRect(32, 110, 496, 210);
+    NSRect devicesCardFrame = NSMakeRect(32, 336, 496, 164);
+    NSRect uploadsCardFrame = NSMakeRect(32, 516, 496, 100);
+    CGFloat documentHeight = NSMaxY(uploadsCardFrame) + 32;
+
     NSScrollView *scrollView = [[NSScrollView alloc] initWithFrame:view.bounds];
     scrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     scrollView.drawsBackground = NO;
@@ -108,26 +115,26 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     scrollView.borderType = NSNoBorder;
     [view addSubview:scrollView];
 
-    TideyFlippedView *documentView = [[TideyFlippedView alloc] initWithFrame:NSMakeRect(0, 0, 560, 636)];
+    TideyFlippedView *documentView = [[TideyFlippedView alloc] initWithFrame:NSMakeRect(0, 0, 560, documentHeight)];
     documentView.autoresizingMask = NSViewWidthSizable;
     documentView.wantsLayer = YES;
     documentView.layer.backgroundColor = [NSColor colorWithSRGBRed:0x1a/255.0 green:0x1a/255.0 blue:0x1a/255.0 alpha:1.0].CGColor;
     scrollView.documentView = documentView;
 
-    NSTextField *titleLabel = [self labelWithFrame:NSMakeRect(32, 24, 496, 28)
+    NSTextField *titleLabel = [self labelWithFrame:titleFrame
                                              string:@"Sync to Remote"
                                                font:[NSFont systemFontOfSize:22 weight:NSFontWeightSemibold]
                                               color:[NSColor colorWithSRGBRed:0xf4/255.0 green:0xf4/255.0 blue:0xf4/255.0 alpha:1.0]];
     [documentView addSubview:titleLabel];
 
-    NSTextField *bodyLabel = [self labelWithFrame:NSMakeRect(32, 58, 496, 38)
+    NSTextField *bodyLabel = [self labelWithFrame:bodyFrame
                                             string:@"Pair Tidey Remote on your phone with this Mac. The LAN QR code will appear here once the Bridge is available."
                                               font:[NSFont systemFontOfSize:13 weight:NSFontWeightRegular]
                                              color:[NSColor colorWithSRGBRed:0x9a/255.0 green:0x9a/255.0 blue:0x9a/255.0 alpha:1.0]];
     bodyLabel.maximumNumberOfLines = 2;
     [documentView addSubview:bodyLabel];
 
-    NSView *cardView = [[NSView alloc] initWithFrame:NSMakeRect(32, 110, 496, 210)];
+    NSView *cardView = [[NSView alloc] initWithFrame:pairCardFrame];
     cardView.wantsLayer = YES;
     cardView.layer.backgroundColor = [NSColor colorWithSRGBRed:0x22/255.0 green:0x22/255.0 blue:0x22/255.0 alpha:1.0].CGColor;
     cardView.layer.cornerRadius = 12;
@@ -188,7 +195,7 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     self.refreshButton.bezelStyle = NSBezelStyleRounded;
     [cardView addSubview:self.refreshButton];
 
-    NSView *devicesCardView = [[NSView alloc] initWithFrame:NSMakeRect(32, 336, 496, 164)];
+    NSView *devicesCardView = [[NSView alloc] initWithFrame:devicesCardFrame];
     devicesCardView.wantsLayer = YES;
     devicesCardView.layer.backgroundColor = [NSColor colorWithSRGBRed:0x22/255.0 green:0x22/255.0 blue:0x22/255.0 alpha:1.0].CGColor;
     devicesCardView.layer.cornerRadius = 12;
@@ -225,7 +232,7 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     self.devicesStackView.spacing = 8;
     [self.devicesDocumentView addSubview:self.devicesStackView];
 
-    NSView *uploadsCardView = [[NSView alloc] initWithFrame:NSMakeRect(32, 516, 496, 100)];
+    NSView *uploadsCardView = [[NSView alloc] initWithFrame:uploadsCardFrame];
     uploadsCardView.wantsLayer = YES;
     uploadsCardView.layer.backgroundColor = [NSColor colorWithSRGBRed:0x22/255.0 green:0x22/255.0 blue:0x22/255.0 alpha:1.0].CGColor;
     uploadsCardView.layer.cornerRadius = 12;
@@ -971,6 +978,7 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     self.appearanceTabButton.target = self;
     self.appearanceTabButton.action = @selector(tabButtonClicked:);
     self.appearanceTabButton.tag = TideySettingsPageAppearance;
+    self.appearanceTabButton.autoresizingMask = NSViewMinYMargin;
     [contentView addSubview:self.appearanceTabButton];
 
     self.shortcutsTabButton = [[TideySettingsTabButton alloc] initWithFrame:NSMakeRect(tabBarX + tabButtonWidth + 2, tabBarY, tabButtonWidth, tabButtonHeight)];
@@ -980,6 +988,7 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     self.shortcutsTabButton.target = self;
     self.shortcutsTabButton.action = @selector(tabButtonClicked:);
     self.shortcutsTabButton.tag = TideySettingsPageShortcuts;
+    self.shortcutsTabButton.autoresizingMask = NSViewMinYMargin;
     [contentView addSubview:self.shortcutsTabButton];
 
     self.remoteTabButton = [[TideySettingsTabButton alloc] initWithFrame:NSMakeRect(tabBarX + (tabButtonWidth + 2) * 2, tabBarY, tabButtonWidth, tabButtonHeight)];
@@ -989,11 +998,13 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     self.remoteTabButton.target = self;
     self.remoteTabButton.action = @selector(tabButtonClicked:);
     self.remoteTabButton.tag = TideySettingsPageRemote;
+    self.remoteTabButton.autoresizingMask = NSViewMinYMargin;
     [contentView addSubview:self.remoteTabButton];
 
     // Content container below tab bar
     CGFloat contentTop = tabBarY - 12; // 12pt padding below tab bar
     self.contentContainerView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, windowWidth, contentTop)];
+    self.contentContainerView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     [contentView addSubview:self.contentContainerView];
 }
 
