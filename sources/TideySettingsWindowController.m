@@ -100,26 +100,40 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     view.wantsLayer = YES;
     view.layer.backgroundColor = [NSColor colorWithSRGBRed:0x1a/255.0 green:0x1a/255.0 blue:0x1a/255.0 alpha:1.0].CGColor;
 
-    NSTextField *titleLabel = [self labelWithFrame:NSMakeRect(32, 584, 496, 28)
+    NSScrollView *scrollView = [[NSScrollView alloc] initWithFrame:view.bounds];
+    scrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    scrollView.drawsBackground = NO;
+    scrollView.hasVerticalScroller = YES;
+    scrollView.autohidesScrollers = YES;
+    scrollView.borderType = NSNoBorder;
+    [view addSubview:scrollView];
+
+    TideyFlippedView *documentView = [[TideyFlippedView alloc] initWithFrame:NSMakeRect(0, 0, 560, 636)];
+    documentView.autoresizingMask = NSViewWidthSizable;
+    documentView.wantsLayer = YES;
+    documentView.layer.backgroundColor = [NSColor colorWithSRGBRed:0x1a/255.0 green:0x1a/255.0 blue:0x1a/255.0 alpha:1.0].CGColor;
+    scrollView.documentView = documentView;
+
+    NSTextField *titleLabel = [self labelWithFrame:NSMakeRect(32, 24, 496, 28)
                                              string:@"Sync to Remote"
                                                font:[NSFont systemFontOfSize:22 weight:NSFontWeightSemibold]
                                               color:[NSColor colorWithSRGBRed:0xf4/255.0 green:0xf4/255.0 blue:0xf4/255.0 alpha:1.0]];
-    [view addSubview:titleLabel];
+    [documentView addSubview:titleLabel];
 
-    NSTextField *bodyLabel = [self labelWithFrame:NSMakeRect(32, 540, 496, 38)
+    NSTextField *bodyLabel = [self labelWithFrame:NSMakeRect(32, 58, 496, 38)
                                             string:@"Pair Tidey Remote on your phone with this Mac. The LAN QR code will appear here once the Bridge is available."
                                               font:[NSFont systemFontOfSize:13 weight:NSFontWeightRegular]
                                              color:[NSColor colorWithSRGBRed:0x9a/255.0 green:0x9a/255.0 blue:0x9a/255.0 alpha:1.0]];
     bodyLabel.maximumNumberOfLines = 2;
-    [view addSubview:bodyLabel];
+    [documentView addSubview:bodyLabel];
 
-    NSView *cardView = [[NSView alloc] initWithFrame:NSMakeRect(32, 316, 496, 210)];
+    NSView *cardView = [[NSView alloc] initWithFrame:NSMakeRect(32, 110, 496, 210)];
     cardView.wantsLayer = YES;
     cardView.layer.backgroundColor = [NSColor colorWithSRGBRed:0x22/255.0 green:0x22/255.0 blue:0x22/255.0 alpha:1.0].CGColor;
     cardView.layer.cornerRadius = 12;
     cardView.layer.borderWidth = 1;
     cardView.layer.borderColor = [NSColor colorWithSRGBRed:0x33/255.0 green:0x33/255.0 blue:0x33/255.0 alpha:1.0].CGColor;
-    [view addSubview:cardView];
+    [documentView addSubview:cardView];
 
     self.qrImageView = [[NSImageView alloc] initWithFrame:NSMakeRect(24, 48, 138, 138)];
     self.qrImageView.imageScaling = NSImageScaleProportionallyUpOrDown;
@@ -174,13 +188,13 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     self.refreshButton.bezelStyle = NSBezelStyleRounded;
     [cardView addSubview:self.refreshButton];
 
-    NSView *devicesCardView = [[NSView alloc] initWithFrame:NSMakeRect(32, 136, 496, 164)];
+    NSView *devicesCardView = [[NSView alloc] initWithFrame:NSMakeRect(32, 336, 496, 164)];
     devicesCardView.wantsLayer = YES;
     devicesCardView.layer.backgroundColor = [NSColor colorWithSRGBRed:0x22/255.0 green:0x22/255.0 blue:0x22/255.0 alpha:1.0].CGColor;
     devicesCardView.layer.cornerRadius = 12;
     devicesCardView.layer.borderWidth = 1;
     devicesCardView.layer.borderColor = [NSColor colorWithSRGBRed:0x33/255.0 green:0x33/255.0 blue:0x33/255.0 alpha:1.0].CGColor;
-    [view addSubview:devicesCardView];
+    [documentView addSubview:devicesCardView];
 
     NSTextField *devicesTitleLabel = [self labelWithFrame:NSMakeRect(20, 126, 220, 22)
                                                    string:@"Paired devices"
@@ -211,13 +225,13 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     self.devicesStackView.spacing = 8;
     [self.devicesDocumentView addSubview:self.devicesStackView];
 
-    NSView *uploadsCardView = [[NSView alloc] initWithFrame:NSMakeRect(32, 20, 496, 100)];
+    NSView *uploadsCardView = [[NSView alloc] initWithFrame:NSMakeRect(32, 516, 496, 100)];
     uploadsCardView.wantsLayer = YES;
     uploadsCardView.layer.backgroundColor = [NSColor colorWithSRGBRed:0x22/255.0 green:0x22/255.0 blue:0x22/255.0 alpha:1.0].CGColor;
     uploadsCardView.layer.cornerRadius = 12;
     uploadsCardView.layer.borderWidth = 1;
     uploadsCardView.layer.borderColor = [NSColor colorWithSRGBRed:0x33/255.0 green:0x33/255.0 blue:0x33/255.0 alpha:1.0].CGColor;
-    [view addSubview:uploadsCardView];
+    [documentView addSubview:uploadsCardView];
 
     NSTextField *uploadsTitleLabel = [self labelWithFrame:NSMakeRect(20, 66, 220, 22)
                                                    string:@"Remote uploads"
