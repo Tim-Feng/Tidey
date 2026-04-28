@@ -527,15 +527,24 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
             var data = frame.unmaskedData
             guard let text = data.readString(length: data.readableBytes) else {
                 send(response: BridgeResponse(id: nil, ok: false, result: nil, error: BridgeInternalError.invalidRequest("Invalid UTF-8 message.").payload),
+                     messageType: "response.invalid_utf8",
                      to: context)
                 return
             }
+            let inboundByteCount = text.utf8.count
             DispatchQueue.global(qos: .userInitiated).async { [decoder, socketClient] in
                 let response: BridgeResponse
                 var agentReplayEnvelopes = [AgentEventEnvelope]()
                 var workspaceReplayEnvelopes = [WorkspaceEventEnvelope]()
+                var responseMessageType = "response.invalid_request"
                 do {
+                    let decodeStartedAt = CFAbsoluteTimeGetCurrent()
                     let request = try decoder.decode(BridgeRequest.self, from: Data(text.utf8))
+                    self.observability.recordPayload(direction: .inbound,
+                                                     messageType: "request.\(request.action)",
+                                                     byteCount: inboundByteCount,
+                                                     durationMs: (CFAbsoluteTimeGetCurrent() - decodeStartedAt) * 1000)
+                    responseMessageType = "response.\(request.action)"
                     if request.action == "image_upload" {
                         BridgeImageUploadDiagnostics.log("server received request_id=\(request.id) action=\(request.action) params_keys=\(request.params?.keys.sorted().joined(separator: ",") ?? "-") base64_length=\(request.params?["data_base64"]?.stringValue?.count ?? 0)")
                     }
@@ -547,14 +556,22 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                         response = self.augment(response: try socketClient.send(request), for: request)
                     }
                 } catch let error as BridgeInternalError {
+                    self.observability.recordPayload(direction: .inbound,
+                                                     messageType: "request.invalid",
+                                                     byteCount: inboundByteCount,
+                                                     durationMs: 0)
                     response = BridgeResponse(id: nil, ok: false, result: nil, error: error.payload)
                 } catch let error as DecodingError {
+                    self.observability.recordPayload(direction: .inbound,
+                                                     messageType: "request.invalid_json",
+                                                     byteCount: inboundByteCount,
+                                                     durationMs: 0)
                     response = BridgeResponse(id: nil, ok: false, result: nil, error: BridgeInternalError.invalidRequest(error.localizedDescription).payload)
                 } catch {
                     response = BridgeResponse(id: nil, ok: false, result: nil, error: BridgeErrorPayload(code: "bridge_error", message: error.localizedDescription))
                 }
                 context.eventLoop.execute {
-                    self.send(response: response, to: context)
+                    self.send(response: response, messageType: responseMessageType, to: context)
                     for envelope in agentReplayEnvelopes {
                         self.send(envelope: envelope, to: context)
                     }
@@ -947,9 +964,14 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
         return augmented
     }
 
-    private func send(response: BridgeResponse, to context: ChannelHandlerContext) {
+    private func send(response: BridgeResponse, messageType: String = "response", to context: ChannelHandlerContext) {
         do {
+            let startedAt = CFAbsoluteTimeGetCurrent()
             let payload = try encoder.encode(response)
+            observability.recordPayload(direction: .outbound,
+                                        messageType: messageType,
+                                        byteCount: payload.count,
+                                        durationMs: (CFAbsoluteTimeGetCurrent() - startedAt) * 1000)
             var buffer = context.channel.allocator.buffer(capacity: payload.count)
             buffer.writeBytes(payload)
             let frame = WebSocketFrame(fin: true, opcode: .text, data: buffer)
@@ -961,7 +983,12 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
 
     private func send(envelope: AgentEventEnvelope, to context: ChannelHandlerContext) {
         do {
+            let startedAt = CFAbsoluteTimeGetCurrent()
             let payload = try encoder.encode(envelope)
+            observability.recordPayload(direction: .outbound,
+                                        messageType: "agent_event",
+                                        byteCount: payload.count,
+                                        durationMs: (CFAbsoluteTimeGetCurrent() - startedAt) * 1000)
             var buffer = context.channel.allocator.buffer(capacity: payload.count)
             buffer.writeBytes(payload)
             let frame = WebSocketFrame(fin: true, opcode: .text, data: buffer)
@@ -973,7 +1000,12 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
 
     private func send(workspaceEnvelope: WorkspaceEventEnvelope, to context: ChannelHandlerContext) {
         do {
+            let startedAt = CFAbsoluteTimeGetCurrent()
             let payload = try encoder.encode(workspaceEnvelope)
+            observability.recordPayload(direction: .outbound,
+                                        messageType: "workspace_event",
+                                        byteCount: payload.count,
+                                        durationMs: (CFAbsoluteTimeGetCurrent() - startedAt) * 1000)
             var buffer = context.channel.allocator.buffer(capacity: payload.count)
             buffer.writeBytes(payload)
             let frame = WebSocketFrame(fin: true, opcode: .text, data: buffer)

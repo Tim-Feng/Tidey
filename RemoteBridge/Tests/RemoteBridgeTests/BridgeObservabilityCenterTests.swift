@@ -49,4 +49,39 @@ final class BridgeObservabilityCenterTests: XCTestCase {
         XCTAssertEqual(snapshot.slowOperations.first?.name, "fetch_agent_events")
         XCTAssertEqual(snapshot.slowOperations.first?.sessionID, "session-1")
     }
+
+    func testRecordPayloadGroupsByDirectionAndMessageType() {
+        let center = BridgeObservabilityCenter()
+
+        center.recordPayload(direction: .inbound,
+                             messageType: "request.fetch_agent_events",
+                             byteCount: 100,
+                             durationMs: 2)
+        center.recordPayload(direction: .inbound,
+                             messageType: "request.fetch_agent_events",
+                             byteCount: 300,
+                             durationMs: 6)
+        center.recordPayload(direction: .outbound,
+                             messageType: "agent_event",
+                             byteCount: 50,
+                             durationMs: 1)
+
+        let snapshot = center.snapshot(activeSessions: [])
+        let fetchStats = snapshot.payloadStats.first {
+            $0.direction == .inbound && $0.messageType == "request.fetch_agent_events"
+        }
+        let eventStats = snapshot.payloadStats.first {
+            $0.direction == .outbound && $0.messageType == "agent_event"
+        }
+
+        XCTAssertEqual(fetchStats?.count, 2)
+        XCTAssertEqual(fetchStats?.totalBytes, 400)
+        XCTAssertEqual(fetchStats?.maxBytes, 300)
+        XCTAssertEqual(fetchStats?.averageBytes, 200)
+        XCTAssertEqual(fetchStats?.averageDurationMs, 4)
+        XCTAssertEqual(fetchStats?.maxDurationMs, 6)
+        XCTAssertEqual(fetchStats?.lastBytes, 300)
+        XCTAssertEqual(eventStats?.count, 1)
+        XCTAssertEqual(eventStats?.totalBytes, 50)
+    }
 }
