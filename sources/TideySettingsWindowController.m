@@ -65,10 +65,7 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 
 @interface TideyRemoteSettingsViewController : NSViewController
 
-@property(nonatomic, strong) NSTextField *endpointValueLabel;
-@property(nonatomic, strong) NSTextField *tunnelValueLabel;
 @property(nonatomic, strong) NSTextField *statusLabel;
-@property(nonatomic, strong) NSButton *tunnelCopyButton;
 @property(nonatomic, strong) NSImageView *qrImageView;
 @property(nonatomic, strong) NSButton *refreshButton;
 @property(nonatomic, strong) NSScrollView *devicesScrollView;
@@ -76,13 +73,11 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 @property(nonatomic, strong) NSStackView *devicesStackView;
 @property(nonatomic, strong) NSTextField *devicesStatusLabel;
 @property(nonatomic, strong) NSTextField *uploadsStatusLabel;
-@property(nonatomic, strong) NSTextField *uploadsPathLabel;
 @property(nonatomic, strong) NSButton *uploadsRevealButton;
 @property(nonatomic, strong) NSButton *uploadsCleanButton;
 @property(nonatomic, strong) NSTimer *countdownTimer;
 @property(nonatomic, strong) NSTimer *devicesRefreshTimer;
 @property(nonatomic, strong) NSDate *expiresAt;
-@property(nonatomic, copy) NSString *pairStatusDetail;
 
 - (void)remotePageDidBecomeVisible;
 - (void)remotePageDidBecomeHidden;
@@ -102,15 +97,16 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     view.layer.backgroundColor = [NSColor colorWithSRGBRed:0x1a/255.0 green:0x1a/255.0 blue:0x1a/255.0 alpha:1.0].CGColor;
 
     NSRect titleFrame = NSMakeRect(32, 24, 496, 28);
-    NSRect bodyFrame = NSMakeRect(32, 58, 496, 38);
-    NSRect pairCardFrame = NSMakeRect(32, 110, 496, 210);
-    NSRect devicesTitleFrame = NSMakeRect(32, 344, 300, 18);
-    NSRect devicesStatusFrame = NSMakeRect(32, 366, 476, 34);
-    NSRect devicesListFrame = NSMakeRect(32, 412, 476, 78);
-    NSRect uploadsTitleFrame = NSMakeRect(32, 514, 220, 18);
-    NSRect uploadsStatusFrame = NSMakeRect(32, 536, 300, 18);
-    NSRect uploadsPathFrame = NSMakeRect(32, 560, 320, 16);
-    CGFloat documentHeight = NSMaxY(uploadsPathFrame) + 48;
+    NSRect introCardFrame = NSMakeRect(32, 68, 242, 184);
+    NSRect qrCardFrame = NSMakeRect(286, 68, 242, 184);
+    NSRect devicesTitleFrame = NSMakeRect(32, 276, 300, 18);
+    NSRect devicesStatusFrame = NSMakeRect(32, 300, 476, 34);
+    NSRect devicesListFrame = NSMakeRect(32, 300, 476, 96);
+    NSRect uploadsTitleFrame = NSMakeRect(32, 430, 220, 18);
+    NSRect uploadsStatusFrame = NSMakeRect(32, 452, 280, 18);
+    NSRect uploadsRevealButtonFrame = NSMakeRect(328, 448, 72, 26);
+    NSRect uploadsCleanButtonFrame = NSMakeRect(408, 448, 100, 26);
+    CGFloat documentHeight = NSMaxY(uploadsCleanButtonFrame) + 48;
 
     NSScrollView *scrollView = [[NSScrollView alloc] initWithFrame:view.bounds];
     scrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
@@ -132,77 +128,52 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
                                               color:[NSColor colorWithSRGBRed:0xf4/255.0 green:0xf4/255.0 blue:0xf4/255.0 alpha:1.0]];
     [documentView addSubview:titleLabel];
 
-    NSTextField *bodyLabel = [self labelWithFrame:bodyFrame
+    NSView *introCardView = [[NSView alloc] initWithFrame:introCardFrame];
+    introCardView.wantsLayer = YES;
+    introCardView.layer.backgroundColor = [NSColor colorWithSRGBRed:0x22/255.0 green:0x22/255.0 blue:0x22/255.0 alpha:1.0].CGColor;
+    introCardView.layer.cornerRadius = 12;
+    introCardView.layer.borderWidth = 1;
+    introCardView.layer.borderColor = [NSColor colorWithSRGBRed:0x33/255.0 green:0x33/255.0 blue:0x33/255.0 alpha:1.0].CGColor;
+    [documentView addSubview:introCardView];
+
+    NSTextField *bodyLabel = [self labelWithFrame:NSMakeRect(20, 58, 202, 72)
                                             string:@"Pair Tidey Remote on your phone with this Mac. The LAN QR code will appear here once the Bridge is available."
                                               font:[NSFont systemFontOfSize:13 weight:NSFontWeightRegular]
                                              color:[NSColor colorWithSRGBRed:0x9a/255.0 green:0x9a/255.0 blue:0x9a/255.0 alpha:1.0]];
-    bodyLabel.maximumNumberOfLines = 2;
-    [documentView addSubview:bodyLabel];
+    bodyLabel.maximumNumberOfLines = 4;
+    bodyLabel.usesSingleLineMode = NO;
+    bodyLabel.lineBreakMode = NSLineBreakByWordWrapping;
+    [introCardView addSubview:bodyLabel];
 
-    NSView *cardView = [[NSView alloc] initWithFrame:pairCardFrame];
-    cardView.wantsLayer = YES;
-    cardView.layer.backgroundColor = [NSColor colorWithSRGBRed:0x22/255.0 green:0x22/255.0 blue:0x22/255.0 alpha:1.0].CGColor;
-    cardView.layer.cornerRadius = 12;
-    cardView.layer.borderWidth = 1;
-    cardView.layer.borderColor = [NSColor colorWithSRGBRed:0x33/255.0 green:0x33/255.0 blue:0x33/255.0 alpha:1.0].CGColor;
-    [documentView addSubview:cardView];
+    NSView *qrCardView = [[NSView alloc] initWithFrame:qrCardFrame];
+    qrCardView.wantsLayer = YES;
+    qrCardView.layer.backgroundColor = [NSColor colorWithSRGBRed:0x22/255.0 green:0x22/255.0 blue:0x22/255.0 alpha:1.0].CGColor;
+    qrCardView.layer.cornerRadius = 12;
+    qrCardView.layer.borderWidth = 1;
+    qrCardView.layer.borderColor = [NSColor colorWithSRGBRed:0x33/255.0 green:0x33/255.0 blue:0x33/255.0 alpha:1.0].CGColor;
+    [documentView addSubview:qrCardView];
 
-    self.qrImageView = [[NSImageView alloc] initWithFrame:NSMakeRect(24, 48, 138, 138)];
+    self.qrImageView = [[NSImageView alloc] initWithFrame:NSMakeRect(65, 64, 112, 112)];
     self.qrImageView.imageScaling = NSImageScaleProportionallyUpOrDown;
     self.qrImageView.wantsLayer = YES;
     self.qrImageView.layer.backgroundColor = NSColor.whiteColor.CGColor;
     self.qrImageView.layer.cornerRadius = 10;
-    [cardView addSubview:self.qrImageView];
+    [qrCardView addSubview:self.qrImageView];
 
-    NSTextField *endpointTitleLabel = [self labelWithFrame:NSMakeRect(188, 166, 276, 18)
-                                                    string:@"LAN endpoint"
-                                                      font:[NSFont systemFontOfSize:12 weight:NSFontWeightMedium]
-                                                     color:[NSColor colorWithSRGBRed:0x88/255.0 green:0x88/255.0 blue:0x88/255.0 alpha:1.0]];
-    [cardView addSubview:endpointTitleLabel];
-
-    self.endpointValueLabel = [self labelWithFrame:NSMakeRect(188, 144, 276, 20)
-                                            string:@"Loading..."
-                                              font:[NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular]
-                                             color:[NSColor colorWithSRGBRed:0xf4/255.0 green:0xf4/255.0 blue:0xf4/255.0 alpha:1.0]];
-    self.endpointValueLabel.lineBreakMode = NSLineBreakByTruncatingMiddle;
-    [cardView addSubview:self.endpointValueLabel];
-
-    NSTextField *tunnelTitleLabel = [self labelWithFrame:NSMakeRect(188, 112, 276, 18)
-                                                  string:@"Tunnel endpoint"
-                                                    font:[NSFont systemFontOfSize:12 weight:NSFontWeightMedium]
-                                                   color:[NSColor colorWithSRGBRed:0x88/255.0 green:0x88/255.0 blue:0x88/255.0 alpha:1.0]];
-    [cardView addSubview:tunnelTitleLabel];
-
-    self.tunnelValueLabel = [self labelWithFrame:NSMakeRect(188, 92, 232, 18)
-                                          string:@"LAN only"
-                                            font:[NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular]
-                                           color:[NSColor colorWithSRGBRed:0x88/255.0 green:0x88/255.0 blue:0x88/255.0 alpha:1.0]];
-    self.tunnelValueLabel.maximumNumberOfLines = 1;
-    self.tunnelValueLabel.usesSingleLineMode = YES;
-    self.tunnelValueLabel.lineBreakMode = NSLineBreakByTruncatingMiddle;
-    [cardView addSubview:self.tunnelValueLabel];
-
-    self.tunnelCopyButton = [NSButton buttonWithTitle:@"Copy"
-                                               target:self
-                                               action:@selector(copyTunnelEndpoint:)];
-    self.tunnelCopyButton.frame = NSMakeRect(428, 88, 48, 24);
-    self.tunnelCopyButton.bezelStyle = NSBezelStyleRounded;
-    self.tunnelCopyButton.enabled = NO;
-    [cardView addSubview:self.tunnelCopyButton];
-
-    self.statusLabel = [self labelWithFrame:NSMakeRect(188, 52, 288, 18)
+    self.statusLabel = [self labelWithFrame:NSMakeRect(20, 42, 202, 18)
                                      string:@""
                                        font:[NSFont systemFontOfSize:12 weight:NSFontWeightRegular]
                                       color:[NSColor colorWithSRGBRed:0xaa/255.0 green:0xaa/255.0 blue:0xaa/255.0 alpha:1.0]];
+    self.statusLabel.alignment = NSTextAlignmentCenter;
     self.statusLabel.lineBreakMode = NSLineBreakByTruncatingTail;
-    [cardView addSubview:self.statusLabel];
+    [qrCardView addSubview:self.statusLabel];
 
     self.refreshButton = [NSButton buttonWithTitle:@"Refresh"
                                             target:self
                                             action:@selector(refreshPairPayload:)];
-    self.refreshButton.frame = NSMakeRect(356, 14, 120, 28);
+    self.refreshButton.frame = NSMakeRect(122, 10, 100, 28);
     self.refreshButton.bezelStyle = NSBezelStyleRounded;
-    [cardView addSubview:self.refreshButton];
+    [qrCardView addSubview:self.refreshButton];
 
     NSTextField *devicesTitleLabel = [self labelWithFrame:devicesTitleFrame
                                                    string:@"Paired devices"
@@ -224,9 +195,10 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     self.devicesScrollView.hasVerticalScroller = YES;
     self.devicesScrollView.autohidesScrollers = YES;
     self.devicesScrollView.borderType = NSNoBorder;
+    self.devicesScrollView.hidden = YES;
     [documentView addSubview:self.devicesScrollView];
 
-    self.devicesDocumentView = [[TideyFlippedView alloc] initWithFrame:NSMakeRect(0, 0, 476, 78)];
+    self.devicesDocumentView = [[TideyFlippedView alloc] initWithFrame:NSMakeRect(0, 0, 476, 96)];
     self.devicesScrollView.documentView = self.devicesDocumentView;
 
     self.devicesStackView = [[NSStackView alloc] initWithFrame:NSMakeRect(0, 0, 476, 0)];
@@ -248,25 +220,17 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
                                              color:[NSColor colorWithSRGBRed:0xaa/255.0 green:0xaa/255.0 blue:0xaa/255.0 alpha:1.0]];
     [documentView addSubview:self.uploadsStatusLabel];
 
-    self.uploadsPathLabel = [self labelWithFrame:uploadsPathFrame
-                                          string:[self abbreviatedUploadsDirectoryPath]
-                                            font:[NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular]
-                                           color:[NSColor colorWithSRGBRed:0x88/255.0 green:0x88/255.0 blue:0x88/255.0 alpha:1.0]];
-    self.uploadsPathLabel.lineBreakMode = NSLineBreakByTruncatingMiddle;
-    self.uploadsPathLabel.toolTip = [self uploadsDirectoryPath];
-    [documentView addSubview:self.uploadsPathLabel];
-
     self.uploadsRevealButton = [NSButton buttonWithTitle:@"Reveal"
                                                   target:self
                                                   action:@selector(revealUploadsDirectory:)];
-    self.uploadsRevealButton.frame = NSMakeRect(328, 532, 72, 26);
+    self.uploadsRevealButton.frame = uploadsRevealButtonFrame;
     self.uploadsRevealButton.bezelStyle = NSBezelStyleRounded;
     [documentView addSubview:self.uploadsRevealButton];
 
     self.uploadsCleanButton = [NSButton buttonWithTitle:@"Clean Now"
                                                  target:self
                                                  action:@selector(cleanUploadsNow:)];
-    self.uploadsCleanButton.frame = NSMakeRect(408, 532, 100, 26);
+    self.uploadsCleanButton.frame = uploadsCleanButtonFrame;
     self.uploadsCleanButton.bezelStyle = NSBezelStyleRounded;
     [documentView addSubview:self.uploadsCleanButton];
 
@@ -309,13 +273,9 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     [self.countdownTimer invalidate];
     self.countdownTimer = nil;
     self.expiresAt = nil;
-    self.pairStatusDetail = @"Requesting a new pairing code from the Bridge.";
     self.refreshButton.enabled = NO;
-    self.endpointValueLabel.stringValue = @"Loading...";
-    self.tunnelValueLabel.stringValue = @"Loading...";
-    self.tunnelValueLabel.toolTip = nil;
-    self.tunnelCopyButton.enabled = NO;
-    self.statusLabel.stringValue = self.pairStatusDetail;
+    self.statusLabel.stringValue = @"Loading...";
+    self.statusLabel.toolTip = nil;
     self.qrImageView.image = nil;
 
     NSError *tokenError = nil;
@@ -364,6 +324,8 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 
 - (void)refreshPairedDevicesShowingLoading:(BOOL)showLoading {
     if (showLoading) {
+        self.devicesStatusLabel.hidden = NO;
+        self.devicesScrollView.hidden = YES;
         self.devicesStatusLabel.stringValue = @"Loading paired devices...";
         [self clearDeviceRows];
     }
@@ -371,6 +333,8 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     NSError *tokenError = nil;
     NSString *token = [self legacyPairTokenWithError:&tokenError];
     if (!token.length) {
+        self.devicesStatusLabel.hidden = NO;
+        self.devicesScrollView.hidden = YES;
         self.devicesStatusLabel.stringValue = [NSString stringWithFormat:@"Pair token unavailable: %@", tokenError.localizedDescription ?: @"unknown error"];
         return;
     }
@@ -389,11 +353,15 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
                 return;
             }
             if (error) {
+                strongSelf.devicesStatusLabel.hidden = NO;
+                strongSelf.devicesScrollView.hidden = YES;
                 strongSelf.devicesStatusLabel.stringValue = [NSString stringWithFormat:@"Device list failed: %@", error.localizedDescription];
                 return;
             }
             NSInteger statusCode = [(NSHTTPURLResponse *)response statusCode];
             if (statusCode != 200 || !data.length) {
+                strongSelf.devicesStatusLabel.hidden = NO;
+                strongSelf.devicesScrollView.hidden = YES;
                 strongSelf.devicesStatusLabel.stringValue = [NSString stringWithFormat:@"Bridge returned HTTP %ld.", (long)statusCode];
                 return;
             }
@@ -534,15 +502,20 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     NSDictionary *payload = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
     NSArray *devices = [payload isKindOfClass:NSDictionary.class] && [payload[@"devices"] isKindOfClass:NSArray.class] ? payload[@"devices"] : nil;
     if (!devices) {
+        self.devicesStatusLabel.hidden = NO;
+        self.devicesScrollView.hidden = YES;
         self.devicesStatusLabel.stringValue = [NSString stringWithFormat:@"Invalid device list: %@", jsonError.localizedDescription ?: @"not a JSON object"];
         return;
     }
     [self clearDeviceRows];
     if (!devices.count) {
+        self.devicesStatusLabel.hidden = NO;
+        self.devicesScrollView.hidden = YES;
         self.devicesStatusLabel.stringValue = @"No devices paired. Scan the QR code with Tidey Remote on your iPhone to pair.";
         return;
     }
-    self.devicesStatusLabel.stringValue = [NSString stringWithFormat:@"%lu paired device%@", (unsigned long)devices.count, devices.count == 1 ? @"" : @"s"];
+    self.devicesStatusLabel.hidden = YES;
+    self.devicesScrollView.hidden = NO;
     [self updateDeviceRowsFrameForCount:devices.count];
     for (NSDictionary *device in devices) {
         if (![device isKindOfClass:NSDictionary.class]) {
@@ -567,7 +540,7 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     static const CGFloat rowHeight = 34;
     static const CGFloat rowSpacing = 8;
     static const CGFloat width = 476;
-    static const CGFloat visibleHeight = 78;
+    static const CGFloat visibleHeight = 96;
     CGFloat contentHeight = count == 0 ? 0 : rowHeight * count + rowSpacing * (count - 1);
     CGFloat documentHeight = MAX(visibleHeight, contentHeight);
     self.devicesDocumentView.frame = NSMakeRect(0, 0, width, documentHeight);
@@ -673,10 +646,6 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     return [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/Tidey Remote Bridge/uploads"];
 }
 
-- (NSString *)abbreviatedUploadsDirectoryPath {
-    return [@"~/" stringByAppendingString:@"Library/Application Support/Tidey Remote Bridge/uploads"];
-}
-
 - (NSString *)byteCountString:(long long)bytes {
     NSByteCountFormatter *formatter = [[NSByteCountFormatter alloc] init];
     formatter.countStyle = NSByteCountFormatterCountStyleFile;
@@ -710,107 +679,17 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 
     NSArray *endpoints = [payload[@"lan_endpoints"] isKindOfClass:NSArray.class] ? payload[@"lan_endpoints"] : @[];
     if (!endpoints.count) {
-        self.endpointValueLabel.stringValue = @"No LAN endpoint";
-        self.endpointValueLabel.toolTip = nil;
-        self.tunnelValueLabel.stringValue = @"LAN only";
-        self.tunnelValueLabel.toolTip = nil;
-        self.tunnelCopyButton.enabled = NO;
-        self.pairStatusDetail = @"No active LAN endpoint found. Connect this Mac to Wi-Fi or Ethernet, then refresh.";
         self.statusLabel.stringValue = @"No active LAN endpoint found. Connect this Mac to Wi-Fi or Ethernet, then refresh.";
+        self.statusLabel.toolTip = self.statusLabel.stringValue;
         self.qrImageView.image = nil;
         return;
     }
 
-    NSString *lanEndpoint = [self displayStringForEndpoint:endpoints.firstObject];
-    self.endpointValueLabel.stringValue = lanEndpoint;
-    self.endpointValueLabel.toolTip = lanEndpoint;
-    NSDictionary *tunnelEndpoint = [payload[@"tunnel_endpoint"] isKindOfClass:NSDictionary.class] ? payload[@"tunnel_endpoint"] : nil;
     NSString *expiresAtString = [payload[@"expires_at"] isKindOfClass:NSString.class] ? payload[@"expires_at"] : nil;
     self.expiresAt = [self dateFromISOString:expiresAtString];
     self.qrImageView.image = [self qrImageForString:[self base64URLStringForData:data]];
-    if (tunnelEndpoint) {
-        [self setTunnelEndpointString:[self displayStringForEndpoint:tunnelEndpoint]];
-    } else {
-        [self setTunnelEndpointString:@"LAN only"];
-    }
-    self.pairStatusDetail = @"Scan with iPhone";
+    self.statusLabel.toolTip = nil;
     [self startCountdownTimer];
-    [self refreshTunnelStatus];
-}
-
-- (void)refreshTunnelStatus {
-    NSError *tokenError = nil;
-    NSString *token = [self legacyPairTokenWithError:&tokenError];
-    if (!token.length) {
-        return;
-    }
-
-    NSURL *url = [NSURL URLWithString:@"http://127.0.0.1:4817/admin/tunnel_status"];
-    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
-    request.timeoutInterval = 4;
-    [request setValue:[NSString stringWithFormat:@"Bearer %@", token] forHTTPHeaderField:@"Authorization"];
-
-    __weak __typeof(self) weakSelf = self;
-    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request
-                                                                 completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            __strong __typeof(weakSelf) strongSelf = weakSelf;
-            if (!strongSelf || error || !data.length) {
-                return;
-            }
-            NSDictionary *payload = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-            if (![payload isKindOfClass:NSDictionary.class]) {
-                return;
-            }
-            NSString *state = [payload[@"state"] isKindOfClass:NSString.class] ? payload[@"state"] : @"off";
-            NSDictionary *endpoint = [payload[@"endpoint"] isKindOfClass:NSDictionary.class] ? payload[@"endpoint"] : nil;
-            NSString *errorMessage = [payload[@"error_message"] isKindOfClass:NSString.class] ? payload[@"error_message"] : nil;
-            NSString *updatedAtString = [payload[@"updated_at"] isKindOfClass:NSString.class] ? payload[@"updated_at"] : nil;
-            NSDate *updatedAt = [strongSelf dateFromISOString:updatedAtString];
-            NSString *age = [strongSelf ageStringSinceDate:updatedAt];
-            if ([state isEqualToString:@"online"] && endpoint) {
-                [strongSelf setTunnelEndpointString:[strongSelf displayStringForEndpoint:endpoint]];
-                strongSelf.pairStatusDetail = age.length ? [NSString stringWithFormat:@"Tunnel updated %@", age] : @"Scan with iPhone";
-                [strongSelf updateCountdown];
-                strongSelf.statusLabel.toolTip = strongSelf.statusLabel.stringValue;
-            } else if ([state isEqualToString:@"starting"]) {
-                [strongSelf setTunnelEndpointString:@"Starting..."];
-                strongSelf.pairStatusDetail = @"Tunnel starting. LAN still works.";
-                [strongSelf updateCountdown];
-                strongSelf.statusLabel.toolTip = strongSelf.statusLabel.stringValue;
-            } else if ([state isEqualToString:@"error"] && [errorMessage containsString:@"cloudflared not found"]) {
-                [strongSelf setTunnelEndpointString:@"LAN only (install cloudflared)"];
-                strongSelf.pairStatusDetail = @"Tunnel unavailable: install cloudflared";
-                [strongSelf updateCountdown];
-                strongSelf.statusLabel.toolTip = errorMessage;
-            } else {
-                [strongSelf setTunnelEndpointString:@"LAN only"];
-                strongSelf.pairStatusDetail = errorMessage.length ? [NSString stringWithFormat:@"Tunnel unavailable: %@", errorMessage] : @"Scan with iPhone";
-                [strongSelf updateCountdown];
-                strongSelf.statusLabel.toolTip = errorMessage;
-            }
-        });
-    }];
-    [task resume];
-}
-
-- (void)setTunnelEndpointString:(NSString *)value {
-    self.tunnelValueLabel.stringValue = value ?: @"LAN only";
-    self.tunnelValueLabel.toolTip = value;
-    BOOL canCopy = [value hasPrefix:@"ws://"] || [value hasPrefix:@"wss://"] || [value hasPrefix:@"http://"] || [value hasPrefix:@"https://"];
-    self.tunnelCopyButton.enabled = canCopy;
-}
-
-- (NSString *)displayStringForEndpoint:(NSDictionary *)endpoint {
-    if (![endpoint isKindOfClass:NSDictionary.class]) {
-        return @"Unknown";
-    }
-    NSString *scheme = [endpoint[@"scheme"] isKindOfClass:NSString.class] ? endpoint[@"scheme"] : @"ws";
-    NSString *host = [endpoint[@"host"] isKindOfClass:NSString.class] ? endpoint[@"host"] : @"";
-    NSNumber *port = [endpoint[@"port"] isKindOfClass:NSNumber.class] ? endpoint[@"port"] : nil;
-    NSString *path = [endpoint[@"path"] isKindOfClass:NSString.class] ? endpoint[@"path"] : @"/";
-    NSString *displayHost = [host containsString:@":"] ? [NSString stringWithFormat:@"[%@]", host] : host;
-    return [NSString stringWithFormat:@"%@://%@%@%@", scheme, displayHost, port ? [NSString stringWithFormat:@":%@", port] : @"", path ?: @"/"];
 }
 
 - (NSDate *)dateFromISOString:(NSString *)string {
@@ -834,34 +713,21 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 }
 
 - (void)updateCountdown {
-    NSString *detail = self.pairStatusDetail.length ? self.pairStatusDetail : @"Scan with iPhone";
     if (!self.expiresAt) {
-        self.statusLabel.stringValue = detail;
+        self.statusLabel.stringValue = @"Loading...";
         return;
     }
     NSTimeInterval remaining = [self.expiresAt timeIntervalSinceNow];
     if (remaining <= 0) {
         [self.countdownTimer invalidate];
         self.countdownTimer = nil;
-        self.pairStatusDetail = @"Press Refresh to create a new code";
-        self.statusLabel.stringValue = @"Expired · Press Refresh to create a new code";
+        self.statusLabel.stringValue = @"Expired";
         return;
     }
     NSInteger seconds = (NSInteger)ceil(remaining);
-    self.statusLabel.stringValue = [NSString stringWithFormat:@"Expires in %ld:%02ld · %@",
+    self.statusLabel.stringValue = [NSString stringWithFormat:@"Expires in %ld:%02ld",
                                     (long)(seconds / 60),
-                                    (long)(seconds % 60),
-                                    detail];
-}
-
-- (void)copyTunnelEndpoint:(id)sender {
-    NSString *value = self.tunnelValueLabel.toolTip.length ? self.tunnelValueLabel.toolTip : self.tunnelValueLabel.stringValue;
-    if (!value.length || !self.tunnelCopyButton.enabled) {
-        return;
-    }
-    NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
-    [pasteboard clearContents];
-    [pasteboard setString:value forType:NSPasteboardTypeString];
+                                    (long)(seconds % 60)];
 }
 
 - (NSString *)base64URLStringForData:(NSData *)data {
@@ -888,31 +754,10 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     return image;
 }
 
-- (NSString *)ageStringSinceDate:(NSDate *)date {
-    if (!date) {
-        return nil;
-    }
-    NSTimeInterval age = [[NSDate date] timeIntervalSinceDate:date];
-    if (age < 0) {
-        age = 0;
-    }
-    if (age < 60) {
-        return [NSString stringWithFormat:@"%lds ago", (long)round(age)];
-    }
-    if (age < 3600) {
-        return [NSString stringWithFormat:@"%ldm ago", (long)round(age / 60.0)];
-    }
-    return [NSString stringWithFormat:@"%ldh ago", (long)round(age / 3600.0)];
-}
-
 - (void)showError:(NSString *)message {
     self.refreshButton.enabled = YES;
-    self.endpointValueLabel.stringValue = @"Unavailable";
-    self.tunnelValueLabel.stringValue = @"Unavailable";
-    self.tunnelValueLabel.toolTip = nil;
-    self.tunnelCopyButton.enabled = NO;
-    self.pairStatusDetail = message ?: @"Unable to create a pairing code.";
     self.statusLabel.stringValue = message ?: @"Unable to create a pairing code.";
+    self.statusLabel.toolTip = self.statusLabel.stringValue;
     self.qrImageView.image = nil;
 }
 
