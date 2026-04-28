@@ -31,6 +31,7 @@ let resolverPublisher = BridgeResolverPublisher(resolverBaseURL: BridgeResolverC
                                                 client: BridgeURLSessionResolverClient())
 let resolverPublicationMonitor = BridgeResolverPublicationMonitor(statusReader: cloudflaredStatusStore,
                                                                   publisher: resolverPublisher)
+let uploadGarbageCollector = BridgeUploadGarbageCollector(uploadDirectory: bridgePaths.uploadsDirectory)
 let server = TideyRemoteBridgeServer(token: token,
                                      authenticator: authenticator,
                                      pairingController: pairingController,
@@ -39,11 +40,13 @@ let server = TideyRemoteBridgeServer(token: token,
                                      workspaceEventHub: workspaceEventHub,
                                      registryMonitor: registryMonitor,
                                      observability: observability,
-                                     cloudflaredManager: cloudflaredManager)
+                                     cloudflaredManager: cloudflaredManager,
+                                     uploadGarbageCollector: uploadGarbageCollector)
 
 do {
     workspaceEventMonitor.start()
     resolverPublicationMonitor.start()
+    uploadGarbageCollector.start()
     try server.run()
 } catch {
     fputs("RemoteBridge failed: \(error)\n", stderr)

@@ -18,6 +18,7 @@ final class TideyRemoteBridgeServer {
     private let registryMonitor: AgentSessionRegistryMonitor
     private let observability: BridgeObservabilityCenter
     private let cloudflaredManager: BridgeCloudflaredManager
+    private let uploadGarbageCollector: BridgeUploadGarbageCollector
     private let group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
 
     init(host: String = "0.0.0.0",
@@ -30,7 +31,8 @@ final class TideyRemoteBridgeServer {
          workspaceEventHub: WorkspaceEventHub,
          registryMonitor: AgentSessionRegistryMonitor,
          observability: BridgeObservabilityCenter,
-         cloudflaredManager: BridgeCloudflaredManager = BridgeCloudflaredManager()) {
+         cloudflaredManager: BridgeCloudflaredManager = BridgeCloudflaredManager(),
+         uploadGarbageCollector: BridgeUploadGarbageCollector = BridgeUploadGarbageCollector(uploadDirectory: BridgePaths().uploadsDirectory)) {
         self.host = host
         self.port = port
         self.token = token
@@ -42,6 +44,7 @@ final class TideyRemoteBridgeServer {
         self.registryMonitor = registryMonitor
         self.observability = observability
         self.cloudflaredManager = cloudflaredManager
+        self.uploadGarbageCollector = uploadGarbageCollector
     }
 
     func run() throws {
@@ -73,7 +76,7 @@ final class TideyRemoteBridgeServer {
         let bootstrap = ServerBootstrap(group: group)
             .serverChannelOption(ChannelOptions.backlog, value: 16)
             .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
-            .childChannelInitializer { [token, authenticator, pairingController, port, registryMonitor, eventHub, observability, cloudflaredManager] channel in
+            .childChannelInitializer { [token, authenticator, pairingController, port, registryMonitor, eventHub, observability, cloudflaredManager, uploadGarbageCollector] channel in
                 let httpHandler = HTTPHandler(legacyPairToken: token,
                                               authenticator: authenticator,
                                               pairingController: pairingController,
@@ -81,7 +84,8 @@ final class TideyRemoteBridgeServer {
                                               registryMonitor: registryMonitor,
                                               eventHub: eventHub,
                                               observability: observability,
-                                              cloudflaredManager: cloudflaredManager)
+                                              cloudflaredManager: cloudflaredManager,
+                                              uploadGarbageCollector: uploadGarbageCollector)
                 return channel.pipeline.configureHTTPServerPipeline(
                     withServerUpgrade: (
                         upgraders: [upgrader],
@@ -157,6 +161,7 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
     private let eventHub: AgentEventHub
     private let observability: BridgeObservabilityCenter
     private let cloudflaredManager: BridgeCloudflaredManager
+    private let uploadGarbageCollector: BridgeUploadGarbageCollector
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     private var pendingHead: HTTPRequestHead?
@@ -169,7 +174,8 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
          registryMonitor: AgentSessionRegistryMonitor,
          eventHub: AgentEventHub,
          observability: BridgeObservabilityCenter,
-         cloudflaredManager: BridgeCloudflaredManager) {
+         cloudflaredManager: BridgeCloudflaredManager,
+         uploadGarbageCollector: BridgeUploadGarbageCollector) {
         self.legacyPairToken = legacyPairToken
         self.authenticator = authenticator
         self.pairingController = pairingController
@@ -178,6 +184,7 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
         self.eventHub = eventHub
         self.observability = observability
         self.cloudflaredManager = cloudflaredManager
+        self.uploadGarbageCollector = uploadGarbageCollector
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys]
         decoder.dateDecodingStrategy = .iso8601
@@ -216,6 +223,10 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
             respondToDeviceList(head: head, context: context)
         case "/admin/devices/revoke":
             respondToDeviceRevoke(head: head, body: body, context: context)
+        case "/admin/uploads/stats":
+            respondToUploadStats(head: head, context: context)
+        case "/admin/uploads/sweep":
+            respondToUploadSweep(head: head, context: context)
         case "/pair/exchange":
             respondToPairExchange(head: head, body: body, context: context)
         case "/ws":
@@ -352,6 +363,56 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
                 }
             }()
             respond(error: error.payload, status: status, context: context, version: head.version)
+        } catch {
+            respond(error: BridgeInternalError.invalidRequest(error.localizedDescription).payload,
+                    status: .badRequest,
+                    context: context,
+                    version: head.version)
+        }
+    }
+
+    private func respondToUploadStats(head: HTTPRequestHead, context: ChannelHandlerContext) {
+        guard head.method == .GET else {
+            respond(status: .methodNotAllowed, data: Data(), context: context, version: head.version)
+            return
+        }
+        guard authenticator.isLegacyTokenAuthorized(authorizationHeader: head.headers.first(name: "Authorization")) else {
+            respond(status: .unauthorized, data: Data(), context: context, version: head.version)
+            return
+        }
+
+        do {
+            respond(status: .ok,
+                    data: try encoder.encode(uploadGarbageCollector.stats()),
+                    context: context,
+                    version: head.version,
+                    contentType: "application/json")
+        } catch {
+            respond(error: BridgeInternalError.invalidRequest(error.localizedDescription).payload,
+                    status: .badRequest,
+                    context: context,
+                    version: head.version)
+        }
+    }
+
+    private func respondToUploadSweep(head: HTTPRequestHead, context: ChannelHandlerContext) {
+        guard head.method == .POST else {
+            respond(status: .methodNotAllowed, data: Data(), context: context, version: head.version)
+            return
+        }
+        guard authenticator.isLegacyTokenAuthorized(authorizationHeader: head.headers.first(name: "Authorization")) else {
+            respond(status: .unauthorized, data: Data(), context: context, version: head.version)
+            return
+        }
+
+        do {
+            let result = try uploadGarbageCollector.sweep()
+            BridgeLogger.server.info("upload GC manual_sweep removed_files=\(result.removedFileCount, privacy: .public) freed_bytes=\(result.freedBytes, privacy: .public)")
+            respond(status: .ok,
+                    data: try encoder.encode(result),
+                    context: context,
+                    version: head.version,
+                    contentType: "application/json")
         } catch {
             respond(error: BridgeInternalError.invalidRequest(error.localizedDescription).payload,
                     status: .badRequest,
