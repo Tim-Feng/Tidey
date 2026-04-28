@@ -105,7 +105,7 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     NSRect pairCardFrame = NSMakeRect(32, 110, 496, 210);
     NSRect devicesCardFrame = NSMakeRect(32, 336, 496, 164);
     NSRect uploadsCardFrame = NSMakeRect(32, 516, 496, 100);
-    CGFloat documentHeight = NSMaxY(uploadsCardFrame) + 32;
+    CGFloat documentHeight = NSMaxY(uploadsCardFrame) + 48;
 
     NSScrollView *scrollView = [[NSScrollView alloc] initWithFrame:view.bounds];
     scrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
