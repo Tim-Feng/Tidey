@@ -75,6 +75,10 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 @property(nonatomic, strong) NSView *devicesDocumentView;
 @property(nonatomic, strong) NSStackView *devicesStackView;
 @property(nonatomic, strong) NSTextField *devicesStatusLabel;
+@property(nonatomic, strong) NSTextField *uploadsStatusLabel;
+@property(nonatomic, strong) NSTextField *uploadsPathLabel;
+@property(nonatomic, strong) NSButton *uploadsRevealButton;
+@property(nonatomic, strong) NSButton *uploadsCleanButton;
 @property(nonatomic, strong) NSTimer *countdownTimer;
 @property(nonatomic, strong) NSTimer *devicesRefreshTimer;
 @property(nonatomic, strong) NSDate *expiresAt;
@@ -92,24 +96,24 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 }
 
 - (void)loadView {
-    NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 560, 520)];
+    NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 560, 636)];
     view.wantsLayer = YES;
     view.layer.backgroundColor = [NSColor colorWithSRGBRed:0x1a/255.0 green:0x1a/255.0 blue:0x1a/255.0 alpha:1.0].CGColor;
 
-    NSTextField *titleLabel = [self labelWithFrame:NSMakeRect(32, 468, 496, 28)
+    NSTextField *titleLabel = [self labelWithFrame:NSMakeRect(32, 584, 496, 28)
                                              string:@"Sync to Remote"
                                                font:[NSFont systemFontOfSize:22 weight:NSFontWeightSemibold]
                                               color:[NSColor colorWithSRGBRed:0xf4/255.0 green:0xf4/255.0 blue:0xf4/255.0 alpha:1.0]];
     [view addSubview:titleLabel];
 
-    NSTextField *bodyLabel = [self labelWithFrame:NSMakeRect(32, 424, 496, 38)
+    NSTextField *bodyLabel = [self labelWithFrame:NSMakeRect(32, 540, 496, 38)
                                             string:@"Pair Tidey Remote on your phone with this Mac. The LAN QR code will appear here once the Bridge is available."
                                               font:[NSFont systemFontOfSize:13 weight:NSFontWeightRegular]
                                              color:[NSColor colorWithSRGBRed:0x9a/255.0 green:0x9a/255.0 blue:0x9a/255.0 alpha:1.0]];
     bodyLabel.maximumNumberOfLines = 2;
     [view addSubview:bodyLabel];
 
-    NSView *cardView = [[NSView alloc] initWithFrame:NSMakeRect(32, 200, 496, 210)];
+    NSView *cardView = [[NSView alloc] initWithFrame:NSMakeRect(32, 316, 496, 210)];
     cardView.wantsLayer = YES;
     cardView.layer.backgroundColor = [NSColor colorWithSRGBRed:0x22/255.0 green:0x22/255.0 blue:0x22/255.0 alpha:1.0].CGColor;
     cardView.layer.cornerRadius = 12;
@@ -170,7 +174,7 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     self.refreshButton.bezelStyle = NSBezelStyleRounded;
     [cardView addSubview:self.refreshButton];
 
-    NSView *devicesCardView = [[NSView alloc] initWithFrame:NSMakeRect(32, 20, 496, 164)];
+    NSView *devicesCardView = [[NSView alloc] initWithFrame:NSMakeRect(32, 136, 496, 164)];
     devicesCardView.wantsLayer = YES;
     devicesCardView.layer.backgroundColor = [NSColor colorWithSRGBRed:0x22/255.0 green:0x22/255.0 blue:0x22/255.0 alpha:1.0].CGColor;
     devicesCardView.layer.cornerRadius = 12;
@@ -207,6 +211,54 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     self.devicesStackView.spacing = 8;
     [self.devicesDocumentView addSubview:self.devicesStackView];
 
+    NSView *uploadsCardView = [[NSView alloc] initWithFrame:NSMakeRect(32, 20, 496, 100)];
+    uploadsCardView.wantsLayer = YES;
+    uploadsCardView.layer.backgroundColor = [NSColor colorWithSRGBRed:0x22/255.0 green:0x22/255.0 blue:0x22/255.0 alpha:1.0].CGColor;
+    uploadsCardView.layer.cornerRadius = 12;
+    uploadsCardView.layer.borderWidth = 1;
+    uploadsCardView.layer.borderColor = [NSColor colorWithSRGBRed:0x33/255.0 green:0x33/255.0 blue:0x33/255.0 alpha:1.0].CGColor;
+    [view addSubview:uploadsCardView];
+
+    NSTextField *uploadsTitleLabel = [self labelWithFrame:NSMakeRect(20, 66, 220, 22)
+                                                   string:@"Remote uploads"
+                                                     font:[NSFont systemFontOfSize:14 weight:NSFontWeightSemibold]
+                                                    color:[NSColor colorWithSRGBRed:0xf4/255.0 green:0xf4/255.0 blue:0xf4/255.0 alpha:1.0]];
+    [uploadsCardView addSubview:uploadsTitleLabel];
+
+    self.uploadsStatusLabel = [self labelWithFrame:NSMakeRect(20, 44, 320, 18)
+                                            string:@"Loading upload usage..."
+                                              font:[NSFont systemFontOfSize:12 weight:NSFontWeightRegular]
+                                             color:[NSColor colorWithSRGBRed:0xaa/255.0 green:0xaa/255.0 blue:0xaa/255.0 alpha:1.0]];
+    [uploadsCardView addSubview:self.uploadsStatusLabel];
+
+    NSTextField *uploadsRetentionLabel = [self labelWithFrame:NSMakeRect(20, 26, 320, 16)
+                                                       string:@"Keep uploads for 7 days. Recent files are protected for 24 hours."
+                                                         font:[NSFont systemFontOfSize:11 weight:NSFontWeightRegular]
+                                                        color:[NSColor colorWithSRGBRed:0x88/255.0 green:0x88/255.0 blue:0x88/255.0 alpha:1.0]];
+    [uploadsCardView addSubview:uploadsRetentionLabel];
+
+    self.uploadsPathLabel = [self labelWithFrame:NSMakeRect(20, 8, 320, 16)
+                                          string:[self abbreviatedUploadsDirectoryPath]
+                                            font:[NSFont monospacedSystemFontOfSize:10 weight:NSFontWeightRegular]
+                                           color:[NSColor colorWithSRGBRed:0x88/255.0 green:0x88/255.0 blue:0x88/255.0 alpha:1.0]];
+    self.uploadsPathLabel.lineBreakMode = NSLineBreakByTruncatingMiddle;
+    self.uploadsPathLabel.toolTip = [self uploadsDirectoryPath];
+    [uploadsCardView addSubview:self.uploadsPathLabel];
+
+    self.uploadsRevealButton = [NSButton buttonWithTitle:@"Reveal"
+                                                  target:self
+                                                  action:@selector(revealUploadsDirectory:)];
+    self.uploadsRevealButton.frame = NSMakeRect(356, 56, 96, 26);
+    self.uploadsRevealButton.bezelStyle = NSBezelStyleRounded;
+    [uploadsCardView addSubview:self.uploadsRevealButton];
+
+    self.uploadsCleanButton = [NSButton buttonWithTitle:@"Clean Now"
+                                                 target:self
+                                                 action:@selector(cleanUploadsNow:)];
+    self.uploadsCleanButton.frame = NSMakeRect(356, 22, 96, 26);
+    self.uploadsCleanButton.bezelStyle = NSBezelStyleRounded;
+    [uploadsCardView addSubview:self.uploadsCleanButton];
+
     self.view = view;
 }
 
@@ -218,6 +270,7 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 - (void)remotePageDidBecomeVisible {
     [self startDevicesRefreshTimer];
     [self refreshPairedDevices];
+    [self refreshUploadStats];
 }
 
 - (void)remotePageDidBecomeHidden {
@@ -336,6 +389,119 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
         });
     }];
     [task resume];
+}
+
+- (void)refreshUploadStats {
+    NSError *tokenError = nil;
+    NSString *token = [self legacyPairTokenWithError:&tokenError];
+    if (!token.length) {
+        self.uploadsStatusLabel.stringValue = [NSString stringWithFormat:@"Upload stats unavailable: %@", tokenError.localizedDescription ?: @"unknown error"];
+        return;
+    }
+
+    NSURL *url = [NSURL URLWithString:@"http://127.0.0.1:4817/admin/uploads/stats"];
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+    request.timeoutInterval = 8;
+    [request setValue:[NSString stringWithFormat:@"Bearer %@", token] forHTTPHeaderField:@"Authorization"];
+
+    __weak __typeof(self) weakSelf = self;
+    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request
+                                                                 completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            __strong __typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf) {
+                return;
+            }
+            if (error) {
+                strongSelf.uploadsStatusLabel.stringValue = [NSString stringWithFormat:@"Upload stats failed: %@", error.localizedDescription];
+                return;
+            }
+            NSInteger statusCode = [(NSHTTPURLResponse *)response statusCode];
+            if (statusCode != 200 || !data.length) {
+                strongSelf.uploadsStatusLabel.stringValue = [NSString stringWithFormat:@"Bridge returned HTTP %ld.", (long)statusCode];
+                return;
+            }
+            [strongSelf handleUploadStatsData:data];
+        });
+    }];
+    [task resume];
+}
+
+- (void)handleUploadStatsData:(NSData *)data {
+    NSError *jsonError = nil;
+    NSDictionary *payload = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
+    if (![payload isKindOfClass:NSDictionary.class]) {
+        self.uploadsStatusLabel.stringValue = [NSString stringWithFormat:@"Invalid upload stats: %@", jsonError.localizedDescription ?: @"not a JSON object"];
+        return;
+    }
+    NSNumber *fileCount = [payload[@"file_count"] isKindOfClass:NSNumber.class] ? payload[@"file_count"] : @(0);
+    NSNumber *totalBytes = [payload[@"total_bytes"] isKindOfClass:NSNumber.class] ? payload[@"total_bytes"] : @(0);
+    NSString *oldestString = [payload[@"oldest_mtime"] isKindOfClass:NSString.class] ? payload[@"oldest_mtime"] : nil;
+    NSDate *oldest = [self dateFromISOString:oldestString];
+    NSString *oldestSuffix = oldest ? [NSString stringWithFormat:@" · oldest %@", [self shortStringForDate:oldest]] : @"";
+    self.uploadsStatusLabel.stringValue = [NSString stringWithFormat:@"%@ file%@ · %@%@",
+                                           fileCount,
+                                           fileCount.integerValue == 1 ? @"" : @"s",
+                                           [self byteCountString:totalBytes.longLongValue],
+                                           oldestSuffix];
+}
+
+- (void)cleanUploadsNow:(id)sender {
+    self.uploadsCleanButton.enabled = NO;
+    self.uploadsStatusLabel.stringValue = @"Cleaning uploads...";
+
+    NSError *tokenError = nil;
+    NSString *token = [self legacyPairTokenWithError:&tokenError];
+    if (!token.length) {
+        self.uploadsCleanButton.enabled = YES;
+        self.uploadsStatusLabel.stringValue = [NSString stringWithFormat:@"Clean failed: %@", tokenError.localizedDescription ?: @"unknown error"];
+        return;
+    }
+
+    NSURL *url = [NSURL URLWithString:@"http://127.0.0.1:4817/admin/uploads/sweep"];
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+    request.HTTPMethod = @"POST";
+    request.timeoutInterval = 20;
+    [request setValue:[NSString stringWithFormat:@"Bearer %@", token] forHTTPHeaderField:@"Authorization"];
+
+    __weak __typeof(self) weakSelf = self;
+    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request
+                                                                 completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            __strong __typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf) {
+                return;
+            }
+            strongSelf.uploadsCleanButton.enabled = YES;
+            if (error) {
+                strongSelf.uploadsStatusLabel.stringValue = [NSString stringWithFormat:@"Clean failed: %@", error.localizedDescription];
+                return;
+            }
+            NSInteger statusCode = [(NSHTTPURLResponse *)response statusCode];
+            if (statusCode != 200 || !data.length) {
+                strongSelf.uploadsStatusLabel.stringValue = [NSString stringWithFormat:@"Clean returned HTTP %ld.", (long)statusCode];
+                return;
+            }
+            NSDictionary *payload = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+            NSNumber *removed = [payload isKindOfClass:NSDictionary.class] && [payload[@"removed_file_count"] isKindOfClass:NSNumber.class] ? payload[@"removed_file_count"] : @(0);
+            NSNumber *freed = [payload isKindOfClass:NSDictionary.class] && [payload[@"freed_bytes"] isKindOfClass:NSNumber.class] ? payload[@"freed_bytes"] : @(0);
+            strongSelf.uploadsStatusLabel.stringValue = [NSString stringWithFormat:@"Cleaned %@ file%@ · freed %@",
+                                                         removed,
+                                                         removed.integerValue == 1 ? @"" : @"s",
+                                                         [strongSelf byteCountString:freed.longLongValue]];
+            [strongSelf refreshUploadStats];
+        });
+    }];
+    [task resume];
+}
+
+- (void)revealUploadsDirectory:(id)sender {
+    NSString *path = [self uploadsDirectoryPath];
+    [[NSFileManager defaultManager] createDirectoryAtPath:path
+                              withIntermediateDirectories:YES
+                                               attributes:nil
+                                                    error:nil];
+    [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:path isDirectory:YES]];
 }
 
 - (void)startDevicesRefreshTimer {
@@ -493,6 +659,21 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
         });
     }];
     [task resume];
+}
+
+- (NSString *)uploadsDirectoryPath {
+    return [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/Tidey Remote Bridge/uploads"];
+}
+
+- (NSString *)abbreviatedUploadsDirectoryPath {
+    return [@"~/" stringByAppendingString:@"Library/Application Support/Tidey Remote Bridge/uploads"];
+}
+
+- (NSString *)byteCountString:(long long)bytes {
+    NSByteCountFormatter *formatter = [[NSByteCountFormatter alloc] init];
+    formatter.countStyle = NSByteCountFormatterCountStyleFile;
+    formatter.allowedUnits = NSByteCountFormatterUseKB | NSByteCountFormatterUseMB | NSByteCountFormatterUseGB;
+    return [formatter stringFromByteCount:bytes];
 }
 
 - (NSString *)legacyPairTokenWithError:(NSError **)error {
@@ -722,7 +903,7 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 @implementation TideySettingsWindowController
 
 - (instancetype)init {
-    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 560, 580)
+    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 560, 700)
                                                    styleMask:(NSWindowStyleMaskTitled |
                                                               NSWindowStyleMaskClosable |
                                                               NSWindowStyleMaskMiniaturizable)
@@ -761,7 +942,7 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 - (void)buildUI {
     NSView *contentView = self.window.contentView;
     CGFloat windowWidth = 560;
-    CGFloat windowHeight = 580;
+    CGFloat windowHeight = 700;
 
     // Tab bar area: two pill buttons near the top
     CGFloat tabBarY = windowHeight - 52;
