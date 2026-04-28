@@ -68,11 +68,14 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 @property(nonatomic, strong) NSTextField *statusLabel;
 @property(nonatomic, strong) NSImageView *qrImageView;
 @property(nonatomic, strong) NSButton *refreshButton;
+@property(nonatomic, strong) NSView *devicesCardView;
 @property(nonatomic, strong) NSScrollView *devicesScrollView;
 @property(nonatomic, strong) NSView *devicesDocumentView;
 @property(nonatomic, strong) NSStackView *devicesStackView;
 @property(nonatomic, strong) NSTextField *devicesStatusLabel;
 @property(nonatomic, strong) NSTextField *uploadsStatusLabel;
+@property(nonatomic, strong) NSTextField *uploadsRetentionLabel;
+@property(nonatomic, strong) NSView *uploadsCardView;
 @property(nonatomic, strong) NSButton *uploadsRevealButton;
 @property(nonatomic, strong) NSButton *uploadsCleanButton;
 @property(nonatomic, strong) NSTimer *countdownTimer;
@@ -94,19 +97,19 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 - (void)loadView {
     NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 560, 636)];
     view.wantsLayer = YES;
-    view.layer.backgroundColor = [NSColor colorWithSRGBRed:0x1a/255.0 green:0x1a/255.0 blue:0x1a/255.0 alpha:1.0].CGColor;
+    view.layer.backgroundColor = [self windowBackgroundColor].CGColor;
 
-    NSRect titleFrame = NSMakeRect(32, 24, 496, 28);
-    NSRect introCardFrame = NSMakeRect(32, 68, 242, 184);
-    NSRect qrCardFrame = NSMakeRect(286, 68, 242, 184);
-    NSRect devicesTitleFrame = NSMakeRect(32, 276, 300, 18);
-    NSRect devicesStatusFrame = NSMakeRect(32, 300, 476, 34);
-    NSRect devicesListFrame = NSMakeRect(32, 300, 476, 96);
-    NSRect uploadsTitleFrame = NSMakeRect(32, 430, 220, 18);
-    NSRect uploadsStatusFrame = NSMakeRect(32, 452, 280, 18);
-    NSRect uploadsRevealButtonFrame = NSMakeRect(328, 448, 72, 26);
-    NSRect uploadsCleanButtonFrame = NSMakeRect(408, 448, 100, 26);
-    CGFloat documentHeight = NSMaxY(uploadsCleanButtonFrame) + 48;
+    static const CGFloat contentX = 20;
+    static const CGFloat contentWidth = 520;
+    static const CGFloat documentWidth = 560;
+    static const CGFloat bottomPadding = 48;
+    NSRect introFrame = NSMakeRect(24, 22, 460, 36);
+    NSRect pairCardFrame = NSMakeRect(contentX, 76, contentWidth, 334);
+    NSRect devicesTitleFrame = NSMakeRect(24, 442, 300, 18);
+    NSRect devicesCardFrame = NSMakeRect(contentX, 468, contentWidth, 58);
+    NSRect uploadsTitleFrame = NSMakeRect(24, 558, 220, 18);
+    NSRect uploadsCardFrame = NSMakeRect(contentX, 584, contentWidth, 62);
+    CGFloat documentHeight = NSMaxY(uploadsCardFrame) + bottomPadding;
 
     NSScrollView *scrollView = [[NSScrollView alloc] initWithFrame:view.bounds];
     scrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
@@ -116,123 +119,127 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     scrollView.borderType = NSNoBorder;
     [view addSubview:scrollView];
 
-    TideyFlippedView *documentView = [[TideyFlippedView alloc] initWithFrame:NSMakeRect(0, 0, 560, documentHeight)];
+    TideyFlippedView *documentView = [[TideyFlippedView alloc] initWithFrame:NSMakeRect(0, 0, documentWidth, documentHeight)];
     documentView.autoresizingMask = NSViewWidthSizable;
     documentView.wantsLayer = YES;
-    documentView.layer.backgroundColor = [NSColor colorWithSRGBRed:0x1a/255.0 green:0x1a/255.0 blue:0x1a/255.0 alpha:1.0].CGColor;
+    documentView.layer.backgroundColor = [self windowBackgroundColor].CGColor;
     scrollView.documentView = documentView;
 
-    NSTextField *titleLabel = [self labelWithFrame:titleFrame
-                                             string:@"Sync to Remote"
-                                               font:[NSFont systemFontOfSize:22 weight:NSFontWeightSemibold]
-                                              color:[NSColor colorWithSRGBRed:0xf4/255.0 green:0xf4/255.0 blue:0xf4/255.0 alpha:1.0]];
-    [documentView addSubview:titleLabel];
-
-    NSView *introCardView = [[NSView alloc] initWithFrame:introCardFrame];
-    introCardView.wantsLayer = YES;
-    introCardView.layer.backgroundColor = [NSColor colorWithSRGBRed:0x22/255.0 green:0x22/255.0 blue:0x22/255.0 alpha:1.0].CGColor;
-    introCardView.layer.cornerRadius = 12;
-    introCardView.layer.borderWidth = 1;
-    introCardView.layer.borderColor = [NSColor colorWithSRGBRed:0x33/255.0 green:0x33/255.0 blue:0x33/255.0 alpha:1.0].CGColor;
-    [documentView addSubview:introCardView];
-
-    NSTextField *bodyLabel = [self labelWithFrame:NSMakeRect(20, 58, 202, 72)
-                                            string:@"Pair Tidey Remote on your phone with this Mac. The LAN QR code will appear here once the Bridge is available."
-                                              font:[NSFont systemFontOfSize:13 weight:NSFontWeightRegular]
-                                             color:[NSColor colorWithSRGBRed:0x9a/255.0 green:0x9a/255.0 blue:0x9a/255.0 alpha:1.0]];
-    bodyLabel.maximumNumberOfLines = 4;
+    NSTextField *bodyLabel = [self labelWithFrame:introFrame
+                                            string:@"Pair Tidey Remote on iPhone to control this Mac's terminal sessions remotely."
+                                              font:[NSFont systemFontOfSize:12 weight:NSFontWeightRegular]
+                                             color:[self secondaryTextColor]];
+    bodyLabel.maximumNumberOfLines = 2;
     bodyLabel.usesSingleLineMode = NO;
     bodyLabel.lineBreakMode = NSLineBreakByWordWrapping;
-    [introCardView addSubview:bodyLabel];
+    [documentView addSubview:bodyLabel];
 
-    NSView *qrCardView = [[NSView alloc] initWithFrame:qrCardFrame];
-    qrCardView.wantsLayer = YES;
-    qrCardView.layer.backgroundColor = [NSColor colorWithSRGBRed:0x22/255.0 green:0x22/255.0 blue:0x22/255.0 alpha:1.0].CGColor;
-    qrCardView.layer.cornerRadius = 12;
-    qrCardView.layer.borderWidth = 1;
-    qrCardView.layer.borderColor = [NSColor colorWithSRGBRed:0x33/255.0 green:0x33/255.0 blue:0x33/255.0 alpha:1.0].CGColor;
+    NSView *qrCardView = [self cardViewWithFrame:pairCardFrame];
     [documentView addSubview:qrCardView];
 
-    self.qrImageView = [[NSImageView alloc] initWithFrame:NSMakeRect(65, 64, 112, 112)];
+    self.qrImageView = [[NSImageView alloc] initWithFrame:NSMakeRect(162, 28, 196, 196)];
     self.qrImageView.imageScaling = NSImageScaleProportionallyUpOrDown;
     self.qrImageView.wantsLayer = YES;
     self.qrImageView.layer.backgroundColor = NSColor.whiteColor.CGColor;
-    self.qrImageView.layer.cornerRadius = 10;
+    self.qrImageView.layer.cornerRadius = 4;
     [qrCardView addSubview:self.qrImageView];
 
-    self.statusLabel = [self labelWithFrame:NSMakeRect(20, 42, 202, 18)
+    NSTextField *captionLabel = [self labelWithFrame:NSMakeRect(24, 238, 472, 18)
+                                              string:@"Scan with Tidey Remote on iPhone"
+                                                font:[NSFont systemFontOfSize:12 weight:NSFontWeightRegular]
+                                               color:[self secondaryTextColor]];
+    captionLabel.alignment = NSTextAlignmentCenter;
+    [qrCardView addSubview:captionLabel];
+
+    [qrCardView addSubview:[self dividerWithFrame:NSMakeRect(0, 286, contentWidth, 0.5)]];
+
+    NSTextField *expiresPrefixLabel = [self labelWithFrame:NSMakeRect(18, 301, 62, 16)
+                                                    string:@"Expires in"
+                                                      font:[self tabularFontOfSize:12 weight:NSFontWeightRegular]
+                                                     color:[self secondaryTextColor]];
+    [qrCardView addSubview:expiresPrefixLabel];
+
+    self.statusLabel = [self labelWithFrame:NSMakeRect(80, 301, 160, 16)
                                      string:@""
-                                       font:[NSFont systemFontOfSize:12 weight:NSFontWeightRegular]
-                                      color:[NSColor colorWithSRGBRed:0xaa/255.0 green:0xaa/255.0 blue:0xaa/255.0 alpha:1.0]];
-    self.statusLabel.alignment = NSTextAlignmentCenter;
+                                       font:[self tabularFontOfSize:12 weight:NSFontWeightMedium]
+                                      color:[self accentColor]];
     self.statusLabel.lineBreakMode = NSLineBreakByTruncatingTail;
     [qrCardView addSubview:self.statusLabel];
 
-    self.refreshButton = [NSButton buttonWithTitle:@"Refresh"
-                                            target:self
-                                            action:@selector(refreshPairPayload:)];
-    self.refreshButton.frame = NSMakeRect(122, 10, 100, 28);
-    self.refreshButton.bezelStyle = NSBezelStyleRounded;
+    self.refreshButton = [self actionButtonWithTitle:@"Refresh"
+                                               frame:NSMakeRect(404, 297, 100, 26)
+                                              action:@selector(refreshPairPayload:)
+                                         destructive:NO];
     [qrCardView addSubview:self.refreshButton];
 
     NSTextField *devicesTitleLabel = [self labelWithFrame:devicesTitleFrame
-                                                   string:@"Paired devices"
-                                                     font:[NSFont systemFontOfSize:14 weight:NSFontWeightBold]
-                                                    color:[NSColor colorWithSRGBRed:0xf4/255.0 green:0xf4/255.0 blue:0xf4/255.0 alpha:1.0]];
+                                                   string:@"Paired Devices"
+                                                     font:[NSFont systemFontOfSize:13 weight:NSFontWeightSemibold]
+                                                    color:[self primaryTextColor]];
     [documentView addSubview:devicesTitleLabel];
 
-    self.devicesStatusLabel = [self labelWithFrame:devicesStatusFrame
+    self.devicesCardView = [self cardViewWithFrame:devicesCardFrame];
+    [documentView addSubview:self.devicesCardView];
+
+    self.devicesStatusLabel = [self labelWithFrame:NSMakeRect(16, 12, 488, 34)
                                             string:@"Loading paired devices..."
                                               font:[NSFont systemFontOfSize:12 weight:NSFontWeightRegular]
-                                             color:[NSColor colorWithSRGBRed:0xaa/255.0 green:0xaa/255.0 blue:0xaa/255.0 alpha:1.0]];
+                                             color:[self tertiaryTextColor]];
     self.devicesStatusLabel.maximumNumberOfLines = 2;
     self.devicesStatusLabel.usesSingleLineMode = NO;
     self.devicesStatusLabel.lineBreakMode = NSLineBreakByWordWrapping;
-    [documentView addSubview:self.devicesStatusLabel];
+    [self.devicesCardView addSubview:self.devicesStatusLabel];
 
-    self.devicesScrollView = [[NSScrollView alloc] initWithFrame:devicesListFrame];
+    self.devicesScrollView = [[NSScrollView alloc] initWithFrame:self.devicesCardView.bounds];
     self.devicesScrollView.drawsBackground = NO;
     self.devicesScrollView.hasVerticalScroller = YES;
     self.devicesScrollView.autohidesScrollers = YES;
     self.devicesScrollView.borderType = NSNoBorder;
     self.devicesScrollView.hidden = YES;
-    [documentView addSubview:self.devicesScrollView];
+    [self.devicesCardView addSubview:self.devicesScrollView];
 
-    self.devicesDocumentView = [[TideyFlippedView alloc] initWithFrame:NSMakeRect(0, 0, 476, 96)];
+    self.devicesDocumentView = [[TideyFlippedView alloc] initWithFrame:NSMakeRect(0, 0, contentWidth, NSHeight(devicesCardFrame))];
     self.devicesScrollView.documentView = self.devicesDocumentView;
 
-    self.devicesStackView = [[NSStackView alloc] initWithFrame:NSMakeRect(0, 0, 476, 0)];
+    self.devicesStackView = [[NSStackView alloc] initWithFrame:NSMakeRect(0, 0, contentWidth, 0)];
     self.devicesStackView.orientation = NSUserInterfaceLayoutOrientationVertical;
     self.devicesStackView.alignment = NSLayoutAttributeLeading;
     self.devicesStackView.distribution = NSStackViewDistributionFill;
-    self.devicesStackView.spacing = 8;
+    self.devicesStackView.spacing = 0;
     [self.devicesDocumentView addSubview:self.devicesStackView];
 
     NSTextField *uploadsTitleLabel = [self labelWithFrame:uploadsTitleFrame
-                                                   string:@"Remote uploads"
-                                                     font:[NSFont systemFontOfSize:14 weight:NSFontWeightBold]
-                                                    color:[NSColor colorWithSRGBRed:0xf4/255.0 green:0xf4/255.0 blue:0xf4/255.0 alpha:1.0]];
+                                                   string:@"Remote Uploads"
+                                                     font:[NSFont systemFontOfSize:13 weight:NSFontWeightSemibold]
+                                                    color:[self primaryTextColor]];
     [documentView addSubview:uploadsTitleLabel];
 
-    self.uploadsStatusLabel = [self labelWithFrame:uploadsStatusFrame
+    self.uploadsCardView = [self cardViewWithFrame:uploadsCardFrame];
+    [documentView addSubview:self.uploadsCardView];
+
+    self.uploadsStatusLabel = [self labelWithFrame:NSMakeRect(16, 12, 220, 18)
                                             string:@"Loading upload usage..."
-                                              font:[NSFont systemFontOfSize:12 weight:NSFontWeightRegular]
-                                             color:[NSColor colorWithSRGBRed:0xaa/255.0 green:0xaa/255.0 blue:0xaa/255.0 alpha:1.0]];
-    [documentView addSubview:self.uploadsStatusLabel];
+                                              font:[self tabularFontOfSize:13 weight:NSFontWeightMedium]
+                                             color:[self primaryTextColor]];
+    [self.uploadsCardView addSubview:self.uploadsStatusLabel];
 
-    self.uploadsRevealButton = [NSButton buttonWithTitle:@"Reveal"
-                                                  target:self
-                                                  action:@selector(revealUploadsDirectory:)];
-    self.uploadsRevealButton.frame = uploadsRevealButtonFrame;
-    self.uploadsRevealButton.bezelStyle = NSBezelStyleRounded;
-    [documentView addSubview:self.uploadsRevealButton];
+    self.uploadsRetentionLabel = [self labelWithFrame:NSMakeRect(16, 32, 240, 16)
+                                               string:@"Uploads are kept for 7 days"
+                                                 font:[NSFont systemFontOfSize:11 weight:NSFontWeightRegular]
+                                                color:[self secondaryTextColor]];
+    [self.uploadsCardView addSubview:self.uploadsRetentionLabel];
 
-    self.uploadsCleanButton = [NSButton buttonWithTitle:@"Clean Now"
-                                                 target:self
-                                                 action:@selector(cleanUploadsNow:)];
-    self.uploadsCleanButton.frame = uploadsCleanButtonFrame;
-    self.uploadsCleanButton.bezelStyle = NSBezelStyleRounded;
-    [documentView addSubview:self.uploadsCleanButton];
+    self.uploadsRevealButton = [self actionButtonWithTitle:@"Reveal"
+                                                     frame:NSMakeRect(332, 18, 72, 26)
+                                                    action:@selector(revealUploadsDirectory:)
+                                               destructive:NO];
+    [self.uploadsCardView addSubview:self.uploadsRevealButton];
+
+    self.uploadsCleanButton = [self actionButtonWithTitle:@"Clean Now"
+                                                    frame:NSMakeRect(412, 18, 92, 26)
+                                                   action:@selector(cleanUploadsNow:)
+                                              destructive:NO];
+    [self.uploadsCardView addSubview:self.uploadsCleanButton];
 
     self.view = view;
 }
@@ -255,6 +262,78 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 - (void)viewWillDisappear {
     [super viewWillDisappear];
     [self stopDevicesRefreshTimer];
+}
+
+- (NSColor *)windowBackgroundColor {
+    return [NSColor colorWithSRGBRed:0x1e/255.0 green:0x1e/255.0 blue:0x1e/255.0 alpha:1.0];
+}
+
+- (NSColor *)cardBackgroundColor {
+    return [NSColor colorWithSRGBRed:0x2a/255.0 green:0x2a/255.0 blue:0x2c/255.0 alpha:1.0];
+}
+
+- (NSColor *)cardBorderColor {
+    return [NSColor colorWithSRGBRed:1 green:1 blue:1 alpha:0.06];
+}
+
+- (NSColor *)dividerColor {
+    return [NSColor colorWithSRGBRed:1 green:1 blue:1 alpha:0.07];
+}
+
+- (NSColor *)primaryTextColor {
+    return [NSColor colorWithSRGBRed:1 green:1 blue:1 alpha:0.92];
+}
+
+- (NSColor *)secondaryTextColor {
+    return [NSColor colorWithSRGBRed:235/255.0 green:235/255.0 blue:245/255.0 alpha:0.55];
+}
+
+- (NSColor *)tertiaryTextColor {
+    return [NSColor colorWithSRGBRed:235/255.0 green:235/255.0 blue:245/255.0 alpha:0.28];
+}
+
+- (NSColor *)accentColor {
+    return [NSColor colorWithSRGBRed:0x0a/255.0 green:0x84/255.0 blue:0xff/255.0 alpha:1.0];
+}
+
+- (NSColor *)destructiveColor {
+    return [NSColor colorWithSRGBRed:0xff/255.0 green:0x45/255.0 blue:0x3a/255.0 alpha:1.0];
+}
+
+- (NSFont *)tabularFontOfSize:(CGFloat)size weight:(NSFontWeight)weight {
+    return [NSFont monospacedDigitSystemFontOfSize:size weight:weight];
+}
+
+- (NSView *)cardViewWithFrame:(NSRect)frame {
+    TideyFlippedView *view = [[TideyFlippedView alloc] initWithFrame:frame];
+    view.wantsLayer = YES;
+    view.layer.backgroundColor = [self cardBackgroundColor].CGColor;
+    view.layer.cornerRadius = 10;
+    view.layer.borderWidth = 0.5;
+    view.layer.borderColor = [self cardBorderColor].CGColor;
+    return view;
+}
+
+- (NSView *)dividerWithFrame:(NSRect)frame {
+    NSView *view = [[NSView alloc] initWithFrame:frame];
+    view.wantsLayer = YES;
+    view.layer.backgroundColor = [self dividerColor].CGColor;
+    return view;
+}
+
+- (NSButton *)actionButtonWithTitle:(NSString *)title frame:(NSRect)frame action:(SEL)action destructive:(BOOL)destructive {
+    NSButton *button = [NSButton buttonWithTitle:title target:self action:action];
+    button.frame = frame;
+    button.bezelStyle = NSBezelStyleRounded;
+    NSMutableParagraphStyle *style = [[NSMutableParagraphStyle alloc] init];
+    style.alignment = NSTextAlignmentCenter;
+    button.attributedTitle = [[NSAttributedString alloc] initWithString:title
+                                                             attributes:@{
+        NSFontAttributeName: [NSFont systemFontOfSize:12 weight:NSFontWeightMedium],
+        NSForegroundColorAttributeName: destructive ? [self destructiveColor] : [self primaryTextColor],
+        NSParagraphStyleAttributeName: style,
+    }];
+    return button;
 }
 
 - (NSTextField *)labelWithFrame:(NSRect)frame string:(NSString *)string font:(NSFont *)font color:(NSColor *)color {
@@ -416,7 +495,7 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     }
     NSNumber *fileCount = [payload[@"file_count"] isKindOfClass:NSNumber.class] ? payload[@"file_count"] : @(0);
     NSNumber *totalBytes = [payload[@"total_bytes"] isKindOfClass:NSNumber.class] ? payload[@"total_bytes"] : @(0);
-    self.uploadsStatusLabel.stringValue = [NSString stringWithFormat:@"%@ file%@ · %@ · 7-day retention",
+    self.uploadsStatusLabel.stringValue = [NSString stringWithFormat:@"%@ file%@ · %@",
                                            fileCount,
                                            fileCount.integerValue == 1 ? @"" : @"s",
                                            [self byteCountString:totalBytes.longLongValue]];
@@ -537,10 +616,10 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 }
 
 - (void)updateDeviceRowsFrameForCount:(NSUInteger)count {
-    static const CGFloat rowHeight = 34;
-    static const CGFloat rowSpacing = 8;
-    static const CGFloat width = 476;
-    static const CGFloat visibleHeight = 96;
+    static const CGFloat rowHeight = 58;
+    static const CGFloat rowSpacing = 0;
+    static const CGFloat width = 520;
+    static const CGFloat visibleHeight = 58;
     CGFloat contentHeight = count == 0 ? 0 : rowHeight * count + rowSpacing * (count - 1);
     CGFloat documentHeight = MAX(visibleHeight, contentHeight);
     self.devicesDocumentView.frame = NSMakeRect(0, 0, width, documentHeight);
@@ -550,33 +629,32 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 }
 
 - (NSView *)rowViewForDevice:(NSDictionary *)device {
-    NSView *row = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 476, 34)];
-    [row.heightAnchor constraintEqualToConstant:34].active = YES;
+    TideyFlippedView *row = [[TideyFlippedView alloc] initWithFrame:NSMakeRect(0, 0, 520, 58)];
+    [row.heightAnchor constraintEqualToConstant:58].active = YES;
     NSString *deviceID = [device[@"device_id"] isKindOfClass:NSString.class] ? device[@"device_id"] : @"";
     NSString *deviceName = [device[@"device_name"] isKindOfClass:NSString.class] ? device[@"device_name"] : @"Unknown device";
     NSDate *pairedAt = [self dateFromISOString:[device[@"paired_at"] isKindOfClass:NSString.class] ? device[@"paired_at"] : nil];
     NSDate *lastSeenAt = [self dateFromISOString:[device[@"last_connected_at"] isKindOfClass:NSString.class] ? device[@"last_connected_at"] : nil];
 
-    NSTextField *nameLabel = [self labelWithFrame:NSMakeRect(0, 16, 360, 18)
+    NSTextField *nameLabel = [self labelWithFrame:NSMakeRect(16, 12, 360, 18)
                                            string:deviceName
-                                             font:[NSFont systemFontOfSize:12 weight:NSFontWeightMedium]
-                                            color:[NSColor colorWithSRGBRed:0xf4/255.0 green:0xf4/255.0 blue:0xf4/255.0 alpha:1.0]];
+                                             font:[NSFont systemFontOfSize:13 weight:NSFontWeightMedium]
+                                            color:[self primaryTextColor]];
     [row addSubview:nameLabel];
 
     NSString *detail = [NSString stringWithFormat:@"Paired %@ · Last seen %@",
                         [self shortStringForDate:pairedAt] ?: @"unknown",
                         [self shortStringForDate:lastSeenAt] ?: @"never"];
-    NSTextField *detailLabel = [self labelWithFrame:NSMakeRect(0, 0, 360, 16)
+    NSTextField *detailLabel = [self labelWithFrame:NSMakeRect(16, 32, 360, 16)
                                              string:detail
-                                               font:[NSFont systemFontOfSize:11 weight:NSFontWeightRegular]
-                                              color:[NSColor colorWithSRGBRed:0x99/255.0 green:0x99/255.0 blue:0x99/255.0 alpha:1.0]];
+                                               font:[self tabularFontOfSize:11 weight:NSFontWeightRegular]
+                                              color:[self secondaryTextColor]];
     [row addSubview:detailLabel];
 
-    NSButton *revokeButton = [NSButton buttonWithTitle:@"Revoke"
-                                                target:self
-                                                action:@selector(revokeDevice:)];
-    revokeButton.frame = NSMakeRect(380, 4, 96, 26);
-    revokeButton.bezelStyle = NSBezelStyleRounded;
+    NSButton *revokeButton = [self actionButtonWithTitle:@"Revoke"
+                                                   frame:NSMakeRect(408, 16, 96, 26)
+                                                  action:@selector(revokeDevice:)
+                                             destructive:YES];
     revokeButton.identifier = deviceID ?: @"";
     revokeButton.enabled = deviceID.length > 0;
     [row addSubview:revokeButton];
@@ -679,8 +757,8 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 
     NSArray *endpoints = [payload[@"lan_endpoints"] isKindOfClass:NSArray.class] ? payload[@"lan_endpoints"] : @[];
     if (!endpoints.count) {
-        self.statusLabel.stringValue = @"No active LAN endpoint found. Connect this Mac to Wi-Fi or Ethernet, then refresh.";
-        self.statusLabel.toolTip = self.statusLabel.stringValue;
+        self.statusLabel.stringValue = @"Unavailable";
+        self.statusLabel.toolTip = @"Connect this Mac to Wi-Fi or Ethernet, then refresh.";
         self.qrImageView.image = nil;
         return;
     }
@@ -756,8 +834,8 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 
 - (void)showError:(NSString *)message {
     self.refreshButton.enabled = YES;
-    self.statusLabel.stringValue = message ?: @"Unable to create a pairing code.";
-    self.statusLabel.toolTip = self.statusLabel.stringValue;
+    self.statusLabel.stringValue = @"Unavailable";
+    self.statusLabel.toolTip = message ?: @"Unable to create a pairing code.";
     self.qrImageView.image = nil;
 }
 
