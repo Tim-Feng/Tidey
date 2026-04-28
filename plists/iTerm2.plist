@@ -283,11 +283,13 @@
 		</dict>
 	</dict>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>An application in Tidey wants to use AppleScript.</string>
+	<string>A terminal command running in Tidey wants to control another app with AppleScript.</string>
+	<key>NSAppleMusicUsageDescription</key>
+	<string>A terminal command running in Tidey wants to access your Apple Music library.</string>
 	<key>NSAppleScriptEnabled</key>
 	<string>YES</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>An application in Tidey wants to use Bluetooth.</string>
+	<string>A terminal command running in Tidey wants to use Bluetooth.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_ssh._tcp.</string>
@@ -295,17 +297,23 @@
 		<string>_telnet._tcp.</string>
 	</array>
 	<key>NSCalendarsUsageDescription</key>
-	<string>An application in Tidey wants to use Calendar data.</string>
+	<string>A terminal command running in Tidey wants to access Calendar data.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>An application in Tidey wants to use the camera.</string>
+	<string>A terminal command running in Tidey wants to use the camera.</string>
 	<key>NSContactsUsageDescription</key>
-	<string>An application in Tidey wants to use your contacts.</string>
+	<string>A terminal command running in Tidey wants to access your contacts.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>A terminal command running in Tidey wants to access files in your Desktop folder.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>A terminal command running in Tidey wants to access files in your Documents folder.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>A terminal command running in Tidey wants to access files in your Downloads folder.</string>
 	<key>NSExtensions</key>
 	<dict/>
 	<key>NSHumanReadableCopyright</key>
 	<string>GPL v2</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>An application in Tidey wants to access the local network.</string>
+	<string>A terminal command running in Tidey wants to access the local network.</string>
 	<key>NSLocationAlwaysUsageDescription</key>
 	<string>An application in Tidey wants to use your location information, even in the background.</string>
 	<key>NSLocationUsageDescription</key>
@@ -315,13 +323,17 @@
 	<key>NSMainNibFile</key>
 	<string>MainMenu</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>An application in Tidey wants to use your microphone.</string>
+	<string>A terminal command running in Tidey wants to use your microphone.</string>
+	<key>NSNetworkVolumesUsageDescription</key>
+	<string>A terminal command running in Tidey wants to access files on a network volume.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>An application in Tidey wants to use the photo library.</string>
+	<string>A terminal command running in Tidey wants to access your photo library.</string>
 	<key>NSPrincipalClass</key>
 	<string>iTermApplication</string>
 	<key>NSRemindersUsageDescription</key>
-	<string>An application in Tidey wants to use your reminders.</string>
+	<string>A terminal command running in Tidey wants to access your reminders.</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>A terminal command running in Tidey wants to access files on a removable volume.</string>
 	<key>NSServices</key>
 	<array>
 		<dict>
