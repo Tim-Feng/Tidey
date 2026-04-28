@@ -45,6 +45,17 @@ final class BridgeImageUploadHandlerTests: XCTestCase {
         XCTAssertTrue(isDirectory.boolValue)
     }
 
+    func testApplicationSupportDestinationResolverUsesBridgeUploadsDirectory() throws {
+        let supportDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        let resolver = ApplicationSupportImageUploadDestinationResolver(paths: paths)
+
+        XCTAssertEqual(try resolver.uploadDirectory().path,
+                       supportDirectory.appendingPathComponent("uploads", isDirectory: true).path)
+        XCTAssertFalse(try resolver.uploadDirectory().path.contains("/Downloads/"))
+    }
+
     func testImageUploadRejectsDecodedPayloadOverHardLimit() throws {
         let fixture = try makeImageUploadFixture()
         let bytes = Data(repeating: 1, count: 10 * 1024 * 1024 + 1)

@@ -495,7 +495,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
     private lazy var inputActionHandler = BridgeInputActionHandler(socketSender: socketClient,
                                                                    sessionResolver: registryMonitor)
     private lazy var fileActionHandler = BridgeFileActionHandler(rootResolver: TideyPanelFileRootResolver(socketSender: socketClient))
-    private lazy var imageUploadHandler = BridgeImageUploadHandler(destinationResolver: DownloadsImageUploadDestinationResolver(),
+    private lazy var imageUploadHandler = BridgeImageUploadHandler(destinationResolver: ApplicationSupportImageUploadDestinationResolver(),
                                                                    filenameGenerator: TimestampedImageUploadFilenameGenerator())
     private var agentSubscriptionID: UUID?
     private var workspaceSubscriptionID: UUID?

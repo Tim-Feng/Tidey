@@ -8,6 +8,7 @@ struct BridgePaths {
     let cloudflaredStateFileURL: URL
     let resolverPublishSecretFileURL: URL
     let agentSessionsDirectory: URL
+    let uploadsDirectory: URL
 
     init(supportDirectory: URL) {
         self.supportDirectory = supportDirectory
@@ -17,6 +18,7 @@ struct BridgePaths {
         cloudflaredStateFileURL = supportDirectory.appendingPathComponent("cloudflared-state.json", isDirectory: false)
         resolverPublishSecretFileURL = supportDirectory.appendingPathComponent("resolver-publish-secret.json", isDirectory: false)
         agentSessionsDirectory = supportDirectory.appendingPathComponent("agent-sessions", isDirectory: true)
+        uploadsDirectory = supportDirectory.appendingPathComponent("uploads", isDirectory: true)
     }
 
     init(fileManager: FileManager = .default) {
@@ -41,6 +43,7 @@ struct BridgePaths {
     func ensureSupportDirectoriesExist(fileManager: FileManager = .default) throws {
         try fileManager.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: agentSessionsDirectory, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: uploadsDirectory, withIntermediateDirectories: true)
         for vendor in AgentVendorRegistry.all {
             try fileManager.createDirectory(at: agentSessionsDirectory(for: vendor.registryDirectoryName),
                                             withIntermediateDirectories: true)

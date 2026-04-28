@@ -83,14 +83,15 @@ struct BridgeImageUploadHandler {
     }
 }
 
-struct DownloadsImageUploadDestinationResolver: BridgeImageUploadDestinationResolving {
+struct ApplicationSupportImageUploadDestinationResolver: BridgeImageUploadDestinationResolving {
+    let paths: BridgePaths
+
+    init(paths: BridgePaths = BridgePaths()) {
+        self.paths = paths
+    }
+
     func uploadDirectory() throws -> URL {
-        if let downloadsURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first {
-            return downloadsURL.appendingPathComponent("Tidey-Remote", isDirectory: true)
-        }
-        return URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
-            .appendingPathComponent("Downloads", isDirectory: true)
-            .appendingPathComponent("Tidey-Remote", isDirectory: true)
+        paths.uploadsDirectory
     }
 }
 
