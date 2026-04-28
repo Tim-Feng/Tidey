@@ -23,6 +23,7 @@ final class BridgePairingTests: XCTestCase {
         XCTAssertEqual(payload.displayName, "Tim's Mac")
         XCTAssertEqual(payload.lanEndpoints, [endpoint])
         XCTAssertNil(payload.tunnelEndpoint)
+        XCTAssertNil(payload.resolverEndpoint)
         XCTAssertEqual(payload.pairSecret, "pair-secret-1")
         XCTAssertEqual(payload.issuedAt, fixture.startDate)
         XCTAssertEqual(payload.expiresAt, fixture.startDate.addingTimeInterval(300))
@@ -410,6 +411,16 @@ final class BridgePairingTests: XCTestCase {
                                                                tunnelEndpoint: tunnelEndpoint)
 
         XCTAssertEqual(payload.tunnelEndpoint, tunnelEndpoint)
+    }
+
+    func testPairPayloadIncludesResolverEndpointWhenProvided() throws {
+        let fixture = try PairingFixture()
+        let resolverEndpoint = URL(string: "https://tidey-remote-resolver.fsjforever26.workers.dev")!
+
+        let payload = try fixture.controller.createPairPayload(lanEndpoints: [],
+                                                               resolverEndpoint: resolverEndpoint)
+
+        XCTAssertEqual(payload.resolverEndpoint, resolverEndpoint)
     }
 }
 

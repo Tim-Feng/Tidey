@@ -23,6 +23,7 @@ struct BridgePairPayload: Codable, Equatable, Sendable {
     let displayName: String
     let lanEndpoints: [BridgePairEndpoint]
     let tunnelEndpoint: BridgePairEndpoint?
+    let resolverEndpoint: URL?
     let pairSecret: String
     let issuedAt: Date
     let expiresAt: Date
@@ -34,6 +35,7 @@ struct BridgePairPayload: Codable, Equatable, Sendable {
         case displayName = "display_name"
         case lanEndpoints = "lan_endpoints"
         case tunnelEndpoint = "tunnel_endpoint"
+        case resolverEndpoint = "resolver_endpoint"
         case pairSecret = "pair_secret"
         case issuedAt = "issued_at"
         case expiresAt = "expires_at"
@@ -296,7 +298,8 @@ final class BridgePairSessionStore {
 
     func createPayload(hostIdentity: BridgeHostIdentity,
                        lanEndpoints: [BridgePairEndpoint],
-                       tunnelEndpoint: BridgePairEndpoint? = nil) throws -> BridgePairPayload {
+                       tunnelEndpoint: BridgePairEndpoint? = nil,
+                       resolverEndpoint: URL? = nil) throws -> BridgePairPayload {
         pruneExpired()
         let issuedAt = nowProvider()
         let expiresAt = issuedAt.addingTimeInterval(lifetime)
@@ -310,6 +313,7 @@ final class BridgePairSessionStore {
                                  displayName: hostIdentity.displayName,
                                  lanEndpoints: lanEndpoints,
                                  tunnelEndpoint: tunnelEndpoint,
+                                 resolverEndpoint: resolverEndpoint,
                                  pairSecret: secret,
                                  issuedAt: issuedAt,
                                  expiresAt: expiresAt)
@@ -469,11 +473,13 @@ final class BridgePairingController {
     }
 
     func createPairPayload(lanEndpoints: [BridgePairEndpoint],
-                           tunnelEndpoint: BridgePairEndpoint? = nil) throws -> BridgePairPayload {
+                           tunnelEndpoint: BridgePairEndpoint? = nil,
+                           resolverEndpoint: URL? = nil) throws -> BridgePairPayload {
         let identity = try hostIdentityStore.loadOrCreateIdentity()
         return try pairSessionStore.createPayload(hostIdentity: identity,
                                                   lanEndpoints: lanEndpoints,
-                                                  tunnelEndpoint: tunnelEndpoint)
+                                                  tunnelEndpoint: tunnelEndpoint,
+                                                  resolverEndpoint: resolverEndpoint)
     }
 
     func exchange(_ request: BridgePairExchangeRequest) throws -> BridgePairExchangeResult {

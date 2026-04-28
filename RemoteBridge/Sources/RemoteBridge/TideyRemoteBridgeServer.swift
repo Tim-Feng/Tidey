@@ -247,7 +247,8 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
             cloudflaredManager.ensureSupervisorRunning()
             let tunnelStatus = cloudflaredManager.currentStatus()
             let payload = try pairingController.createPairPayload(lanEndpoints: endpoints,
-                                                                  tunnelEndpoint: tunnelStatus.endpoint)
+                                                                  tunnelEndpoint: tunnelStatus.endpoint,
+                                                                  resolverEndpoint: BridgeResolverConfiguration.resolverBaseURL())
             let data = try encoder.encode(payload)
             respond(status: .ok,
                     data: data,
