@@ -131,8 +131,9 @@
         int fds[2] = { -1, -1 };
         XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, fds), 0);
         [server acceptFileDescriptor:fds[0]];
+        int writeFD = fds[1];
         dispatch_async(closeQueue, ^{
-            close(fds[1]);
+            close(writeFD);
         });
     }
 
