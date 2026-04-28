@@ -835,6 +835,64 @@ final class PathTests: XCTestCase {
         XCTAssertEqual(candidate?["endX"] as? Int, (text as NSString).range(of: "repo").location + 3)
     }
 
+    func testURLLikeCandidateStopsBeforeChineseTrailingPunctuation() {
+        let suffixes = ["、", "，", "。", "「", "」", "！", "？", "；", "：", "（", "）", "【", "】"]
+        for suffix in suffixes {
+            let text = "進 https://claude.ai/admin-settings/claude-code\(suffix)看是否有"
+            let clickIndex = (text as NSString).range(of: "claude").location
+            let coordinates = gridCoordinates(for: text, width: 200)
+
+            let candidate = urlHitCandidate(logicalString: text,
+                                            clickIndex: clickIndex,
+                                            columns: coordinates.columns,
+                                            rows: coordinates.rows)
+            let joinedCandidate = preferredURLLikeCandidate(primaryJoined: text,
+                                                            fallbackJoined: text,
+                                                            clickIndex: clickIndex,
+                                                            respectHardNewlines: true)
+            let action = openURLAction(text: text, clickIndex: clickIndex)
+
+            XCTAssertEqual(candidate?["url"] as? String,
+                           "https://claude.ai/admin-settings/claude-code",
+                           "suffix: \(suffix)")
+            XCTAssertEqual(joinedCandidate,
+                           "https://claude.ai/admin-settings/claude-code",
+                           "suffix: \(suffix)")
+            XCTAssertEqual(action?["url"] as? String,
+                           "https://claude.ai/admin-settings/claude-code",
+                           "suffix: \(suffix)")
+        }
+    }
+
+    func testURLLikeCandidateStartsAfterChineseLeadingPunctuation() {
+        let prefixes = ["網址：", "（", "【", "「"]
+        for prefix in prefixes {
+            let text = "\(prefix)https://claude.ai/admin-settings/claude-code"
+            let clickIndex = (text as NSString).range(of: "claude").location
+            let coordinates = gridCoordinates(for: text, width: 200)
+
+            let candidate = urlHitCandidate(logicalString: text,
+                                            clickIndex: clickIndex,
+                                            columns: coordinates.columns,
+                                            rows: coordinates.rows)
+            let joinedCandidate = preferredURLLikeCandidate(primaryJoined: text,
+                                                            fallbackJoined: text,
+                                                            clickIndex: clickIndex,
+                                                            respectHardNewlines: true)
+            let action = openURLAction(text: text, clickIndex: clickIndex)
+
+            XCTAssertEqual(candidate?["url"] as? String,
+                           "https://claude.ai/admin-settings/claude-code",
+                           "prefix: \(prefix)")
+            XCTAssertEqual(joinedCandidate,
+                           "https://claude.ai/admin-settings/claude-code",
+                           "prefix: \(prefix)")
+            XCTAssertEqual(action?["url"] as? String,
+                           "https://claude.ai/admin-settings/claude-code",
+                           "prefix: \(prefix)")
+        }
+    }
+
     func testOSC8LabelPlainClickCandidateOpensExternalURL() {
         let text = "download DMG"
         let url = "https://github.com/Tim-Feng/Tidey/releases/download/v0.3.1/Tidey.dmg"
