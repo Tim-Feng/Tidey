@@ -1,6 +1,15 @@
 import CryptoKit
 import Foundation
 
+enum BridgeFileReadDiagnostics {
+    static func log(_ message: String) {
+        BridgeLogger.server.info("[file_read] \(message, privacy: .public)")
+        if let data = "[file_read] \(message)\n".data(using: .utf8) {
+            FileHandle.standardError.write(data)
+        }
+    }
+}
+
 protocol PanelFileRootResolving {
     func rootPath(workspaceID: String, panelID: String) throws -> String
 }
@@ -67,6 +76,8 @@ struct BridgeFileActionHandler {
 
     private func readFile(_ request: BridgeRequest) throws -> BridgeResponse {
         let params = try BridgeFileReadRequest(params: request.params)
+        let expandedPath = expandTilde(in: params.path)
+        BridgeFileReadDiagnostics.log("start request_id=\(request.id) requested_path=\(params.path) expanded_path=\(expandedPath) workspace_id=\(params.workspaceID) panel_id=\(params.panelID)")
         let resolved = try resolveFile(path: params.path,
                                        workspaceID: params.workspaceID,
                                        panelID: params.panelID,
@@ -110,6 +121,7 @@ struct BridgeFileActionHandler {
             "read_only": .bool(resolved.isReadOnlyOutsideRoot || !isWritable),
             "reason": readOnlyReason,
         ]
+        BridgeFileReadDiagnostics.log("success request_id=\(request.id) normalized_path=\(resolved.targetURL.path) bytes=\(data.count) content_count=\(content.count) read_only=\(resolved.isReadOnlyOutsideRoot || !isWritable) reason=\(resolved.isReadOnlyOutsideRoot ? "outside_workspace" : (!isWritable ? "permission_denied" : "-"))")
         return BridgeResponse(id: request.id, ok: true, result: result, error: nil)
     }
 
