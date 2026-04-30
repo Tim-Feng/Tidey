@@ -111,7 +111,8 @@ final class BridgeFileActionHandlerTests: XCTestCase {
         try "outside".write(to: outsideURL, atomically: true, encoding: .utf8)
 
         let handler = BridgeFileActionHandler(rootResolver: fixture.rootResolver,
-                                              fileManager: fixture.fileManager)
+                                              fileManager: fixture.fileManager,
+                                              homeDirectoryURL: fixture.homeURL)
 
         XCTAssertThrowsError(try handler.handle(BridgeRequest(id: "request-1",
                                                               action: "file_read",
@@ -119,6 +120,110 @@ final class BridgeFileActionHandlerTests: XCTestCase {
                                                                 "workspace_id": .string("workspace-1"),
                                                                 "panel_id": .string("panel-1"),
                                                                 "path": .string(outsideURL.path),
+                                                              ]))) { error in
+            guard case BridgeInternalError.fileOutsideRoot(let message) = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+            XCTAssertTrue(message.contains("允許編輯"))
+        }
+    }
+
+    func testFileReadExpandsTildeAndAllowsReadOnlyEditableDocumentUnderHome() throws {
+        let fixture = try makeFixture()
+        let fileURL = fixture.homeURL
+            .appendingPathComponent("GitHub/thought-seeds/thoughts/raw", isDirectory: true)
+            .appendingPathComponent("Andrej Karpathy - From Vibe Coding to Agentic Engineering.md")
+        try fixture.fileManager.createDirectory(at: fileURL.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try "notes".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let handler = BridgeFileActionHandler(rootResolver: fixture.rootResolver,
+                                              fileManager: fixture.fileManager,
+                                              homeDirectoryURL: fixture.homeURL)
+        let response = try XCTUnwrap(handler.handle(BridgeRequest(id: "request-1",
+                                                                  action: "file_read",
+                                                                  params: [
+                                                                    "workspace_id": .string("workspace-1"),
+                                                                    "panel_id": .string("panel-1"),
+                                                                    "path": .string("~/GitHub/thought-seeds/thoughts/raw/Andrej Karpathy - From Vibe Coding to Agentic Engineering.md"),
+                                                                  ])))
+
+        XCTAssertTrue(response.ok)
+        XCTAssertEqual(response.result?["content"]?.stringValue, "notes")
+        XCTAssertEqual(response.result?["normalized_path"]?.stringValue, fileURL.path)
+        XCTAssertEqual(response.result?["read_only"]?.boolValue, true)
+        XCTAssertEqual(response.result?["reason"]?.stringValue, "outside_workspace")
+    }
+
+    func testFileReadRejectsHiddenHomePathOutsideRoot() throws {
+        let fixture = try makeFixture()
+        let fileURL = fixture.homeURL.appendingPathComponent(".ssh/notes.md")
+        try fixture.fileManager.createDirectory(at: fileURL.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try "secret".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let handler = BridgeFileActionHandler(rootResolver: fixture.rootResolver,
+                                              fileManager: fixture.fileManager,
+                                              homeDirectoryURL: fixture.homeURL)
+
+        XCTAssertThrowsError(try handler.handle(BridgeRequest(id: "request-1",
+                                                              action: "file_read",
+                                                              params: [
+                                                                "workspace_id": .string("workspace-1"),
+                                                                "panel_id": .string("panel-1"),
+                                                                "path": .string("~/.ssh/notes.md"),
+                                                              ]))) { error in
+            guard case BridgeInternalError.fileOutsideRoot(let message) = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+            XCTAssertTrue(message.contains("允許編輯"))
+        }
+    }
+
+    func testFileReadRejectsSensitiveHomePathOutsideRoot() throws {
+        let fixture = try makeFixture()
+        let fileURL = fixture.homeURL.appendingPathComponent("Library/Keychains/notes.md")
+        try fixture.fileManager.createDirectory(at: fileURL.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try "secret".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let handler = BridgeFileActionHandler(rootResolver: fixture.rootResolver,
+                                              fileManager: fixture.fileManager,
+                                              homeDirectoryURL: fixture.homeURL)
+
+        XCTAssertThrowsError(try handler.handle(BridgeRequest(id: "request-1",
+                                                              action: "file_read",
+                                                              params: [
+                                                                "workspace_id": .string("workspace-1"),
+                                                                "panel_id": .string("panel-1"),
+                                                                "path": .string("~/Library/Keychains/notes.md"),
+                                                              ]))) { error in
+            guard case BridgeInternalError.fileOutsideRoot(let message) = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+            XCTAssertTrue(message.contains("允許編輯"))
+        }
+    }
+
+    func testFileWriteRejectsEditableDocumentOutsideRootUnderHome() throws {
+        let fixture = try makeFixture()
+        let fileURL = fixture.homeURL.appendingPathComponent("GitHub/notes/outside.md")
+        try fixture.fileManager.createDirectory(at: fileURL.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try "before".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let handler = BridgeFileActionHandler(rootResolver: fixture.rootResolver,
+                                              fileManager: fixture.fileManager,
+                                              homeDirectoryURL: fixture.homeURL)
+
+        XCTAssertThrowsError(try handler.handle(BridgeRequest(id: "request-1",
+                                                              action: "file_write",
+                                                              params: [
+                                                                "workspace_id": .string("workspace-1"),
+                                                                "panel_id": .string("panel-1"),
+                                                                "path": .string("~/GitHub/notes/outside.md"),
+                                                                "content": .string("after"),
+                                                                "expected_revision_token": .string("token"),
                                                               ]))) { error in
             guard case BridgeInternalError.fileOutsideRoot(let message) = error else {
                 return XCTFail("Unexpected error: \(error)")
@@ -266,6 +371,7 @@ final class BridgeFileActionHandlerTests: XCTestCase {
 private struct FileHandlerFixture {
     let tempDirectory: URL
     let rootURL: URL
+    let homeURL: URL
     let fileManager: FileManager
     let rootResolver: MockPanelFileRootResolver
 }
@@ -275,9 +381,12 @@ private func makeFixture() throws -> FileHandlerFixture {
     let tempDirectory = fileManager.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
     let rootURL = tempDirectory.appendingPathComponent("workspace-root", isDirectory: true)
+    let homeURL = tempDirectory.appendingPathComponent("home", isDirectory: true)
     try fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
+    try fileManager.createDirectory(at: homeURL, withIntermediateDirectories: true)
     return FileHandlerFixture(tempDirectory: tempDirectory,
                               rootURL: rootURL,
+                              homeURL: homeURL,
                               fileManager: fileManager,
                               rootResolver: MockPanelFileRootResolver(rootPath: rootURL.path))
 }

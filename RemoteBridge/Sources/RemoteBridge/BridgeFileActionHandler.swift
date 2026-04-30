@@ -42,13 +42,16 @@ struct BridgeFileActionHandler {
     private let rootResolver: PanelFileRootResolving
     private let fileManager: FileManager
     private let policy: BridgeDocumentFilePolicy
+    private let homeDirectoryURL: URL
 
     init(rootResolver: PanelFileRootResolving,
          fileManager: FileManager = .default,
-         policy: BridgeDocumentFilePolicy = .poc) {
+         policy: BridgeDocumentFilePolicy = .poc,
+         homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser) {
         self.rootResolver = rootResolver
         self.fileManager = fileManager
         self.policy = policy
+        self.homeDirectoryURL = homeDirectoryURL
     }
 
     func handle(_ request: BridgeRequest) throws -> BridgeResponse? {
@@ -66,7 +69,8 @@ struct BridgeFileActionHandler {
         let params = try BridgeFileReadRequest(params: request.params)
         let resolved = try resolveFile(path: params.path,
                                        workspaceID: params.workspaceID,
-                                       panelID: params.panelID)
+                                       panelID: params.panelID,
+                                       allowsReadOnlyHomeScope: true)
         guard fileManager.fileExists(atPath: resolved.targetURL.path) else {
             throw BridgeInternalError.notFound("file_read target does not exist")
         }
@@ -85,6 +89,16 @@ struct BridgeFileActionHandler {
             throw BridgeInternalError.fileEncodingUnsupported("這個檔案不是 UTF-8 文字格式，這個版本的編輯器無法開啟。")
         }
 
+        let isWritable = fileManager.isWritableFile(atPath: resolved.targetURL.path)
+        let readOnlyReason: JSONValue
+        if resolved.isReadOnlyOutsideRoot {
+            readOnlyReason = .string("outside_workspace")
+        } else if !isWritable {
+            readOnlyReason = .string("permission_denied")
+        } else {
+            readOnlyReason = .null
+        }
+
         let result: [String: JSONValue] = [
             "normalized_path": .string(resolved.targetURL.path),
             "display_name": .string(resolved.targetURL.lastPathComponent),
@@ -93,8 +107,8 @@ struct BridgeFileActionHandler {
             "size": .number(Double(metadata.size)),
             "mtime": .number(metadata.mtime.timeIntervalSince1970),
             "revision_token": .string(metadata.revisionToken),
-            "read_only": .bool(!fileManager.isWritableFile(atPath: resolved.targetURL.path)),
-            "reason": fileManager.isWritableFile(atPath: resolved.targetURL.path) ? .null : .string("permission_denied"),
+            "read_only": .bool(resolved.isReadOnlyOutsideRoot || !isWritable),
+            "reason": readOnlyReason,
         ]
         return BridgeResponse(id: request.id, ok: true, result: result, error: nil)
     }
@@ -103,7 +117,8 @@ struct BridgeFileActionHandler {
         let params = try BridgeFileWriteRequest(params: request.params)
         let resolved = try resolveFile(path: params.path,
                                        workspaceID: params.workspaceID,
-                                       panelID: params.panelID)
+                                       panelID: params.panelID,
+                                       allowsReadOnlyHomeScope: false)
         guard fileManager.fileExists(atPath: resolved.targetURL.path) else {
             throw BridgeInternalError.notFound("file_write target does not exist")
         }
@@ -131,7 +146,10 @@ struct BridgeFileActionHandler {
                               error: nil)
     }
 
-    private func resolveFile(path: String, workspaceID: String, panelID: String) throws -> ResolvedFileTarget {
+    private func resolveFile(path: String,
+                             workspaceID: String,
+                             panelID: String,
+                             allowsReadOnlyHomeScope: Bool) throws -> ResolvedFileTarget {
         let rawRootPath = try rootResolver.rootPath(workspaceID: workspaceID, panelID: panelID)
         let rootURL = URL(fileURLWithPath: rawRootPath, isDirectory: true)
             .standardizedFileURL
@@ -142,19 +160,24 @@ struct BridgeFileActionHandler {
         }
 
         let candidateURL: URL
-        if NSString(string: path).isAbsolutePath {
-            candidateURL = URL(fileURLWithPath: path, isDirectory: false)
+        let expandedPath = expandTilde(in: path)
+        if NSString(string: expandedPath).isAbsolutePath {
+            candidateURL = URL(fileURLWithPath: expandedPath, isDirectory: false)
         } else {
-            candidateURL = rootURL.appendingPathComponent(path, isDirectory: false)
+            candidateURL = rootURL.appendingPathComponent(expandedPath, isDirectory: false)
         }
         let normalizedURL = candidateURL.standardizedFileURL.resolvingSymlinksInPath()
-        guard isDescendant(normalizedURL, of: rootURL) else {
-            throw BridgeInternalError.fileOutsideRoot("這個檔案不在允許編輯的範圍內。")
-        }
         guard policy.allows(normalizedURL) else {
             throw BridgeInternalError.fileNotInAllowlist("這個檔案類型目前不支援在 iPhone 編輯。")
         }
-        return ResolvedFileTarget(targetURL: normalizedURL)
+        if isDescendant(normalizedURL, of: rootURL) {
+            return ResolvedFileTarget(targetURL: normalizedURL, isReadOnlyOutsideRoot: false)
+        }
+        guard allowsReadOnlyHomeScope,
+              policy.allowsReadOnlyHomeScope(normalizedURL, homeDirectoryURL: normalizedHomeDirectoryURL()) else {
+            throw BridgeInternalError.fileOutsideRoot("這個檔案不在允許編輯的範圍內。")
+        }
+        return ResolvedFileTarget(targetURL: normalizedURL, isReadOnlyOutsideRoot: true)
     }
 
     private func readMetadata(at fileURL: URL, attributes: [FileAttributeKey: Any]? = nil) throws -> FileRevisionMetadata {
@@ -176,10 +199,27 @@ struct BridgeFileActionHandler {
         let rootPrefix = rootURL.path.hasSuffix("/") ? rootURL.path : rootURL.path + "/"
         return fileURL.path.hasPrefix(rootPrefix)
     }
+
+    private func normalizedHomeDirectoryURL() -> URL {
+        homeDirectoryURL
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+    }
+
+    private func expandTilde(in path: String) -> String {
+        if path == "~" {
+            return homeDirectoryURL.path
+        }
+        if path.hasPrefix("~/") {
+            return homeDirectoryURL.appendingPathComponent(String(path.dropFirst(2))).path
+        }
+        return path
+    }
 }
 
 private struct ResolvedFileTarget {
     let targetURL: URL
+    let isReadOnlyOutsideRoot: Bool
 }
 
 private struct FileRevisionMetadata {
@@ -204,5 +244,44 @@ struct BridgeDocumentFilePolicy {
             return allowedExtensions.contains(ext)
         }
         return wellKnownFilenames.contains(filename.uppercased())
+    }
+
+    func allowsReadOnlyHomeScope(_ fileURL: URL, homeDirectoryURL: URL) -> Bool {
+        guard allows(fileURL),
+              isDescendant(fileURL, of: homeDirectoryURL),
+              !hasHiddenPathComponent(fileURL, relativeTo: homeDirectoryURL),
+              !hasSensitiveHomePathComponent(fileURL, relativeTo: homeDirectoryURL) else {
+            return false
+        }
+        return true
+    }
+
+    private func isDescendant(_ fileURL: URL, of rootURL: URL) -> Bool {
+        if fileURL.path == rootURL.path {
+            return true
+        }
+        let rootPrefix = rootURL.path.hasSuffix("/") ? rootURL.path : rootURL.path + "/"
+        return fileURL.path.hasPrefix(rootPrefix)
+    }
+
+    private func hasHiddenPathComponent(_ fileURL: URL, relativeTo rootURL: URL) -> Bool {
+        let rootComponents = rootURL.standardizedFileURL.pathComponents
+        let fileComponents = fileURL.standardizedFileURL.pathComponents
+        guard fileComponents.count > rootComponents.count else {
+            return false
+        }
+        return fileComponents.dropFirst(rootComponents.count).contains { component in
+            component.hasPrefix(".")
+        }
+    }
+
+    private func hasSensitiveHomePathComponent(_ fileURL: URL, relativeTo rootURL: URL) -> Bool {
+        let rootComponents = rootURL.standardizedFileURL.pathComponents
+        let fileComponents = fileURL.standardizedFileURL.pathComponents
+        guard fileComponents.count > rootComponents.count else {
+            return false
+        }
+        let relativeComponents = Array(fileComponents.dropFirst(rootComponents.count))
+        return relativeComponents.first == "Library"
     }
 }
