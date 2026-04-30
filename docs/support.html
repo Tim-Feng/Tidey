@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tidey Remote Support</title>
+  <meta name="description" content="Support, setup, pairing, and troubleshooting for Tidey Remote.">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0c1117;
+      --surface: #111920;
+      --accent: #3a8fd6;
+      --text: #d8e0ea;
+      --muted: #7b8a9c;
+      --border: rgba(255, 255, 255, 0.08);
+      --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+      --mono: "SF Mono", "JetBrains Mono", monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      color: var(--text);
+      background:
+        radial-gradient(circle at 24% 0%, rgba(58, 143, 214, 0.16), transparent 32rem),
+        var(--bg);
+      line-height: 1.68;
+    }
+
+    main {
+      width: min(760px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 72px 0 88px;
+    }
+
+    nav {
+      margin-bottom: 42px;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      color: #fff;
+      font-size: clamp(2.2rem, 7vw, 4rem);
+      line-height: 1;
+      letter-spacing: -0.05em;
+    }
+
+    h2 {
+      margin: 42px 0 12px;
+      color: #fff;
+      font-size: 1.15rem;
+      letter-spacing: -0.015em;
+    }
+
+    p, li {
+      color: var(--muted);
+    }
+
+    ul, ol {
+      padding-left: 1.3rem;
+    }
+
+    a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    code {
+      font-family: var(--mono);
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.1rem 0.34rem;
+    }
+
+    .updated {
+      margin: 0 0 32px;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    .card {
+      margin: 24px 0;
+      padding: 20px 22px;
+      background: rgba(17, 25, 32, 0.82);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+    }
+
+    .card h2 {
+      margin-top: 0;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <nav><a href="./">Tidey</a> / Tidey Remote Support</nav>
+    <h1>Tidey Remote Support</h1>
+    <p class="updated">Last updated: 2026-04-30</p>
+
+    <section class="card">
+      <h2>Contact</h2>
+      <p>For questions, bug reports, or feature requests, email <a href="mailto:fsjforever26@gmail.com">fsjforever26@gmail.com</a>.</p>
+      <p>We aim to respond within a few business days.</p>
+    </section>
+
+    <h2>Getting started</h2>
+    <p>Tidey Remote is the iPhone companion for <strong>Tidey</strong>, a developer-friendly terminal app for macOS.</p>
+
+    <h2>Get Tidey for Mac</h2>
+    <p>Install Tidey on your Mac before pairing Tidey Remote:</p>
+    <ul>
+      <li><a href="https://tim-feng.github.io/Tidey/">Download Tidey for Mac</a></li>
+    </ul>
+    <p>After installing Tidey, open <strong>Settings → Remote</strong> on the Mac app to show the pairing QR code.</p>
+
+    <h2>Requirements</h2>
+    <ol>
+      <li>A Mac running macOS Sonoma or later.</li>
+      <li><strong>Tidey</strong> installed on that Mac.</li>
+      <li><strong>Tidey Remote Bridge</strong> running on that Mac. It is the small companion service that exposes Tidey to the iPhone app.</li>
+    </ol>
+    <p>Both Tidey and the Bridge are free.</p>
+
+    <h2>Pairing your iPhone</h2>
+    <ol>
+      <li>Open Tidey on your Mac.</li>
+      <li>In Tidey's settings, open the <strong>Remote</strong> tab.</li>
+      <li>A QR code will appear once the Bridge is available.</li>
+      <li>Open Tidey Remote on your iPhone, tap <strong>Pair a Mac</strong>, and scan the QR code with the camera.</li>
+    </ol>
+    <p>If pairing fails, check that:</p>
+    <ul>
+      <li>Both devices are on the same Wi-Fi network for the first pairing.</li>
+      <li>The Bridge is running on your Mac. It shows a status in Tidey Settings → Remote.</li>
+      <li>The Camera permission for Tidey Remote is granted in iOS Settings.</li>
+    </ul>
+
+    <h2>Connecting from outside your network</h2>
+    <p>When you leave your Wi-Fi, Tidey Remote reconnects to your Mac through Cloudflare Quick Tunnel and a small resolver service that tracks your Mac's current tunnel endpoint.</p>
+    <p>If a remote connection fails:</p>
+    <ul>
+      <li>Check that your Mac is awake and online.</li>
+      <li>Check that Tidey is running and the Bridge service is active.</li>
+      <li>Reopen Tidey Remote on your iPhone. The app will retry the connection automatically.</li>
+    </ul>
+
+    <h2>Try Demo mode</h2>
+    <p>If you do not yet have Tidey on a Mac, tap <strong>Try Demo</strong> on the host list to explore the app with sample data. Demo mode does not connect to a live Mac and does not send network requests.</p>
+
+    <h2>Permissions</h2>
+    <p>Tidey Remote uses these permissions:</p>
+    <ul>
+      <li><strong>Camera</strong> — scan the pairing QR code and capture image attachments.</li>
+      <li><strong>Photos (add only)</strong> — save photos taken from the camera flow to your library.</li>
+      <li><strong>Local network</strong> — discover your Mac on the same Wi-Fi.</li>
+      <li><strong>Notifications</strong> — show local replies and session updates.</li>
+    </ul>
+    <p>All permissions are optional and the app works with reduced functionality if you decline them.</p>
+
+    <h2>Privacy</h2>
+    <p>Tidey Remote does not include third-party analytics or advertising SDKs and does not sell user data. See the <a href="privacy.html">Privacy Policy</a> for details.</p>
+
+    <h2>Reporting a bug</h2>
+    <p>When reporting a bug, please include:</p>
+    <ul>
+      <li>iPhone model and iOS version.</li>
+      <li>macOS version on your Mac.</li>
+      <li>A short description of what you were doing when the issue happened.</li>
+      <li>Whether the issue is repeatable.</li>
+    </ul>
+    <p>Send the report to <a href="mailto:fsjforever26@gmail.com">fsjforever26@gmail.com</a>.</p>
+  </main>
+</body>
+</html>

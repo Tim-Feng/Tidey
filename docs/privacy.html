@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tidey Remote Privacy Policy</title>
+  <meta name="description" content="Privacy policy for Tidey Remote.">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0c1117;
+      --surface: #111920;
+      --accent: #3a8fd6;
+      --text: #d8e0ea;
+      --muted: #7b8a9c;
+      --border: rgba(255, 255, 255, 0.08);
+      --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+      --mono: "SF Mono", "JetBrains Mono", monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      color: var(--text);
+      background:
+        radial-gradient(circle at 24% 0%, rgba(58, 143, 214, 0.16), transparent 32rem),
+        var(--bg);
+      line-height: 1.68;
+    }
+
+    main {
+      width: min(760px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 72px 0 88px;
+    }
+
+    nav {
+      margin-bottom: 42px;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      color: #fff;
+      font-size: clamp(2.2rem, 7vw, 4rem);
+      line-height: 1;
+      letter-spacing: -0.05em;
+    }
+
+    h2 {
+      margin: 42px 0 12px;
+      color: #fff;
+      font-size: 1.15rem;
+      letter-spacing: -0.015em;
+    }
+
+    h3 {
+      margin: 28px 0 10px;
+      color: var(--text);
+      font-size: 1rem;
+    }
+
+    p, li {
+      color: var(--muted);
+    }
+
+    ul {
+      padding-left: 1.3rem;
+    }
+
+    a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    code {
+      font-family: var(--mono);
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.1rem 0.34rem;
+    }
+
+    .updated {
+      margin: 0 0 32px;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <nav><a href="./">Tidey</a> / Tidey Remote Privacy Policy</nav>
+    <h1>Tidey Remote Privacy Policy</h1>
+    <p class="updated">Last updated: 2026-04-30</p>
+
+    <h2>Overview</h2>
+    <p>Tidey Remote lets an iPhone connect to the user's own Mac running Tidey and Tidey Remote Bridge. The app is designed for remote control of the user's own terminal and agent sessions, not for advertising, tracking, or selling user data.</p>
+    <p>Tidey Remote does not include third-party analytics SDKs or advertising SDKs. It does not sell personal data.</p>
+
+    <h2>Data the app handles</h2>
+
+    <h3>Pairing and connection data</h3>
+    <p>Tidey Remote stores paired Mac records on the iPhone, including:</p>
+    <ul>
+      <li>Mac display name.</li>
+      <li>Host identifier.</li>
+      <li>LAN, tunnel, and resolver endpoints.</li>
+      <li>Connection state metadata.</li>
+      <li>Device credentials used to authenticate with the user's Mac.</li>
+    </ul>
+    <p>Device credentials and pairing identity values are stored in the iOS Keychain where appropriate. Host records and local preferences are stored on the device.</p>
+
+    <h3>Terminal, chat, and control data</h3>
+    <p>When connected to a Mac, Tidey Remote sends user actions and messages to Tidey Remote Bridge on that Mac. This can include chat messages, selected workspace or panel identifiers, and commands needed to operate the user's own sessions.</p>
+    <p>These messages are sent to the user's paired Mac. Tidey Remote does not use them for advertising or analytics.</p>
+
+    <h3>Images and attachments</h3>
+    <p>When the user selects or captures an image attachment:</p>
+    <ul>
+      <li>The image is processed locally on the iPhone.</li>
+      <li>HEIC and other input formats are converted to JPEG for upload.</li>
+      <li>The image is resized and compressed before upload.</li>
+      <li>The processed image is uploaded to the user's Mac-side Tidey Remote Bridge.</li>
+      <li>The Mac stores uploaded images under <code>~/Library/Application Support/Tidey Remote Bridge/uploads/</code>.</li>
+    </ul>
+    <p>If the user takes a new photo from the camera flow, Tidey Remote may save that photo to the user's Photos library when the user grants the related permission.</p>
+
+    <h3>Local preferences</h3>
+    <p>Tidey Remote stores local settings such as paired hosts, editor settings, notification prompt state, and UI preferences. These values stay on the user's device unless needed for pairing or connection to the user's Mac.</p>
+
+    <h3>Notifications</h3>
+    <p>Tidey Remote can show local notifications for replies or session updates. Notification permission is optional and controlled by iOS Settings.</p>
+
+    <h3>Pasteboard</h3>
+    <p>Tidey Remote uses the system pasteboard only when the user explicitly chooses a copy action in the app.</p>
+
+    <h3>Demo mode</h3>
+    <p>Try Demo uses local sample data. It does not connect to a live Bridge and does not send network requests.</p>
+
+    <h2>Network services</h2>
+
+    <h3>Local network</h3>
+    <p>On the same network, Tidey Remote connects directly to Tidey Remote Bridge on the user's Mac. This uses local network access and the Mac-side Bridge authentication token or device credential.</p>
+
+    <h3>Cloudflare tunnel and resolver</h3>
+    <p>For remote access outside the local network, Tidey can use Cloudflare Quick Tunnel and a resolver service.</p>
+    <p>The resolver stores host-to-tunnel metadata needed to recover from changing tunnel URLs. This metadata can include:</p>
+    <ul>
+      <li>Host identifier.</li>
+      <li>Current tunnel endpoint.</li>
+      <li>Timestamps such as update and expiry time.</li>
+    </ul>
+    <p>The resolver does not need chat messages, image contents, transcript contents, or terminal output.</p>
+    <p>Cloudflare tunnel traffic and resolver requests transit Cloudflare infrastructure. Cloudflare may process network metadata as part of providing the tunnel or resolver hosting service.</p>
+
+    <h2>Permissions</h2>
+    <p>Tidey Remote may request these permissions:</p>
+    <ul>
+      <li>Camera: scan a Mac pairing QR code and capture photo attachments.</li>
+      <li>Photos add-only access: save photos captured from the camera flow to the user's library.</li>
+      <li>Local network: connect to the user's Mac on the same network.</li>
+      <li>Notifications: show local reply or session update notifications.</li>
+    </ul>
+    <p>The app should still work with reduced functionality if optional permissions are denied.</p>
+
+    <h2>Retention and deletion</h2>
+    <p>On iPhone:</p>
+    <ul>
+      <li>Removing a paired Mac deletes the app's saved host record and associated credential reference.</li>
+      <li>Uninstalling the app removes app-local data. Keychain behavior may depend on iOS system behavior and existing credential cleanup paths.</li>
+    </ul>
+    <p>On Mac:</p>
+    <ul>
+      <li>Uploaded image attachments are stored under <code>~/Library/Application Support/Tidey Remote Bridge/uploads/</code>.</li>
+      <li>Tidey Remote Bridge includes storage cleanup for uploaded files, including age-based cleanup and a storage size cap.</li>
+      <li>Users can reveal or clean the upload folder from Tidey Mac's Remote settings.</li>
+      <li>Users can revoke paired devices from Tidey Mac's Remote settings.</li>
+    </ul>
+
+    <h2>Children's privacy</h2>
+    <p>Tidey Remote is not directed to children.</p>
+
+    <h2>Changes to this policy</h2>
+    <p>This policy may be updated as Tidey Remote adds features or changes its network architecture. The public policy includes the effective date of the latest version.</p>
+
+    <h2>Contact</h2>
+    <p>Privacy contact: <a href="mailto:fsjforever26@gmail.com">fsjforever26@gmail.com</a></p>
+  </main>
+</body>
+</html>
