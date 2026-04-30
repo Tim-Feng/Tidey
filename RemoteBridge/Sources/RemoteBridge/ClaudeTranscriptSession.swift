@@ -1088,6 +1088,10 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             return false
         }
 
+        if Self.isClaudeLocalCommandEnvelope(trimmed) {
+            return false
+        }
+
         if trimmed.hasPrefix("This session is being continued from a previous conversation") {
             return false
         }
@@ -1102,6 +1106,15 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         }
 
         return true
+    }
+
+    private static func isClaudeLocalCommandEnvelope(_ text: String) -> Bool {
+        let stripped = text
+            .replacingOccurrences(of: #"<(local-command-[A-Za-z0-9_-]+|command-(?:name|message|args))\b[^>]*>[\s\S]*?</\1>"#,
+                                  with: "",
+                                  options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return stripped.isEmpty && stripped != text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func publishFileBacked(kind: AgentEventKind,
