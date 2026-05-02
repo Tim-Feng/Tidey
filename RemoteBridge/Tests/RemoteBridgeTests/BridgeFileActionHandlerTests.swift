@@ -155,6 +155,42 @@ final class BridgeFileActionHandlerTests: XCTestCase {
         XCTAssertEqual(response.result?["reason"]?.stringValue, "outside_workspace")
     }
 
+    func testFileReadUsesOrdinaryTmuxRouteCWDForLogicalPanelRoot() throws {
+        let fixture = try makeFixture()
+        let tmuxRoot = fixture.tempDirectory.appendingPathComponent("tmux-window", isDirectory: true)
+        try fixture.fileManager.createDirectory(at: tmuxRoot, withIntermediateDirectories: true)
+        let fileURL = tmuxRoot.appendingPathComponent("README.md")
+        try "tmux window file".write(to: fileURL, atomically: true, encoding: .utf8)
+        let route = OrdinaryTmuxPanelRoute(workspaceID: "workspace-1",
+                                           panelID: "ordinary-tmux:/tmp/tmux-\(getuid())/default:$7:@16",
+                                           carrierPanelID: "carrier-panel",
+                                           socket: .path("/tmp/tmux-\(getuid())/default"),
+                                           sessionID: "$7",
+                                           sessionName: "genesis-extraction",
+                                           windowID: "@16",
+                                           windowIndex: 1,
+                                           activePaneID: "%16",
+                                           cwd: tmuxRoot.path,
+                                           currentCommand: "zsh")
+        let rootResolver = TideyPanelFileRootResolver(socketSender: FailingTideyRequestSender(),
+                                                      ordinaryTmuxRouteResolver: StubOrdinaryRouteResolver(route: route))
+        let handler = BridgeFileActionHandler(rootResolver: rootResolver,
+                                              fileManager: fixture.fileManager,
+                                              homeDirectoryURL: fixture.homeURL)
+
+        let response = try XCTUnwrap(handler.handle(BridgeRequest(id: "request-1",
+                                                                  action: "file_read",
+                                                                  params: [
+                                                                    "workspace_id": .string("workspace-1"),
+                                                                    "panel_id": .string(route.panelID),
+                                                                    "path": .string("README.md"),
+                                                                  ])))
+
+        XCTAssertTrue(response.ok)
+        XCTAssertEqual(response.result?["content"]?.stringValue, "tmux window file")
+        XCTAssertEqual(response.result?["normalized_path"]?.stringValue, fileURL.path)
+    }
+
     func testFileReadRejectsHiddenHomePathOutsideRoot() throws {
         let fixture = try makeFixture()
         let fileURL = fixture.homeURL.appendingPathComponent(".ssh/notes.md")
@@ -400,5 +436,19 @@ private final class MockPanelFileRootResolver: PanelFileRootResolving {
 
     func rootPath(workspaceID: String, panelID: String) throws -> String {
         rootPathValue
+    }
+}
+
+private struct StubOrdinaryRouteResolver: OrdinaryTmuxRouteResolving {
+    let route: OrdinaryTmuxPanelRoute?
+
+    func route(forPanelID panelID: String, workspaceID: String?) throws -> OrdinaryTmuxPanelRoute? {
+        route
+    }
+}
+
+private struct FailingTideyRequestSender: TideyRequestSending {
+    func send(_ request: BridgeRequest) throws -> BridgeResponse {
+        throw BridgeInternalError.invalidRequest("unexpected Tidey socket request")
     }
 }

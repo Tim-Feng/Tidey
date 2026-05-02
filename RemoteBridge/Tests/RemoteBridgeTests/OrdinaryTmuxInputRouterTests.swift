@@ -35,7 +35,7 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
         registry.replaceRoutes(workspaceID: "workspace-1", routes: [route])
         let state = RunnerState(responses: [
             RunnerState.key(socket: route.socket, arguments: listPanesArguments(windowID: route.windowID)):
-                "%20\t0\t/tmp\tzsh\n%21\t1\t/Users/timfeng/GitHub/mother_nature\tcodex\n",
+                "%20\t0\t1020\t/tmp\tzsh\n%21\t1\t1021\t/Users/timfeng/GitHub/mother_nature\tcodex\n",
             RunnerState.key(socket: route.socket,
                             arguments: ["load-buffer", "-b", "ignored", "-"],
                             stdin: "hello"):
@@ -79,7 +79,7 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
         registry.replaceRoutes(workspaceID: "workspace-1", routes: [route])
         let state = RunnerState(responses: [
             RunnerState.key(socket: route.socket, arguments: listPanesArguments(windowID: route.windowID)):
-                "%21\t1\t/Users/timfeng/GitHub/mother_nature\tcodex\n",
+                "%21\t1\t1021\t/Users/timfeng/GitHub/mother_nature\tcodex\n",
             RunnerState.key(socket: route.socket,
                             arguments: ["load-buffer", "-b", "ignored", "-"],
                             stdin: "hello"):
@@ -139,7 +139,9 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
             sessionName: "genesis-extraction",
             windowID: "@16",
             windowIndex: 1,
-            activePaneID: "%16"
+            activePaneID: "%16",
+            cwd: "/Users/timfeng/GitHub/mother_nature",
+            currentCommand: "codex"
         )
     }
 
@@ -149,7 +151,7 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
             "-t",
             windowID,
             "-F",
-            "#{pane_id}\t#{pane_active}\t#{pane_current_path}\t#{pane_current_command}",
+            "#{pane_id}\t#{pane_active}\t#{pane_pid}\t#{pane_current_path}\t#{pane_current_command}",
         ]
     }
 }

@@ -9,6 +9,7 @@ final class OrdinaryTmuxPanelProjector {
     private struct ProjectedPanelsLoad {
         let panels: [OrdinaryTmuxProjectedPanel]
         let canSetPaneIdentity: Bool
+        let canReplaceRegistry: Bool
     }
 
     private let adapter: OrdinaryTmuxWindowProjecting
@@ -80,6 +81,9 @@ final class OrdinaryTmuxPanelProjector {
 
             guard projectedPanels.count > 1 else {
                 BridgeLogger.server.debug("ordinary tmux projection skipped workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) projected_count=\(projectedPanels.count, privacy: .public) fallback_reason=single_window")
+                if projectedLoad.canReplaceRegistry {
+                    registry?.replaceRoutes(workspaceID: workspaceID, routes: [], observedAt: now())
+                }
                 nextPanels.append(panelValue)
                 continue
             }
@@ -106,11 +110,12 @@ final class OrdinaryTmuxPanelProjector {
         }
 
         guard didProjectCarrier else {
-            registry?.replaceRoutes(workspaceID: workspaceID, routes: [])
             return result
         }
 
-        registry?.replaceRoutes(workspaceID: workspaceID, routes: routes)
+        if routes.isEmpty == false {
+            registry?.replaceRoutes(workspaceID: workspaceID, routes: routes, observedAt: now())
+        }
 
         let indexedPanels = nextPanels.enumerated().map { index, panelValue -> JSONValue in
             guard var panel = panelValue.objectValue else {
@@ -134,7 +139,9 @@ final class OrdinaryTmuxPanelProjector {
 
         if let entry = cacheQueue.sync(execute: { cache[key] }),
            currentDate.timeIntervalSince(entry.loadedAt) < cacheTTL {
-            return ProjectedPanelsLoad(panels: entry.panels, canSetPaneIdentity: true)
+            return ProjectedPanelsLoad(panels: entry.panels,
+                                       canSetPaneIdentity: true,
+                                       canReplaceRegistry: true)
         }
 
         do {
@@ -142,12 +149,16 @@ final class OrdinaryTmuxPanelProjector {
             cacheQueue.sync {
                 cache[key] = CacheEntry(panels: panels, loadedAt: currentDate)
             }
-            return ProjectedPanelsLoad(panels: panels, canSetPaneIdentity: true)
+            return ProjectedPanelsLoad(panels: panels,
+                                       canSetPaneIdentity: true,
+                                       canReplaceRegistry: true)
         } catch {
             if let entry = cacheQueue.sync(execute: { cache[key] }),
                currentDate.timeIntervalSince(entry.loadedAt) < staleTTL {
                 BridgeLogger.server.error("ordinary tmux projection using stale cache workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) error=\(String(describing: error), privacy: .public)")
-                return ProjectedPanelsLoad(panels: entry.panels, canSetPaneIdentity: false)
+                return ProjectedPanelsLoad(panels: entry.panels,
+                                           canSetPaneIdentity: false,
+                                           canReplaceRegistry: false)
             }
             throw error
         }
@@ -208,6 +219,9 @@ final class OrdinaryTmuxPanelProjector {
             ]),
         ]
 
+        if let activePanePID = projectedPanel.activePanePID {
+            panel["effective_shell_pid"] = .number(Double(activePanePID))
+        }
         if let windowGUID = carrierPanel["window_guid"] {
             panel["window_guid"] = windowGUID
         }
@@ -216,6 +230,11 @@ final class OrdinaryTmuxPanelProjector {
         }
         if let currentCommand = projectedPanel.currentCommand {
             panel["current_command"] = .string(currentCommand)
+        }
+        if let socketPath = projectedPanel.socketPath {
+            var logical = panel["ordinary_tmux_logical"]?.objectValue ?? [:]
+            logical["socket_path"] = .string(socketPath)
+            panel["ordinary_tmux_logical"] = .object(logical)
         }
         return .object(panel)
     }
@@ -233,7 +252,9 @@ final class OrdinaryTmuxPanelProjector {
             sessionName: projectedPanel.sessionName,
             windowID: projectedPanel.windowID,
             windowIndex: projectedPanel.windowIndex,
-            activePaneID: projectedPanel.activePaneID
+            activePaneID: projectedPanel.activePaneID,
+            cwd: projectedPanel.cwd,
+            currentCommand: projectedPanel.currentCommand
         )
     }
 
