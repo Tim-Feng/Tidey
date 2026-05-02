@@ -71,11 +71,16 @@ struct OrdinaryTmuxProjectedPanel: Equatable, Sendable {
     let windowID: String
     let windowIndex: Int
     let windowName: String
+    let isCurrentWindow: Bool
     let activePaneID: String
     let cwd: String?
     let currentCommand: String?
     let title: String
     let subtitle: String
+}
+
+protocol OrdinaryTmuxWindowProjecting: Sendable {
+    func projectedPanels(for metadata: OrdinaryTmuxAttachMetadata) throws -> [OrdinaryTmuxProjectedPanel]
 }
 
 final class OrdinaryTmuxCLIAdapter {
@@ -190,6 +195,7 @@ final class OrdinaryTmuxCLIAdapter {
                 windowID: window.id,
                 windowIndex: window.index,
                 windowName: window.name,
+                isCurrentWindow: window.id == client.currentWindowID,
                 activePaneID: pane.id,
                 cwd: pane.cwd,
                 currentCommand: pane.currentCommand,
@@ -300,6 +306,8 @@ final class OrdinaryTmuxCLIAdapter {
             .map(String.init)
     }
 }
+
+extension OrdinaryTmuxCLIAdapter: OrdinaryTmuxWindowProjecting {}
 
 private extension String {
     var nilIfEmpty: String? {

@@ -558,6 +558,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
     private lazy var fileActionHandler = BridgeFileActionHandler(rootResolver: TideyPanelFileRootResolver(socketSender: socketClient))
     private lazy var imageUploadHandler = BridgeImageUploadHandler(destinationResolver: ApplicationSupportImageUploadDestinationResolver(),
                                                                    filenameGenerator: TimestampedImageUploadFilenameGenerator())
+    private lazy var ordinaryTmuxPanelProjector = OrdinaryTmuxPanelProjector()
     private var agentSubscriptionID: UUID?
     private var workspaceSubscriptionID: UUID?
 
@@ -910,11 +911,12 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
         }
         switch request.action {
         case "list_panels":
-            recordPanelListResult(result)
+            let projectedResult = ordinaryTmuxPanelProjector.projectPanelListResult(result)
+            recordPanelListResult(projectedResult)
             return BridgeResponse(id: response.id,
                                   ok: response.ok,
                                   v: response.v,
-                                  result: augmentPanelListResult(result),
+                                  result: augmentPanelListResult(projectedResult),
                                   error: response.error)
         case "list_workspaces":
             refreshLivePanelsForListedWorkspaces(result)
@@ -945,7 +947,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                 registryMonitor.replaceLivePanels(workspaceID: workspaceID, panels: [])
                 continue
             }
-            recordPanelListResult(panelResult)
+            recordPanelListResult(ordinaryTmuxPanelProjector.projectPanelListResult(panelResult))
         }
     }
 
