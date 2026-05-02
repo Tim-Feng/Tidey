@@ -59,6 +59,7 @@
 #import "TmuxControllerRegistry.h"
 #import "TmuxDashboardController.h"
 #import "TmuxLayoutParser.h"
+#import "TSVParser.h"
 #import "ToolCapturedOutputView.h"
 #import "ToolCommandHistoryView.h"
 #import "ToolDirectoriesView.h"
@@ -354,6 +355,8 @@ static NSString *TideySubmitLogSuffix(NSString *input) {
 - (void)clearCustomTitleForWorkspaceAtIndex:(NSInteger)index;
 - (NSString *)tideyWorkspaceIdentifierForWorkspace:(Workspace *)workspace;
 - (void)tideyAssignWorkspaceIdentifierToPanel:(PTYTab *)panel workspace:(Workspace *)workspace;
+- (NSString *)tideyPanelIdentifierForPanel:(PTYTab *)panel;
+- (void)tideySyncTmuxPaneIdentityOptionsForPanel:(PTYTab *)panel workspace:(Workspace *)workspace;
 - (Workspace *)tideyWorkspaceWithIdentifier:(NSString *)workspaceIdentifier index:(NSInteger *)index;
 - (PTYTab *)tideyPanelWithIdentifier:(NSString *)panelIdentifier
                            workspace:(Workspace **)workspace
@@ -584,6 +587,7 @@ static NSImage *gTideyApplicationIconBaseImage = nil;
 
     // Socket-driven title overrides keyed by workspace UUID string.
     NSMutableDictionary<NSString *, NSString *> *_tideyWorkspaceTitleOverrides;
+    NSMutableSet<NSString *> *_tideyTmuxWindowBackfillKeysInFlight;
 }
 
 @synthesize scope = _scope;
@@ -614,6 +618,7 @@ static NSImage *gTideyApplicationIconBaseImage = nil;
         _pendingInsertedPanelCreatesWorkspace = NO;
         _pendingInsertedPanelShouldAssignInitialTitle = NO;
         _tideySwitchingWorkspace = NO;
+        _tideyTmuxWindowBackfillKeysInFlight = [[NSMutableSet alloc] init];
     }
     return self;
 }
@@ -1234,6 +1239,7 @@ ITERM_WEAKLY_REFERENCEABLE
     [_titlebarAccessoryNanny release];
     [_workspaces release];
     [_tideyWorkspaceTitleOverrides release];
+    [_tideyTmuxWindowBackfillKeysInFlight release];
     [_tideyLastBroadcastWorkspaceSelectionIdentifier release];
     [_tideyLastBroadcastPanelSelectionIdentifier release];
 
@@ -1346,6 +1352,167 @@ ITERM_WEAKLY_REFERENCEABLE
     return [self workspaceAtIndex:self.selectedWorkspaceIndex];
 }
 
+- (NSString *)tideyPanelIdentifierForPanel:(PTYTab *)panel {
+    if (!panel) {
+        return nil;
+    }
+    if (panel.isTmuxTab &&
+        panel.tmuxController.sessionGuid.length > 0 &&
+        panel.tmuxWindow >= 0) {
+        return [NSString stringWithFormat:@"tmux:%@:%d",
+                                          panel.tmuxController.sessionGuid,
+                                          panel.tmuxWindow];
+    }
+    return panel.stringUniqueIdentifier;
+}
+
+- (BOOL)tideyPanel:(PTYTab *)panel matchesIdentifier:(NSString *)panelIdentifier {
+    if (!panel || panelIdentifier.length == 0) {
+        return NO;
+    }
+    NSString *stableID = [self tideyPanelIdentifierForPanel:panel];
+    return [stableID isEqualToString:panelIdentifier] ||
+        [panel.stringUniqueIdentifier isEqualToString:panelIdentifier];
+}
+
+- (NSString *)tideyTmuxWindowBackfillKeyForWorkspaceID:(NSString *)workspaceID
+                                        tmuxController:(TmuxController *)tmuxController {
+    if (workspaceID.length == 0 || !tmuxController) {
+        return nil;
+    }
+    NSString *controllerID = tmuxController.sessionGuid;
+    if (controllerID.length == 0) {
+        controllerID = [NSString stringWithFormat:@"%p", tmuxController];
+    }
+    return [NSString stringWithFormat:@"%@:%@", workspaceID, controllerID];
+}
+
+- (int)tideyTmuxWindowIDFromString:(NSString *)windowIDString {
+    if (windowIDString.length == 0) {
+        return -1;
+    }
+    if ([windowIDString characterAtIndex:0] == '@') {
+        return [[windowIDString substringFromIndex:1] intValue];
+    }
+    return [windowIDString intValue];
+}
+
+- (void)tideyMaterializeExistingTmuxPanel:(PTYTab *)panel
+                                workspace:(Workspace *)workspace
+                            workspaceIndex:(NSInteger)workspaceIndex {
+    if (!panel || !workspace || [workspace.panels containsObject:panel]) {
+        return;
+    }
+    if ([self indexOfWorkspaceContainingPanel:panel] != NSNotFound) {
+        return;
+    }
+
+    [workspace.panels addObject:panel];
+    [self tideySyncTmuxPaneIdentityOptionsForPanel:panel workspace:workspace];
+    [_contentView reloadTideySidebar];
+
+    const NSInteger panelIndex = [workspace.panels indexOfObjectIdenticalTo:panel];
+    NSDictionary *workspaceSummary = [self tideySocketWorkspaceSummaryForWorkspace:workspace
+                                                                            index:workspaceIndex];
+    NSDictionary *panelSummary = panelIndex != NSNotFound ? [self tideySocketPanelSummaryForPanel:panel
+                                                                                       workspace:workspace
+                                                                                  workspaceIndex:workspaceIndex
+                                                                                      panelIndex:panelIndex] : nil;
+    [self tideyPostWorkspaceEventForKind:@"panel_created"
+                             workspaceID:[self tideyWorkspaceIdentifierForWorkspace:workspace]
+                                 panelID:[self tideyPanelIdentifierForPanel:panel]
+                               workspace:workspaceSummary
+                                   panel:panelSummary];
+}
+
+- (void)tideyBackfillTmuxWindowsFromList:(TSVDocument *)doc context:(NSArray *)context {
+    if (context.count < 3) {
+        return;
+    }
+    NSString *workspaceID = [context[0] isKindOfClass:[NSString class]] ? context[0] : nil;
+    NSString *backfillKey = [context[1] isKindOfClass:[NSString class]] ? context[1] : nil;
+    TmuxController *tmuxController = [context[2] isKindOfClass:[TmuxController class]] ? context[2] : nil;
+    if (backfillKey.length > 0) {
+        [_tideyTmuxWindowBackfillKeysInFlight removeObject:backfillKey];
+    }
+    if (workspaceID.length == 0 || !tmuxController) {
+        return;
+    }
+
+    NSInteger workspaceIndex = NSNotFound;
+    Workspace *workspace = [self tideyWorkspaceWithIdentifier:workspaceID index:&workspaceIndex];
+    if (!workspace || workspaceIndex == NSNotFound) {
+        return;
+    }
+
+    NSMutableSet<NSNumber *> *knownWindowIDs = [NSMutableSet set];
+    for (PTYTab *panel in workspace.panels) {
+        if ([self tideyPanel:panel belongsToTmuxController:tmuxController] && panel.tmuxWindow >= 0) {
+            [knownWindowIDs addObject:@(panel.tmuxWindow)];
+        }
+    }
+
+    for (NSArray *record in doc.records) {
+        const int windowID = [self tideyTmuxWindowIDFromString:[doc valueInRecord:record
+                                                                         forField:@"window_id"]];
+        if (windowID < 0 || [knownWindowIDs containsObject:@(windowID)]) {
+            continue;
+        }
+
+        PTYTab *existingPanel = [tmuxController window:windowID];
+        if (existingPanel) {
+            [self tideyMaterializeExistingTmuxPanel:existingPanel
+                                          workspace:workspace
+                                      workspaceIndex:workspaceIndex];
+            [knownWindowIDs addObject:@(windowID)];
+            continue;
+        }
+
+        _pendingWorkspaceIndexForInsertedPanel = workspaceIndex;
+        _pendingInsertedPanelCreatesWorkspace = NO;
+        _pendingInsertedPanelShouldAssignInitialTitle = NO;
+        [tmuxController openWindowWithId:windowID
+                             intentional:YES
+                                 profile:tmuxController.sharedProfile];
+        [knownWindowIDs addObject:@(windowID)];
+    }
+}
+
+- (void)tideyRequestTmuxWindowBackfillForWorkspace:(Workspace *)workspace
+                                    workspaceIndex:(NSInteger)workspaceIndex {
+    if (!self.isShowingTideySidebar || !workspace || workspaceIndex == NSNotFound) {
+        return;
+    }
+    NSString *workspaceID = [self tideyWorkspaceIdentifierForWorkspace:workspace];
+    if (workspaceID.length == 0) {
+        return;
+    }
+
+    NSMutableDictionary<NSString *, TmuxController *> *controllersByKey = [NSMutableDictionary dictionary];
+    for (PTYTab *panel in workspace.panels) {
+        if (!panel.isTmuxTab || !panel.tmuxController) {
+            continue;
+        }
+        NSString *backfillKey = [self tideyTmuxWindowBackfillKeyForWorkspaceID:workspaceID
+                                                                tmuxController:panel.tmuxController];
+        if (backfillKey.length > 0) {
+            controllersByKey[backfillKey] = panel.tmuxController;
+        }
+    }
+
+    for (NSString *backfillKey in controllersByKey) {
+        if ([_tideyTmuxWindowBackfillKeysInFlight containsObject:backfillKey]) {
+            continue;
+        }
+        TmuxController *tmuxController = controllersByKey[backfillKey];
+        [_tideyTmuxWindowBackfillKeysInFlight addObject:backfillKey];
+        [tmuxController listWindowsInSessionNumber:tmuxController.sessionId
+                                            target:self
+                                          selector:@selector(tideyBackfillTmuxWindowsFromList:context:)
+                                            object:@[ workspaceID, backfillKey, tmuxController ]];
+    }
+}
+
 - (void)tideySetTmuxPaneIdentityOptionsForSession:(PTYSession *)session
                                       workspaceID:(NSString *)workspaceID
                                           panelID:(NSString *)panelID {
@@ -1368,7 +1535,7 @@ ITERM_WEAKLY_REFERENCEABLE
         return;
     }
     NSString *workspaceID = [self tideyWorkspaceIdentifierForWorkspace:workspace];
-    NSString *panelID = panel.stringUniqueIdentifier;
+    NSString *panelID = [self tideyPanelIdentifierForPanel:panel];
     if (workspaceID.length == 0 || panelID.length == 0) {
         return;
     }
@@ -1555,7 +1722,7 @@ ITERM_WEAKLY_REFERENCEABLE
 
 - (NSString *)tideyPanelIdentifierForSession:(PTYSession *)session {
     PTYTab *panel = [self tabForSession:session];
-    return panel.stringUniqueIdentifier;
+    return [self tideyPanelIdentifierForPanel:panel];
 }
 
 - (Workspace *)tideyWorkspaceWithIdentifier:(NSString *)workspaceIdentifier index:(NSInteger *)index {
@@ -1587,7 +1754,7 @@ ITERM_WEAKLY_REFERENCEABLE
         Workspace *candidateWorkspace = self.workspaces[i];
         for (NSInteger j = 0; j < (NSInteger)candidateWorkspace.panels.count; j++) {
             PTYTab *panel = candidateWorkspace.panels[j];
-            if (![panel.stringUniqueIdentifier isEqualToString:panelIdentifier]) {
+            if (![self tideyPanel:panel matchesIdentifier:panelIdentifier]) {
                 continue;
             }
             if (workspace) {
@@ -1633,7 +1800,7 @@ ITERM_WEAKLY_REFERENCEABLE
         @"selected": @(index == self.selectedWorkspaceIndex),
         @"window_guid": self.terminalGuid ?: @"",
         @"panel_count": @(workspace.panels.count),
-        @"selected_panel_id": panel.stringUniqueIdentifier ?: @"",
+        @"selected_panel_id": [self tideyPanelIdentifierForPanel:panel] ?: @"",
     }];
     if (session.currentLocalWorkingDirectory.length > 0) {
         summary[@"cwd"] = session.currentLocalWorkingDirectory;
@@ -1661,7 +1828,7 @@ ITERM_WEAKLY_REFERENCEABLE
     NSString *subtitle = session ? ([self tideySidebarDisplaySubtitleForSession:session panel:panel] ?: @"") : @"";
     NSString *state = panel.isProcessing ? @"running" : @"idle";
     NSMutableDictionary *summary = [NSMutableDictionary dictionaryWithDictionary:@{
-        @"panel_id": panel.stringUniqueIdentifier ?: @"",
+        @"panel_id": [self tideyPanelIdentifierForPanel:panel] ?: @"",
         @"workspace_id": workspaceID,
         @"window_guid": self.terminalGuid ?: @"",
         @"title": title,
@@ -1725,6 +1892,8 @@ ITERM_WEAKLY_REFERENCEABLE
         return nil;
     }
 
+    [self tideyRequestTmuxWindowBackfillForWorkspace:workspace workspaceIndex:workspaceIndex];
+
     NSMutableArray<NSDictionary *> *panels = [NSMutableArray array];
     for (NSInteger i = 0; i < (NSInteger)workspace.panels.count; i++) {
         PTYTab *panel = workspace.panels[i];
@@ -1736,7 +1905,7 @@ ITERM_WEAKLY_REFERENCEABLE
 
     return @{
         @"workspace_id": workspaceIdentifier,
-        @"selected_panel_id": workspace.selectedPanel.stringUniqueIdentifier ?: @"",
+        @"selected_panel_id": [self tideyPanelIdentifierForPanel:workspace.selectedPanel] ?: @"",
         @"panels": panels,
     };
 }
@@ -2527,7 +2696,7 @@ ITERM_WEAKLY_REFERENCEABLE
     [_contentView reloadTideySidebar];
     [self tideyPostWorkspaceEventForKind:@"workspace_updated"
                              workspaceID:[self tideyWorkspaceIdentifierForWorkspace:workspace]
-                                 panelID:workspace.selectedPanel.stringUniqueIdentifier
+                                 panelID:[self tideyPanelIdentifierForPanel:workspace.selectedPanel]
                                workspace:[self tideySocketWorkspaceSummaryForWorkspace:workspace index:index]
                                    panel:nil];
 }
@@ -2541,7 +2710,7 @@ ITERM_WEAKLY_REFERENCEABLE
     [_contentView reloadTideySidebar];
     [self tideyPostWorkspaceEventForKind:@"workspace_updated"
                              workspaceID:[self tideyWorkspaceIdentifierForWorkspace:workspace]
-                                 panelID:workspace.selectedPanel.stringUniqueIdentifier
+                                 panelID:[self tideyPanelIdentifierForPanel:workspace.selectedPanel]
                                workspace:[self tideySocketWorkspaceSummaryForWorkspace:workspace index:index]
                                    panel:nil];
 }
@@ -2599,7 +2768,7 @@ ITERM_WEAKLY_REFERENCEABLE
     [alert addButtonWithTitle:@"Cancel"];
 
     if ([alert runSheetModalForWindow:self.window] == NSAlertFirstButtonReturn) {
-        [self tideyRenamePanelWithIdentifier:panel.stringUniqueIdentifier title:textField.stringValue];
+        [self tideyRenamePanelWithIdentifier:[self tideyPanelIdentifierForPanel:panel] title:textField.stringValue];
     }
 }
 
@@ -3919,7 +4088,7 @@ ITERM_WEAKLY_REFERENCEABLE
     NSDictionary *closedWorkspaceSummary = nil;
     NSDictionary *closedPanelSummary = nil;
     NSString *closedWorkspaceID = nil;
-    NSString *closedPanelID = aTab.stringUniqueIdentifier;
+    NSString *closedPanelID = [self tideyPanelIdentifierForPanel:aTab];
     BOOL closingLastPanelInWorkspace = NO;
     if (self.isShowingTideySidebar) {
         tideyWorkspaceIndex = [self indexOfWorkspaceContainingPanel:aTab];
@@ -8838,7 +9007,7 @@ hidingToolbeltShouldResizeWindow:(BOOL)hidingToolbeltShouldResizeWindow
         }
     }
     NSString *currentWorkspaceID = [self tideySelectedWorkspaceIdentifier];
-    NSString *currentPanelID = tab.stringUniqueIdentifier;
+    NSString *currentPanelID = [self tideyPanelIdentifierForPanel:tab];
     if (!tideySuppressWorkspaceTransitionSideEffects &&
         currentWorkspaceID.length > 0 &&
         ![currentWorkspaceID isEqualToString:self.tideyLastBroadcastWorkspaceSelectionIdentifier]) {
@@ -10072,7 +10241,7 @@ hidingToolbeltShouldResizeWindow:(BOOL)hidingToolbeltShouldResizeWindow
                 }
                 [self tideyPostWorkspaceEventForKind:@"workspace_updated"
                                          workspaceID:[self tideyWorkspaceIdentifierForWorkspace:workspace]
-                                             panelID:selectedPanel.stringUniqueIdentifier
+                                             panelID:[self tideyPanelIdentifierForPanel:selectedPanel]
                                            workspace:workspaceSummary
                                                panel:panelSummary];
             }
@@ -13745,7 +13914,7 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
                                                                                                     panelIndex:panelIndex] : nil;
                 [self tideyPostWorkspaceEventForKind:(createdWorkspace ? @"workspace_created" : @"panel_created")
                                          workspaceID:[self tideyWorkspaceIdentifierForWorkspace:targetWorkspace]
-                                             panelID:aTab.stringUniqueIdentifier
+                                             panelID:[self tideyPanelIdentifierForPanel:aTab]
                                            workspace:workspaceSummary
                                                panel:panelSummary];
             }
