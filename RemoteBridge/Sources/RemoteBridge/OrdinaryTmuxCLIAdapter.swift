@@ -98,6 +98,11 @@ protocol OrdinaryTmuxWindowProjecting: Sendable {
     func setPaneIdentity(route: OrdinaryTmuxPanelRoute) throws
 }
 
+enum OrdinaryTmuxProjectionError: Error, Equatable {
+    case partialWindowProjection(windowID: String)
+    case staleWindow(windowID: String)
+}
+
 final class OrdinaryTmuxCLIAdapter {
     typealias CommandRunner = @Sendable (_ socket: OrdinaryTmuxSocketSelector, _ arguments: [String], _ stdin: String?) throws -> String
 
@@ -235,17 +240,17 @@ final class OrdinaryTmuxCLIAdapter {
         let windowIDs = windows.map { "\($0.id):\($0.index):\($0.name)" }.joined(separator: ",")
         BridgeLogger.server.debug("ordinary tmux projectedPanels list-windows raw_line_count=\(rawWindowLines.count, privacy: .public) parsed_count=\(windows.count, privacy: .public) window_ids=\(windowIDs, privacy: .public) session_id=\(client.sessionID, privacy: .public)")
 
-        return windows.compactMap { window in
-            let pane: TmuxPane?
+        return try windows.map { window in
+            let pane: TmuxPane
             do {
-                pane = try activePane(forWindowID: window.id, socket: socket)
+                guard let matchedPane = try activePane(forWindowID: window.id, socket: socket) else {
+                    BridgeLogger.server.debug("ordinary tmux projectedPanels activePane failed window_id=\(window.id, privacy: .public) window_index=\(window.index, privacy: .public) reason=no_pane")
+                    throw OrdinaryTmuxProjectionError.partialWindowProjection(windowID: window.id)
+                }
+                pane = matchedPane
             } catch {
                 BridgeLogger.server.debug("ordinary tmux projectedPanels activePane failed window_id=\(window.id, privacy: .public) window_index=\(window.index, privacy: .public) reason=command_error error=\(String(describing: error), privacy: .public)")
-                return nil
-            }
-            guard let pane else {
-                BridgeLogger.server.debug("ordinary tmux projectedPanels activePane failed window_id=\(window.id, privacy: .public) window_index=\(window.index, privacy: .public) reason=no_pane")
-                return nil
+                throw error
             }
             BridgeLogger.server.debug("ordinary tmux projectedPanels activePane matched window_id=\(window.id, privacy: .public) window_index=\(window.index, privacy: .public) pane_id=\(pane.id, privacy: .public) cwd=\(pane.cwd ?? "<none>", privacy: .public) command=\(pane.currentCommand ?? "<none>", privacy: .public)")
             let title = window.name.nilIfEmpty ?? "tmux window \(window.index)"
@@ -334,6 +339,56 @@ final class OrdinaryTmuxCLIAdapter {
         }
     }
 
+    func refreshedRoute(_ route: OrdinaryTmuxPanelRoute) throws -> OrdinaryTmuxPanelRoute {
+        guard windowExists(route.windowID, inSessionID: route.sessionID, socket: route.socket),
+              let pane = try activePane(forWindowID: route.windowID, socket: route.socket) else {
+            throw BridgeInternalError.notFound("ordinary tmux panel route is stale")
+        }
+        return OrdinaryTmuxPanelRoute(workspaceID: route.workspaceID,
+                                      panelID: route.panelID,
+                                      carrierPanelID: route.carrierPanelID,
+                                      socket: route.socket,
+                                      sessionID: route.sessionID,
+                                      sessionName: route.sessionName,
+                                      windowID: route.windowID,
+                                      windowIndex: route.windowIndex,
+                                      activePaneID: pane.id,
+                                      cwd: pane.cwd,
+                                      currentCommand: pane.currentCommand)
+    }
+
+    func route(for logicalID: OrdinaryTmuxLogicalPanelID,
+               authorizedTarget: OrdinaryTmuxAuthorizedTarget) throws -> OrdinaryTmuxPanelRoute {
+        guard windowExists(logicalID.windowID, inSessionID: authorizedTarget.sessionID, socket: authorizedTarget.socket),
+              let pane = try activePane(forWindowID: logicalID.windowID, socket: authorizedTarget.socket) else {
+            throw BridgeInternalError.notFound("ordinary tmux logical panel route is stale")
+        }
+        return OrdinaryTmuxPanelRoute(workspaceID: authorizedTarget.workspaceID,
+                                      panelID: logicalID.rawValue,
+                                      carrierPanelID: authorizedTarget.carrierPanelID,
+                                      socket: authorizedTarget.socket,
+                                      sessionID: authorizedTarget.sessionID,
+                                      sessionName: authorizedTarget.sessionName,
+                                      windowID: logicalID.windowID,
+                                      windowIndex: 0,
+                                      activePaneID: pane.id,
+                                      cwd: pane.cwd,
+                                      currentCommand: pane.currentCommand)
+    }
+
+    func captureOutput(route: OrdinaryTmuxPanelRoute, maxLines: Int) throws -> OrdinaryTmuxCapturedOutput {
+        let refreshed = try refreshedRoute(route)
+        var arguments = ["capture-pane", "-p", "-J"]
+        if maxLines > 0 {
+            arguments += ["-S", "-\(maxLines)"]
+        }
+        arguments += ["-t", refreshed.activePaneID]
+        let output = try commandRunner(refreshed.socket, arguments, nil)
+        return OrdinaryTmuxCapturedOutput(output: output,
+                                          cursorRow: nil,
+                                          cursorColumn: nil)
+    }
+
     func setPaneIdentity(route: OrdinaryTmuxPanelRoute) throws {
         try setPaneIdentity(route: route, paneID: route.activePaneID)
     }
@@ -345,6 +400,27 @@ final class OrdinaryTmuxCLIAdapter {
         _ = try commandRunner(route.socket,
                               ["set-option", "-p", "-t", paneID, "@tidey_panel_id", route.panelID],
                               nil)
+    }
+
+    private func windowExists(_ windowID: String,
+                              inSessionID sessionID: String,
+                              socket: OrdinaryTmuxSocketSelector) -> Bool {
+        do {
+            let output = try commandRunner(
+                socket,
+                [
+                    "list-windows",
+                    "-t",
+                    sessionID,
+                    "-F",
+                    "#{window_id}",
+                ],
+                nil
+            )
+            return output.split(whereSeparator: \.isNewline).contains { String($0) == windowID }
+        } catch {
+            return false
+        }
     }
 
     static func splitInputForPasteAndEnter(_ input: String) -> (pasteText: String, sendEnter: Bool) {
@@ -419,6 +495,7 @@ final class OrdinaryTmuxCLIAdapter {
 }
 
 extension OrdinaryTmuxCLIAdapter: OrdinaryTmuxWindowProjecting {}
+extension OrdinaryTmuxCLIAdapter: OrdinaryTmuxRouteRefreshing {}
 
 private extension String {
     var nilIfEmpty: String? {

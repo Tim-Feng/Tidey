@@ -556,10 +556,13 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
     private let ordinaryTmuxPanelRegistry: OrdinaryTmuxPanelRegistry
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
+    private lazy var ordinaryTmuxRouteResolver = OrdinaryTmuxRouteResolver(registry: ordinaryTmuxPanelRegistry)
     private lazy var inputActionHandler = BridgeInputActionHandler(socketSender: socketClient,
                                                                    sessionResolver: registryMonitor,
-                                                                   ordinaryTmuxInputRouter: OrdinaryTmuxInputRouter(registry: ordinaryTmuxPanelRegistry))
-    private lazy var fileActionHandler = BridgeFileActionHandler(rootResolver: TideyPanelFileRootResolver(socketSender: socketClient))
+                                                                   ordinaryTmuxInputRouter: OrdinaryTmuxInputRouter(routeResolver: ordinaryTmuxRouteResolver))
+    private lazy var fileActionHandler = BridgeFileActionHandler(rootResolver: TideyPanelFileRootResolver(socketSender: socketClient,
+                                                                                                          ordinaryTmuxRouteResolver: ordinaryTmuxRouteResolver))
+    private lazy var ordinaryTmuxRecentOutputHandler = OrdinaryTmuxRecentOutputHandler(routeResolver: ordinaryTmuxRouteResolver)
     private lazy var imageUploadHandler = BridgeImageUploadHandler(destinationResolver: ApplicationSupportImageUploadDestinationResolver(),
                                                                    filenameGenerator: TimestampedImageUploadFilenameGenerator())
     private lazy var ordinaryTmuxPanelProjector = OrdinaryTmuxPanelProjector(registry: ordinaryTmuxPanelRegistry)
@@ -677,6 +680,11 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                 if request.action == "image_upload" {
                     BridgeImageUploadDiagnostics.log("local dispatch handled_by=file request_id=\(request.id)")
                 }
+                return LocalRequestResult(response: response,
+                                          agentReplayEnvelopes: [],
+                                          workspaceReplayEnvelopes: [])
+            }
+            if let response = try ordinaryTmuxRecentOutputHandler.handle(request) {
                 return LocalRequestResult(response: response,
                                           agentReplayEnvelopes: [],
                                           workspaceReplayEnvelopes: [])

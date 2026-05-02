@@ -149,6 +149,25 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
         XCTAssertEqual(panels.first?.cwd, "/Users/timfeng/GitHub/mother_nature")
     }
 
+    func testProjectionThrowsWhenAnyWindowPaneLookupFails() throws {
+        let state = RunnerState(responses: [
+            RunnerState.key(socket: .defaultSocket, arguments: listClientsArguments):
+                "/dev/ttys010\t/tmp/tmux-501/default\t$7\tgenesis-extraction\t@15\n",
+            RunnerState.key(socket: .path("/tmp/tmux-501/default"), arguments: listWindowsArguments):
+                "@15\t0\tpriest\n@16\t1\tmother_nature\n",
+            RunnerState.key(socket: .path("/tmp/tmux-501/default"), arguments: listPanesArguments(windowID: "@15")):
+                "%15\t1\t/Users/timfeng/GitHub/priest\tclaude\n",
+        ])
+        let adapter = makeAdapter(state: state)
+
+        XCTAssertThrowsError(try adapter.projectedPanels(
+            for: OrdinaryTmuxAttachMetadata(clientTTY: "/dev/ttys010", targetSession: "genesis-extraction")
+        )) { error in
+            XCTAssertEqual(error as? OrdinaryTmuxProjectionError,
+                           .partialWindowProjection(windowID: "@16"))
+        }
+    }
+
     private var listClientsArguments: [String] {
         [
             "list-clients",

@@ -16,12 +16,23 @@ protocol PanelFileRootResolving {
 
 struct TideyPanelFileRootResolver: PanelFileRootResolving {
     private let socketSender: TideyRequestSending
+    private let ordinaryTmuxRouteResolver: OrdinaryTmuxRouteResolving?
 
-    init(socketSender: TideyRequestSending) {
+    init(socketSender: TideyRequestSending,
+         ordinaryTmuxRouteResolver: OrdinaryTmuxRouteResolving? = nil) {
         self.socketSender = socketSender
+        self.ordinaryTmuxRouteResolver = ordinaryTmuxRouteResolver
     }
 
     func rootPath(workspaceID: String, panelID: String) throws -> String {
+        if panelID.hasPrefix("\(OrdinaryTmuxLogicalPanelID.prefix):"),
+           let route = try ordinaryTmuxRouteResolver?.route(forPanelID: panelID, workspaceID: workspaceID) {
+            guard let cwd = route.cwd, cwd.isEmpty == false else {
+                throw BridgeInternalError.panelContextUnavailable("目前無法判斷這個 tmux window 的工作目錄。")
+            }
+            return cwd
+        }
+
         // PoC 階段先用 panel cwd 當檔案邊界。之後若 Tidey 提供正式 workspace root，
         // 只要替換這個 resolver，不用改 file_read / file_write contract。
         let request = BridgeRequest(id: UUID().uuidString,

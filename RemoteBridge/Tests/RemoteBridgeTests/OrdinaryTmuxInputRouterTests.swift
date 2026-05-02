@@ -139,7 +139,9 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
             sessionName: "genesis-extraction",
             windowID: "@16",
             windowIndex: 1,
-            activePaneID: "%16"
+            activePaneID: "%16",
+            cwd: "/Users/timfeng/GitHub/mother_nature",
+            currentCommand: "codex"
         )
     }
 
