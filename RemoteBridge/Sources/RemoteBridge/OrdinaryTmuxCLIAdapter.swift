@@ -68,6 +68,9 @@ struct OrdinaryTmuxClient: Equatable, Sendable {
 
 struct OrdinaryTmuxProjectedPanel: Equatable, Sendable {
     let panelID: String
+    let socketPath: String?
+    let sessionID: String
+    let sessionName: String
     let windowID: String
     let windowIndex: Int
     let windowName: String
@@ -84,10 +87,10 @@ protocol OrdinaryTmuxWindowProjecting: Sendable {
 }
 
 final class OrdinaryTmuxCLIAdapter {
-    typealias CommandRunner = @Sendable (_ socket: OrdinaryTmuxSocketSelector, _ arguments: [String]) throws -> String
+    typealias CommandRunner = @Sendable (_ socket: OrdinaryTmuxSocketSelector, _ arguments: [String], _ stdin: String?) throws -> String
 
     private static let fieldSeparator = "\t"
-    private static let liveCommandRunner: CommandRunner = { socket, arguments in
+    private static let liveCommandRunner: CommandRunner = { socket, arguments, stdin in
         guard let tmuxBinaryPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
             BridgeLogger.server.error("ordinary tmux adapter could not find a tmux binary in supported paths")
             throw NSError(domain: "OrdinaryTmuxCLIAdapter",
@@ -105,9 +108,17 @@ final class OrdinaryTmuxCLIAdapter {
 
         let outputPipe = Pipe()
         let errorPipe = Pipe()
+        let inputPipe = stdin == nil ? nil : Pipe()
         process.standardOutput = outputPipe
         process.standardError = errorPipe
+        if let inputPipe {
+            process.standardInput = inputPipe
+        }
         try process.run()
+        if let stdin, let inputPipe {
+            inputPipe.fileHandleForWriting.write(Data(stdin.utf8))
+            try? inputPipe.fileHandleForWriting.close()
+        }
         process.waitUntilExit()
 
         let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
@@ -143,7 +154,8 @@ final class OrdinaryTmuxCLIAdapter {
                     "#{session_name}",
                     "#{client_window}",
                 ].joined(separator: Self.fieldSeparator),
-            ]
+            ],
+            nil
         )
         let clients = output
             .split(whereSeparator: \.isNewline)
@@ -176,7 +188,8 @@ final class OrdinaryTmuxCLIAdapter {
                     "#{window_index}",
                     "#{window_name}",
                 ].joined(separator: Self.fieldSeparator),
-            ]
+            ],
+            nil
         )
         let windows = windowsOutput
             .split(whereSeparator: \.isNewline)
@@ -192,6 +205,9 @@ final class OrdinaryTmuxCLIAdapter {
                 panelID: OrdinaryTmuxCLIAdapter.stablePanelID(socketComponent: client.stableSocketComponent,
                                                               sessionID: client.sessionID,
                                                               windowID: window.id),
+                socketPath: client.socketPath,
+                sessionID: client.sessionID,
+                sessionName: client.sessionName,
                 windowID: window.id,
                 windowIndex: window.index,
                 windowName: window.name,
@@ -220,7 +236,8 @@ final class OrdinaryTmuxCLIAdapter {
                     "#{pane_current_path}",
                     "#{pane_current_command}",
                 ].joined(separator: Self.fieldSeparator),
-            ]
+            ],
+            nil
         )
         let panes = panesOutput
             .split(whereSeparator: \.isNewline)
@@ -244,6 +261,38 @@ final class OrdinaryTmuxCLIAdapter {
         case .name(let name):
             return ["-L", name] + commandArguments
         }
+    }
+
+    func sendInput(_ input: String, route: OrdinaryTmuxPanelRoute) throws {
+        let socket = route.socket
+        guard let pane = try activePane(forWindowID: route.windowID, socket: socket) else {
+            throw BridgeInternalError.notFound("ordinary tmux panel route is stale")
+        }
+        let splitInput = Self.splitInputForPasteAndEnter(input)
+        if !splitInput.pasteText.isEmpty {
+            let bufferName = "tidey-remote-\(UUID().uuidString)"
+            _ = try commandRunner(socket,
+                                  ["load-buffer", "-b", bufferName, "-"],
+                                  splitInput.pasteText)
+            _ = try commandRunner(socket,
+                                  ["paste-buffer", "-d", "-b", bufferName, "-t", pane.id],
+                                  nil)
+        }
+        if splitInput.sendEnter {
+            _ = try commandRunner(socket,
+                                  ["send-keys", "-t", pane.id, "C-m"],
+                                  nil)
+        }
+    }
+
+    static func splitInputForPasteAndEnter(_ input: String) -> (pasteText: String, sendEnter: Bool) {
+        if input.hasSuffix("\r\n") {
+            return (String(input.dropLast(2)), true)
+        }
+        if input.hasSuffix("\r") || input.hasSuffix("\n") {
+            return (String(input.dropLast()), true)
+        }
+        return (input, false)
     }
 
     private static func parseClientLine(_ line: Substring) -> OrdinaryTmuxClient? {

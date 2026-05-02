@@ -2,9 +2,12 @@ import Foundation
 
 final class OrdinaryTmuxPanelProjector {
     private let adapter: OrdinaryTmuxWindowProjecting
+    private let registry: OrdinaryTmuxPanelRegistry?
 
-    init(adapter: OrdinaryTmuxWindowProjecting = OrdinaryTmuxCLIAdapter()) {
+    init(adapter: OrdinaryTmuxWindowProjecting = OrdinaryTmuxCLIAdapter(),
+         registry: OrdinaryTmuxPanelRegistry? = nil) {
         self.adapter = adapter
+        self.registry = registry
     }
 
     func projectPanelListResult(_ result: [String: JSONValue]) -> [String: JSONValue] {
@@ -15,6 +18,7 @@ final class OrdinaryTmuxPanelProjector {
 
         var didProjectCarrier = false
         var nextPanels = [JSONValue]()
+        var routes = [OrdinaryTmuxPanelRoute]()
 
         for panelValue in panels {
             guard let carrierPanel = panelValue.objectValue,
@@ -40,6 +44,12 @@ final class OrdinaryTmuxPanelProjector {
             }
 
             didProjectCarrier = true
+            routes.append(contentsOf: projectedPanels.map {
+                Self.route(for: $0,
+                           workspaceID: workspaceID,
+                           carrierPanelID: carrierPanelID,
+                           metadata: metadata)
+            })
             nextPanels.append(contentsOf: projectedPanels.map {
                 Self.panelValue(for: $0,
                                 carrierPanel: carrierPanel,
@@ -49,8 +59,11 @@ final class OrdinaryTmuxPanelProjector {
         }
 
         guard didProjectCarrier else {
+            registry?.replaceRoutes(workspaceID: workspaceID, routes: [])
             return result
         }
+
+        registry?.replaceRoutes(workspaceID: workspaceID, routes: routes)
 
         let indexedPanels = nextPanels.enumerated().map { index, panelValue -> JSONValue in
             guard var panel = panelValue.objectValue else {
@@ -91,6 +104,8 @@ final class OrdinaryTmuxPanelProjector {
             "workspace_index": carrierPanel["workspace_index"] ?? .number(0),
             "ordinary_tmux_logical": .object([
                 "carrier_panel_id": .string(carrierPanelID),
+                "session_id": .string(projectedPanel.sessionID),
+                "session_name": .string(projectedPanel.sessionName),
                 "window_id": .string(projectedPanel.windowID),
                 "window_index": .number(Double(projectedPanel.windowIndex)),
                 "window_name": .string(projectedPanel.windowName),
@@ -108,5 +123,22 @@ final class OrdinaryTmuxPanelProjector {
             panel["current_command"] = .string(currentCommand)
         }
         return .object(panel)
+    }
+
+    private static func route(for projectedPanel: OrdinaryTmuxProjectedPanel,
+                              workspaceID: String,
+                              carrierPanelID: String,
+                              metadata: OrdinaryTmuxAttachMetadata) -> OrdinaryTmuxPanelRoute {
+        OrdinaryTmuxPanelRoute(
+            workspaceID: workspaceID,
+            panelID: projectedPanel.panelID,
+            carrierPanelID: carrierPanelID,
+            socket: projectedPanel.socketPath.map(OrdinaryTmuxSocketSelector.path) ?? metadata.preferredSocketSelector,
+            sessionID: projectedPanel.sessionID,
+            sessionName: projectedPanel.sessionName,
+            windowID: projectedPanel.windowID,
+            windowIndex: projectedPanel.windowIndex,
+            activePaneID: projectedPanel.activePaneID
+        )
     }
 }

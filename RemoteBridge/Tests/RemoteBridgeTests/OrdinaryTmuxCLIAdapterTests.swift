@@ -6,6 +6,7 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
         struct Call: Equatable {
             let socket: OrdinaryTmuxSocketSelector
             let arguments: [String]
+            let stdin: String?
         }
 
         private let lock = NSLock()
@@ -16,16 +17,16 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
             self.responses = responses
         }
 
-        func run(socket: OrdinaryTmuxSocketSelector, arguments: [String]) throws -> String {
+        func run(socket: OrdinaryTmuxSocketSelector, arguments: [String], stdin: String?) throws -> String {
             lock.lock()
             defer { lock.unlock() }
-            calls.append(Call(socket: socket, arguments: arguments))
-            let key = Self.key(socket: socket, arguments: arguments)
+            calls.append(Call(socket: socket, arguments: arguments, stdin: stdin))
+            let key = Self.key(socket: socket, arguments: arguments, stdin: stdin)
             return responses[key] ?? ""
         }
 
-        static func key(socket: OrdinaryTmuxSocketSelector, arguments: [String]) -> String {
-            "\(socket.cacheKey)::\(arguments.joined(separator: " "))"
+        static func key(socket: OrdinaryTmuxSocketSelector, arguments: [String], stdin: String? = nil) -> String {
+            "\(socket.cacheKey)::\(arguments.joined(separator: " "))::\(stdin ?? "")"
         }
     }
 
@@ -177,8 +178,8 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
     }
 
     private func makeAdapter(state: RunnerState) -> OrdinaryTmuxCLIAdapter {
-        OrdinaryTmuxCLIAdapter { socket, arguments in
-            try state.run(socket: socket, arguments: arguments)
+        OrdinaryTmuxCLIAdapter { socket, arguments, stdin in
+            try state.run(socket: socket, arguments: arguments, stdin: stdin)
         }
     }
 }

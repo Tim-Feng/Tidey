@@ -16,18 +16,21 @@ extension AgentSessionRegistryMonitor: ActiveAgentSessionResolving {}
 struct BridgeInputActionHandler {
     private let socketSender: TideyRequestSending
     private let sessionResolver: ActiveAgentSessionResolving
+    private let ordinaryTmuxInputRouter: OrdinaryTmuxInputRouting?
     private let sleep: @Sendable (UInt64) throws -> Void
 
     init(socketSender: TideyRequestSending,
          sessionResolver: ActiveAgentSessionResolving,
+         ordinaryTmuxInputRouter: OrdinaryTmuxInputRouting? = nil,
          sleep: @escaping @Sendable (UInt64) throws -> Void = { delayNanoseconds in
              guard delayNanoseconds > 0 else {
                  return
              }
              usleep(useconds_t(delayNanoseconds / 1_000))
-         }) {
+        }) {
         self.socketSender = socketSender
         self.sessionResolver = sessionResolver
+        self.ordinaryTmuxInputRouter = ordinaryTmuxInputRouter
         self.sleep = sleep
     }
 
@@ -55,6 +58,16 @@ struct BridgeInputActionHandler {
         let panelID = params["panel_id"]?.stringValue ?? "-"
         let workspaceID = params["workspace_id"]?.stringValue ?? "-"
         BridgeLogger.input.info("forward action=terminal_input request_id=\(request.id, privacy: .public) workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) length=\(input.count) has_cr=\(input.contains("\r")) has_lf=\(input.contains("\n")) tail=\(summarizedTail(input), privacy: .public)")
+
+        if let ordinaryTmuxInputRouter,
+           let routedPanelID = params["panel_id"]?.stringValue,
+           try ordinaryTmuxInputRouter.sendInput(input, toPanelID: routedPanelID) {
+            BridgeLogger.input.info("route action=terminal_input request_id=\(request.id, privacy: .public) panel_id=\(routedPanelID, privacy: .public) transport=ordinary_tmux")
+            return BridgeResponse(id: request.id,
+                                  ok: true,
+                                  result: ["sent": .bool(true)],
+                                  error: nil)
+        }
 
         let forwardedRequest = BridgeRequest(id: request.id,
                                              action: "send_input",
@@ -101,18 +114,23 @@ struct BridgeInputActionHandler {
                 try sleep(step.delayNanoseconds)
             }
             BridgeLogger.input.info("step action=send_input request_id=\(request.id, privacy: .public) vendor=\(vendor.id, privacy: .public) step_index=\(index) delay_ns=\(step.delayNanoseconds) length=\(step.input.count) has_cr=\(step.input.contains("\r")) has_lf=\(step.input.contains("\n")) tail=\(summarizedTail(step.input), privacy: .public)")
-            let stepRequest = BridgeRequest(id: UUID().uuidString,
-                                            action: "send_input",
-                                            params: [
-                                                "panel_id": .string(panelID),
-                                                "input": .string(step.input),
-                                            ])
-            let response = try socketSender.send(stepRequest)
-            guard response.ok else {
-                return BridgeResponse(id: request.id,
-                                      ok: false,
-                                      result: nil,
-                                      error: response.error)
+            if let ordinaryTmuxInputRouter,
+               try ordinaryTmuxInputRouter.sendInput(step.input, toPanelID: panelID) {
+                BridgeLogger.input.info("route action=chat_submit request_id=\(request.id, privacy: .public) panel_id=\(panelID, privacy: .public) transport=ordinary_tmux step_index=\(index)")
+            } else {
+                let stepRequest = BridgeRequest(id: UUID().uuidString,
+                                                action: "send_input",
+                                                params: [
+                                                    "panel_id": .string(panelID),
+                                                    "input": .string(step.input),
+                                                ])
+                let response = try socketSender.send(stepRequest)
+                guard response.ok else {
+                    return BridgeResponse(id: request.id,
+                                          ok: false,
+                                          result: nil,
+                                          error: response.error)
+                }
             }
         }
 

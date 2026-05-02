@@ -19,6 +19,7 @@ final class TideyRemoteBridgeServer {
     private let observability: BridgeObservabilityCenter
     private let cloudflaredManager: BridgeCloudflaredManager
     private let uploadGarbageCollector: BridgeUploadGarbageCollector
+    private let ordinaryTmuxPanelRegistry = OrdinaryTmuxPanelRegistry()
     private let group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
 
     init(host: String = "0.0.0.0",
@@ -64,12 +65,13 @@ final class TideyRemoteBridgeServer {
                 }
                 return channel.eventLoop.makeSucceededFuture([:])
             },
-            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub, registryMonitor, observability] channel, _ in
+            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub, registryMonitor, observability, ordinaryTmuxPanelRegistry] channel, _ in
                 channel.pipeline.addHandler(WebSocketFrameHandler(socketClient: socketClient,
                                                                   eventHub: eventHub,
                                                                   workspaceEventHub: workspaceEventHub,
                                                                   registryMonitor: registryMonitor,
-                                                                  observability: observability))
+                                                                  observability: observability,
+                                                                  ordinaryTmuxPanelRegistry: ordinaryTmuxPanelRegistry))
             }
         )
 
@@ -551,14 +553,16 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
     private let workspaceEventHub: WorkspaceEventHub
     private let registryMonitor: AgentSessionRegistryMonitor
     private let observability: BridgeObservabilityCenter
+    private let ordinaryTmuxPanelRegistry: OrdinaryTmuxPanelRegistry
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     private lazy var inputActionHandler = BridgeInputActionHandler(socketSender: socketClient,
-                                                                   sessionResolver: registryMonitor)
+                                                                   sessionResolver: registryMonitor,
+                                                                   ordinaryTmuxInputRouter: OrdinaryTmuxInputRouter(registry: ordinaryTmuxPanelRegistry))
     private lazy var fileActionHandler = BridgeFileActionHandler(rootResolver: TideyPanelFileRootResolver(socketSender: socketClient))
     private lazy var imageUploadHandler = BridgeImageUploadHandler(destinationResolver: ApplicationSupportImageUploadDestinationResolver(),
                                                                    filenameGenerator: TimestampedImageUploadFilenameGenerator())
-    private lazy var ordinaryTmuxPanelProjector = OrdinaryTmuxPanelProjector()
+    private lazy var ordinaryTmuxPanelProjector = OrdinaryTmuxPanelProjector(registry: ordinaryTmuxPanelRegistry)
     private var agentSubscriptionID: UUID?
     private var workspaceSubscriptionID: UUID?
 
@@ -566,12 +570,14 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
          eventHub: AgentEventHub,
          workspaceEventHub: WorkspaceEventHub,
          registryMonitor: AgentSessionRegistryMonitor,
-         observability: BridgeObservabilityCenter) {
+         observability: BridgeObservabilityCenter,
+         ordinaryTmuxPanelRegistry: OrdinaryTmuxPanelRegistry) {
         self.socketClient = socketClient
         self.eventHub = eventHub
         self.workspaceEventHub = workspaceEventHub
         self.registryMonitor = registryMonitor
         self.observability = observability
+        self.ordinaryTmuxPanelRegistry = ordinaryTmuxPanelRegistry
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
