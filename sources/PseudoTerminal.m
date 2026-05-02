@@ -1483,15 +1483,32 @@ ITERM_WEAKLY_REFERENCEABLE
 - (void)tideyRequestTmuxWindowBackfillForWorkspace:(Workspace *)workspace
                                     workspaceIndex:(NSInteger)workspaceIndex {
     if (!self.isShowingTideySidebar || !workspace || workspaceIndex == NSNotFound) {
+        NSLog(@"[TideyTmuxPanels] backfill skip sidebar=%@ workspace=%p workspace_index=%ld",
+              self.isShowingTideySidebar ? @"YES" : @"NO",
+              workspace,
+              (long)workspaceIndex);
         return;
     }
     NSString *workspaceID = [self tideyWorkspaceIdentifierForWorkspace:workspace];
     if (workspaceID.length == 0) {
+        NSLog(@"[TideyTmuxPanels] backfill skip missing_workspace_id workspace=%p workspace_index=%ld panel_count=%lu",
+              workspace,
+              (long)workspaceIndex,
+              (unsigned long)workspace.panels.count);
         return;
     }
 
+    NSLog(@"[TideyTmuxPanels] backfill scan workspace=%@ workspace_index=%ld panel_count=%lu",
+          workspaceID,
+          (long)workspaceIndex,
+          (unsigned long)workspace.panels.count);
     NSMutableDictionary<NSString *, TmuxController *> *controllersByKey = [NSMutableDictionary dictionary];
     for (PTYTab *panel in workspace.panels) {
+        NSLog(@"[TideyTmuxPanels] backfill panel panel=%p title=%@ is_tmux=%@ tmux_controller=%p",
+              panel,
+              panel.title ?: @"-",
+              panel.isTmuxTab ? @"YES" : @"NO",
+              panel.tmuxController);
         if (!panel.isTmuxTab || !panel.tmuxController) {
             continue;
         }
@@ -1501,13 +1518,22 @@ ITERM_WEAKLY_REFERENCEABLE
             controllersByKey[backfillKey] = panel.tmuxController;
         }
     }
+    if (controllersByKey.count == 0) {
+        NSLog(@"[TideyTmuxPanels] backfill skip no_tmux_controllers workspace=%@", workspaceID);
+    }
 
     for (NSString *backfillKey in controllersByKey) {
         if ([_tideyTmuxWindowBackfillKeysInFlight containsObject:backfillKey]) {
+            NSLog(@"[TideyTmuxPanels] backfill skip in_flight key=%@", backfillKey);
             continue;
         }
         TmuxController *tmuxController = controllersByKey[backfillKey];
         [_tideyTmuxWindowBackfillKeysInFlight addObject:backfillKey];
+        NSLog(@"[TideyTmuxPanels] backfill list_windows workspace=%@ key=%@ tmux_controller=%p session_id=%d",
+              workspaceID,
+              backfillKey,
+              tmuxController,
+              tmuxController.sessionId);
         [tmuxController listWindowsInSessionNumber:tmuxController.sessionId
                                             target:self
                                           selector:@selector(tideyBackfillTmuxWindowsFromList:context:)
@@ -1517,14 +1543,25 @@ ITERM_WEAKLY_REFERENCEABLE
 
 - (void)tideyTabDidBecomeTmuxBacked:(PTYTab *)panel {
     if (!panel.isTmuxTab || !panel.tmuxController) {
+        NSLog(@"[TideyTmuxPanels] controller_ready_hook skip panel=%p is_tmux=%@ tmux_controller=%p",
+              panel,
+              panel.isTmuxTab ? @"YES" : @"NO",
+              panel.tmuxController);
         return;
     }
+    NSLog(@"[TideyTmuxPanels] controller_ready_hook invoked panel=%p title=%@ tmux_controller=%p tmux_window=%d",
+          panel,
+          panel.title ?: @"-",
+          panel.tmuxController,
+          panel.tmuxWindow);
     [self ensureTideyWorkspacesInitialized];
 
     NSInteger workspaceIndex = [self indexOfWorkspaceContainingPanel:panel];
     if (workspaceIndex == NSNotFound) {
         workspaceIndex = [self tideyWorkspaceIndexForTmuxController:panel.tmuxController
                                                      excludingPanel:panel];
+        NSLog(@"[TideyTmuxPanels] controller_ready_hook workspace_missing inferred_index=%ld",
+              (long)workspaceIndex);
         if (workspaceIndex != NSNotFound) {
             [self tideyMaterializeExistingTmuxPanel:panel
                                           workspace:[self workspaceAtIndex:workspaceIndex]
@@ -1532,6 +1569,9 @@ ITERM_WEAKLY_REFERENCEABLE
         }
     }
     if (workspaceIndex == NSNotFound) {
+        NSLog(@"[TideyTmuxPanels] controller_ready_hook skip no_workspace panel=%p tmux_controller=%p",
+              panel,
+              panel.tmuxController);
         return;
     }
 
@@ -1547,13 +1587,41 @@ ITERM_WEAKLY_REFERENCEABLE
 - (void)tideySetTmuxPaneIdentityOptionsForSession:(PTYSession *)session
                                       workspaceID:(NSString *)workspaceID
                                           panelID:(NSString *)panelID {
-    if (!session.isTmuxClient || !session.tmuxController || session.tmuxPane <= 0) {
+    if (!session.isTmuxClient) {
+        NSLog(@"[TideyTmuxPanels] identity_set skip not_tmux_client session=%p workspace=%@ panel=%@",
+              session,
+              workspaceID ?: @"-",
+              panelID ?: @"-");
+        return;
+    }
+    if (!session.tmuxController) {
+        NSLog(@"[TideyTmuxPanels] identity_set skip nil_controller session=%p pane=%d workspace=%@ panel=%@",
+              session,
+              session.tmuxPane,
+              workspaceID ?: @"-",
+              panelID ?: @"-");
+        return;
+    }
+    if (session.tmuxPane <= 0) {
+        NSLog(@"[TideyTmuxPanels] identity_set skip invalid_pane session=%p tmux_controller=%p pane=%d workspace=%@ panel=%@",
+              session,
+              session.tmuxController,
+              session.tmuxPane,
+              workspaceID ?: @"-",
+              panelID ?: @"-");
         return;
     }
     NSArray<NSString *> *commands =
         [[self class] tideyTmuxPaneIdentityCommandsForPane:session.tmuxPane
                                                workspaceID:workspaceID
                                                    panelID:panelID];
+    NSLog(@"[TideyTmuxPanels] identity_set set_option session=%p tmux_controller=%p pane=%d workspace=%@ panel=%@ command_count=%lu",
+          session,
+          session.tmuxController,
+          session.tmuxPane,
+          workspaceID ?: @"-",
+          panelID ?: @"-",
+          (unsigned long)commands.count);
     for (NSString *command in commands) {
         [session.tmuxController.gateway sendCommand:command
                                      responseTarget:nil
@@ -1563,15 +1631,36 @@ ITERM_WEAKLY_REFERENCEABLE
 
 - (void)tideySyncTmuxPaneIdentityOptionsForPanel:(PTYTab *)panel workspace:(Workspace *)workspace {
     if (!panel || !workspace) {
+        NSLog(@"[TideyTmuxPanels] identity_sync skip panel=%p workspace=%p",
+              panel,
+              workspace);
         return;
     }
     NSString *workspaceID = [self tideyWorkspaceIdentifierForWorkspace:workspace];
     NSString *panelID = [self tideyPanelIdentifierForPanel:panel];
     if (workspaceID.length == 0 || panelID.length == 0) {
+        NSLog(@"[TideyTmuxPanels] identity_sync skip missing_ids panel=%p workspace=%p workspace_id=%@ panel_id=%@",
+              panel,
+              workspace,
+              workspaceID ?: @"-",
+              panelID ?: @"-");
         return;
     }
+    NSLog(@"[TideyTmuxPanels] identity_sync panel=%p title=%@ workspace=%@ panel_id=%@ is_tmux=%@ tmux_controller=%p session_count=%lu",
+          panel,
+          panel.title ?: @"-",
+          workspaceID,
+          panelID,
+          panel.isTmuxTab ? @"YES" : @"NO",
+          panel.tmuxController,
+          (unsigned long)panel.sessions.count);
     [self tideyAssignWorkspaceIdentifierToPanel:panel workspace:workspace];
     for (PTYSession *session in panel.sessions) {
+        NSLog(@"[TideyTmuxPanels] identity_sync session session=%p is_tmux_client=%@ tmux_controller=%p tmux_pane=%d",
+              session,
+              session.isTmuxClient ? @"YES" : @"NO",
+              session.tmuxController,
+              session.isTmuxClient ? session.tmuxPane : -1);
         [self tideySetTmuxPaneIdentityOptionsForSession:session
                                             workspaceID:workspaceID
                                                 panelID:panelID];
@@ -2404,12 +2493,23 @@ ITERM_WEAKLY_REFERENCEABLE
     if (self.workspaces == nil) {
         self.workspaces = [NSMutableArray array];
     }
+    NSLog(@"[TideyTmuxPanels] ensure_workspaces begin workspaces=%lu tabs=%lu selected=%ld",
+          (unsigned long)self.workspaces.count,
+          (unsigned long)self.tabs.count,
+          (long)self.selectedWorkspaceIndex);
     BOOL initializedFromTabs = NO;
     if (self.workspaces.count == 0) {
         PTYTab *currentTab = self.currentTab;
         Workspace *selectedWorkspace = nil;
         NSMutableDictionary<NSString *, Workspace *> *workspaceMap = [NSMutableDictionary dictionary];
         for (PTYTab *tab in self.tabs) {
+            NSLog(@"[TideyTmuxPanels] ensure_workspaces tab tab=%p title=%@ workspace_id=%@ is_tmux=%@ tmux_controller=%p session_count=%lu",
+                  tab,
+                  tab.title ?: @"-",
+                  tab.tideyWorkspaceIdentifier ?: @"-",
+                  tab.isTmuxTab ? @"YES" : @"NO",
+                  tab.tmuxController,
+                  (unsigned long)tab.sessions.count);
             NSString *workspaceID = tab.tideyWorkspaceIdentifier;
             Workspace *workspace = nil;
             if (workspaceID.length > 0) {
@@ -2443,6 +2543,10 @@ ITERM_WEAKLY_REFERENCEABLE
     if (initializedFromTabs) {
         [self tideySyncAllTmuxPaneIdentityOptions];
     }
+    NSLog(@"[TideyTmuxPanels] ensure_workspaces end initialized_from_tabs=%@ workspaces=%lu selected=%ld",
+          initializedFromTabs ? @"YES" : @"NO",
+          (unsigned long)self.workspaces.count,
+          (long)self.selectedWorkspaceIndex);
 }
 
 - (NSInteger)indexOfWorkspaceContainingPanel:(PTYTab *)panel {

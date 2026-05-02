@@ -5155,6 +5155,12 @@ typedef struct {
        tmuxController:(TmuxController *)tmuxController
                zoomed:(NSNumber *)zoomed {
     DLog(@"setTmuxLayout:tmuxController:%@zoomed:%@", tmuxController, zoomed);
+    NSLog(@"[TideyTmuxPanels] tab_set_tmux_layout tab=%p tmux_controller=%p tmux_window=%d session_count=%lu real_parent=%@",
+          self,
+          tmuxController,
+          self.tmuxWindow,
+          (unsigned long)self.sessions.count,
+          realParentWindow_);
     BOOL shouldZoom = isMaximized_;
     if (isMaximized_) {
         DLog(@"Unmaximizing");
@@ -7111,9 +7117,23 @@ typedef struct {
 
 - (void)tideySessionDidSetTmuxController:(PTYSession *)session {
     if (!session.isTmuxClient || !session.tmuxController) {
+        NSLog(@"[TideyTmuxPanels] tab_session_controller_hook skip tab=%p session=%p is_tmux_client=%@ tmux_controller=%p real_parent=%@",
+              self,
+              session,
+              session.isTmuxClient ? @"YES" : @"NO",
+              session.tmuxController,
+              realParentWindow_);
         return;
     }
-    if ([realParentWindow_ respondsToSelector:@selector(tideyTabDidBecomeTmuxBacked:)]) {
+    const BOOL parentResponds = [realParentWindow_ respondsToSelector:@selector(tideyTabDidBecomeTmuxBacked:)];
+    NSLog(@"[TideyTmuxPanels] tab_session_controller_hook invoked tab=%p session=%p tmux_controller=%p tmux_window=%d real_parent=%@ parent_responds=%@",
+          self,
+          session,
+          session.tmuxController,
+          self.isTmuxTab ? self.tmuxWindow : -1,
+          realParentWindow_,
+          parentResponds ? @"YES" : @"NO");
+    if (parentResponds) {
         [(id)realParentWindow_ tideyTabDidBecomeTmuxBacked:self];
     }
 }

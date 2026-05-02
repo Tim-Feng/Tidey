@@ -3927,6 +3927,15 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
 - (void)setTmuxController:(TmuxController *)tmuxController {
     [_tmuxController autorelease];
     _tmuxController = [tmuxController retain];
+    const int pane = self.isTmuxClient ? self.tmuxPane : -1;
+    const BOOL delegateResponds = [_delegate respondsToSelector:@selector(tideySessionDidSetTmuxController:)];
+    NSLog(@"[TideyTmuxPanels] session_set_tmux_controller session=%p tmux_controller=%p is_tmux_client=%@ pane=%d delegate=%@ delegate_responds=%@",
+          self,
+          _tmuxController,
+          self.isTmuxClient ? @"YES" : @"NO",
+          pane,
+          _delegate,
+          delegateResponds ? @"YES" : @"NO");
     NSDictionary<NSString *, NSString *> *dict = [tmuxController userVarsForPane:self.tmuxPane];
     for (NSString *key in dict) {
         if (![key hasPrefix:@"user."]) {
@@ -3934,7 +3943,7 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
         }
         [self.variablesScope setValue:dict[key] forVariableNamed:key];
     }
-    if ([_delegate respondsToSelector:@selector(tideySessionDidSetTmuxController:)]) {
+    if (delegateResponds) {
         [(id)_delegate tideySessionDidSetTmuxController:self];
     }
 }
