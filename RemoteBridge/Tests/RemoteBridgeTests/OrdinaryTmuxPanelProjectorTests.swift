@@ -16,6 +16,60 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
         }
     }
 
+    private final class MutableAdapter: OrdinaryTmuxWindowProjecting, @unchecked Sendable {
+        private let lock = NSLock()
+        private var panels: [OrdinaryTmuxProjectedPanel]
+        private var shouldThrow = false
+        private(set) var callCount = 0
+
+        init(panels: [OrdinaryTmuxProjectedPanel]) {
+            self.panels = panels
+        }
+
+        func setPanels(_ panels: [OrdinaryTmuxProjectedPanel]) {
+            lock.lock()
+            self.panels = panels
+            lock.unlock()
+        }
+
+        func setShouldThrow(_ shouldThrow: Bool) {
+            lock.lock()
+            self.shouldThrow = shouldThrow
+            lock.unlock()
+        }
+
+        func projectedPanels(for metadata: OrdinaryTmuxAttachMetadata) throws -> [OrdinaryTmuxProjectedPanel] {
+            lock.lock()
+            defer { lock.unlock() }
+            callCount += 1
+            if shouldThrow {
+                throw NSError(domain: "OrdinaryTmuxPanelProjectorTests", code: 2)
+            }
+            return panels
+        }
+    }
+
+    private final class TestClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var date: Date
+
+        init(_ date: Date) {
+            self.date = date
+        }
+
+        func advance(_ interval: TimeInterval) {
+            lock.lock()
+            date = date.addingTimeInterval(interval)
+            lock.unlock()
+        }
+
+        func now() -> Date {
+            lock.lock()
+            defer { lock.unlock() }
+            return date
+        }
+    }
+
     func testProjectsMultiWindowCarrierIntoRemoteOnlyPanels() {
         let projector = OrdinaryTmuxPanelProjector(adapter: StubAdapter(panels: [
             projectedPanel(windowID: "@15", index: 0, name: "priest", paneID: "%15", current: true),
@@ -88,6 +142,50 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
         let panels = result["panels"]?.arrayValue?.compactMap(\.objectValue)
         XCTAssertEqual(panels?.count, 1)
         XCTAssertEqual(panels?.first?["panel_id"]?.stringValue, "carrier-panel")
+    }
+
+    func testProjectionUsesCacheWithinTTL() {
+        let adapter = MutableAdapter(panels: [
+            projectedPanel(windowID: "@15", index: 0, name: "priest", paneID: "%15", current: true),
+            projectedPanel(windowID: "@16", index: 1, name: "mother_nature", paneID: "%16", current: false),
+        ])
+        let clock = TestClock(Date(timeIntervalSince1970: 0))
+        let projector = OrdinaryTmuxPanelProjector(adapter: adapter,
+                                                   cacheTTL: 10,
+                                                   staleTTL: 30,
+                                                   now: { clock.now() })
+
+        _ = projector.projectPanelListResult(panelListResult())
+        adapter.setPanels([
+            projectedPanel(windowID: "@15", index: 0, name: "changed", paneID: "%15", current: true),
+            projectedPanel(windowID: "@16", index: 1, name: "mother_nature", paneID: "%16", current: false),
+        ])
+        let cached = projector.projectPanelListResult(panelListResult())
+
+        let panels = cached["panels"]?.arrayValue?.compactMap(\.objectValue)
+        XCTAssertEqual(adapter.callCount, 1)
+        XCTAssertEqual(panels?.first?["title"]?.stringValue, "priest")
+    }
+
+    func testProjectionRefreshesAfterTTLAndUsesStaleCacheOnRefreshFailure() {
+        let adapter = MutableAdapter(panels: [
+            projectedPanel(windowID: "@15", index: 0, name: "priest", paneID: "%15", current: true),
+            projectedPanel(windowID: "@16", index: 1, name: "mother_nature", paneID: "%16", current: false),
+        ])
+        let clock = TestClock(Date(timeIntervalSince1970: 0))
+        let projector = OrdinaryTmuxPanelProjector(adapter: adapter,
+                                                   cacheTTL: 1,
+                                                   staleTTL: 30,
+                                                   now: { clock.now() })
+
+        _ = projector.projectPanelListResult(panelListResult())
+        clock.advance(2)
+        adapter.setShouldThrow(true)
+        let stale = projector.projectPanelListResult(panelListResult())
+
+        let panels = stale["panels"]?.arrayValue?.compactMap(\.objectValue)
+        XCTAssertEqual(adapter.callCount, 2)
+        XCTAssertEqual(panels?.map { $0["title"]?.stringValue }, ["priest", "mother_nature"])
     }
 
     private func panelListResult() -> [String: JSONValue] {

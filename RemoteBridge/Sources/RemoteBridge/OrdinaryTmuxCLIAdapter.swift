@@ -90,6 +90,7 @@ final class OrdinaryTmuxCLIAdapter {
     typealias CommandRunner = @Sendable (_ socket: OrdinaryTmuxSocketSelector, _ arguments: [String], _ stdin: String?) throws -> String
 
     private static let fieldSeparator = "\t"
+    private static let commandTimeoutSeconds: TimeInterval = 3
     private static let liveCommandRunner: CommandRunner = { socket, arguments, stdin in
         guard let tmuxBinaryPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
             BridgeLogger.server.error("ordinary tmux adapter could not find a tmux binary in supported paths")
@@ -119,7 +120,18 @@ final class OrdinaryTmuxCLIAdapter {
             inputPipe.fileHandleForWriting.write(Data(stdin.utf8))
             try? inputPipe.fileHandleForWriting.close()
         }
-        process.waitUntilExit()
+        let waitSemaphore = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .utility).async {
+            process.waitUntilExit()
+            waitSemaphore.signal()
+        }
+        if waitSemaphore.wait(timeout: .now() + OrdinaryTmuxCLIAdapter.commandTimeoutSeconds) == .timedOut {
+            process.terminate()
+            _ = waitSemaphore.wait(timeout: .now() + 1)
+            throw NSError(domain: "OrdinaryTmuxCLIAdapter",
+                          code: 124,
+                          userInfo: [NSLocalizedDescriptionKey: "tmux command timed out"])
+        }
 
         let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
         let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()

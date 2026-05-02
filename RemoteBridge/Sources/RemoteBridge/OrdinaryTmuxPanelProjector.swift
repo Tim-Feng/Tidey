@@ -1,13 +1,29 @@
 import Foundation
 
 final class OrdinaryTmuxPanelProjector {
+    private struct CacheEntry {
+        let panels: [OrdinaryTmuxProjectedPanel]
+        let loadedAt: Date
+    }
+
     private let adapter: OrdinaryTmuxWindowProjecting
     private let registry: OrdinaryTmuxPanelRegistry?
+    private let cacheTTL: TimeInterval
+    private let staleTTL: TimeInterval
+    private let now: @Sendable () -> Date
+    private let cacheQueue = DispatchQueue(label: "com.tidey.remote-bridge.ordinary-tmux-panel-projector-cache")
+    private var cache = [String: CacheEntry]()
 
     init(adapter: OrdinaryTmuxWindowProjecting = OrdinaryTmuxCLIAdapter(),
-         registry: OrdinaryTmuxPanelRegistry? = nil) {
+         registry: OrdinaryTmuxPanelRegistry? = nil,
+         cacheTTL: TimeInterval = 2,
+         staleTTL: TimeInterval = 30,
+         now: @escaping @Sendable () -> Date = { Date() }) {
         self.adapter = adapter
         self.registry = registry
+        self.cacheTTL = cacheTTL
+        self.staleTTL = staleTTL
+        self.now = now
     }
 
     func projectPanelListResult(_ result: [String: JSONValue]) -> [String: JSONValue] {
@@ -31,7 +47,9 @@ final class OrdinaryTmuxPanelProjector {
 
             let projectedPanels: [OrdinaryTmuxProjectedPanel]
             do {
-                projectedPanels = try adapter.projectedPanels(for: metadata)
+                projectedPanels = try cachedProjectedPanels(for: metadata,
+                                                            workspaceID: workspaceID,
+                                                            carrierPanelID: carrierPanelID)
             } catch {
                 BridgeLogger.server.error("ordinary tmux projection failed workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) error=\(String(describing: error), privacy: .public)")
                 nextPanels.append(panelValue)
@@ -77,6 +95,33 @@ final class OrdinaryTmuxPanelProjector {
         projectedResult["panels"] = .array(indexedPanels)
         projectedResult["selected_panel_id"] = selectedPanelID(from: indexedPanels) ?? result["selected_panel_id"]
         return projectedResult
+    }
+
+    private func cachedProjectedPanels(for metadata: OrdinaryTmuxAttachMetadata,
+                                       workspaceID: String,
+                                       carrierPanelID: String) throws -> [OrdinaryTmuxProjectedPanel] {
+        let key = Self.cacheKey(metadata: metadata, workspaceID: workspaceID, carrierPanelID: carrierPanelID)
+        let currentDate = now()
+
+        if let entry = cacheQueue.sync(execute: { cache[key] }),
+           currentDate.timeIntervalSince(entry.loadedAt) < cacheTTL {
+            return entry.panels
+        }
+
+        do {
+            let panels = try adapter.projectedPanels(for: metadata)
+            cacheQueue.sync {
+                cache[key] = CacheEntry(panels: panels, loadedAt: currentDate)
+            }
+            return panels
+        } catch {
+            if let entry = cacheQueue.sync(execute: { cache[key] }),
+               currentDate.timeIntervalSince(entry.loadedAt) < staleTTL {
+                BridgeLogger.server.error("ordinary tmux projection using stale cache workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) error=\(String(describing: error), privacy: .public)")
+                return entry.panels
+            }
+            throw error
+        }
     }
 
     private func selectedPanelID(from panels: [JSONValue]) -> JSONValue? {
@@ -140,5 +185,17 @@ final class OrdinaryTmuxPanelProjector {
             windowIndex: projectedPanel.windowIndex,
             activePaneID: projectedPanel.activePaneID
         )
+    }
+
+    private static func cacheKey(metadata: OrdinaryTmuxAttachMetadata,
+                                 workspaceID: String,
+                                 carrierPanelID: String) -> String {
+        [
+            workspaceID,
+            carrierPanelID,
+            metadata.preferredSocketSelector.cacheKey,
+            metadata.clientTTY,
+            metadata.targetSession ?? "-",
+        ].joined(separator: "|")
     }
 }
