@@ -456,6 +456,14 @@ static int OctalValue(const char *bytes) {
             DLog(@"Use original window %@", term);
         }
         if (!term &&
+            self.initial &&
+            [gateway_.window respondsToSelector:@selector(tideyShouldMaterializeAllTmuxWindowsInAttachingWindow)] &&
+            [(PseudoTerminal *)gateway_.window tideyShouldMaterializeAllTmuxWindowsInAttachingWindow]) {
+            term = [gateway_ window];
+            initialTabs = term.tabs.count;
+            DLog(@"Use Tidey attaching window %@", term);
+        }
+        if (!term &&
             !self.initial &&
             self.anonymous &&
             [iTermAdvancedSettingsModel anonymousTmuxWindowsOpenInCurrentWindow]) {

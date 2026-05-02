@@ -231,6 +231,7 @@ extern NSString *const PseudoTerminalTideyWorkspaceEventNotification;
 - (void)createTideyWorkspacePossiblyTmux:(BOOL)possiblyTmux;
 - (void)createTideyPanelPossiblyTmux:(BOOL)possiblyTmux;
 - (BOOL)isShowingTideySidebar;
+- (BOOL)tideyShouldMaterializeAllTmuxWindowsInAttachingWindow;
 - (BOOL)isShowingTideyEditorPanel;
 - (BOOL)tideyEditorPaneHasFocus;
 - (BOOL)tideyEditorHasFocus;

@@ -1388,6 +1388,49 @@ ITERM_WEAKLY_REFERENCEABLE
     }
 }
 
+- (BOOL)tideyPanel:(PTYTab *)panel belongsToTmuxController:(TmuxController *)tmuxController {
+    if (!panel || !tmuxController) {
+        return NO;
+    }
+    if (panel.tmuxController == tmuxController) {
+        return YES;
+    }
+    for (PTYSession *session in panel.sessions) {
+        if (session.tmuxController == tmuxController) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+- (NSInteger)tideyWorkspaceIndexForTmuxController:(TmuxController *)tmuxController excludingPanel:(PTYTab *)excludedPanel {
+    if (!tmuxController) {
+        return NSNotFound;
+    }
+    NSInteger match = NSNotFound;
+    for (NSInteger i = 0; i < (NSInteger)self.workspaces.count; i++) {
+        Workspace *workspace = self.workspaces[i];
+        for (PTYTab *panel in workspace.panels) {
+            if (panel == excludedPanel) {
+                continue;
+            }
+            if (![self tideyPanel:panel belongsToTmuxController:tmuxController]) {
+                continue;
+            }
+            if (match != NSNotFound && match != i) {
+                return NSNotFound;
+            }
+            match = i;
+            break;
+        }
+    }
+    return match;
+}
+
+- (BOOL)tideyShouldMaterializeAllTmuxWindowsInAttachingWindow {
+    return self.isShowingTideySidebar;
+}
+
 - (NSString *)tideyWorkspaceIdentifierForWorkspace:(Workspace *)workspace {
     return workspace.identifier.UUIDString;
 }
@@ -13596,6 +13639,16 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
     if ([_contentView.tabView indexOfTabViewItemWithIdentifier:aTab] == NSNotFound) {
         NSInteger targetWorkspaceIndex = _pendingWorkspaceIndexForInsertedPanel;
         const BOOL createWorkspace = _pendingInsertedPanelCreatesWorkspace;
+        if (self.isShowingTideySidebar &&
+            targetWorkspaceIndex < 0 &&
+            !createWorkspace &&
+            aTab.isTmuxTab) {
+            NSInteger tmuxWorkspaceIndex = [self tideyWorkspaceIndexForTmuxController:aTab.tmuxController
+                                                                       excludingPanel:aTab];
+            if (tmuxWorkspaceIndex != NSNotFound) {
+                targetWorkspaceIndex = tmuxWorkspaceIndex;
+            }
+        }
         const BOOL shouldManageTideyWorkspaceInsert = [[self class] tideyShouldManagePendingPanelInsertForShowingSidebar:self.isShowingTideySidebar
                                                                                                   pendingWorkspaceIndex:targetWorkspaceIndex
                                                                                                         createWorkspace:createWorkspace];

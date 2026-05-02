@@ -564,11 +564,16 @@ static NSDictionary *iTermTmuxControllerDefaultFontOverridesFromProfile(Profile 
     NSNumber *newWindowAffinity = nil;
     const iTermOpenTmuxWindowsMode openWindowsMode = [iTermPreferences intForKey:kPreferenceKeyOpenTmuxWindowsIn];
     const BOOL newWindowsInTabs = openWindowsMode == kOpenTmuxWindowsAsNativeTabsInNewWindow;
+    const BOOL tideyMaterializesAllWindows =
+        [gateway_.window respondsToSelector:@selector(tideyShouldMaterializeAllTmuxWindowsInAttachingWindow)] &&
+        [(PseudoTerminal *)gateway_.window tideyShouldMaterializeAllTmuxWindowsInAttachingWindow];
     DLog(@"Iterating records...");
     for (NSArray *record in doc.records) {
         DLog(@"Consider record %@", record);
         const int wid = [self windowIdFromString:[doc valueInRecord:record forField:@"window_id"]];
-        if (hiddenWindows_ && [hiddenWindows_ containsObject:[NSNumber numberWithInt:wid]]) {
+        if (!tideyMaterializesAllWindows &&
+            hiddenWindows_ &&
+            [hiddenWindows_ containsObject:[NSNumber numberWithInt:wid]]) {
             DLog(@"Don't open window %d because it was saved hidden.", wid);
             haveHidden = YES;
             // Let the user know something is up.
@@ -590,7 +595,8 @@ static NSDictionary *iTermTmuxControllerDefaultFontOverridesFromProfile(Profile 
         [windowsToOpen addObject:record];
     }
     BOOL tooMany = NO;
-    if (windowsToOpen.count > [iTermPreferences intForKey:kPreferenceKeyTmuxDashboardLimit]) {
+    if (!tideyMaterializesAllWindows &&
+        windowsToOpen.count > [iTermPreferences intForKey:kPreferenceKeyTmuxDashboardLimit]) {
         DLog(@"There are too many windows to open so just show the dashboard");
         tooMany = YES;
         // Save that these windows are hidden so the UI will be consistent next time you attach.
