@@ -96,6 +96,20 @@ struct AgentPanelProcessSnapshot: Sendable {
     let workspaceID: String
     let panelID: String
     let effectiveShellPID: Int32?
+    let tmuxPaneID: String?
+    let tmuxSocketPath: String?
+
+    init(workspaceID: String,
+         panelID: String,
+         effectiveShellPID: Int32?,
+         tmuxPaneID: String? = nil,
+         tmuxSocketPath: String? = nil) {
+        self.workspaceID = workspaceID
+        self.panelID = panelID
+        self.effectiveShellPID = effectiveShellPID
+        self.tmuxPaneID = tmuxPaneID
+        self.tmuxSocketPath = tmuxSocketPath
+    }
 }
 
 final class AgentSessionRegistryMonitor {
@@ -183,11 +197,15 @@ final class AgentSessionRegistryMonitor {
 
     func activeSessionForPanel(workspaceID: String,
                                panelID: String,
-                               effectiveShellPID: Int32?) -> ActiveAgentSessionSnapshot? {
+                               effectiveShellPID: Int32?,
+                               tmuxPaneID: String? = nil,
+                               tmuxSocketPath: String? = nil) -> ActiveAgentSessionSnapshot? {
         queue.sync {
             let panel = AgentPanelProcessSnapshot(workspaceID: workspaceID,
                                                  panelID: panelID,
-                                                 effectiveShellPID: effectiveShellPID)
+                                                 effectiveShellPID: effectiveShellPID,
+                                                 tmuxPaneID: tmuxPaneID,
+                                                 tmuxSocketPath: tmuxSocketPath)
             return matchedSession(for: panel)
         }
     }
@@ -366,6 +384,17 @@ final class AgentSessionRegistryMonitor {
         }
 
         BridgeLogger.server.debug("agent panel trying tmux match effective_shell_pid=\(effectiveShellPID, privacy: .public) candidate_records=\(self.activeRecords.count, privacy: .public)")
+        if let ordinaryTmuxMatch = ordinaryTmuxProcessMatch(for: panel, effectiveShellPID: effectiveShellPID) {
+            applyResolvedBinding(sessionID: ordinaryTmuxMatch.sessionID,
+                                 workspaceID: panel.workspaceID,
+                                 panelID: panel.panelID)
+            BridgeLogger.server.debug("agent panel matched via ordinary tmux pane process vendor=\(ordinaryTmuxMatch.vendor, privacy: .public) session_id=\(ordinaryTmuxMatch.sessionID, privacy: .public)")
+            return ActiveAgentSessionSnapshot(vendor: ordinaryTmuxMatch.vendor,
+                                              workspaceID: panel.workspaceID,
+                                              sessionID: ordinaryTmuxMatch.sessionID,
+                                              panelID: panel.panelID)
+        }
+
         let tmuxCandidates = self.activeRecords.values
             .filter { record in
                 guard let paneID = record.tmuxPaneID,
@@ -401,6 +430,41 @@ final class AgentSessionRegistryMonitor {
                                           workspaceID: panel.workspaceID,
                                           sessionID: match.sessionID,
                                           panelID: panel.panelID)
+    }
+
+    private func ordinaryTmuxProcessMatch(for panel: AgentPanelProcessSnapshot,
+                                          effectiveShellPID: Int32) -> AgentSessionRegistryRecord? {
+        guard let panelPaneID = panel.tmuxPaneID,
+              !panelPaneID.isEmpty,
+              let panelSocketPath = panel.tmuxSocketPath,
+              !panelSocketPath.isEmpty else {
+            return nil
+        }
+
+        let candidates = activeRecords.values
+            .filter { record in
+                guard let recordPaneID = record.tmuxPaneID,
+                      recordPaneID == panelPaneID,
+                      let recordSocketPath = record.tmuxSocketPath,
+                      Self.socketPathsMatch(recordSocketPath, panelSocketPath) else {
+                    return false
+                }
+                return processIsDescendantOrSelf(of: effectiveShellPID, candidate: record.pid)
+            }
+            .sorted(by: Self.isRecordPreferred(_:_:))
+        return candidates.first
+    }
+
+    private static func socketPathsMatch(_ lhs: String, _ rhs: String) -> Bool {
+        normalizeSocketPath(lhs) == normalizeSocketPath(rhs)
+    }
+
+    private static func normalizeSocketPath(_ path: String) -> String {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("/private/tmp/") {
+            return "/tmp/" + trimmed.dropFirst("/private/tmp/".count)
+        }
+        return trimmed
     }
 
     private static func isRecordPreferred(_ lhs: AgentSessionRegistryRecord,

@@ -101,6 +101,8 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
         XCTAssertEqual(panels?.map { $0["panel_index"]?.intValue }, [0, 1, 2])
         XCTAssertEqual(panels?.first?["ordinary_tmux_logical"]?.objectValue?["carrier_panel_id"]?.stringValue, "carrier-panel")
         XCTAssertEqual(panels?.first?["ordinary_tmux_logical"]?.objectValue?["active_pane_id"]?.stringValue, "%15")
+        XCTAssertEqual(panels?.first?["ordinary_tmux_logical"]?.objectValue?["socket_path"]?.stringValue, "/tmp/tmux-501/default")
+        XCTAssertEqual(panels?.first?["effective_shell_pid"]?.intValue, 1015)
     }
 
     func testProjectionPreservesNonTmuxPanelsAndReindexes() {
@@ -273,6 +275,7 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
             windowName: name,
             isCurrentWindow: current,
             activePaneID: paneID,
+            activePanePID: Int32(1000 + index + 15),
             cwd: "/Users/timfeng/GitHub/\(name)",
             currentCommand: "zsh",
             title: name,

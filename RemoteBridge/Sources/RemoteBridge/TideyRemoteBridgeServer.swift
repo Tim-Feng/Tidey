@@ -984,9 +984,14 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
 
         let workspaceID = panel["workspace_id"]?.stringValue ?? defaultWorkspaceID
         let effectiveShellPID = panel["effective_shell_pid"]?.intValue.flatMap(Int32.init)
+        let ordinaryTmux = panel["ordinary_tmux_logical"]?.objectValue
+        let tmuxPaneID = ordinaryTmux?["active_pane_id"]?.stringValue
+        let tmuxSocketPath = ordinaryTmux?["socket_path"]?.stringValue
         return AgentPanelProcessSnapshot(workspaceID: workspaceID,
                                          panelID: panelID,
-                                         effectiveShellPID: effectiveShellPID)
+                                         effectiveShellPID: effectiveShellPID,
+                                         tmuxPaneID: tmuxPaneID,
+                                         tmuxSocketPath: tmuxSocketPath)
     }
 
     private func augmentPanelListResult(_ result: [String: JSONValue]) -> [String: JSONValue] {
@@ -1000,10 +1005,12 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                   let panelID = panel["panel_id"]?.stringValue else {
                 return panelValue
             }
-            let effectiveShellPID = panel["effective_shell_pid"]?.intValue.flatMap(Int32.init)
+            let snapshot = Self.panelProcessSnapshot(from: panelValue, defaultWorkspaceID: workspaceID)
             if let session = registryMonitor.activeSessionForPanel(workspaceID: workspaceID,
                                                                    panelID: panelID,
-                                                                   effectiveShellPID: effectiveShellPID) {
+                                                                   effectiveShellPID: snapshot?.effectiveShellPID,
+                                                                   tmuxPaneID: snapshot?.tmuxPaneID,
+                                                                   tmuxSocketPath: snapshot?.tmuxSocketPath) {
                 panel["agent_session"] = .object([
                     "vendor": .string(session.vendor),
                     "session_id": .string(session.sessionID),

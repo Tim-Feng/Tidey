@@ -105,11 +105,11 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
             RunnerState.key(socket: .path("/tmp/tmux-501/default"), arguments: listWindowsArguments):
                 "@15\t0\tpriest\n@16\t1\tmother_nature\n@17\t2\tpeon_001\n",
             RunnerState.key(socket: .path("/tmp/tmux-501/default"), arguments: listPanesArguments(windowID: "@15")):
-                "%15\t1\t/Users/timfeng/GitHub/priest\tclaude\n",
+                "%15\t1\t1015\t/Users/timfeng/GitHub/priest\tclaude\n",
             RunnerState.key(socket: .path("/tmp/tmux-501/default"), arguments: listPanesArguments(windowID: "@16")):
-                "%16\t1\t/Users/timfeng/GitHub/mother_nature\tcodex\n",
+                "%16\t1\t1016\t/Users/timfeng/GitHub/mother_nature\tcodex\n",
             RunnerState.key(socket: .path("/tmp/tmux-501/default"), arguments: listPanesArguments(windowID: "@17")):
-                "%17\t1\t/Users/timfeng/GitHub/peon_001\tzsh\n",
+                "%17\t1\t1017\t/Users/timfeng/GitHub/peon_001\tzsh\n",
         ])
         let adapter = makeAdapter(state: state)
 
@@ -120,6 +120,7 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
         XCTAssertEqual(panels.map(\.title), ["priest", "mother_nature", "peon_001"])
         XCTAssertEqual(panels.map(\.windowIndex), [0, 1, 2])
         XCTAssertEqual(panels.map(\.activePaneID), ["%15", "%16", "%17"])
+        XCTAssertEqual(panels.map(\.activePanePID), [1015, 1016, 1017])
         XCTAssertEqual(
             panels.map(\.panelID),
             [
@@ -137,7 +138,7 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
             RunnerState.key(socket: .path("/tmp/tmux-501/default"), arguments: listWindowsArguments):
                 "@16\t1\tmother_nature\n",
             RunnerState.key(socket: .path("/tmp/tmux-501/default"), arguments: listPanesArguments(windowID: "@16")):
-                "%20\t0\t/tmp\tzsh\n%21\t1\t/Users/timfeng/GitHub/mother_nature\tcodex\n",
+                "%20\t0\t1020\t/tmp\tzsh\n%21\t1\t1021\t/Users/timfeng/GitHub/mother_nature\tcodex\n",
         ])
         let adapter = makeAdapter(state: state)
 
@@ -146,6 +147,7 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
         )
 
         XCTAssertEqual(panels.first?.activePaneID, "%21")
+        XCTAssertEqual(panels.first?.activePanePID, 1021)
         XCTAssertEqual(panels.first?.cwd, "/Users/timfeng/GitHub/mother_nature")
     }
 
@@ -156,7 +158,7 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
             RunnerState.key(socket: .path("/tmp/tmux-501/default"), arguments: listWindowsArguments):
                 "@15\t0\tpriest\n@16\t1\tmother_nature\n",
             RunnerState.key(socket: .path("/tmp/tmux-501/default"), arguments: listPanesArguments(windowID: "@15")):
-                "%15\t1\t/Users/timfeng/GitHub/priest\tclaude\n",
+                "%15\t1\t1015\t/Users/timfeng/GitHub/priest\tclaude\n",
         ])
         let adapter = makeAdapter(state: state)
 
@@ -192,7 +194,7 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
             "-t",
             windowID,
             "-F",
-            "#{pane_id}\t#{pane_active}\t#{pane_current_path}\t#{pane_current_command}",
+            "#{pane_id}\t#{pane_active}\t#{pane_pid}\t#{pane_current_path}\t#{pane_current_command}",
         ]
     }
 

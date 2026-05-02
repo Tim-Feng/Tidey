@@ -87,6 +87,7 @@ struct OrdinaryTmuxProjectedPanel: Equatable, Sendable {
     let windowName: String
     let isCurrentWindow: Bool
     let activePaneID: String
+    let activePanePID: Int32?
     let cwd: String?
     let currentCommand: String?
     let title: String
@@ -266,6 +267,7 @@ final class OrdinaryTmuxCLIAdapter {
                 windowName: window.name,
                 isCurrentWindow: window.id == client.currentWindowID,
                 activePaneID: pane.id,
+                activePanePID: pane.pid,
                 cwd: pane.cwd,
                 currentCommand: pane.currentCommand,
                 title: title,
@@ -286,6 +288,7 @@ final class OrdinaryTmuxCLIAdapter {
                 [
                     "#{pane_id}",
                     "#{pane_active}",
+                    "#{pane_pid}",
                     "#{pane_current_path}",
                     "#{pane_current_command}",
                 ].joined(separator: Self.fieldSeparator),
@@ -467,13 +470,14 @@ final class OrdinaryTmuxCLIAdapter {
     private struct TmuxPane {
         let id: String
         let isActive: Bool
+        let pid: Int32?
         let cwd: String?
         let currentCommand: String?
     }
 
     private static func parsePaneLine(_ line: Substring) -> TmuxPane? {
-        let parts = split(line, maxSplits: 3)
-        guard parts.count == 4 else {
+        let parts = split(line, maxSplits: 4)
+        guard parts.count == 5 else {
             return nil
         }
         let id = parts[0].nilIfEmpty
@@ -482,8 +486,9 @@ final class OrdinaryTmuxCLIAdapter {
         }
         return TmuxPane(id: id,
                         isActive: parts[1] == "1",
-                        cwd: parts[2].nilIfEmpty,
-                        currentCommand: parts[3].nilIfEmpty)
+                        pid: Int32(parts[2]),
+                        cwd: parts[3].nilIfEmpty,
+                        currentCommand: parts[4].nilIfEmpty)
     }
 
     private static func split(_ line: Substring, maxSplits: Int) -> [String] {

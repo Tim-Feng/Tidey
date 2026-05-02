@@ -219,6 +219,9 @@ final class OrdinaryTmuxPanelProjector {
             ]),
         ]
 
+        if let activePanePID = projectedPanel.activePanePID {
+            panel["effective_shell_pid"] = .number(Double(activePanePID))
+        }
         if let windowGUID = carrierPanel["window_guid"] {
             panel["window_guid"] = windowGUID
         }
@@ -227,6 +230,11 @@ final class OrdinaryTmuxPanelProjector {
         }
         if let currentCommand = projectedPanel.currentCommand {
             panel["current_command"] = .string(currentCommand)
+        }
+        if let socketPath = projectedPanel.socketPath {
+            var logical = panel["ordinary_tmux_logical"]?.objectValue ?? [:]
+            logical["socket_path"] = .string(socketPath)
+            panel["ordinary_tmux_logical"] = .object(logical)
         }
         return .object(panel)
     }
