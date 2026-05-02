@@ -95,6 +95,7 @@ struct OrdinaryTmuxProjectedPanel: Equatable, Sendable {
 
 protocol OrdinaryTmuxWindowProjecting: Sendable {
     func projectedPanels(for metadata: OrdinaryTmuxAttachMetadata) throws -> [OrdinaryTmuxProjectedPanel]
+    func setPaneIdentity(route: OrdinaryTmuxPanelRoute) throws
 }
 
 final class OrdinaryTmuxCLIAdapter {
@@ -331,6 +332,10 @@ final class OrdinaryTmuxCLIAdapter {
                                   ["send-keys", "-t", pane.id, "C-m"],
                                   nil)
         }
+    }
+
+    func setPaneIdentity(route: OrdinaryTmuxPanelRoute) throws {
+        try setPaneIdentity(route: route, paneID: route.activePaneID)
     }
 
     private func setPaneIdentity(route: OrdinaryTmuxPanelRoute, paneID: String) throws {

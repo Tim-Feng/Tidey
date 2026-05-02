@@ -8,12 +8,16 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
         func projectedPanels(for metadata: OrdinaryTmuxAttachMetadata) throws -> [OrdinaryTmuxProjectedPanel] {
             panels
         }
+
+        func setPaneIdentity(route: OrdinaryTmuxPanelRoute) throws {}
     }
 
     private struct ThrowingAdapter: OrdinaryTmuxWindowProjecting {
         func projectedPanels(for metadata: OrdinaryTmuxAttachMetadata) throws -> [OrdinaryTmuxProjectedPanel] {
             throw NSError(domain: "OrdinaryTmuxPanelProjectorTests", code: 1)
         }
+
+        func setPaneIdentity(route: OrdinaryTmuxPanelRoute) throws {}
     }
 
     private final class MutableAdapter: OrdinaryTmuxWindowProjecting, @unchecked Sendable {
@@ -21,6 +25,7 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
         private var panels: [OrdinaryTmuxProjectedPanel]
         private var shouldThrow = false
         private(set) var callCount = 0
+        private(set) var identityRoutes = [OrdinaryTmuxPanelRoute]()
 
         init(panels: [OrdinaryTmuxProjectedPanel]) {
             self.panels = panels
@@ -46,6 +51,12 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
                 throw NSError(domain: "OrdinaryTmuxPanelProjectorTests", code: 2)
             }
             return panels
+        }
+
+        func setPaneIdentity(route: OrdinaryTmuxPanelRoute) throws {
+            lock.lock()
+            identityRoutes.append(route)
+            lock.unlock()
         }
     }
 
@@ -186,6 +197,38 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
         let panels = stale["panels"]?.arrayValue?.compactMap(\.objectValue)
         XCTAssertEqual(adapter.callCount, 2)
         XCTAssertEqual(panels?.map { $0["title"]?.stringValue }, ["priest", "mother_nature"])
+        XCTAssertEqual(adapter.identityRoutes.map(\.panelID), [
+            "ordinary-tmux:/tmp/tmux-501/default:$7:@15",
+            "ordinary-tmux:/tmp/tmux-501/default:$7:@16",
+        ])
+    }
+
+    func testProjectionSetsPaneIdentityForProjectedRoutes() {
+        let adapter = MutableAdapter(panels: [
+            projectedPanel(windowID: "@15", index: 0, name: "priest", paneID: "%15", current: true),
+            projectedPanel(windowID: "@16", index: 1, name: "mother_nature", paneID: "%16", current: false),
+        ])
+        let projector = OrdinaryTmuxPanelProjector(adapter: adapter)
+
+        _ = projector.projectPanelListResult(panelListResult())
+
+        XCTAssertEqual(adapter.identityRoutes.map { "\($0.windowID):\($0.activePaneID):\($0.panelID)" }, [
+            "@15:%15:ordinary-tmux:/tmp/tmux-501/default:$7:@15",
+            "@16:%16:ordinary-tmux:/tmp/tmux-501/default:$7:@16",
+        ])
+    }
+
+    func testProjectionSkipsDuplicatePaneIdentityWritesForSameActivePane() {
+        let adapter = MutableAdapter(panels: [
+            projectedPanel(windowID: "@15", index: 0, name: "priest", paneID: "%15", current: true),
+            projectedPanel(windowID: "@16", index: 1, name: "mother_nature", paneID: "%16", current: false),
+        ])
+        let projector = OrdinaryTmuxPanelProjector(adapter: adapter)
+
+        _ = projector.projectPanelListResult(panelListResult())
+        _ = projector.projectPanelListResult(panelListResult())
+
+        XCTAssertEqual(adapter.identityRoutes.count, 2)
     }
 
     private func panelListResult() -> [String: JSONValue] {
