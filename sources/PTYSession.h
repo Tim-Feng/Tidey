@@ -454,6 +454,10 @@ backgroundColor:(NSColor *)backgroundColor;
 // tty device
 @property(nonatomic, readonly) NSString *tty;
 
+// Metadata for an ordinary tmux attach running inside this session. This is
+// nil for Tidey-managed tmux control-mode sessions and non-tmux jobs.
+@property(nonatomic, readonly, copy) NSDictionary<NSString *, NSString *> *tideyOrdinaryTmuxAttachMetadata;
+
 @property(nonatomic, assign) iTermBackgroundImageMode backgroundImageMode;
 
 // Blend level as specified in this session's profile.

@@ -571,6 +571,28 @@ final class PathTests: XCTestCase {
         return function(PTYSession.self, selector, tmuxBinaryPath as NSString) as String
     }
 
+    private func ordinaryTmuxAttachMetadata(processName: String = "tmux",
+                                            argv0: String = "tmux",
+                                            commandLine: String,
+                                            tty: String = "/dev/ttys001",
+                                            isTmuxClient: Bool = false) -> [String: String]? {
+        let selector = NSSelectorFromString("tideyOrdinaryTmuxAttachMetadataForProcessName:argv0:commandLine:tty:isTmuxClient:")
+        guard let method = class_getClassMethod(PTYSession.self, selector) else {
+            XCTFail("Missing PTYSession ordinary tmux attach detector")
+            return nil
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, NSString, NSString, NSString, NSString, ObjCBool) -> NSDictionary?
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        return function(PTYSession.self,
+                        selector,
+                        processName as NSString,
+                        argv0 as NSString,
+                        commandLine as NSString,
+                        tty as NSString,
+                        ObjCBool(isTmuxClient)) as? [String: String]
+    }
+
     private func resolvedExecutablePath(name: String,
                                         searchPATH: String,
                                         fallbackPaths: [String]) -> String? {
@@ -1159,6 +1181,41 @@ final class PathTests: XCTestCase {
         XCTAssertTrue(command.contains("TIDEY_SOCKET_PATH"))
         XCTAssertTrue(command.contains("TIDEY_WORKSPACE_ID"))
         XCTAssertTrue(command.contains("TIDEY_PANEL_ID"))
+    }
+
+    func testOrdinaryTmuxAttachDetectorFindsTargetSession() {
+        let metadata = ordinaryTmuxAttachMetadata(commandLine: "tmux a -t genesis-extraction")
+
+        XCTAssertEqual(metadata?["target_session"], "genesis-extraction")
+        XCTAssertEqual(metadata?["attach_command"], "a")
+        XCTAssertEqual(metadata?["client_tty"], "/dev/ttys001")
+    }
+
+    func testOrdinaryTmuxAttachDetectorCapturesSocketPathAndAttachSession() {
+        let metadata = ordinaryTmuxAttachMetadata(commandLine: "tmux -S /tmp/tmux-501/default attach-session -t genesis-extraction")
+
+        XCTAssertEqual(metadata?["socket_path"], "/tmp/tmux-501/default")
+        XCTAssertEqual(metadata?["target_session"], "genesis-extraction")
+        XCTAssertEqual(metadata?["attach_command"], "attach-session")
+    }
+
+    func testOrdinaryTmuxAttachDetectorIgnoresControlModeTmux() {
+        let metadata = ordinaryTmuxAttachMetadata(commandLine: "tmux -CC attach -t genesis-extraction")
+
+        XCTAssertNil(metadata)
+    }
+
+    func testOrdinaryTmuxAttachDetectorIgnoresExistingTmuxClientSession() {
+        let metadata = ordinaryTmuxAttachMetadata(commandLine: "tmux a -t genesis-extraction",
+                                                  isTmuxClient: true)
+
+        XCTAssertNil(metadata)
+    }
+
+    func testOrdinaryTmuxAttachDetectorIgnoresNonAttachCommands() {
+        let metadata = ordinaryTmuxAttachMetadata(commandLine: "tmux list-windows -t genesis-extraction")
+
+        XCTAssertNil(metadata)
     }
 
     func testPreparedTerminalEnvironmentUsesPreScrubBundleIdentifierForTmuxCleanup() {

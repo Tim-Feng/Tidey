@@ -599,6 +599,7 @@ typedef NS_ENUM(NSUInteger, PTYSessionTurdType) {
     BOOL _titleDirty;
     // May be stale, but allows us to update titles fast after an OSC 0/1/2
     iTermProcessInfo *_lastProcessInfo;
+    NSDictionary<NSString *, NSString *> *_tideyOrdinaryTmuxAttachMetadata;
     iTermLoggingHelper *_logging;
     iTermNaggingController *_naggingController;
     BOOL _tmuxTTLHasThresholds;
@@ -789,6 +790,165 @@ typedef NS_ENUM(NSUInteger, PTYSessionTurdType) {
     [command appendString:@"_tidey_filtered_update_environment=\"${_tidey_filtered_update_environment} TIDEY_SOCKET_PATH TIDEY_WORKSPACE_ID TIDEY_PANEL_ID TIDEY_BIN_DIR ITERM_ENABLE_SHELL_INTEGRATION_WITH_TMUX LC_TERMINAL\"; "];
     [command appendFormat:@"%@ set-option -g update-environment \"${_tidey_filtered_update_environment}\" 2>/dev/null", quotedTmuxPath];
     return command;
+}
+
++ (NSArray<NSString *> *)tideyTokenizedCommandLine:(NSString *)commandLine {
+    if (commandLine.length == 0) {
+        return @[];
+    }
+    NSMutableArray<NSString *> *tokens = [NSMutableArray array];
+    NSMutableString *current = [NSMutableString string];
+    BOOL inSingleQuote = NO;
+    BOOL inDoubleQuote = NO;
+    BOOL escaping = NO;
+    BOOL hasCurrentToken = NO;
+
+    for (NSUInteger i = 0; i < commandLine.length; i++) {
+        unichar ch = [commandLine characterAtIndex:i];
+        if (escaping) {
+            [current appendFormat:@"%C", ch];
+            hasCurrentToken = YES;
+            escaping = NO;
+            continue;
+        }
+        if (ch == '\\' && !inSingleQuote) {
+            escaping = YES;
+            hasCurrentToken = YES;
+            continue;
+        }
+        if (ch == '\'' && !inDoubleQuote) {
+            inSingleQuote = !inSingleQuote;
+            hasCurrentToken = YES;
+            continue;
+        }
+        if (ch == '"' && !inSingleQuote) {
+            inDoubleQuote = !inDoubleQuote;
+            hasCurrentToken = YES;
+            continue;
+        }
+        if ([[NSCharacterSet whitespaceAndNewlineCharacterSet] characterIsMember:ch] && !inSingleQuote && !inDoubleQuote) {
+            if (hasCurrentToken) {
+                [tokens addObject:[[current copy] autorelease]];
+                [current setString:@""];
+                hasCurrentToken = NO;
+            }
+            continue;
+        }
+        [current appendFormat:@"%C", ch];
+        hasCurrentToken = YES;
+    }
+    if (escaping) {
+        [current appendString:@"\\"];
+    }
+    if (hasCurrentToken) {
+        [tokens addObject:[[current copy] autorelease]];
+    }
+    return tokens;
+}
+
++ (NSDictionary<NSString *, NSString *> *)tideyOrdinaryTmuxAttachMetadataForProcessName:(NSString *)processName
+                                                                                  argv0:(NSString *)argv0
+                                                                            commandLine:(NSString *)commandLine
+                                                                                    tty:(NSString *)tty
+                                                                           isTmuxClient:(BOOL)isTmuxClient {
+    if (isTmuxClient) {
+        return nil;
+    }
+    NSArray<NSString *> *tokens = [self tideyTokenizedCommandLine:commandLine];
+    NSString *executable = tokens.firstObject ?: argv0 ?: processName;
+    if (![executable.lastPathComponent isEqualToString:@"tmux"] &&
+        ![processName.lastPathComponent isEqualToString:@"tmux"]) {
+        return nil;
+    }
+
+    NSMutableDictionary<NSString *, NSString *> *metadata = [NSMutableDictionary dictionary];
+    if (tty.length > 0) {
+        metadata[@"client_tty"] = tty;
+    }
+    if (commandLine.length > 0) {
+        metadata[@"command_line"] = commandLine;
+    }
+    if (processName.length > 0) {
+        metadata[@"process_name"] = processName;
+    }
+
+    NSUInteger index = tokens.count > 0 ? 1 : 0;
+    NSString *command = nil;
+    while (index < tokens.count) {
+        NSString *token = tokens[index];
+        if ([token isEqualToString:@"-CC"] || [token isEqualToString:@"-C"]) {
+            return nil;
+        }
+        if ([token isEqualToString:@"-S"] && index + 1 < tokens.count) {
+            metadata[@"socket_path"] = tokens[index + 1];
+            index += 2;
+            continue;
+        }
+        if ([token hasPrefix:@"-S"] && token.length > 2) {
+            metadata[@"socket_path"] = [token substringFromIndex:2];
+            index++;
+            continue;
+        }
+        if ([token isEqualToString:@"-L"] && index + 1 < tokens.count) {
+            metadata[@"socket_name"] = tokens[index + 1];
+            index += 2;
+            continue;
+        }
+        if ([token hasPrefix:@"-L"] && token.length > 2) {
+            metadata[@"socket_name"] = [token substringFromIndex:2];
+            index++;
+            continue;
+        }
+        if ([token isEqualToString:@"-f"] && index + 1 < tokens.count) {
+            index += 2;
+            continue;
+        }
+        if ([token hasPrefix:@"-f"] && token.length > 2) {
+            index++;
+            continue;
+        }
+        if ([token hasPrefix:@"-"]) {
+            index++;
+            continue;
+        }
+        command = token;
+        index++;
+        break;
+    }
+
+    if (!([command isEqualToString:@"attach"] ||
+          [command isEqualToString:@"attach-session"] ||
+          [command isEqualToString:@"a"])) {
+        return nil;
+    }
+    metadata[@"attach_command"] = command;
+
+    while (index < tokens.count) {
+        NSString *token = tokens[index];
+        if ([token isEqualToString:@"-t"] && index + 1 < tokens.count) {
+            metadata[@"target_session"] = tokens[index + 1];
+            break;
+        }
+        if ([token hasPrefix:@"-t"] && token.length > 2) {
+            metadata[@"target_session"] = [token substringFromIndex:2];
+            break;
+        }
+        if (([token isEqualToString:@"-c"] ||
+             [token isEqualToString:@"-f"] ||
+             [token isEqualToString:@"-x"] ||
+             [token isEqualToString:@"-y"]) && index + 1 < tokens.count) {
+            index += 2;
+            continue;
+        }
+        if ([token hasPrefix:@"-"]) {
+            index++;
+            continue;
+        }
+        metadata[@"target_session"] = token;
+        break;
+    }
+
+    return metadata;
 }
 
 + (NSMapTable<NSString *, PTYSession *> *)sessionMap {
@@ -1198,6 +1358,7 @@ ITERM_WEAKLY_REFERENCEABLE
     [_divorceDecree release];
     [_cursorTypeOverride release];
     [_lastProcessInfo release];
+    [_tideyOrdinaryTmuxAttachMetadata release];
     _logging.rawLogger = nil;
     _logging.cookedLogger = nil;
     [_logging release];
@@ -6022,6 +6183,37 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
     return [_shell tty];
 }
 
+- (NSDictionary<NSString *,NSString *> *)tideyOrdinaryTmuxAttachMetadata {
+    return _tideyOrdinaryTmuxAttachMetadata;
+}
+
+- (void)tideyUpdateOrdinaryTmuxAttachMetadataWithProcessInfo:(iTermProcessInfo *)processInfo {
+    NSDictionary<NSString *, NSString *> *metadata =
+        [[self class] tideyOrdinaryTmuxAttachMetadataForProcessName:processInfo.name
+                                                              argv0:processInfo.argv0
+                                                        commandLine:processInfo.commandLine
+                                                                tty:self.tty
+                                                       isTmuxClient:self.isTmuxClient];
+    if ((_tideyOrdinaryTmuxAttachMetadata == nil && metadata == nil) ||
+        [_tideyOrdinaryTmuxAttachMetadata isEqualToDictionary:metadata]) {
+        return;
+    }
+
+    [_tideyOrdinaryTmuxAttachMetadata autorelease];
+    _tideyOrdinaryTmuxAttachMetadata = [metadata copy];
+    if (_tideyOrdinaryTmuxAttachMetadata) {
+        NSLog(@"[TideyOrdinaryTmux] detected ordinary tmux attach session=%p tty=%@ target=%@ socket_path=%@ socket_name=%@ command=%@",
+              self,
+              _tideyOrdinaryTmuxAttachMetadata[@"client_tty"] ?: @"<nil>",
+              _tideyOrdinaryTmuxAttachMetadata[@"target_session"] ?: @"<default>",
+              _tideyOrdinaryTmuxAttachMetadata[@"socket_path"] ?: @"<default>",
+              _tideyOrdinaryTmuxAttachMetadata[@"socket_name"] ?: @"<default>",
+              _tideyOrdinaryTmuxAttachMetadata[@"command_line"] ?: @"<nil>");
+    } else {
+        NSLog(@"[TideyOrdinaryTmux] cleared ordinary tmux attach session=%p", self);
+    }
+}
+
 - (void)setBackgroundImageMode:(iTermBackgroundImageMode)mode {
     _backgroundImageMode = mode;
     [_backgroundDrawingHelper invalidate];
@@ -6881,6 +7073,7 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
     [self.variablesScope setValue:processTitle forVariableNamed:iTermVariableKeySessionProcessTitle];
     [self.variablesScope setValue:processInfo.commandLine forVariableNamed:iTermVariableKeySessionCommandLine];
     [self.variablesScope setValue:@(processInfo.processID) forVariableNamed:iTermVariableKeySessionJobPid];
+    [self tideyUpdateOrdinaryTmuxAttachMetadataWithProcessInfo:processInfo];
 
     if ([name isEqualToString:@"sudo"]) {
         [self checkForSudoPasswordPromptToOfferTouchID];
