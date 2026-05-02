@@ -7109,6 +7109,15 @@ typedef struct {
     [_tmuxTitleMonitor updateOnce];
 }
 
+- (void)tideySessionDidSetTmuxController:(PTYSession *)session {
+    if (!session.isTmuxClient || !session.tmuxController) {
+        return;
+    }
+    if ([realParentWindow_ respondsToSelector:@selector(tideyTabDidBecomeTmuxBacked:)]) {
+        [(id)realParentWindow_ tideyTabDidBecomeTmuxBacked:self];
+    }
+}
+
 - (void)sessionDidSetWindowTitle:(NSString *)title {
     [self.delegate tabDidSetWindowTitle:self to:title];
 }

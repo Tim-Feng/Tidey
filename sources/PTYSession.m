@@ -3934,6 +3934,9 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
         }
         [self.variablesScope setValue:dict[key] forVariableNamed:key];
     }
+    if ([_delegate respondsToSelector:@selector(tideySessionDidSetTmuxController:)]) {
+        [(id)_delegate tideySessionDidSetTmuxController:self];
+    }
 }
 
 - (void)handleKeypressInTmuxGateway:(NSEvent *)event {

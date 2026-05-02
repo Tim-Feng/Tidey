@@ -357,6 +357,8 @@ static NSString *TideySubmitLogSuffix(NSString *input) {
 - (void)tideyAssignWorkspaceIdentifierToPanel:(PTYTab *)panel workspace:(Workspace *)workspace;
 - (NSString *)tideyPanelIdentifierForPanel:(PTYTab *)panel;
 - (void)tideySyncTmuxPaneIdentityOptionsForPanel:(PTYTab *)panel workspace:(Workspace *)workspace;
+- (void)tideyTabDidBecomeTmuxBacked:(PTYTab *)panel;
+- (NSInteger)tideyWorkspaceIndexForTmuxController:(TmuxController *)tmuxController excludingPanel:(PTYTab *)excludedPanel;
 - (Workspace *)tideyWorkspaceWithIdentifier:(NSString *)workspaceIdentifier index:(NSInteger *)index;
 - (PTYTab *)tideyPanelWithIdentifier:(NSString *)panelIdentifier
                            workspace:(Workspace **)workspace
@@ -1511,6 +1513,35 @@ ITERM_WEAKLY_REFERENCEABLE
                                           selector:@selector(tideyBackfillTmuxWindowsFromList:context:)
                                             object:@[ workspaceID, backfillKey, tmuxController ]];
     }
+}
+
+- (void)tideyTabDidBecomeTmuxBacked:(PTYTab *)panel {
+    if (!panel.isTmuxTab || !panel.tmuxController) {
+        return;
+    }
+    [self ensureTideyWorkspacesInitialized];
+
+    NSInteger workspaceIndex = [self indexOfWorkspaceContainingPanel:panel];
+    if (workspaceIndex == NSNotFound) {
+        workspaceIndex = [self tideyWorkspaceIndexForTmuxController:panel.tmuxController
+                                                     excludingPanel:panel];
+        if (workspaceIndex != NSNotFound) {
+            [self tideyMaterializeExistingTmuxPanel:panel
+                                          workspace:[self workspaceAtIndex:workspaceIndex]
+                                      workspaceIndex:workspaceIndex];
+        }
+    }
+    if (workspaceIndex == NSNotFound) {
+        return;
+    }
+
+    Workspace *workspace = [self workspaceAtIndex:workspaceIndex];
+    [self tideySyncTmuxPaneIdentityOptionsForPanel:panel workspace:workspace];
+    NSLog(@"[TideyTmuxPanels] controller_ready workspace=%@ panel=%@ tmux_window=%d",
+          [self tideyWorkspaceIdentifierForWorkspace:workspace] ?: @"-",
+          [self tideyPanelIdentifierForPanel:panel] ?: @"-",
+          panel.tmuxWindow);
+    [self tideyRequestTmuxWindowBackfillForWorkspace:workspace workspaceIndex:workspaceIndex];
 }
 
 - (void)tideySetTmuxPaneIdentityOptionsForSession:(PTYSession *)session
