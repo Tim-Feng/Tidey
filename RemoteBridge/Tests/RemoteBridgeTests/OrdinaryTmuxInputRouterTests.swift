@@ -53,16 +53,22 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
 
         XCTAssertTrue(try router.sendInput("hello\r", toPanelID: route.panelID))
 
-        XCTAssertEqual(state.calls.count, 4)
+        XCTAssertEqual(state.calls.count, 6)
         XCTAssertEqual(state.calls[0], .init(socket: route.socket,
                                              arguments: listPanesArguments(windowID: route.windowID),
                                              stdin: nil))
-        XCTAssertEqual(state.calls[1].arguments, ["load-buffer", "-b", "ignored", "-"])
-        XCTAssertEqual(state.calls[1].stdin, "hello")
-        XCTAssertEqual(state.calls[2], .init(socket: route.socket,
-                                             arguments: ["paste-buffer", "-d", "-b", state.calls[2].arguments[3], "-t", "%21"],
+        XCTAssertEqual(state.calls[1], .init(socket: route.socket,
+                                             arguments: ["set-option", "-p", "-t", "%21", "@tidey_workspace_id", "workspace-1"],
                                              stdin: nil))
-        XCTAssertEqual(state.calls[3], .init(socket: route.socket,
+        XCTAssertEqual(state.calls[2], .init(socket: route.socket,
+                                             arguments: ["set-option", "-p", "-t", "%21", "@tidey_panel_id", route.panelID],
+                                             stdin: nil))
+        XCTAssertEqual(state.calls[3].arguments, ["load-buffer", "-b", "ignored", "-"])
+        XCTAssertEqual(state.calls[3].stdin, "hello")
+        XCTAssertEqual(state.calls[4], .init(socket: route.socket,
+                                             arguments: ["paste-buffer", "-d", "-b", state.calls[4].arguments[3], "-t", "%21"],
+                                             stdin: nil))
+        XCTAssertEqual(state.calls[5], .init(socket: route.socket,
                                              arguments: ["send-keys", "-t", "%21", "C-m"],
                                              stdin: nil))
     }
@@ -91,7 +97,7 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
 
         XCTAssertTrue(try router.sendInput("hello", toPanelID: route.panelID))
 
-        XCTAssertEqual(state.calls.map { $0.arguments.first }, ["list-panes", "load-buffer", "paste-buffer"])
+        XCTAssertEqual(state.calls.map { $0.arguments.first }, ["list-panes", "set-option", "set-option", "load-buffer", "paste-buffer"])
     }
 
     func testUnknownPanelFallsBackToMacSocketPath() throws {

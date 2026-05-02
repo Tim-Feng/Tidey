@@ -268,6 +268,7 @@ final class OrdinaryTmuxCLIAdapter {
         guard let pane = try activePane(forWindowID: route.windowID, socket: socket) else {
             throw BridgeInternalError.notFound("ordinary tmux panel route is stale")
         }
+        try setPaneIdentity(route: route, paneID: pane.id)
         let splitInput = Self.splitInputForPasteAndEnter(input)
         if !splitInput.pasteText.isEmpty {
             let bufferName = "tidey-remote-\(UUID().uuidString)"
@@ -283,6 +284,15 @@ final class OrdinaryTmuxCLIAdapter {
                                   ["send-keys", "-t", pane.id, "C-m"],
                                   nil)
         }
+    }
+
+    private func setPaneIdentity(route: OrdinaryTmuxPanelRoute, paneID: String) throws {
+        _ = try commandRunner(route.socket,
+                              ["set-option", "-p", "-t", paneID, "@tidey_workspace_id", route.workspaceID],
+                              nil)
+        _ = try commandRunner(route.socket,
+                              ["set-option", "-p", "-t", paneID, "@tidey_panel_id", route.panelID],
+                              nil)
     }
 
     static func splitInputForPasteAndEnter(_ input: String) -> (pasteText: String, sendEnter: Bool) {
