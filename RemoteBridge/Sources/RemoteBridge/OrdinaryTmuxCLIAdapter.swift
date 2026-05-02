@@ -150,7 +150,7 @@ final class OrdinaryTmuxCLIAdapter {
         let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
         let stdoutText = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let stderrText = String(data: errorData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        BridgeLogger.server.info("ordinary tmux command argv=\(process.arguments?.joined(separator: " ") ?? "-", privacy: .public) socket=\(socket.logDescription, privacy: .public) exit_code=\(process.terminationStatus, privacy: .public) stdout_bytes=\(outputData.count, privacy: .public) stderr_bytes=\(errorData.count, privacy: .public) stdout_prefix=\(String(stdoutText.prefix(500)), privacy: .public) stderr_prefix=\(String(stderrText.prefix(500)), privacy: .public)")
+        BridgeLogger.server.debug("ordinary tmux command argv=\(process.arguments?.joined(separator: " ") ?? "-", privacy: .public) socket=\(socket.logDescription, privacy: .public) exit_code=\(process.terminationStatus, privacy: .public) stdout_bytes=\(outputData.count, privacy: .public) stderr_bytes=\(errorData.count, privacy: .public) stdout_prefix=\(String(stdoutText.prefix(500)), privacy: .public) stderr_prefix=\(String(stderrText.prefix(500)), privacy: .public)")
         guard process.terminationStatus == 0 else {
             let stderr = stderrText.isEmpty ? "tmux exited \(process.terminationStatus)" : stderrText
             throw NSError(domain: "OrdinaryTmuxCLIAdapter",
@@ -167,7 +167,7 @@ final class OrdinaryTmuxCLIAdapter {
     }
 
     func resolveClient(for metadata: OrdinaryTmuxAttachMetadata) throws -> OrdinaryTmuxClient? {
-        BridgeLogger.server.info("ordinary tmux resolveClient start tty=\(metadata.clientTTY, privacy: .public) target=\(metadata.targetSession ?? "<default>", privacy: .public) socket_selector=\(metadata.preferredSocketSelector.logDescription, privacy: .public)")
+        BridgeLogger.server.debug("ordinary tmux resolveClient start tty=\(metadata.clientTTY, privacy: .public) target=\(metadata.targetSession ?? "<default>", privacy: .public) socket_selector=\(metadata.preferredSocketSelector.logDescription, privacy: .public)")
         let output = try commandRunner(
             metadata.preferredSocketSelector,
             [
@@ -186,9 +186,9 @@ final class OrdinaryTmuxCLIAdapter {
         let rawClientLines = output.split(whereSeparator: \.isNewline)
         let clients = rawClientLines
             .compactMap { Self.parseClientLine($0) }
-        BridgeLogger.server.info("ordinary tmux resolveClient list-clients raw_line_count=\(rawClientLines.count, privacy: .public) parsed_count=\(clients.count, privacy: .public) tty=\(metadata.clientTTY, privacy: .public) target=\(metadata.targetSession ?? "<default>", privacy: .public)")
+        BridgeLogger.server.debug("ordinary tmux resolveClient list-clients raw_line_count=\(rawClientLines.count, privacy: .public) parsed_count=\(clients.count, privacy: .public) tty=\(metadata.clientTTY, privacy: .public) target=\(metadata.targetSession ?? "<default>", privacy: .public)")
         for client in clients {
-            BridgeLogger.server.info("ordinary tmux resolveClient parsed_client tty=\(client.clientTTY, privacy: .public) session_id=\(client.sessionID, privacy: .public) session_name=\(client.sessionName, privacy: .public) socket_path=\(client.socketPath ?? "<default>", privacy: .public) current_window=\(client.currentWindowID ?? "<none>", privacy: .public)")
+            BridgeLogger.server.debug("ordinary tmux resolveClient parsed_client tty=\(client.clientTTY, privacy: .public) session_id=\(client.sessionID, privacy: .public) session_name=\(client.sessionName, privacy: .public) socket_path=\(client.socketPath ?? "<default>", privacy: .public) current_window=\(client.currentWindowID ?? "<none>", privacy: .public)")
         }
         let match = clients.first { client in
             guard client.clientTTY == metadata.clientTTY else {
@@ -200,9 +200,9 @@ final class OrdinaryTmuxCLIAdapter {
             return targetSession == client.sessionName || targetSession == client.sessionID
         }
         if let match {
-            BridgeLogger.server.info("ordinary tmux resolveClient matched tty=\(metadata.clientTTY, privacy: .public) target=\(metadata.targetSession ?? "<default>", privacy: .public) session_id=\(match.sessionID, privacy: .public) session_name=\(match.sessionName, privacy: .public) current_window=\(match.currentWindowID ?? "<none>", privacy: .public)")
+            BridgeLogger.server.debug("ordinary tmux resolveClient matched tty=\(metadata.clientTTY, privacy: .public) target=\(metadata.targetSession ?? "<default>", privacy: .public) session_id=\(match.sessionID, privacy: .public) session_name=\(match.sessionName, privacy: .public) current_window=\(match.currentWindowID ?? "<none>", privacy: .public)")
         } else {
-            BridgeLogger.server.info("ordinary tmux resolveClient no_match tty=\(metadata.clientTTY, privacy: .public) target=\(metadata.targetSession ?? "<default>", privacy: .public) parsed_count=\(clients.count, privacy: .public)")
+            BridgeLogger.server.debug("ordinary tmux resolveClient no_match tty=\(metadata.clientTTY, privacy: .public) target=\(metadata.targetSession ?? "<default>", privacy: .public) parsed_count=\(clients.count, privacy: .public)")
         }
         return match
     }
@@ -212,7 +212,7 @@ final class OrdinaryTmuxCLIAdapter {
             return []
         }
         let socket = client.socketPath.map(OrdinaryTmuxSocketSelector.path) ?? metadata.preferredSocketSelector
-        BridgeLogger.server.info("ordinary tmux projectedPanels matched_client session_id=\(client.sessionID, privacy: .public) session_name=\(client.sessionName, privacy: .public) socket=\(socket.logDescription, privacy: .public)")
+        BridgeLogger.server.debug("ordinary tmux projectedPanels matched_client session_id=\(client.sessionID, privacy: .public) session_name=\(client.sessionName, privacy: .public) socket=\(socket.logDescription, privacy: .public)")
         let windowsOutput = try commandRunner(
             socket,
             [
@@ -233,21 +233,21 @@ final class OrdinaryTmuxCLIAdapter {
             .compactMap { Self.parseWindowLine($0) }
             .sorted { $0.index < $1.index }
         let windowIDs = windows.map { "\($0.id):\($0.index):\($0.name)" }.joined(separator: ",")
-        BridgeLogger.server.info("ordinary tmux projectedPanels list-windows raw_line_count=\(rawWindowLines.count, privacy: .public) parsed_count=\(windows.count, privacy: .public) window_ids=\(windowIDs, privacy: .public) session_id=\(client.sessionID, privacy: .public)")
+        BridgeLogger.server.debug("ordinary tmux projectedPanels list-windows raw_line_count=\(rawWindowLines.count, privacy: .public) parsed_count=\(windows.count, privacy: .public) window_ids=\(windowIDs, privacy: .public) session_id=\(client.sessionID, privacy: .public)")
 
         return windows.compactMap { window in
             let pane: TmuxPane?
             do {
                 pane = try activePane(forWindowID: window.id, socket: socket)
             } catch {
-                BridgeLogger.server.info("ordinary tmux projectedPanels activePane failed window_id=\(window.id, privacy: .public) window_index=\(window.index, privacy: .public) reason=command_error error=\(String(describing: error), privacy: .public)")
+                BridgeLogger.server.debug("ordinary tmux projectedPanels activePane failed window_id=\(window.id, privacy: .public) window_index=\(window.index, privacy: .public) reason=command_error error=\(String(describing: error), privacy: .public)")
                 return nil
             }
             guard let pane else {
-                BridgeLogger.server.info("ordinary tmux projectedPanels activePane failed window_id=\(window.id, privacy: .public) window_index=\(window.index, privacy: .public) reason=no_pane")
+                BridgeLogger.server.debug("ordinary tmux projectedPanels activePane failed window_id=\(window.id, privacy: .public) window_index=\(window.index, privacy: .public) reason=no_pane")
                 return nil
             }
-            BridgeLogger.server.info("ordinary tmux projectedPanels activePane matched window_id=\(window.id, privacy: .public) window_index=\(window.index, privacy: .public) pane_id=\(pane.id, privacy: .public) cwd=\(pane.cwd ?? "<none>", privacy: .public) command=\(pane.currentCommand ?? "<none>", privacy: .public)")
+            BridgeLogger.server.debug("ordinary tmux projectedPanels activePane matched window_id=\(window.id, privacy: .public) window_index=\(window.index, privacy: .public) pane_id=\(pane.id, privacy: .public) cwd=\(pane.cwd ?? "<none>", privacy: .public) command=\(pane.currentCommand ?? "<none>", privacy: .public)")
             let title = window.name.nilIfEmpty ?? "tmux window \(window.index)"
             return OrdinaryTmuxProjectedPanel(
                 panelID: OrdinaryTmuxCLIAdapter.stablePanelID(socketComponent: client.stableSocketComponent,

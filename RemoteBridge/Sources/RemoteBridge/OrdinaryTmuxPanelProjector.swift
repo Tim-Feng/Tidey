@@ -52,17 +52,17 @@ final class OrdinaryTmuxPanelProjector {
                 continue
             }
             guard let carrierPanelID = carrierPanel["panel_id"]?.stringValue else {
-                BridgeLogger.server.error("ordinary tmux projection skipped workspace_id=\(workspaceID, privacy: .public) fallback_reason=missing_carrier_panel_id")
+                BridgeLogger.server.debug("ordinary tmux projection skipped workspace_id=\(workspaceID, privacy: .public) fallback_reason=missing_carrier_panel_id")
                 nextPanels.append(panelValue)
                 continue
             }
             guard let metadata = OrdinaryTmuxAttachMetadata(json: ordinaryTmuxMetadata) else {
-                BridgeLogger.server.error("ordinary tmux projection skipped workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) fallback_reason=invalid_metadata")
+                BridgeLogger.server.debug("ordinary tmux projection skipped workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) fallback_reason=invalid_metadata")
                 nextPanels.append(panelValue)
                 continue
             }
 
-            BridgeLogger.server.info("ordinary tmux projection metadata workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) tty=\(metadata.clientTTY, privacy: .public) target=\(metadata.targetSession ?? "<default>", privacy: .public)")
+            BridgeLogger.server.debug("ordinary tmux projection metadata workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) tty=\(metadata.clientTTY, privacy: .public) target=\(metadata.targetSession ?? "<default>", privacy: .public)")
 
             let projectedLoad: ProjectedPanelsLoad
             do {
@@ -79,7 +79,7 @@ final class OrdinaryTmuxPanelProjector {
             BridgeLogger.server.info("ordinary tmux projection result workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) tty=\(metadata.clientTTY, privacy: .public) target=\(metadata.targetSession ?? "<default>", privacy: .public) projected_count=\(projectedPanels.count, privacy: .public)")
 
             guard projectedPanels.count > 1 else {
-                BridgeLogger.server.info("ordinary tmux projection skipped workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) projected_count=\(projectedPanels.count, privacy: .public) fallback_reason=single_window")
+                BridgeLogger.server.debug("ordinary tmux projection skipped workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) projected_count=\(projectedPanels.count, privacy: .public) fallback_reason=single_window")
                 nextPanels.append(panelValue)
                 continue
             }
