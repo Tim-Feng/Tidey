@@ -1925,6 +1925,10 @@ ITERM_WEAKLY_REFERENCEABLE
     if (session.currentLocalWorkingDirectory.length > 0) {
         summary[@"cwd"] = session.currentLocalWorkingDirectory;
     }
+    NSDictionary<NSString *, NSString *> *ordinaryTmuxMetadata = session.tideyOrdinaryTmuxAttachMetadata;
+    if (ordinaryTmuxMetadata.count > 0) {
+        summary[@"ordinary_tmux"] = ordinaryTmuxMetadata;
+    }
     return summary;
 }
 

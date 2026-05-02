@@ -1,0 +1,309 @@
+import Foundation
+
+enum OrdinaryTmuxSocketSelector: Equatable, Sendable {
+    case defaultSocket
+    case path(String)
+    case name(String)
+
+    var cacheKey: String {
+        switch self {
+        case .defaultSocket:
+            return "default"
+        case .path(let path):
+            return "path:\(path)"
+        case .name(let name):
+            return "name:\(name)"
+        }
+    }
+}
+
+struct OrdinaryTmuxAttachMetadata: Equatable, Sendable {
+    let clientTTY: String
+    let targetSession: String?
+    let socketPath: String?
+    let socketName: String?
+
+    init(clientTTY: String,
+         targetSession: String? = nil,
+         socketPath: String? = nil,
+         socketName: String? = nil) {
+        self.clientTTY = clientTTY
+        self.targetSession = targetSession?.nilIfEmpty
+        self.socketPath = socketPath?.nilIfEmpty
+        self.socketName = socketName?.nilIfEmpty
+    }
+
+    init?(json: [String: JSONValue]) {
+        guard let clientTTY = json["client_tty"]?.stringValue?.nilIfEmpty else {
+            return nil
+        }
+        self.init(clientTTY: clientTTY,
+                  targetSession: json["target_session"]?.stringValue,
+                  socketPath: json["socket_path"]?.stringValue,
+                  socketName: json["socket_name"]?.stringValue)
+    }
+
+    var preferredSocketSelector: OrdinaryTmuxSocketSelector {
+        if let socketPath {
+            return .path(socketPath)
+        }
+        if let socketName {
+            return .name(socketName)
+        }
+        return .defaultSocket
+    }
+}
+
+struct OrdinaryTmuxClient: Equatable, Sendable {
+    let clientTTY: String
+    let socketPath: String?
+    let sessionID: String
+    let sessionName: String
+    let currentWindowID: String?
+
+    var stableSocketComponent: String {
+        socketPath?.nilIfEmpty ?? "runtime-default"
+    }
+}
+
+struct OrdinaryTmuxProjectedPanel: Equatable, Sendable {
+    let panelID: String
+    let windowID: String
+    let windowIndex: Int
+    let windowName: String
+    let activePaneID: String
+    let cwd: String?
+    let currentCommand: String?
+    let title: String
+    let subtitle: String
+}
+
+final class OrdinaryTmuxCLIAdapter {
+    typealias CommandRunner = @Sendable (_ socket: OrdinaryTmuxSocketSelector, _ arguments: [String]) throws -> String
+
+    private static let fieldSeparator = "\t"
+    private static let liveCommandRunner: CommandRunner = { socket, arguments in
+        guard let tmuxBinaryPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
+            BridgeLogger.server.error("ordinary tmux adapter could not find a tmux binary in supported paths")
+            throw NSError(domain: "OrdinaryTmuxCLIAdapter",
+                          code: 127,
+                          userInfo: [NSLocalizedDescriptionKey: "tmux not found"])
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: tmuxBinaryPath)
+        process.arguments = OrdinaryTmuxCLIAdapter.arguments(for: socket, commandArguments: arguments)
+        var environment = ProcessInfo.processInfo.environment
+        environment["LC_CTYPE"] = "UTF-8"
+        environment["LANG"] = "en_US.UTF-8"
+        process.environment = environment
+
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = errorPipe
+        try process.run()
+        process.waitUntilExit()
+
+        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+        let stdoutText = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let stderrText = String(data: errorData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        BridgeLogger.server.debug("ordinary tmux argv=\(process.arguments?.joined(separator: " ") ?? "-", privacy: .public) stdout_bytes=\(outputData.count, privacy: .public) stderr_bytes=\(errorData.count, privacy: .public) stdout=\(String(stdoutText.prefix(500)), privacy: .public) stderr=\(String(stderrText.prefix(500)), privacy: .public)")
+        guard process.terminationStatus == 0 else {
+            let stderr = stderrText.isEmpty ? "tmux exited \(process.terminationStatus)" : stderrText
+            throw NSError(domain: "OrdinaryTmuxCLIAdapter",
+                          code: Int(process.terminationStatus),
+                          userInfo: [NSLocalizedDescriptionKey: stderr])
+        }
+        return stdoutText
+    }
+
+    private let commandRunner: CommandRunner
+
+    init(commandRunner: @escaping CommandRunner = OrdinaryTmuxCLIAdapter.liveCommandRunner) {
+        self.commandRunner = commandRunner
+    }
+
+    func resolveClient(for metadata: OrdinaryTmuxAttachMetadata) throws -> OrdinaryTmuxClient? {
+        let output = try commandRunner(
+            metadata.preferredSocketSelector,
+            [
+                "list-clients",
+                "-F",
+                [
+                    "#{client_tty}",
+                    "#{socket_path}",
+                    "#{session_id}",
+                    "#{session_name}",
+                    "#{client_window}",
+                ].joined(separator: Self.fieldSeparator),
+            ]
+        )
+        let clients = output
+            .split(whereSeparator: \.isNewline)
+            .compactMap { Self.parseClientLine($0) }
+        return clients.first { client in
+            guard client.clientTTY == metadata.clientTTY else {
+                return false
+            }
+            guard let targetSession = metadata.targetSession else {
+                return true
+            }
+            return targetSession == client.sessionName || targetSession == client.sessionID
+        }
+    }
+
+    func projectedPanels(for metadata: OrdinaryTmuxAttachMetadata) throws -> [OrdinaryTmuxProjectedPanel] {
+        guard let client = try resolveClient(for: metadata) else {
+            return []
+        }
+        let socket = client.socketPath.map(OrdinaryTmuxSocketSelector.path) ?? metadata.preferredSocketSelector
+        let windowsOutput = try commandRunner(
+            socket,
+            [
+                "list-windows",
+                "-t",
+                client.sessionID,
+                "-F",
+                [
+                    "#{window_id}",
+                    "#{window_index}",
+                    "#{window_name}",
+                ].joined(separator: Self.fieldSeparator),
+            ]
+        )
+        let windows = windowsOutput
+            .split(whereSeparator: \.isNewline)
+            .compactMap { Self.parseWindowLine($0) }
+            .sorted { $0.index < $1.index }
+
+        return windows.compactMap { window in
+            guard let pane = try? activePane(forWindowID: window.id, socket: socket) else {
+                return nil
+            }
+            let title = window.name.nilIfEmpty ?? "tmux window \(window.index)"
+            return OrdinaryTmuxProjectedPanel(
+                panelID: OrdinaryTmuxCLIAdapter.stablePanelID(socketComponent: client.stableSocketComponent,
+                                                              sessionID: client.sessionID,
+                                                              windowID: window.id),
+                windowID: window.id,
+                windowIndex: window.index,
+                windowName: window.name,
+                activePaneID: pane.id,
+                cwd: pane.cwd,
+                currentCommand: pane.currentCommand,
+                title: title,
+                subtitle: pane.cwd ?? client.sessionName
+            )
+        }
+    }
+
+    private func activePane(forWindowID windowID: String,
+                            socket: OrdinaryTmuxSocketSelector) throws -> TmuxPane? {
+        let panesOutput = try commandRunner(
+            socket,
+            [
+                "list-panes",
+                "-t",
+                windowID,
+                "-F",
+                [
+                    "#{pane_id}",
+                    "#{pane_active}",
+                    "#{pane_current_path}",
+                    "#{pane_current_command}",
+                ].joined(separator: Self.fieldSeparator),
+            ]
+        )
+        let panes = panesOutput
+            .split(whereSeparator: \.isNewline)
+            .compactMap { Self.parsePaneLine($0) }
+        return panes.first { $0.isActive } ?? panes.first
+    }
+
+    static func stablePanelID(socketComponent: String,
+                              sessionID: String,
+                              windowID: String) -> String {
+        "ordinary-tmux:\(socketComponent):\(sessionID):\(windowID)"
+    }
+
+    static func arguments(for socket: OrdinaryTmuxSocketSelector,
+                          commandArguments: [String]) -> [String] {
+        switch socket {
+        case .defaultSocket:
+            return commandArguments
+        case .path(let path):
+            return ["-S", path] + commandArguments
+        case .name(let name):
+            return ["-L", name] + commandArguments
+        }
+    }
+
+    private static func parseClientLine(_ line: Substring) -> OrdinaryTmuxClient? {
+        let parts = split(line, maxSplits: 4)
+        guard parts.count == 5 else {
+            return nil
+        }
+        let clientTTY = parts[0].nilIfEmpty
+        let sessionID = parts[2].nilIfEmpty
+        let sessionName = parts[3].nilIfEmpty
+        guard let clientTTY, let sessionID, let sessionName else {
+            return nil
+        }
+        return OrdinaryTmuxClient(clientTTY: clientTTY,
+                                  socketPath: parts[1].nilIfEmpty,
+                                  sessionID: sessionID,
+                                  sessionName: sessionName,
+                                  currentWindowID: parts[4].nilIfEmpty)
+    }
+
+    private static func parseWindowLine(_ line: Substring) -> (id: String, index: Int, name: String)? {
+        let parts = split(line, maxSplits: 2)
+        guard parts.count == 3,
+              let index = Int(parts[1]) else {
+            return nil
+        }
+        let id = parts[0].nilIfEmpty
+        guard let id else {
+            return nil
+        }
+        return (id, index, parts[2])
+    }
+
+    private struct TmuxPane {
+        let id: String
+        let isActive: Bool
+        let cwd: String?
+        let currentCommand: String?
+    }
+
+    private static func parsePaneLine(_ line: Substring) -> TmuxPane? {
+        let parts = split(line, maxSplits: 3)
+        guard parts.count == 4 else {
+            return nil
+        }
+        let id = parts[0].nilIfEmpty
+        guard let id else {
+            return nil
+        }
+        return TmuxPane(id: id,
+                        isActive: parts[1] == "1",
+                        cwd: parts[2].nilIfEmpty,
+                        currentCommand: parts[3].nilIfEmpty)
+    }
+
+    private static func split(_ line: Substring, maxSplits: Int) -> [String] {
+        line.split(separator: Character(fieldSeparator),
+                   maxSplits: maxSplits,
+                   omittingEmptySubsequences: false)
+            .map(String.init)
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
