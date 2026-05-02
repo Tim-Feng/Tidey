@@ -1951,8 +1951,9 @@ ITERM_WEAKLY_REFERENCEABLE
     }
     NSString *subtitle = session ? ([self tideySidebarDisplaySubtitleForSession:session panel:panel] ?: @"") : @"";
     NSString *state = panel.isProcessing ? @"running" : @"idle";
+    NSString *panelID = [self tideyPanelIdentifierForPanel:panel] ?: @"";
     NSMutableDictionary *summary = [NSMutableDictionary dictionaryWithDictionary:@{
-        @"panel_id": [self tideyPanelIdentifierForPanel:panel] ?: @"",
+        @"panel_id": panelID,
         @"workspace_id": workspaceID,
         @"window_guid": self.terminalGuid ?: @"",
         @"title": title,
@@ -1969,6 +1970,14 @@ ITERM_WEAKLY_REFERENCEABLE
     }
     if (session.currentLocalWorkingDirectory.length > 0) {
         summary[@"cwd"] = session.currentLocalWorkingDirectory;
+    }
+    NSDictionary<NSString *, NSString *> *ordinaryTmuxMetadata = session.tideyOrdinaryTmuxAttachMetadata;
+    if (ordinaryTmuxMetadata.count > 0) {
+        summary[@"ordinary_tmux"] = ordinaryTmuxMetadata;
+        NSLog(@"[TideyOrdinaryTmux] emitted panel summary ordinary tmux metadata panel_id=%@ tty=%@ target=%@",
+              panelID,
+              ordinaryTmuxMetadata[@"client_tty"] ?: @"<nil>",
+              ordinaryTmuxMetadata[@"target_session"] ?: @"<default>");
     }
     return summary;
 }
