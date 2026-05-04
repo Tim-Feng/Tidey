@@ -70,6 +70,40 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
                                                  currentWindowID: "@15"))
     }
 
+    func testResolvesClientWhenTmuxOmitsTrailingCurrentWindowField() throws {
+        let state = RunnerState(responses: [
+            RunnerState.key(socket: .defaultSocket, arguments: listClientsArguments):
+                "/dev/ttys000\t/private/tmp/tmux-501/default\t$6\ttidey-cc\t\n" +
+                "/dev/ttys005\t/private/tmp/tmux-501/default\t$24\tgenesis-extraction\n",
+        ])
+        let adapter = makeAdapter(state: state)
+
+        let client = try adapter.resolveClient(
+            for: OrdinaryTmuxAttachMetadata(clientTTY: "/dev/ttys005", targetSession: "genesis-extraction")
+        )
+
+        XCTAssertEqual(client, OrdinaryTmuxClient(clientTTY: "/dev/ttys005",
+                                                 socketPath: "/private/tmp/tmux-501/default",
+                                                 sessionID: "$24",
+                                                 sessionName: "genesis-extraction",
+                                                 currentWindowID: nil))
+    }
+
+    func testResolvesClientWhenCurrentWindowFieldIsPresent() throws {
+        let state = RunnerState(responses: [
+            RunnerState.key(socket: .defaultSocket, arguments: listClientsArguments):
+                "/dev/ttys005\t/private/tmp/tmux-501/default\t$24\tgenesis-extraction\t@36\n",
+        ])
+        let adapter = makeAdapter(state: state)
+
+        let client = try adapter.resolveClient(
+            for: OrdinaryTmuxAttachMetadata(clientTTY: "/dev/ttys005", targetSession: "genesis-extraction")
+        )
+
+        XCTAssertEqual(client?.currentWindowID, "@36")
+        XCTAssertEqual(client?.sessionName, "genesis-extraction")
+    }
+
     func testTargetSessionCanMatchSessionID() throws {
         let state = RunnerState(responses: [
             RunnerState.key(socket: .defaultSocket, arguments: listClientsArguments):
@@ -131,6 +165,33 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
         )
     }
 
+    func testProjectsWindowsWhenClientLineOmitsTrailingCurrentWindowField() throws {
+        let state = RunnerState(responses: [
+            RunnerState.key(socket: .defaultSocket, arguments: listClientsArguments):
+                "/dev/ttys005\t/private/tmp/tmux-501/default\t$24\tgenesis-extraction\n",
+            RunnerState.key(socket: .path("/private/tmp/tmux-501/default"), arguments: listWindowsArguments(sessionID: "$24")):
+                "@36\t0\tpriest\n@37\t1\tmother_nature\n@38\t2\tpeon_001\n",
+            RunnerState.key(socket: .path("/private/tmp/tmux-501/default"), arguments: listPanesArguments(windowID: "@36")):
+                "%36\t1\t2036\t/Users/timfeng/GitHub/priest\tclaude\n",
+            RunnerState.key(socket: .path("/private/tmp/tmux-501/default"), arguments: listPanesArguments(windowID: "@37")):
+                "%37\t1\t2037\t/Users/timfeng/GitHub/mother_nature\tcodex\n",
+            RunnerState.key(socket: .path("/private/tmp/tmux-501/default"), arguments: listPanesArguments(windowID: "@38")):
+                "%38\t1\t2038\t/Users/timfeng/GitHub/peon_001\tzsh\n",
+        ])
+        let adapter = makeAdapter(state: state)
+
+        let panels = try adapter.projectedPanels(
+            for: OrdinaryTmuxAttachMetadata(clientTTY: "/dev/ttys005", targetSession: "genesis-extraction")
+        )
+
+        XCTAssertEqual(panels.map(\.title), ["priest", "mother_nature", "peon_001"])
+        XCTAssertEqual(panels.map(\.panelID), [
+            "ordinary-tmux:/private/tmp/tmux-501/default:$24:@36",
+            "ordinary-tmux:/private/tmp/tmux-501/default:$24:@37",
+            "ordinary-tmux:/private/tmp/tmux-501/default:$24:@38",
+        ])
+    }
+
     func testChoosesActivePaneWhenWindowHasSplits() throws {
         let state = RunnerState(responses: [
             RunnerState.key(socket: .defaultSocket, arguments: listClientsArguments):
@@ -179,10 +240,14 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
     }
 
     private var listWindowsArguments: [String] {
+        listWindowsArguments(sessionID: "$7")
+    }
+
+    private func listWindowsArguments(sessionID: String) -> [String] {
         [
             "list-windows",
             "-t",
-            "$7",
+            sessionID,
             "-F",
             "#{window_id}\t#{window_index}\t#{window_name}",
         ]
