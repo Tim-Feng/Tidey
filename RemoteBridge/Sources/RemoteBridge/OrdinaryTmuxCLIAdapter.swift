@@ -192,6 +192,9 @@ final class OrdinaryTmuxCLIAdapter {
         let rawClientLines = output.split(whereSeparator: \.isNewline)
         let clients = rawClientLines
             .compactMap { Self.parseClientLine($0) }
+        if rawClientLines.count != clients.count {
+            BridgeLogger.server.error("ordinary tmux resolveClient parse mismatch raw_line_count=\(rawClientLines.count, privacy: .public) parsed_count=\(clients.count, privacy: .public) tty=\(metadata.clientTTY, privacy: .public) target=\(metadata.targetSession ?? "<default>", privacy: .public)")
+        }
         BridgeLogger.server.debug("ordinary tmux resolveClient list-clients raw_line_count=\(rawClientLines.count, privacy: .public) parsed_count=\(clients.count, privacy: .public) tty=\(metadata.clientTTY, privacy: .public) target=\(metadata.targetSession ?? "<default>", privacy: .public)")
         for client in clients {
             BridgeLogger.server.debug("ordinary tmux resolveClient parsed_client tty=\(client.clientTTY, privacy: .public) session_id=\(client.sessionID, privacy: .public) session_name=\(client.sessionName, privacy: .public) socket_path=\(client.socketPath ?? "<default>", privacy: .public) current_window=\(client.currentWindowID ?? "<none>", privacy: .public)")
@@ -438,7 +441,7 @@ final class OrdinaryTmuxCLIAdapter {
 
     private static func parseClientLine(_ line: Substring) -> OrdinaryTmuxClient? {
         let parts = split(line, maxSplits: 4)
-        guard parts.count == 5 else {
+        guard parts.count == 4 || parts.count == 5 else {
             return nil
         }
         let clientTTY = parts[0].nilIfEmpty
@@ -451,7 +454,7 @@ final class OrdinaryTmuxCLIAdapter {
                                   socketPath: parts[1].nilIfEmpty,
                                   sessionID: sessionID,
                                   sessionName: sessionName,
-                                  currentWindowID: parts[4].nilIfEmpty)
+                                  currentWindowID: parts.count == 5 ? parts[4].nilIfEmpty : nil)
     }
 
     private static func parseWindowLine(_ line: Substring) -> (id: String, index: Int, name: String)? {
