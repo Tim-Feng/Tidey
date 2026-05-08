@@ -6,15 +6,15 @@ A terminal-first IDE for AI agents. Run agents in workspaces, edit code side by 
 
 ![Tidey main window](docs/screenshots/hero-main.png)
 
-## Latest in 0.3.2
+## Latest in 0.4.0
 
-- **Click file paths to open** — Plain-clicking a resolvable file path in the terminal now opens it via Semantic History, matching the existing ⌘-click behavior.
-- **In-app browser auto-focus** — ⌘-clicking a URL opens the in-app browser tab and automatically focuses it. ⌘-W closes the browser tab instead of the panel.
-- **Plain click works on styled terminal links** — Plain-clicking rendered link labels now opens the underlying URL, including OSC 8 hyperlinks and tools that render markdown links with the URL hidden in terminal cells.
+- **Multi-window tmux in Tidey Remote** — Regular `tmux a` attach sessions now project each window as a separate panel in Tidey Remote, no control mode required.
+- **Cleaner agent transcripts** — Tidey Remote chat filters Claude Code internal markup so only the readable conversation surfaces.
+- **Browse files outside the panel cwd** — Markdown / text file links in Tidey Remote chat can open files anywhere on disk for reading.
 
 ## Install
 
-**Download:** [Tidey.dmg](https://github.com/Tim-Feng/Tidey/releases/download/v0.3.2/Tidey.dmg) (macOS 12+, Apple Silicon & Intel)
+**Download:** [Tidey.dmg](https://github.com/Tim-Feng/Tidey/releases/download/v0.4.0/Tidey.dmg) (macOS 12+, Apple Silicon & Intel)
 
 1. Open the DMG, drag Tidey to Applications
 2. First launch: right-click → Open
