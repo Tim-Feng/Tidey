@@ -80,11 +80,30 @@ final class OrdinaryTmuxPanelProjector {
             BridgeLogger.server.info("ordinary tmux projection result workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) tty=\(metadata.clientTTY, privacy: .public) target=\(metadata.targetSession ?? "<default>", privacy: .public) projected_count=\(projectedPanels.count, privacy: .public)")
 
             guard projectedPanels.count > 1 else {
-                BridgeLogger.server.debug("ordinary tmux projection skipped workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) projected_count=\(projectedPanels.count, privacy: .public) fallback_reason=single_window")
-                if projectedLoad.canReplaceRegistry {
-                    registry?.replaceRoutes(workspaceID: workspaceID, routes: [], observedAt: now())
+                if let projectedPanel = projectedPanels.first {
+                    didProjectCarrier = true
+                    let route = Self.route(for: projectedPanel,
+                                           workspaceID: workspaceID,
+                                           carrierPanelID: carrierPanelID,
+                                           metadata: metadata,
+                                           panelID: carrierPanelID)
+                    if projectedLoad.canSetPaneIdentity {
+                        syncPaneIdentitiesIfNeeded(routes: [route])
+                    } else {
+                        BridgeLogger.server.info("ordinary tmux pane identity sync skipped workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) reason=stale_single_window_projection")
+                    }
+                    routes.append(route)
+                    nextPanels.append(Self.carrierPanelValue(for: projectedPanel,
+                                                             carrierPanel: carrierPanel,
+                                                             workspaceID: workspaceID,
+                                                             carrierPanelID: carrierPanelID))
+                } else {
+                    BridgeLogger.server.debug("ordinary tmux projection skipped workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) projected_count=0 fallback_reason=no_windows")
+                    if projectedLoad.canReplaceRegistry {
+                        registry?.replaceRoutes(workspaceID: workspaceID, routes: [], observedAt: now())
+                    }
+                    nextPanels.append(panelValue)
                 }
-                nextPanels.append(panelValue)
                 continue
             }
 
@@ -239,13 +258,47 @@ final class OrdinaryTmuxPanelProjector {
         return .object(panel)
     }
 
+    private static func carrierPanelValue(for projectedPanel: OrdinaryTmuxProjectedPanel,
+                                          carrierPanel: [String: JSONValue],
+                                          workspaceID: String,
+                                          carrierPanelID: String) -> JSONValue {
+        var panel = carrierPanel
+        panel["panel_id"] = .string(carrierPanelID)
+        panel["workspace_id"] = .string(workspaceID)
+
+        var logical = panel["ordinary_tmux_logical"]?.objectValue ?? [:]
+        logical["carrier_panel_id"] = .string(carrierPanelID)
+        logical["session_id"] = .string(projectedPanel.sessionID)
+        logical["session_name"] = .string(projectedPanel.sessionName)
+        logical["window_id"] = .string(projectedPanel.windowID)
+        logical["window_index"] = .number(Double(projectedPanel.windowIndex))
+        logical["window_name"] = .string(projectedPanel.windowName)
+        logical["active_pane_id"] = .string(projectedPanel.activePaneID)
+
+        if let activePanePID = projectedPanel.activePanePID {
+            panel["effective_shell_pid"] = .number(Double(activePanePID))
+        }
+        if let cwd = projectedPanel.cwd {
+            panel["cwd"] = .string(cwd)
+        }
+        if let currentCommand = projectedPanel.currentCommand {
+            panel["current_command"] = .string(currentCommand)
+        }
+        if let socketPath = projectedPanel.socketPath {
+            logical["socket_path"] = .string(socketPath)
+        }
+        panel["ordinary_tmux_logical"] = .object(logical)
+        return .object(panel)
+    }
+
     private static func route(for projectedPanel: OrdinaryTmuxProjectedPanel,
                               workspaceID: String,
                               carrierPanelID: String,
-                              metadata: OrdinaryTmuxAttachMetadata) -> OrdinaryTmuxPanelRoute {
+                              metadata: OrdinaryTmuxAttachMetadata,
+                              panelID: String? = nil) -> OrdinaryTmuxPanelRoute {
         OrdinaryTmuxPanelRoute(
             workspaceID: workspaceID,
-            panelID: projectedPanel.panelID,
+            panelID: panelID ?? projectedPanel.panelID,
             carrierPanelID: carrierPanelID,
             socket: projectedPanel.socketPath.map(OrdinaryTmuxSocketSelector.path) ?? metadata.preferredSocketSelector,
             sessionID: projectedPanel.sessionID,
