@@ -44,6 +44,29 @@ step() {
     echo "━━━ $1 ━━━"
 }
 
+bundle_remote_bridge() {
+    local bridge_dir="$PROJECT_DIR/RemoteBridge"
+    local resources_dir="$APP_PATH/Contents/Resources/RemoteBridge"
+    local bridge_binary="$bridge_dir/.build/release/tidey-remote-bridge"
+
+    step "Bundle Remote Bridge"
+
+    swift build -c release --package-path "$bridge_dir" 2>&1 | tail -1
+    if [[ ! -x "$bridge_binary" ]]; then
+        echo "Error: RemoteBridge binary not found at $bridge_binary" >&2
+        exit 1
+    fi
+
+    mkdir -p "$resources_dir"
+    cp -f "$bridge_binary" "$resources_dir/tidey-remote-bridge"
+    chmod 755 "$resources_dir/tidey-remote-bridge"
+    cp -f "$bridge_dir/com.tidey.remote-bridge.plist" "$resources_dir/com.tidey.remote-bridge.plist.template"
+    cp -f "$bridge_dir/com.tidey.remote-bridge.cloudflared.plist" "$resources_dir/com.tidey.remote-bridge.cloudflared.plist.template"
+
+    echo "RemoteBridge: $resources_dir/tidey-remote-bridge"
+    echo "LaunchAgents: bundled plist templates"
+}
+
 # --- Preflight checks ---
 step "Preflight"
 
@@ -73,6 +96,8 @@ if [[ ! -d "$APP_PATH" ]]; then
     exit 1
 fi
 echo "App: $APP_PATH"
+
+bundle_remote_bridge
 
 # --- Sign ---
 step "Code Sign"
