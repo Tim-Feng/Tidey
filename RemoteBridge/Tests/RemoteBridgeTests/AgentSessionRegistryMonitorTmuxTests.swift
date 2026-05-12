@@ -126,6 +126,7 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
         defer { try? fileManager.removeItem(at: supportDirectory) }
 
+        let agentPID = Int32(getpid())
         let registryURL = paths.claudeAgentSessionsDirectory.appendingPathComponent("claude-session-priest.json")
         let recordData = Data("""
         {
@@ -134,7 +135,7 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
           "workspace_id": "stale-workspace",
           "session_id": "session-priest",
           "panel_id": "stale-panel",
-          "pid": 66742,
+          "pid": \(agentPID),
           "cwd": "/Users/timfeng/GitHub/priest",
           "created_at": "2026-04-15T00:00:00Z",
           "tmux_pane_id": "%15",
@@ -149,7 +150,7 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
                                                   tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
                                                   parentPIDLookup: { pid in
                                                       switch pid {
-                                                      case 66742:
+                                                      case agentPID:
                                                           return 5000
                                                       case 5000:
                                                           return 1
@@ -179,6 +180,7 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
         defer { try? fileManager.removeItem(at: supportDirectory) }
 
+        let agentPID = Int32(getpid())
         let registryURL = paths.codexAgentSessionsDirectory.appendingPathComponent("codex-session-adbrewer.json")
         let recordData = Data("""
         {
@@ -187,7 +189,7 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
           "workspace_id": "stale-workspace",
           "session_id": "session-adbrewer",
           "panel_id": "stale-panel",
-          "pid": 95759,
+          "pid": \(agentPID),
           "cwd": "/Users/timfeng/GitHub/adbrewer",
           "created_at": "2026-04-15T00:00:00Z",
           "tmux_pane_id": "%43",
@@ -202,7 +204,7 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
                                                   tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
                                                   parentPIDLookup: { pid in
                                                       switch pid {
-                                                      case 95759:
+                                                      case agentPID:
                                                           return 82923
                                                       case 82923:
                                                           return 1

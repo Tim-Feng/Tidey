@@ -380,6 +380,7 @@ final class AgentSessionRegistryMonitor {
 
         guard let effectiveShellPID = panel.effectiveShellPID, effectiveShellPID > 0 else {
             BridgeLogger.server.debug("agent panel no direct match and effective_shell_pid unavailable workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public)")
+            logPanelMatchFailure(panel, matchedReason: "no_effective_shell_pid")
             return nil
         }
 
@@ -419,6 +420,7 @@ final class AgentSessionRegistryMonitor {
 
         guard let match = tmuxCandidates.first else {
             BridgeLogger.server.debug("agent panel no tmux match workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public)")
+            logPanelMatchFailure(panel, matchedReason: "none")
             return nil
         }
 
@@ -430,6 +432,11 @@ final class AgentSessionRegistryMonitor {
                                           workspaceID: panel.workspaceID,
                                           sessionID: match.sessionID,
                                           panelID: panel.panelID)
+    }
+
+    private func logPanelMatchFailure(_ panel: AgentPanelProcessSnapshot,
+                                      matchedReason: String) {
+        BridgeLogger.server.debug("agent panel match failed summary workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) effective_shell_pid=\(panel.effectiveShellPID.map(String.init) ?? "-", privacy: .public) tmux_pane_id=\(panel.tmuxPaneID ?? "-", privacy: .public) tmux_socket_path=\(panel.tmuxSocketPath ?? "-", privacy: .public) active_record_count=\(self.activeRecords.count, privacy: .public) matched_reason=\(matchedReason, privacy: .public)")
     }
 
     private func ordinaryTmuxProcessMatch(for panel: AgentPanelProcessSnapshot,
