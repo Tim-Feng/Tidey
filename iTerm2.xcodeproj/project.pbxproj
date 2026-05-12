@@ -1011,6 +1011,8 @@
 		F0A10D1E3A28000100000008 /* TideyCLICommandFormatterTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000007 /* TideyCLICommandFormatterTests.m */; };
 		F0A10D1E3A2800010000000A /* TideyShellIntegrationConfigWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000009 /* TideyShellIntegrationConfigWriter.swift */; };
 		F0A10D1E3A2800010000000C /* TideyShellIntegrationConfigWriterTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A2800010000000B /* TideyShellIntegrationConfigWriterTests.m */; };
+		F0B420A13A6D000100000001 /* TideyRemoteBridgeInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0B420A13A6D000100000000 /* TideyRemoteBridgeInstaller.swift */; };
+		F0B420A13A6D000100000003 /* TideyRemoteBridgeInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0B420A13A6D000100000002 /* TideyRemoteBridgeInstallerTests.swift */; };
 		F0A10D1E3A28000100000013 /* MainMenuManglerTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000012 /* MainMenuManglerTests.m */; };
 		F0A10D1E3A28000100000015 /* iTermLayoutCalculatorTideyTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000014 /* iTermLayoutCalculatorTideyTests.m */; };
 		F0A10D1E3A30000100000001 /* TideyCmdLongPressPanelHintsTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A30000100000000 /* TideyCmdLongPressPanelHintsTests.m */; };
@@ -6445,6 +6447,8 @@
 		F0A10D1E3A28000100000005 /* TideyCLICommandFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TideyCLICommandFormatter.swift; path = sources/TideyCLICommandFormatter.swift; sourceTree = SOURCE_ROOT; };
 		F0A10D1E3A28000100000007 /* TideyCLICommandFormatterTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyCLICommandFormatterTests.m; sourceTree = "<group>"; };
 		F0A10D1E3A2800010000000B /* TideyShellIntegrationConfigWriterTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyShellIntegrationConfigWriterTests.m; sourceTree = "<group>"; };
+		F0B420A13A6D000100000000 /* TideyRemoteBridgeInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TideyRemoteBridgeInstaller.swift; path = sources/TideyRemoteBridgeInstaller.swift; sourceTree = SOURCE_ROOT; };
+		F0B420A13A6D000100000002 /* TideyRemoteBridgeInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TideyRemoteBridgeInstallerTests.swift; sourceTree = "<group>"; };
 		F0A10D1E3A28000100000010 /* TideySocketCommandDecoderTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySocketCommandDecoderTests.m; sourceTree = "<group>"; };
 		F0A10D1E3A28000100000012 /* MainMenuManglerTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MainMenuManglerTests.m; sourceTree = "<group>"; };
 		F0A10D1E3A28000100000014 /* iTermLayoutCalculatorTideyTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = iTermLayoutCalculatorTideyTests.m; sourceTree = "<group>"; };
@@ -10012,6 +10016,7 @@
 				5F139DFA4255DC27A1E3E0FF /* AccessibilityDeletionDetectionTests.swift */,
 				F78529322C819CAD15A19251 /* IntervalTreeGraphEncodingTests.swift */,
 				86F85D24451C27760B7C75BC /* PrivateIPCheckerTests.swift */,
+				F0B420A13A6D000100000002 /* TideyRemoteBridgeInstallerTests.swift */,
 				E188B891EEA2947C8B12466D /* iTermCharacterSourceTests.swift */,
 				D78783C5E320CF711E81627F /* NSStringQuotedStringForPasteTests.swift */,
 				E8741F82F6611DA66E83C465 /* AsyncFilterTests.swift */,
@@ -12729,6 +12734,7 @@
 				A6A3EDC12E0CA95E00D711DA /* print.swift */,
 				A6F7D51B2E0613920065D09C /* MainMenuMangler.swift */,
 				F0A10D1E3A28000100000005 /* TideyCLICommandFormatter.swift */,
+				F0B420A13A6D000100000000 /* TideyRemoteBridgeInstaller.swift */,
 				A6F7D4EF2E0532C60065D09C /* DatabaseBackedArray.swift */,
 				A6F7D4ED2E0532B00065D09C /* Database.swift */,
 				A6069F3D2DF88C7100EE6CC7 /* PerformanceCounter.swift */,
@@ -19473,6 +19479,7 @@
 				A6F7D51C2E0613970065D09C /* MainMenuMangler.swift in Sources */,
 				F0A10D1E3A28000100000006 /* TideyCLICommandFormatter.swift in Sources */,
 				F0A10D1E3A2800010000000A /* TideyShellIntegrationConfigWriter.swift in Sources */,
+				F0B420A13A6D000100000001 /* TideyRemoteBridgeInstaller.swift in Sources */,
 				A63B92482F05C75200591B9E /* ExpressionBindingIconView.swift in Sources */,
 				A6AF79D62E06776C008D77BA /* iTermDatabase.swift in Sources */,
 				A68400A71FF82424008D3EE2 /* iTermIndicatorRenderer.m in Sources */,
@@ -20343,6 +20350,7 @@
 				EEBDD6CF78595292D0CF8977 /* PrivateIPCheckerTests.swift in Sources */,
 				56C476620E56B783B8972219 /* iTermCharacterSourceTests.swift in Sources */,
 				82FAE5CD376B4D65172ECCF2 /* NSStringQuotedStringForPasteTests.swift in Sources */,
+				F0B420A13A6D000100000003 /* TideyRemoteBridgeInstallerTests.swift in Sources */,
 				89F216591EB4AC6A168253CF /* AsyncFilterTests.swift in Sources */,
 				A78BC63A048881BDA2FB4F38 /* FIFOQueueTests.swift in Sources */,
 				A34452991BBAE7EC73F6F1A4 /* IntervalTreeSmallestLocationBugTests.swift in Sources */,
