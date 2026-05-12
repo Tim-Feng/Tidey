@@ -190,6 +190,7 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
                                                       action:@selector(reinstallBridge:)
                                                  destructive:NO];
     self.reinstallBridgeButton.hidden = YES;
+    self.reinstallBridgeButton.toolTip = @"Copy the bundled Tidey Remote Bridge into Application Support and restart its LaunchAgent.";
     [qrCardView addSubview:self.reinstallBridgeButton];
 
     NSTextField *devicesTitleLabel = [self labelWithFrame:devicesTitleFrame
@@ -423,6 +424,7 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     self.reinstallBridgeButton.hidden = YES;
     self.bridgeSetupLabel.textColor = [self secondaryTextColor];
     self.bridgeSetupLabel.stringValue = @"Setting up Tidey Remote Bridge...";
+    self.bridgeSetupLabel.toolTip = @"Tidey is installing the local Bridge service used by Tidey Remote.";
     self.statusLabel.stringValue = @"Setting up...";
     self.statusLabel.toolTip = nil;
     self.qrImageView.image = nil;
@@ -444,7 +446,7 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     self.refreshButton.enabled = YES;
     self.reinstallBridgeButton.hidden = NO;
     self.bridgeSetupLabel.textColor = [self destructiveColor];
-    self.bridgeSetupLabel.stringValue = result.detailMessage.length ? [NSString stringWithFormat:@"Setup failed: %@", result.detailMessage] : @"Setup failed.";
+    self.bridgeSetupLabel.stringValue = result.detailMessage.length ? [NSString stringWithFormat:@"Setup failed: %@", result.detailMessage] : @"Setup failed. Use Reinstall Bridge to retry.";
     self.bridgeSetupLabel.toolTip = result.detailMessage;
     self.statusLabel.stringValue = @"Setup failed";
     self.statusLabel.toolTip = result.detailMessage ?: result.userMessage;
@@ -872,7 +874,7 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     if (!token.length && error) {
         *error = [NSError errorWithDomain:@"TideyRemoteSettings"
                                      code:1
-                                 userInfo:@{ NSLocalizedDescriptionKey: @"pair-token.json does not contain token" }];
+                                 userInfo:@{ NSLocalizedDescriptionKey: @"Bridge pairing credentials are not ready yet" }];
     }
     return token;
 }
