@@ -152,6 +152,28 @@ git push origin master
 - [ ] `xmllint --xpath '//item[last()]/title/text()' docs/appcast.xml` 顯示新版
 - [ ] 本機裝上 DMG → 右鍵 → 開啟 → 跑一下確認沒炸（可選，release.sh 的 spctl --assess 已確認簽章）
 
+### Remote Bridge fresh-install audit
+
+Remote pairing 是 release blocker。每次 release 前用乾淨 macOS 使用者帳號驗一次，避免 Tidey Remote 使用者裝完 Mac app 後看不到 QR code。
+
+建議固定建立第二個本機使用者帳號 `tidey-test`。在該帳號登入後驗：
+
+1. 確認 fresh state：
+   - `~/Library/Application Support/Tidey Remote Bridge/` 不存在，或先移到備份位置。
+   - `~/Library/LaunchAgents/com.tidey.remote-bridge.plist` 不存在。
+   - `~/Library/LaunchAgents/com.tidey.remote-bridge.cloudflared.plist` 不存在。
+2. 安裝剛產出的 `Tidey.dmg`，把 Tidey 拖進 `/Applications`。
+3. 啟動 Tidey，開 Settings → Remote。
+4. 預期 Remote tab 先顯示 `Setting up Tidey Remote Bridge...`，10-20 秒內 QR code 出現。
+5. 驗 LaunchAgent：
+   - `launchctl print gui/$(id -u)/com.tidey.remote-bridge` 有 service。
+   - `curl -fsS http://127.0.0.1:4817/admin/status` 回 200 JSON。
+6. 用 iPhone Tidey Remote 掃 QR，配對成功，能進 workspace list。
+7. Quit Tidey 後重開，Remote tab 仍能顯示 QR，Bridge 不需要手動 install。
+8. 如果該機沒有 `cloudflared`，Remote tab 可顯示 LAN pairing 可用、Internet access degraded；這不是 blocker。Bridge auto-install 不能依賴 `cloudflared`。
+
+任何一步失敗都不要 release。先修 Mac app bundle / installer / LaunchAgent，再重新產 DMG。
+
 ## 故障排除
 
 - **`security find-identity` 在 agent sandbox 回 0 valid identities，但 Keychain Access 看得到**
