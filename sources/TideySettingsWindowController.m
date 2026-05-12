@@ -2,6 +2,7 @@
 
 #import "TideyKeyboardShortcutsViewController.h"
 #import "TideyTerminalAppearanceViewController.h"
+#import "iTerm2SharedARC-Swift.h"
 
 @import CoreImage;
 
@@ -66,8 +67,10 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 @interface TideyRemoteSettingsViewController : NSViewController
 
 @property(nonatomic, strong) NSTextField *statusLabel;
+@property(nonatomic, strong) NSTextField *bridgeSetupLabel;
 @property(nonatomic, strong) NSImageView *qrImageView;
 @property(nonatomic, strong) NSButton *refreshButton;
+@property(nonatomic, strong) NSButton *reinstallBridgeButton;
 @property(nonatomic, strong) NSView *devicesCardView;
 @property(nonatomic, strong) NSScrollView *devicesScrollView;
 @property(nonatomic, strong) NSView *devicesDocumentView;
@@ -81,6 +84,8 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 @property(nonatomic, strong) NSTimer *countdownTimer;
 @property(nonatomic, strong) NSTimer *devicesRefreshTimer;
 @property(nonatomic, strong) NSDate *expiresAt;
+@property(nonatomic, assign) BOOL bridgeReady;
+@property(nonatomic, assign) BOOL bridgeInstallInProgress;
 
 - (void)remotePageDidBecomeVisible;
 - (void)remotePageDidBecomeHidden;
@@ -151,6 +156,14 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     captionLabel.alignment = NSTextAlignmentCenter;
     [qrCardView addSubview:captionLabel];
 
+    self.bridgeSetupLabel = [self labelWithFrame:NSMakeRect(24, 260, 472, 16)
+                                          string:@""
+                                            font:[NSFont systemFontOfSize:11 weight:NSFontWeightRegular]
+                                           color:[self secondaryTextColor]];
+    self.bridgeSetupLabel.alignment = NSTextAlignmentCenter;
+    self.bridgeSetupLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+    [qrCardView addSubview:self.bridgeSetupLabel];
+
     [qrCardView addSubview:[self dividerWithFrame:NSMakeRect(0, 286, contentWidth, 0.5)]];
 
     NSTextField *expiresPrefixLabel = [self labelWithFrame:NSMakeRect(18, 301, 62, 16)
@@ -171,6 +184,13 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
                                               action:@selector(refreshPairPayload:)
                                          destructive:NO];
     [qrCardView addSubview:self.refreshButton];
+
+    self.reinstallBridgeButton = [self actionButtonWithTitle:@"Reinstall Bridge"
+                                                       frame:NSMakeRect(276, 297, 120, 26)
+                                                      action:@selector(reinstallBridge:)
+                                                 destructive:NO];
+    self.reinstallBridgeButton.hidden = YES;
+    [qrCardView addSubview:self.reinstallBridgeButton];
 
     NSTextField *devicesTitleLabel = [self labelWithFrame:devicesTitleFrame
                                                    string:@"Paired Devices"
@@ -246,13 +266,17 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    [self refreshPairPayload:nil];
+    [self ensureBridgeAndRefresh:NO];
 }
 
 - (void)remotePageDidBecomeVisible {
-    [self startDevicesRefreshTimer];
-    [self refreshPairedDevices];
-    [self refreshUploadStats];
+    if (self.bridgeReady) {
+        [self startDevicesRefreshTimer];
+        [self refreshPairedDevices];
+        [self refreshUploadStats];
+        return;
+    }
+    [self ensureBridgeAndRefresh:NO];
 }
 
 - (void)remotePageDidBecomeHidden {
@@ -349,6 +373,89 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 }
 
 - (void)refreshPairPayload:(id)sender {
+    [self ensureBridgeAndRefresh:NO];
+}
+
+- (void)reinstallBridge:(id)sender {
+    [self ensureBridgeAndRefresh:YES];
+}
+
+- (void)ensureBridgeAndRefresh:(BOOL)forceReinstall {
+    if (self.bridgeInstallInProgress) {
+        return;
+    }
+
+    self.bridgeInstallInProgress = YES;
+    self.bridgeReady = NO;
+    [self setBridgeSetupInstalling];
+
+    __weak __typeof(self) weakSelf = self;
+    void (^completion)(TideyRemoteBridgeInstallResult *) = ^(TideyRemoteBridgeInstallResult *result) {
+        __strong __typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        strongSelf.bridgeInstallInProgress = NO;
+        strongSelf.bridgeReady = result.bridgeReady;
+        if (!result.bridgeReady) {
+            [strongSelf setBridgeSetupFailedWithResult:result];
+            return;
+        }
+        [strongSelf setBridgeSetupRunningWithResult:result];
+        [strongSelf startDevicesRefreshTimer];
+        [strongSelf fetchPairPayload];
+        [strongSelf refreshPairedDevices];
+        [strongSelf refreshUploadStats];
+    };
+
+    if (forceReinstall) {
+        [[TideyRemoteBridgeInstaller shared] reinstallWithCompletion:completion];
+    } else {
+        [[TideyRemoteBridgeInstaller shared] ensureInstalledWithCompletion:completion];
+    }
+}
+
+- (void)setBridgeSetupInstalling {
+    [self.countdownTimer invalidate];
+    self.countdownTimer = nil;
+    self.expiresAt = nil;
+    self.refreshButton.enabled = NO;
+    self.reinstallBridgeButton.hidden = YES;
+    self.bridgeSetupLabel.textColor = [self secondaryTextColor];
+    self.bridgeSetupLabel.stringValue = @"Setting up Tidey Remote Bridge...";
+    self.statusLabel.stringValue = @"Setting up...";
+    self.statusLabel.toolTip = nil;
+    self.qrImageView.image = nil;
+    self.devicesStatusLabel.hidden = NO;
+    self.devicesScrollView.hidden = YES;
+    self.devicesStatusLabel.stringValue = @"Setting up Tidey Remote Bridge...";
+    self.uploadsStatusLabel.stringValue = @"Bridge setup pending";
+}
+
+- (void)setBridgeSetupRunningWithResult:(TideyRemoteBridgeInstallResult *)result {
+    self.refreshButton.enabled = YES;
+    self.reinstallBridgeButton.hidden = YES;
+    self.bridgeSetupLabel.textColor = result.cloudflaredAvailable ? [self secondaryTextColor] : [self tertiaryTextColor];
+    self.bridgeSetupLabel.stringValue = result.detailMessage.length ? result.detailMessage : @"Bridge running.";
+    self.bridgeSetupLabel.toolTip = result.detailMessage;
+}
+
+- (void)setBridgeSetupFailedWithResult:(TideyRemoteBridgeInstallResult *)result {
+    self.refreshButton.enabled = YES;
+    self.reinstallBridgeButton.hidden = NO;
+    self.bridgeSetupLabel.textColor = [self destructiveColor];
+    self.bridgeSetupLabel.stringValue = result.detailMessage.length ? [NSString stringWithFormat:@"Setup failed: %@", result.detailMessage] : @"Setup failed.";
+    self.bridgeSetupLabel.toolTip = result.detailMessage;
+    self.statusLabel.stringValue = @"Setup failed";
+    self.statusLabel.toolTip = result.detailMessage ?: result.userMessage;
+    self.qrImageView.image = nil;
+    self.devicesStatusLabel.hidden = NO;
+    self.devicesScrollView.hidden = YES;
+    self.devicesStatusLabel.stringValue = result.detailMessage.length ? [NSString stringWithFormat:@"Bridge setup failed: %@", result.detailMessage] : @"Bridge setup failed.";
+    self.uploadsStatusLabel.stringValue = @"Bridge setup failed";
+}
+
+- (void)fetchPairPayload {
     [self.countdownTimer invalidate];
     self.countdownTimer = nil;
     self.expiresAt = nil;
@@ -360,7 +467,7 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     NSError *tokenError = nil;
     NSString *token = [self legacyPairTokenWithError:&tokenError];
     if (!token.length) {
-        [self showError:[NSString stringWithFormat:@"Pair token unavailable: %@", tokenError.localizedDescription ?: @"unknown error"]];
+        [self showError:@"Tidey Remote Bridge is starting. Refresh again in a moment."];
         return;
     }
 
@@ -402,6 +509,14 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 }
 
 - (void)refreshPairedDevicesShowingLoading:(BOOL)showLoading {
+    if (!self.bridgeReady) {
+        self.devicesStatusLabel.hidden = NO;
+        self.devicesScrollView.hidden = YES;
+        self.devicesStatusLabel.stringValue = self.bridgeInstallInProgress ? @"Setting up Tidey Remote Bridge..." : @"Tidey Remote Bridge is not ready.";
+        [self clearDeviceRows];
+        return;
+    }
+
     if (showLoading) {
         self.devicesStatusLabel.hidden = NO;
         self.devicesScrollView.hidden = YES;
@@ -414,7 +529,7 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     if (!token.length) {
         self.devicesStatusLabel.hidden = NO;
         self.devicesScrollView.hidden = YES;
-        self.devicesStatusLabel.stringValue = [NSString stringWithFormat:@"Pair token unavailable: %@", tokenError.localizedDescription ?: @"unknown error"];
+        self.devicesStatusLabel.stringValue = @"Tidey Remote Bridge is starting. Refresh again in a moment.";
         return;
     }
 
@@ -451,10 +566,15 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 }
 
 - (void)refreshUploadStats {
+    if (!self.bridgeReady) {
+        self.uploadsStatusLabel.stringValue = self.bridgeInstallInProgress ? @"Bridge setup pending" : @"Bridge not ready";
+        return;
+    }
+
     NSError *tokenError = nil;
     NSString *token = [self legacyPairTokenWithError:&tokenError];
     if (!token.length) {
-        self.uploadsStatusLabel.stringValue = [NSString stringWithFormat:@"Upload stats unavailable: %@", tokenError.localizedDescription ?: @"unknown error"];
+        self.uploadsStatusLabel.stringValue = @"Bridge is starting";
         return;
     }
 
@@ -502,6 +622,11 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 }
 
 - (void)cleanUploadsNow:(id)sender {
+    if (!self.bridgeReady) {
+        [self ensureBridgeAndRefresh:NO];
+        return;
+    }
+
     self.uploadsCleanButton.enabled = NO;
     self.uploadsStatusLabel.stringValue = @"Cleaning uploads...";
 
@@ -509,7 +634,7 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     NSString *token = [self legacyPairTokenWithError:&tokenError];
     if (!token.length) {
         self.uploadsCleanButton.enabled = YES;
-        self.uploadsStatusLabel.stringValue = [NSString stringWithFormat:@"Clean failed: %@", tokenError.localizedDescription ?: @"unknown error"];
+        self.uploadsStatusLabel.stringValue = @"Bridge is starting";
         return;
     }
 
@@ -673,6 +798,11 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 }
 
 - (void)revokeDevice:(NSButton *)sender {
+    if (!self.bridgeReady) {
+        [self ensureBridgeAndRefresh:NO];
+        return;
+    }
+
     NSString *deviceID = sender.identifier;
     if (!deviceID.length) {
         return;
@@ -683,7 +813,7 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     NSString *token = [self legacyPairTokenWithError:&tokenError];
     if (!token.length) {
         sender.enabled = YES;
-        self.devicesStatusLabel.stringValue = [NSString stringWithFormat:@"Pair token unavailable: %@", tokenError.localizedDescription ?: @"unknown error"];
+        self.devicesStatusLabel.stringValue = @"Bridge is starting. Try again in a moment.";
         return;
     }
 
