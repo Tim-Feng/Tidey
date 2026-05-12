@@ -171,6 +171,59 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         XCTAssertEqual(session?.panelID, "ordinary-tmux:/tmp/tmux-501/default:$13:@15")
     }
 
+    func testActiveSessionForSingleWindowCarrierMatchesCodexByPaneProcess() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let registryURL = paths.codexAgentSessionsDirectory.appendingPathComponent("codex-session-adbrewer.json")
+        let recordData = Data("""
+        {
+          "version": 1,
+          "vendor": "codex",
+          "workspace_id": "stale-workspace",
+          "session_id": "session-adbrewer",
+          "panel_id": "stale-panel",
+          "pid": 95759,
+          "cwd": "/Users/timfeng/GitHub/adbrewer",
+          "created_at": "2026-04-15T00:00:00Z",
+          "tmux_pane_id": "%43",
+          "tmux_socket_path": "/private/tmp/tmux-501/default"
+        }
+        """.utf8)
+        try recordData.write(to: registryURL)
+
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: fileManager,
+                                                  hub: AgentEventHub(),
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+                                                  parentPIDLookup: { pid in
+                                                      switch pid {
+                                                      case 95759:
+                                                          return 82923
+                                                      case 82923:
+                                                          return 1
+                                                      default:
+                                                          return nil
+                                                      }
+                                                  })
+        try monitor.start()
+
+        let session = monitor.activeSessionForPanel(workspaceID: "current-workspace",
+                                                    panelID: "carrier-panel",
+                                                    effectiveShellPID: 82923,
+                                                    tmuxPaneID: "%43",
+                                                    tmuxSocketPath: "/tmp/tmux-501/default")
+
+        XCTAssertEqual(session?.vendor, "codex")
+        XCTAssertEqual(session?.sessionID, "session-adbrewer")
+        XCTAssertEqual(session?.workspaceID, "current-workspace")
+        XCTAssertEqual(session?.panelID, "carrier-panel")
+    }
+
     func testActiveSessionForPanelImmediatelyMigratesBufferedEventsToCurrentIDs() throws {
         let fileManager = FileManager.default
         let supportDirectory = fileManager.temporaryDirectory

@@ -134,17 +134,31 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
         XCTAssertEqual(projected["selected_panel_id"]?.stringValue, "ordinary-tmux:/tmp/tmux-501/default:$7:@16")
     }
 
-    func testSingleWindowCarrierFallsBackToOriginalPanel() {
-        let projector = OrdinaryTmuxPanelProjector(adapter: StubAdapter(panels: [
+    func testSingleWindowCarrierKeepsCarrierIDAndCarriesActivePaneContext() throws {
+        let adapter = MutableAdapter(panels: [
             projectedPanel(windowID: "@15", index: 0, name: "priest", paneID: "%15", current: true),
-        ]))
+        ])
+        let registry = OrdinaryTmuxPanelRegistry()
+        let projector = OrdinaryTmuxPanelProjector(adapter: adapter, registry: registry)
 
         let result = projector.projectPanelListResult(panelListResult())
 
         let panels = result["panels"]?.arrayValue?.compactMap(\.objectValue)
         XCTAssertEqual(panels?.count, 1)
-        XCTAssertEqual(panels?.first?["panel_id"]?.stringValue, "carrier-panel")
+        let panel = try XCTUnwrap(panels?.first)
+        XCTAssertEqual(panel["panel_id"]?.stringValue, "carrier-panel")
+        XCTAssertEqual(panel["effective_shell_pid"]?.intValue, 1015)
+        XCTAssertEqual(panel["cwd"]?.stringValue, "/Users/timfeng/GitHub/priest")
+        XCTAssertEqual(panel["current_command"]?.stringValue, "zsh")
+        let logical = try XCTUnwrap(panel["ordinary_tmux_logical"]?.objectValue)
+        XCTAssertEqual(logical["carrier_panel_id"]?.stringValue, "carrier-panel")
+        XCTAssertEqual(logical["active_pane_id"]?.stringValue, "%15")
+        XCTAssertEqual(logical["socket_path"]?.stringValue, "/tmp/tmux-501/default")
         XCTAssertEqual(result["selected_panel_id"]?.stringValue, "carrier-panel")
+        XCTAssertEqual(adapter.identityRoutes.map { "\($0.windowID):\($0.activePaneID):\($0.panelID)" }, [
+            "@15:%15:carrier-panel",
+        ])
+        XCTAssertNotNil(registry.route(forPanelID: "carrier-panel"))
     }
 
     func testProjectionFailureFallsBackToOriginalPanel() {
