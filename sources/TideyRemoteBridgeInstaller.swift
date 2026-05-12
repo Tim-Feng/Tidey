@@ -191,19 +191,20 @@ struct TideyRemoteBridgeCloudflaredResolver {
     }
 }
 
+@objcMembers
 @objc(TideyRemoteBridgeInstallResult)
-final class TideyRemoteBridgeInstallResult: NSObject {
-    @objc let state: String
-    @objc let userMessage: String
-    @objc let detailMessage: String?
-    @objc let bridgeReady: Bool
-    @objc let cloudflaredAvailable: Bool
+public final class TideyRemoteBridgeInstallResult: NSObject {
+    public let state: String
+    public let userMessage: String
+    public let detailMessage: String?
+    public let bridgeReady: Bool
+    public let cloudflaredAvailable: Bool
 
-    init(state: String,
-         userMessage: String,
-         detailMessage: String?,
-         bridgeReady: Bool,
-         cloudflaredAvailable: Bool) {
+    public init(state: String,
+                userMessage: String,
+                detailMessage: String?,
+                bridgeReady: Bool,
+                cloudflaredAvailable: Bool) {
         self.state = state
         self.userMessage = userMessage
         self.detailMessage = detailMessage
@@ -212,9 +213,10 @@ final class TideyRemoteBridgeInstallResult: NSObject {
     }
 }
 
+@objcMembers
 @objc(TideyRemoteBridgeInstaller)
-final class TideyRemoteBridgeInstaller: NSObject {
-    @objc static let shared = TideyRemoteBridgeInstaller()
+public final class TideyRemoteBridgeInstaller: NSObject {
+    public static let shared = TideyRemoteBridgeInstaller()
 
     private let queue = DispatchQueue(label: "com.tidey.remote-bridge-installer", qos: .utility)
     private let fileManager: FileManager
@@ -231,7 +233,7 @@ final class TideyRemoteBridgeInstaller: NSObject {
     }
 
     @objc(ensureInstalledWithCompletion:)
-    func ensureInstalled(completion: @escaping (TideyRemoteBridgeInstallResult) -> Void) {
+    public func ensureInstalled(completion: @escaping (TideyRemoteBridgeInstallResult) -> Void) {
         queue.async {
             let result = self.performInstall(force: false)
             DispatchQueue.main.async {
@@ -241,7 +243,7 @@ final class TideyRemoteBridgeInstaller: NSObject {
     }
 
     @objc(reinstallWithCompletion:)
-    func reinstall(completion: @escaping (TideyRemoteBridgeInstallResult) -> Void) {
+    public func reinstall(completion: @escaping (TideyRemoteBridgeInstallResult) -> Void) {
         queue.async {
             let result = self.performInstall(force: true)
             DispatchQueue.main.async {
@@ -250,7 +252,7 @@ final class TideyRemoteBridgeInstaller: NSObject {
         }
     }
 
-    @objc func cloudflaredAvailabilityMessage() -> String? {
+    public func cloudflaredAvailabilityMessage() -> String? {
         if TideyRemoteBridgeCloudflaredResolver.executableURL(fileManager: fileManager) != nil {
             return nil
         }
