@@ -10,7 +10,7 @@ protocol AgentTranscriptSession: AnyObject {
     func stop()
 }
 
-struct AgentSessionRegistryRecord: Decodable, Sendable {
+struct AgentSessionRegistryRecord: Codable, Sendable {
     let version: Int
     let vendor: String
     let workspaceID: String
@@ -78,6 +78,22 @@ struct AgentSessionRegistryRecord: Decodable, Sendable {
         tmuxPaneID = try container.decodeIfPresent(String.self, forKey: .tmuxPaneID)
         tmuxSocketPath = try container.decodeIfPresent(String.self, forKey: .tmuxSocketPath)
     }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(version, forKey: .version)
+        try container.encode(vendor, forKey: .vendor)
+        try container.encode(workspaceID, forKey: .workspaceID)
+        try container.encode(sessionID, forKey: .sessionID)
+        try container.encodeIfPresent(panelID, forKey: .panelID)
+        try container.encode(pid, forKey: .pid)
+        try container.encode(cwd, forKey: .cwd)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encodeIfPresent(transcriptPath, forKey: .transcriptPath)
+        try container.encodeIfPresent(transcriptPath, forKey: .rolloutPath)
+        try container.encodeIfPresent(tmuxPaneID, forKey: .tmuxPaneID)
+        try container.encodeIfPresent(tmuxSocketPath, forKey: .tmuxSocketPath)
+    }
 }
 
 struct ActiveAgentSessionSnapshot: Sendable {
@@ -98,22 +114,33 @@ struct AgentPanelProcessSnapshot: Sendable {
     let effectiveShellPID: Int32?
     let tmuxPaneID: String?
     let tmuxSocketPath: String?
+    let cwd: String?
 
     init(workspaceID: String,
          panelID: String,
          effectiveShellPID: Int32?,
          tmuxPaneID: String? = nil,
-         tmuxSocketPath: String? = nil) {
+         tmuxSocketPath: String? = nil,
+         cwd: String? = nil) {
         self.workspaceID = workspaceID
         self.panelID = panelID
         self.effectiveShellPID = effectiveShellPID
         self.tmuxPaneID = tmuxPaneID
         self.tmuxSocketPath = tmuxSocketPath
+        self.cwd = cwd
     }
+}
+
+struct AgentProcessDescriptor: Equatable, Sendable {
+    let pid: Int32
+    let command: String
+    let arguments: String
 }
 
 final class AgentSessionRegistryMonitor {
     typealias ParentPIDLookup = @Sendable (Int32) -> Int32?
+    typealias DescendantProcessLookup = @Sendable (Int32) -> [AgentProcessDescriptor]
+    typealias RolloutPathLookup = @Sendable (Int32) -> String?
     private static let liveParentPIDLookup: ParentPIDLookup = { pid in
         guard pid > 0 else {
             return nil
@@ -147,12 +174,140 @@ final class AgentSessionRegistryMonitor {
         return parentPID
     }
 
+    private static let liveDescendantProcessLookup: DescendantProcessLookup = { rootPID in
+        guard rootPID > 0 else {
+            return []
+        }
+
+        var results = [AgentProcessDescriptor]()
+        var queue = [rootPID]
+        var visited = Set<Int32>([rootPID])
+
+        while queue.isEmpty == false {
+            let pid = queue.removeFirst()
+            if let descriptor = liveProcessDescriptor(for: pid) {
+                results.append(descriptor)
+            }
+            for childPID in liveChildPIDs(for: pid) where !visited.contains(childPID) {
+                visited.insert(childPID)
+                queue.append(childPID)
+            }
+        }
+
+        return results
+    }
+
+    private static let liveRolloutPathLookup: RolloutPathLookup = { pid in
+        guard pid > 0 else {
+            return nil
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        process.arguments = ["-Fn", "-p", String(pid)]
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return nil
+        }
+
+        guard process.terminationStatus == 0,
+              let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(),
+                                  encoding: .utf8) else {
+            return nil
+        }
+
+        return output.split(separator: "\n")
+            .compactMap { line -> String? in
+                guard line.hasPrefix("n") else {
+                    return nil
+                }
+                let path = String(line.dropFirst())
+                guard path.contains("/.codex/sessions/"),
+                      path.contains("/rollout-"),
+                      path.hasSuffix(".jsonl") else {
+                    return nil
+                }
+                return path
+            }
+            .sorted()
+            .last
+    }
+
+    private static func liveChildPIDs(for pid: Int32) -> [Int32] {
+        guard pid > 0 else {
+            return []
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        process.arguments = ["-P", String(pid)]
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return []
+        }
+
+        guard let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(),
+                                  encoding: .utf8) else {
+            return []
+        }
+        return output.split(whereSeparator: \.isNewline).compactMap {
+            Int32(String($0).trimmingCharacters(in: .whitespaces))
+        }
+    }
+
+    private static func liveProcessDescriptor(for pid: Int32) -> AgentProcessDescriptor? {
+        guard pid > 0 else {
+            return nil
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.arguments = ["-o", "comm=", "-o", "args=", "-p", String(pid)]
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return nil
+        }
+
+        guard process.terminationStatus == 0,
+              let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(),
+                                  encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              output.isEmpty == false else {
+            return nil
+        }
+
+        let parts = output.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+        let command = parts.first.map(String.init) ?? ""
+        let arguments = parts.count > 1 ? String(parts[1]) : ""
+        return AgentProcessDescriptor(pid: pid, command: command, arguments: arguments)
+    }
+
     private let paths: BridgePaths
     private let fileManager: FileManager
     private let hub: AgentEventHub
     private let socketClient: TideySocketClient?
     private let tmuxResolver: TmuxStateResolver
     private let parentPIDLookup: ParentPIDLookup
+    private let descendantProcessLookup: DescendantProcessLookup
+    private let rolloutPathLookup: RolloutPathLookup
     private let queue = DispatchQueue(label: "com.tidey.remote-bridge.agent-registry")
     private var timer: DispatchSourceTimer?
     private var watchers = [String: DispatchSourceFileSystemObject]()
@@ -168,13 +323,17 @@ final class AgentSessionRegistryMonitor {
          hub: AgentEventHub,
          socketClient: TideySocketClient? = nil,
          tmuxResolver: TmuxStateResolver = TmuxStateResolver(),
-         parentPIDLookup: @escaping ParentPIDLookup = AgentSessionRegistryMonitor.liveParentPIDLookup) {
+         parentPIDLookup: @escaping ParentPIDLookup = AgentSessionRegistryMonitor.liveParentPIDLookup,
+         descendantProcessLookup: @escaping DescendantProcessLookup = AgentSessionRegistryMonitor.liveDescendantProcessLookup,
+         rolloutPathLookup: @escaping RolloutPathLookup = AgentSessionRegistryMonitor.liveRolloutPathLookup) {
         self.paths = paths
         self.fileManager = fileManager
         self.hub = hub
         self.socketClient = socketClient
         self.tmuxResolver = tmuxResolver
         self.parentPIDLookup = parentPIDLookup
+        self.descendantProcessLookup = descendantProcessLookup
+        self.rolloutPathLookup = rolloutPathLookup
     }
 
     func start() throws {

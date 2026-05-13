@@ -987,11 +987,13 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
         let ordinaryTmux = panel["ordinary_tmux_logical"]?.objectValue
         let tmuxPaneID = ordinaryTmux?["active_pane_id"]?.stringValue
         let tmuxSocketPath = ordinaryTmux?["socket_path"]?.stringValue
+        let cwd = panel["cwd"]?.stringValue
         return AgentPanelProcessSnapshot(workspaceID: workspaceID,
                                          panelID: panelID,
                                          effectiveShellPID: effectiveShellPID,
                                          tmuxPaneID: tmuxPaneID,
-                                         tmuxSocketPath: tmuxSocketPath)
+                                         tmuxSocketPath: tmuxSocketPath,
+                                         cwd: cwd)
     }
 
     private func augmentPanelListResult(_ result: [String: JSONValue]) -> [String: JSONValue] {
