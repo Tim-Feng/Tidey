@@ -226,6 +226,143 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         XCTAssertEqual(session?.panelID, "carrier-panel")
     }
 
+    func testActiveSessionForSingleWindowCarrierSynthesizesCodexRecordFromLiveProcess() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let sessionID = "11111111-2222-3333-4444-555555555555"
+        let rolloutURL = supportDirectory
+            .appendingPathComponent(".codex/sessions/2026/05/13", isDirectory: true)
+            .appendingPathComponent("rollout-2026-05-13T00-00-00-\(sessionID).jsonl", isDirectory: false)
+        try fileManager.createDirectory(at: rolloutURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("[]\n".utf8).write(to: rolloutURL)
+
+        let codexPID = Int32(getpid())
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: fileManager,
+                                                  hub: AgentEventHub(),
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+                                                  parentPIDLookup: { _ in nil },
+                                                  descendantProcessLookup: { rootPID in
+                                                      XCTAssertEqual(rootPID, 82923)
+                                                      return [
+                                                          AgentProcessDescriptor(pid: 95759,
+                                                                                 command: "/Users/timfeng/.nvm/versions/node/v24.13.0/bin/node",
+                                                                                 arguments: "/Users/timfeng/.nvm/versions/node/v24.13.0/lib/node_modules/@openai/codex/bin/codex.js"),
+                                                          AgentProcessDescriptor(pid: codexPID,
+                                                                                 command: "/Users/timfeng/.nvm/versions/node/v24.13.0/lib/node_modules/@openai/codex/vendor/darwin-arm64/codex",
+                                                                                 arguments: "codex"),
+                                                      ]
+                                                  },
+                                                  rolloutPathLookup: { pid in
+                                                      pid == codexPID ? rolloutURL.path : nil
+                                                  })
+        try monitor.start()
+
+        let session = monitor.activeSessionForPanel(workspaceID: "current-workspace",
+                                                    panelID: "carrier-panel",
+                                                    effectiveShellPID: 82923,
+                                                    tmuxPaneID: "%43",
+                                                    tmuxSocketPath: "/private/tmp/tmux-501/default")
+
+        XCTAssertEqual(session?.vendor, "codex")
+        XCTAssertEqual(session?.sessionID, sessionID)
+        XCTAssertEqual(session?.workspaceID, "current-workspace")
+        XCTAssertEqual(session?.panelID, "carrier-panel")
+
+        let registryURL = paths.codexAgentSessionsDirectory.appendingPathComponent("codex-\(sessionID).json")
+        let registryData = try Data(contentsOf: registryURL)
+        let record = try JSONDecoder().decode(AgentSessionRegistryRecord.self, from: registryData)
+        XCTAssertEqual(record.vendor, "codex")
+        XCTAssertEqual(record.workspaceID, "current-workspace")
+        XCTAssertEqual(record.panelID, "carrier-panel")
+        XCTAssertEqual(record.pid, codexPID)
+        XCTAssertEqual(record.tmuxPaneID, "%43")
+        XCTAssertEqual(record.tmuxSocketPath, "/private/tmp/tmux-501/default")
+        XCTAssertEqual(record.transcriptPath, rolloutURL.path)
+
+        let subsequent = monitor.activeSessionForPanel(workspaceID: "current-workspace",
+                                                       panelID: "carrier-panel",
+                                                       effectiveShellPID: 82923,
+                                                       tmuxPaneID: "%43",
+                                                       tmuxSocketPath: "/private/tmp/tmux-501/default")
+        XCTAssertEqual(subsequent?.sessionID, sessionID)
+    }
+
+    func testActiveSessionForSingleWindowCarrierDoesNotSynthesizeWithoutCodexProcess() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: fileManager,
+                                                  hub: AgentEventHub(),
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+                                                  parentPIDLookup: { _ in nil },
+                                                  descendantProcessLookup: { rootPID in
+                                                      XCTAssertEqual(rootPID, 82923)
+                                                      return [
+                                                          AgentProcessDescriptor(pid: Int32(getpid()),
+                                                                                 command: "/bin/zsh",
+                                                                                 arguments: "-zsh"),
+                                                      ]
+                                                  },
+                                                  rolloutPathLookup: { _ in
+                                                      XCTFail("rollout lookup should not run without a codex process")
+                                                      return nil
+                                                  })
+        try monitor.start()
+
+        let session = monitor.activeSessionForPanel(workspaceID: "current-workspace",
+                                                    panelID: "carrier-panel",
+                                                    effectiveShellPID: 82923,
+                                                    tmuxPaneID: "%43",
+                                                    tmuxSocketPath: "/private/tmp/tmux-501/default")
+
+        XCTAssertNil(session)
+    }
+
+    func testActiveSessionForSingleWindowCarrierDoesNotSynthesizeCodexWithoutRollout() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: fileManager,
+                                                  hub: AgentEventHub(),
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+                                                  parentPIDLookup: { _ in nil },
+                                                  descendantProcessLookup: { _ in
+                                                      [
+                                                          AgentProcessDescriptor(pid: Int32(getpid()),
+                                                                                 command: "/Users/timfeng/.nvm/versions/node/v24.13.0/bin/node",
+                                                                                 arguments: "/Users/timfeng/.nvm/versions/node/v24.13.0/lib/node_modules/@openai/codex/bin/codex.js"),
+                                                      ]
+                                                  },
+                                                  rolloutPathLookup: { _ in nil })
+        try monitor.start()
+
+        let session = monitor.activeSessionForPanel(workspaceID: "current-workspace",
+                                                    panelID: "carrier-panel",
+                                                    effectiveShellPID: 82923,
+                                                    tmuxPaneID: "%43",
+                                                    tmuxSocketPath: "/private/tmp/tmux-501/default")
+
+        XCTAssertNil(session)
+        let files = try fileManager.contentsOfDirectory(atPath: paths.codexAgentSessionsDirectory.path)
+        XCTAssertTrue(files.isEmpty)
+    }
+
     func testActiveSessionForPanelImmediatelyMigratesBufferedEventsToCurrentIDs() throws {
         let fileManager = FileManager.default
         let supportDirectory = fileManager.temporaryDirectory

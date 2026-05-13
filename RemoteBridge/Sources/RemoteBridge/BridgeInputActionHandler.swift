@@ -1,6 +1,8 @@
 import Darwin
 import Foundation
 
+let ordinaryTmuxChatSubmitEnterDelayNanoseconds: UInt64 = 5_000_000_000
+
 protocol TideyRequestSending {
     func send(_ request: BridgeRequest) throws -> BridgeResponse
 }
@@ -109,13 +111,17 @@ struct BridgeInputActionHandler {
 
         BridgeLogger.input.info("dispatch action=chat_submit request_id=\(request.id, privacy: .public) workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) session_id=\(activeSession?.sessionID ?? requestedSessionID ?? "-", privacy: .public) vendor=\(vendor.id, privacy: .public) length=\(message.count) has_cr=\(message.contains("\r")) has_lf=\(message.contains("\n")) tail=\(summarizedTail(message), privacy: .public)")
 
+        var previousStepUsedOrdinaryTmux = false
         for (index, step) in vendor.submitMessagePlan(text: message).enumerated() {
+            let effectiveDelay = Self.effectiveDelay(for: step,
+                                                     previousStepUsedOrdinaryTmux: previousStepUsedOrdinaryTmux)
             if index > 0 {
-                try sleep(step.delayNanoseconds)
+                try sleep(effectiveDelay)
             }
-            BridgeLogger.input.info("step action=send_input request_id=\(request.id, privacy: .public) vendor=\(vendor.id, privacy: .public) step_index=\(index) delay_ns=\(step.delayNanoseconds) length=\(step.input.count) has_cr=\(step.input.contains("\r")) has_lf=\(step.input.contains("\n")) tail=\(summarizedTail(step.input), privacy: .public)")
+            BridgeLogger.input.info("step action=send_input request_id=\(request.id, privacy: .public) vendor=\(vendor.id, privacy: .public) step_index=\(index) delay_ns=\(effectiveDelay) length=\(step.input.count) has_cr=\(step.input.contains("\r")) has_lf=\(step.input.contains("\n")) tail=\(summarizedTail(step.input), privacy: .public)")
             if let ordinaryTmuxInputRouter,
                try ordinaryTmuxInputRouter.sendInput(step.input, toPanelID: panelID) {
+                previousStepUsedOrdinaryTmux = true
                 BridgeLogger.input.info("route action=chat_submit request_id=\(request.id, privacy: .public) panel_id=\(panelID, privacy: .public) transport=ordinary_tmux step_index=\(index)")
             } else {
                 let stepRequest = BridgeRequest(id: UUID().uuidString,
@@ -131,6 +137,7 @@ struct BridgeInputActionHandler {
                                           result: nil,
                                           error: response.error)
                 }
+                previousStepUsedOrdinaryTmux = false
             }
         }
 
@@ -148,5 +155,13 @@ struct BridgeInputActionHandler {
         String(input.suffix(3))
             .replacingOccurrences(of: "\r", with: "\\r")
             .replacingOccurrences(of: "\n", with: "\\n")
+    }
+
+    private static func effectiveDelay(for step: ChatSubmitStep, previousStepUsedOrdinaryTmux: Bool) -> UInt64 {
+        guard previousStepUsedOrdinaryTmux,
+              step.input == "\r" || step.input == "\n" || step.input == "\r\n" else {
+            return step.delayNanoseconds
+        }
+        return ordinaryTmuxChatSubmitEnterDelayNanoseconds
     }
 }

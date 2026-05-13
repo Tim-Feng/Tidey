@@ -211,6 +211,7 @@ protocol OrdinaryTmuxInputRouting: Sendable {
 final class OrdinaryTmuxInputRouter: OrdinaryTmuxInputRouting {
     private let routeResolver: OrdinaryTmuxRouteResolving
     private let adapter: OrdinaryTmuxCLIAdapter
+    private let lastPastePaneStore = OrdinaryTmuxLastPastePaneStore()
 
     init(registry: OrdinaryTmuxPanelRegistry,
          adapter: OrdinaryTmuxCLIAdapter = OrdinaryTmuxCLIAdapter()) {
@@ -228,8 +229,43 @@ final class OrdinaryTmuxInputRouter: OrdinaryTmuxInputRouting {
         guard let route = try routeResolver.route(forPanelID: panelID, workspaceID: nil) else {
             return false
         }
-        try adapter.sendInput(input, route: route)
+        let routeKey = Self.lastPastePaneKey(for: route)
+        let fallbackEnterPaneID = lastPastePaneStore.paneID(for: routeKey)
+        let delivery = try adapter.sendInput(input,
+                                             route: route,
+                                             fallbackEnterPaneID: fallbackEnterPaneID)
+        lastPastePaneStore.record(delivery: delivery, routeKey: routeKey)
         return true
+    }
+
+    private static func lastPastePaneKey(for route: OrdinaryTmuxPanelRoute) -> String {
+        [
+            route.panelID,
+            route.socket.cacheKey,
+            route.sessionID,
+            route.windowID,
+        ].joined(separator: "|")
+    }
+}
+
+private final class OrdinaryTmuxLastPastePaneStore: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "com.tidey.remote-bridge.ordinary-tmux-input-router.last-paste-pane")
+    private var paneByRouteKey = [String: String]()
+
+    func paneID(for routeKey: String) -> String? {
+        queue.sync {
+            paneByRouteKey[routeKey]
+        }
+    }
+
+    func record(delivery: OrdinaryTmuxInputDelivery, routeKey: String) {
+        queue.sync {
+            if delivery.pastedText && !delivery.sentEnter {
+                paneByRouteKey[routeKey] = delivery.paneID
+            } else if delivery.sentEnter {
+                paneByRouteKey.removeValue(forKey: routeKey)
+            }
+        }
     }
 }
 

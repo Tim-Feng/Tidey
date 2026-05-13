@@ -122,7 +122,36 @@ final class BridgeInputActionHandlerTests: XCTestCase {
         XCTAssertTrue(sender.sentRequests.isEmpty)
         XCTAssertEqual(router.sentInputs.map(\.panelID), ["ordinary-panel", "ordinary-panel"])
         XCTAssertEqual(router.sentInputs.map(\.input), ["hello", "\r"])
-        XCTAssertEqual(delayRecorder.recordedDelays, [chatSubmitEnterDelayNanoseconds])
+        XCTAssertEqual(delayRecorder.recordedDelays, [ordinaryTmuxChatSubmitEnterDelayNanoseconds])
+    }
+
+    func testChatSubmitRoutesClaudeOrdinaryTmuxEnterAfterPasteWithSettleDelay() throws {
+        let sender = MockTideyRequestSender()
+        let resolver = MockSessionResolver(session: ActiveAgentSessionSnapshot(vendor: "claude",
+                                                                              workspaceID: "workspace-1",
+                                                                              sessionID: "session-1",
+                                                                              panelID: "ordinary-panel"))
+        let router = MockOrdinaryTmuxInputRouter(routedPanelIDs: ["ordinary-panel"])
+        let delayRecorder = DelayRecorder()
+        let handler = BridgeInputActionHandler(socketSender: sender,
+                                               sessionResolver: resolver,
+                                               ordinaryTmuxInputRouter: router,
+                                               sleep: { delayRecorder.record($0) })
+
+        let response = try handler.handle(BridgeRequest(id: "request-1",
+                                                        action: "chat_submit",
+                                                        params: [
+                                                            "workspace_id": .string("workspace-1"),
+                                                            "panel_id": .string("ordinary-panel"),
+                                                            "message": .string("hello"),
+                                                            "session_id": .string("session-1"),
+                                                            "vendor": .string("claude"),
+                                                        ]))
+
+        XCTAssertEqual(response?.ok, true)
+        XCTAssertTrue(sender.sentRequests.isEmpty)
+        XCTAssertEqual(router.sentInputs.map(\.input), ["hello", "\r"])
+        XCTAssertEqual(delayRecorder.recordedDelays, [ordinaryTmuxChatSubmitEnterDelayNanoseconds])
     }
 
     func testChatSubmitRejectsMismatchedSession() throws {

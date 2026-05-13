@@ -94,6 +94,13 @@ struct OrdinaryTmuxProjectedPanel: Equatable, Sendable {
     let subtitle: String
 }
 
+struct OrdinaryTmuxInputDelivery: Equatable, Sendable {
+    let paneID: String
+    let pastedText: Bool
+    let sentEnter: Bool
+    let usedFallbackPane: Bool
+}
+
 protocol OrdinaryTmuxWindowProjecting: Sendable {
     func projectedPanels(for metadata: OrdinaryTmuxAttachMetadata) throws -> [OrdinaryTmuxProjectedPanel]
     func setPaneIdentity(route: OrdinaryTmuxPanelRoute) throws
@@ -322,13 +329,49 @@ final class OrdinaryTmuxCLIAdapter {
         }
     }
 
-    func sendInput(_ input: String, route: OrdinaryTmuxPanelRoute) throws {
+    func sendInput(_ input: String,
+                   route: OrdinaryTmuxPanelRoute,
+                   fallbackEnterPaneID: String? = nil) throws -> OrdinaryTmuxInputDelivery {
         let socket = route.socket
-        guard let pane = try activePane(forWindowID: route.windowID, socket: socket) else {
+        let splitInput = Self.splitInputForPasteAndEnter(input)
+        if splitInput.pasteText.isEmpty,
+           splitInput.sendEnter,
+           let fallbackEnterPaneID {
+            BridgeLogger.server.info("ordinary tmux input using last paste pane for enter workspace_id=\(route.workspaceID, privacy: .public) panel_id=\(route.panelID, privacy: .public) window_id=\(route.windowID, privacy: .public) pane_id=\(fallbackEnterPaneID, privacy: .public)")
+            _ = try commandRunner(socket,
+                                  ["send-keys", "-t", fallbackEnterPaneID, "Enter"],
+                                  nil)
+            return OrdinaryTmuxInputDelivery(paneID: fallbackEnterPaneID,
+                                             pastedText: false,
+                                             sentEnter: true,
+                                             usedFallbackPane: true)
+        }
+        let pane: TmuxPane
+        do {
+            guard let activePane = try activePane(forWindowID: route.windowID, socket: socket) else {
+                throw BridgeInternalError.notFound("ordinary tmux panel route is stale")
+            }
+            pane = activePane
+        } catch {
+            if splitInput.pasteText.isEmpty,
+               splitInput.sendEnter,
+               let fallbackEnterPaneID,
+               Self.isTmuxCommandTimeout(error) {
+                BridgeLogger.server.info("ordinary tmux input using fallback pane after active pane timeout workspace_id=\(route.workspaceID, privacy: .public) panel_id=\(route.panelID, privacy: .public) window_id=\(route.windowID, privacy: .public) pane_id=\(fallbackEnterPaneID, privacy: .public)")
+                _ = try commandRunner(socket,
+                                      ["send-keys", "-t", fallbackEnterPaneID, "Enter"],
+                                      nil)
+                return OrdinaryTmuxInputDelivery(paneID: fallbackEnterPaneID,
+                                                 pastedText: false,
+                                                 sentEnter: true,
+                                                 usedFallbackPane: true)
+            }
+            throw error
+        }
+        guard !pane.id.isEmpty else {
             throw BridgeInternalError.notFound("ordinary tmux panel route is stale")
         }
-        try setPaneIdentity(route: route, paneID: pane.id)
-        let splitInput = Self.splitInputForPasteAndEnter(input)
+        setPaneIdentityBestEffort(route: route, paneID: pane.id)
         if !splitInput.pasteText.isEmpty {
             let bufferName = "tidey-remote-\(UUID().uuidString)"
             _ = try commandRunner(socket,
@@ -340,9 +383,13 @@ final class OrdinaryTmuxCLIAdapter {
         }
         if splitInput.sendEnter {
             _ = try commandRunner(socket,
-                                  ["send-keys", "-t", pane.id, "C-m"],
+                                  ["send-keys", "-t", pane.id, "Enter"],
                                   nil)
         }
+        return OrdinaryTmuxInputDelivery(paneID: pane.id,
+                                         pastedText: !splitInput.pasteText.isEmpty,
+                                         sentEnter: splitInput.sendEnter,
+                                         usedFallbackPane: false)
     }
 
     func refreshedRoute(_ route: OrdinaryTmuxPanelRoute) throws -> OrdinaryTmuxPanelRoute {
@@ -399,6 +446,14 @@ final class OrdinaryTmuxCLIAdapter {
         try setPaneIdentity(route: route, paneID: route.activePaneID)
     }
 
+    private func setPaneIdentityBestEffort(route: OrdinaryTmuxPanelRoute, paneID: String) {
+        do {
+            try setPaneIdentity(route: route, paneID: paneID)
+        } catch {
+            BridgeLogger.server.error("ordinary tmux input pane identity sync skipped workspace_id=\(route.workspaceID, privacy: .public) panel_id=\(route.panelID, privacy: .public) window_id=\(route.windowID, privacy: .public) pane_id=\(paneID, privacy: .public) error=\(String(describing: error), privacy: .public)")
+        }
+    }
+
     private func setPaneIdentity(route: OrdinaryTmuxPanelRoute, paneID: String) throws {
         _ = try commandRunner(route.socket,
                               ["set-option", "-p", "-t", paneID, "@tidey_workspace_id", route.workspaceID],
@@ -437,6 +492,11 @@ final class OrdinaryTmuxCLIAdapter {
             return (String(input.dropLast()), true)
         }
         return (input, false)
+    }
+
+    private static func isTmuxCommandTimeout(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == "OrdinaryTmuxCLIAdapter" && nsError.code == 124
     }
 
     private static func parseClientLine(_ line: Substring) -> OrdinaryTmuxClient? {
