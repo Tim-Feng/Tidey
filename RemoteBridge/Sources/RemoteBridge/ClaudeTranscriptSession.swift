@@ -579,6 +579,16 @@ final class AgentSessionRegistryMonitor {
 
         guard let match = tmuxCandidates.first else {
             BridgeLogger.server.debug("agent panel no tmux match workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public)")
+            if let liveCodexMatch = liveCodexSessionMatch(for: panel, effectiveShellPID: effectiveShellPID) {
+                applyResolvedBinding(sessionID: liveCodexMatch.sessionID,
+                                     workspaceID: panel.workspaceID,
+                                     panelID: panel.panelID)
+                BridgeLogger.server.info("agent panel matched via live codex discovery workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) session_id=\(liveCodexMatch.sessionID, privacy: .public)")
+                return ActiveAgentSessionSnapshot(vendor: liveCodexMatch.vendor,
+                                                  workspaceID: panel.workspaceID,
+                                                  sessionID: liveCodexMatch.sessionID,
+                                                  panelID: panel.panelID)
+            }
             logPanelMatchFailure(panel, matchedReason: "none")
             return nil
         }
@@ -595,7 +605,109 @@ final class AgentSessionRegistryMonitor {
 
     private func logPanelMatchFailure(_ panel: AgentPanelProcessSnapshot,
                                       matchedReason: String) {
-        BridgeLogger.server.debug("agent panel match failed summary workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) effective_shell_pid=\(panel.effectiveShellPID.map(String.init) ?? "-", privacy: .public) tmux_pane_id=\(panel.tmuxPaneID ?? "-", privacy: .public) tmux_socket_path=\(panel.tmuxSocketPath ?? "-", privacy: .public) active_record_count=\(self.activeRecords.count, privacy: .public) matched_reason=\(matchedReason, privacy: .public)")
+        BridgeLogger.server.info("agent panel match failed summary workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) effective_shell_pid=\(panel.effectiveShellPID.map(String.init) ?? "-", privacy: .public) tmux_pane_id=\(panel.tmuxPaneID ?? "-", privacy: .public) tmux_socket_path=\(panel.tmuxSocketPath ?? "-", privacy: .public) active_record_count=\(self.activeRecords.count, privacy: .public) matched_reason=\(matchedReason, privacy: .public)")
+    }
+
+    private func liveCodexSessionMatch(for panel: AgentPanelProcessSnapshot,
+                                       effectiveShellPID: Int32) -> AgentSessionRegistryRecord? {
+        guard let tmuxPaneID = panel.tmuxPaneID,
+              tmuxPaneID.isEmpty == false,
+              let tmuxSocketPath = panel.tmuxSocketPath,
+              tmuxSocketPath.isEmpty == false else {
+            BridgeLogger.server.info("agent panel live codex discovery skipped workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) reason=missing_tmux_context")
+            return nil
+        }
+
+        BridgeLogger.server.info("agent panel live codex discovery start workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) effective_shell_pid=\(effectiveShellPID, privacy: .public) tmux_pane_id=\(tmuxPaneID, privacy: .public) tmux_socket_path=\(tmuxSocketPath, privacy: .public) active_record_count=\(self.activeRecords.count, privacy: .public)")
+
+        let descendants = descendantProcessLookup(effectiveShellPID)
+        let codexCandidates = descendants
+            .filter(Self.isCodexProcess)
+            .sorted { lhs, rhs in lhs.pid < rhs.pid }
+
+        guard codexCandidates.isEmpty == false else {
+            BridgeLogger.server.info("agent panel live codex discovery no_candidate workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) descendant_count=\(descendants.count, privacy: .public)")
+            return nil
+        }
+
+        for candidate in codexCandidates {
+            BridgeLogger.server.info("agent panel live codex discovery candidate workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) pid=\(candidate.pid, privacy: .public) command=\(candidate.command, privacy: .public)")
+            guard let rolloutPath = rolloutPathLookup(candidate.pid),
+                  rolloutPath.isEmpty == false else {
+                BridgeLogger.server.info("agent panel live codex discovery no_rollout workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) pid=\(candidate.pid, privacy: .public)")
+                continue
+            }
+            guard let sessionID = Self.codexSessionID(fromRolloutPath: rolloutPath) else {
+                BridgeLogger.server.info("agent panel live codex discovery invalid_rollout workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) pid=\(candidate.pid, privacy: .public) rollout_path=\(rolloutPath, privacy: .private)")
+                continue
+            }
+
+            let record = AgentSessionRegistryRecord(version: 1,
+                                                    vendor: "codex",
+                                                    workspaceID: panel.workspaceID,
+                                                    sessionID: sessionID,
+                                                    panelID: panel.panelID,
+                                                    pid: candidate.pid,
+                                                    cwd: panel.cwd ?? fileManager.currentDirectoryPath,
+                                                    createdAt: Self.iso8601Now(),
+                                                    transcriptPath: rolloutPath,
+                                                    tmuxPaneID: tmuxPaneID,
+                                                    tmuxSocketPath: tmuxSocketPath)
+            persistSynthesizedCodexRecord(record)
+            BridgeLogger.server.info("agent panel live codex discovery synthesized workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) session_id=\(sessionID, privacy: .public) pid=\(candidate.pid, privacy: .public) tmux_pane_id=\(tmuxPaneID, privacy: .public)")
+            return record
+        }
+
+        BridgeLogger.server.info("agent panel live codex discovery no_rollout_match workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) candidate_count=\(codexCandidates.count, privacy: .public)")
+        return nil
+    }
+
+    private static func isCodexProcess(_ descriptor: AgentProcessDescriptor) -> Bool {
+        let command = descriptor.command.lowercased()
+        let arguments = descriptor.arguments.lowercased()
+        let combined = command + " " + arguments
+        if URL(fileURLWithPath: command).lastPathComponent == "codex" {
+            return true
+        }
+        if combined.contains("@openai/codex") {
+            return true
+        }
+        if combined.contains("/codex") || combined.contains(" codex") {
+            return true
+        }
+        return false
+    }
+
+    private static func codexSessionID(fromRolloutPath rolloutPath: String) -> String? {
+        let stem = URL(fileURLWithPath: rolloutPath).deletingPathExtension().lastPathComponent
+        guard stem.count >= 36 else {
+            return nil
+        }
+        return String(stem.suffix(36))
+    }
+
+    private static func iso8601Now() -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.string(from: Date())
+    }
+
+    private func persistSynthesizedCodexRecord(_ record: AgentSessionRegistryRecord) {
+        do {
+            try fileManager.createDirectory(at: paths.codexAgentSessionsDirectory,
+                                            withIntermediateDirectories: true)
+            let url = paths.codexAgentSessionsDirectory
+                .appendingPathComponent("codex-\(record.sessionID).json", isDirectory: false)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            let data = try encoder.encode(record)
+            try data.write(to: url, options: [.atomic])
+            let records = activeRecords.values.filter { $0.sessionID != record.sessionID } + [record]
+            syncRecords(records)
+            activeRecords[record.sessionID] = record
+        } catch {
+            BridgeLogger.server.error("agent panel live codex discovery persist_failed workspace_id=\(record.workspaceID, privacy: .public) panel_id=\(record.panelID ?? "-", privacy: .public) session_id=\(record.sessionID, privacy: .public) error=\(String(describing: error), privacy: .public)")
+        }
     }
 
     private func ordinaryTmuxProcessMatch(for panel: AgentPanelProcessSnapshot,
