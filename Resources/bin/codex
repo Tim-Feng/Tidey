@@ -131,24 +131,19 @@ pattern = re.compile(r"(?ms)^\[features\]\n(?P<body>.*?)(?=^\[|\Z)")
 match = pattern.search(text)
 if match:
     body = match.group("body")
-    if re.search(r"(?m)^codex_hooks\s*=\s*true\s*$", body):
+    if re.search(r"(?m)^hooks\s*=\s*true\s*$", body):
         pass
-    elif re.search(r"(?m)^codex_hooks\s*=\s*false\s*$", body):
-        body = re.sub(r"(?m)^codex_hooks\s*=\s*false\s*$", "codex_hooks = true", body)
+    elif re.search(r"(?m)^hooks\s*=\s*false\s*$", body):
+        body = re.sub(r"(?m)^hooks\s*=\s*false\s*$", "hooks = true", body)
         text = text[:match.start("body")] + body + text[match.end("body"):]
     else:
         insertion = "" if body.endswith("\n") or body == "" else "\n"
-        text = text[:match.end("body")] + insertion + "codex_hooks = true\n" + text[match.end("body"):]
+        text = text[:match.end("body")] + insertion + "hooks = true\n" + text[match.end("body"):]
 else:
     if text and not text.endswith("\n\n"):
         text += "\n"
     text += "[features]\n"
-    text += "codex_hooks = true\n"
-
-if "suppress_unstable_features_warning" not in text:
-    if text and not text.endswith("\n"):
-        text += "\n"
-    text += "suppress_unstable_features_warning = true\n"
+    text += "hooks = true\n"
 
 output_path.write_text(text)
 PY
@@ -165,7 +160,8 @@ prepare_codex_home_overlay() {
     shopt -s dotglob nullglob
     for entry in "$real_codex_home"/*; do
         name="${entry##*/}"
-        [[ "$name" == "." || "$name" == ".." || "$name" == "hooks.json" || "$name" == "config.toml" ]] && continue
+        [[ "$name" == "." || "$name" == ".." || "$name" == ".tmp" || "$name" == "hooks.json" || "$name" == "config.toml" ]] && continue
+        [[ -e "$overlay_codex_home/$name" || -L "$overlay_codex_home/$name" ]] && continue
         ln -s "$entry" "$overlay_codex_home/$name"
     done
     shopt -u dotglob nullglob
@@ -331,7 +327,7 @@ main() {
     fi
 
     real_codex_home="$(resolve_real_codex_home)"
-    overlay_codex_home="$(mktemp -d "${TMPDIR:-/tmp}/tidey-codex-home.XXXXXX")"
+    overlay_codex_home="$real_codex_home/.tmp/tidey-codex-home"
     dispatch_script="$HOOK_DIR/codex-hook-dispatch"
     prepare_codex_home_overlay "$real_codex_home" "$overlay_codex_home" "$dispatch_script"
 
@@ -341,7 +337,7 @@ main() {
     write_registry_file "$registry_file" "$TIDEY_WORKSPACE_ID" "$session_id" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$created_at" ""
 
     cleanup() {
-        rm -rf "$overlay_codex_home"
+        :
     }
 
     trap cleanup EXIT
