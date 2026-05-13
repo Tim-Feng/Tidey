@@ -303,9 +303,14 @@ public final class TideyRemoteBridgeInstaller: NSObject {
         try fileManager.createDirectory(at: paths.launchAgentsDirectory, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: paths.logsDirectory, withIntermediateDirectories: true)
 
-        let binaryDiffers = force || (try TideyRemoteBridgeFileComparator.filesDiffer(resources.bridgeBinaryURL,
-                                                                                      paths.bridgeBinaryURL,
-                                                                                      fileManager: fileManager))
+        let binaryDiffers: Bool
+        if force {
+            binaryDiffers = true
+        } else {
+            binaryDiffers = try TideyRemoteBridgeFileComparator.filesDiffer(resources.bridgeBinaryURL,
+                                                                            paths.bridgeBinaryURL,
+                                                                            fileManager: fileManager)
+        }
         if binaryDiffers {
             if fileManager.fileExists(atPath: paths.bridgeBinaryURL.path) {
                 try fileManager.removeItem(at: paths.bridgeBinaryURL)
