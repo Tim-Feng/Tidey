@@ -85,7 +85,7 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
                                              arguments: ["paste-buffer", "-d", "-b", state.calls[4].arguments[3], "-t", "%21"],
                                              stdin: nil))
         XCTAssertEqual(state.calls[5], .init(socket: route.socket,
-                                             arguments: ["send-keys", "-t", "%21", "C-m"],
+                                             arguments: ["send-keys", "-t", "%21", "Enter"],
                                              stdin: nil))
     }
 
@@ -207,7 +207,7 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
             "send-keys",
         ])
         XCTAssertEqual(state.calls.last, .init(socket: route.socket,
-                                               arguments: ["send-keys", "-t", "%21", "C-m"],
+                                               arguments: ["send-keys", "-t", "%21", "Enter"],
                                                stdin: nil))
     }
 
@@ -226,7 +226,7 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
                 .success(""),
             ],
             RunnerState.key(socket: route.socket,
-                            arguments: ["send-keys", "-t", "%21", "C-m"]): [
+                            arguments: ["send-keys", "-t", "%21", "Enter"]): [
                 .failure(NSError(domain: "OrdinaryTmuxCLIAdapter",
                                   code: 1,
                                   userInfo: [NSLocalizedDescriptionKey: "can't find pane: %21"])),
@@ -240,7 +240,7 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
             XCTAssertEqual((error as NSError).domain, "OrdinaryTmuxCLIAdapter")
             XCTAssertEqual((error as NSError).code, 1)
         }
-        XCTAssertEqual(state.calls.last?.arguments, ["send-keys", "-t", "%21", "C-m"])
+        XCTAssertEqual(state.calls.last?.arguments, ["send-keys", "-t", "%21", "Enter"])
     }
 
     func testNonEnterInputDoesNotFallbackWhenActivePaneQueryTimesOut() throws {
@@ -293,8 +293,8 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
 
         let sendKeyCalls = state.calls.filter { $0.arguments.first == "send-keys" }
         XCTAssertEqual(sendKeyCalls.map(\.arguments), [
-            ["send-keys", "-t", "%21", "C-m"],
-            ["send-keys", "-t", "%22", "C-m"],
+            ["send-keys", "-t", "%21", "Enter"],
+            ["send-keys", "-t", "%22", "Enter"],
         ])
     }
 

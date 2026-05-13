@@ -339,7 +339,7 @@ final class OrdinaryTmuxCLIAdapter {
            let fallbackEnterPaneID {
             BridgeLogger.server.info("ordinary tmux input using last paste pane for enter workspace_id=\(route.workspaceID, privacy: .public) panel_id=\(route.panelID, privacy: .public) window_id=\(route.windowID, privacy: .public) pane_id=\(fallbackEnterPaneID, privacy: .public)")
             _ = try commandRunner(socket,
-                                  ["send-keys", "-t", fallbackEnterPaneID, "C-m"],
+                                  ["send-keys", "-t", fallbackEnterPaneID, "Enter"],
                                   nil)
             return OrdinaryTmuxInputDelivery(paneID: fallbackEnterPaneID,
                                              pastedText: false,
@@ -359,7 +359,7 @@ final class OrdinaryTmuxCLIAdapter {
                Self.isTmuxCommandTimeout(error) {
                 BridgeLogger.server.info("ordinary tmux input using fallback pane after active pane timeout workspace_id=\(route.workspaceID, privacy: .public) panel_id=\(route.panelID, privacy: .public) window_id=\(route.windowID, privacy: .public) pane_id=\(fallbackEnterPaneID, privacy: .public)")
                 _ = try commandRunner(socket,
-                                      ["send-keys", "-t", fallbackEnterPaneID, "C-m"],
+                                      ["send-keys", "-t", fallbackEnterPaneID, "Enter"],
                                       nil)
                 return OrdinaryTmuxInputDelivery(paneID: fallbackEnterPaneID,
                                                  pastedText: false,
@@ -383,7 +383,7 @@ final class OrdinaryTmuxCLIAdapter {
         }
         if splitInput.sendEnter {
             _ = try commandRunner(socket,
-                                  ["send-keys", "-t", pane.id, "C-m"],
+                                  ["send-keys", "-t", pane.id, "Enter"],
                                   nil)
         }
         return OrdinaryTmuxInputDelivery(paneID: pane.id,
