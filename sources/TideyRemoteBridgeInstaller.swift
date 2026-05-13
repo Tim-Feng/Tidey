@@ -5,6 +5,7 @@ struct TideyRemoteBridgeInstallPaths: Equatable {
     let homeDirectory: URL
     let applicationSupportDirectory: URL
     let bridgeBinaryURL: URL
+    let pairTokenFileURL: URL
     let launchAgentsDirectory: URL
     let bridgePlistURL: URL
     let cloudflaredPlistURL: URL
@@ -23,6 +24,7 @@ struct TideyRemoteBridgeInstallPaths: Equatable {
             homeDirectory: home,
             applicationSupportDirectory: support,
             bridgeBinaryURL: support.appendingPathComponent("tidey-remote-bridge", isDirectory: false),
+            pairTokenFileURL: support.appendingPathComponent("pair-token.json", isDirectory: false),
             launchAgentsDirectory: launchAgents,
             bridgePlistURL: launchAgents.appendingPathComponent("com.tidey.remote-bridge.plist", isDirectory: false),
             cloudflaredPlistURL: launchAgents.appendingPathComponent("com.tidey.remote-bridge.cloudflared.plist", isDirectory: false),
@@ -121,7 +123,8 @@ enum TideyRemoteBridgeInstallerError: Error, LocalizedError {
     case missingBundledBinary(String)
     case missingBundledTemplate(String)
     case launchctlFailed(arguments: [String], output: String)
-    case bridgeDidNotBecomeReady
+    case bridgeDidNotBecomeReady(String)
+    case bridgeAuthMismatch
 
     var errorDescription: String? {
         switch self {
@@ -134,9 +137,149 @@ enum TideyRemoteBridgeInstallerError: Error, LocalizedError {
         case .launchctlFailed(let arguments, let output):
             let command = (["launchctl"] + arguments).joined(separator: " ")
             return "\(command) failed: \(output)"
-        case .bridgeDidNotBecomeReady:
-            return "Tidey Remote Bridge did not respond on localhost after installation."
+        case .bridgeDidNotBecomeReady(let detail):
+            return "Tidey Remote Bridge did not respond on localhost after installation. \(detail)"
+        case .bridgeAuthMismatch:
+            return "Another Bridge is using port 4817 (auth mismatch). Quit the other instance or restart your Mac."
         }
+    }
+}
+
+private struct TideyRemoteBridgePairTokenRecord: Decodable {
+    let token: String
+}
+
+enum TideyRemoteBridgeReadinessResult: Equatable {
+    case ready(statusCode: Int)
+    case authMismatch(statusCode: Int)
+    case httpFailure(statusCode: Int)
+    case tokenUnavailable(String)
+    case networkFailure(String)
+
+    var isReady: Bool {
+        if case .ready = self {
+            return true
+        }
+        return false
+    }
+
+    var logStatusCode: String {
+        switch self {
+        case .ready(let statusCode), .authMismatch(let statusCode), .httpFailure(let statusCode):
+            return String(statusCode)
+        case .tokenUnavailable, .networkFailure:
+            return "-"
+        }
+    }
+
+    var logResult: String {
+        switch self {
+        case .ready:
+            return "ready"
+        case .authMismatch:
+            return "conflict"
+        case .httpFailure:
+            return "failed"
+        case .tokenUnavailable:
+            return "token_unavailable"
+        case .networkFailure:
+            return "network_failure"
+        }
+    }
+
+    var userFacingDetail: String {
+        switch self {
+        case .ready(let statusCode):
+            return "HTTP \(statusCode)."
+        case .authMismatch:
+            return "Another Bridge is using port 4817 (auth mismatch). Quit the other instance or restart your Mac."
+        case .httpFailure(let statusCode):
+            return "Bridge readiness check returned HTTP \(statusCode)."
+        case .tokenUnavailable(let message):
+            return "Pair token is not available yet: \(message)"
+        case .networkFailure(let message):
+            return "Bridge readiness check failed: \(message)"
+        }
+    }
+}
+
+protocol TideyRemoteBridgeHTTPClient {
+    func statusCode(for request: URLRequest) throws -> Int
+}
+
+struct TideyRemoteBridgeURLSessionHTTPClient: TideyRemoteBridgeHTTPClient {
+    func statusCode(for request: URLRequest) throws -> Int {
+        let semaphore = DispatchSemaphore(value: 0)
+        var result: Result<Int, Error> = .failure(URLError(.unknown))
+        let task = URLSession.shared.dataTask(with: request) { _, response, error in
+            defer { semaphore.signal() }
+            if let error {
+                result = .failure(error)
+                return
+            }
+            guard let httpResponse = response as? HTTPURLResponse else {
+                result = .failure(URLError(.badServerResponse))
+                return
+            }
+            result = .success(httpResponse.statusCode)
+        }
+        task.resume()
+        if semaphore.wait(timeout: .now() + 1.5) == .timedOut {
+            task.cancel()
+            throw URLError(.timedOut)
+        }
+        return try result.get()
+    }
+}
+
+protocol TideyRemoteBridgeReadinessChecking {
+    func check(paths: TideyRemoteBridgeInstallPaths) -> TideyRemoteBridgeReadinessResult
+}
+
+struct TideyRemoteBridgeStatusReadinessChecker: TideyRemoteBridgeReadinessChecking {
+    let httpClient: TideyRemoteBridgeHTTPClient
+    let fileManager: FileManager
+
+    init(httpClient: TideyRemoteBridgeHTTPClient = TideyRemoteBridgeURLSessionHTTPClient(),
+         fileManager: FileManager = .default) {
+        self.httpClient = httpClient
+        self.fileManager = fileManager
+    }
+
+    func check(paths: TideyRemoteBridgeInstallPaths) -> TideyRemoteBridgeReadinessResult {
+        let token: String
+        do {
+            token = try readPairToken(at: paths.pairTokenFileURL)
+        } catch {
+            return .tokenUnavailable(error.localizedDescription)
+        }
+
+        guard let url = URL(string: "http://127.0.0.1:4817/admin/status") else {
+            return .networkFailure("Invalid Bridge status URL.")
+        }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 1
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        do {
+            let statusCode = try httpClient.statusCode(for: request)
+            switch statusCode {
+            case 200:
+                return .ready(statusCode: statusCode)
+            case 401:
+                return .authMismatch(statusCode: statusCode)
+            default:
+                return .httpFailure(statusCode: statusCode)
+            }
+        } catch {
+            return .networkFailure(error.localizedDescription)
+        }
+    }
+
+    private func readPairToken(at url: URL) throws -> String {
+        let data = try Data(contentsOf: url)
+        let record = try JSONDecoder().decode(TideyRemoteBridgePairTokenRecord.self, from: data)
+        return record.token
     }
 }
 
@@ -221,14 +364,32 @@ public final class TideyRemoteBridgeInstaller: NSObject {
     private let queue = DispatchQueue(label: "com.tidey.remote-bridge-installer", qos: .utility)
     private let fileManager: FileManager
     private let commandRunner: TideyRemoteBridgeCommandRunning
+    private let resourcesProvider: () throws -> TideyRemoteBridgeBundledResources
+    private let pathsProvider: () -> TideyRemoteBridgeInstallPaths
+    private let readinessChecker: TideyRemoteBridgeReadinessChecking
+    private let sleep: (TimeInterval) -> Void
 
     override convenience init() {
-        self.init(fileManager: .default, commandRunner: TideyRemoteBridgeProcessRunner())
+        self.init(fileManager: .default,
+                  commandRunner: TideyRemoteBridgeProcessRunner(),
+                  resourcesProvider: TideyRemoteBridgeBundledResources.inMainBundle,
+                  pathsProvider: { TideyRemoteBridgeInstallPaths.currentUser() },
+                  readinessChecker: TideyRemoteBridgeStatusReadinessChecker(),
+                  sleep: Thread.sleep(forTimeInterval:))
     }
 
-    init(fileManager: FileManager, commandRunner: TideyRemoteBridgeCommandRunning) {
+    init(fileManager: FileManager,
+         commandRunner: TideyRemoteBridgeCommandRunning,
+         resourcesProvider: @escaping () throws -> TideyRemoteBridgeBundledResources = TideyRemoteBridgeBundledResources.inMainBundle,
+         pathsProvider: @escaping () -> TideyRemoteBridgeInstallPaths = { TideyRemoteBridgeInstallPaths.currentUser() },
+         readinessChecker: TideyRemoteBridgeReadinessChecking = TideyRemoteBridgeStatusReadinessChecker(),
+         sleep: @escaping (TimeInterval) -> Void = Thread.sleep(forTimeInterval:)) {
         self.fileManager = fileManager
         self.commandRunner = commandRunner
+        self.resourcesProvider = resourcesProvider
+        self.pathsProvider = pathsProvider
+        self.readinessChecker = readinessChecker
+        self.sleep = sleep
         super.init()
     }
 
@@ -259,14 +420,18 @@ public final class TideyRemoteBridgeInstaller: NSObject {
         return "LAN pairing is available. Internet access requires cloudflared. Install with Homebrew: brew install cloudflared"
     }
 
+    func performInstallForTesting(force: Bool) -> TideyRemoteBridgeInstallResult {
+        performInstall(force: force)
+    }
+
     private func performInstall(force: Bool) -> TideyRemoteBridgeInstallResult {
         do {
-            let resources = try TideyRemoteBridgeBundledResources.inMainBundle()
-            let paths = TideyRemoteBridgeInstallPaths.currentUser(fileManager: fileManager)
+            let resources = try resourcesProvider()
+            let paths = pathsProvider()
             try validateBundledResources(resources)
             try installIfNeeded(resources: resources, paths: paths, force: force)
             try reloadLaunchAgents(paths: paths)
-            try pollBridgeReady()
+            try pollBridgeReady(paths: paths)
 
             let cloudflaredAvailable = TideyRemoteBridgeCloudflaredResolver.executableURL(fileManager: fileManager) != nil
             let detail = cloudflaredAvailable ? nil : cloudflaredAvailabilityMessage()
@@ -364,34 +529,26 @@ public final class TideyRemoteBridgeInstaller: NSObject {
         }
     }
 
-    private func pollBridgeReady(timeout: TimeInterval = 20, interval: TimeInterval = 0.5) throws {
+    private func pollBridgeReady(paths: TideyRemoteBridgeInstallPaths,
+                                 timeout: TimeInterval = 20,
+                                 interval: TimeInterval = 0.5) throws {
         let deadline = Date().addingTimeInterval(timeout)
+        var lastResult: TideyRemoteBridgeReadinessResult?
         while Date() < deadline {
-            if bridgeStatusResponds() {
+            let result = readinessChecker.check(paths: paths)
+            NSLog("installer readiness check status_code=%@ result=%@",
+                  result.logStatusCode,
+                  result.logResult)
+            switch result {
+            case .ready:
                 return
+            case .authMismatch:
+                throw TideyRemoteBridgeInstallerError.bridgeAuthMismatch
+            case .httpFailure, .tokenUnavailable, .networkFailure:
+                lastResult = result
             }
-            Thread.sleep(forTimeInterval: interval)
+            sleep(interval)
         }
-        throw TideyRemoteBridgeInstallerError.bridgeDidNotBecomeReady
-    }
-
-    private func bridgeStatusResponds() -> Bool {
-        guard let url = URL(string: "http://127.0.0.1:4817/admin/status") else {
-            return false
-        }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 1
-
-        let semaphore = DispatchSemaphore(value: 0)
-        var success = false
-        let task = URLSession.shared.dataTask(with: request) { _, response, _ in
-            if let httpResponse = response as? HTTPURLResponse {
-                success = (200..<500).contains(httpResponse.statusCode)
-            }
-            semaphore.signal()
-        }
-        task.resume()
-        _ = semaphore.wait(timeout: .now() + 1.5)
-        return success
+        throw TideyRemoteBridgeInstallerError.bridgeDidNotBecomeReady(lastResult?.userFacingDetail ?? "")
     }
 }
