@@ -334,6 +334,18 @@ final class OrdinaryTmuxCLIAdapter {
                    fallbackEnterPaneID: String? = nil) throws -> OrdinaryTmuxInputDelivery {
         let socket = route.socket
         let splitInput = Self.splitInputForPasteAndEnter(input)
+        if splitInput.pasteText.isEmpty,
+           splitInput.sendEnter,
+           let fallbackEnterPaneID {
+            BridgeLogger.server.info("ordinary tmux input using last paste pane for enter workspace_id=\(route.workspaceID, privacy: .public) panel_id=\(route.panelID, privacy: .public) window_id=\(route.windowID, privacy: .public) pane_id=\(fallbackEnterPaneID, privacy: .public)")
+            _ = try commandRunner(socket,
+                                  ["send-keys", "-t", fallbackEnterPaneID, "C-m"],
+                                  nil)
+            return OrdinaryTmuxInputDelivery(paneID: fallbackEnterPaneID,
+                                             pastedText: false,
+                                             sentEnter: true,
+                                             usedFallbackPane: true)
+        }
         let pane: TmuxPane
         do {
             guard let activePane = try activePane(forWindowID: route.windowID, socket: socket) else {

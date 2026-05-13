@@ -145,7 +145,7 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
         }
     }
 
-    func testEnterOnlyFallsBackToLastPastePaneWhenActivePaneQueryTimesOut() throws {
+    func testEnterOnlyUsesLastPastePaneWithoutActivePaneQuery() throws {
         let registry = OrdinaryTmuxPanelRegistry()
         let route = ordinaryRoute()
         registry.replaceRoutes(workspaceID: "workspace-1", routes: [route])
@@ -153,7 +153,6 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
         let state = RunnerState(scriptedResponses: [
             listPanesKey: [
                 .success("%21\t1\t1021\t/Users/timfeng/GitHub/mother_nature\tcodex\n"),
-                .failure(tmuxTimeoutError()),
             ],
             RunnerState.key(socket: route.socket,
                             arguments: ["load-buffer", "-b", "ignored", "-"],
@@ -173,7 +172,6 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
             "set-option",
             "load-buffer",
             "paste-buffer",
-            "list-panes",
             "send-keys",
         ])
         XCTAssertEqual(state.calls.last, .init(socket: route.socket,
@@ -181,7 +179,7 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
                                                stdin: nil))
     }
 
-    func testEnterOnlyDoesNotFallbackWhenActivePaneIsGone() throws {
+    func testEnterOnlyFailsWhenLastPastePaneIsGone() throws {
         let registry = OrdinaryTmuxPanelRegistry()
         let route = ordinaryRoute()
         registry.replaceRoutes(workspaceID: "workspace-1", routes: [route])
@@ -189,12 +187,17 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
         let state = RunnerState(scriptedResponses: [
             listPanesKey: [
                 .success("%21\t1\t1021\t/Users/timfeng/GitHub/mother_nature\tcodex\n"),
-                .success(""),
             ],
             RunnerState.key(socket: route.socket,
                             arguments: ["load-buffer", "-b", "ignored", "-"],
                             stdin: "hello"): [
                 .success(""),
+            ],
+            RunnerState.key(socket: route.socket,
+                            arguments: ["send-keys", "-t", "%21", "C-m"]): [
+                .failure(NSError(domain: "OrdinaryTmuxCLIAdapter",
+                                  code: 1,
+                                  userInfo: [NSLocalizedDescriptionKey: "can't find pane: %21"])),
             ],
         ])
         let router = OrdinaryTmuxInputRouter(registry: registry,
@@ -202,12 +205,10 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
 
         XCTAssertTrue(try router.sendInput("hello", toPanelID: route.panelID))
         XCTAssertThrowsError(try router.sendInput("\r", toPanelID: route.panelID)) { error in
-            guard let bridgeError = error as? BridgeInternalError else {
-                return XCTFail("expected BridgeInternalError")
-            }
-            XCTAssertEqual(bridgeError.payload.code, "not_found")
+            XCTAssertEqual((error as NSError).domain, "OrdinaryTmuxCLIAdapter")
+            XCTAssertEqual((error as NSError).code, 1)
         }
-        XCTAssertFalse(state.calls.contains { $0.arguments.first == "send-keys" })
+        XCTAssertEqual(state.calls.last?.arguments, ["send-keys", "-t", "%21", "C-m"])
     }
 
     func testNonEnterInputDoesNotFallbackWhenActivePaneQueryTimesOut() throws {
@@ -237,9 +238,7 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
         let state = RunnerState(scriptedResponses: [
             listPanesKey: [
                 .success("%21\t1\t1021\t/Users/timfeng/GitHub/mother_nature\tcodex\n"),
-                .failure(tmuxTimeoutError()),
                 .success("%22\t1\t1022\t/Users/timfeng/GitHub/mother_nature\tcodex\n"),
-                .failure(tmuxTimeoutError()),
             ],
             RunnerState.key(socket: route.socket,
                             arguments: ["load-buffer", "-b", "ignored", "-"],
