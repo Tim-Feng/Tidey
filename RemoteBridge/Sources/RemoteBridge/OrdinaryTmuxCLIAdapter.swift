@@ -371,7 +371,7 @@ final class OrdinaryTmuxCLIAdapter {
         guard !pane.id.isEmpty else {
             throw BridgeInternalError.notFound("ordinary tmux panel route is stale")
         }
-        try setPaneIdentity(route: route, paneID: pane.id)
+        setPaneIdentityBestEffort(route: route, paneID: pane.id)
         if !splitInput.pasteText.isEmpty {
             let bufferName = "tidey-remote-\(UUID().uuidString)"
             _ = try commandRunner(socket,
@@ -444,6 +444,14 @@ final class OrdinaryTmuxCLIAdapter {
 
     func setPaneIdentity(route: OrdinaryTmuxPanelRoute) throws {
         try setPaneIdentity(route: route, paneID: route.activePaneID)
+    }
+
+    private func setPaneIdentityBestEffort(route: OrdinaryTmuxPanelRoute, paneID: String) {
+        do {
+            try setPaneIdentity(route: route, paneID: paneID)
+        } catch {
+            BridgeLogger.server.error("ordinary tmux input pane identity sync skipped workspace_id=\(route.workspaceID, privacy: .public) panel_id=\(route.panelID, privacy: .public) window_id=\(route.windowID, privacy: .public) pane_id=\(paneID, privacy: .public) error=\(String(describing: error), privacy: .public)")
+        }
     }
 
     private func setPaneIdentity(route: OrdinaryTmuxPanelRoute, paneID: String) throws {

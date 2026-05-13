@@ -116,6 +116,38 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
         XCTAssertEqual(state.calls.map { $0.arguments.first }, ["list-panes", "set-option", "set-option", "load-buffer", "paste-buffer"])
     }
 
+    func testPaneIdentityTimeoutDoesNotAbortPasteInput() throws {
+        let registry = OrdinaryTmuxPanelRegistry()
+        let route = ordinaryRoute()
+        registry.replaceRoutes(workspaceID: "workspace-1", routes: [route])
+        let state = RunnerState(scriptedResponses: [
+            RunnerState.key(socket: route.socket, arguments: listPanesArguments(windowID: route.windowID)): [
+                .success("%21\t1\t1021\t/Users/timfeng/GitHub/mother_nature\tcodex\n"),
+            ],
+            RunnerState.key(socket: route.socket,
+                            arguments: ["set-option", "-p", "-t", "%21", "@tidey_panel_id", route.panelID]): [
+                .failure(tmuxTimeoutError()),
+            ],
+            RunnerState.key(socket: route.socket,
+                            arguments: ["load-buffer", "-b", "ignored", "-"],
+                            stdin: "hello"): [
+                .success(""),
+            ],
+        ])
+        let router = OrdinaryTmuxInputRouter(registry: registry,
+                                             adapter: adapter(state: state))
+
+        XCTAssertTrue(try router.sendInput("hello", toPanelID: route.panelID))
+
+        XCTAssertEqual(state.calls.map(\.arguments.first), [
+            "list-panes",
+            "set-option",
+            "set-option",
+            "load-buffer",
+            "paste-buffer",
+        ])
+    }
+
     func testUnknownPanelFallsBackToMacSocketPath() throws {
         let registry = OrdinaryTmuxPanelRegistry()
         let router = OrdinaryTmuxInputRouter(registry: registry,
