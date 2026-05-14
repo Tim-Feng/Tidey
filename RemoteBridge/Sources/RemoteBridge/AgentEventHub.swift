@@ -321,7 +321,7 @@ final class AgentEventHub {
     private func budgetLimitedEvents(_ events: [AgentEvent],
                                      maxBytes: Int?,
                                      prefersNewestEvents: Bool) -> [AgentEvent] {
-        guard let maxBytes, maxBytes > 0, events.count > 1 else {
+        guard let maxBytes, maxBytes > 0 else {
             return events
         }
 
@@ -330,11 +330,12 @@ final class AgentEventHub {
             var selected = [AgentEvent]()
             var accumulatedBytes = 0
             for event in events.reversed() {
-                let estimatedBytes = (try? encoder.encode(event).count) ?? 0
+                let candidate = budgetSafeEvent(event, maxBytes: maxBytes, encoder: encoder)
+                let estimatedBytes = (try? encoder.encode(candidate).count) ?? 0
                 if !selected.isEmpty, accumulatedBytes + estimatedBytes > maxBytes {
                     break
                 }
-                selected.append(event)
+                selected.append(candidate)
                 accumulatedBytes += estimatedBytes
             }
             return selected.reversed()
@@ -342,14 +343,64 @@ final class AgentEventHub {
             var selected = [AgentEvent]()
             var accumulatedBytes = 0
             for event in events {
-                let estimatedBytes = (try? encoder.encode(event).count) ?? 0
+                let candidate = budgetSafeEvent(event, maxBytes: maxBytes, encoder: encoder)
+                let estimatedBytes = (try? encoder.encode(candidate).count) ?? 0
                 if !selected.isEmpty, accumulatedBytes + estimatedBytes > maxBytes {
                     break
                 }
-                selected.append(event)
+                selected.append(candidate)
                 accumulatedBytes += estimatedBytes
             }
             return selected
         }
+    }
+
+    private func budgetSafeEvent(_ event: AgentEvent,
+                                 maxBytes: Int,
+                                 encoder: JSONEncoder) -> AgentEvent {
+        let estimatedBytes = (try? encoder.encode(event).count) ?? 0
+        guard estimatedBytes > maxBytes else {
+            return event
+        }
+
+        var metadata = event.metadata ?? [:]
+        metadata["tidey_truncated"] = "true"
+        metadata["tidey_original_estimated_bytes"] = String(estimatedBytes)
+        metadata["tidey_max_bytes"] = String(maxBytes)
+
+        let placeholder = "內容超過這次載入的大小限制，已先顯示摘要。需要完整內容時請回到 Mac 端查看。"
+        let text: String?
+        let input: String?
+        let output: String?
+
+        switch event.type {
+        case .toolResult:
+            text = event.text == nil ? nil : placeholder
+            input = event.input
+            output = placeholder
+        case .toolCall:
+            text = event.text
+            input = placeholder
+            output = event.output
+        default:
+            text = placeholder
+            input = event.input
+            output = event.output
+        }
+
+        return AgentEvent(eventID: event.eventID,
+                          seq: event.seq,
+                          vendor: event.vendor,
+                          workspaceID: event.workspaceID,
+                          sessionID: event.sessionID,
+                          timestamp: event.timestamp,
+                          type: event.type,
+                          role: event.role,
+                          text: text,
+                          name: event.name,
+                          input: input,
+                          output: output,
+                          toolCallID: event.toolCallID,
+                          metadata: metadata)
     }
 }
