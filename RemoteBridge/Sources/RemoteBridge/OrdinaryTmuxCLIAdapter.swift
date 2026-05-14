@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 enum OrdinaryTmuxSocketSelector: Equatable, Sendable {
@@ -377,9 +378,19 @@ final class OrdinaryTmuxCLIAdapter {
             _ = try commandRunner(socket,
                                   ["load-buffer", "-b", bufferName, "-"],
                                   splitInput.pasteText)
-            _ = try commandRunner(socket,
-                                  ["paste-buffer", "-d", "-b", bufferName, "-t", pane.id],
-                                  nil)
+            do {
+                _ = try commandRunner(socket,
+                                      ["paste-buffer", "-d", "-b", bufferName, "-t", pane.id],
+                                      nil)
+            } catch {
+                guard Self.isTmuxCommandTimeout(error),
+                      verifyPasteBufferDelivery(pasteText: splitInput.pasteText,
+                                                paneID: pane.id,
+                                                socket: socket,
+                                                route: route) else {
+                    throw error
+                }
+            }
         }
         if splitInput.sendEnter {
             _ = try commandRunner(socket,
@@ -442,6 +453,28 @@ final class OrdinaryTmuxCLIAdapter {
                                           cursorColumn: nil)
     }
 
+    private func verifyPasteBufferDelivery(pasteText: String,
+                                           paneID: String,
+                                           socket: OrdinaryTmuxSocketSelector,
+                                           route: OrdinaryTmuxPanelRoute) -> Bool {
+        let diagnostic = Self.pasteDiagnostic(for: pasteText)
+        do {
+            let output = try commandRunner(socket,
+                                           ["capture-pane", "-p", "-J", "-S", "-20", "-t", paneID],
+                                           nil)
+            let didVerify = Self.captureOutput(output, containsPasteText: pasteText)
+            if didVerify {
+                BridgeLogger.server.info("ordinary tmux paste-buffer timeout verified workspace_id=\(route.workspaceID, privacy: .public) panel_id=\(route.panelID, privacy: .public) window_id=\(route.windowID, privacy: .public) pane_id=\(paneID, privacy: .public) paste_count=\(diagnostic.count, privacy: .public) paste_hash=\(diagnostic.hash, privacy: .public)")
+            } else {
+                BridgeLogger.server.info("ordinary tmux paste-buffer timeout unverified workspace_id=\(route.workspaceID, privacy: .public) panel_id=\(route.panelID, privacy: .public) window_id=\(route.windowID, privacy: .public) pane_id=\(paneID, privacy: .public) reason=no_match paste_count=\(diagnostic.count, privacy: .public) paste_hash=\(diagnostic.hash, privacy: .public)")
+            }
+            return didVerify
+        } catch {
+            BridgeLogger.server.info("ordinary tmux paste-buffer timeout unverified workspace_id=\(route.workspaceID, privacy: .public) panel_id=\(route.panelID, privacy: .public) window_id=\(route.windowID, privacy: .public) pane_id=\(paneID, privacy: .public) reason=capture_error paste_count=\(diagnostic.count, privacy: .public) paste_hash=\(diagnostic.hash, privacy: .public) error=\(String(describing: error), privacy: .public)")
+            return false
+        }
+    }
+
     func setPaneIdentity(route: OrdinaryTmuxPanelRoute) throws {
         try setPaneIdentity(route: route, paneID: route.activePaneID)
     }
@@ -497,6 +530,38 @@ final class OrdinaryTmuxCLIAdapter {
     private static func isTmuxCommandTimeout(_ error: Error) -> Bool {
         let nsError = error as NSError
         return nsError.domain == "OrdinaryTmuxCLIAdapter" && nsError.code == 124
+    }
+
+    private static func captureOutput(_ output: String, containsPasteText pasteText: String) -> Bool {
+        let pasteKey = ChatSubmitEchoRegistry.normalizedKey(pasteText)
+        guard !pasteKey.isEmpty else {
+            return true
+        }
+        let captureKey = ChatSubmitEchoRegistry.normalizedKey(output)
+        if captureKey.contains(pasteKey) {
+            return true
+        }
+        let pasteBlankLineInsensitive = pasteKey.replacingOccurrences(of: "\n{2,}",
+                                                                      with: "\n",
+                                                                      options: .regularExpression)
+        let captureBlankLineInsensitive = captureKey.replacingOccurrences(of: "\n{2,}",
+                                                                          with: "\n",
+                                                                          options: .regularExpression)
+        if captureBlankLineInsensitive.contains(pasteBlankLineInsensitive) {
+            return true
+        }
+        guard pasteBlankLineInsensitive.count > 80 else {
+            return false
+        }
+        let tailToken = String(pasteBlankLineInsensitive.suffix(80))
+        return captureBlankLineInsensitive.contains(tailToken)
+    }
+
+    private static func pasteDiagnostic(for pasteText: String) -> (count: Int, hash: String) {
+        let normalized = ChatSubmitEchoRegistry.normalizedKey(pasteText)
+        let digest = SHA256.hash(data: Data(normalized.utf8))
+        let hash = digest.prefix(4).map { String(format: "%02x", $0) }.joined()
+        return (normalized.count, hash)
     }
 
     private static func parseClientLine(_ line: Substring) -> OrdinaryTmuxClient? {
