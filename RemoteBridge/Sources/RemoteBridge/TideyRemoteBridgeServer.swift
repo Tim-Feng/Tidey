@@ -559,7 +559,8 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
     private lazy var ordinaryTmuxRouteResolver = OrdinaryTmuxRouteResolver(registry: ordinaryTmuxPanelRegistry)
     private lazy var inputActionHandler = BridgeInputActionHandler(socketSender: socketClient,
                                                                    sessionResolver: registryMonitor,
-                                                                   ordinaryTmuxInputRouter: OrdinaryTmuxInputRouter(routeResolver: ordinaryTmuxRouteResolver))
+                                                                   ordinaryTmuxInputRouter: OrdinaryTmuxInputRouter(routeResolver: ordinaryTmuxRouteResolver),
+                                                                   chatSubmitEchoRegistry: registryMonitor.chatSubmitEchoRegistry)
     private lazy var fileActionHandler = BridgeFileActionHandler(rootResolver: TideyPanelFileRootResolver(socketSender: socketClient,
                                                                                                           ordinaryTmuxRouteResolver: ordinaryTmuxRouteResolver))
     private lazy var ordinaryTmuxRecentOutputHandler = OrdinaryTmuxRecentOutputHandler(routeResolver: ordinaryTmuxRouteResolver)

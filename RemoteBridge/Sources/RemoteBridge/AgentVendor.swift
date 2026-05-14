@@ -16,7 +16,8 @@ protocol AgentVendor {
     func makeTranscriptSession(record: AgentSessionRegistryRecord,
                                fileManager: FileManager,
                                hub: AgentEventHub,
-                               socketClient: TideySocketClient?) -> AgentTranscriptSession
+                               socketClient: TideySocketClient?,
+                               chatSubmitEchoRegistry: ChatSubmitEchoRegistry) -> AgentTranscriptSession
 }
 
 enum AgentVendorRegistry {
@@ -52,10 +53,12 @@ private struct ClaudeAgentVendor: AgentVendor {
     func makeTranscriptSession(record: AgentSessionRegistryRecord,
                                fileManager: FileManager,
                                hub: AgentEventHub,
-                               socketClient: TideySocketClient?) -> AgentTranscriptSession {
+                               socketClient: TideySocketClient?,
+                               chatSubmitEchoRegistry: ChatSubmitEchoRegistry) -> AgentTranscriptSession {
         ClaudeTranscriptSession(record: record,
                                 fileManager: fileManager,
-                                hub: hub)
+                                hub: hub,
+                                chatSubmitEchoRegistry: chatSubmitEchoRegistry)
     }
 }
 
@@ -77,10 +80,12 @@ private struct CodexAgentVendor: AgentVendor {
     func makeTranscriptSession(record: AgentSessionRegistryRecord,
                                fileManager: FileManager,
                                hub: AgentEventHub,
-                               socketClient: TideySocketClient?) -> AgentTranscriptSession {
+                               socketClient: TideySocketClient?,
+                               chatSubmitEchoRegistry: ChatSubmitEchoRegistry) -> AgentTranscriptSession {
         CodexTranscriptSession(record: record,
                                fileManager: fileManager,
                                hub: hub,
-                               socketClient: socketClient)
+                               socketClient: socketClient,
+                               chatSubmitEchoRegistry: chatSubmitEchoRegistry)
     }
 }

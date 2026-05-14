@@ -19,11 +19,13 @@ struct BridgeInputActionHandler {
     private let socketSender: TideyRequestSending
     private let sessionResolver: ActiveAgentSessionResolving
     private let ordinaryTmuxInputRouter: OrdinaryTmuxInputRouting?
+    private let chatSubmitEchoRegistry: ChatSubmitEchoRegistry?
     private let sleep: @Sendable (UInt64) throws -> Void
 
     init(socketSender: TideyRequestSending,
          sessionResolver: ActiveAgentSessionResolving,
          ordinaryTmuxInputRouter: OrdinaryTmuxInputRouting? = nil,
+         chatSubmitEchoRegistry: ChatSubmitEchoRegistry? = nil,
          sleep: @escaping @Sendable (UInt64) throws -> Void = { delayNanoseconds in
              guard delayNanoseconds > 0 else {
                  return
@@ -33,6 +35,7 @@ struct BridgeInputActionHandler {
         self.socketSender = socketSender
         self.sessionResolver = sessionResolver
         self.ordinaryTmuxInputRouter = ordinaryTmuxInputRouter
+        self.chatSubmitEchoRegistry = chatSubmitEchoRegistry
         self.sleep = sleep
     }
 
@@ -88,6 +91,7 @@ struct BridgeInputActionHandler {
 
         let requestedSessionID = params["session_id"]?.stringValue
         let requestedVendor = params["vendor"]?.stringValue
+        let clientRequestID = params["client_request_id"]?.stringValue
         let activeSession = sessionResolver.activeSessionForPanel(workspaceID: workspaceID, panelID: panelID)
 
         if let requestedSessionID,
@@ -139,6 +143,16 @@ struct BridgeInputActionHandler {
                 }
                 previousStepUsedOrdinaryTmux = false
             }
+        }
+
+        if let clientRequestID,
+           let resolvedSessionID = activeSession?.sessionID ?? requestedSessionID {
+            chatSubmitEchoRegistry?.register(workspaceID: workspaceID,
+                                             panelID: panelID,
+                                             sessionID: resolvedSessionID,
+                                             vendor: vendor.id,
+                                             text: message,
+                                             clientRequestID: clientRequestID)
         }
 
         return BridgeResponse(id: request.id,

@@ -46,7 +46,8 @@ final class AgentVendorTests: XCTestCase {
         let codexSession = codexVendor.makeTranscriptSession(record: record,
                                                              fileManager: .default,
                                                              hub: hub,
-                                                             socketClient: nil)
+                                                             socketClient: nil,
+                                                             chatSubmitEchoRegistry: ChatSubmitEchoRegistry())
         XCTAssertTrue(codexSession is CodexTranscriptSession)
 
         let claudeRecord = AgentSessionRegistryRecord(version: 1,
@@ -62,7 +63,8 @@ final class AgentVendorTests: XCTestCase {
         let claudeSession = claudeVendor.makeTranscriptSession(record: claudeRecord,
                                                                fileManager: .default,
                                                                hub: hub,
-                                                               socketClient: nil)
+                                                               socketClient: nil,
+                                                               chatSubmitEchoRegistry: ChatSubmitEchoRegistry())
         XCTAssertTrue(claudeSession is ClaudeTranscriptSession)
     }
 }

@@ -77,6 +77,52 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         XCTAssertEqual(result.events.compactMap(\.text), ["Please explain when to use /exit in docs."])
     }
 
+    func testClaudeUserEchoConsumesClientRequestIDMetadata() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        try makeClaudeUserLine(uuid: "u1", content: "hello from remote")
+            .appending("\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let registry = ChatSubmitEchoRegistry()
+        registry.register(workspaceID: "workspace",
+                          panelID: "panel",
+                          sessionID: "session",
+                          vendor: "claude",
+                          text: "hello from remote",
+                          clientRequestID: "local-1")
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub,
+                                              chatSubmitEchoRegistry: registry)
+        session.start()
+        defer { session.stop() }
+
+        XCTAssertTrue(waitUntil {
+            let result = hub.fetch(workspaceID: "workspace",
+                                   sessionID: "session",
+                                   limit: 10,
+                                   beforeSeq: nil,
+                                   afterSeq: nil)
+            return result.events.contains { $0.metadata?["client_request_id"] == "local-1" }
+        })
+
+        let result = hub.fetch(workspaceID: "workspace",
+                               sessionID: "session",
+                               limit: 10,
+                               beforeSeq: nil,
+                               afterSeq: nil)
+        let userEvent = try XCTUnwrap(result.events.first { $0.type == .userMessage })
+        XCTAssertEqual(userEvent.metadata?["client_request_id"], "local-1")
+        XCTAssertTrue(registry.snapshot().isEmpty)
+    }
+
     private func makeRecord(transcriptPath: String) -> AgentSessionRegistryRecord {
         AgentSessionRegistryRecord(version: 1,
                                    vendor: "claude",

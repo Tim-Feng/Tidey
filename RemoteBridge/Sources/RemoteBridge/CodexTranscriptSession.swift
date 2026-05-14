@@ -8,6 +8,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     private let fileManager: FileManager
     private let hub: AgentEventHub
     private let socketClient: TideySocketClient?
+    private let chatSubmitEchoRegistry: ChatSubmitEchoRegistry
 
     private var record: AgentSessionRegistryRecord
     private var resolverTimer: DispatchSourceTimer?
@@ -32,11 +33,13 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     init(record: AgentSessionRegistryRecord,
          fileManager: FileManager = .default,
          hub: AgentEventHub,
-         socketClient: TideySocketClient? = nil) {
+         socketClient: TideySocketClient? = nil,
+         chatSubmitEchoRegistry: ChatSubmitEchoRegistry? = nil) {
         self.record = record
         self.fileManager = fileManager
         self.hub = hub
         self.socketClient = socketClient
+        self.chatSubmitEchoRegistry = chatSubmitEchoRegistry ?? ChatSubmitEchoRegistry()
         self.queue = DispatchQueue(label: "com.tidey.remote-bridge.codex-session.\(record.sessionID)")
     }
 
@@ -641,6 +644,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                    metadata: [String: String]?) {
         let seq = transcriptEventSequence(lineOffset: lineOffset, ordinal: ordinal)
         maxObservedSeq = max(maxObservedSeq, seq)
+        let resolvedMetadata = metadataWithClientRequestID(kind: kind, text: text, metadata: metadata)
         let event = AgentEvent(eventID: eventID,
                                seq: seq,
                                vendor: "codex",
@@ -654,7 +658,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                input: input,
                                output: output,
                                toolCallID: toolCallID,
-                               metadata: baseMetadata(metadata))
+                               metadata: baseMetadata(resolvedMetadata))
         hub.publish(event, deliverToSubscribers: !isBackfillingHistory)
     }
 
@@ -745,6 +749,23 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             merged["panel_id"] = panelID
         }
         return merged.isEmpty ? nil : merged
+    }
+
+    private func metadataWithClientRequestID(kind: AgentEventKind,
+                                             text: String?,
+                                             metadata: [String: String]?) -> [String: String]? {
+        guard kind == .userMessage,
+              let text,
+              let clientRequestID = chatSubmitEchoRegistry.consumeClientRequestID(workspaceID: record.workspaceID,
+                                                                                  panelID: record.panelID,
+                                                                                  sessionID: record.sessionID,
+                                                                                  vendor: "codex",
+                                                                                  text: text) else {
+            return metadata
+        }
+        var merged = metadata ?? [:]
+        merged["client_request_id"] = clientRequestID
+        return merged
     }
 
     private static func extractMessageText(from value: Any?) -> String {

@@ -304,6 +304,7 @@ final class AgentSessionRegistryMonitor {
     private let fileManager: FileManager
     private let hub: AgentEventHub
     private let socketClient: TideySocketClient?
+    let chatSubmitEchoRegistry: ChatSubmitEchoRegistry
     private let tmuxResolver: TmuxStateResolver
     private let parentPIDLookup: ParentPIDLookup
     private let descendantProcessLookup: DescendantProcessLookup
@@ -322,6 +323,7 @@ final class AgentSessionRegistryMonitor {
          fileManager: FileManager = .default,
          hub: AgentEventHub,
          socketClient: TideySocketClient? = nil,
+         chatSubmitEchoRegistry: ChatSubmitEchoRegistry = ChatSubmitEchoRegistry(),
          tmuxResolver: TmuxStateResolver = TmuxStateResolver(),
          parentPIDLookup: @escaping ParentPIDLookup = AgentSessionRegistryMonitor.liveParentPIDLookup,
          descendantProcessLookup: @escaping DescendantProcessLookup = AgentSessionRegistryMonitor.liveDescendantProcessLookup,
@@ -330,6 +332,7 @@ final class AgentSessionRegistryMonitor {
         self.fileManager = fileManager
         self.hub = hub
         self.socketClient = socketClient
+        self.chatSubmitEchoRegistry = chatSubmitEchoRegistry
         self.tmuxResolver = tmuxResolver
         self.parentPIDLookup = parentPIDLookup
         self.descendantProcessLookup = descendantProcessLookup
@@ -825,7 +828,8 @@ final class AgentSessionRegistryMonitor {
             let session = vendor.makeTranscriptSession(record: record,
                                                        fileManager: fileManager,
                                                        hub: hub,
-                                                       socketClient: socketClient)
+                                                       socketClient: socketClient,
+                                                       chatSubmitEchoRegistry: chatSubmitEchoRegistry)
             sessions[record.sessionID] = session
             session.start()
         }
@@ -1037,6 +1041,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private let queue: DispatchQueue
     private let fileManager: FileManager
     private let hub: AgentEventHub
+    private let chatSubmitEchoRegistry: ChatSubmitEchoRegistry
 
     private var record: AgentSessionRegistryRecord
     private var resolverTimer: DispatchSourceTimer?
@@ -1050,10 +1055,12 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
 
     init(record: AgentSessionRegistryRecord,
          fileManager: FileManager = .default,
-         hub: AgentEventHub) {
+         hub: AgentEventHub,
+         chatSubmitEchoRegistry: ChatSubmitEchoRegistry? = nil) {
         self.record = record
         self.fileManager = fileManager
         self.hub = hub
+        self.chatSubmitEchoRegistry = chatSubmitEchoRegistry ?? ChatSubmitEchoRegistry()
         self.queue = DispatchQueue(label: "com.tidey.remote-bridge.claude-session.\(record.sessionID)")
     }
 
@@ -1473,6 +1480,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                    metadata: [String: String]?) {
         let seq = transcriptEventSequence(lineOffset: lineOffset, ordinal: ordinal)
         maxObservedSeq = max(maxObservedSeq, seq)
+        let resolvedMetadata = metadataWithClientRequestID(kind: kind, text: text, metadata: metadata)
         let event = AgentEvent(eventID: eventID,
                                seq: seq,
                                vendor: "claude",
@@ -1486,7 +1494,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                input: input,
                                output: output,
                                toolCallID: toolCallID,
-                               metadata: baseMetadata(metadata))
+                               metadata: baseMetadata(resolvedMetadata))
         hub.publish(event, deliverToSubscribers: !isBackfillingHistory)
     }
 
@@ -1530,6 +1538,23 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             merged["panel_id"] = panelID
         }
         return merged.isEmpty ? nil : merged
+    }
+
+    private func metadataWithClientRequestID(kind: AgentEventKind,
+                                             text: String?,
+                                             metadata: [String: String]?) -> [String: String]? {
+        guard kind == .userMessage,
+              let text,
+              let clientRequestID = chatSubmitEchoRegistry.consumeClientRequestID(workspaceID: record.workspaceID,
+                                                                                  panelID: record.panelID,
+                                                                                  sessionID: record.sessionID,
+                                                                                  vendor: "claude",
+                                                                                  text: text) else {
+            return metadata
+        }
+        var merged = metadata ?? [:]
+        merged["client_request_id"] = clientRequestID
+        return merged
     }
 
     private static func compactString(_ value: Any?) -> String {

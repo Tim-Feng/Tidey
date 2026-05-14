@@ -95,6 +95,37 @@ final class BridgeInputActionHandlerTests: XCTestCase {
         XCTAssertEqual(delayRecorder.recordedDelays, [chatSubmitEnterDelayNanoseconds])
     }
 
+    func testChatSubmitRegistersClientRequestIDForTranscriptEchoMatching() throws {
+        let sender = MockTideyRequestSender()
+        let resolver = MockSessionResolver(session: ActiveAgentSessionSnapshot(vendor: "codex",
+                                                                              workspaceID: "workspace-1",
+                                                                              sessionID: "session-1",
+                                                                              panelID: "panel-1"))
+        let registry = ChatSubmitEchoRegistry()
+        let handler = BridgeInputActionHandler(socketSender: sender,
+                                               sessionResolver: resolver,
+                                               chatSubmitEchoRegistry: registry)
+
+        let response = try handler.handle(BridgeRequest(id: "request-1",
+                                                        action: "chat_submit",
+                                                        params: [
+                                                            "workspace_id": .string("workspace-1"),
+                                                            "panel_id": .string("panel-1"),
+                                                            "message": .string("hello"),
+                                                            "session_id": .string("session-1"),
+                                                            "vendor": .string("codex"),
+                                                            "client_request_id": .string("local-1"),
+                                                        ]))
+
+        XCTAssertEqual(response?.ok, true)
+        XCTAssertEqual(registry.consumeClientRequestID(workspaceID: "workspace-1",
+                                                       panelID: "panel-1",
+                                                       sessionID: "session-1",
+                                                       vendor: "codex",
+                                                       text: "hello"),
+                       "local-1")
+    }
+
     func testChatSubmitRoutesOrdinaryTmuxPanelStepsWithoutMacSocketForward() throws {
         let sender = MockTideyRequestSender()
         let resolver = MockSessionResolver(session: ActiveAgentSessionSnapshot(vendor: "codex",
