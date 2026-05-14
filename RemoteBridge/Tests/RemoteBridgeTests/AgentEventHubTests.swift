@@ -146,6 +146,52 @@ final class AgentEventHubTests: XCTestCase {
         XCTAssertTrue(result.hasMore)
     }
 
+    func testFetchBeforeSeqHonorsMaxBytesForOlderSlice() {
+        let hub = AgentEventHub()
+        let event1 = makeAssistantEvent(id: "assistant-1", seq: 1, text: String(repeating: "a", count: 32))
+        let event2 = makeAssistantEvent(id: "assistant-2", seq: 2, text: String(repeating: "b", count: 32))
+        let event3 = makeAssistantEvent(id: "assistant-3", seq: 3, text: String(repeating: "c", count: 32))
+        hub.publish(event1)
+        hub.publish(event2)
+        hub.publish(event3)
+        hub.publish(makeAssistantEvent(id: "assistant-4", seq: 4, text: "newer"))
+
+        let maxBytes = estimatedBytes(for: event2) + estimatedBytes(for: event3)
+
+        let result = hub.fetch(workspaceID: "workspace",
+                               sessionID: "session",
+                               limit: 10,
+                               maxBytes: maxBytes,
+                               beforeSeq: 4,
+                               afterSeq: nil)
+
+        XCTAssertEqual(result.events.map(\.seq), [2, 3])
+        XCTAssertEqual(result.oldestSeq, 2)
+        XCTAssertEqual(result.newestSeq, 3)
+        XCTAssertTrue(result.hasMore)
+    }
+
+    func testFetchReplacesSingleOversizedToolResultWithPlaceholder() {
+        let hub = AgentEventHub()
+        hub.publish(makeToolResultEvent(id: "tool-result-1",
+                                        seq: 1,
+                                        output: String(repeating: "x", count: 4096)))
+
+        let result = hub.fetch(workspaceID: "workspace",
+                               sessionID: "session",
+                               limit: 10,
+                               maxBytes: 512,
+                               beforeSeq: nil,
+                               afterSeq: nil)
+
+        XCTAssertEqual(result.events.count, 1)
+        XCTAssertEqual(result.events.first?.seq, 1)
+        XCTAssertEqual(result.events.first?.type, .toolResult)
+        XCTAssertEqual(result.events.first?.metadata?["tidey_truncated"], "true")
+        XCTAssertNotEqual(result.events.first?.output, String(repeating: "x", count: 4096))
+        XCTAssertTrue((result.events.first?.output ?? "").contains("大小限制"))
+    }
+
     private func makeAssistantEvent(id: String, seq: Int, text: String? = nil) -> AgentEvent {
         AgentEvent(eventID: id,
                    seq: seq,
@@ -160,6 +206,23 @@ final class AgentEventHubTests: XCTestCase {
                    input: nil,
                    output: nil,
                    toolCallID: nil,
+                   metadata: nil)
+    }
+
+    private func makeToolResultEvent(id: String, seq: Int, output: String) -> AgentEvent {
+        AgentEvent(eventID: id,
+                   seq: seq,
+                   vendor: "claude",
+                   workspaceID: "workspace",
+                   sessionID: "session",
+                   timestamp: String(format: "2026-01-01T00:00:%02dZ", seq),
+                   type: .toolResult,
+                   role: nil,
+                   text: nil,
+                   name: nil,
+                   input: nil,
+                   output: output,
+                   toolCallID: "tool-call-1",
                    metadata: nil)
     }
 
