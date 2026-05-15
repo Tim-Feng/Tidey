@@ -402,6 +402,10 @@ static NSString *TideySubmitLogSuffix(NSString *input) {
 + (BOOL)tideyShouldIgnoreCloseCurrentSessionWithTabCount:(NSInteger)tabCount
                                   currentTabSessionCount:(NSInteger)sessionCount
                                  didCloseRightPanelTab:(BOOL)didCloseRightPanelTab;
++ (BOOL)tideyShouldUpdateSelectedPanelIndexFromVisibleSelectionForShowingSidebar:(BOOL)showingSidebar
+                                                              switchingWorkspace:(BOOL)switchingWorkspace
+                                                       rebuildingVisibleWorkspace:(BOOL)rebuildingVisibleWorkspace
+                                                         readingSidebarSelection:(BOOL)readingSidebarSelection;
 + (NSDictionary<NSString *, id> *)tideyDockBadgeStateForBellCount:(NSInteger)bellCount
                                            hasUnreadNotifications:(BOOL)hasUnreadNotifications;
 + (NSInteger)tideyCurrentDockBellCount;
@@ -1301,6 +1305,19 @@ ITERM_WEAKLY_REFERENCEABLE
         @"panels": orderedPanels,
         @"selectedPanelIndex": @(selectedPanelIndex),
     };
+}
+
++ (BOOL)tideyShouldUpdateSelectedPanelIndexFromVisibleSelectionForShowingSidebar:(BOOL)showingSidebar
+                                                              switchingWorkspace:(BOOL)switchingWorkspace
+                                                       rebuildingVisibleWorkspace:(BOOL)rebuildingVisibleWorkspace
+                                                         readingSidebarSelection:(BOOL)readingSidebarSelection {
+    if (!showingSidebar) {
+        return YES;
+    }
+    if (readingSidebarSelection) {
+        return NO;
+    }
+    return !switchingWorkspace && !rebuildingVisibleWorkspace;
 }
 
 + (BOOL)tideyShouldInsertPanelIntoVisibleTabViewForSelectedWorkspaceIndex:(NSInteger)selectedWorkspaceIndex

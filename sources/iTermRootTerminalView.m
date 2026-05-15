@@ -512,6 +512,10 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
 + (TideyEditorTab *)tideyRightPanelTabForShortcutNumber:(NSInteger)number
                                                    tabs:(NSArray<TideyEditorTab *> *)tabs
                                            expandedKind:(TideyRightPanelTabKind)expandedKind;
++ (BOOL)tideyShouldForwardSidebarSelectionChangeWithIgnoreNextSelection:(BOOL)ignoreNextSelection
+                                                             selectedRow:(NSInteger)selectedRow
+                                                        modelSelectedRow:(NSInteger)modelSelectedRow
+                                                            numberOfRows:(NSInteger)numberOfRows;
 + (void)tideySyncShortcutHintDescriptors:(NSArray<TideyShortcutHintDescriptor *> *)descriptors
                          inContainerView:(NSView *)containerView
                                hintViews:(NSMutableArray<NSView *> *)hintViews;
@@ -1413,6 +1417,19 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         return nil;
     }
     return visibleTabs[index];
+}
+
++ (BOOL)tideyShouldForwardSidebarSelectionChangeWithIgnoreNextSelection:(BOOL)ignoreNextSelection
+                                                             selectedRow:(NSInteger)selectedRow
+                                                        modelSelectedRow:(NSInteger)modelSelectedRow
+                                                            numberOfRows:(NSInteger)numberOfRows {
+    if (selectedRow < 0 || selectedRow >= numberOfRows) {
+        return NO;
+    }
+    if (!ignoreNextSelection) {
+        return YES;
+    }
+    return selectedRow != modelSelectedRow;
 }
 
 + (BOOL)tideyResponder:(NSResponder *)responder isDescendantOfView:(NSView *)view {

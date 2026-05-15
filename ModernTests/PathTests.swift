@@ -535,6 +535,47 @@ final class PathTests: XCTestCase {
                         ObjCBool(createWorkspace)).boolValue
     }
 
+    private func tideyShouldUpdateSelectedPanelFromVisibleSelection(showingSidebar: Bool = true,
+                                                                    switchingWorkspace: Bool = false,
+                                                                    rebuildingVisibleWorkspace: Bool = false,
+                                                                    readingSidebarSelection: Bool = false) -> Bool {
+        let selector = NSSelectorFromString("tideyShouldUpdateSelectedPanelIndexFromVisibleSelectionForShowingSidebar:switchingWorkspace:rebuildingVisibleWorkspace:readingSidebarSelection:")
+        guard let method = class_getClassMethod(PseudoTerminal.self, selector) else {
+            XCTFail("Missing PseudoTerminal selected panel update helper")
+            return false
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, ObjCBool, ObjCBool, ObjCBool, ObjCBool) -> ObjCBool
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        return function(PseudoTerminal.self,
+                        selector,
+                        ObjCBool(showingSidebar),
+                        ObjCBool(switchingWorkspace),
+                        ObjCBool(rebuildingVisibleWorkspace),
+                        ObjCBool(readingSidebarSelection)).boolValue
+    }
+
+    private func tideyShouldForwardSidebarSelectionChange(ignoreNextSelection: Bool,
+                                                          selectedRow: Int,
+                                                          modelSelectedRow: Int,
+                                                          numberOfRows: Int) -> Bool {
+        let selector = NSSelectorFromString("tideyShouldForwardSidebarSelectionChangeWithIgnoreNextSelection:selectedRow:modelSelectedRow:numberOfRows:")
+        guard let rootTerminalViewClass = NSClassFromString("iTermRootTerminalView"),
+              let method = class_getClassMethod(rootTerminalViewClass, selector) else {
+            XCTFail("Missing iTermRootTerminalView sidebar selection helper")
+            return false
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, ObjCBool, Int, Int, Int) -> ObjCBool
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        return function(rootTerminalViewClass,
+                        selector,
+                        ObjCBool(ignoreNextSelection),
+                        selectedRow,
+                        modelSelectedRow,
+                        numberOfRows).boolValue
+    }
+
     private func scrubbedTerminalIdentityEnvironment(_ environment: [String: String]) -> [String: String] {
         let selector = NSSelectorFromString("tideyEnvironmentByScrubbingExternalTerminalIdentityFromEnvironment:")
         guard let method = class_getClassMethod(PTYSession.self, selector) else {
@@ -1122,6 +1163,44 @@ final class PathTests: XCTestCase {
         let selectedPanelIndex = secondState["selectedPanelIndex"] as? NSNumber
         XCTAssertEqual(orderedPanels ?? [], [panelC, panelB, panelA])
         XCTAssertEqual(selectedPanelIndex?.intValue, 0)
+    }
+
+    func testSidebarSelectionQueryDoesNotOverwriteSelectedPanel() {
+        XCTAssertFalse(tideyShouldUpdateSelectedPanelFromVisibleSelection(readingSidebarSelection: true))
+    }
+
+    func testWorkspaceSwitchRebuildDoesNotOverwriteSelectedPanelFromTransientTabSelection() {
+        XCTAssertFalse(tideyShouldUpdateSelectedPanelFromVisibleSelection(switchingWorkspace: true))
+        XCTAssertFalse(tideyShouldUpdateSelectedPanelFromVisibleSelection(rebuildingVisibleWorkspace: true))
+    }
+
+    func testUserPanelSelectionStillUpdatesSelectedPanel() {
+        XCTAssertTrue(tideyShouldUpdateSelectedPanelFromVisibleSelection())
+    }
+
+    func testStaleSidebarIgnoreDoesNotSwallowUserWorkspaceClick() {
+        XCTAssertTrue(tideyShouldForwardSidebarSelectionChange(ignoreNextSelection: true,
+                                                              selectedRow: 1,
+                                                              modelSelectedRow: 0,
+                                                              numberOfRows: 3))
+    }
+
+    func testProgrammaticSidebarSelectionChangeStillDoesNotForward() {
+        XCTAssertFalse(tideyShouldForwardSidebarSelectionChange(ignoreNextSelection: true,
+                                                               selectedRow: 1,
+                                                               modelSelectedRow: 1,
+                                                               numberOfRows: 3))
+    }
+
+    func testSidebarSelectionRejectsInvalidRows() {
+        XCTAssertFalse(tideyShouldForwardSidebarSelectionChange(ignoreNextSelection: false,
+                                                               selectedRow: -1,
+                                                               modelSelectedRow: 0,
+                                                               numberOfRows: 3))
+        XCTAssertFalse(tideyShouldForwardSidebarSelectionChange(ignoreNextSelection: false,
+                                                               selectedRow: 3,
+                                                               modelSelectedRow: 0,
+                                                               numberOfRows: 3))
     }
 
     func testPendingPanelInsertIntoBackgroundWorkspaceDoesNotUseVisibleTabView() {
