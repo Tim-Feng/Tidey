@@ -293,32 +293,39 @@ static const CGFloat kAnsiLabelHeight = 14;
 #pragma mark - Browser Card
 
 - (CGFloat)buildBrowserCardInView:(NSView *)parent atY:(CGFloat)y width:(CGFloat)width {
-    CGFloat cardHeight = 80;
+    CGFloat cardHeight = 64;
     TideySettingsCardView *card = [[TideySettingsCardView alloc] initWithFrame:NSMakeRect(kContentPadding, y, width, cardHeight)];
     [parent addSubview:card];
 
+    // Vertically center label / field / button around rowCenterY (card center);
+    // status label sits below, anchored to the card bottom.
     CGFloat saveButtonWidth = 60;
-    CGFloat resetButtonWidth = 110;
-    CGFloat rowTopY = 12;
-    CGFloat rowBotY = 46;
+    CGFloat saveButtonHeight = 24;
+    CGFloat fieldHeight = 24;
+    CGFloat labelHeight = 20;
+    CGFloat rowCenterY = cardHeight / 2.0;
 
     NSTextField *homepageLabel = [NSTextField labelWithString:@"Homepage"];
     homepageLabel.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
     homepageLabel.textColor = TideySettingsPrimaryTextColor();
-    homepageLabel.frame = NSMakeRect(kCardInternalPaddingH, rowTopY + 4, 80, 20);
+    homepageLabel.frame = NSMakeRect(kCardInternalPaddingH, rowCenterY - labelHeight / 2.0, 80, labelHeight);
     [card addSubview:homepageLabel];
 
     CGFloat fieldX = kCardInternalPaddingH + 80 + 8;
     CGFloat saveButtonX = width - kCardInternalPaddingH - saveButtonWidth;
     CGFloat fieldWidth = saveButtonX - fieldX - 8;
-    self.browserHomepageField = [[NSTextField alloc] initWithFrame:NSMakeRect(fieldX, rowTopY, fieldWidth, 24)];
+    self.browserHomepageField = [[NSTextField alloc] initWithFrame:NSMakeRect(fieldX, rowCenterY - fieldHeight / 2.0, fieldWidth, fieldHeight)];
     self.browserHomepageField.font = [NSFont systemFontOfSize:13];
     self.browserHomepageField.placeholderString = @"https://example.com";
+    self.browserHomepageField.bezelStyle = NSTextFieldRoundedBezel;
     self.browserHomepageField.target = self;
     self.browserHomepageField.action = @selector(saveBrowserHomepage:);
     [card addSubview:self.browserHomepageField];
 
-    NSButton *saveButton = [[NSButton alloc] initWithFrame:NSMakeRect(saveButtonX, rowTopY - 2, saveButtonWidth, 28)];
+    // NSBezelStyleRounded has uneven top/bottom bezel padding inside the frame.
+    // Push the button down 1pt so its visual center aligns with the homepage
+    // field's text baseline instead of its frame center.
+    NSButton *saveButton = [[NSButton alloc] initWithFrame:NSMakeRect(saveButtonX, rowCenterY - saveButtonHeight / 2.0 + 1, saveButtonWidth, saveButtonHeight)];
     saveButton.title = @"Save";
     saveButton.bezelStyle = NSBezelStyleRounded;
     saveButton.font = [NSFont systemFontOfSize:12];
@@ -326,19 +333,10 @@ static const CGFloat kAnsiLabelHeight = 14;
     saveButton.action = @selector(saveBrowserHomepage:);
     [card addSubview:saveButton];
 
-    NSButton *resetButton = [[NSButton alloc] initWithFrame:NSMakeRect(kCardInternalPaddingH, rowBotY, resetButtonWidth, 24)];
-    resetButton.title = @"Reset Default";
-    resetButton.bezelStyle = NSBezelStyleRounded;
-    resetButton.font = [NSFont systemFontOfSize:12];
-    resetButton.target = self;
-    resetButton.action = @selector(resetBrowserHomepage:);
-    [card addSubview:resetButton];
-
-    CGFloat statusX = kCardInternalPaddingH + resetButtonWidth + 10;
     self.browserStatusLabel = [NSTextField labelWithString:@""];
     self.browserStatusLabel.font = [NSFont systemFontOfSize:11];
     self.browserStatusLabel.textColor = TideySettingsSecondaryTextColor();
-    self.browserStatusLabel.frame = NSMakeRect(statusX, rowBotY + 4, width - statusX - kCardInternalPaddingH, 18);
+    self.browserStatusLabel.frame = NSMakeRect(kCardInternalPaddingH, cardHeight - 18, width - kCardInternalPaddingH * 2, 14);
     self.browserStatusLabel.lineBreakMode = NSLineBreakByTruncatingTail;
     [card addSubview:self.browserStatusLabel];
 
@@ -433,14 +431,6 @@ static const CGFloat kAnsiLabelHeight = 14;
     self.browserHomepageField.stringValue = [iTermRootTerminalView tideyBrowserHomepageURLString] ?: @"";
     self.browserStatusLabel.textColor = TideySettingsSecondaryTextColor();
     self.browserStatusLabel.stringValue = @"Saved.";
-}
-
-- (void)resetBrowserHomepage:(id)sender {
-    (void)sender;
-    [iTermRootTerminalView tideySetBrowserHomepageURLString:nil];
-    self.browserHomepageField.stringValue = [iTermRootTerminalView tideyBrowserHomepageURLString] ?: @"";
-    self.browserStatusLabel.textColor = TideySettingsSecondaryTextColor();
-    self.browserStatusLabel.stringValue = @"Reset to default.";
 }
 
 // Keep the font panel limited to family/face/size.
