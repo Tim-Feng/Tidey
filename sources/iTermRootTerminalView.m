@@ -5498,7 +5498,8 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         self.shouldShowTideyEditorPanel = YES;
     }
     [self reloadTideyEditorFileTree];
-    [self tideySelectEditorFileTreeItemAtPath:normalizedPath];
+    [self tideyEditorRevealFileAtPath:normalizedPath];
+    [self.window makeFirstResponder:_tideyEditorFileTreeView];
     [self reloadTideyRightPanelTabs];
     [self tideyUpdateBrowserContentVisibility];
     [self tideyUpdateEditorPlaceholder];
