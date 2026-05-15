@@ -3185,10 +3185,21 @@ ITERM_WEAKLY_REFERENCEABLE
     if (path.length == 0) {
         return;
     }
+    BOOL isDirectory = NO;
+    BOOL pathExists = [[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&isDirectory];
+    NSInteger route = [[self class] tideyEditorOpenRouteForPathExists:pathExists
+                                                           isDirectory:isDirectory];
+    if (route == 0) {
+        return;
+    }
     if (!_contentView.shouldShowTideyEditorPanel) {
         _contentView.shouldShowTideyEditorPanel = YES;
         [self repositionWidgets];
         [self notifyTmuxOfWindowResize];
+    }
+    if (route == 2) {
+        [_contentView openTideyEditorDirectoryAtPath:path];
+        return;
     }
     [_contentView openTideyEditorFileAtPath:path];
 }

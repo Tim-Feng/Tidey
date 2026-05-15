@@ -405,6 +405,7 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
 - (void)tideyEditorCopyFileTreeRelativePath:(id)sender;
 - (void)tideyEditorOpenFileTreeItemInExternalEditor:(id)sender;
 - (void)tideyEditorRevealFileTreeItemInFinder:(id)sender;
+- (void)openTideyEditorDirectoryAtPath:(NSString *)path;
 - (TideyEditorTab *)tideyCurrentEditorTab;
 - (TideyEditorTab *)tideyCurrentRightPanelTab;
 - (void)reloadTideyRightPanelTabs;
@@ -4037,7 +4038,8 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
 }
 
 - (NSString *)tideyEditorFileTreeRootPath {
-    return NSHomeDirectory();
+    return [[self class] tideyEditorFileTreeRootPathForOverridePath:_tideyEditorRootOverridePath
+                                                      homeDirectory:NSHomeDirectory()];
 }
 
 - (BOOL)tideyEditorIsDemoFilePath:(NSString *)path {
@@ -5472,6 +5474,32 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     [self tideyOpenOrSelectEditorTabAtPath:path];
 }
 
+- (void)openTideyEditorDirectoryAtPath:(NSString *)path {
+    NSString *normalizedPath = [path stringByStandardizingPath];
+    BOOL isDirectory = NO;
+    if (normalizedPath.length == 0 ||
+        ![[NSFileManager defaultManager] fileExistsAtPath:normalizedPath isDirectory:&isDirectory] ||
+        !isDirectory) {
+        return;
+    }
+
+    _tideyEditorRootOverridePath = [normalizedPath copy];
+    _tideyEditorLoadedPath = nil;
+    _primaryPane.selectedTabIndex = -1;
+    [self tideyStopWatchingCurrentEditorFile];
+    self.shouldShowTideyEditorFileTree = YES;
+    if (_tideyEditorPanelView.hidden) {
+        self.shouldShowTideyEditorPanel = YES;
+    }
+    [self reloadTideyEditorFileTree];
+    [self tideySelectEditorFileTreeItemAtPath:normalizedPath];
+    [self reloadTideyRightPanelTabs];
+    [self tideyUpdateBrowserContentVisibility];
+    [self tideyUpdateEditorPlaceholder];
+    [self layoutSubviews];
+    [self updateTideyChromeToggleButtons];
+}
+
 - (NSString *)tideyEditorLanguageForPath:(NSString *)path {
     NSString *extension = path.pathExtension.lowercaseString;
     static NSDictionary<NSString *, NSString *> *map;
@@ -5579,7 +5607,6 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         _tideyEditorLoadedDemoFile = YES;
     } else {
         _tideyEditorLoadedPath = nil;
-        _tideyEditorRootOverridePath = nil;
         [self reloadTideyEditorFileTree];
     }
     [self tideyUpdateEditorPlaceholder];
