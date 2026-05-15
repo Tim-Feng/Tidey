@@ -6113,7 +6113,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         return;
     }
     NSIndexSet *indexSet = [NSIndexSet indexSetWithIndex:index];
-    _tideyIgnoreNextSidebarSelection = YES;
+    _tideyIgnoreNextSidebarSelection = (_tideySidebarTableView.selectedRow != index);
     [_tideySidebarTableView selectRowIndexes:indexSet byExtendingSelection:NO];
     [_tideySidebarTableView scrollRowToVisible:index];
 }
@@ -7658,7 +7658,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         return NO;
     }
     NSIndexSet *indexSet = [NSIndexSet indexSetWithIndex:index];
-    _tideyIgnoreNextSidebarSelection = YES;
+    _tideyIgnoreNextSidebarSelection = (_tideySidebarTableView.selectedRow != index);
     [_tideySidebarTableView selectRowIndexes:indexSet byExtendingSelection:NO];
     [_tideySidebarTableView scrollRowToVisible:index];
     return YES;
@@ -7785,12 +7785,16 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     if (notification.object != _tideySidebarTableView) {
         return;
     }
-    if (_tideyIgnoreNextSidebarSelection) {
-        _tideyIgnoreNextSidebarSelection = NO;
+    const NSInteger selectedRow = _tideySidebarTableView.selectedRow;
+    const BOOL ignoreNextSelection = _tideyIgnoreNextSidebarSelection;
+    _tideyIgnoreNextSidebarSelection = NO;
+    if (![[self class] tideyShouldForwardSidebarSelectionChangeWithIgnoreNextSelection:ignoreNextSelection
+                                                                           selectedRow:selectedRow
+                                                                      modelSelectedRow:self.tideySidebarSelectedWorkspaceIndex
+                                                                          numberOfRows:self.numberOfTideySidebarWorkspaces]) {
         [_tideySidebarTableView setNeedsDisplay:YES];
         return;
     }
-    const NSInteger selectedRow = _tideySidebarTableView.selectedRow;
     if (selectedRow < 0 || selectedRow >= self.numberOfTideySidebarWorkspaces) {
         return;
     }
