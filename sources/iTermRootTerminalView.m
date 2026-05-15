@@ -5489,7 +5489,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         return;
     }
 
-    _tideyEditorRootOverridePath = [normalizedPath copy];
+    _tideyEditorRootOverridePath = nil;
     _tideyEditorLoadedPath = nil;
     _primaryPane.selectedTabIndex = -1;
     [self tideyStopWatchingCurrentEditorFile];
