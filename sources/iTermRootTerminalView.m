@@ -373,6 +373,8 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
 - (void)tideyEditorDidBecomeReadyForPane:(TideyRightPanelPane *)pane;
 - (void)tideyEditorDidReceiveScriptMessage:(WKScriptMessage *)message;
 - (void)tideyEditorDidReceiveScriptMessage:(WKScriptMessage *)message fromPane:(TideyRightPanelPane *)pane;
+- (BOOL)tideyIsEditorWebView:(WKWebView *)webView;
+- (BOOL)tideyEditorShouldAllowMainFrameNavigationToURL:(NSURL *)url;
 - (void)toggleTideyEditorSplit:(id)sender;
 - (void)tideyCreateTerminalPanelFromEditorChrome:(id)sender;
 - (void)tideyCreateBrowserTabFromEditorChrome:(id)sender;
@@ -6035,6 +6037,23 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
             "    return 'data:text/javascript;charset=utf-8,' + encodeURIComponent(worker);"
             "  }"
             "};"
+            "function tideyDropHasExternalFile(event) {"
+            "  const dataTransfer = event.dataTransfer;"
+            "  if (!dataTransfer) { return false; }"
+            "  if (dataTransfer.files && dataTransfer.files.length > 0) { return true; }"
+            "  const types = dataTransfer.types ? Array.prototype.slice.call(dataTransfer.types) : [];"
+            "  return types.indexOf('Files') !== -1 || types.indexOf('public.file-url') !== -1;"
+            "}"
+            "function tideySuppressExternalFileDrop(event) {"
+            "  if (!tideyDropHasExternalFile(event)) { return; }"
+            "  event.preventDefault();"
+            "  event.stopPropagation();"
+            "  if (event.dataTransfer) { event.dataTransfer.dropEffect = 'none'; }"
+            "}"
+            "['dragenter','dragover','drop'].forEach(function(type) {"
+            "  window.addEventListener(type, tideySuppressExternalFileDrop, true);"
+            "  document.addEventListener(type, tideySuppressExternalFileDrop, true);"
+            "});"
             "window.tideyNative = {"
             "  setValue(value) {"
             "    window.__tideyPendingValue = value || '';"
@@ -6354,6 +6373,49 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
 }
 
 #pragma mark - WKNavigationDelegate
+
+- (BOOL)tideyIsEditorWebView:(WKWebView *)webView {
+    return webView == _primaryPane.editorWebView || (_secondaryPane && webView == _secondaryPane.editorWebView);
+}
+
+- (BOOL)tideyEditorShouldAllowMainFrameNavigationToURL:(NSURL *)url {
+    if (!url) {
+        return YES;
+    }
+    NSString *scheme = url.scheme.lowercaseString;
+    if (scheme.length == 0 || [scheme isEqualToString:@"about"] || [scheme isEqualToString:@"data"]) {
+        return YES;
+    }
+    NSURL *monacoBaseURL = [self tideyEditorMonacoBaseURL];
+    if (monacoBaseURL && [url.absoluteString hasPrefix:monacoBaseURL.absoluteString]) {
+        return YES;
+    }
+    return NO;
+}
+
+- (void)webView:(WKWebView *)webView
+decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction
+decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
+    if (![self tideyIsEditorWebView:webView]) {
+        decisionHandler(WKNavigationActionPolicyAllow);
+        return;
+    }
+
+    WKFrameInfo *targetFrame = navigationAction.targetFrame;
+    if (targetFrame && !targetFrame.isMainFrame) {
+        decisionHandler(WKNavigationActionPolicyAllow);
+        return;
+    }
+
+    NSURL *url = navigationAction.request.URL;
+    if ([self tideyEditorShouldAllowMainFrameNavigationToURL:url]) {
+        decisionHandler(WKNavigationActionPolicyAllow);
+        return;
+    }
+
+    DLog(@"Blocked Tidey editor main-frame navigation to %@", url.absoluteString);
+    decisionHandler(WKNavigationActionPolicyCancel);
+}
 
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
     if (webView == _primaryPane.editorWebView) {
