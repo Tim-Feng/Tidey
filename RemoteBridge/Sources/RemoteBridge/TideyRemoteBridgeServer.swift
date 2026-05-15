@@ -719,6 +719,113 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
         }
 
         switch request.action {
+        case "publish_codex_context_snapshot":
+            guard let workspaceID = request.params?["workspace_id"]?.stringValue,
+                  let panelID = request.params?["panel_id"]?.stringValue else {
+                return LocalRequestResult(
+                    response: BridgeResponse(id: request.id,
+                                             ok: false,
+                                             result: nil,
+                                             error: BridgeInternalError.invalidRequest("publish_codex_context_snapshot requires workspace_id and panel_id").payload),
+                    agentReplayEnvelopes: [],
+                    workspaceReplayEnvelopes: []
+                )
+            }
+            let requestedSessionID = request.params?["session_id"]?.stringValue
+            guard let activeSession = registryMonitor.activeSessionForPanel(workspaceID: workspaceID,
+                                                                            panelID: panelID) else {
+                return LocalRequestResult(
+                    response: BridgeResponse(id: request.id,
+                                             ok: false,
+                                             result: nil,
+                                             error: BridgeInternalError.invalidRequest("No active agent session for panel.").payload),
+                    agentReplayEnvelopes: [],
+                    workspaceReplayEnvelopes: []
+                )
+            }
+            guard activeSession.vendor == "codex" else {
+                return LocalRequestResult(
+                    response: BridgeResponse(id: request.id,
+                                             ok: false,
+                                             result: nil,
+                                             error: BridgeInternalError.invalidRequest("Native /context is only available for Codex panels.").payload),
+                    agentReplayEnvelopes: [],
+                    workspaceReplayEnvelopes: []
+                )
+            }
+            if let requestedSessionID, requestedSessionID != activeSession.sessionID {
+                return LocalRequestResult(
+                    response: BridgeResponse(id: request.id,
+                                             ok: false,
+                                             result: nil,
+                                             error: BridgeInternalError.invalidRequest("publish_codex_context_snapshot session_id does not match the active panel session").payload),
+                    agentReplayEnvelopes: [],
+                    workspaceReplayEnvelopes: []
+                )
+            }
+            guard let record = registryMonitor.activeRecord(sessionID: activeSession.sessionID) else {
+                return LocalRequestResult(
+                    response: BridgeResponse(id: request.id,
+                                             ok: false,
+                                             result: nil,
+                                             error: BridgeInternalError.invalidRequest("Codex registry record is unavailable.").payload),
+                    agentReplayEnvelopes: [],
+                    workspaceReplayEnvelopes: []
+                )
+            }
+            do {
+                let snapshot = try CodexContextSnapshotReader().read(transcriptPath: record.transcriptPath)
+                let seq = eventHub.nextSyntheticSeq(sessionID: activeSession.sessionID)
+                let eventID = "codex-context:\(activeSession.sessionID):\(seq)"
+                let event = AgentEvent(eventID: eventID,
+                                       seq: seq,
+                                       vendor: "codex",
+                                       workspaceID: workspaceID,
+                                       sessionID: activeSession.sessionID,
+                                       timestamp: Self.iso8601Now(),
+                                       type: .assistantMessage,
+                                       role: "assistant",
+                                       text: snapshot.markdownSummary,
+                                       name: nil,
+                                       input: nil,
+                                       output: nil,
+                                       toolCallID: nil,
+                                       metadata: [
+                                        "panel_id": panelID,
+                                        "tidey_generated": "codex_context",
+                                        "slash_command": "/context",
+                                        "tokens_in_context": String(snapshot.tokensInContext),
+                                        "context_window": String(snapshot.contextWindow),
+                                        "percent_remaining": String(snapshot.percentRemaining),
+                                        "snapshot_timestamp": snapshot.timestamp,
+                                       ])
+                eventHub.publish(event)
+                return LocalRequestResult(
+                    response: BridgeResponse(id: request.id,
+                                             ok: true,
+                                             result: [
+                                                "published": .bool(true),
+                                                "event_id": .string(eventID),
+                                                "tokens_in_context": .number(Double(snapshot.tokensInContext)),
+                                                "context_window": .number(Double(snapshot.contextWindow)),
+                                                "percent_remaining": .number(Double(snapshot.percentRemaining)),
+                                             ],
+                                             error: nil),
+                    agentReplayEnvelopes: [],
+                    workspaceReplayEnvelopes: []
+                )
+            } catch {
+                return LocalRequestResult(
+                    response: BridgeResponse(id: request.id,
+                                             ok: false,
+                                             result: nil,
+                                             error: BridgeErrorPayload(code: "codex_context_unavailable",
+                                                                       message: error.localizedDescription)),
+                    agentReplayEnvelopes: [],
+                    workspaceReplayEnvelopes: []
+                )
+            }
+
         case "fetch_agent_events":
             let startedAt = CFAbsoluteTimeGetCurrent()
             guard let workspaceID = request.params?["workspace_id"]?.stringValue,
@@ -1100,6 +1207,12 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
         } catch {
             context.close(promise: nil)
         }
+    }
+
+    private static func iso8601Now() -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: Date())
     }
 
     private static func jsonValue(for event: AgentEvent) -> JSONValue {

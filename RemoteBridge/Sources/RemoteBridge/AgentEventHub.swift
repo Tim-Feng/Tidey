@@ -178,6 +178,14 @@ final class AgentEventHub {
         }
     }
 
+    func nextSyntheticSeq(sessionID: String) -> Int {
+        queue.sync {
+            let bufferedMax = sessions[sessionID]?.bufferedEvents.map(\.seq).max() ?? transcriptSessionStartedSequence
+            let startMax = sessions[sessionID]?.latestSessionStarted?.seq ?? transcriptSessionStartedSequence
+            return max(bufferedMax, startMax) + 1
+        }
+    }
+
     func debugSnapshots() -> [SessionDebugSnapshot] {
         queue.sync {
             sessions.map { sessionID, state in

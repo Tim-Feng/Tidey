@@ -397,6 +397,12 @@ final class AgentSessionRegistryMonitor {
         }
     }
 
+    func activeRecord(sessionID: String) -> AgentSessionRegistryRecord? {
+        queue.sync {
+            activeRecords[sessionID]
+        }
+    }
+
     func backfillSession(sessionID: String, beforeSeq: Int, limit: Int) -> Bool {
         let session: AgentTranscriptSession? = queue.sync { sessions[sessionID] }
         return session?.backfill(beforeSeq: beforeSeq, limit: limit) ?? false
