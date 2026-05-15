@@ -624,10 +624,13 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         guard !text.isEmpty else {
             return false
         }
+        if Self.isBootstrapUserMessage(text) {
+            return false
+        }
         if didSeeInteractiveEvent {
             return true
         }
-        return !Self.isBootstrapUserMessage(text)
+        return true
     }
 
     private func publishFileBacked(kind: AgentEventKind,
