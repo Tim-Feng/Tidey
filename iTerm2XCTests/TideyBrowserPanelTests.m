@@ -25,6 +25,8 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
 
 @interface iTermRootTerminalView (TideyBrowserPanelTests)
 + (NSString *)tideyNormalizedBrowserURLString:(NSString *)input;
++ (NSString *)tideyBrowserHomepageURLString;
++ (void)tideySetBrowserHomepageURLString:(NSString *)urlString;
 + (NSString *)tideyBrowserDisplayNameForURL:(NSURL *)url pageTitle:(NSString *)pageTitle;
 + (NSInteger)tideyIndexOfExistingBrowserTabForURL:(NSString *)urlString
                                            inTabs:(NSArray<TideyEditorTab *> *)tabs;
@@ -56,6 +58,41 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
     XCTAssertNil([iTermRootTerminalView tideyNormalizedBrowserURLString:@""]);
     XCTAssertNil([iTermRootTerminalView tideyNormalizedBrowserURLString:@"  "]);
     XCTAssertNil([iTermRootTerminalView tideyNormalizedBrowserURLString:nil]);
+}
+
+- (void)testBrowserHomepageDefaultsToTideySite {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSString *original = [defaults stringForKey:@"TideyBrowserHomepageURL"];
+    [defaults removeObjectForKey:@"TideyBrowserHomepageURL"];
+    XCTAssertEqualObjects([iTermRootTerminalView tideyBrowserHomepageURLString], @"https://github.com/Tim-Feng/Tidey");
+    if (original.length > 0) {
+        [defaults setObject:original forKey:@"TideyBrowserHomepageURL"];
+    }
+}
+
+- (void)testBrowserHomepageSetterNormalizesBareHost {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSString *original = [defaults stringForKey:@"TideyBrowserHomepageURL"];
+    [iTermRootTerminalView tideySetBrowserHomepageURLString:@"example.com/start"];
+    XCTAssertEqualObjects([iTermRootTerminalView tideyBrowserHomepageURLString], @"https://example.com/start");
+    if (original.length > 0) {
+        [defaults setObject:original forKey:@"TideyBrowserHomepageURL"];
+    } else {
+        [defaults removeObjectForKey:@"TideyBrowserHomepageURL"];
+    }
+}
+
+- (void)testBrowserHomepageSetterResetsInvalidInput {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSString *original = [defaults stringForKey:@"TideyBrowserHomepageURL"];
+    [iTermRootTerminalView tideySetBrowserHomepageURLString:@"example.com/start"];
+    [iTermRootTerminalView tideySetBrowserHomepageURLString:@" "];
+    XCTAssertEqualObjects([iTermRootTerminalView tideyBrowserHomepageURLString], @"https://github.com/Tim-Feng/Tidey");
+    if (original.length > 0) {
+        [defaults setObject:original forKey:@"TideyBrowserHomepageURL"];
+    } else {
+        [defaults removeObjectForKey:@"TideyBrowserHomepageURL"];
+    }
 }
 
 #pragma mark - Browser Tab Creation

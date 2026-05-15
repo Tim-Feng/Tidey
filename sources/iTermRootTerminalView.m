@@ -1408,6 +1408,19 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 #pragma mark - Browser Tab Helpers (pure, testable)
 
+static NSString *const kTideyBrowserHomepageDefaultsKey = @"TideyBrowserHomepageURL";
+static NSString *const kTideyDefaultBrowserHomepageURLString = @"https://github.com/Tim-Feng/Tidey";
+
+static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
+    if (url.scheme.length == 0) {
+        return NO;
+    }
+    if (url.fileURL) {
+        return url.path.length > 0;
+    }
+    return url.host.length > 0;
+}
+
 + (NSString *)tideyNormalizedBrowserURLString:(NSString *)input {
     if (input.length == 0) {
         return nil;
@@ -1427,6 +1440,27 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     }
     // Bare host or path — add https://
     return [@"https://" stringByAppendingString:trimmed];
+}
+
++ (NSString *)tideyBrowserHomepageURLString {
+    NSString *stored = [[NSUserDefaults standardUserDefaults] stringForKey:kTideyBrowserHomepageDefaultsKey];
+    NSString *normalized = [self tideyNormalizedBrowserURLString:stored];
+    NSURL *url = normalized.length > 0 ? [NSURL URLWithString:normalized] : nil;
+    if (TideyBrowserHomepageURLIsValid(url)) {
+        return normalized;
+    }
+    return kTideyDefaultBrowserHomepageURLString;
+}
+
++ (void)tideySetBrowserHomepageURLString:(NSString *)urlString {
+    NSString *normalized = [self tideyNormalizedBrowserURLString:urlString];
+    NSURL *url = normalized.length > 0 ? [NSURL URLWithString:normalized] : nil;
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    if (!TideyBrowserHomepageURLIsValid(url) || [normalized isEqualToString:kTideyDefaultBrowserHomepageURLString]) {
+        [defaults removeObjectForKey:kTideyBrowserHomepageDefaultsKey];
+        return;
+    }
+    [defaults setObject:normalized forKey:kTideyBrowserHomepageDefaultsKey];
 }
 
 + (NSString *)tideyBrowserDisplayNameForURL:(NSURL *)url pageTitle:(NSString *)pageTitle {
@@ -6077,7 +6111,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
 }
 
 - (void)createNewBlankBrowserTab {
-    NSURL *homeURL = [NSURL URLWithString:@"https://github.com/Tim-Feng/Tidey"];
+    NSURL *homeURL = [NSURL URLWithString:[[self class] tideyBrowserHomepageURLString]];
     [self tideyOpenNewBrowserTabWithURL:homeURL inPane:self.activePane];
 }
 

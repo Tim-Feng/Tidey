@@ -2,6 +2,7 @@
 
 #import "TideyKeyboardShortcutsViewController.h"
 #import "TideyTerminalAppearanceViewController.h"
+#import "iTermRootTerminalView.h"
 #import "iTerm2SharedARC-Swift.h"
 
 @import CoreImage;
@@ -9,7 +10,8 @@
 typedef NS_ENUM(NSInteger, TideySettingsPage) {
     TideySettingsPageAppearance = 0,
     TideySettingsPageShortcuts = 1,
-    TideySettingsPageRemote = 2,
+    TideySettingsPageBrowser = 2,
+    TideySettingsPageRemote = 3,
 };
 
 @interface TideySettingsTabButton : NSButton
@@ -60,6 +62,121 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 
 - (BOOL)isFlipped {
     return YES;
+}
+
+@end
+
+@interface TideyBrowserSettingsViewController : NSViewController
+@property(nonatomic, strong) NSTextField *homepageField;
+@property(nonatomic, strong) NSTextField *statusLabel;
+@end
+
+@implementation TideyBrowserSettingsViewController
+
+- (void)loadView {
+    NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 560, 636)];
+    view.wantsLayer = YES;
+    view.layer.backgroundColor = [self backgroundColor].CGColor;
+
+    NSTextField *titleLabel = [self labelWithFrame:NSMakeRect(24, 28, 420, 20)
+                                            string:@"Browser"
+                                              font:[NSFont systemFontOfSize:17 weight:NSFontWeightSemibold]
+                                             color:[self primaryTextColor]];
+    [view addSubview:titleLabel];
+
+    NSTextField *bodyLabel = [self labelWithFrame:NSMakeRect(24, 58, 472, 34)
+                                           string:@"Choose the home page used by new Web tabs in Tidey's right panel."
+                                             font:[NSFont systemFontOfSize:12 weight:NSFontWeightRegular]
+                                            color:[self secondaryTextColor]];
+    bodyLabel.maximumNumberOfLines = 2;
+    bodyLabel.usesSingleLineMode = NO;
+    bodyLabel.lineBreakMode = NSLineBreakByWordWrapping;
+    [view addSubview:bodyLabel];
+
+    NSTextField *fieldLabel = [self labelWithFrame:NSMakeRect(24, 118, 160, 16)
+                                            string:@"Homepage URL"
+                                              font:[NSFont systemFontOfSize:12 weight:NSFontWeightMedium]
+                                             color:[self secondaryTextColor]];
+    [view addSubview:fieldLabel];
+
+    self.homepageField = [[NSTextField alloc] initWithFrame:NSMakeRect(24, 142, 408, 28)];
+    self.homepageField.stringValue = [iTermRootTerminalView tideyBrowserHomepageURLString] ?: @"";
+    self.homepageField.placeholderString = @"https://example.com";
+    self.homepageField.font = [NSFont systemFontOfSize:13 weight:NSFontWeightRegular];
+    self.homepageField.target = self;
+    self.homepageField.action = @selector(saveHomepage:);
+    [view addSubview:self.homepageField];
+
+    NSButton *saveButton = [[NSButton alloc] initWithFrame:NSMakeRect(444, 141, 70, 30)];
+    saveButton.title = @"Save";
+    saveButton.bezelStyle = NSBezelStyleRounded;
+    saveButton.target = self;
+    saveButton.action = @selector(saveHomepage:);
+    [view addSubview:saveButton];
+
+    NSButton *resetButton = [[NSButton alloc] initWithFrame:NSMakeRect(24, 186, 98, 28)];
+    resetButton.title = @"Reset Default";
+    resetButton.bezelStyle = NSBezelStyleRounded;
+    resetButton.target = self;
+    resetButton.action = @selector(resetHomepage:);
+    [view addSubview:resetButton];
+
+    self.statusLabel = [self labelWithFrame:NSMakeRect(136, 192, 360, 16)
+                                     string:@""
+                                       font:[NSFont systemFontOfSize:11 weight:NSFontWeightRegular]
+                                      color:[self secondaryTextColor]];
+    [view addSubview:self.statusLabel];
+
+    self.view = view;
+}
+
+- (void)saveHomepage:(id)sender {
+    NSString *normalized = [iTermRootTerminalView tideyNormalizedBrowserURLString:self.homepageField.stringValue];
+    NSURL *url = normalized.length > 0 ? [NSURL URLWithString:normalized] : nil;
+    BOOL validURL = url.scheme.length > 0 && (url.host.length > 0 || (url.fileURL && url.path.length > 0));
+    if (!validURL) {
+        self.statusLabel.textColor = [NSColor colorWithSRGBRed:1.0 green:0.32 blue:0.28 alpha:1.0];
+        self.statusLabel.stringValue = @"Enter a valid URL.";
+        return;
+    }
+    [iTermRootTerminalView tideySetBrowserHomepageURLString:normalized];
+    self.homepageField.stringValue = [iTermRootTerminalView tideyBrowserHomepageURLString] ?: @"";
+    self.statusLabel.textColor = [self secondaryTextColor];
+    self.statusLabel.stringValue = @"Saved. New browser tabs will use this home page.";
+}
+
+- (void)resetHomepage:(id)sender {
+    [iTermRootTerminalView tideySetBrowserHomepageURLString:nil];
+    self.homepageField.stringValue = [iTermRootTerminalView tideyBrowserHomepageURLString] ?: @"";
+    self.statusLabel.textColor = [self secondaryTextColor];
+    self.statusLabel.stringValue = @"Reset to Tidey's default home page.";
+}
+
+- (NSTextField *)labelWithFrame:(NSRect)frame
+                         string:(NSString *)string
+                           font:(NSFont *)font
+                          color:(NSColor *)color {
+    NSTextField *label = [[NSTextField alloc] initWithFrame:frame];
+    label.stringValue = string ?: @"";
+    label.font = font;
+    label.textColor = color;
+    label.bezeled = NO;
+    label.drawsBackground = NO;
+    label.editable = NO;
+    label.selectable = NO;
+    return label;
+}
+
+- (NSColor *)backgroundColor {
+    return [NSColor colorWithSRGBRed:0x1e/255.0 green:0x1e/255.0 blue:0x1e/255.0 alpha:1.0];
+}
+
+- (NSColor *)primaryTextColor {
+    return [NSColor colorWithSRGBRed:0.92 green:0.92 blue:0.92 alpha:1.0];
+}
+
+- (NSColor *)secondaryTextColor {
+    return [NSColor colorWithSRGBRed:0.70 green:0.70 blue:0.72 alpha:1.0];
 }
 
 @end
@@ -977,10 +1094,12 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 
 @property(nonatomic, strong) TideySettingsTabButton *appearanceTabButton;
 @property(nonatomic, strong) TideySettingsTabButton *shortcutsTabButton;
+@property(nonatomic, strong) TideySettingsTabButton *browserTabButton;
 @property(nonatomic, strong) TideySettingsTabButton *remoteTabButton;
 @property(nonatomic, strong) NSView *contentContainerView;
 @property(nonatomic, strong) TideyTerminalAppearanceViewController *appearanceViewController;
 @property(nonatomic, strong) TideyKeyboardShortcutsViewController *shortcutsViewController;
+@property(nonatomic, strong) TideyBrowserSettingsViewController *browserViewController;
 @property(nonatomic, strong) TideyRemoteSettingsViewController *remoteViewController;
 @property(nonatomic, strong) NSViewController *currentViewController;
 
@@ -1005,6 +1124,7 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 
         _appearanceViewController = [[TideyTerminalAppearanceViewController alloc] init];
         _shortcutsViewController = [[TideyKeyboardShortcutsViewController alloc] init];
+        _browserViewController = [[TideyBrowserSettingsViewController alloc] init];
         _remoteViewController = [[TideyRemoteSettingsViewController alloc] init];
 
         [self buildUI];
@@ -1056,7 +1176,17 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     self.shortcutsTabButton.autoresizingMask = NSViewMinYMargin;
     [contentView addSubview:self.shortcutsTabButton];
 
-    self.remoteTabButton = [[TideySettingsTabButton alloc] initWithFrame:NSMakeRect(tabBarX + (tabButtonWidth + 2) * 2, tabBarY, tabButtonWidth, tabButtonHeight)];
+    self.browserTabButton = [[TideySettingsTabButton alloc] initWithFrame:NSMakeRect(tabBarX + (tabButtonWidth + 2) * 2, tabBarY, tabButtonWidth, tabButtonHeight)];
+    self.browserTabButton.title = @"Browser";
+    self.browserTabButton.bordered = NO;
+    self.browserTabButton.bezelStyle = NSBezelStyleSmallSquare;
+    self.browserTabButton.target = self;
+    self.browserTabButton.action = @selector(tabButtonClicked:);
+    self.browserTabButton.tag = TideySettingsPageBrowser;
+    self.browserTabButton.autoresizingMask = NSViewMinYMargin;
+    [contentView addSubview:self.browserTabButton];
+
+    self.remoteTabButton = [[TideySettingsTabButton alloc] initWithFrame:NSMakeRect(tabBarX + (tabButtonWidth + 2) * 3, tabBarY, tabButtonWidth, tabButtonHeight)];
     self.remoteTabButton.title = @"Remote";
     self.remoteTabButton.bordered = NO;
     self.remoteTabButton.bezelStyle = NSBezelStyleSmallSquare;
@@ -1080,9 +1210,11 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 - (void)selectPage:(TideySettingsPage)page {
     self.appearanceTabButton.isActiveTab = (page == TideySettingsPageAppearance);
     self.shortcutsTabButton.isActiveTab = (page == TideySettingsPageShortcuts);
+    self.browserTabButton.isActiveTab = (page == TideySettingsPageBrowser);
     self.remoteTabButton.isActiveTab = (page == TideySettingsPageRemote);
     [self.appearanceTabButton setNeedsDisplay:YES];
     [self.shortcutsTabButton setNeedsDisplay:YES];
+    [self.browserTabButton setNeedsDisplay:YES];
     [self.remoteTabButton setNeedsDisplay:YES];
 
     NSViewController *nextViewController;
@@ -1092,6 +1224,9 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
             break;
         case TideySettingsPageShortcuts:
             nextViewController = self.shortcutsViewController;
+            break;
+        case TideySettingsPageBrowser:
+            nextViewController = self.browserViewController;
             break;
         case TideySettingsPageRemote:
             nextViewController = self.remoteViewController;
