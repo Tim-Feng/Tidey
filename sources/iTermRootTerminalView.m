@@ -375,6 +375,9 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
 - (void)tideyEditorDidReceiveScriptMessage:(WKScriptMessage *)message fromPane:(TideyRightPanelPane *)pane;
 - (BOOL)tideyIsEditorWebView:(WKWebView *)webView;
 - (BOOL)tideyEditorShouldAllowMainFrameNavigationToURL:(NSURL *)url;
+- (BOOL)tideyCanPreviewDroppedFileURL:(NSURL *)url;
+- (BOOL)tideyHandleEditorDroppedFileURL:(NSURL *)url inPane:(TideyRightPanelPane *)pane;
+- (BOOL)tideyOpenImagePreviewAtPath:(NSString *)path inPane:(TideyRightPanelPane *)pane;
 - (void)toggleTideyEditorSplit:(id)sender;
 - (void)tideyCreateTerminalPanelFromEditorChrome:(id)sender;
 - (void)tideyCreateBrowserTabFromEditorChrome:(id)sender;
@@ -900,9 +903,63 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 @class iTermRootTerminalView;
 
+@interface iTermRootTerminalView (TideyEditorDropHandling)
+- (BOOL)tideyCanPreviewDroppedFileURL:(NSURL *)url;
+- (BOOL)tideyHandleEditorDroppedFileURL:(NSURL *)url inPane:(TideyRightPanelPane *)pane;
+@end
+
+@interface TideyEditorWebView : WKWebView
+@property(nonatomic, weak) iTermRootTerminalView *tideyRootView;
+@property(nonatomic, weak) TideyRightPanelPane *tideyPane;
+@end
+
 @interface TideyEditorScriptMessageHandler : NSObject<WKScriptMessageHandler>
 @property(nonatomic, weak) iTermRootTerminalView *rootView;
 @property(nonatomic, weak) TideyRightPanelPane *pane;
+@end
+
+@implementation TideyEditorWebView
+
+- (instancetype)initWithFrame:(NSRect)frame configuration:(WKWebViewConfiguration *)configuration {
+    self = [super initWithFrame:frame configuration:configuration];
+    if (self) {
+        [self registerForDraggedTypes:@[ NSPasteboardTypeFileURL ]];
+    }
+    return self;
+}
+
+- (NSURL *)tideyPreviewableFileURLFromDraggingInfo:(id<NSDraggingInfo>)draggingInfo {
+    NSPasteboard *pasteboard = draggingInfo.draggingPasteboard;
+    NSArray<NSURL *> *urls = [pasteboard readObjectsForClasses:@[ NSURL.class ]
+                                                       options:@{ NSPasteboardURLReadingFileURLsOnlyKey: @YES }];
+    for (NSURL *url in urls) {
+        if ([self.tideyRootView tideyCanPreviewDroppedFileURL:url]) {
+            return url;
+        }
+    }
+    return nil;
+}
+
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
+    return [self tideyPreviewableFileURLFromDraggingInfo:sender] ? NSDragOperationCopy : NSDragOperationNone;
+}
+
+- (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)sender {
+    return [self tideyPreviewableFileURLFromDraggingInfo:sender] ? NSDragOperationCopy : NSDragOperationNone;
+}
+
+- (BOOL)prepareForDragOperation:(id<NSDraggingInfo>)sender {
+    return [self tideyPreviewableFileURLFromDraggingInfo:sender] != nil;
+}
+
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+    NSURL *url = [self tideyPreviewableFileURLFromDraggingInfo:sender];
+    if (!url) {
+        return NO;
+    }
+    return [self.tideyRootView tideyHandleEditorDroppedFileURL:url inPane:self.tideyPane];
+}
+
 @end
 
 @implementation TideyEditorScriptMessageHandler
@@ -1375,6 +1432,9 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 + (NSString *)tideyBrowserDisplayNameForURL:(NSURL *)url pageTitle:(NSString *)pageTitle {
     if (pageTitle.length > 0) {
         return pageTitle;
+    }
+    if (url.fileURL && url.path.lastPathComponent.length > 0) {
+        return url.path.lastPathComponent;
     }
     if (url.host.length > 0) {
         return url.host;
@@ -3595,7 +3655,11 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     [contentController addScriptMessageHandler:handler name:@"tideyEditorOpenLink"];
     configuration.userContentController = contentController;
 
-    pane.editorWebView = [[WKWebView alloc] initWithFrame:containerView.bounds configuration:configuration];
+    TideyEditorWebView *editorWebView = [[TideyEditorWebView alloc] initWithFrame:containerView.bounds
+                                                                    configuration:configuration];
+    editorWebView.tideyRootView = self;
+    editorWebView.tideyPane = pane;
+    pane.editorWebView = editorWebView;
     pane.editorWebView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     pane.editorWebView.navigationDelegate = self;
     if (@available(macOS 13.3, *)) {
@@ -3793,7 +3857,12 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     if (!pane) {
         return;
     }
-    [pane.browserEngine load:url];
+    if (url.fileURL) {
+        NSURL *readAccessURL = url.URLByDeletingLastPathComponent ?: url;
+        [pane.browserEngine.webView loadFileURL:url allowingReadAccessToURL:readAccessURL];
+    } else {
+        [pane.browserEngine load:url];
+    }
     pane.browserURLField.stringValue = url.absoluteString;
 }
 
@@ -5270,6 +5339,66 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     TideyEditorTab *tab = [TideyEditorTab browserTabWithURL:url];
     [targetPane.tabs addObject:tab];
     [self selectTideyRightPanelTabAtIndex:targetPane.tabs.count - 1 inPane:targetPane];
+}
+
+- (BOOL)tideyCanPreviewDroppedFileURL:(NSURL *)url {
+    if (!url.fileURL) {
+        return NO;
+    }
+    NSString *path = [url.path stringByStandardizingPath];
+    BOOL isDirectory = NO;
+    if (path.length == 0 ||
+        ![[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&isDirectory] ||
+        isDirectory) {
+        return NO;
+    }
+    NSString *type = [[NSWorkspace sharedWorkspace] typeOfFile:path error:nil];
+    return type.length > 0 && [[NSWorkspace sharedWorkspace] type:type conformsToType:@"public.image"];
+}
+
+- (BOOL)tideyHandleEditorDroppedFileURL:(NSURL *)url inPane:(TideyRightPanelPane *)pane {
+    if (![self tideyCanPreviewDroppedFileURL:url]) {
+        return NO;
+    }
+    return [self tideyOpenImagePreviewAtPath:url.path inPane:pane];
+}
+
+- (BOOL)tideyOpenImagePreviewAtPath:(NSString *)path inPane:(TideyRightPanelPane *)pane {
+    NSString *normalizedPath = [path stringByStandardizingPath];
+    NSURL *url = [NSURL fileURLWithPath:normalizedPath];
+    if (![self tideyCanPreviewDroppedFileURL:url]) {
+        return NO;
+    }
+
+    TideyRightPanelPane *targetPane = pane ?: self.activePane;
+    if (_tideyEditorPanelView.hidden) {
+        self.shouldShowTideyEditorPanel = YES;
+        [self layoutSubviews];
+    }
+    [self tideySetActivePane:targetPane];
+
+    self.shouldShowTideyEditorFileTree = YES;
+    _tideyEditorRootOverridePath = nil;
+    [self syncTideyEditorFileTreeRootIfNeeded];
+
+    NSString *urlString = url.absoluteString;
+    for (NSInteger index = 0; index < (NSInteger)targetPane.tabs.count; index++) {
+        TideyEditorTab *candidate = targetPane.tabs[index];
+        if (candidate.kind == TideyRightPanelTabKindBrowser && [candidate.path isEqualToString:urlString]) {
+            [self selectTideyRightPanelTabAtIndex:index inPane:targetPane];
+            [self tideyEditorRevealFileAtPath:normalizedPath];
+            [self.window makeFirstResponder:_tideyEditorFileTreeView];
+            return YES;
+        }
+    }
+
+    TideyEditorTab *tab = [TideyEditorTab browserTabWithURL:url];
+    tab.displayName = normalizedPath.lastPathComponent;
+    [targetPane.tabs addObject:tab];
+    [self selectTideyRightPanelTabAtIndex:targetPane.tabs.count - 1 inPane:targetPane];
+    [self tideyEditorRevealFileAtPath:normalizedPath];
+    [self.window makeFirstResponder:_tideyEditorFileTreeView];
+    return YES;
 }
 
 - (TideyRightPanelPane *)tideyPaneForBrowserEngine:(TideyBrowserEngine *)engine {
