@@ -1120,6 +1120,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
                                                              sourceIsPrimary:(BOOL)sourceIsPrimary
                                                             splitWasVisible:(BOOL)splitWasVisible;
 + (BOOL)tideyNextSplitVisibilityAfterToggleFromVisible:(BOOL)splitVisible;
++ (NSString *)tideyEditorFileTreeRootPathForOverridePath:(NSString *)overridePath
+                                           homeDirectory:(NSString *)homeDirectory;
 @end
 
 @implementation iTermRootTerminalView {
@@ -8149,6 +8151,19 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
 
 + (BOOL)tideyNextSplitVisibilityAfterToggleFromVisible:(BOOL)splitVisible {
     return !splitVisible;
+}
+
++ (NSString *)tideyEditorFileTreeRootPathForOverridePath:(NSString *)overridePath
+                                           homeDirectory:(NSString *)homeDirectory {
+    NSString *normalizedOverridePath = [overridePath stringByStandardizingPath];
+    if (normalizedOverridePath.length > 0) {
+        return normalizedOverridePath;
+    }
+    NSString *normalizedHomeDirectory = [homeDirectory stringByStandardizingPath];
+    if (normalizedHomeDirectory.length > 0) {
+        return normalizedHomeDirectory;
+    }
+    return [NSHomeDirectory() stringByStandardizingPath];
 }
 
 @end

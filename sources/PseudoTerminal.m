@@ -406,6 +406,7 @@ static NSString *TideySubmitLogSuffix(NSString *input) {
                                                               switchingWorkspace:(BOOL)switchingWorkspace
                                                        rebuildingVisibleWorkspace:(BOOL)rebuildingVisibleWorkspace
                                                          readingSidebarSelection:(BOOL)readingSidebarSelection;
++ (NSInteger)tideyEditorOpenRouteForPathExists:(BOOL)pathExists isDirectory:(BOOL)isDirectory;
 + (NSDictionary<NSString *, id> *)tideyDockBadgeStateForBellCount:(NSInteger)bellCount
                                            hasUnreadNotifications:(BOOL)hasUnreadNotifications;
 + (NSInteger)tideyCurrentDockBellCount;
@@ -1318,6 +1319,13 @@ ITERM_WEAKLY_REFERENCEABLE
         return NO;
     }
     return !switchingWorkspace && !rebuildingVisibleWorkspace;
+}
+
++ (NSInteger)tideyEditorOpenRouteForPathExists:(BOOL)pathExists isDirectory:(BOOL)isDirectory {
+    if (!pathExists) {
+        return 0;
+    }
+    return isDirectory ? 2 : 1;
 }
 
 + (BOOL)tideyShouldInsertPanelIntoVisibleTabViewForSelectedWorkspaceIndex:(NSInteger)selectedWorkspaceIndex

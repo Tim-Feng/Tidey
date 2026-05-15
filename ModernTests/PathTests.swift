@@ -119,6 +119,12 @@ final class PathTests: XCTestCase {
         case externalDefaultBrowser = 1
     }
 
+    private enum TideyEditorOpenRoute: Int {
+        case none = 0
+        case file = 1
+        case directory = 2
+    }
+
     private func urlClickOpenPolicy(clickCount: Int = 1,
                                     mouseDragged: Bool = false,
                                     modifierFlags: NSEvent.ModifierFlags = [],
@@ -574,6 +580,39 @@ final class PathTests: XCTestCase {
                         selectedRow,
                         modelSelectedRow,
                         numberOfRows).boolValue
+    }
+
+    private func tideyEditorOpenRoute(pathExists: Bool, isDirectory: Bool) -> TideyEditorOpenRoute {
+        let selector = NSSelectorFromString("tideyEditorOpenRouteForPathExists:isDirectory:")
+        guard let method = class_getClassMethod(PseudoTerminal.self, selector) else {
+            XCTFail("Missing PseudoTerminal editor open route helper")
+            return .none
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, ObjCBool, ObjCBool) -> Int
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        let raw = function(PseudoTerminal.self,
+                           selector,
+                           ObjCBool(pathExists),
+                           ObjCBool(isDirectory))
+        return TideyEditorOpenRoute(rawValue: raw) ?? .none
+    }
+
+    private func tideyEditorFileTreeRootPath(overridePath: String,
+                                             homeDirectory: String = "/Users/tim") -> String {
+        let selector = NSSelectorFromString("tideyEditorFileTreeRootPathForOverridePath:homeDirectory:")
+        guard let rootTerminalViewClass = NSClassFromString("iTermRootTerminalView"),
+              let method = class_getClassMethod(rootTerminalViewClass, selector) else {
+            XCTFail("Missing iTermRootTerminalView file tree root helper")
+            return ""
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, NSString, NSString) -> NSString
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        return function(rootTerminalViewClass,
+                        selector,
+                        overridePath as NSString,
+                        homeDirectory as NSString) as String
     }
 
     private func scrubbedTerminalIdentityEnvironment(_ environment: [String: String]) -> [String: String] {
@@ -1201,6 +1240,28 @@ final class PathTests: XCTestCase {
                                                                selectedRow: 3,
                                                                modelSelectedRow: 0,
                                                                numberOfRows: 3))
+    }
+
+    func testDirectorySemanticHistoryRouteOpensFileTree() {
+        XCTAssertEqual(tideyEditorOpenRoute(pathExists: true, isDirectory: true), .directory)
+    }
+
+    func testFileSemanticHistoryRouteStillOpensEditor() {
+        XCTAssertEqual(tideyEditorOpenRoute(pathExists: true, isDirectory: false), .file)
+    }
+
+    func testMissingSemanticHistoryPathDoesNotOpenEditorChrome() {
+        XCTAssertEqual(tideyEditorOpenRoute(pathExists: false, isDirectory: false), .none)
+    }
+
+    func testEditorFileTreeRootPrefersDirectoryOverride() {
+        XCTAssertEqual(tideyEditorFileTreeRootPath(overridePath: "/Users/tim/Project"),
+                       "/Users/tim/Project")
+    }
+
+    func testEditorFileTreeRootFallsBackToHomeDirectory() {
+        XCTAssertEqual(tideyEditorFileTreeRootPath(overridePath: "", homeDirectory: "/Users/tim"),
+                       "/Users/tim")
     }
 
     func testPendingPanelInsertIntoBackgroundWorkspaceDoesNotUseVisibleTabView() {
