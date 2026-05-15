@@ -5153,6 +5153,12 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     if (normalizedPath.length == 0) {
         return;
     }
+    BOOL isDirectory = NO;
+    if ([[NSFileManager defaultManager] fileExistsAtPath:normalizedPath isDirectory:&isDirectory] &&
+        isDirectory) {
+        [self openTideyEditorDirectoryAtPath:normalizedPath];
+        return;
+    }
     for (NSInteger i = 0; i < (NSInteger)pane.tabs.count; i++) {
         TideyEditorTab *existing = pane.tabs[i];
         if ([[existing.path stringByStandardizingPath] isEqualToString:normalizedPath]) {
