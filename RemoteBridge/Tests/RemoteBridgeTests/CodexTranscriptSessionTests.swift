@@ -61,6 +61,64 @@ final class CodexTranscriptSessionTests: XCTestCase {
         XCTAssertFalse(result.events.contains { ($0.text ?? "").contains("<environment_context>") })
     }
 
+    func testCodexStandaloneEnvironmentContextUserMessagesAreAlwaysFiltered() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let transcriptURL = directory.appendingPathComponent("rollout-session.jsonl", isDirectory: false)
+        let firstContext = """
+        <environment_context>
+          <shell>zsh</shell>
+          <current_date>2026-05-01</current_date>
+          <timezone>Asia/Taipei</timezone>
+        </environment_context>
+        """
+        let secondContext = """
+        <environment_context>
+          <shell>zsh</shell>
+          <current_date>2026-05-03</current_date>
+          <timezone>Asia/Taipei</timezone>
+        </environment_context>
+        """
+        let lines = [
+            makeCodexMessageLine(role: "assistant", content: "Ready."),
+            makeCodexMessageLine(role: "user", content: firstContext),
+            makeCodexMessageLine(role: "user", content: "Actual user message"),
+            makeCodexMessageLine(role: "user", content: secondContext),
+        ].joined(separator: "\n") + "\n"
+        try lines.write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                             fileManager: .default,
+                                             hub: hub)
+        session.start()
+        defer { session.stop() }
+
+        XCTAssertTrue(waitUntil {
+            let result = hub.fetch(workspaceID: "workspace",
+                                   sessionID: "session",
+                                   limit: 10,
+                                   beforeSeq: nil,
+                                   afterSeq: nil)
+            return result.events.contains { $0.text == "Actual user message" }
+        })
+
+        let result = hub.fetch(workspaceID: "workspace",
+                               sessionID: "session",
+                               limit: 10,
+                               beforeSeq: nil,
+                               afterSeq: nil)
+        let userTexts = result.events
+            .filter { $0.type == .userMessage }
+            .compactMap(\.text)
+        XCTAssertEqual(userTexts, ["Actual user message"])
+        XCTAssertFalse(result.events.contains { ($0.text ?? "").contains("<current_date>2026-05-01</current_date>") })
+        XCTAssertFalse(result.events.contains { ($0.text ?? "").contains("<current_date>2026-05-03</current_date>") })
+    }
+
     private func makeRecord(transcriptPath: String) -> AgentSessionRegistryRecord {
         AgentSessionRegistryRecord(version: 1,
                                    vendor: "codex",
