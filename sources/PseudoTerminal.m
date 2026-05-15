@@ -2593,6 +2593,12 @@ ITERM_WEAKLY_REFERENCEABLE
 }
 
 - (void)updateSelectedPanelIndexFromVisibleTabSelection {
+    if (![[self class] tideyShouldUpdateSelectedPanelIndexFromVisibleSelectionForShowingSidebar:self.isShowingTideySidebar
+                                                                             switchingWorkspace:_tideySwitchingWorkspace
+                                                                      rebuildingVisibleWorkspace:_tideyRebuildingVisibleWorkspaceTabs
+                                                                        readingSidebarSelection:NO]) {
+        return;
+    }
     Workspace *workspace = self.selectedWorkspace;
     PTYTab *currentTab = self.currentTab;
     if (!workspace || !currentTab) {
@@ -13172,7 +13178,12 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
 
 - (NSInteger)rootTerminalViewSelectedTideySidebarWorkspaceIndex {
     [self ensureTideyWorkspacesInitialized];
-    [self updateSelectedPanelIndexFromVisibleTabSelection];
+    if ([[self class] tideyShouldUpdateSelectedPanelIndexFromVisibleSelectionForShowingSidebar:self.isShowingTideySidebar
+                                                                            switchingWorkspace:_tideySwitchingWorkspace
+                                                                     rebuildingVisibleWorkspace:_tideyRebuildingVisibleWorkspaceTabs
+                                                                       readingSidebarSelection:YES]) {
+        [self updateSelectedPanelIndexFromVisibleTabSelection];
+    }
     return self.selectedWorkspaceIndex;
 }
 
