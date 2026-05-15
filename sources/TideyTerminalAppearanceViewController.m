@@ -5,6 +5,7 @@
 #import "TideyTerminalAppearanceProfileAdapter.h"
 #import "iTermFlippedView.h"
 #import "iTermFontPanel.h"
+#import "iTermRootTerminalView.h"
 
 // ----- Card view: rounded rect with border -----
 @interface TideySettingsCardView : NSView
@@ -66,6 +67,8 @@ static NSColor *TideySettingsSecondaryTextColor(void) {
 @property(nonatomic, strong) NSMutableDictionary<NSString *, TideyColorSwatchView *> *coreColorWells;
 @property(nonatomic, strong) NSMutableArray<TideyColorSwatchView *> *ansiColorWells;
 @property(nonatomic, strong) NSFont *selectedFont;
+@property(nonatomic, strong) NSTextField *browserHomepageField;
+@property(nonatomic, strong) NSTextField *browserStatusLabel;
 
 @end
 
@@ -119,6 +122,11 @@ static const CGFloat kAnsiLabelHeight = 14;
     // ===== ANSI PALETTE section =====
     y += [self addSectionHeader:@"ANSI PALETTE" toView:documentView atY:y width:contentWidth];
     y += [self buildANSICardInView:documentView atY:y width:contentWidth];
+    y += kSectionGap;
+
+    // ===== BROWSER section =====
+    y += [self addSectionHeader:@"BROWSER" toView:documentView atY:y width:contentWidth];
+    y += [self buildBrowserCardInView:documentView atY:y width:contentWidth];
     y += 24; // bottom padding
 
     // Set document view height to fit content
@@ -282,6 +290,61 @@ static const CGFloat kAnsiLabelHeight = 14;
     return gridHeight;
 }
 
+#pragma mark - Browser Card
+
+- (CGFloat)buildBrowserCardInView:(NSView *)parent atY:(CGFloat)y width:(CGFloat)width {
+    CGFloat cardHeight = 80;
+    TideySettingsCardView *card = [[TideySettingsCardView alloc] initWithFrame:NSMakeRect(kContentPadding, y, width, cardHeight)];
+    [parent addSubview:card];
+
+    CGFloat saveButtonWidth = 60;
+    CGFloat resetButtonWidth = 110;
+    CGFloat rowTopY = 12;
+    CGFloat rowBotY = 46;
+
+    NSTextField *homepageLabel = [NSTextField labelWithString:@"Homepage"];
+    homepageLabel.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
+    homepageLabel.textColor = TideySettingsPrimaryTextColor();
+    homepageLabel.frame = NSMakeRect(kCardInternalPaddingH, rowTopY + 4, 80, 20);
+    [card addSubview:homepageLabel];
+
+    CGFloat fieldX = kCardInternalPaddingH + 80 + 8;
+    CGFloat saveButtonX = width - kCardInternalPaddingH - saveButtonWidth;
+    CGFloat fieldWidth = saveButtonX - fieldX - 8;
+    self.browserHomepageField = [[NSTextField alloc] initWithFrame:NSMakeRect(fieldX, rowTopY, fieldWidth, 24)];
+    self.browserHomepageField.font = [NSFont systemFontOfSize:13];
+    self.browserHomepageField.placeholderString = @"https://example.com";
+    self.browserHomepageField.target = self;
+    self.browserHomepageField.action = @selector(saveBrowserHomepage:);
+    [card addSubview:self.browserHomepageField];
+
+    NSButton *saveButton = [[NSButton alloc] initWithFrame:NSMakeRect(saveButtonX, rowTopY - 2, saveButtonWidth, 28)];
+    saveButton.title = @"Save";
+    saveButton.bezelStyle = NSBezelStyleRounded;
+    saveButton.font = [NSFont systemFontOfSize:12];
+    saveButton.target = self;
+    saveButton.action = @selector(saveBrowserHomepage:);
+    [card addSubview:saveButton];
+
+    NSButton *resetButton = [[NSButton alloc] initWithFrame:NSMakeRect(kCardInternalPaddingH, rowBotY, resetButtonWidth, 24)];
+    resetButton.title = @"Reset Default";
+    resetButton.bezelStyle = NSBezelStyleRounded;
+    resetButton.font = [NSFont systemFontOfSize:12];
+    resetButton.target = self;
+    resetButton.action = @selector(resetBrowserHomepage:);
+    [card addSubview:resetButton];
+
+    CGFloat statusX = kCardInternalPaddingH + resetButtonWidth + 10;
+    self.browserStatusLabel = [NSTextField labelWithString:@""];
+    self.browserStatusLabel.font = [NSFont systemFontOfSize:11];
+    self.browserStatusLabel.textColor = TideySettingsSecondaryTextColor();
+    self.browserStatusLabel.frame = NSMakeRect(statusX, rowBotY + 4, width - statusX - kCardInternalPaddingH, 18);
+    self.browserStatusLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+    [card addSubview:self.browserStatusLabel];
+
+    return cardHeight;
+}
+
 #pragma mark - Profile Read/Write
 
 - (void)reloadValuesFromProfile {
@@ -293,6 +356,8 @@ static const CGFloat kAnsiLabelHeight = 14;
     for (NSInteger i = 0; i < (NSInteger)self.ansiColorWells.count; i++) {
         self.ansiColorWells[i].color = [self.adapter ansiColorAtIndex:i];
     }
+    self.browserHomepageField.stringValue = [iTermRootTerminalView tideyBrowserHomepageURLString] ?: @"";
+    self.browserStatusLabel.stringValue = @"";
 }
 
 - (void)updateFontControls {
@@ -349,6 +414,33 @@ static const CGFloat kAnsiLabelHeight = 14;
 
 - (void)ansiColorWellDidChange:(TideyColorSwatchView *)sender {
     [self.adapter updateANSIColor:sender.color atIndex:sender.tag];
+}
+
+#pragma mark - Browser Actions
+
+- (void)saveBrowserHomepage:(id)sender {
+    (void)sender;
+    NSString *input = self.browserHomepageField.stringValue ?: @"";
+    NSString *normalized = [iTermRootTerminalView tideyNormalizedBrowserURLString:input];
+    NSURL *url = normalized.length > 0 ? [NSURL URLWithString:normalized] : nil;
+    BOOL validURL = url.scheme.length > 0 && (url.host.length > 0 || (url.fileURL && url.path.length > 0));
+    if (!validURL) {
+        self.browserStatusLabel.textColor = [NSColor colorWithSRGBRed:1.0 green:0.32 blue:0.28 alpha:1.0];
+        self.browserStatusLabel.stringValue = @"Enter a valid URL.";
+        return;
+    }
+    [iTermRootTerminalView tideySetBrowserHomepageURLString:normalized];
+    self.browserHomepageField.stringValue = [iTermRootTerminalView tideyBrowserHomepageURLString] ?: @"";
+    self.browserStatusLabel.textColor = TideySettingsSecondaryTextColor();
+    self.browserStatusLabel.stringValue = @"Saved.";
+}
+
+- (void)resetBrowserHomepage:(id)sender {
+    (void)sender;
+    [iTermRootTerminalView tideySetBrowserHomepageURLString:nil];
+    self.browserHomepageField.stringValue = [iTermRootTerminalView tideyBrowserHomepageURLString] ?: @"";
+    self.browserStatusLabel.textColor = TideySettingsSecondaryTextColor();
+    self.browserStatusLabel.stringValue = @"Reset to default.";
 }
 
 // Keep the font panel limited to family/face/size.
