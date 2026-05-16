@@ -2,6 +2,66 @@ import XCTest
 @testable import RemoteBridge
 
 final class ChatSubmitEchoRegistryTests: XCTestCase {
+    func testBeginSubmissionSuppressesDuplicateClientRequestIDForSamePanelSessionAndVendor() {
+        var now = Date(timeIntervalSince1970: 100)
+        let registry = ChatSubmitEchoRegistry(ttl: 600, now: { now })
+
+        XCTAssertTrue(registry.beginSubmission(workspaceID: "workspace-1",
+                                               panelID: "panel-1",
+                                               sessionID: "session-1",
+                                               vendor: "codex",
+                                               clientRequestID: "local-1"))
+
+        now = Date(timeIntervalSince1970: 105)
+        XCTAssertFalse(registry.beginSubmission(workspaceID: "workspace-1",
+                                                panelID: "panel-1",
+                                                sessionID: "session-1",
+                                                vendor: "codex",
+                                                clientRequestID: "local-1"))
+    }
+
+    func testBeginSubmissionAllowsSameClientRequestIDAcrossDifferentPanelSessionOrVendor() {
+        let registry = ChatSubmitEchoRegistry()
+        XCTAssertTrue(registry.beginSubmission(workspaceID: "workspace-1",
+                                               panelID: "panel-1",
+                                               sessionID: "session-1",
+                                               vendor: "codex",
+                                               clientRequestID: "local-1"))
+
+        XCTAssertTrue(registry.beginSubmission(workspaceID: "workspace-1",
+                                               panelID: "panel-2",
+                                               sessionID: "session-1",
+                                               vendor: "codex",
+                                               clientRequestID: "local-1"))
+        XCTAssertTrue(registry.beginSubmission(workspaceID: "workspace-1",
+                                               panelID: "panel-1",
+                                               sessionID: "session-2",
+                                               vendor: "codex",
+                                               clientRequestID: "local-1"))
+        XCTAssertTrue(registry.beginSubmission(workspaceID: "workspace-1",
+                                               panelID: "panel-1",
+                                               sessionID: "session-1",
+                                               vendor: "claude",
+                                               clientRequestID: "local-1"))
+    }
+
+    func testExpiredSubmissionCanBeRegisteredAgain() {
+        var now = Date(timeIntervalSince1970: 100)
+        let registry = ChatSubmitEchoRegistry(ttl: 10, now: { now })
+        XCTAssertTrue(registry.beginSubmission(workspaceID: "workspace-1",
+                                               panelID: "panel-1",
+                                               sessionID: "session-1",
+                                               vendor: "codex",
+                                               clientRequestID: "local-1"))
+
+        now = Date(timeIntervalSince1970: 111)
+        XCTAssertTrue(registry.beginSubmission(workspaceID: "workspace-1",
+                                               panelID: "panel-1",
+                                               sessionID: "session-1",
+                                               vendor: "codex",
+                                               clientRequestID: "local-1"))
+    }
+
     func testConsumesMatchingClientRequestIDForSamePanelSessionAndVendor() {
         var now = Date(timeIntervalSince1970: 100)
         let registry = ChatSubmitEchoRegistry(ttl: 600, now: { now })

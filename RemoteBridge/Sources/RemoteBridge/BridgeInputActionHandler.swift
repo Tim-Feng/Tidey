@@ -2,7 +2,6 @@ import Darwin
 import Foundation
 
 let ordinaryTmuxChatSubmitEnterDelayNanoseconds: UInt64 = 5_000_000_000
-let ordinaryTmuxChatSubmitConfirmationEnterDelayNanoseconds: UInt64 = 500_000_000
 
 protocol TideyRequestSending {
     func send(_ request: BridgeRequest) throws -> BridgeResponse
@@ -113,6 +112,17 @@ struct BridgeInputActionHandler {
         guard let vendor = AgentVendorRegistry.resolve(id: resolvedVendorID) else {
             throw BridgeInternalError.invalidRequest("chat_submit vendor is not supported")
         }
+        let resolvedSessionID = activeSession?.sessionID ?? requestedSessionID ?? "-"
+        if chatSubmitEchoRegistry?.beginSubmission(workspaceID: workspaceID,
+                                                   panelID: panelID,
+                                                   sessionID: resolvedSessionID,
+                                                   vendor: vendor.id,
+                                                   clientRequestID: clientRequestID) == false {
+            return Self.submittedResponse(for: request,
+                                          vendorID: vendor.id,
+                                          sessionID: activeSession?.sessionID,
+                                          deduplicated: true)
+        }
 
         BridgeLogger.input.info("dispatch action=chat_submit request_id=\(request.id, privacy: .public) workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) session_id=\(activeSession?.sessionID ?? requestedSessionID ?? "-", privacy: .public) vendor=\(vendor.id, privacy: .public) length=\(message.count) has_cr=\(message.contains("\r")) has_lf=\(message.contains("\n")) tail=\(summarizedTail(message), privacy: .public)")
 
@@ -128,16 +138,6 @@ struct BridgeInputActionHandler {
                try ordinaryTmuxInputRouter.sendInput(step.input, toPanelID: panelID) {
                 previousStepUsedOrdinaryTmux = true
                 BridgeLogger.input.info("route action=chat_submit request_id=\(request.id, privacy: .public) panel_id=\(panelID, privacy: .public) transport=ordinary_tmux step_index=\(index)")
-                if Self.isEnterOnly(step.input),
-                   index > 0 {
-                    try sleep(ordinaryTmuxChatSubmitConfirmationEnterDelayNanoseconds)
-                    do {
-                        _ = try ordinaryTmuxInputRouter.sendInput(step.input, toPanelID: panelID)
-                        BridgeLogger.input.info("route action=chat_submit request_id=\(request.id, privacy: .public) panel_id=\(panelID, privacy: .public) transport=ordinary_tmux step_index=\(index) confirmation_enter=true")
-                    } catch {
-                        BridgeLogger.input.error("route action=chat_submit request_id=\(request.id, privacy: .public) panel_id=\(panelID, privacy: .public) transport=ordinary_tmux step_index=\(index) confirmation_enter_failed=\(String(describing: error), privacy: .public)")
-                    }
-                }
             } else {
                 let stepRequest = BridgeRequest(id: UUID().uuidString,
                                                 action: "send_input",
@@ -166,12 +166,23 @@ struct BridgeInputActionHandler {
                                              clientRequestID: clientRequestID)
         }
 
+        return Self.submittedResponse(for: request,
+                                      vendorID: vendor.id,
+                                      sessionID: activeSession?.sessionID,
+                                      deduplicated: false)
+    }
+
+    private static func submittedResponse(for request: BridgeRequest,
+                                          vendorID: String,
+                                          sessionID: String?,
+                                          deduplicated: Bool) -> BridgeResponse {
         return BridgeResponse(id: request.id,
                               ok: true,
                               result: [
                                 "submitted": .bool(true),
-                                "vendor": .string(vendor.id),
-                                "session_id": activeSession.map { .string($0.sessionID) } ?? .null,
+                                "vendor": .string(vendorID),
+                                "session_id": sessionID.map { .string($0) } ?? .null,
+                                "deduplicated": .bool(deduplicated),
                               ],
                               error: nil)
     }

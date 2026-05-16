@@ -11,10 +11,20 @@ final class ChatSubmitEchoRegistry {
         let submittedAt: Date
     }
 
+    private struct SubmissionRecord: Equatable {
+        let workspaceID: String
+        let panelID: String
+        let sessionID: String
+        let vendor: String
+        let clientRequestID: String
+        let submittedAt: Date
+    }
+
     private let ttl: TimeInterval
     private let now: () -> Date
     private let queue = DispatchQueue(label: "com.tidey.remote-bridge.chat-submit-echo-registry")
     private var records = [Record]()
+    private var submissionRecords = [SubmissionRecord]()
 
     init(ttl: TimeInterval = 10 * 60,
          now: @escaping () -> Date = Date.init) {
@@ -45,6 +55,46 @@ final class ChatSubmitEchoRegistry {
                                   clientRequestID: trimmedRequestID,
                                   submittedAt: now))
             BridgeLogger.input.info("chat submit echo registered workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) session_id=\(sessionID, privacy: .public) vendor=\(vendor, privacy: .public) client_request_id=\(trimmedRequestID, privacy: .public)")
+        }
+    }
+
+    func beginSubmission(workspaceID: String,
+                         panelID: String,
+                         sessionID: String,
+                         vendor: String,
+                         clientRequestID: String?,
+                         submittedAt: Date? = nil) -> Bool {
+        guard let clientRequestID else {
+            return true
+        }
+        let trimmedRequestID = clientRequestID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedRequestID.isEmpty else {
+            return true
+        }
+
+        return queue.sync {
+            let now = submittedAt ?? self.now()
+            pruneExpired(now: now)
+            let normalizedVendor = vendor.lowercased()
+            if submissionRecords.contains(where: {
+                $0.workspaceID == workspaceID
+                    && $0.panelID == panelID
+                    && $0.sessionID == sessionID
+                    && $0.vendor == normalizedVendor
+                    && $0.clientRequestID == trimmedRequestID
+            }) {
+                BridgeLogger.input.info("chat submit duplicate suppressed workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) session_id=\(sessionID, privacy: .public) vendor=\(vendor, privacy: .public) client_request_id=\(trimmedRequestID, privacy: .public)")
+                return false
+            }
+
+            submissionRecords.append(SubmissionRecord(workspaceID: workspaceID,
+                                                      panelID: panelID,
+                                                      sessionID: sessionID,
+                                                      vendor: normalizedVendor,
+                                                      clientRequestID: trimmedRequestID,
+                                                      submittedAt: now))
+            BridgeLogger.input.info("chat submit submission registered workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) session_id=\(sessionID, privacy: .public) vendor=\(vendor, privacy: .public) client_request_id=\(trimmedRequestID, privacy: .public)")
+            return true
         }
     }
 
@@ -84,6 +134,7 @@ final class ChatSubmitEchoRegistry {
 
     private func pruneExpired(now: Date) {
         records.removeAll { now.timeIntervalSince($0.submittedAt) > ttl }
+        submissionRecords.removeAll { now.timeIntervalSince($0.submittedAt) > ttl }
     }
 
     static func normalizedKey(_ text: String) -> String {

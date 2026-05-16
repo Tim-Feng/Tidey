@@ -151,11 +151,10 @@ final class BridgeInputActionHandlerTests: XCTestCase {
 
         XCTAssertEqual(response?.ok, true)
         XCTAssertTrue(sender.sentRequests.isEmpty)
-        XCTAssertEqual(router.sentInputs.map(\.panelID), ["ordinary-panel", "ordinary-panel", "ordinary-panel"])
-        XCTAssertEqual(router.sentInputs.map(\.input), ["hello", "\r", "\r"])
+        XCTAssertEqual(router.sentInputs.map(\.panelID), ["ordinary-panel", "ordinary-panel"])
+        XCTAssertEqual(router.sentInputs.map(\.input), ["hello", "\r"])
         XCTAssertEqual(delayRecorder.recordedDelays, [
             ordinaryTmuxChatSubmitEnterDelayNanoseconds,
-            ordinaryTmuxChatSubmitConfirmationEnterDelayNanoseconds,
         ])
     }
 
@@ -184,11 +183,45 @@ final class BridgeInputActionHandlerTests: XCTestCase {
 
         XCTAssertEqual(response?.ok, true)
         XCTAssertTrue(sender.sentRequests.isEmpty)
-        XCTAssertEqual(router.sentInputs.map(\.input), ["hello", "\r", "\r"])
+        XCTAssertEqual(router.sentInputs.map(\.input), ["hello", "\r"])
         XCTAssertEqual(delayRecorder.recordedDelays, [
             ordinaryTmuxChatSubmitEnterDelayNanoseconds,
-            ordinaryTmuxChatSubmitConfirmationEnterDelayNanoseconds,
         ])
+    }
+
+    func testChatSubmitDeduplicatesRepeatedClientRequestIDBeforeSendingInput() throws {
+        let sender = MockTideyRequestSender()
+        let resolver = MockSessionResolver(session: ActiveAgentSessionSnapshot(vendor: "codex",
+                                                                              workspaceID: "workspace-1",
+                                                                              sessionID: "session-1",
+                                                                              panelID: "ordinary-panel"))
+        let router = MockOrdinaryTmuxInputRouter(routedPanelIDs: ["ordinary-panel"])
+        let registry = ChatSubmitEchoRegistry()
+        let handler = BridgeInputActionHandler(socketSender: sender,
+                                               sessionResolver: resolver,
+                                               ordinaryTmuxInputRouter: router,
+                                               chatSubmitEchoRegistry: registry)
+        let params: [String: JSONValue] = [
+            "workspace_id": .string("workspace-1"),
+            "panel_id": .string("ordinary-panel"),
+            "message": .string("hello"),
+            "session_id": .string("session-1"),
+            "vendor": .string("codex"),
+            "client_request_id": .string("local-1"),
+        ]
+
+        let first = try handler.handle(BridgeRequest(id: "request-1",
+                                                     action: "chat_submit",
+                                                     params: params))
+        let duplicate = try handler.handle(BridgeRequest(id: "request-2",
+                                                         action: "chat_submit",
+                                                         params: params))
+
+        XCTAssertEqual(first?.ok, true)
+        XCTAssertEqual(duplicate?.ok, true)
+        XCTAssertEqual(duplicate?.result?["deduplicated"]?.boolValue, true)
+        XCTAssertTrue(sender.sentRequests.isEmpty)
+        XCTAssertEqual(router.sentInputs.map(\.input), ["hello", "\r"])
     }
 
     func testChatSubmitRejectsMismatchedSession() throws {
