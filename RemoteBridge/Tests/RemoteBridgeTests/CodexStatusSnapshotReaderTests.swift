@@ -27,16 +27,13 @@ final class CodexStatusSnapshotReaderTests: XCTestCase {
         XCTAssertEqual(snapshot.primaryRateLimit?.percentLeft, 99)
         XCTAssertEqual(snapshot.secondaryRateLimit?.percentLeft, 84)
         XCTAssertTrue(snapshot.markdownSummary.contains("### Codex Status"))
-        XCTAssertTrue(snapshot.markdownSummary.contains("Model: gpt-5.5 (reasoning xhigh, summaries auto)"))
-        XCTAssertTrue(snapshot.markdownSummary.contains("Permissions: workspace-write · on-request"))
-        XCTAssertTrue(snapshot.markdownSummary.contains("Context"))
-        XCTAssertTrue(snapshot.markdownSummary.contains("`■■■■■■■■■■■■□□□□□□□□` 60% used · 40% left"))
-        XCTAssertTrue(snapshot.markdownSummary.contains("65K / 100K"))
-        XCTAssertTrue(snapshot.markdownSummary.contains("5h limit"))
-        XCTAssertTrue(snapshot.markdownSummary.contains("`□□□□□□□□□□□□□□□□□□□□` 99% left"))
-        XCTAssertTrue(snapshot.markdownSummary.contains("Weekly limit"))
-        XCTAssertTrue(snapshot.markdownSummary.contains("`■■■□□□□□□□□□□□□□□□□□` 84% left"))
-        XCTAssertTrue(snapshot.markdownSummary.contains("Session: 019d70fe-fd27-7a12-a3f7-9c89ae5048b6"))
+        XCTAssertTrue(snapshot.markdownSummary.contains("Model: `gpt-5.5 (reasoning xhigh, summaries auto)`"))
+        XCTAssertTrue(snapshot.markdownSummary.contains("Permissions: `workspace-write · on-request`"))
+        XCTAssertTrue(snapshot.markdownSummary.contains("Context window: `■■■■■■■■■■■■□□□□□□□□ 60% used · 40% left`"))
+        XCTAssertTrue(snapshot.markdownSummary.contains("Tokens: `65K / 100K`"))
+        XCTAssertTrue(snapshot.markdownSummary.contains("5h limit: `□□□□□□□□□□□□□□□□□□□□ 99% left"))
+        XCTAssertTrue(snapshot.markdownSummary.contains("Weekly limit: `■■■□□□□□□□□□□□□□□□□□ 84% left"))
+        XCTAssertTrue(snapshot.markdownSummary.contains("Session: `019d70fe-fd27-7a12-a3f7-9c89ae5048b6`"))
     }
 
     func testUsesFallbackSessionMetadataWhenTailLacksSessionMeta() throws {
@@ -51,7 +48,7 @@ final class CodexStatusSnapshotReaderTests: XCTestCase {
 
         XCTAssertEqual(snapshot.sessionID, "session-from-registry")
         XCTAssertEqual(snapshot.cwd, "/Users/timfeng")
-        XCTAssertTrue(snapshot.markdownSummary.contains("Directory: ~"))
+        XCTAssertTrue(snapshot.markdownSummary.contains("Directory: `~`"))
     }
 
     func testThrowsWhenRolloutHasNoTokenCount() throws {

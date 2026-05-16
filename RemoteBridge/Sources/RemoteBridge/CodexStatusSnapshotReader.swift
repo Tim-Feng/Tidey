@@ -19,10 +19,10 @@ struct CodexStatusSnapshot: Equatable {
         var lines = ["### Codex Status", ""]
 
         if let modelDisplay {
-            lines.append("Model: \(modelDisplay)")
+            lines.append("Model: `\(modelDisplay)`")
         }
         if let cwd, !cwd.isEmpty {
-            lines.append("Directory: \(Self.displayPath(cwd))")
+            lines.append("Directory: `\(Self.displayPath(cwd))`")
         }
         let permissionParts = [sandboxPolicy, approvalPolicy]
             .compactMap { value -> String? in
@@ -30,29 +30,26 @@ struct CodexStatusSnapshot: Equatable {
                 return value
             }
         if !permissionParts.isEmpty {
-            lines.append("Permissions: \(permissionParts.joined(separator: " · "))")
+            lines.append("Permissions: `\(permissionParts.joined(separator: " · "))`")
         }
 
         if lines.last != "" {
             lines.append("")
         }
         let percentUsed = 100 - percentRemaining
-        lines.append("Context")
-        lines.append("`\(Self.progressBar(percent: Double(percentUsed)))` \(percentUsed)% used · \(percentRemaining)% left")
-        lines.append("\(Self.compact(tokensInContext)) / \(Self.compact(contextWindow))")
+        lines.append("Context window: `\(Self.progressBar(percent: Double(percentUsed))) \(percentUsed)% used · \(percentRemaining)% left`")
+        lines.append("Tokens: `\(Self.compact(tokensInContext)) / \(Self.compact(contextWindow))`")
         if let primaryRateLimit {
             lines.append("")
-            lines.append("5h limit")
-            lines.append(primaryRateLimit.markdownLine)
+            lines.append("5h limit: \(primaryRateLimit.markdownLine)")
         }
         if let secondaryRateLimit {
             lines.append("")
-            lines.append("Weekly limit")
-            lines.append(secondaryRateLimit.markdownLine)
+            lines.append("Weekly limit: \(secondaryRateLimit.markdownLine)")
         }
         if let sessionID, !sessionID.isEmpty {
             lines.append("")
-            lines.append("Session: \(sessionID)")
+            lines.append("Session: `\(sessionID)`")
         }
         return lines.joined(separator: "\n")
     }
@@ -119,9 +116,9 @@ struct CodexRateLimit: Equatable {
     var markdownLine: String {
         let percentUsed = 100 - percentLeft
         if let resetsAt {
-            return "`\(Self.progressBar(percent: Double(percentUsed)))` \(percentLeft)% left · resets \(Self.formatResetTime(resetsAt))"
+            return "`\(Self.progressBar(percent: Double(percentUsed))) \(percentLeft)% left · resets \(Self.formatResetTime(resetsAt))`"
         }
-        return "`\(Self.progressBar(percent: Double(percentUsed)))` \(percentLeft)% left"
+        return "`\(Self.progressBar(percent: Double(percentUsed))) \(percentLeft)% left`"
     }
 
     private static func formatResetTime(_ epochSeconds: Int) -> String {
