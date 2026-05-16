@@ -292,7 +292,7 @@ echo ""
 if [[ "$IS_AUDIT" == "1" ]]; then
     echo "Audit build complete. Distribute $DMG_PATH manually for audit only."
     echo "Do NOT run 'gh release upload v$VERSION \"$DMG_PATH\"' — that would"
-    echo "publish an unsigned-by-Sparkle audit DMG as the production v$VERSION asset."
+    echo "publish an audit-only DMG without matching production appcast metadata."
 else
     echo "Next steps:"
     echo "  1. gh release upload v$VERSION \"$DMG_PATH\" --clobber"
