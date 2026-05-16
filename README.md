@@ -6,13 +6,15 @@ A terminal-first IDE for AI agents. Run agents in workspaces, edit code side by 
 
 ![Tidey main window](docs/screenshots/hero-main.png)
 
-## Latest in 0.4.1
+## Latest in 0.4.2
 
-- **Codex detected in single-window tmux** — Tidey Remote now correctly recognizes Codex sessions inside a single-window `tmux a` attach instead of falling back to a generic terminal panel.
+- **Tidey Remote setup on first launch** — Tidey now bundles and installs the Remote Bridge automatically, so fresh installs can show the pairing QR code without a manual Bridge install step.
+- **Faster Remote connections** — paired devices now prefer Tailscale when available, with LAN and Cloudflare fallback still available.
+- **Better Remote agent controls** — Codex `/status` and Claude `/context` render as native summary cards, and ordinary tmux input is more reliable under paste / Enter timeouts.
 
 ## Install
 
-**Download:** [Tidey.dmg](https://github.com/Tim-Feng/Tidey/releases/download/v0.4.1/Tidey.dmg) (macOS 12+, Apple Silicon & Intel)
+**Download:** [Tidey.dmg](https://github.com/Tim-Feng/Tidey/releases/download/v0.4.2/Tidey.dmg) (macOS 12+, Apple Silicon & Intel)
 
 1. Open the DMG, drag Tidey to Applications
 2. First launch: right-click → Open
