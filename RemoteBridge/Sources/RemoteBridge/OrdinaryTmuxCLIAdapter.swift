@@ -375,9 +375,11 @@ final class OrdinaryTmuxCLIAdapter {
         setPaneIdentityBestEffort(route: route, paneID: pane.id)
         if !splitInput.pasteText.isEmpty {
             let bufferName = "tidey-remote-\(UUID().uuidString)"
-            _ = try commandRunner(socket,
-                                  ["load-buffer", "-b", bufferName, "-"],
-                                  splitInput.pasteText)
+            try loadPasteBuffer(bufferName,
+                                text: splitInput.pasteText,
+                                socket: socket,
+                                route: route,
+                                paneID: pane.id)
             do {
                 _ = try commandRunner(socket,
                                       ["paste-buffer", "-d", "-b", bufferName, "-t", pane.id],
@@ -409,6 +411,27 @@ final class OrdinaryTmuxCLIAdapter {
                                          pastedText: !splitInput.pasteText.isEmpty,
                                          sentEnter: splitInput.sendEnter,
                                          usedFallbackPane: false)
+    }
+
+    private func loadPasteBuffer(_ bufferName: String,
+                                 text: String,
+                                 socket: OrdinaryTmuxSocketSelector,
+                                 route: OrdinaryTmuxPanelRoute,
+                                 paneID: String) throws {
+        do {
+            _ = try commandRunner(socket,
+                                  ["load-buffer", "-b", bufferName, "-"],
+                                  text)
+        } catch {
+            guard Self.isTmuxCommandTimeout(error) else {
+                throw error
+            }
+            let diagnostic = Self.pasteDiagnostic(for: text)
+            BridgeLogger.server.info("ordinary tmux load-buffer timeout retrying workspace_id=\(route.workspaceID, privacy: .public) panel_id=\(route.panelID, privacy: .public) window_id=\(route.windowID, privacy: .public) pane_id=\(paneID, privacy: .public) paste_count=\(diagnostic.count, privacy: .public) paste_hash=\(diagnostic.hash, privacy: .public)")
+            _ = try commandRunner(socket,
+                                  ["load-buffer", "-b", bufferName, "-"],
+                                  text)
+        }
     }
 
     func refreshedRoute(_ route: OrdinaryTmuxPanelRoute) throws -> OrdinaryTmuxPanelRoute {

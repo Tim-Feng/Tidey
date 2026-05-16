@@ -116,6 +116,69 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
         XCTAssertEqual(state.calls.map { $0.arguments.first }, ["list-panes", "set-option", "set-option", "load-buffer", "paste-buffer"])
     }
 
+    func testLoadBufferTimeoutRetriesBeforePasteAndEnter() throws {
+        let registry = OrdinaryTmuxPanelRegistry()
+        let route = ordinaryRoute()
+        registry.replaceRoutes(workspaceID: "workspace-1", routes: [route])
+        let state = RunnerState(scriptedResponses: [
+            RunnerState.key(socket: route.socket, arguments: listPanesArguments(windowID: route.windowID)): [
+                .success("%21\t1\t1021\t/Users/timfeng/GitHub/mother_nature\tcodex\n"),
+            ],
+            RunnerState.key(socket: route.socket,
+                            arguments: ["load-buffer", "-b", "ignored", "-"],
+                            stdin: "hello"): [
+                .failure(tmuxTimeoutError()),
+                .success(""),
+            ],
+        ])
+        let router = OrdinaryTmuxInputRouter(registry: registry,
+                                             adapter: adapter(state: state))
+
+        XCTAssertTrue(try router.sendInput("hello\r", toPanelID: route.panelID))
+
+        let commandNames = state.calls.map { $0.arguments.first }
+        XCTAssertEqual(commandNames, [
+            "list-panes",
+            "set-option",
+            "set-option",
+            "load-buffer",
+            "load-buffer",
+            "paste-buffer",
+            "send-keys",
+        ])
+        let loadCalls = state.calls.filter { $0.arguments.first == "load-buffer" }
+        XCTAssertEqual(loadCalls.count, 2)
+        XCTAssertEqual(loadCalls.map(\.stdin), ["hello", "hello"])
+        XCTAssertEqual(state.calls.last?.arguments, ["send-keys", "-t", "%21", "Enter"])
+    }
+
+    func testLoadBufferNonTimeoutErrorStillAbortsInput() throws {
+        let registry = OrdinaryTmuxPanelRegistry()
+        let route = ordinaryRoute()
+        registry.replaceRoutes(workspaceID: "workspace-1", routes: [route])
+        let nonTimeoutError = NSError(domain: "OrdinaryTmuxCLIAdapter",
+                                      code: 2,
+                                      userInfo: [NSLocalizedDescriptionKey: "tmux failed"])
+        let state = RunnerState(scriptedResponses: [
+            RunnerState.key(socket: route.socket, arguments: listPanesArguments(windowID: route.windowID)): [
+                .success("%21\t1\t1021\t/Users/timfeng/GitHub/mother_nature\tcodex\n"),
+            ],
+            RunnerState.key(socket: route.socket,
+                            arguments: ["load-buffer", "-b", "ignored", "-"],
+                            stdin: "hello"): [
+                .failure(nonTimeoutError),
+            ],
+        ])
+        let router = OrdinaryTmuxInputRouter(registry: registry,
+                                             adapter: adapter(state: state))
+
+        XCTAssertThrowsError(try router.sendInput("hello\r", toPanelID: route.panelID)) { error in
+            XCTAssertEqual((error as NSError).code, 2)
+        }
+        XCTAssertFalse(state.calls.contains { $0.arguments.first == "paste-buffer" })
+        XCTAssertFalse(state.calls.contains { $0.arguments.first == "send-keys" })
+    }
+
     func testPaneIdentityTimeoutDoesNotAbortPasteInput() throws {
         let registry = OrdinaryTmuxPanelRegistry()
         let route = ordinaryRoute()
