@@ -22,6 +22,7 @@ struct BridgePairPayload: Codable, Equatable, Sendable {
     let hostID: String
     let displayName: String
     let lanEndpoints: [BridgePairEndpoint]
+    let tailscaleEndpoint: BridgePairEndpoint?
     let tunnelEndpoint: BridgePairEndpoint?
     let resolverEndpoint: URL?
     let pairSecret: String
@@ -34,6 +35,7 @@ struct BridgePairPayload: Codable, Equatable, Sendable {
         case hostID = "host_id"
         case displayName = "display_name"
         case lanEndpoints = "lan_endpoints"
+        case tailscaleEndpoint = "tailscale_endpoint"
         case tunnelEndpoint = "tunnel_endpoint"
         case resolverEndpoint = "resolver_endpoint"
         case pairSecret = "pair_secret"
@@ -58,7 +60,7 @@ struct BridgeLANEndpointCandidate: Equatable, Sendable {
 
 enum BridgeLANEndpointResolver {
     static func resolve(port: Int) -> [BridgePairEndpoint] {
-        endpoints(from: currentInterfaceCandidates(), port: port)
+        endpoints(from: BridgeNetworkInterfaceResolver.currentInterfaceCandidates(), port: port)
     }
 
     static func endpoints(from candidates: [BridgeLANEndpointCandidate],
@@ -84,7 +86,74 @@ enum BridgeLANEndpointResolver {
             }
     }
 
-    private static func currentInterfaceCandidates() -> [BridgeLANEndpointCandidate] {
+    private static func isAllowedInterfaceName(_ name: String) -> Bool {
+        guard name.hasPrefix("anpi") == false,
+              name.hasPrefix("awdl") == false,
+              name.hasPrefix("gif") == false,
+              name.hasPrefix("stf") == false,
+              name.hasPrefix("utun") == false,
+              name.hasPrefix("utap") == false,
+              name.hasPrefix("ipsec") == false else {
+            return false
+        }
+        return name.hasPrefix("en") ||
+               name.hasPrefix("bridge")
+    }
+
+    private static func isLinkLocalOrLoopbackHost(_ host: String) -> Bool {
+        let lowercaseHost = host.lowercased()
+        return host == "0.0.0.0" ||
+               host.hasPrefix("127.") ||
+               host.hasPrefix("169.254.") ||
+               lowercaseHost == "::1" ||
+               lowercaseHost.hasPrefix("fe80:")
+    }
+}
+
+enum BridgeTailscaleEndpointResolver {
+    static func resolve(port: Int) -> BridgePairEndpoint? {
+        endpoints(from: BridgeNetworkInterfaceResolver.currentInterfaceCandidates(), port: port).first
+    }
+
+    static func endpoints(from candidates: [BridgeLANEndpointCandidate],
+                          port: Int) -> [BridgePairEndpoint] {
+        var seenHosts = Set<String>()
+        return candidates
+            .filter { candidate in
+                candidate.isUp &&
+                candidate.isRunning &&
+                !candidate.isLoopback &&
+                candidate.addressFamily == .ipv6 &&
+                isTailscaleIPv6Host(candidate.host)
+            }
+            .compactMap { candidate in
+                let host = hostWithoutZoneIdentifier(candidate.host)
+                guard seenHosts.insert(host.lowercased()).inserted else {
+                    return nil
+                }
+                return BridgePairEndpoint(scheme: "ws",
+                                          host: host,
+                                          port: port,
+                                          path: "/")
+            }
+    }
+
+    static func isTailscaleIPv6Host(_ host: String) -> Bool {
+        hostWithoutZoneIdentifier(host)
+            .lowercased()
+            .hasPrefix("fd7a:115c:a1e0:")
+    }
+
+    private static func hostWithoutZoneIdentifier(_ host: String) -> String {
+        guard let percentIndex = host.firstIndex(of: "%") else {
+            return host
+        }
+        return String(host[..<percentIndex])
+    }
+}
+
+enum BridgeNetworkInterfaceResolver {
+    static func currentInterfaceCandidates() -> [BridgeLANEndpointCandidate] {
         var interfaceList: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&interfaceList) == 0, let firstInterface = interfaceList else {
             return []
@@ -129,29 +198,6 @@ enum BridgeLANEndpointResolver {
                                                         isLoopback: (flags & IFF_LOOPBACK) != 0))
         }
         return candidates
-    }
-
-    private static func isAllowedInterfaceName(_ name: String) -> Bool {
-        guard name.hasPrefix("anpi") == false,
-              name.hasPrefix("awdl") == false,
-              name.hasPrefix("gif") == false,
-              name.hasPrefix("stf") == false,
-              name.hasPrefix("utun") == false,
-              name.hasPrefix("utap") == false,
-              name.hasPrefix("ipsec") == false else {
-            return false
-        }
-        return name.hasPrefix("en") ||
-               name.hasPrefix("bridge")
-    }
-
-    private static func isLinkLocalOrLoopbackHost(_ host: String) -> Bool {
-        let lowercaseHost = host.lowercased()
-        return host == "0.0.0.0" ||
-               host.hasPrefix("127.") ||
-               host.hasPrefix("169.254.") ||
-               lowercaseHost == "::1" ||
-               lowercaseHost.hasPrefix("fe80:")
     }
 }
 
@@ -298,6 +344,7 @@ final class BridgePairSessionStore {
 
     func createPayload(hostIdentity: BridgeHostIdentity,
                        lanEndpoints: [BridgePairEndpoint],
+                       tailscaleEndpoint: BridgePairEndpoint? = nil,
                        tunnelEndpoint: BridgePairEndpoint? = nil,
                        resolverEndpoint: URL? = nil) throws -> BridgePairPayload {
         pruneExpired()
@@ -312,6 +359,7 @@ final class BridgePairSessionStore {
                                  hostID: hostIdentity.hostID,
                                  displayName: hostIdentity.displayName,
                                  lanEndpoints: lanEndpoints,
+                                 tailscaleEndpoint: tailscaleEndpoint,
                                  tunnelEndpoint: tunnelEndpoint,
                                  resolverEndpoint: resolverEndpoint,
                                  pairSecret: secret,
@@ -473,11 +521,13 @@ final class BridgePairingController {
     }
 
     func createPairPayload(lanEndpoints: [BridgePairEndpoint],
+                           tailscaleEndpoint: BridgePairEndpoint? = nil,
                            tunnelEndpoint: BridgePairEndpoint? = nil,
                            resolverEndpoint: URL? = nil) throws -> BridgePairPayload {
         let identity = try hostIdentityStore.loadOrCreateIdentity()
         return try pairSessionStore.createPayload(hostIdentity: identity,
                                                   lanEndpoints: lanEndpoints,
+                                                  tailscaleEndpoint: tailscaleEndpoint,
                                                   tunnelEndpoint: tunnelEndpoint,
                                                   resolverEndpoint: resolverEndpoint)
     }

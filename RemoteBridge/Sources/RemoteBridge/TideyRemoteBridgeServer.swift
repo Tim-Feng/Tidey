@@ -257,9 +257,11 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
         }
         do {
             let endpoints = BridgeLANEndpointResolver.resolve(port: bridgePort)
+            let tailscaleEndpoint = BridgeTailscaleEndpointResolver.resolve(port: bridgePort)
             cloudflaredManager.ensureSupervisorRunning()
             let tunnelStatus = cloudflaredManager.currentStatus()
             let payload = try pairingController.createPairPayload(lanEndpoints: endpoints,
+                                                                  tailscaleEndpoint: tailscaleEndpoint,
                                                                   tunnelEndpoint: tunnelStatus.endpoint,
                                                                   resolverEndpoint: BridgeResolverConfiguration.resolverBaseURL())
             let data = try encoder.encode(payload)

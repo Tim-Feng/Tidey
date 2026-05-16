@@ -22,6 +22,7 @@ final class BridgePairingTests: XCTestCase {
         XCTAssertEqual(payload.hostID, "host-1")
         XCTAssertEqual(payload.displayName, "Tim's Mac")
         XCTAssertEqual(payload.lanEndpoints, [endpoint])
+        XCTAssertNil(payload.tailscaleEndpoint)
         XCTAssertNil(payload.tunnelEndpoint)
         XCTAssertNil(payload.resolverEndpoint)
         XCTAssertEqual(payload.pairSecret, "pair-secret-1")
@@ -380,6 +381,50 @@ final class BridgePairingTests: XCTestCase {
         ])
     }
 
+    func testTailscaleEndpointResolverUsesIPv6ULAEndpoint() {
+        let candidates = [
+            BridgeLANEndpointCandidate(interfaceName: "en0",
+                                       host: "192.168.1.23",
+                                       addressFamily: .ipv4,
+                                       isUp: true,
+                                       isRunning: true,
+                                       isLoopback: false),
+            BridgeLANEndpointCandidate(interfaceName: "utun4",
+                                       host: "fd7a:115c:a1e0:abcd:1234:5678:9abc:def0",
+                                       addressFamily: .ipv6,
+                                       isUp: true,
+                                       isRunning: true,
+                                       isLoopback: false),
+            BridgeLANEndpointCandidate(interfaceName: "utun5",
+                                       host: "fd12:3456:789a::1",
+                                       addressFamily: .ipv6,
+                                       isUp: true,
+                                       isRunning: true,
+                                       isLoopback: false),
+            BridgeLANEndpointCandidate(interfaceName: "utun6",
+                                       host: "fd7a:115c:a1e0:abcd:1234:5678:9abc:def0",
+                                       addressFamily: .ipv6,
+                                       isUp: true,
+                                       isRunning: true,
+                                       isLoopback: false),
+            BridgeLANEndpointCandidate(interfaceName: "utun7",
+                                       host: "fd7a:115c:a1e0:ffff::1",
+                                       addressFamily: .ipv6,
+                                       isUp: false,
+                                       isRunning: true,
+                                       isLoopback: false),
+        ]
+
+        let endpoints = BridgeTailscaleEndpointResolver.endpoints(from: candidates, port: 4817)
+
+        XCTAssertEqual(endpoints, [
+            BridgePairEndpoint(scheme: "ws",
+                               host: "fd7a:115c:a1e0:abcd:1234:5678:9abc:def0",
+                               port: 4817,
+                               path: "/"),
+        ])
+    }
+
     func testPairPayloadQRCodeStringDecodesToRawPairPayload() throws {
         let fixture = try PairingFixture()
         let endpoint = BridgePairEndpoint(scheme: "ws",
@@ -411,6 +456,19 @@ final class BridgePairingTests: XCTestCase {
                                                                tunnelEndpoint: tunnelEndpoint)
 
         XCTAssertEqual(payload.tunnelEndpoint, tunnelEndpoint)
+    }
+
+    func testPairPayloadIncludesTailscaleEndpointWhenProvided() throws {
+        let fixture = try PairingFixture()
+        let tailscaleEndpoint = BridgePairEndpoint(scheme: "ws",
+                                                   host: "fd7a:115c:a1e0:abcd:1234:5678:9abc:def0",
+                                                   port: 4817,
+                                                   path: "/")
+
+        let payload = try fixture.controller.createPairPayload(lanEndpoints: [],
+                                                               tailscaleEndpoint: tailscaleEndpoint)
+
+        XCTAssertEqual(payload.tailscaleEndpoint, tailscaleEndpoint)
     }
 
     func testPairPayloadIncludesResolverEndpointWhenProvided() throws {
