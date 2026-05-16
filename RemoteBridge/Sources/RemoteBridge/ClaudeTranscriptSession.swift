@@ -1058,6 +1058,11 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private var didPublishEnd = false
     private var unsupportedVersions = Set<String>()
     private var isBackfillingHistory = false
+    private var pendingLocalCommand: ClaudeLocalCommand?
+
+    private struct ClaudeLocalCommand {
+        let name: String
+    }
 
     init(record: AgentSessionRegistryRecord,
          fileManager: FileManager = .default,
@@ -1366,6 +1371,9 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         // User messages can have content as a plain string (user input)
         if let text = message["content"] as? String {
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if consumeLocalCommandEnvelope(trimmed, uuid: uuid, timestamp: timestamp, lineOffset: lineOffset) {
+                return
+            }
             if shouldPublishUserMessage(trimmed) {
                 publishFileBacked(kind: .userMessage,
                                   lineOffset: lineOffset,
@@ -1429,6 +1437,44 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         }
     }
 
+    private func consumeLocalCommandEnvelope(_ text: String,
+                                             uuid: String,
+                                             timestamp: String,
+                                             lineOffset: Int) -> Bool {
+        if let commandName = Self.localCommandName(in: text) {
+            pendingLocalCommand = ClaudeLocalCommand(name: commandName)
+            return true
+        }
+
+        guard let stdout = Self.localCommandStdout(in: text) else {
+            return false
+        }
+
+        let command = pendingLocalCommand
+        pendingLocalCommand = nil
+        guard command?.name == "/context",
+              let markdown = Self.markdownForClaudeContext(stdout: stdout) else {
+            return true
+        }
+
+        publishFileBacked(kind: .assistantMessage,
+                          lineOffset: lineOffset,
+                          ordinal: 0,
+                          eventID: "\(uuid):claude-context:0",
+                          timestamp: timestamp,
+                          role: "assistant",
+                          text: markdown,
+                          name: nil,
+                          input: nil,
+                          output: nil,
+                          toolCallID: nil,
+                          metadata: [
+                              "slash_command": "/context",
+                              "tidey_generated": "claude_context",
+                          ])
+        return true
+    }
+
     private func shouldPublishUserMessage(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -1470,6 +1516,58 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                   options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return stripped.isEmpty && stripped != text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func localCommandName(in text: String) -> String? {
+        firstCapture(in: text,
+                     pattern: #"<command-name\b[^>]*>\s*([\s\S]*?)\s*</command-name>"#)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func localCommandStdout(in text: String) -> String? {
+        firstCapture(in: text,
+                     pattern: #"<local-command-stdout\b[^>]*>([\s\S]*?)</local-command-stdout>"#)
+    }
+
+    private static func markdownForClaudeContext(stdout: String) -> String? {
+        let cleaned = stripANSIEscapeSequences(stdout)
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        let lines = cleaned
+            .components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let collapsed = lines
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+        guard collapsed.range(of: "Context Usage", options: [.caseInsensitive, .diacriticInsensitive]) != nil else {
+            return nil
+        }
+        return "### Claude Context\n\n```text\n\(collapsed)\n```"
+    }
+
+    private static func stripANSIEscapeSequences(_ text: String) -> String {
+        let escape = "\u{001B}"
+        let bell = "\u{0007}"
+        return text
+            .replacingOccurrences(of: "\(escape)\\][\\s\\S]*?(\(bell)|\(escape)\\\\)",
+                                  with: "",
+                                  options: .regularExpression)
+            .replacingOccurrences(of: "\(escape)\\[[0-?]*[ -/]*[@-~]",
+                                  with: "",
+                                  options: .regularExpression)
+    }
+
+    private static func firstCapture(in text: String, pattern: String) -> String? {
+        guard let expression = try? NSRegularExpression(pattern: pattern) else {
+            return nil
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let match = expression.firstMatch(in: text, range: range),
+              match.numberOfRanges > 1,
+              let captureRange = Range(match.range(at: 1), in: text) else {
+            return nil
+        }
+        return String(text[captureRange])
     }
 
     private func publishFileBacked(kind: AgentEventKind,

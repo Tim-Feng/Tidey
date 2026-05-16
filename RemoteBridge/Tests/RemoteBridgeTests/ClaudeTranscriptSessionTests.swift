@@ -77,6 +77,88 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         XCTAssertEqual(result.events.compactMap(\.text), ["Please explain when to use /exit in docs."])
     }
 
+    func testClaudeContextCommandPublishesCleanGeneratedSummary() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        let lines = [
+            makeClaudeUserLine(uuid: "u1", content: "<command-name>/context</command-name>\n<command-message>context</command-message>\n<command-args></command-args>"),
+            makeClaudeUserLine(uuid: "u2", content: "<local-command-stdout> \u{001B}[1mContext Usage\u{001B}[22m\nOpus 4.7 (1M context)\n678.5k/1m tokens (68%)\nEstimated remaining: 321.5k</local-command-stdout>"),
+        ].joined(separator: "\n") + "\n"
+        try lines.write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+
+        XCTAssertTrue(waitUntil {
+            let result = hub.fetch(workspaceID: "workspace",
+                                   sessionID: "session",
+                                   limit: 10,
+                                   beforeSeq: nil,
+                                   afterSeq: nil)
+            return result.events.contains { $0.metadata?["tidey_generated"] == "claude_context" }
+        })
+
+        let result = hub.fetch(workspaceID: "workspace",
+                               sessionID: "session",
+                               limit: 10,
+                               beforeSeq: nil,
+                               afterSeq: nil)
+        let contextEvent = try XCTUnwrap(result.events.first { $0.metadata?["tidey_generated"] == "claude_context" })
+        XCTAssertEqual(contextEvent.type, .assistantMessage)
+        XCTAssertEqual(contextEvent.role, "assistant")
+        XCTAssertEqual(contextEvent.metadata?["slash_command"], "/context")
+        XCTAssertTrue((contextEvent.text ?? "").contains("### Claude Context"))
+        XCTAssertTrue((contextEvent.text ?? "").contains("678.5k/1m tokens (68%)"))
+        XCTAssertFalse((contextEvent.text ?? "").contains("local-command-stdout"))
+        XCTAssertFalse((contextEvent.text ?? "").contains("\u{001B}"))
+        XCTAssertFalse(result.events.contains { ($0.text ?? "").contains("<command-name>") })
+    }
+
+    func testClaudeLocalCommandStdoutWithoutContextCommandIsNotPublished() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        let lines = [
+            makeClaudeUserLine(uuid: "u1", content: "<command-name>/exit</command-name><command-message>exit</command-message><command-args></command-args>"),
+            makeClaudeUserLine(uuid: "u2", content: "<local-command-stdout>Goodbye!</local-command-stdout>"),
+        ].joined(separator: "\n") + "\n"
+        try lines.write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+
+        XCTAssertTrue(waitUntil {
+            let result = hub.fetch(workspaceID: "workspace",
+                                   sessionID: "session",
+                                   limit: 10,
+                                   beforeSeq: nil,
+                                   afterSeq: nil)
+            return result.events.contains { $0.type == .sessionStarted }
+        })
+
+        let result = hub.fetch(workspaceID: "workspace",
+                               sessionID: "session",
+                               limit: 10,
+                               beforeSeq: nil,
+                               afterSeq: nil)
+        XCTAssertEqual(result.events.map(\.type), [.sessionStarted])
+    }
+
     func testClaudeUserEchoConsumesClientRequestIDMetadata() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
