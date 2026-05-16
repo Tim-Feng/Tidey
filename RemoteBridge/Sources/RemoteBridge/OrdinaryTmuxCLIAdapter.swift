@@ -393,9 +393,17 @@ final class OrdinaryTmuxCLIAdapter {
             }
         }
         if splitInput.sendEnter {
-            _ = try commandRunner(socket,
-                                  ["send-keys", "-t", pane.id, "Enter"],
-                                  nil)
+            do {
+                _ = try commandRunner(socket,
+                                      ["send-keys", "-t", pane.id, "Enter"],
+                                      nil)
+            } catch {
+                guard !splitInput.pasteText.isEmpty,
+                      Self.isTmuxCommandTimeout(error) else {
+                    throw error
+                }
+                BridgeLogger.server.info("ordinary tmux input treating enter timeout as delivered after paste workspace_id=\(route.workspaceID, privacy: .public) panel_id=\(route.panelID, privacy: .public) window_id=\(route.windowID, privacy: .public) pane_id=\(pane.id, privacy: .public)")
+            }
         }
         return OrdinaryTmuxInputDelivery(paneID: pane.id,
                                          pastedText: !splitInput.pasteText.isEmpty,

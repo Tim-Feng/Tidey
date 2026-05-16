@@ -335,6 +335,57 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
         XCTAssertFalse(state.calls.contains { $0.arguments.first == "capture-pane" })
     }
 
+    func testPasteAndEnterTreatsEnterTimeoutAsDeliveredAfterPaste() throws {
+        let registry = OrdinaryTmuxPanelRegistry()
+        let route = ordinaryRoute()
+        registry.replaceRoutes(workspaceID: "workspace-1", routes: [route])
+        let state = RunnerState(scriptedResponses: [
+            RunnerState.key(socket: route.socket, arguments: listPanesArguments(windowID: route.windowID)): [
+                .success("%21\t1\t1021\t/Users/timfeng/GitHub/mother_nature\tcodex\n"),
+            ],
+            RunnerState.key(socket: route.socket,
+                            arguments: ["load-buffer", "-b", "ignored", "-"],
+                            stdin: "/status"): [
+                .success(""),
+            ],
+            RunnerState.key(socket: route.socket,
+                            arguments: ["paste-buffer", "-d", "-b", "ignored", "-t", "%21"]): [
+                .success(""),
+            ],
+            RunnerState.key(socket: route.socket,
+                            arguments: ["send-keys", "-t", "%21", "Enter"]): [
+                .failure(tmuxTimeoutError()),
+            ],
+        ])
+        let router = OrdinaryTmuxInputRouter(registry: registry,
+                                             adapter: adapter(state: state))
+
+        XCTAssertTrue(try router.sendInput("/status\r", toPanelID: route.panelID))
+        XCTAssertEqual(state.calls.last?.arguments, ["send-keys", "-t", "%21", "Enter"])
+    }
+
+    func testEnterOnlyTimeoutStillThrowsWithoutPreviousPaste() throws {
+        let registry = OrdinaryTmuxPanelRegistry()
+        let route = ordinaryRoute()
+        registry.replaceRoutes(workspaceID: "workspace-1", routes: [route])
+        let state = RunnerState(scriptedResponses: [
+            RunnerState.key(socket: route.socket, arguments: listPanesArguments(windowID: route.windowID)): [
+                .success("%21\t1\t1021\t/Users/timfeng/GitHub/mother_nature\tcodex\n"),
+            ],
+            RunnerState.key(socket: route.socket,
+                            arguments: ["send-keys", "-t", "%21", "Enter"]): [
+                .failure(tmuxTimeoutError()),
+            ],
+        ])
+        let router = OrdinaryTmuxInputRouter(registry: registry,
+                                             adapter: adapter(state: state))
+
+        XCTAssertThrowsError(try router.sendInput("\r", toPanelID: route.panelID)) { error in
+            XCTAssertEqual((error as NSError).domain, "OrdinaryTmuxCLIAdapter")
+            XCTAssertEqual((error as NSError).code, 124)
+        }
+    }
+
     func testUnknownPanelFallsBackToMacSocketPath() throws {
         let registry = OrdinaryTmuxPanelRegistry()
         let router = OrdinaryTmuxInputRouter(registry: registry,
