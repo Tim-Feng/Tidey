@@ -1646,7 +1646,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         let columns = 20
         let clamped = min(max(percent, 0), 100)
         let filled = Int((clamped / 100 * Double(columns)).rounded())
-        return "[" + String(repeating: "#", count: filled) + String(repeating: "-", count: columns - filled) + "]"
+        return String(repeating: "■", count: filled) + String(repeating: "□", count: columns - filled)
     }
 
     private static func normalizedClaudeContextLine(_ line: String) -> String {
