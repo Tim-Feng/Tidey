@@ -1064,6 +1064,23 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         let name: String
     }
 
+    private struct ClaudeContextMetric {
+        let label: String
+        let value: String
+        let percentText: String
+        let percentValue: Double
+    }
+
+    private struct ClaudeContextSummary {
+        let model: String?
+        let used: String
+        let total: String
+        let usedPercentText: String
+        let usedPercentValue: Double
+        let free: ClaudeContextMetric?
+        let breakdown: [ClaudeContextMetric]
+    }
+
     init(record: AgentSessionRegistryRecord,
          fileManager: FileManager = .default,
          hub: AgentEventHub,
@@ -1533,16 +1550,111 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         let cleaned = stripANSIEscapeSequences(stdout)
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
-        let lines = cleaned
-            .components(separatedBy: "\n")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-        let collapsed = lines
-            .filter { !$0.isEmpty }
-            .joined(separator: "\n")
-        guard collapsed.range(of: "Context Usage", options: [.caseInsensitive, .diacriticInsensitive]) != nil else {
+        guard let summary = parseClaudeContextSummary(from: cleaned) else {
             return nil
         }
-        return "### Claude Context\n\n```text\n\(collapsed)\n```"
+        return markdown(for: summary)
+    }
+
+    private static func parseClaudeContextSummary(from text: String) -> ClaudeContextSummary? {
+        let lines = text
+            .components(separatedBy: "\n")
+            .map { normalizedClaudeContextLine($0) }
+            .filter { !$0.isEmpty }
+        guard lines.contains(where: { $0.range(of: "Context Usage", options: [.caseInsensitive, .diacriticInsensitive]) != nil }) else {
+            return nil
+        }
+
+        let model = lines.first { line in
+            line.range(of: #"^[A-Za-z][A-Za-z0-9 ._-]*\([^)]*context[^)]*\)$"#,
+                       options: [.regularExpression, .caseInsensitive]) != nil &&
+            line.range(of: "Context Usage", options: [.caseInsensitive, .diacriticInsensitive]) == nil
+        }
+
+        guard let usageLine = lines.first(where: { line in
+            line.range(of: #"^[0-9]+(?:\.[0-9]+)?[kKmM]?/[0-9]+(?:\.[0-9]+)?[kKmM]?\s+tokens\s+\([0-9]+(?:\.[0-9]+)?%\)"#,
+                       options: .regularExpression) != nil
+        }),
+              let usageMatch = captureGroups(in: usageLine,
+                                             pattern: #"^([0-9]+(?:\.[0-9]+)?[kKmM]?)/([0-9]+(?:\.[0-9]+)?[kKmM]?)\s+tokens\s+\(([0-9]+(?:\.[0-9]+)?)%\)"#),
+              let usedPercentValue = Double(usageMatch[2]) else {
+            return nil
+        }
+
+        let free = metric(in: lines,
+                          label: "Free space",
+                          pattern: #"^Free space:\s*([0-9]+(?:\.[0-9]+)?[kKmM]?)\s*(?:tokens)?\s*\(([0-9]+(?:\.[0-9]+)?)%\)"#)
+        let desiredBreakdown = [
+            "Messages",
+            "System prompt",
+            "Skills",
+            "System tools",
+            "Memory files",
+        ]
+        let breakdown = desiredBreakdown.compactMap { label in
+            metric(in: lines,
+                   label: label,
+                   pattern: #"^\#(label):\s*([0-9]+(?:\.[0-9]+)?[kKmM]?)\s+tokens\s+\(([0-9]+(?:\.[0-9]+)?)%\)"#)
+        }
+
+        return ClaudeContextSummary(model: model,
+                                    used: usageMatch[0],
+                                    total: usageMatch[1],
+                                    usedPercentText: usageMatch[2],
+                                    usedPercentValue: usedPercentValue,
+                                    free: free,
+                                    breakdown: breakdown)
+    }
+
+    private static func metric(in lines: [String], label: String, pattern: String) -> ClaudeContextMetric? {
+        guard let line = lines.first(where: { $0.hasPrefix("\(label):") }),
+              let groups = captureGroups(in: line, pattern: pattern),
+              groups.count >= 2,
+              let percentValue = Double(groups[1]) else {
+            return nil
+        }
+        return ClaudeContextMetric(label: label,
+                                   value: groups[0],
+                                   percentText: groups[1],
+                                   percentValue: percentValue)
+    }
+
+    private static func markdown(for summary: ClaudeContextSummary) -> String {
+        var parts = ["### Claude Context"]
+        if let model = summary.model {
+            parts.append(model.replacingOccurrences(of: " (", with: " - ").replacingOccurrences(of: ")", with: ""))
+        }
+        parts.append("")
+        parts.append("**Context**")
+        parts.append("`\(progressBar(percent: summary.usedPercentValue))` \(summary.usedPercentText)%")
+        var usageLine = "\(summary.used) / \(summary.total) used"
+        if let free = summary.free {
+            usageLine += " - \(free.value) free"
+        }
+        parts.append(usageLine)
+        if !summary.breakdown.isEmpty {
+            parts.append("")
+            parts.append("**Breakdown**")
+            for metric in summary.breakdown {
+                parts.append("- \(metric.label): `\(progressBar(percent: metric.percentValue))` \(metric.percentText)% - \(metric.value)")
+            }
+        }
+        return parts.joined(separator: "\n")
+    }
+
+    private static func progressBar(percent: Double) -> String {
+        let columns = 20
+        let clamped = min(max(percent, 0), 100)
+        let filled = Int((clamped / 100 * Double(columns)).rounded())
+        return "[" + String(repeating: "#", count: filled) + String(repeating: "-", count: columns - filled) + "]"
+    }
+
+    private static func normalizedClaudeContextLine(_ line: String) -> String {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let start = trimmed.firstIndex(where: { $0.isLetter || $0.isNumber }) else {
+            return ""
+        }
+        return String(trimmed[start...]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func stripANSIEscapeSequences(_ text: String) -> String {
@@ -1558,16 +1670,26 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     }
 
     private static func firstCapture(in text: String, pattern: String) -> String? {
+        captureGroups(in: text, pattern: pattern)?.first
+    }
+
+    private static func captureGroups(in text: String, pattern: String) -> [String]? {
         guard let expression = try? NSRegularExpression(pattern: pattern) else {
             return nil
         }
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
         guard let match = expression.firstMatch(in: text, range: range),
-              match.numberOfRanges > 1,
-              let captureRange = Range(match.range(at: 1), in: text) else {
+              match.numberOfRanges > 1 else {
             return nil
         }
-        return String(text[captureRange])
+        var groups = [String]()
+        for index in 1..<match.numberOfRanges {
+            guard let captureRange = Range(match.range(at: index), in: text) else {
+                return nil
+            }
+            groups.append(String(text[captureRange]))
+        }
+        return groups
     }
 
     private func publishFileBacked(kind: AgentEventKind,

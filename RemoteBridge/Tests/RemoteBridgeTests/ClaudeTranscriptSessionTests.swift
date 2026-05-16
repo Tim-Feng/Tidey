@@ -86,7 +86,7 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
         let lines = [
             makeClaudeUserLine(uuid: "u1", content: "<command-name>/context</command-name>\n<command-message>context</command-message>\n<command-args></command-args>"),
-            makeClaudeUserLine(uuid: "u2", content: "<local-command-stdout> \u{001B}[1mContext Usage\u{001B}[22m\nOpus 4.7 (1M context)\n678.5k/1m tokens (68%)\nEstimated remaining: 321.5k</local-command-stdout>"),
+            makeClaudeUserLine(uuid: "u2", content: "<local-command-stdout> \u{001B}[1mContext Usage\u{001B}[22m\n◉ ◉ ◉ Opus 4.7 (1M context)\n◉ ◉ ◉ 399.1k/1m tokens (40%)\n▢ ▢ ▢ Estimated usage by category\n◉ System prompt: 8.3k tokens (0.8%)\n◉ System tools: 5.5k tokens (0.5%)\n◉ Memory files: 3.5k tokens (0.3%)\n◉ Skills: 7.2k tokens (0.7%)\n◉ Messages: 376.8k tokens (37.7%)\n▢ Free space: 598.8k (59.9%)\nMCP tools: /mcp (loaded on-demand)\nAvailable\n├ benchmark: 103 tokens</local-command-stdout>"),
         ].joined(separator: "\n") + "\n"
         try lines.write(to: transcriptURL, atomically: true, encoding: .utf8)
 
@@ -116,8 +116,15 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         XCTAssertEqual(contextEvent.role, "assistant")
         XCTAssertEqual(contextEvent.metadata?["slash_command"], "/context")
         XCTAssertTrue((contextEvent.text ?? "").contains("### Claude Context"))
-        XCTAssertTrue((contextEvent.text ?? "").contains("678.5k/1m tokens (68%)"))
+        XCTAssertTrue((contextEvent.text ?? "").contains("Opus 4.7 - 1M context"))
+        XCTAssertTrue((contextEvent.text ?? "").contains("`[########------------]` 40%"))
+        XCTAssertTrue((contextEvent.text ?? "").contains("399.1k / 1m used - 598.8k free"))
+        XCTAssertTrue((contextEvent.text ?? "").contains("- Messages: `[########------------]` 37.7% - 376.8k"))
+        XCTAssertTrue((contextEvent.text ?? "").contains("- System prompt: `[--------------------]` 0.8% - 8.3k"))
         XCTAssertFalse((contextEvent.text ?? "").contains("local-command-stdout"))
+        XCTAssertFalse((contextEvent.text ?? "").contains("Available"))
+        XCTAssertFalse((contextEvent.text ?? "").contains("benchmark"))
+        XCTAssertFalse((contextEvent.text ?? "").contains("MCP tools"))
         XCTAssertFalse((contextEvent.text ?? "").contains("\u{001B}"))
         XCTAssertFalse(result.events.contains { ($0.text ?? "").contains("<command-name>") })
     }
