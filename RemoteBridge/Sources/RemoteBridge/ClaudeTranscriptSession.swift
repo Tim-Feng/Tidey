@@ -1636,7 +1636,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             parts.append("")
             parts.append("**Breakdown**")
             for metric in summary.breakdown {
-                parts.append("- \(metric.label): `\(progressBar(percent: metric.percentValue))` \(metric.percentText)% - \(metric.value)")
+                parts.append("\(metric.label): `\(progressBar(percent: metric.percentValue))` \(metric.percentText)% - \(metric.value)")
             }
         }
         return parts.joined(separator: "\n")
