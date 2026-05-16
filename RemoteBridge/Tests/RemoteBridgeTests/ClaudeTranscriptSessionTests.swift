@@ -112,6 +112,12 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                                beforeSeq: nil,
                                afterSeq: nil)
         let contextEvent = try XCTUnwrap(result.events.first { $0.metadata?["tidey_generated"] == "claude_context" })
+        let commandEvent = try XCTUnwrap(result.events.first { $0.metadata?["tidey_generated"] == "claude_context_command" })
+        XCTAssertEqual(commandEvent.type, .userMessage)
+        XCTAssertEqual(commandEvent.role, "user")
+        XCTAssertEqual(commandEvent.text, "/context")
+        XCTAssertEqual(commandEvent.metadata?["slash_command"], "/context")
+        XCTAssertLessThan(commandEvent.seq, contextEvent.seq)
         XCTAssertEqual(contextEvent.type, .assistantMessage)
         XCTAssertEqual(contextEvent.role, "assistant")
         XCTAssertEqual(contextEvent.metadata?["slash_command"], "/context")

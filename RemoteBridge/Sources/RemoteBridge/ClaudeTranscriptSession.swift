@@ -1460,6 +1460,23 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                              lineOffset: Int) -> Bool {
         if let commandName = Self.localCommandName(in: text) {
             pendingLocalCommand = ClaudeLocalCommand(name: commandName)
+            if commandName == "/context" {
+                publishFileBacked(kind: .userMessage,
+                                  lineOffset: lineOffset,
+                                  ordinal: 0,
+                                  eventID: "\(uuid):claude-context-command:0",
+                                  timestamp: timestamp,
+                                  role: "user",
+                                  text: commandName,
+                                  name: nil,
+                                  input: nil,
+                                  output: nil,
+                                  toolCallID: nil,
+                                  metadata: [
+                                      "slash_command": commandName,
+                                      "tidey_generated": "claude_context_command",
+                                  ])
+            }
             return true
         }
 
