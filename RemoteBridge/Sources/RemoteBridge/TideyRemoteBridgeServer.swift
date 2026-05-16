@@ -65,12 +65,14 @@ final class TideyRemoteBridgeServer {
                 }
                 return channel.eventLoop.makeSucceededFuture([:])
             },
-            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub, registryMonitor, observability, ordinaryTmuxPanelRegistry] channel, _ in
+            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub, registryMonitor, observability, ordinaryTmuxPanelRegistry, port, cloudflaredManager] channel, _ in
                 channel.pipeline.addHandler(WebSocketFrameHandler(socketClient: socketClient,
                                                                   eventHub: eventHub,
                                                                   workspaceEventHub: workspaceEventHub,
                                                                   registryMonitor: registryMonitor,
                                                                   observability: observability,
+                                                                  bridgePort: port,
+                                                                  cloudflaredManager: cloudflaredManager,
                                                                   ordinaryTmuxPanelRegistry: ordinaryTmuxPanelRegistry))
             }
         )
@@ -555,6 +557,8 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
     private let workspaceEventHub: WorkspaceEventHub
     private let registryMonitor: AgentSessionRegistryMonitor
     private let observability: BridgeObservabilityCenter
+    private let bridgePort: Int
+    private let cloudflaredManager: BridgeCloudflaredManager
     private let ordinaryTmuxPanelRegistry: OrdinaryTmuxPanelRegistry
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
@@ -577,12 +581,16 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
          workspaceEventHub: WorkspaceEventHub,
          registryMonitor: AgentSessionRegistryMonitor,
          observability: BridgeObservabilityCenter,
+         bridgePort: Int,
+         cloudflaredManager: BridgeCloudflaredManager,
          ordinaryTmuxPanelRegistry: OrdinaryTmuxPanelRegistry) {
         self.socketClient = socketClient
         self.eventHub = eventHub
         self.workspaceEventHub = workspaceEventHub
         self.registryMonitor = registryMonitor
         self.observability = observability
+        self.bridgePort = bridgePort
+        self.cloudflaredManager = cloudflaredManager
         self.ordinaryTmuxPanelRegistry = ordinaryTmuxPanelRegistry
     }
 
@@ -721,6 +729,24 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
         }
 
         switch request.action {
+        case "get_connection_endpoints":
+            let lanEndpoints = BridgeLANEndpointResolver.resolve(port: bridgePort)
+            let tailscaleEndpoint = BridgeTailscaleEndpointResolver.resolve(port: bridgePort)
+            let tunnelEndpoint = cloudflaredManager.currentStatus().endpoint
+            return LocalRequestResult(
+                response: BridgeResponse(id: request.id,
+                                         ok: true,
+                                         result: [
+                                            "lan_endpoints": .array(lanEndpoints.map(Self.jsonValue(for:))),
+                                            "tailscale_endpoint": tailscaleEndpoint.map(Self.jsonValue(for:)) ?? .null,
+                                            "tunnel_endpoint": tunnelEndpoint.map(Self.jsonValue(for:)) ?? .null,
+                                            "resolver_endpoint": .string(BridgeResolverConfiguration.resolverBaseURL().absoluteString),
+                                         ],
+                                         error: nil),
+                agentReplayEnvelopes: [],
+                workspaceReplayEnvelopes: []
+            )
+
         case "publish_codex_status_snapshot":
             guard let workspaceID = request.params?["workspace_id"]?.stringValue,
                   let panelID = request.params?["panel_id"]?.stringValue else {
@@ -1217,6 +1243,15 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.string(from: Date())
+    }
+
+    private static func jsonValue(for endpoint: BridgePairEndpoint) -> JSONValue {
+        .object([
+            "scheme": .string(endpoint.scheme),
+            "host": .string(endpoint.host),
+            "port": endpoint.port.map { .number(Double($0)) } ?? .null,
+            "path": .string(endpoint.path),
+        ])
     }
 
     private static func jsonValue(for event: AgentEvent) -> JSONValue {
