@@ -123,8 +123,10 @@ enum BridgeTailscaleEndpointResolver {
                 candidate.isUp &&
                 candidate.isRunning &&
                 !candidate.isLoopback &&
-                candidate.addressFamily == .ipv6 &&
-                isTailscaleIPv6Host(candidate.host)
+                isTailscaleHost(candidate)
+            }
+            .sorted { lhs, rhs in
+                priority(for: lhs) < priority(for: rhs)
             }
             .compactMap { candidate in
                 let host = hostWithoutZoneIdentifier(candidate.host)
@@ -138,10 +140,36 @@ enum BridgeTailscaleEndpointResolver {
             }
     }
 
+    static func isTailscaleIPv4Host(_ host: String) -> Bool {
+        guard let firstOctet = host.split(separator: ".").first,
+              firstOctet == "100" else {
+            return false
+        }
+        return host.split(separator: ".").count == 4
+    }
+
     static func isTailscaleIPv6Host(_ host: String) -> Bool {
         hostWithoutZoneIdentifier(host)
             .lowercased()
             .hasPrefix("fd7a:115c:a1e0:")
+    }
+
+    private static func isTailscaleHost(_ candidate: BridgeLANEndpointCandidate) -> Bool {
+        switch candidate.addressFamily {
+        case .ipv4:
+            return isTailscaleIPv4Host(candidate.host)
+        case .ipv6:
+            return isTailscaleIPv6Host(candidate.host)
+        }
+    }
+
+    private static func priority(for candidate: BridgeLANEndpointCandidate) -> Int {
+        switch candidate.addressFamily {
+        case .ipv4:
+            return 0
+        case .ipv6:
+            return 1
+        }
     }
 
     private static func hostWithoutZoneIdentifier(_ host: String) -> String {

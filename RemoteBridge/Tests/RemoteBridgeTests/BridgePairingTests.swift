@@ -381,10 +381,22 @@ final class BridgePairingTests: XCTestCase {
         ])
     }
 
-    func testTailscaleEndpointResolverUsesIPv6ULAEndpoint() {
+    func testTailscaleEndpointResolverPrefersIPv4EndpointThenFallsBackToIPv6ULAEndpoint() {
         let candidates = [
             BridgeLANEndpointCandidate(interfaceName: "en0",
                                        host: "192.168.1.23",
+                                       addressFamily: .ipv4,
+                                       isUp: true,
+                                       isRunning: true,
+                                       isLoopback: false),
+            BridgeLANEndpointCandidate(interfaceName: "utun1",
+                                       host: "100.74.239.4",
+                                       addressFamily: .ipv4,
+                                       isUp: true,
+                                       isRunning: true,
+                                       isLoopback: false),
+            BridgeLANEndpointCandidate(interfaceName: "utun2",
+                                       host: "100.74.239.4",
                                        addressFamily: .ipv4,
                                        isUp: true,
                                        isRunning: true,
@@ -418,6 +430,10 @@ final class BridgePairingTests: XCTestCase {
         let endpoints = BridgeTailscaleEndpointResolver.endpoints(from: candidates, port: 4817)
 
         XCTAssertEqual(endpoints, [
+            BridgePairEndpoint(scheme: "ws",
+                               host: "100.74.239.4",
+                               port: 4817,
+                               path: "/"),
             BridgePairEndpoint(scheme: "ws",
                                host: "fd7a:115c:a1e0:abcd:1234:5678:9abc:def0",
                                port: 4817,
