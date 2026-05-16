@@ -153,6 +153,7 @@ final class BridgeInputActionHandlerTests: XCTestCase {
         XCTAssertTrue(sender.sentRequests.isEmpty)
         XCTAssertEqual(router.sentInputs.map(\.panelID), ["ordinary-panel", "ordinary-panel"])
         XCTAssertEqual(router.sentInputs.map(\.input), ["hello", "\r"])
+        XCTAssertEqual(router.sentInputs.map(\.allowAmbiguousPasteTimeout), [true, true])
         XCTAssertEqual(delayRecorder.recordedDelays, [
             ordinaryTmuxChatSubmitEnterDelayNanoseconds,
         ])
@@ -184,6 +185,7 @@ final class BridgeInputActionHandlerTests: XCTestCase {
         XCTAssertEqual(response?.ok, true)
         XCTAssertTrue(sender.sentRequests.isEmpty)
         XCTAssertEqual(router.sentInputs.map(\.input), ["hello", "\r"])
+        XCTAssertEqual(router.sentInputs.map(\.allowAmbiguousPasteTimeout), [true, true])
         XCTAssertEqual(delayRecorder.recordedDelays, [
             ordinaryTmuxChatSubmitEnterDelayNanoseconds,
         ])
@@ -301,17 +303,19 @@ private final class MockTideyRequestSender: TideyRequestSending {
 
 private final class MockOrdinaryTmuxInputRouter: OrdinaryTmuxInputRouting, @unchecked Sendable {
     private let routedPanelIDs: Set<String>
-    private(set) var sentInputs = [(panelID: String, input: String)]()
+    private(set) var sentInputs = [(panelID: String, input: String, allowAmbiguousPasteTimeout: Bool)]()
 
     init(routedPanelIDs: Set<String>) {
         self.routedPanelIDs = routedPanelIDs
     }
 
-    func sendInput(_ input: String, toPanelID panelID: String) throws -> Bool {
+    func sendInput(_ input: String,
+                   toPanelID panelID: String,
+                   allowAmbiguousPasteTimeout: Bool) throws -> Bool {
         guard routedPanelIDs.contains(panelID) else {
             return false
         }
-        sentInputs.append((panelID, input))
+        sentInputs.append((panelID, input, allowAmbiguousPasteTimeout))
         return true
     }
 }

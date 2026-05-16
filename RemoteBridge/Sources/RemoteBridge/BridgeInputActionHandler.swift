@@ -135,7 +135,9 @@ struct BridgeInputActionHandler {
             }
             BridgeLogger.input.info("step action=send_input request_id=\(request.id, privacy: .public) vendor=\(vendor.id, privacy: .public) step_index=\(index) delay_ns=\(effectiveDelay) length=\(step.input.count) has_cr=\(step.input.contains("\r")) has_lf=\(step.input.contains("\n")) tail=\(summarizedTail(step.input), privacy: .public)")
             if let ordinaryTmuxInputRouter,
-               try ordinaryTmuxInputRouter.sendInput(step.input, toPanelID: panelID) {
+               try ordinaryTmuxInputRouter.sendInput(step.input,
+                                                     toPanelID: panelID,
+                                                     allowAmbiguousPasteTimeout: true) {
                 previousStepUsedOrdinaryTmux = true
                 BridgeLogger.input.info("route action=chat_submit request_id=\(request.id, privacy: .public) panel_id=\(panelID, privacy: .public) transport=ordinary_tmux step_index=\(index)")
             } else {

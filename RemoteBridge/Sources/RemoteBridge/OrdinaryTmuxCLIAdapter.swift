@@ -332,7 +332,8 @@ final class OrdinaryTmuxCLIAdapter {
 
     func sendInput(_ input: String,
                    route: OrdinaryTmuxPanelRoute,
-                   fallbackEnterPaneID: String? = nil) throws -> OrdinaryTmuxInputDelivery {
+                   fallbackEnterPaneID: String? = nil,
+                   allowAmbiguousPasteTimeout: Bool = false) throws -> OrdinaryTmuxInputDelivery {
         let socket = route.socket
         let splitInput = Self.splitInputForPasteAndEnter(input)
         if splitInput.pasteText.isEmpty,
@@ -385,12 +386,19 @@ final class OrdinaryTmuxCLIAdapter {
                                       ["paste-buffer", "-d", "-b", bufferName, "-t", pane.id],
                                       nil)
             } catch {
-                guard Self.isTmuxCommandTimeout(error),
-                      verifyPasteBufferDelivery(pasteText: splitInput.pasteText,
-                                                paneID: pane.id,
-                                                socket: socket,
-                                                route: route) else {
+                guard Self.isTmuxCommandTimeout(error) else {
                     throw error
+                }
+                let didVerify = verifyPasteBufferDelivery(pasteText: splitInput.pasteText,
+                                                          paneID: pane.id,
+                                                          socket: socket,
+                                                          route: route)
+                guard didVerify || allowAmbiguousPasteTimeout else {
+                    throw error
+                }
+                if !didVerify {
+                    let diagnostic = Self.pasteDiagnostic(for: splitInput.pasteText)
+                    BridgeLogger.server.info("ordinary tmux paste-buffer timeout accepted as ambiguous delivery workspace_id=\(route.workspaceID, privacy: .public) panel_id=\(route.panelID, privacy: .public) window_id=\(route.windowID, privacy: .public) pane_id=\(pane.id, privacy: .public) paste_count=\(diagnostic.count, privacy: .public) paste_hash=\(diagnostic.hash, privacy: .public)")
                 }
             }
         }

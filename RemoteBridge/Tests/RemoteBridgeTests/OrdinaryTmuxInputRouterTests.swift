@@ -311,6 +311,37 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
         XCTAssertFalse(state.calls.contains { $0.arguments.first == "send-keys" })
     }
 
+    func testPasteBufferTimeoutWithoutPaneEchoCanBeAcceptedForAmbiguousChatSubmitDelivery() throws {
+        let route = ordinaryRoute()
+        let state = RunnerState(scriptedResponses: [
+            RunnerState.key(socket: route.socket, arguments: listPanesArguments(windowID: route.windowID)): [
+                .success("%21\t1\t1021\t/Users/timfeng/GitHub/mother_nature\tclaude\n"),
+            ],
+            RunnerState.key(socket: route.socket,
+                            arguments: ["load-buffer", "-b", "ignored", "-"],
+                            stdin: "hello from remote"): [
+                .success(""),
+            ],
+            RunnerState.key(socket: route.socket,
+                            arguments: ["paste-buffer", "-d", "-b", "ignored", "-t", "%21"]): [
+                .failure(tmuxTimeoutError()),
+            ],
+            RunnerState.key(socket: route.socket,
+                            arguments: capturePaneArguments(paneID: "%21")): [
+                .success("Claude prompt"),
+            ],
+        ])
+
+        let delivery = try adapter(state: state).sendInput("hello from remote",
+                                                           route: route,
+                                                           allowAmbiguousPasteTimeout: true)
+
+        XCTAssertEqual(delivery.paneID, "%21")
+        XCTAssertTrue(delivery.pastedText)
+        XCTAssertFalse(delivery.sentEnter)
+        XCTAssertFalse(state.calls.contains { $0.arguments.first == "send-keys" })
+    }
+
     func testPasteBufferTimeoutWithCaptureTimeoutThrows() throws {
         let registry = OrdinaryTmuxPanelRegistry()
         let route = ordinaryRoute()

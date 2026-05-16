@@ -205,7 +205,17 @@ final class OrdinaryTmuxRouteResolver: OrdinaryTmuxRouteResolving, @unchecked Se
 }
 
 protocol OrdinaryTmuxInputRouting: Sendable {
-    func sendInput(_ input: String, toPanelID panelID: String) throws -> Bool
+    func sendInput(_ input: String,
+                   toPanelID panelID: String,
+                   allowAmbiguousPasteTimeout: Bool) throws -> Bool
+}
+
+extension OrdinaryTmuxInputRouting {
+    func sendInput(_ input: String, toPanelID panelID: String) throws -> Bool {
+        try sendInput(input,
+                      toPanelID: panelID,
+                      allowAmbiguousPasteTimeout: false)
+    }
 }
 
 final class OrdinaryTmuxInputRouter: OrdinaryTmuxInputRouting {
@@ -225,7 +235,9 @@ final class OrdinaryTmuxInputRouter: OrdinaryTmuxInputRouting {
         self.adapter = adapter
     }
 
-    func sendInput(_ input: String, toPanelID panelID: String) throws -> Bool {
+    func sendInput(_ input: String,
+                   toPanelID panelID: String,
+                   allowAmbiguousPasteTimeout: Bool = false) throws -> Bool {
         guard let route = try routeResolver.route(forPanelID: panelID, workspaceID: nil) else {
             return false
         }
@@ -233,7 +245,8 @@ final class OrdinaryTmuxInputRouter: OrdinaryTmuxInputRouting {
         let fallbackEnterPaneID = lastPastePaneStore.paneID(for: routeKey)
         let delivery = try adapter.sendInput(input,
                                              route: route,
-                                             fallbackEnterPaneID: fallbackEnterPaneID)
+                                             fallbackEnterPaneID: fallbackEnterPaneID,
+                                             allowAmbiguousPasteTimeout: allowAmbiguousPasteTimeout)
         lastPastePaneStore.record(delivery: delivery, routeKey: routeKey)
         return true
     }
