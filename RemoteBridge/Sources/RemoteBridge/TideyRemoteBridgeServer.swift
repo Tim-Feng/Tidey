@@ -719,14 +719,14 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
         }
 
         switch request.action {
-        case "publish_codex_context_snapshot":
+        case "publish_codex_status_snapshot":
             guard let workspaceID = request.params?["workspace_id"]?.stringValue,
                   let panelID = request.params?["panel_id"]?.stringValue else {
                 return LocalRequestResult(
                     response: BridgeResponse(id: request.id,
                                              ok: false,
                                              result: nil,
-                                             error: BridgeInternalError.invalidRequest("publish_codex_context_snapshot requires workspace_id and panel_id").payload),
+                                             error: BridgeInternalError.invalidRequest("publish_codex_status_snapshot requires workspace_id and panel_id").payload),
                     agentReplayEnvelopes: [],
                     workspaceReplayEnvelopes: []
                 )
@@ -748,7 +748,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                     response: BridgeResponse(id: request.id,
                                              ok: false,
                                              result: nil,
-                                             error: BridgeInternalError.invalidRequest("Native /context is only available for Codex panels.").payload),
+                                             error: BridgeInternalError.invalidRequest("Native /status is only available for Codex panels.").payload),
                     agentReplayEnvelopes: [],
                     workspaceReplayEnvelopes: []
                 )
@@ -758,7 +758,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                     response: BridgeResponse(id: request.id,
                                              ok: false,
                                              result: nil,
-                                             error: BridgeInternalError.invalidRequest("publish_codex_context_snapshot session_id does not match the active panel session").payload),
+                                             error: BridgeInternalError.invalidRequest("publish_codex_status_snapshot session_id does not match the active panel session").payload),
                     agentReplayEnvelopes: [],
                     workspaceReplayEnvelopes: []
                 )
@@ -774,9 +774,11 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                 )
             }
             do {
-                let snapshot = try CodexContextSnapshotReader().read(transcriptPath: record.transcriptPath)
+                let snapshot = try CodexStatusSnapshotReader().read(transcriptPath: record.transcriptPath,
+                                                                    fallbackSessionID: activeSession.sessionID,
+                                                                    fallbackCWD: record.cwd)
                 let seq = eventHub.nextSyntheticSeq(sessionID: activeSession.sessionID)
-                let eventID = "codex-context:\(activeSession.sessionID):\(seq)"
+                let eventID = "codex-status:\(activeSession.sessionID):\(seq)"
                 let event = AgentEvent(eventID: eventID,
                                        seq: seq,
                                        vendor: "codex",
@@ -792,8 +794,8 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                                        toolCallID: nil,
                                        metadata: [
                                         "panel_id": panelID,
-                                        "tidey_generated": "codex_context",
-                                        "slash_command": "/context",
+                                        "tidey_generated": "codex_status",
+                                        "slash_command": "/status",
                                         "tokens_in_context": String(snapshot.tokensInContext),
                                         "context_window": String(snapshot.contextWindow),
                                         "percent_remaining": String(snapshot.percentRemaining),
@@ -819,7 +821,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                     response: BridgeResponse(id: request.id,
                                              ok: false,
                                              result: nil,
-                                             error: BridgeErrorPayload(code: "codex_context_unavailable",
+                                             error: BridgeErrorPayload(code: "codex_status_unavailable",
                                                                        message: error.localizedDescription)),
                     agentReplayEnvelopes: [],
                     workspaceReplayEnvelopes: []
