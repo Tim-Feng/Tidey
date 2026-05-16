@@ -37,8 +37,8 @@ struct CodexStatusSnapshot: Equatable {
             lines.append("")
         }
         let percentUsed = 100 - percentRemaining
-        lines.append("Context window: `\(Self.progressBar(percent: Double(percentUsed))) \(percentUsed)% used · \(percentRemaining)% left`")
-        lines.append("Tokens: `\(Self.compact(tokensInContext)) / \(Self.compact(contextWindow))`")
+        lines.append("Context window: `\(Self.progressBar(percent: Double(percentUsed)))` \(percentUsed)% used · \(percentRemaining)% left")
+        lines.append("Tokens: \(Self.compact(tokensInContext)) / \(Self.compact(contextWindow))")
         if let primaryRateLimit {
             lines.append("")
             lines.append("5h limit: \(primaryRateLimit.markdownLine)")
@@ -116,9 +116,9 @@ struct CodexRateLimit: Equatable {
     var markdownLine: String {
         let percentUsed = 100 - percentLeft
         if let resetsAt {
-            return "`\(Self.progressBar(percent: Double(percentUsed))) \(percentLeft)% left · resets \(Self.formatResetTime(resetsAt))`"
+            return "`\(Self.progressBar(percent: Double(percentUsed)))` \(percentLeft)% left · resets \(Self.formatResetTime(resetsAt))"
         }
-        return "`\(Self.progressBar(percent: Double(percentUsed))) \(percentLeft)% left`"
+        return "`\(Self.progressBar(percent: Double(percentUsed)))` \(percentLeft)% left"
     }
 
     private static func formatResetTime(_ epochSeconds: Int) -> String {

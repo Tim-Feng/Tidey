@@ -29,10 +29,10 @@ final class CodexStatusSnapshotReaderTests: XCTestCase {
         XCTAssertTrue(snapshot.markdownSummary.contains("### Codex Status"))
         XCTAssertTrue(snapshot.markdownSummary.contains("Model: `gpt-5.5 (reasoning xhigh, summaries auto)`"))
         XCTAssertTrue(snapshot.markdownSummary.contains("Permissions: `workspace-write · on-request`"))
-        XCTAssertTrue(snapshot.markdownSummary.contains("Context window: `■■■■■■■■■■■■□□□□□□□□ 60% used · 40% left`"))
-        XCTAssertTrue(snapshot.markdownSummary.contains("Tokens: `65K / 100K`"))
-        XCTAssertTrue(snapshot.markdownSummary.contains("5h limit: `□□□□□□□□□□□□□□□□□□□□ 99% left"))
-        XCTAssertTrue(snapshot.markdownSummary.contains("Weekly limit: `■■■□□□□□□□□□□□□□□□□□ 84% left"))
+        XCTAssertTrue(snapshot.markdownSummary.contains("Context window: `■■■■■■■■■■■■□□□□□□□□` 60% used · 40% left"))
+        XCTAssertTrue(snapshot.markdownSummary.contains("Tokens: 65K / 100K"))
+        XCTAssertTrue(snapshot.markdownSummary.contains("5h limit: `□□□□□□□□□□□□□□□□□□□□` 99% left"))
+        XCTAssertTrue(snapshot.markdownSummary.contains("Weekly limit: `■■■□□□□□□□□□□□□□□□□□` 84% left"))
         XCTAssertTrue(snapshot.markdownSummary.contains("Session: `019d70fe-fd27-7a12-a3f7-9c89ae5048b6`"))
     }
 
