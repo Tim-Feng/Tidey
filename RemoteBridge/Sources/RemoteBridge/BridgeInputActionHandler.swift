@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 
 let ordinaryTmuxChatSubmitEnterDelayNanoseconds: UInt64 = 5_000_000_000
+let ordinaryTmuxChatSubmitConfirmationEnterDelayNanoseconds: UInt64 = 500_000_000
 
 protocol TideyRequestSending {
     func send(_ request: BridgeRequest) throws -> BridgeResponse
@@ -127,6 +128,16 @@ struct BridgeInputActionHandler {
                try ordinaryTmuxInputRouter.sendInput(step.input, toPanelID: panelID) {
                 previousStepUsedOrdinaryTmux = true
                 BridgeLogger.input.info("route action=chat_submit request_id=\(request.id, privacy: .public) panel_id=\(panelID, privacy: .public) transport=ordinary_tmux step_index=\(index)")
+                if Self.isEnterOnly(step.input),
+                   index > 0 {
+                    try sleep(ordinaryTmuxChatSubmitConfirmationEnterDelayNanoseconds)
+                    do {
+                        _ = try ordinaryTmuxInputRouter.sendInput(step.input, toPanelID: panelID)
+                        BridgeLogger.input.info("route action=chat_submit request_id=\(request.id, privacy: .public) panel_id=\(panelID, privacy: .public) transport=ordinary_tmux step_index=\(index) confirmation_enter=true")
+                    } catch {
+                        BridgeLogger.input.error("route action=chat_submit request_id=\(request.id, privacy: .public) panel_id=\(panelID, privacy: .public) transport=ordinary_tmux step_index=\(index) confirmation_enter_failed=\(String(describing: error), privacy: .public)")
+                    }
+                }
             } else {
                 let stepRequest = BridgeRequest(id: UUID().uuidString,
                                                 action: "send_input",
@@ -173,9 +184,13 @@ struct BridgeInputActionHandler {
 
     private static func effectiveDelay(for step: ChatSubmitStep, previousStepUsedOrdinaryTmux: Bool) -> UInt64 {
         guard previousStepUsedOrdinaryTmux,
-              step.input == "\r" || step.input == "\n" || step.input == "\r\n" else {
+              isEnterOnly(step.input) else {
             return step.delayNanoseconds
         }
         return ordinaryTmuxChatSubmitEnterDelayNanoseconds
+    }
+
+    private static func isEnterOnly(_ input: String) -> Bool {
+        input == "\r" || input == "\n" || input == "\r\n"
     }
 }

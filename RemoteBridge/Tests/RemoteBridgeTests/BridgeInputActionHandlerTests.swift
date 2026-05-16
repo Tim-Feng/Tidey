@@ -151,9 +151,12 @@ final class BridgeInputActionHandlerTests: XCTestCase {
 
         XCTAssertEqual(response?.ok, true)
         XCTAssertTrue(sender.sentRequests.isEmpty)
-        XCTAssertEqual(router.sentInputs.map(\.panelID), ["ordinary-panel", "ordinary-panel"])
-        XCTAssertEqual(router.sentInputs.map(\.input), ["hello", "\r"])
-        XCTAssertEqual(delayRecorder.recordedDelays, [ordinaryTmuxChatSubmitEnterDelayNanoseconds])
+        XCTAssertEqual(router.sentInputs.map(\.panelID), ["ordinary-panel", "ordinary-panel", "ordinary-panel"])
+        XCTAssertEqual(router.sentInputs.map(\.input), ["hello", "\r", "\r"])
+        XCTAssertEqual(delayRecorder.recordedDelays, [
+            ordinaryTmuxChatSubmitEnterDelayNanoseconds,
+            ordinaryTmuxChatSubmitConfirmationEnterDelayNanoseconds,
+        ])
     }
 
     func testChatSubmitRoutesClaudeOrdinaryTmuxEnterAfterPasteWithSettleDelay() throws {
@@ -181,8 +184,11 @@ final class BridgeInputActionHandlerTests: XCTestCase {
 
         XCTAssertEqual(response?.ok, true)
         XCTAssertTrue(sender.sentRequests.isEmpty)
-        XCTAssertEqual(router.sentInputs.map(\.input), ["hello", "\r"])
-        XCTAssertEqual(delayRecorder.recordedDelays, [ordinaryTmuxChatSubmitEnterDelayNanoseconds])
+        XCTAssertEqual(router.sentInputs.map(\.input), ["hello", "\r", "\r"])
+        XCTAssertEqual(delayRecorder.recordedDelays, [
+            ordinaryTmuxChatSubmitEnterDelayNanoseconds,
+            ordinaryTmuxChatSubmitConfirmationEnterDelayNanoseconds,
+        ])
     }
 
     func testChatSubmitRejectsMismatchedSession() throws {
