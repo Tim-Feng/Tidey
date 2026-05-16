@@ -1,6 +1,17 @@
 #!/bin/bash
 # Build, sign, notarize, and package Tidey for distribution.
-# Usage: tools/release.sh
+# Usage: tools/release.sh [--audit] [--replace-existing]
+#
+# Flags:
+#   --audit             Build a signed/notarized DMG for local audit only.
+#                       Skips appcast write. Output DMG is renamed to
+#                       Tidey-audit-v<version>.dmg so a stray
+#                       `gh release upload --clobber Tidey.dmg` cannot
+#                       replace the production asset.
+#   --replace-existing  Allow appcast to overwrite an existing entry for the
+#                       same version. Use only when the GitHub Release asset
+#                       for that version is also being replaced in the same
+#                       step. Otherwise bump the patch version.
 #
 # Prerequisites:
 #   - Developer ID Application certificate installed in Keychain
@@ -9,6 +20,30 @@
 #       --apple-id "fsjforever26@gmail.com" --team-id "4T64VW5B7M"
 
 set -euo pipefail
+
+IS_AUDIT=0
+ALLOW_REPLACE=0
+for arg in "$@"; do
+    case "$arg" in
+        --audit)
+            IS_AUDIT=1
+            ;;
+        --replace-existing)
+            ALLOW_REPLACE=1
+            ;;
+        *)
+            echo "Error: unknown flag: $arg" >&2
+            echo "Usage: tools/release.sh [--audit] [--replace-existing]" >&2
+            exit 1
+            ;;
+    esac
+done
+
+if [[ "$IS_AUDIT" == "1" && "$ALLOW_REPLACE" == "1" ]]; then
+    echo "Error: --audit and --replace-existing are mutually exclusive." >&2
+    echo "Audit builds never write the appcast, so --replace-existing has no effect there." >&2
+    exit 1
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -170,19 +205,39 @@ DMG_SIZE=$(stat -f%z "$DMG_PATH")
 echo "EdDSA signature: $SPARKLE_SIG"
 echo "DMG size: $DMG_SIZE bytes"
 
+# --- Resolve version (used by audit rename + appcast update) ---
+VERSION=$(plutil -extract CFBundleShortVersionString raw "$APP_PATH/Contents/Info.plist")
+BUILD=$(plutil -extract CFBundleVersion raw "$APP_PATH/Contents/Info.plist")
+
+# --- Rename DMG for audit mode ---
+# Audit DMG must never collide with the production filename; otherwise a stray
+# `gh release upload --clobber Tidey.dmg` would replace the published asset.
+if [[ "$IS_AUDIT" == "1" ]]; then
+    AUDIT_DMG_PATH="$PROJECT_DIR/Tidey-audit-v${VERSION}.dmg"
+    mv "$DMG_PATH" "$AUDIT_DMG_PATH"
+    DMG_PATH="$AUDIT_DMG_PATH"
+    echo "Audit DMG path: $DMG_PATH"
+fi
+
 # --- Update Appcast ---
 step "Update Appcast"
 
-VERSION=$(plutil -extract CFBundleShortVersionString raw "$APP_PATH/Contents/Info.plist")
-BUILD=$(plutil -extract CFBundleVersion raw "$APP_PATH/Contents/Info.plist")
-APPCAST="$PROJECT_DIR/docs/appcast.xml"
-PUB_DATE=$(date -R)
-DMG_URL="https://github.com/Tim-Feng/Tidey/releases/download/v${VERSION}/Tidey.dmg"
+if [[ "$IS_AUDIT" == "1" ]]; then
+    echo "Audit mode: appcast not written (version $VERSION build $BUILD)"
+else
+    APPCAST="$PROJECT_DIR/docs/appcast.xml"
+    PUB_DATE=$(date -R)
+    DMG_URL="https://github.com/Tim-Feng/Tidey/releases/download/v${VERSION}/Tidey.dmg"
 
-# Update the appcast XML with the current release item.
-python3 -c "
+    # Update the appcast XML with the current release item.
+    # If an entry for this version already exists, refuse unless
+    # --replace-existing was passed (and even then warn that the GitHub
+    # Release asset must be replaced in the same step).
+    ALLOW_REPLACE="$ALLOW_REPLACE" python3 -c "
+import os
 import xml.etree.ElementTree as ET
 
+allow_replace = os.environ.get('ALLOW_REPLACE') == '1'
 ET.register_namespace('sparkle', 'http://www.andymatuschak.net/xml-namespaces/sparkle')
 ET.register_namespace('dc', 'http://purl.org/dc/elements/1.1/')
 tree = ET.parse('$APPCAST')
@@ -190,10 +245,24 @@ channel = tree.find('channel')
 ns = {'sparkle': 'http://www.andymatuschak.net/xml-namespaces/sparkle'}
 if channel is None:
     raise SystemExit('Error: channel element not found in appcast')
+
+existing = None
 for item in channel.findall('item'):
     ver = item.find('sparkle:shortVersionString', ns)
     if ver is not None and ver.text == '$VERSION':
-        channel.remove(item)
+        existing = item
+        break
+
+if existing is not None:
+    if not allow_replace:
+        raise SystemExit(
+            'Error: appcast already has v$VERSION entry.\n'
+            'Normally bump the patch version instead of rebuilding the same version.\n'
+            'Pass --replace-existing only if you are intentionally replacing the\n'
+            'existing GitHub Release asset and appcast metadata together.'
+        )
+    channel.remove(existing)
+
 item = ET.SubElement(channel, 'item')
 ET.SubElement(item, 'title').text = 'Tidey $VERSION'
 ET.SubElement(item, 'pubDate').text = '$PUB_DATE'
@@ -208,7 +277,9 @@ enc.set('length', '$DMG_SIZE')
 tree.write('$APPCAST', xml_declaration=True, encoding='utf-8')
 "
 
-echo "Appcast updated: $APPCAST"
+    echo "Appcast updated: $APPCAST"
+fi
+
 echo "Version: $VERSION (build $BUILD)"
 
 # --- Verify ---
@@ -218,7 +289,13 @@ spctl --assess -t open --context context:primary-signature -v "$DMG_PATH" 2>&1
 echo ""
 echo "Done. DMG ready at: $DMG_PATH"
 echo ""
-echo "Next steps:"
-echo "  1. gh release upload v$VERSION \"$DMG_PATH\" --clobber"
-echo "  2. git add docs/appcast.xml && git commit -m 'Update appcast for v$VERSION'"
-echo "  3. git push origin master  # deploys appcast via GitHub Pages"
+if [[ "$IS_AUDIT" == "1" ]]; then
+    echo "Audit build complete. Distribute $DMG_PATH manually for audit only."
+    echo "Do NOT run 'gh release upload v$VERSION \"$DMG_PATH\"' — that would"
+    echo "publish an unsigned-by-Sparkle audit DMG as the production v$VERSION asset."
+else
+    echo "Next steps:"
+    echo "  1. gh release upload v$VERSION \"$DMG_PATH\" --clobber"
+    echo "  2. git add docs/appcast.xml && git commit -m 'Update appcast for v$VERSION'"
+    echo "  3. git push origin master  # deploys appcast via GitHub Pages"
+fi
