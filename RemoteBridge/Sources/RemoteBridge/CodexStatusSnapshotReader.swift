@@ -36,12 +36,19 @@ struct CodexStatusSnapshot: Equatable {
         if lines.last != "" {
             lines.append("")
         }
-        lines.append("Context: \(percentRemaining)% left · \(Self.compact(tokensInContext)) / \(Self.compact(contextWindow))")
+        let percentUsed = 100 - percentRemaining
+        lines.append("Context")
+        lines.append("`\(Self.progressBar(percent: Double(percentUsed)))` \(percentUsed)% used · \(percentRemaining)% left")
+        lines.append("\(Self.compact(tokensInContext)) / \(Self.compact(contextWindow))")
         if let primaryRateLimit {
-            lines.append("5h limit: \(primaryRateLimit.displayLine)")
+            lines.append("")
+            lines.append("5h limit")
+            lines.append(primaryRateLimit.markdownLine)
         }
         if let secondaryRateLimit {
-            lines.append("Weekly limit: \(secondaryRateLimit.displayLine)")
+            lines.append("")
+            lines.append("Weekly limit")
+            lines.append(secondaryRateLimit.markdownLine)
         }
         if let sessionID, !sessionID.isEmpty {
             lines.append("")
@@ -74,6 +81,13 @@ struct CodexStatusSnapshot: Equatable {
         return "\(Int((Double(value) / 1_000.0).rounded()))K"
     }
 
+    private static func progressBar(percent: Double) -> String {
+        let columns = 20
+        let clamped = min(max(percent, 0), 100)
+        let filled = Int((clamped / 100 * Double(columns)).rounded())
+        return String(repeating: "■", count: filled) + String(repeating: "□", count: columns - filled)
+    }
+
     private static func displayPath(_ path: String) -> String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         if path == home {
@@ -102,6 +116,14 @@ struct CodexRateLimit: Equatable {
         return "\(percentLeft)% left"
     }
 
+    var markdownLine: String {
+        let percentUsed = 100 - percentLeft
+        if let resetsAt {
+            return "`\(Self.progressBar(percent: Double(percentUsed)))` \(percentLeft)% left · resets \(Self.formatResetTime(resetsAt))"
+        }
+        return "`\(Self.progressBar(percent: Double(percentUsed)))` \(percentLeft)% left"
+    }
+
     private static func formatResetTime(_ epochSeconds: Int) -> String {
         let date = Date(timeIntervalSince1970: TimeInterval(epochSeconds))
         let formatter = DateFormatter()
@@ -113,6 +135,13 @@ struct CodexRateLimit: Equatable {
             formatter.dateFormat = "HH:mm 'on' d MMM"
         }
         return formatter.string(from: date)
+    }
+
+    private static func progressBar(percent: Double) -> String {
+        let columns = 20
+        let clamped = min(max(percent, 0), 100)
+        let filled = Int((clamped / 100 * Double(columns)).rounded())
+        return String(repeating: "■", count: filled) + String(repeating: "□", count: columns - filled)
     }
 }
 
