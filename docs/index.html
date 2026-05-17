@@ -4,22 +4,18 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Tidey — Terminal-First IDE for AI Agents</title>
-  <meta name="description" content="A terminal-first IDE for AI agents on macOS. Run agents in workspaces, edit code side by side, see what each agent is doing.">
+  <meta name="description" content="A terminal-first IDE for AI agents on macOS, now in your pocket with Tidey Remote.">
 
   <!-- Open Graph -->
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://tim-feng.github.io/Tidey/">
   <meta property="og:title" content="Tidey — Terminal-First IDE for AI Agents">
-  <meta property="og:description" content="Multi-terminal, Monaco editor, in-app browser, split view. Built for AI agent workflows. Open source.">
+  <meta property="og:description" content="Multi-agent workspaces. Native chat. Editor + browser. iPhone companion.">
   <meta property="og:image" content="https://tim-feng.github.io/Tidey/screenshots/hero-main.png">
-  <meta property="og:image:width" content="2560">
-  <meta property="og:image:height" content="1390">
 
-  <!-- Twitter Card -->
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:url" content="https://tim-feng.github.io/Tidey/">
   <meta name="twitter:title" content="Tidey — Terminal-First IDE for AI Agents">
-  <meta name="twitter:description" content="Multi-terminal, Monaco editor, in-app browser, split view. Built for AI agent workflows. Open source.">
+  <meta name="twitter:description" content="Multi-agent workspaces. Native chat. Editor + browser. iPhone companion.">
   <meta name="twitter:image" content="https://tim-feng.github.io/Tidey/screenshots/hero-main.png">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -29,7 +25,9 @@
     :root {
       --bg: #0c1117;
       --bg-surface: #111920;
+      --bg-elevated: #15202b;
       --accent: #3A8FD6;
+      --accent-warm: #E0A65A;
       --accent-dim: rgba(58, 143, 214, 0.08);
       --accent-glow: rgba(58, 143, 214, 0.15);
       --text: #d8e0ea;
@@ -73,7 +71,7 @@
       padding: 0 28px;
     }
 
-    /* ─── Language Toggle ─── */
+    /* ─── Top Nav ─── */
     .top-nav {
       position: fixed;
       top: 20px;
@@ -103,10 +101,7 @@
       box-shadow: 0 2px 12px rgba(58, 143, 214, 0.45);
     }
 
-    .lang-switcher {
-      position: relative;
-    }
-
+    .lang-switcher { position: relative; }
     .lang-btn {
       font-family: var(--sans);
       font-size: 0.78rem;
@@ -124,15 +119,8 @@
       align-items: center;
       gap: 4px;
     }
-    .lang-btn:hover {
-      color: var(--text-muted);
-      border-color: rgba(255, 255, 255, 0.12);
-    }
-    .lang-btn::after {
-      content: '▾';
-      font-size: 0.65rem;
-      opacity: 0.5;
-    }
+    .lang-btn:hover { color: var(--text-muted); border-color: rgba(255, 255, 255, 0.12); }
+    .lang-btn::after { content: '▾'; font-size: 0.65rem; opacity: 0.5; }
 
     .lang-menu {
       display: none;
@@ -149,7 +137,6 @@
       box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
     }
     .lang-menu.open { display: block; }
-
     .lang-option {
       display: block;
       width: 100%;
@@ -161,20 +148,11 @@
       border-radius: 5px;
       transition: background 0.15s, color 0.15s;
     }
-    .lang-option:hover {
-      background: rgba(255, 255, 255, 0.06);
-      color: var(--text);
-    }
-    .lang-option.active {
-      color: var(--accent);
-    }
+    .lang-option:hover { background: rgba(255, 255, 255, 0.06); color: var(--text); }
+    .lang-option.active { color: var(--accent); }
 
     /* ─── Hero ─── */
-    .hero {
-      padding: 96px 0 56px;
-      text-align: center;
-    }
-
+    .hero { padding: 96px 0 56px; text-align: center; }
     .hero-icon {
       width: 88px;
       height: 88px;
@@ -182,12 +160,10 @@
       filter: drop-shadow(0 4px 24px rgba(58, 143, 214, 0.2));
       animation: float 6s ease-in-out infinite;
     }
-
     @keyframes float {
       0%, 100% { transform: translateY(0); }
       50% { transform: translateY(-6px); }
     }
-
     .hero h1 {
       font-family: var(--serif);
       font-size: 3rem;
@@ -196,16 +172,23 @@
       margin-bottom: 16px;
       color: #fff;
     }
-
     .hero .tagline {
       font-family: var(--serif);
-      font-size: 1.15rem;
+      font-size: 1.2rem;
       font-weight: 300;
       font-style: italic;
       color: var(--text-muted);
-      max-width: 420px;
-      margin: 0 auto 40px;
+      max-width: 480px;
+      margin: 0 auto 14px;
       line-height: 1.5;
+    }
+    .hero .hero-subline {
+      font-family: var(--sans);
+      font-size: 0.85rem;
+      color: var(--text-faint);
+      letter-spacing: 0.02em;
+      margin: 0 auto 36px;
+      max-width: 420px;
     }
 
     .cta {
@@ -228,7 +211,6 @@
       transform: translateY(-1px);
       box-shadow: 0 4px 24px rgba(58, 143, 214, 0.35);
     }
-
     .cta-ghost {
       display: inline-flex;
       align-items: center;
@@ -245,59 +227,92 @@
       text-decoration: none;
       transition: all 0.2s ease;
     }
-    .cta svg, .cta-ghost svg {
-      width: 18px;
-      height: 18px;
-      flex-shrink: 0;
-    }
     .cta-ghost:hover {
       border-color: var(--accent);
       background: rgba(58, 143, 214, 0.06);
       transform: translateY(-1px);
     }
+    .cta svg, .cta-ghost svg { width: 18px; height: 18px; flex-shrink: 0; }
+
+    .cta-appstore {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      background: #000;
+      color: #fff;
+      padding: 11px 22px;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.18);
+      font-family: var(--sans);
+      font-size: 0.78rem;
+      letter-spacing: 0.02em;
+      text-decoration: none;
+      transition: all 0.2s ease;
+      line-height: 1.1;
+    }
+    .cta-appstore:hover {
+      border-color: rgba(255,255,255,0.35);
+      transform: translateY(-1px);
+    }
+    .cta-appstore svg { width: 26px; height: 26px; flex-shrink: 0; }
+    .cta-appstore-text { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; }
+    .cta-appstore-text .small { font-size: 0.6rem; opacity: 0.75; }
+    .cta-appstore-text .large { font-size: 0.95rem; font-weight: 600; }
 
     .cta-row {
       display: flex;
       justify-content: center;
       gap: 12px;
       flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .cta-pair {
+      display: flex;
+      justify-content: center;
+      gap: 28px;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      margin: 0 auto;
+      max-width: 560px;
+    }
+    .cta-col {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      min-width: 210px;
+    }
+    .cta-col-label {
+      font-family: var(--mono);
+      font-size: 0.62rem;
+      color: var(--text-faint);
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+    .cta-col-note {
+      font-size: 0.7rem;
+      color: var(--text-faint);
+      letter-spacing: 0.03em;
+      text-align: center;
     }
 
     .cta-note {
       display: block;
-      margin-top: 12px;
+      margin-top: 14px;
       font-size: 0.75rem;
       color: var(--text-faint);
       letter-spacing: 0.04em;
     }
 
     /* ─── Screenshot ─── */
-    .screenshot {
-      padding: 0 0 72px;
-    }
-    .screenshot-frame {
-      background: var(--bg-surface);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 80px 24px;
-      text-align: center;
-      color: var(--text-faint);
-      font-size: 0.85rem;
-      font-style: italic;
-    }
+    .screenshot { padding: 0 0 72px; }
 
     /* ─── Divider ─── */
-    .divider {
-      height: 1px;
-      background: var(--border);
-      margin: 0;
-    }
+    .divider { height: 1px; background: var(--border); margin: 0; }
 
     /* ─── Features ─── */
-    .features {
-      padding: 64px 0;
-    }
-
+    .features { padding: 64px 0; }
     .features-label {
       font-family: var(--mono);
       font-size: 0.7rem;
@@ -306,36 +321,19 @@
       text-transform: uppercase;
       margin-bottom: 32px;
     }
-
-    .feature-item {
-      padding: 16px 0;
-      border-bottom: 1px solid var(--border);
-    }
+    .feature-item { padding: 16px 0; border-bottom: 1px solid var(--border); }
     .feature-item:last-child { border-bottom: none; }
-
     .feature-item strong {
       font-family: var(--sans);
       font-weight: 600;
       color: #fff;
       font-size: 0.92rem;
     }
-
-    .feature-item .sep {
-      color: var(--accent);
-      margin: 0 8px;
-      opacity: 0.5;
-    }
-
-    .feature-item span {
-      font-size: 0.88rem;
-      color: var(--text-muted);
-    }
+    .feature-item .sep { color: var(--accent); margin: 0 8px; opacity: 0.5; }
+    .feature-item span { font-size: 0.88rem; color: var(--text-muted); }
 
     /* ─── Showcase ─── */
-    .showcase {
-      padding: 64px 0;
-    }
-
+    .showcase { padding: 64px 0; }
     .showcase-label {
       font-family: var(--mono);
       font-size: 0.7rem;
@@ -344,7 +342,6 @@
       text-transform: uppercase;
       margin-bottom: 12px;
     }
-
     .showcase-subtitle {
       font-family: var(--serif);
       font-size: 1.4rem;
@@ -353,7 +350,6 @@
       margin-bottom: 28px;
       letter-spacing: -0.02em;
     }
-
     .showcase-carousel {
       position: relative;
       overflow: hidden;
@@ -361,22 +357,9 @@
       border: 1px solid var(--border);
       box-shadow: 0 8px 40px rgba(0,0,0,0.35);
     }
-
-    .showcase-track {
-      display: flex;
-      transition: transform 0.4s ease;
-    }
-
-    .showcase-slide {
-      min-width: 100%;
-      position: relative;
-    }
-
-    .showcase-slide img {
-      width: 100%;
-      display: block;
-    }
-
+    .showcase-track { display: flex; transition: transform 0.4s ease; }
+    .showcase-slide { min-width: 100%; position: relative; }
+    .showcase-slide img { width: 100%; display: block; }
     .showcase-caption {
       position: absolute;
       bottom: 0;
@@ -390,14 +373,7 @@
       letter-spacing: 0.06em;
       text-align: right;
     }
-
-    .showcase-dots {
-      display: flex;
-      justify-content: center;
-      gap: 8px;
-      margin-top: 16px;
-    }
-
+    .showcase-dots { display: flex; justify-content: center; gap: 8px; margin-top: 16px; }
     .showcase-dot {
       width: 8px;
       height: 8px;
@@ -408,13 +384,8 @@
       cursor: pointer;
       transition: background 0.2s, transform 0.2s;
     }
-
     .showcase-dot:hover { background: var(--text-muted); }
-    .showcase-dot.active {
-      background: var(--accent);
-      transform: scale(1.25);
-    }
-
+    .showcase-dot.active { background: var(--accent); transform: scale(1.25); }
     .showcase-nav {
       position: absolute;
       top: 50%;
@@ -435,25 +406,232 @@
       transition: background 0.2s, color 0.2s;
       z-index: 2;
     }
-
-    .showcase-nav:hover {
-      background: rgba(12, 17, 23, 0.95);
-      color: var(--text);
-    }
-
+    .showcase-nav:hover { background: rgba(12, 17, 23, 0.95); color: var(--text); }
     .showcase-prev { left: 10px; }
     .showcase-next { right: 10px; }
 
-    @media (max-width: 520px) {
-      .showcase-subtitle { font-size: 1.15rem; }
-      .showcase-nav { width: 28px; height: 28px; font-size: 0.8rem; }
+    /* ─── Remote ─── */
+    .remote {
+      padding: 80px 0;
+      background: linear-gradient(180deg, var(--bg) 0%, var(--bg-elevated) 50%, var(--bg) 100%);
+      margin: 0 -28px;
+      padding-left: 28px;
+      padding-right: 28px;
+    }
+    .remote-inner { max-width: 100%; margin: 0 auto; }
+    .remote-label {
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      color: var(--accent-warm);
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+    .remote h2 {
+      font-family: var(--serif);
+      font-size: 2.2rem;
+      font-weight: 300;
+      color: #fff;
+      letter-spacing: -0.02em;
+      margin-bottom: 20px;
+    }
+    .remote p.lede {
+      font-family: var(--serif);
+      font-size: 1.1rem;
+      font-weight: 300;
+      color: var(--text-muted);
+      line-height: 1.65;
+      margin-bottom: 32px;
+      max-width: 540px;
+    }
+    .remote-bullets {
+      list-style: none;
+      padding: 0;
+      margin: 0 0 36px;
+    }
+    .remote-bullets li {
+      padding: 12px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.92rem;
+      color: var(--text);
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+    }
+    .remote-bullets li:last-child { border-bottom: none; }
+    .remote-bullets li::before {
+      content: '';
+      flex-shrink: 0;
+      margin-top: 9px;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent-warm);
+    }
+    .remote-phone-frame {
+      width: 250px;
+      aspect-ratio: 1320 / 2868;
+      margin: 0 auto 16px;
+      border-radius: 38px;
+      border: 2px solid rgba(255,255,255,0.14);
+      background: #000;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.06);
+      padding: 6px;
+      position: relative;
+      overflow: hidden;
+    }
+    .remote-carousel-track {
+      width: 100%;
+      height: 100%;
+      position: relative;
+      border-radius: 32px;
+      overflow: hidden;
+    }
+    .remote-carousel-slide {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      transition: opacity 0.35s ease;
+      pointer-events: none;
+    }
+    .remote-carousel-slide.active {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .remote-carousel-slide img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .remote-carousel-controls {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      margin: 0 auto 32px;
+    }
+    .remote-carousel-controls .showcase-nav {
+      position: static;
+      transform: none;
+    }
+    .remote-carousel-dots {
+      display: flex;
+      gap: 7px;
+      align-items: center;
+    }
+    /* Unused fake-chat styles kept for now in case we want a CSS mockup again */
+    .phone-screen {
+      width: 100%;
+      height: 100%;
+      border-radius: 28px;
+      background: linear-gradient(180deg, #0a1018 0%, #0c1320 100%);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      font-family: var(--sans);
+    }
+    .phone-nav {
+      padding: 40px 14px 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .phone-nav-back {
+      color: var(--accent);
+      font-size: 0.95rem;
+    }
+    .phone-nav-title {
+      font-size: 0.78rem;
+      color: var(--text);
+      font-weight: 500;
+    }
+    .phone-nav-sub {
+      font-size: 0.6rem;
+      color: var(--text-faint);
+      margin-left: auto;
+      font-family: var(--mono);
+    }
+    .phone-chat {
+      flex: 1;
+      padding: 10px 10px 4px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      overflow: hidden;
+    }
+    .phone-msg-user {
+      align-self: flex-end;
+      background: var(--accent);
+      color: #fff;
+      padding: 5px 10px;
+      border-radius: 12px 12px 4px 12px;
+      font-size: 0.65rem;
+      max-width: 70%;
+      font-family: var(--mono);
+    }
+    .phone-msg-card {
+      align-self: flex-start;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.08);
+      padding: 8px 10px;
+      border-radius: 12px 12px 12px 4px;
+      max-width: 86%;
+      font-size: 0.6rem;
+      color: var(--text);
+    }
+    .phone-msg-card-title {
+      font-family: var(--mono);
+      font-size: 0.55rem;
+      color: var(--accent-warm);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+    .phone-msg-card-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 2px 0;
+      font-size: 0.6rem;
+      line-height: 1.3;
+    }
+    .phone-msg-card-row .k { color: var(--text-faint); }
+    .phone-msg-card-row .v { color: var(--text); }
+    .phone-msg-card-bar {
+      margin-top: 5px;
+      height: 4px;
+      background: rgba(255,255,255,0.06);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .phone-msg-card-bar-fill {
+      width: 40%;
+      height: 100%;
+      background: var(--accent);
+      border-radius: 2px;
+    }
+    .phone-input {
+      margin: 0 8px 12px;
+      padding: 7px 12px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 18px;
+      color: var(--text-faint);
+      font-size: 0.62rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .phone-input .phone-send {
+      color: var(--accent);
+      font-size: 0.9rem;
     }
 
     /* ─── FAQ ─── */
-    .faq {
-      padding: 64px 0;
-    }
-
+    .faq { padding: 64px 0; }
     .faq-label {
       font-family: var(--mono);
       font-size: 0.7rem;
@@ -462,12 +640,8 @@
       text-transform: uppercase;
       margin-bottom: 32px;
     }
-
-    .faq-item {
-      margin-bottom: 28px;
-    }
+    .faq-item { margin-bottom: 28px; }
     .faq-item:last-child { margin-bottom: 0; }
-
     .faq-item dt {
       font-family: var(--serif);
       font-size: 1.05rem;
@@ -475,19 +649,10 @@
       color: #fff;
       margin-bottom: 6px;
     }
+    .faq-item dd { font-size: 0.9rem; color: var(--text-muted); line-height: 1.7; }
 
-    .faq-item dd {
-      font-size: 0.9rem;
-      color: var(--text-muted);
-      line-height: 1.7;
-    }
-
-    /* ─── Closing CTA ─── */
-    .closing {
-      padding: 64px 0;
-      text-align: center;
-    }
-
+    /* ─── Closing ─── */
+    .closing { padding: 64px 0; text-align: center; }
     .closing h2 {
       font-family: var(--serif);
       font-size: 1.8rem;
@@ -511,23 +676,29 @@
       border-bottom: 1px solid var(--border);
       transition: color 0.2s, border-color 0.2s;
     }
-    .footer a:hover {
-      color: var(--text);
-      border-bottom-color: var(--text-muted);
-    }
-    .footer .credits {
-      margin-bottom: 8px;
+    .footer a:hover { color: var(--text); border-bottom-color: var(--text-muted); }
+    .footer .credits { margin-bottom: 8px; }
+
+    /* ─── Reveal ─── */
+    .reveal { opacity: 0; transform: translateY(16px); transition: opacity 0.6s ease, transform 0.6s ease; }
+    .reveal.visible { opacity: 1; transform: translateY(0); }
+
+    /* App Store CTA secondary channel — warm tint on hover, not isolated to Remote */
+    .cta-appstore:hover {
+      border-color: rgba(224, 166, 90, 0.45);
+      box-shadow: 0 2px 16px rgba(224, 166, 90, 0.12);
     }
 
-    /* ─── Scroll reveal ─── */
-    .reveal {
-      opacity: 0;
-      transform: translateY(16px);
-      transition: opacity 0.6s ease, transform 0.6s ease;
-    }
-    .reveal.visible {
-      opacity: 1;
-      transform: translateY(0);
+    /* Reduced motion: respect user preference, kill animations + scroll reveal */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.001s !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001s !important;
+        scroll-behavior: auto !important;
+      }
+      .reveal { opacity: 1; transform: none; }
+      .hero-icon { animation: none; }
     }
 
     /* ─── Mobile ─── */
@@ -536,22 +707,26 @@
       .hero h1 { font-size: 2.2rem; }
       .hero .tagline { font-size: 1rem; }
       .features, .faq { padding: 48px 0; }
+      .remote { padding: 56px 28px; }
+      .remote h2 { font-size: 1.7rem; }
       .closing h2 { font-size: 1.5rem; }
       .top-nav { top: 12px; right: 16px; }
+      .showcase-subtitle { font-size: 1.15rem; }
+      .showcase-nav { width: 28px; height: 28px; font-size: 0.8rem; }
     }
   </style>
 </head>
 <body>
 
 <div class="top-nav">
-<a class="top-dl" href="https://github.com/Tim-Feng/Tidey/releases/latest/download/Tidey.dmg" data-en="Download" data-zh="下載">Download</a>
-<div class="lang-switcher" id="langSwitcher">
-  <button class="lang-btn" id="langBtn">English</button>
-  <div class="lang-menu" id="langMenu">
-    <a class="lang-option" href="?" data-locale="en">English</a>
-    <a class="lang-option" href="?locale=zh-TW" data-locale="zh">繁體中文</a>
+  <a class="top-dl" href="https://github.com/Tim-Feng/Tidey/releases/latest/download/Tidey.dmg">Download</a>
+  <div class="lang-switcher" id="langSwitcher">
+    <button class="lang-btn" id="langBtn" aria-haspopup="true" aria-expanded="false" aria-controls="langMenu">English</button>
+    <div class="lang-menu" id="langMenu" role="menu">
+      <a class="lang-option" href="?" data-locale="en">English</a>
+      <a class="lang-option" href="?locale=zh-TW" data-locale="zh">繁體中文</a>
+    </div>
   </div>
-</div>
 </div>
 
 <div class="page">
@@ -559,77 +734,137 @@
   <section class="hero">
     <img class="hero-icon" src="screenshots/TideyAppIcon_nobg.png" alt="Tidey" width="88" height="88">
     <h1>Tidey</h1>
-    <p class="tagline" data-en="A terminal-first IDE for AI agents on macOS." data-zh="為 AI agent 打造的 terminal-first IDE。macOS 原生。">A terminal-first IDE for AI agents on macOS.</p>
-    <div class="cta-row">
-      <a class="cta" href="https://github.com/Tim-Feng/Tidey/releases/latest/download/Tidey.dmg" data-en="Download for macOS" data-zh="下載 macOS 版">Download for macOS</a>
-      <a class="cta-ghost" href="https://github.com/Tim-Feng/Tidey" target="_blank" rel="noopener" data-en="View on GitHub" data-zh="在 GitHub 上查看">View on GitHub</a>
+    <p class="tagline"
+       data-en="Terminal-first IDE for AI agents, now in your pocket."
+       data-zh="為 AI agent 打造的 terminal-first IDE，也在口袋裡。">
+      Terminal-first IDE for AI agents, now in your pocket.
+    </p>
+    <p class="hero-subline"
+       data-en="Start on Mac. Continue from iPhone with Tidey Remote."
+       data-zh="從 Mac 開始，用手機接力。">
+      Start on Mac. Continue from iPhone with Tidey Remote.
+    </p>
+    <div class="cta-pair">
+      <div class="cta-col">
+        <span class="cta-col-label" data-en="The Mac app" data-zh="Mac 主程式">The Mac app</span>
+        <a class="cta" href="https://github.com/Tim-Feng/Tidey/releases/latest/download/Tidey.dmg"
+           data-en="Download Tidey for Mac" data-zh="下載 Tidey for Mac">Download Tidey for Mac</a>
+        <span class="cta-col-note"
+              data-en="macOS 12+ · Free & Open Source · .dmg"
+              data-zh="macOS 12+ · 免費開源 · .dmg">macOS 12+ · Free & Open Source · .dmg</span>
+      </div>
+      <div class="cta-col">
+        <span class="cta-col-label" data-en="The iPhone companion" data-zh="iPhone 配對程式">The iPhone companion</span>
+        <a class="cta-appstore" href="https://apps.apple.com/tw/app/tidey-remote/id6764449416" aria-label="Get Tidey Remote on the App Store">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09l.01-.01M12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/>
+          </svg>
+          <span class="cta-appstore-text">
+            <span class="small" data-en="Tidey Remote on" data-zh="Tidey Remote ·">Tidey Remote on</span>
+            <span class="large">App Store</span>
+          </span>
+        </a>
+        <span class="cta-col-note"
+              data-en="iOS 17+ · Requires Tidey on a paired Mac"
+              data-zh="iOS 17+ · 需要在 Mac 上安裝 Tidey">iOS 17+ · Requires Tidey on a paired Mac</span>
+      </div>
     </div>
-    <span class="cta-note" data-en="macOS 12+ · Apple Silicon · Free & Open Source" data-zh="macOS 12+ · Apple Silicon · 免費開源">macOS 12+ · Apple Silicon · Free & Open Source</span>
   </section>
 
   <section class="screenshot">
-    <img src="screenshots/hero-main.png" alt="Tidey main window — sidebar, terminal, editor, and file tree" style="width:100%; border-radius:12px; border:1px solid var(--border); box-shadow: 0 8px 40px rgba(0,0,0,0.35);">
+    <img src="screenshots/hero-main.png"
+         alt="Tidey main window — sidebar, terminal, editor, and file tree"
+         style="width:100%; border-radius:12px; border:1px solid var(--border); box-shadow: 0 8px 40px rgba(0,0,0,0.35);">
   </section>
 
   <hr class="divider">
 
   <section class="features reveal">
-    <p class="features-label" data-en="Features" data-zh="功能">Features</p>
+    <p class="features-label" data-en="Tidey · Mac" data-zh="Tidey · Mac">Tidey · Mac</p>
 
     <div class="feature-item">
       <strong data-en="Workspaces" data-zh="Workspaces">Workspaces</strong><span class="sep">·</span>
-      <span data-en="Sidebar shows workspace status, working directory, and notifications. ⌘1–⌘9 to switch." data-zh="側邊欄顯示 workspace 狀態、工作目錄、通知。⌘1–⌘9 切換。">Sidebar shows workspace status, working directory, and notifications. ⌘1–⌘9 to switch.</span>
+      <span data-en="Sidebar shows workspace status, working directory, and notifications. ⌘1–⌘9 to switch."
+            data-zh="側邊欄顯示 workspace 狀態、工作目錄、通知。⌘1–⌘9 切換。">
+        Sidebar shows workspace status, working directory, and notifications. ⌘1–⌘9 to switch.
+      </span>
     </div>
 
     <div class="feature-item">
       <strong data-en="Notifications" data-zh="通知系統">Notifications</strong><span class="sep">·</span>
-      <span data-en="Workspace lights up when an agent finishes or needs attention. Supports macOS native notifications." data-zh="Agent 完成或需要注意時，workspace 亮起通知。支援 macOS 原生通知。">Workspace lights up when an agent finishes or needs attention. Supports macOS native notifications.</span>
+      <span data-en="Workspace lights up when an agent finishes or needs attention. Supports macOS native notifications."
+            data-zh="Agent 完成或需要注意時，workspace 亮起通知。支援 macOS 原生通知。">
+        Workspace lights up when an agent finishes or needs attention. Supports macOS native notifications.
+      </span>
     </div>
 
     <div class="feature-item">
       <strong data-en="Tidey Remote" data-zh="Tidey Remote">Tidey Remote</strong><span class="sep">·</span>
-      <span data-en="Pair your iPhone with a QR code to follow workspaces, chat with agents, and review files away from the Mac." data-zh="用 QR code 配對 iPhone，離開 Mac 也能查看 workspaces、和 agent 對話、閱讀文件。">Pair your iPhone with a QR code to follow workspaces, chat with agents, and review files away from the Mac.</span>
+      <span data-en="Pair your iPhone with a QR code to follow workspaces, chat with agents, and review files away from the Mac."
+            data-zh="用 QR code 配對 iPhone，離開 Mac 也能查看 workspaces、和 agent 對話、閱讀文件。">
+        Pair your iPhone with a QR code to follow workspaces, chat with agents, and review files away from the Mac.
+      </span>
     </div>
 
     <div class="feature-item">
       <strong data-en="Built-in Editor" data-zh="內建編輯器">Built-in Editor</strong><span class="sep">·</span>
-      <span data-en="⌘-click any path in the terminal to open it. Monaco engine, syntax highlighting." data-zh="⌘-click terminal 裡的路徑直接開啟。Monaco 引擎，syntax highlighting。">⌘-click any path in the terminal to open it. Monaco engine, syntax highlighting.</span>
+      <span data-en="⌘-click any path in the terminal to open it. Monaco engine, syntax highlighting."
+            data-zh="⌘-click terminal 裡的路徑直接開啟。Monaco 引擎，syntax highlighting。">
+        ⌘-click any path in the terminal to open it. Monaco engine, syntax highlighting.
+      </span>
     </div>
 
     <div class="feature-item">
       <strong data-en="Split View" data-zh="分割檢視">Split View</strong><span class="sep">·</span>
-      <span data-en="Split the editor into two panes, mix code and web tabs, drag tabs between panes. Terminal splits too." data-zh="編輯器分割成兩個窗格，混合 code 和 web tab，跨窗格拖曳。Terminal 也支援分割。">Split the editor into two panes, mix code and web tabs, drag tabs between panes. Terminal splits too.</span>
+      <span data-en="Split the editor into two panes, mix code and web tabs, drag tabs between panes. Terminal splits too."
+            data-zh="編輯器分割成兩個窗格，混合 code 和 web tab，跨窗格拖曳。Terminal 也支援分割。">
+        Split the editor into two panes, mix code and web tabs, drag tabs between panes. Terminal splits too.
+      </span>
     </div>
 
     <div class="feature-item">
       <strong data-en="In-app Browser" data-zh="內建瀏覽器">In-app Browser</strong><span class="sep">·</span>
-      <span data-en="⌘-click URLs in the terminal to open them in the built-in browser panel, without leaving the IDE." data-zh="⌘-click terminal 裡的 URL，在內建瀏覽器開啟，不離開 IDE。">⌘-click URLs in the terminal to open them in the built-in browser panel, without leaving the IDE.</span>
+      <span data-en="⌘-click URLs in the terminal to open them in the built-in browser panel, without leaving the IDE."
+            data-zh="⌘-click terminal 裡的 URL，在內建瀏覽器開啟，不離開 IDE。">
+        ⌘-click URLs in the terminal to open them in the built-in browser panel, without leaving the IDE.
+      </span>
     </div>
 
     <div class="feature-item">
       <strong data-en="Terminal Core" data-zh="Terminal 核心">Terminal Core</strong><span class="sep">·</span>
-      <span data-en="Built on iTerm2. Mature and stable. Native Objective-C + Swift, no Electron." data-zh="建構在 iTerm2 之上，成熟穩定。原生 Objective-C + Swift，無 Electron。">Built on iTerm2. Mature and stable. Native Objective-C + Swift, no Electron.</span>
+      <span data-en="Built on iTerm2. Mature and stable. Native Objective-C + Swift, no Electron."
+            data-zh="建構在 iTerm2 之上，成熟穩定。原生 Objective-C + Swift，無 Electron。">
+        Built on iTerm2. Mature and stable. Native Objective-C + Swift, no Electron.
+      </span>
     </div>
 
     <div class="feature-item">
       <strong data-en="Agent-Ready" data-zh="Agent-Ready">Agent-Ready</strong><span class="sep">·</span>
-      <span data-en="Works with any CLI agent. Auto-tracks Running / Idle / Needs Input. Claude Code, Codex compatible." data-zh="任何 CLI agent 都能用。自動追蹤 Running / Idle / Needs Input。Claude Code、Codex 都適用。">Works with any CLI agent. Auto-tracks Running / Idle / Needs Input. Claude Code, Codex compatible.</span>
+      <span data-en="Works with any CLI agent. Auto-tracks Running / Idle / Needs Input. Claude Code, Codex compatible."
+            data-zh="任何 CLI agent 都能用。自動追蹤 Running / Idle / Needs Input。Claude Code、Codex 都適用。">
+        Works with any CLI agent. Auto-tracks Running / Idle / Needs Input. Claude Code, Codex compatible.
+      </span>
     </div>
 
     <div class="feature-item">
       <strong data-en="Keyboard-Driven" data-zh="鍵盤驅動">Keyboard-Driven</strong><span class="sep">·</span>
-      <span data-en="Hold ⌘ to reveal shortcut hints. ⌃1–⌃9 to switch panels." data-zh="Hold ⌘ 浮現快捷鍵提示。⌃1–⌃9 切換 panel。">Hold ⌘ to reveal shortcut hints. ⌃1–⌃9 to switch panels.</span>
+      <span data-en="Hold ⌘ to reveal shortcut hints. ⌃1–⌃9 to switch panels."
+            data-zh="Hold ⌘ 浮現快捷鍵提示。⌃1–⌃9 切換 panel。">
+        Hold ⌘ to reveal shortcut hints. ⌃1–⌃9 to switch panels.
+      </span>
     </div>
   </section>
 
   <hr class="divider">
 
   <section class="showcase reveal">
-    <p class="showcase-label" data-en="Flexible Layouts" data-zh="彈性配置">Flexible Layouts</p>
-    <p class="showcase-subtitle" data-en="Arrange terminal, code, and web — your way." data-zh="自由安排 terminal、code、web 的位置。">Arrange terminal, code, and web — your way.</p>
-    <div class="showcase-carousel" id="showcaseCarousel">
-      <button class="showcase-nav showcase-prev" id="showcasePrev">‹</button>
-      <button class="showcase-nav showcase-next" id="showcaseNext">›</button>
+    <p class="showcase-label" data-en="Flexible layouts" data-zh="彈性配置">Flexible layouts</p>
+    <p class="showcase-subtitle"
+       data-en="Arrange terminal, code, and web — your way."
+       data-zh="自由安排 terminal、code、web 的位置。">Arrange terminal, code, and web — your way.</p>
+    <div class="showcase-carousel" id="showcaseCarousel" role="region" aria-label="Layout examples">
+      <button class="showcase-nav showcase-prev" id="showcasePrev" aria-label="Previous layout">‹</button>
+      <button class="showcase-nav showcase-next" id="showcaseNext" aria-label="Next layout">›</button>
       <div class="showcase-track" id="showcaseTrack">
         <div class="showcase-slide">
           <img src="screenshots/terminal-code.png" alt="Terminal and code editor side by side">
@@ -654,18 +889,135 @@
 
   <hr class="divider">
 
+  <section class="remote reveal">
+    <div class="remote-inner">
+      <p class="remote-label" data-en="Tidey Remote · iPhone" data-zh="Tidey Remote · iPhone">Tidey Remote · iPhone</p>
+      <h2 data-en="Take it with you." data-zh="隨身帶走。">Take it with you.</h2>
+
+      <div class="remote-phone-frame">
+        <div class="remote-carousel-track" id="remoteTrack">
+          <div class="remote-carousel-slide active"><img src="remote-screenshots/1.jpg" alt="Tidey Remote screenshot 1"></div>
+          <div class="remote-carousel-slide"><img src="remote-screenshots/2.jpg" alt="Tidey Remote screenshot 2"></div>
+          <div class="remote-carousel-slide"><img src="remote-screenshots/3.jpg" alt="Tidey Remote screenshot 3"></div>
+          <div class="remote-carousel-slide"><img src="remote-screenshots/4.jpg" alt="Tidey Remote screenshot 4"></div>
+          <div class="remote-carousel-slide"><img src="remote-screenshots/5.jpg" alt="Tidey Remote screenshot 5"></div>
+          <div class="remote-carousel-slide"><img src="remote-screenshots/6.jpg" alt="Tidey Remote screenshot 6"></div>
+          <div class="remote-carousel-slide"><img src="remote-screenshots/7.jpg" alt="Tidey Remote screenshot 7"></div>
+          <div class="remote-carousel-slide"><img src="remote-screenshots/8.jpg" alt="Tidey Remote screenshot 8"></div>
+          <div class="remote-carousel-slide"><img src="remote-screenshots/9.jpg" alt="Tidey Remote screenshot 9"></div>
+        </div>
+      </div>
+      <div class="remote-carousel-controls" role="region" aria-label="Tidey Remote screenshots">
+        <button class="showcase-nav" id="remotePrev" aria-label="Previous Remote screenshot">‹</button>
+        <div class="remote-carousel-dots" id="remoteDots"></div>
+        <button class="showcase-nav" id="remoteNext" aria-label="Next Remote screenshot">›</button>
+      </div>
+
+      <div class="remote-features">
+        <div class="feature-item">
+          <strong data-en="Seamless link to Tidey on your Mac" data-zh="無縫連到 Mac 上的 Tidey">Seamless link to Tidey on your Mac</strong><span class="sep">·</span>
+          <span data-en="One app, direct access to every workspace, panel, and session running on your Mac."
+                data-zh="一個 app、直連 Mac 上的每一個 workspace、panel 和 session。">
+            One app, direct access to every workspace, panel, and session running on your Mac.
+          </span>
+        </div>
+
+        <div class="feature-item">
+          <strong data-en="QR-code pairing" data-zh="QR Code 配對">QR-code pairing</strong><span class="sep">·</span>
+          <span data-en="Scan the QR from Tidey on your Mac and you're connected. No accounts, no cloud login."
+                data-zh="掃 Mac 上 Tidey 的 QR Code 就能配對。不需註冊帳號、沒有雲端登入。">
+            Scan the QR from Tidey on your Mac and you're connected. No accounts, no cloud login.
+          </span>
+        </div>
+
+        <div class="feature-item">
+          <strong data-en="Chat directly with your agents" data-zh="直接跟 agent 對話">Chat directly with your agents</strong><span class="sep">·</span>
+          <span data-en="Claude Code and Codex in a chat interface tuned for the phone. Send screenshots or photos straight to your agent."
+                data-zh="Claude Code 跟 Codex、專為手機設計的對話介面。截圖、相片直接送給 agent。">
+            Claude Code and Codex in a chat interface tuned for the phone. Send screenshots or photos straight to your agent.
+          </span>
+        </div>
+
+        <div class="feature-item">
+          <strong data-en="Code is for agents. Docs are for humans." data-zh="程式碼給 agent。文件給人。">Code is for agents. Docs are for humans.</strong><span class="sep">·</span>
+          <span data-en="A reader-friendly editor for the documents your agent ships."
+                data-zh="閱讀模式渲染 agent 產出的 markdown 文件、像看 doc 一樣讀。">
+            A reader-friendly editor for the documents your agent ships.
+          </span>
+        </div>
+
+        <div class="feature-item">
+          <strong data-en="Privacy first" data-zh="隱私優先">Privacy first</strong><span class="sep">·</span>
+          <span data-en="LAN or Tailscale direct connection by default; Cloudflare Tunnel as optional fallback. No Tidey-operated relay server. No third-party analytics, no advertising SDKs, no data sales."
+                data-zh="預設走 LAN 或 Tailscale 直連、可選擇啟用 Cloudflare Tunnel 作為 fallback。Tidey 不營運中繼伺服器。沒有第三方分析、沒有廣告 SDK、不販售資料。">
+            LAN or Tailscale direct connection by default; Cloudflare Tunnel as optional fallback. No Tidey-operated relay server. No third-party analytics, no advertising SDKs, no data sales.
+          </span>
+        </div>
+      </div>
+
+      <div class="cta-row" style="justify-content: center; margin-top: 32px;">
+        <a class="cta-appstore" href="https://apps.apple.com/tw/app/tidey-remote/id6764449416" aria-label="Get Tidey Remote on the App Store">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09l.01-.01M12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/>
+          </svg>
+          <span class="cta-appstore-text">
+            <span class="small" data-en="Tidey Remote on" data-zh="Tidey Remote ·">Tidey Remote on</span>
+            <span class="large">App Store</span>
+          </span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider">
+
   <section class="faq reveal">
     <p class="faq-label">FAQ</p>
 
     <dl>
       <div class="faq-item">
-        <dt data-en="What is Tidey?" data-zh="什麼是 Tidey？">What is Tidey?</dt>
-        <dd data-en="A macOS terminal app for running AI coding agents. Built on iTerm2 with a Monaco code editor built in." data-zh="一個用來執行 AI coding agent 的 macOS terminal app。建構在 iTerm2 之上，內建 Monaco 程式碼編輯器。">A macOS terminal app for running AI coding agents. Built on iTerm2 with a Monaco code editor built in.</dd>
+        <dt data-en="Is Tidey just iTerm2 with extras?"
+            data-zh="Tidey 是不是只是 iTerm2 加一些東西？">Is Tidey just iTerm2 with extras?</dt>
+        <dd data-en="Tidey is a fork of iTerm2, so it inherits everything iTerm2 does well. The difference is the agent layer: multi-agent workspaces, a native chat panel, slash-command native cards, and an iPhone companion. Existing iTerm2 users can migrate their config directly."
+            data-zh="Tidey 從 iTerm2 fork 出來、繼承所有 iTerm2 的功能。差異在 agent layer：multi-agent workspace、native chat panel、slash command native card、iPhone companion。已有的 iTerm2 user 可以直接遷移設定。">
+          Tidey is a fork of iTerm2, so it inherits everything iTerm2 does well. The difference is the agent layer: multi-agent workspaces, a native chat panel, slash-command native cards, and an iPhone companion. Existing iTerm2 users can migrate their config directly.
+        </dd>
       </div>
 
       <div class="faq-item">
-        <dt data-en="Is Tidey free?" data-zh="Tidey 是免費的嗎？">Is Tidey free?</dt>
-        <dd data-en="Yes, Tidey is free and open source. As for your CLI agents, use them the same way you always do — Tidey is the interface that manages them." data-zh="是的，Tidey 免費且開源。至於你的 CLI agent，跟平常一樣使用就好——Tidey 是管理它們的介面。">Yes, Tidey is free and open source. As for your CLI agents, use them the same way you always do — Tidey is the interface that manages them.</dd>
+        <dt data-en="Does Tidey send my chats or code to a server?"
+            data-zh="對話跟程式碼會送 server 嗎？">Does Tidey send my chats or code to a server?</dt>
+        <dd data-en="Tidey doesn't operate a relay server. Tidey Remote uses a Bridge daemon that connects your iPhone directly to your Mac — over LAN or Tailscale by default, with Cloudflare Tunnel as an optional fallback you enable yourself. Your calls to Claude or Codex still go to Anthropic / OpenAI under your own account or credentials — no Tidey middleman."
+            data-zh="Tidey 不營運中繼伺服器。Tidey Remote 透過 Bridge daemon 把 iPhone 跟 Mac 直連——預設走 LAN 或 Tailscale、可選擇啟用 Cloudflare Tunnel 作為 fallback。你跟 Claude / Codex 的呼叫走 Anthropic / OpenAI 各自的 endpoint（用你自己的帳號或憑證）、不經 Tidey。">
+          Tidey doesn't operate a relay server. Tidey Remote uses a Bridge daemon that connects your iPhone directly to your Mac — over LAN or Tailscale by default, with Cloudflare Tunnel as an optional fallback you enable yourself. Your calls to Claude or Codex still go to Anthropic / OpenAI under your own account or credentials — no Tidey middleman.
+        </dd>
+      </div>
+
+      <div class="faq-item">
+        <dt data-en="Do I need an account for Tidey Remote?"
+            data-zh="Tidey Remote 要 Apple ID 嗎？">Do I need an account for Tidey Remote?</dt>
+        <dd data-en="An Apple ID to download from the App Store, yes. Pairing with the Mac is a QR code — no Tidey account, no cloud login."
+            data-zh="App Store 下載需要 Apple ID。跟 Mac 配對用 QR code、不用註冊任何 Tidey 帳號、沒有 cloud login。">
+          An Apple ID to download from the App Store, yes. Pairing with the Mac is a QR code — no Tidey account, no cloud login.
+        </dd>
+      </div>
+
+      <div class="faq-item">
+        <dt data-en="Requirements?"
+            data-zh="系統需求？">Requirements?</dt>
+        <dd data-en="Mac: macOS 12+. iPhone: iOS 17+, same LAN or Tailscale network as your Mac."
+            data-zh="Mac：macOS 12+。iPhone：iOS 17+、跟 Mac 同 LAN 或 Tailscale 網路。">
+          Mac: macOS 12+. iPhone: iOS 17+, same LAN or Tailscale network as your Mac.
+        </dd>
+      </div>
+
+      <div class="faq-item">
+        <dt data-en="Open source?"
+            data-zh="開源嗎？">Open source?</dt>
+        <dd data-en="Tidey Mac is GPLv2+ on GitHub. Tidey Remote (iOS) source isn't public for now."
+            data-zh="Tidey Mac：GPLv2+、GitHub 上 public。Tidey Remote iOS：目前 source 未 public。">
+          Tidey Mac is GPLv2+ on GitHub. Tidey Remote (iOS) source isn't public for now.
+        </dd>
       </div>
     </dl>
   </section>
@@ -673,21 +1025,58 @@
   <hr class="divider">
 
   <section class="closing reveal">
-    <h2 data-en="Ready to try?" data-zh="準備好了嗎？">Ready to try?</h2>
-    <div class="cta-row">
-      <a class="cta" href="https://github.com/Tim-Feng/Tidey/releases/latest/download/Tidey.dmg"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09l.01-.01M12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/></svg><span data-en="Download for macOS" data-zh="下載 macOS 版">Download for macOS</span></a>
-      <a class="cta-ghost" href="https://github.com/Tim-Feng/Tidey" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.4 3-.405 1.02.005 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg><span data-en="View on GitHub" data-zh="在 GitHub 上查看">View on GitHub</span></a>
-      <a class="cta-ghost" href="https://discord.gg/A7R8UECk" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419-.0189 1.3332-.946 2.419-2.1569 2.419zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.419-2.1568 2.419Z"/></svg><span data-en="Join Discord" data-zh="加入 Discord">Join Discord</span></a>
+    <h2 data-en="Ready when you are." data-zh="準備好了就開始。">Ready when you are.</h2>
+    <div class="cta-pair">
+      <div class="cta-col">
+        <span class="cta-col-label" data-en="The Mac app" data-zh="Mac 主程式">The Mac app</span>
+        <a class="cta" href="https://github.com/Tim-Feng/Tidey/releases/latest/download/Tidey.dmg">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09l.01-.01M12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/>
+          </svg>
+          <span data-en="Download Tidey for Mac" data-zh="下載 Tidey for Mac">Download Tidey for Mac</span>
+        </a>
+        <span class="cta-col-note"
+              data-en="macOS 12+ · v0.4.2 (May 2026) · .dmg"
+              data-zh="macOS 12+ · v0.4.2 (2026 年 5 月) · .dmg">macOS 12+ · v0.4.2 (May 2026) · .dmg</span>
+      </div>
+
+      <div class="cta-col">
+        <span class="cta-col-label" data-en="The iPhone companion" data-zh="iPhone 配對程式">The iPhone companion</span>
+        <a class="cta-appstore" href="https://apps.apple.com/tw/app/tidey-remote/id6764449416" aria-label="Get Tidey Remote on the App Store">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09l.01-.01M12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/>
+          </svg>
+          <span class="cta-appstore-text">
+            <span class="small" data-en="Tidey Remote on" data-zh="Tidey Remote ·">Tidey Remote on</span>
+            <span class="large">App Store</span>
+          </span>
+        </a>
+        <span class="cta-col-note"
+              data-en="iOS 17+ · Requires Tidey on a paired Mac"
+              data-zh="iOS 17+ · 需要在 Mac 上安裝 Tidey">iOS 17+ · Requires Tidey on a paired Mac</span>
+      </div>
     </div>
-    <span class="cta-note" data-en="macOS 12+ · Apple Silicon · Free & Open Source" data-zh="macOS 12+ · Apple Silicon · 免費開源">macOS 12+ · Apple Silicon · Free & Open Source</span>
+
+    <div class="cta-row" style="margin-top: 32px;">
+      <a class="cta-ghost" href="https://github.com/Tim-Feng/Tidey" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.4 3-.405 1.02.005 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/>
+        </svg>
+        <span data-en="View on GitHub" data-zh="在 GitHub 上查看">View on GitHub</span>
+      </a>
+    </div>
   </section>
 
   <hr class="divider">
 
   <footer class="footer reveal">
-    <p style="font-family: var(--serif); font-style: italic; color: var(--text-muted); margin-bottom: 16px;" data-en="Where context flows between agent and code, like the tide." data-zh="讓脈絡在 agent 和程式碼之間流動，如潮汐。">Where context flows between agent and code, like the tide.</p>
+    <p style="font-family: var(--serif); font-style: italic; color: var(--text-muted); margin-bottom: 16px;"
+       data-en="Where context flows between agent and code, like the tide."
+       data-zh="讓脈絡在 agent 和程式碼之間流動，如潮汐。">
+      Where context flows between agent and code, like the tide.
+    </p>
     <p class="credits">Built on <a href="https://iterm2.com">iTerm2</a> · Integrates <a href="https://microsoft.github.io/monaco-editor/">Monaco</a> · Inspired by <a href="https://cmux.com">cmux</a></p>
-    <p><a href="https://github.com/Tim-Feng/Tidey">GitHub</a> · <a href="https://discord.gg/A7R8UECk">Discord</a> · <a href="support.html">Tidey Remote Support</a> · <a href="privacy.html">Privacy</a> · <a href="https://github.com/Tim-Feng/Tidey/blob/master/docs/socket-api.md">Socket API</a> · GPLv2+</p>
+    <p><a href="https://github.com/Tim-Feng/Tidey">GitHub</a> · <a href="https://discord.gg/A7R8UECk">Discord</a> · <a href="support.html">Tidey Remote Support</a> · <a href="privacy.html">Privacy</a> · GPLv2+</p>
   </footer>
 
 </div>
@@ -699,35 +1088,31 @@
 
     document.documentElement.lang = locale === 'zh' ? 'zh-TW' : 'en';
 
-    // Apply translations
     document.querySelectorAll('[data-en][data-zh]').forEach(el => {
       el.textContent = el.getAttribute('data-' + locale);
     });
 
-    // Language dropdown
     const btn = document.getElementById('langBtn');
     const menu = document.getElementById('langMenu');
     btn.textContent = locale === 'zh' ? '繁體中文' : 'English';
-
-    // Mark active
     menu.querySelectorAll('.lang-option').forEach(opt => {
       if (opt.dataset.locale === locale) opt.classList.add('active');
     });
-
-    btn.addEventListener('click', () => menu.classList.toggle('open'));
+    btn.addEventListener('click', () => {
+      const opened = menu.classList.toggle('open');
+      btn.setAttribute('aria-expanded', String(opened));
+    });
     document.addEventListener('click', (e) => {
       if (!document.getElementById('langSwitcher').contains(e.target)) {
         menu.classList.remove('open');
       }
     });
 
-    // Scroll reveal
     const observer = new IntersectionObserver((entries) => {
       entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('visible'); });
     }, { threshold: 0.15 });
     document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
 
-    // Carousel
     const track = document.getElementById('showcaseTrack');
     const slides = track.querySelectorAll('.showcase-slide');
     const dotsContainer = document.getElementById('showcaseDots');
@@ -736,6 +1121,8 @@
     slides.forEach((_, i) => {
       const dot = document.createElement('button');
       dot.className = 'showcase-dot' + (i === 0 ? ' active' : '');
+      dot.setAttribute('aria-label', 'Go to layout ' + (i + 1));
+      if (i === 0) dot.setAttribute('aria-current', 'true');
       dot.addEventListener('click', () => goTo(i));
       dotsContainer.appendChild(dot);
     });
@@ -744,12 +1131,81 @@
       currentSlide = ((i % slides.length) + slides.length) % slides.length;
       track.style.transform = 'translateX(-' + (currentSlide * 100) + '%)';
       dotsContainer.querySelectorAll('.showcase-dot').forEach((d, j) => {
-        d.classList.toggle('active', j === currentSlide);
+        const active = j === currentSlide;
+        d.classList.toggle('active', active);
+        if (active) d.setAttribute('aria-current', 'true');
+        else d.removeAttribute('aria-current');
       });
     }
 
     document.getElementById('showcasePrev').addEventListener('click', () => goTo(currentSlide - 1));
     document.getElementById('showcaseNext').addEventListener('click', () => goTo(currentSlide + 1));
+
+    // Remote carousel
+    const rTrack = document.getElementById('remoteTrack');
+    const rSlides = rTrack.querySelectorAll('.remote-carousel-slide');
+    const rDots = document.getElementById('remoteDots');
+    let rCurrent = 0;
+
+    rSlides.forEach((_, i) => {
+      const dot = document.createElement('button');
+      dot.className = 'showcase-dot' + (i === 0 ? ' active' : '');
+      dot.setAttribute('aria-label', 'Go to Remote screenshot ' + (i + 1));
+      if (i === 0) dot.setAttribute('aria-current', 'true');
+      dot.addEventListener('click', () => rGoTo(i));
+      rDots.appendChild(dot);
+    });
+
+    function rGoTo(i) {
+      rCurrent = ((i % rSlides.length) + rSlides.length) % rSlides.length;
+      rSlides.forEach((s, j) => s.classList.toggle('active', j === rCurrent));
+      rDots.querySelectorAll('.showcase-dot').forEach((d, j) => {
+        const active = j === rCurrent;
+        d.classList.toggle('active', active);
+        if (active) d.setAttribute('aria-current', 'true');
+        else d.removeAttribute('aria-current');
+      });
+    }
+
+    document.getElementById('remotePrev').addEventListener('click', () => { rGoTo(rCurrent - 1); resetAutoRotate(); });
+    document.getElementById('remoteNext').addEventListener('click', () => { rGoTo(rCurrent + 1); resetAutoRotate(); });
+    rDots.addEventListener('click', resetAutoRotate);
+
+    // Auto-rotate: 4.5s interval; pause if reduced-motion or out of viewport;
+    // reset whenever user interacts.
+    let rRotateId = null;
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+    function startAutoRotate() {
+      if (reducedMotion.matches) return;
+      if (rRotateId) return;
+      rRotateId = setInterval(() => rGoTo(rCurrent + 1), 4500);
+    }
+    function stopAutoRotate() {
+      if (rRotateId) { clearInterval(rRotateId); rRotateId = null; }
+    }
+    function resetAutoRotate() {
+      stopAutoRotate();
+      startAutoRotate();
+    }
+
+    // Only rotate when the phone frame is visible (saves battery / cycles)
+    const phoneFrameEl = document.querySelector('.remote-phone-frame');
+    if (phoneFrameEl) {
+      const phoneObserver = new IntersectionObserver(entries => {
+        entries.forEach(e => {
+          if (e.isIntersecting) startAutoRotate();
+          else stopAutoRotate();
+        });
+      }, { threshold: 0.4 });
+      phoneObserver.observe(phoneFrameEl);
+    }
+
+    // Stop / resume if user toggles reduced motion preference
+    reducedMotion.addEventListener('change', e => {
+      if (e.matches) stopAutoRotate();
+      else startAutoRotate();
+    });
   })();
 </script>
 
