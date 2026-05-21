@@ -149,6 +149,55 @@ PY
 
 run_hook_overlay_json_test
 
+run_stable_overlay_path_test() {
+    local tmpdir
+
+    tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/tidey-codex-overlay-tests.XXXXXX")"
+
+    HOOK_TEST_DIR="$tmpdir" CODEX_UNDER_TEST="$CODEX_UNDER_TEST" bash -c '
+        set -euo pipefail
+        source "$CODEX_UNDER_TEST"
+
+        real_home="$HOOK_TEST_DIR/real-home"
+        mkdir -p "$real_home"
+
+        overlay_home="$(stable_codex_home_overlay "$real_home")"
+        [[ "$overlay_home" == "$real_home/.tmp/tidey-codex-home" ]] || fail "overlay path is not stable"
+    '
+
+    rm -rf "$tmpdir"
+}
+
+run_stable_overlay_path_test
+
+run_prepare_overlay_is_idempotent_test() {
+    local tmpdir
+
+    tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/tidey-codex-overlay-tests.XXXXXX")"
+
+    HOOK_TEST_DIR="$tmpdir" CODEX_UNDER_TEST="$CODEX_UNDER_TEST" bash -c '
+        set -euo pipefail
+        source "$CODEX_UNDER_TEST"
+
+        real_home="$HOOK_TEST_DIR/real-home"
+        overlay_home="$(stable_codex_home_overlay "$real_home")"
+        dispatch_script="/Applications/Tidey.app/Contents/Resources/bin/codex-hook-dispatch"
+        mkdir -p "$real_home"
+        printf "token\n" > "$real_home/auth.json"
+
+        prepare_codex_home_overlay "$real_home" "$overlay_home" "$dispatch_script"
+        prepare_codex_home_overlay "$real_home" "$overlay_home" "$dispatch_script"
+
+        [[ -L "$overlay_home/auth.json" ]] || fail "real home file was not symlinked into overlay"
+        [[ -f "$overlay_home/hooks.json" ]] || fail "hooks.json was not created"
+        [[ -f "$overlay_home/config.toml" ]] || fail "config.toml was not created"
+    '
+
+    rm -rf "$tmpdir"
+}
+
+run_prepare_overlay_is_idempotent_test
+
 run_config_overlay_features_test() {
     local tmpdir
 

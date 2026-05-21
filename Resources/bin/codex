@@ -168,6 +168,7 @@ prepare_codex_home_overlay() {
     for entry in "$real_codex_home"/*; do
         name="${entry##*/}"
         [[ "$name" == "." || "$name" == ".." || "$name" == "hooks.json" || "$name" == "config.toml" ]] && continue
+        [[ -e "$overlay_codex_home/$name" || -L "$overlay_codex_home/$name" ]] && continue
         ln -s "$entry" "$overlay_codex_home/$name"
     done
     shopt -u dotglob nullglob
@@ -176,12 +177,17 @@ prepare_codex_home_overlay() {
     merge_tidey_hooks_into_overlay "$real_codex_home" "$overlay_codex_home" "$dispatch_script"
 }
 
+stable_codex_home_overlay() {
+    local real_codex_home="$1"
+    printf '%s/.tmp/tidey-codex-home' "$real_codex_home"
+}
+
 resolve_real_codex_home() {
     local candidate="${CODEX_HOME:-$HOME/.codex}"
     local basename=""
 
     basename="$(basename "$candidate")"
-    if [[ "$basename" == tidey-codex-home.* ]]; then
+    if [[ "$basename" == "tidey-codex-home" || "$basename" == tidey-codex-home.* ]]; then
         printf '%s' "$HOME/.codex"
         return 0
     fi
@@ -333,7 +339,7 @@ main() {
     fi
 
     real_codex_home="$(resolve_real_codex_home)"
-    overlay_codex_home="$(mktemp -d "${TMPDIR:-/tmp}/tidey-codex-home.XXXXXX")"
+    overlay_codex_home="$(stable_codex_home_overlay "$real_codex_home")"
     dispatch_script="$HOOK_DIR/codex-hook-dispatch"
     prepare_codex_home_overlay "$real_codex_home" "$overlay_codex_home" "$dispatch_script"
 
@@ -341,12 +347,6 @@ main() {
     session_id="$(initial_session_id)"
     registry_file="$REGISTRY_ROOT/codex-$session_id.json"
     write_registry_file "$registry_file" "$TIDEY_WORKSPACE_ID" "$session_id" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$created_at" ""
-
-    cleanup() {
-        rm -rf "$overlay_codex_home"
-    }
-
-    trap cleanup EXIT
 
     start_rollout_monitor_if_needed "$$" "${TIDEY_WORKSPACE_ID:-}" "${TIDEY_PANEL_ID:-}" "$PWD" "$created_at" "$registry_file" "$session_id"
 
