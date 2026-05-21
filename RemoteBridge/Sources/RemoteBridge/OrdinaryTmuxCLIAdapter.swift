@@ -116,17 +116,8 @@ final class OrdinaryTmuxCLIAdapter {
     typealias CommandRunner = @Sendable (_ socket: OrdinaryTmuxSocketSelector, _ arguments: [String], _ stdin: String?) throws -> String
 
     private static let fieldSeparator = "\t"
-    private static let commandTimeoutSeconds: TimeInterval = 8
-    private static let liveCommandQueue = DispatchQueue(label: "com.tidey.remote-bridge.ordinary-tmux-cli")
+    private static let commandTimeoutSeconds: TimeInterval = 3
     private static let liveCommandRunner: CommandRunner = { socket, arguments, stdin in
-        try liveCommandQueue.sync {
-            try runLiveCommand(socket: socket, arguments: arguments, stdin: stdin)
-        }
-    }
-
-    private static func runLiveCommand(socket: OrdinaryTmuxSocketSelector,
-                                       arguments: [String],
-                                       stdin: String?) throws -> String {
         guard let tmuxBinaryPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
             BridgeLogger.server.error("ordinary tmux adapter could not find a tmux binary in supported paths")
             throw NSError(domain: "OrdinaryTmuxCLIAdapter",
