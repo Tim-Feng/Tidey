@@ -12,6 +12,11 @@ struct TmuxSnapshot: Sendable {
     }
 }
 
+struct TmuxPaneIdentity: Sendable, Equatable {
+    let workspaceID: String
+    let panelID: String
+}
+
 final class TmuxStateResolver {
     typealias CommandRunner = @Sendable (_ socketPath: String, _ arguments: [String]) throws -> String
     private static let tmuxDiscoveryCandidates = [
@@ -105,6 +110,24 @@ final class TmuxStateResolver {
             let sessionName = refreshedSnapshot?.paneToSessionName[paneID] ?? "-"
             BridgeLogger.server.debug("tmux resolver refreshed pane_count=\(refreshedSnapshot?.paneToSessionName.count ?? 0, privacy: .public) session_count=\(refreshedSnapshot?.sessionToClientPIDs.count ?? 0, privacy: .public) pane_session=\(sessionName, privacy: .public) client_pids=\(String(describing: refreshedPIDs), privacy: .public)")
             return refreshedPIDs
+        }
+    }
+
+    func paneIdentity(forPaneID paneID: String, socketPath: String) -> TmuxPaneIdentity? {
+        queue.sync {
+            do {
+                let workspaceID = try commandRunner(socketPath, ["show-options", "-p", "-v", "-t", paneID, "@tidey_workspace_id"])
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let panelID = try commandRunner(socketPath, ["show-options", "-p", "-v", "-t", paneID, "@tidey_panel_id"])
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !workspaceID.isEmpty, !panelID.isEmpty else {
+                    return nil
+                }
+                return TmuxPaneIdentity(workspaceID: workspaceID, panelID: panelID)
+            } catch {
+                BridgeLogger.server.debug("tmux resolver pane identity failed pane_id=\(paneID, privacy: .public) socket=\(socketPath, privacy: .public) error=\(String(describing: error), privacy: .public)")
+                return nil
+            }
         }
     }
 

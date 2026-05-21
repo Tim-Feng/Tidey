@@ -509,7 +509,9 @@ final class AgentSessionRegistryMonitor {
         }
         let activeSessionIDs = Set(sourceRecords.map(\.sessionID))
         resolvedPanelBindings = resolvedPanelBindings.filter { activeSessionIDs.contains($0.key) }
-        let effectiveRecords = sourceRecords.map(effectiveRecord(for:))
+        let effectiveRecords = sourceRecords
+            .map(recordWithPaneIdentityIfAvailable(_:))
+            .map(effectiveRecord(for:))
         syncRecords(effectiveRecords)
         activeRecords = Dictionary(uniqueKeysWithValues: effectiveRecords.map { ($0.sessionID, $0) })
         for record in effectiveRecords where resolvedPanelBindings[record.sessionID] != nil {
@@ -517,6 +519,30 @@ final class AgentSessionRegistryMonitor {
                                  workspaceID: record.workspaceID,
                                  panelID: record.panelID)
         }
+    }
+
+    private func recordWithPaneIdentityIfAvailable(_ record: AgentSessionRegistryRecord) -> AgentSessionRegistryRecord {
+        guard let paneID = record.tmuxPaneID,
+              !paneID.isEmpty,
+              let socketPath = record.tmuxSocketPath,
+              !socketPath.isEmpty,
+              let identity = tmuxResolver.paneIdentity(forPaneID: paneID, socketPath: socketPath),
+              identity.workspaceID != record.workspaceID || identity.panelID != record.panelID else {
+            return record
+        }
+
+        BridgeLogger.server.info("agent registry corrected from tmux pane identity session_id=\(record.sessionID, privacy: .public) vendor=\(record.vendor, privacy: .public) pane_id=\(paneID, privacy: .public) old_workspace_id=\(record.workspaceID, privacy: .public) old_panel_id=\(record.panelID ?? "-", privacy: .public) workspace_id=\(identity.workspaceID, privacy: .public) panel_id=\(identity.panelID, privacy: .public)")
+        return AgentSessionRegistryRecord(version: record.version,
+                                          vendor: record.vendor,
+                                          workspaceID: identity.workspaceID,
+                                          sessionID: record.sessionID,
+                                          panelID: identity.panelID,
+                                          pid: record.pid,
+                                          cwd: record.cwd,
+                                          createdAt: record.createdAt,
+                                          transcriptPath: record.transcriptPath,
+                                          tmuxPaneID: record.tmuxPaneID,
+                                          tmuxSocketPath: record.tmuxSocketPath)
     }
 
     private func directSessionForWorkspace(workspaceID: String) -> ActiveAgentSessionSnapshot? {

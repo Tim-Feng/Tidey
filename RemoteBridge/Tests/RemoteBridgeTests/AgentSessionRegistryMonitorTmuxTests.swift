@@ -2,6 +2,59 @@ import XCTest
 @testable import RemoteBridge
 
 final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
+    func testScanCorrectsStaleRegistryRecordFromTmuxPaneIdentity() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let registryURL = paths.codexAgentSessionsDirectory.appendingPathComponent("codex-session-stale-env.json")
+        let recordData = Data("""
+        {
+          "version": 1,
+          "vendor": "codex",
+          "workspace_id": "stale-workspace",
+          "session_id": "session-stale-env",
+          "panel_id": "stale-panel",
+          "pid": \(getpid()),
+          "cwd": "/tmp",
+          "created_at": "2026-05-21T00:00:00Z",
+          "tmux_pane_id": "%6",
+          "tmux_socket_path": "/tmp/tmux.sock"
+        }
+        """.utf8)
+        try recordData.write(to: registryURL)
+
+        let tmuxResolver = TmuxStateResolver(ttl: 60) { socketPath, arguments in
+            XCTAssertEqual(socketPath, "/tmp/tmux.sock")
+            XCTAssertEqual(Array(arguments.prefix(5)), ["show-options", "-p", "-v", "-t", "%6"])
+            switch arguments.last {
+            case "@tidey_workspace_id":
+                return "current-workspace\n"
+            case "@tidey_panel_id":
+                return "current-panel\n"
+            default:
+                XCTFail("unexpected tmux arguments \(arguments)")
+                return ""
+            }
+        }
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: fileManager,
+                                                  hub: AgentEventHub(),
+                                                  tmuxResolver: tmuxResolver,
+                                                  parentPIDLookup: { _ in nil })
+        try monitor.start()
+
+        let snapshots = monitor.activeSessionSnapshots()
+        XCTAssertEqual(snapshots.count, 1)
+        XCTAssertEqual(snapshots.first?.workspaceID, "current-workspace")
+        XCTAssertEqual(snapshots.first?.panelID, "current-panel")
+        XCTAssertEqual(monitor.activeSessionForWorkspace(workspaceID: "stale-workspace")?.sessionID, nil)
+        XCTAssertEqual(monitor.activeSessionForWorkspace(workspaceID: "current-workspace")?.sessionID, "session-stale-env")
+    }
+
     func testActiveSessionForPanelFallsBackToTmuxPaneMatchWhenPanelIDsChanged() throws {
         let fileManager = FileManager.default
         let supportDirectory = fileManager.temporaryDirectory

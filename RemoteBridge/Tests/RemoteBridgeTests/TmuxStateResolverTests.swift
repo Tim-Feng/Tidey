@@ -114,6 +114,33 @@ final class TmuxStateResolverTests: XCTestCase {
         XCTAssertNil(resolver.clientPIDs(forPaneID: "%1", socketPath: "/tmp/tmux.sock"))
     }
 
+    func testPaneIdentityReadsWorkspaceAndPanelOptions() {
+        let resolver = TmuxStateResolver(ttl: 60) { socketPath, arguments in
+            XCTAssertEqual(socketPath, "/tmp/tmux.sock")
+            XCTAssertEqual(Array(arguments.prefix(5)), ["show-options", "-p", "-v", "-t", "%1"])
+            switch arguments.last {
+            case "@tidey_workspace_id":
+                return "workspace-1\n"
+            case "@tidey_panel_id":
+                return "panel-1\n"
+            default:
+                XCTFail("unexpected tmux arguments \(arguments)")
+                return ""
+            }
+        }
+
+        XCTAssertEqual(resolver.paneIdentity(forPaneID: "%1", socketPath: "/tmp/tmux.sock"),
+                       TmuxPaneIdentity(workspaceID: "workspace-1", panelID: "panel-1"))
+    }
+
+    func testPaneIdentityReturnsNilWhenOptionsAreMissing() {
+        let resolver = TmuxStateResolver(ttl: 60) { _, arguments in
+            arguments.last == "@tidey_workspace_id" ? "workspace-1\n" : "\n"
+        }
+
+        XCTAssertNil(resolver.paneIdentity(forPaneID: "%1", socketPath: "/tmp/tmux.sock"))
+    }
+
     func testDiscoverTmuxBinaryPathPrefersFirstExecutableCandidate() throws {
         let fileManager = FileManager.default
         let tempDirectory = fileManager.temporaryDirectory
