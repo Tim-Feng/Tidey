@@ -787,7 +787,9 @@ typedef NS_ENUM(NSUInteger, PTYSessionTurdType) {
     [command appendString:@"esac; "];
     [command appendString:@"_tidey_filtered_update_environment=\"${_tidey_filtered_update_environment} ${_tidey_var}\"; "];
     [command appendString:@"done; "];
-    [command appendString:@"_tidey_filtered_update_environment=\"${_tidey_filtered_update_environment} TIDEY_SOCKET_PATH TIDEY_WORKSPACE_ID TIDEY_PANEL_ID TIDEY_BIN_DIR ITERM_ENABLE_SHELL_INTEGRATION_WITH_TMUX LC_TERMINAL\"; "];
+    // Workspace/panel ids are pane-scoped and must not enter tmux's global
+    // environment. Agent wrappers hydrate those ids from per-pane tmux options.
+    [command appendString:@"_tidey_filtered_update_environment=\"${_tidey_filtered_update_environment} TIDEY_SOCKET_PATH TIDEY_BIN_DIR ITERM_ENABLE_SHELL_INTEGRATION_WITH_TMUX LC_TERMINAL\"; "];
     [command appendFormat:@"%@ set-option -g update-environment \"${_tidey_filtered_update_environment}\" 2>/dev/null", quotedTmuxPath];
     return command;
 }

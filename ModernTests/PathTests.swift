@@ -1319,8 +1319,8 @@ final class PathTests: XCTestCase {
         XCTAssertFalse(command.contains("set-environment -gu GHOSTTY_BIN_DIR"))
         XCTAssertFalse(command.contains("CMUX_SOCKET_PATH"))
         XCTAssertTrue(command.contains("TIDEY_SOCKET_PATH"))
-        XCTAssertTrue(command.contains("TIDEY_WORKSPACE_ID"))
-        XCTAssertTrue(command.contains("TIDEY_PANEL_ID"))
+        XCTAssertFalse(command.contains(" TIDEY_WORKSPACE_ID TIDEY_PANEL_ID "))
+        XCTAssertTrue(command.contains("__CFBundleIdentifier|TIDEY_SOCKET_PATH|TIDEY_WORKSPACE_ID|TIDEY_PANEL_ID|TIDEY_BIN_DIR"))
     }
 
     func testOrdinaryTmuxAttachDetectorFindsTargetSession() {
