@@ -42,6 +42,50 @@ final class BridgeInputActionHandlerTests: XCTestCase {
         XCTAssertEqual(router.sentInputs.map(\.input), ["ls\r"])
     }
 
+    func testTerminalInputFallsBackToMacSocketWhenCarrierOrdinaryTmuxTimesOut() throws {
+        let sender = MockTideyRequestSender()
+        let resolver = MockSessionResolver()
+        let router = MockOrdinaryTmuxInputRouter(routedPanelIDs: ["carrier-panel"],
+                                                 errorsByPanelID: ["carrier-panel": tmuxTimeoutError()])
+        let handler = BridgeInputActionHandler(socketSender: sender,
+                                               sessionResolver: resolver,
+                                               ordinaryTmuxInputRouter: router)
+
+        let response = try handler.handle(BridgeRequest(id: "request-1",
+                                                        action: "terminal_input",
+                                                        params: [
+                                                            "panel_id": .string("carrier-panel"),
+                                                            "input": .string("ls\r"),
+                                                        ]))
+
+        XCTAssertEqual(response?.ok, true)
+        XCTAssertEqual(sender.sentRequests.count, 1)
+        XCTAssertEqual(sender.sentRequests.first?.action, "send_input")
+        XCTAssertEqual(sender.sentRequests.first?.params?["panel_id"]?.stringValue, "carrier-panel")
+        XCTAssertEqual(sender.sentRequests.first?.params?["input"]?.stringValue, "ls\r")
+    }
+
+    func testTerminalInputDoesNotFallbackForRemoteOnlyLogicalPanelTimeout() {
+        let sender = MockTideyRequestSender()
+        let resolver = MockSessionResolver()
+        let logicalPanelID = "ordinary-tmux:/tmp/tmux-501/default:$7:@4"
+        let router = MockOrdinaryTmuxInputRouter(routedPanelIDs: [logicalPanelID],
+                                                 errorsByPanelID: [logicalPanelID: tmuxTimeoutError()])
+        let handler = BridgeInputActionHandler(socketSender: sender,
+                                               sessionResolver: resolver,
+                                               ordinaryTmuxInputRouter: router)
+
+        XCTAssertThrowsError(
+            try handler.handle(BridgeRequest(id: "request-1",
+                                             action: "terminal_input",
+                                             params: [
+                                                "panel_id": .string(logicalPanelID),
+                                                "input": .string("ls\r"),
+                                             ]))
+        )
+        XCTAssertTrue(sender.sentRequests.isEmpty)
+    }
+
     func testChatSubmitForClaudeSplitsMultilineTextAndEnterWithDelay() throws {
         let sender = MockTideyRequestSender()
         let resolver = MockSessionResolver(session: ActiveAgentSessionSnapshot(vendor: "claude",
@@ -191,6 +235,36 @@ final class BridgeInputActionHandlerTests: XCTestCase {
         ])
     }
 
+    func testChatSubmitFallsBackToMacSocketWhenCarrierOrdinaryTmuxTimesOut() throws {
+        let sender = MockTideyRequestSender()
+        let resolver = MockSessionResolver(session: ActiveAgentSessionSnapshot(vendor: "codex",
+                                                                              workspaceID: "workspace-1",
+                                                                              sessionID: "session-1",
+                                                                              panelID: "carrier-panel"))
+        let router = MockOrdinaryTmuxInputRouter(routedPanelIDs: ["carrier-panel"],
+                                                 errorsByPanelID: ["carrier-panel": tmuxTimeoutError()])
+        let delayRecorder = DelayRecorder()
+        let handler = BridgeInputActionHandler(socketSender: sender,
+                                               sessionResolver: resolver,
+                                               ordinaryTmuxInputRouter: router,
+                                               sleep: { delayRecorder.record($0) })
+
+        let response = try handler.handle(BridgeRequest(id: "request-1",
+                                                        action: "chat_submit",
+                                                        params: [
+                                                            "workspace_id": .string("workspace-1"),
+                                                            "panel_id": .string("carrier-panel"),
+                                                            "message": .string("hello"),
+                                                            "session_id": .string("session-1"),
+                                                            "vendor": .string("codex"),
+                                                        ]))
+
+        XCTAssertEqual(response?.ok, true)
+        XCTAssertEqual(router.sentInputs.map(\.input), ["hello"])
+        XCTAssertEqual(sender.sentRequests.map { $0.params?["input"]?.stringValue }, ["hello", "\r"])
+        XCTAssertEqual(delayRecorder.recordedDelays, [chatSubmitEnterDelayNanoseconds])
+    }
+
     func testChatSubmitDeduplicatesRepeatedClientRequestIDBeforeSendingInput() throws {
         let sender = MockTideyRequestSender()
         let resolver = MockSessionResolver(session: ActiveAgentSessionSnapshot(vendor: "codex",
@@ -303,10 +377,12 @@ private final class MockTideyRequestSender: TideyRequestSending {
 
 private final class MockOrdinaryTmuxInputRouter: OrdinaryTmuxInputRouting, @unchecked Sendable {
     private let routedPanelIDs: Set<String>
+    private let errorsByPanelID: [String: Error]
     private(set) var sentInputs = [(panelID: String, input: String, allowAmbiguousPasteTimeout: Bool)]()
 
-    init(routedPanelIDs: Set<String>) {
+    init(routedPanelIDs: Set<String>, errorsByPanelID: [String: Error] = [:]) {
         self.routedPanelIDs = routedPanelIDs
+        self.errorsByPanelID = errorsByPanelID
     }
 
     func sendInput(_ input: String,
@@ -316,8 +392,17 @@ private final class MockOrdinaryTmuxInputRouter: OrdinaryTmuxInputRouting, @unch
             return false
         }
         sentInputs.append((panelID, input, allowAmbiguousPasteTimeout))
+        if let error = errorsByPanelID[panelID] {
+            throw error
+        }
         return true
     }
+}
+
+private func tmuxTimeoutError() -> NSError {
+    NSError(domain: "OrdinaryTmuxCLIAdapter",
+            code: 124,
+            userInfo: [NSLocalizedDescriptionKey: "tmux command timed out"])
 }
 
 private final class DelayRecorder: @unchecked Sendable {

@@ -16,6 +16,12 @@ protocol ActiveAgentSessionResolving {
 extension AgentSessionRegistryMonitor: ActiveAgentSessionResolving {}
 
 struct BridgeInputActionHandler {
+    private enum OrdinaryTmuxRouteDecision {
+        case routed
+        case unavailable
+        case macSocketFallback
+    }
+
     private let socketSender: TideyRequestSending
     private let sessionResolver: ActiveAgentSessionResolving
     private let ordinaryTmuxInputRouter: OrdinaryTmuxInputRouting?
@@ -64,9 +70,13 @@ struct BridgeInputActionHandler {
         let workspaceID = params["workspace_id"]?.stringValue ?? "-"
         BridgeLogger.input.info("forward action=terminal_input request_id=\(request.id, privacy: .public) workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) length=\(input.count) has_cr=\(input.contains("\r")) has_lf=\(input.contains("\n")) tail=\(summarizedTail(input), privacy: .public)")
 
-        if let ordinaryTmuxInputRouter,
-           let routedPanelID = params["panel_id"]?.stringValue,
-           try ordinaryTmuxInputRouter.sendInput(input, toPanelID: routedPanelID) {
+        if let routedPanelID = params["panel_id"]?.stringValue,
+           try routeOrdinaryTmuxInputIfAvailable(input,
+                                                 panelID: routedPanelID,
+                                                 requestID: request.id,
+                                                 action: "terminal_input",
+                                                 stepIndex: nil,
+                                                 allowAmbiguousPasteTimeout: false) == .routed {
             BridgeLogger.input.info("route action=terminal_input request_id=\(request.id, privacy: .public) panel_id=\(routedPanelID, privacy: .public) transport=ordinary_tmux")
             return BridgeResponse(id: request.id,
                                   ok: true,
@@ -127,6 +137,7 @@ struct BridgeInputActionHandler {
         BridgeLogger.input.info("dispatch action=chat_submit request_id=\(request.id, privacy: .public) workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) session_id=\(activeSession?.sessionID ?? requestedSessionID ?? "-", privacy: .public) vendor=\(vendor.id, privacy: .public) length=\(message.count) has_cr=\(message.contains("\r")) has_lf=\(message.contains("\n")) tail=\(summarizedTail(message), privacy: .public)")
 
         var previousStepUsedOrdinaryTmux = false
+        var forceMacSocketForRemainingSteps = false
         for (index, step) in vendor.submitMessagePlan(text: message).enumerated() {
             let effectiveDelay = Self.effectiveDelay(for: step,
                                                      previousStepUsedOrdinaryTmux: previousStepUsedOrdinaryTmux)
@@ -134,13 +145,24 @@ struct BridgeInputActionHandler {
                 try sleep(effectiveDelay)
             }
             BridgeLogger.input.info("step action=send_input request_id=\(request.id, privacy: .public) vendor=\(vendor.id, privacy: .public) step_index=\(index) delay_ns=\(effectiveDelay) length=\(step.input.count) has_cr=\(step.input.contains("\r")) has_lf=\(step.input.contains("\n")) tail=\(summarizedTail(step.input), privacy: .public)")
-            if let ordinaryTmuxInputRouter,
-               try ordinaryTmuxInputRouter.sendInput(step.input,
-                                                     toPanelID: panelID,
-                                                     allowAmbiguousPasteTimeout: true) {
+            let routeDecision: OrdinaryTmuxRouteDecision
+            if forceMacSocketForRemainingSteps {
+                routeDecision = .macSocketFallback
+            } else {
+                routeDecision = try routeOrdinaryTmuxInputIfAvailable(step.input,
+                                                                      panelID: panelID,
+                                                                      requestID: request.id,
+                                                                      action: "chat_submit",
+                                                                      stepIndex: index,
+                                                                      allowAmbiguousPasteTimeout: true)
+            }
+            if routeDecision == .routed {
                 previousStepUsedOrdinaryTmux = true
                 BridgeLogger.input.info("route action=chat_submit request_id=\(request.id, privacy: .public) panel_id=\(panelID, privacy: .public) transport=ordinary_tmux step_index=\(index)")
             } else {
+                if routeDecision == .macSocketFallback {
+                    forceMacSocketForRemainingSteps = true
+                }
                 let stepRequest = BridgeRequest(id: UUID().uuidString,
                                                 action: "send_input",
                                                 params: [
@@ -205,5 +227,35 @@ struct BridgeInputActionHandler {
 
     private static func isEnterOnly(_ input: String) -> Bool {
         input == "\r" || input == "\n" || input == "\r\n"
+    }
+
+    private func routeOrdinaryTmuxInputIfAvailable(_ input: String,
+                                                   panelID: String,
+                                                   requestID: String,
+                                                   action: String,
+                                                   stepIndex: Int?,
+                                                   allowAmbiguousPasteTimeout: Bool) throws -> OrdinaryTmuxRouteDecision {
+        guard let ordinaryTmuxInputRouter else {
+            return .unavailable
+        }
+        do {
+            return try ordinaryTmuxInputRouter.sendInput(input,
+                                                        toPanelID: panelID,
+                                                        allowAmbiguousPasteTimeout: allowAmbiguousPasteTimeout) ? .routed : .unavailable
+        } catch {
+            guard Self.shouldFallbackToMacSocket(panelID: panelID, error: error) else {
+                throw error
+            }
+            BridgeLogger.input.info("ordinary tmux route timeout fallback action=\(action, privacy: .public) request_id=\(requestID, privacy: .public) panel_id=\(panelID, privacy: .public) step_index=\(stepIndex.map(String.init) ?? "-", privacy: .public) transport=mac_socket error=\(String(describing: error), privacy: .public)")
+            return .macSocketFallback
+        }
+    }
+
+    private static func shouldFallbackToMacSocket(panelID: String, error: Error) -> Bool {
+        guard OrdinaryTmuxLogicalPanelID(rawValue: panelID) == nil else {
+            return false
+        }
+        let nsError = error as NSError
+        return nsError.domain == "OrdinaryTmuxCLIAdapter" && nsError.code == 124
     }
 }
