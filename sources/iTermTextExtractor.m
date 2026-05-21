@@ -1717,7 +1717,7 @@ trimTrailingWhitespace:(BOOL)trimSelectionTrailingSpaces
                       truncateTail:forward
                  continuationChars:continuationChars];
     if (!respectHardNewlines) {
-        [locatedString removeOcurrencesOfString:@"\n"];
+        [locatedString removeHardNewlinesAndContinuationWhitespace];
     }
     return locatedString;
 }

@@ -87,6 +87,35 @@
     }];
 }
 
+- (void)removeHardNewlinesAndContinuationWhitespace {
+    NSInteger i = _string.length - 1;
+    while (i >= 0) {
+        unichar c = [_string characterAtIndex:i];
+        if (c != '\n' && c != '\r') {
+            i--;
+            continue;
+        }
+
+        NSInteger start = i;
+        NSInteger end = i + 1;
+        if (c == '\n' && i > 0 && [_string characterAtIndex:i - 1] == '\r') {
+            start = i - 1;
+        }
+        while (end < (NSInteger)_string.length) {
+            unichar next = [_string characterAtIndex:end];
+            if (next != ' ' && next != '\t') {
+                break;
+            }
+            end++;
+        }
+
+        NSRange range = NSMakeRange(start, end - start);
+        [_string replaceCharactersInRange:range withString:@""];
+        [_gridCoords removeRange:range];
+        i = start - 1;
+    }
+}
+
 - (void)replaceCharactersInRange:(NSRange)range withString:(NSString *)replacement {
     [_string replaceCharactersInRange:range withString:replacement];
     [_gridCoords resizeRange:range
@@ -174,6 +203,35 @@
         [_attributedString replaceCharactersInRange:range withString:@""];
         [self.gridCoords removeRange:range];
     }];
+}
+
+- (void)removeHardNewlinesAndContinuationWhitespace {
+    NSInteger i = _attributedString.length - 1;
+    while (i >= 0) {
+        unichar c = [_attributedString.string characterAtIndex:i];
+        if (c != '\n' && c != '\r') {
+            i--;
+            continue;
+        }
+
+        NSInteger start = i;
+        NSInteger end = i + 1;
+        if (c == '\n' && i > 0 && [_attributedString.string characterAtIndex:i - 1] == '\r') {
+            start = i - 1;
+        }
+        while (end < (NSInteger)_attributedString.length) {
+            unichar next = [_attributedString.string characterAtIndex:end];
+            if (next != ' ' && next != '\t') {
+                break;
+            }
+            end++;
+        }
+
+        NSRange range = NSMakeRange(start, end - start);
+        [_attributedString replaceCharactersInRange:range withString:@""];
+        [self.gridCoords removeRange:range];
+        i = start - 1;
+    }
 }
 
 @end

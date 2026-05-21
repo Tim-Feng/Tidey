@@ -937,6 +937,21 @@ final class PathTests: XCTestCase {
         XCTAssertEqual(candidate?["endX"] as? Int, (text as NSString).range(of: "repo").location + 3)
     }
 
+    func testLocatedPathDropsHardNewlineContinuationIndentation() {
+        let text = "/Users/timfeng/GitHub/adbrewer/.skills/craft-\n  glossary/glossary.md"
+        let coords = GridCoordArray()
+        for index in 0..<(text as NSString).length {
+            coords.append(coord: VT100GridCoord(x: Int32(index), y: 0))
+        }
+        let located = iTermLocatedString(string: text, gridCoords: coords)
+
+        located.removeHardNewlinesAndContinuationWhitespace()
+
+        XCTAssertEqual(located.string,
+                       "/Users/timfeng/GitHub/adbrewer/.skills/craft-glossary/glossary.md")
+        XCTAssertEqual(located.gridCoords.count, (located.string as NSString).length)
+    }
+
     func testURLLikeCandidateStopsBeforeChineseTrailingPunctuation() {
         let suffixes = ["、", "，", "。", "「", "」", "！", "？", "；", "：", "（", "）", "【", "】"]
         for suffix in suffixes {

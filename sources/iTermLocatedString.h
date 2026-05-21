@@ -28,6 +28,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)dropFirst:(NSInteger)count;
 - (void)trimTrailingWhitespace;
 - (void)removeOcurrencesOfString:(NSString *)string;
+- (void)removeHardNewlinesAndContinuationWhitespace;
 
 // Preserves the location, even if replacement is not the same length
 - (void)replaceCharactersInRange:(NSRange)range withString:(NSString *)replacement;
