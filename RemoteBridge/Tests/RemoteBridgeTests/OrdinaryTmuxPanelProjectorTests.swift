@@ -285,6 +285,35 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
         XCTAssertEqual(cooldownPanels?.map { $0["title"]?.stringValue }, ["priest", "mother_nature"])
     }
 
+    func testProjectionResumesAfterCooldownExpiry() {
+        let adapter = MutableAdapter(panels: [
+            projectedPanel(windowID: "@15", index: 0, name: "priest", paneID: "%15", current: true),
+            projectedPanel(windowID: "@16", index: 1, name: "mother_nature", paneID: "%16", current: false),
+        ])
+        let clock = TestClock(Date(timeIntervalSince1970: 0))
+        let projector = OrdinaryTmuxPanelProjector(adapter: adapter,
+                                                   cacheTTL: 1,
+                                                   staleTTL: 30,
+                                                   now: { clock.now() })
+
+        _ = projector.projectPanelListResult(panelListResult())
+        clock.advance(2)
+        adapter.setShouldThrow(true, domain: "OrdinaryTmuxCLIAdapter", code: 124)
+        _ = projector.projectPanelListResult(panelListResult())
+        adapter.setShouldThrow(false)
+        adapter.setPanels([
+            projectedPanel(windowID: "@18", index: 0, name: "restored_priest", paneID: "%18", current: true),
+            projectedPanel(windowID: "@19", index: 1, name: "restored_mother_nature", paneID: "%19", current: false),
+        ])
+        clock.advance(11)
+
+        let recovered = projector.projectPanelListResult(panelListResult())
+
+        let panels = recovered["panels"]?.arrayValue?.compactMap(\.objectValue)
+        XCTAssertEqual(adapter.callCount, 3)
+        XCTAssertEqual(panels?.map { $0["title"]?.stringValue }, ["restored_priest", "restored_mother_nature"])
+    }
+
     func testProjectionSetsPaneIdentityForProjectedRoutes() {
         let adapter = MutableAdapter(panels: [
             projectedPanel(windowID: "@15", index: 0, name: "priest", paneID: "%15", current: true),

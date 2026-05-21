@@ -179,10 +179,14 @@ final class OrdinaryTmuxPanelProjector {
                                        canReplaceRegistry: false)
         }
 
+        let recoveredFromCooldown = consumeExpiredProjectionCooldown(at: currentDate)
         do {
             let panels = try adapter.projectedPanels(for: metadata)
             cacheQueue.sync {
                 cache[key] = CacheEntry(panels: panels, loadedAt: currentDate)
+            }
+            if recoveredFromCooldown {
+                BridgeLogger.server.info("ordinary tmux projection recovered from timeout cooldown workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) projected_count=\(panels.count, privacy: .public)")
             }
             return ProjectedPanelsLoad(panels: panels,
                                        canSetPaneIdentity: true,
@@ -219,6 +223,17 @@ final class OrdinaryTmuxPanelProjector {
                 return false
             }
             return currentDate < projectionCooldownUntil
+        }
+    }
+
+    private func consumeExpiredProjectionCooldown(at currentDate: Date) -> Bool {
+        cacheQueue.sync {
+            guard let projectionCooldownUntil,
+                  currentDate >= projectionCooldownUntil else {
+                return false
+            }
+            self.projectionCooldownUntil = nil
+            return true
         }
     }
 
