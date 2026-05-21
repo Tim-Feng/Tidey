@@ -20,10 +20,28 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
         func setPaneIdentity(route: OrdinaryTmuxPanelRoute) throws {}
     }
 
+    private final class TimeoutAdapter: OrdinaryTmuxWindowProjecting, @unchecked Sendable {
+        private let lock = NSLock()
+        private(set) var callCount = 0
+
+        func projectedPanels(for metadata: OrdinaryTmuxAttachMetadata) throws -> [OrdinaryTmuxProjectedPanel] {
+            lock.lock()
+            callCount += 1
+            lock.unlock()
+            throw NSError(domain: "OrdinaryTmuxCLIAdapter",
+                          code: 124,
+                          userInfo: [NSLocalizedDescriptionKey: "tmux command timed out"])
+        }
+
+        func setPaneIdentity(route: OrdinaryTmuxPanelRoute) throws {}
+    }
+
     private final class MutableAdapter: OrdinaryTmuxWindowProjecting, @unchecked Sendable {
         private let lock = NSLock()
         private var panels: [OrdinaryTmuxProjectedPanel]
         private var shouldThrow = false
+        private var errorDomain = "OrdinaryTmuxPanelProjectorTests"
+        private var errorCode = 2
         private(set) var callCount = 0
         private(set) var identityRoutes = [OrdinaryTmuxPanelRoute]()
 
@@ -43,12 +61,20 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
             lock.unlock()
         }
 
+        func setShouldThrow(_ shouldThrow: Bool, domain: String, code: Int) {
+            lock.lock()
+            self.shouldThrow = shouldThrow
+            self.errorDomain = domain
+            self.errorCode = code
+            lock.unlock()
+        }
+
         func projectedPanels(for metadata: OrdinaryTmuxAttachMetadata) throws -> [OrdinaryTmuxProjectedPanel] {
             lock.lock()
             defer { lock.unlock() }
             callCount += 1
             if shouldThrow {
-                throw NSError(domain: "OrdinaryTmuxPanelProjectorTests", code: 2)
+                throw NSError(domain: errorDomain, code: errorCode)
             }
             return panels
         }
@@ -217,6 +243,46 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
             "ordinary-tmux:/tmp/tmux-501/default:$7:@15",
             "ordinary-tmux:/tmp/tmux-501/default:$7:@16",
         ])
+    }
+
+    func testProjectionTimeoutWithoutCacheKeepsCarrierPanelAndEntersCooldown() {
+        let adapter = TimeoutAdapter()
+        let clock = TestClock(Date(timeIntervalSince1970: 0))
+        let projector = OrdinaryTmuxPanelProjector(adapter: adapter,
+                                                   cacheTTL: 1,
+                                                   staleTTL: 30,
+                                                   now: { clock.now() })
+
+        let first = projector.projectPanelListResult(panelListResult())
+        let second = projector.projectPanelListResult(panelListResult())
+
+        XCTAssertEqual(adapter.callCount, 1)
+        XCTAssertEqual(first["panels"]?.arrayValue?.first?.objectValue?["panel_id"]?.stringValue, "carrier-panel")
+        XCTAssertEqual(second["panels"]?.arrayValue?.first?.objectValue?["panel_id"]?.stringValue, "carrier-panel")
+    }
+
+    func testProjectionTimeoutUsesStaleCacheAndCooldownSkipsNextAdapterCall() {
+        let adapter = MutableAdapter(panels: [
+            projectedPanel(windowID: "@15", index: 0, name: "priest", paneID: "%15", current: true),
+            projectedPanel(windowID: "@16", index: 1, name: "mother_nature", paneID: "%16", current: false),
+        ])
+        let clock = TestClock(Date(timeIntervalSince1970: 0))
+        let projector = OrdinaryTmuxPanelProjector(adapter: adapter,
+                                                   cacheTTL: 1,
+                                                   staleTTL: 30,
+                                                   now: { clock.now() })
+
+        _ = projector.projectPanelListResult(panelListResult())
+        clock.advance(2)
+        adapter.setShouldThrow(true, domain: "OrdinaryTmuxCLIAdapter", code: 124)
+        let stale = projector.projectPanelListResult(panelListResult())
+        let cooldown = projector.projectPanelListResult(panelListResult())
+
+        let stalePanels = stale["panels"]?.arrayValue?.compactMap(\.objectValue)
+        let cooldownPanels = cooldown["panels"]?.arrayValue?.compactMap(\.objectValue)
+        XCTAssertEqual(adapter.callCount, 2)
+        XCTAssertEqual(stalePanels?.map { $0["title"]?.stringValue }, ["priest", "mother_nature"])
+        XCTAssertEqual(cooldownPanels?.map { $0["title"]?.stringValue }, ["priest", "mother_nature"])
     }
 
     func testProjectionSetsPaneIdentityForProjectedRoutes() {

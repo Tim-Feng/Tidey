@@ -20,6 +20,7 @@ final class OrdinaryTmuxPanelProjector {
     private let cacheQueue = DispatchQueue(label: "com.tidey.remote-bridge.ordinary-tmux-panel-projector-cache")
     private var cache = [String: CacheEntry]()
     private var identityCache = [String: String]()
+    private var projectionCooldownUntil: Date?
 
     init(adapter: OrdinaryTmuxWindowProjecting = OrdinaryTmuxCLIAdapter(),
          registry: OrdinaryTmuxPanelRegistry? = nil,
@@ -164,6 +165,20 @@ final class OrdinaryTmuxPanelProjector {
                                        canReplaceRegistry: true)
         }
 
+        if isProjectionInCooldown(at: currentDate) {
+            if let staleLoad = staleProjectedPanelsLoad(for: key,
+                                                        currentDate: currentDate,
+                                                        workspaceID: workspaceID,
+                                                        carrierPanelID: carrierPanelID,
+                                                        reason: "cooldown") {
+                return staleLoad
+            }
+            BridgeLogger.server.info("ordinary tmux projection skipped workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) reason=timeout_cooldown_no_cache")
+            return ProjectedPanelsLoad(panels: [],
+                                       canSetPaneIdentity: false,
+                                       canReplaceRegistry: false)
+        }
+
         do {
             let panels = try adapter.projectedPanels(for: metadata)
             cacheQueue.sync {
@@ -173,15 +188,59 @@ final class OrdinaryTmuxPanelProjector {
                                        canSetPaneIdentity: true,
                                        canReplaceRegistry: true)
         } catch {
-            if let entry = cacheQueue.sync(execute: { cache[key] }),
-               currentDate.timeIntervalSince(entry.loadedAt) < staleTTL {
-                BridgeLogger.server.error("ordinary tmux projection using stale cache workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) error=\(String(describing: error), privacy: .public)")
-                return ProjectedPanelsLoad(panels: entry.panels,
+            if Self.isTmuxCommandTimeout(error) {
+                enterProjectionCooldown(at: currentDate)
+                if let staleLoad = staleProjectedPanelsLoad(for: key,
+                                                            currentDate: currentDate,
+                                                            workspaceID: workspaceID,
+                                                            carrierPanelID: carrierPanelID,
+                                                            reason: "timeout") {
+                    return staleLoad
+                }
+                BridgeLogger.server.error("ordinary tmux projection timed out without cache workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) cooldown_seconds=10")
+                return ProjectedPanelsLoad(panels: [],
                                            canSetPaneIdentity: false,
                                            canReplaceRegistry: false)
             }
+            if let staleLoad = staleProjectedPanelsLoad(for: key,
+                                                        currentDate: currentDate,
+                                                        workspaceID: workspaceID,
+                                                        carrierPanelID: carrierPanelID,
+                                                        reason: "error") {
+                return staleLoad
+            }
             throw error
         }
+    }
+
+    private func isProjectionInCooldown(at currentDate: Date) -> Bool {
+        cacheQueue.sync {
+            guard let projectionCooldownUntil else {
+                return false
+            }
+            return currentDate < projectionCooldownUntil
+        }
+    }
+
+    private func enterProjectionCooldown(at currentDate: Date) {
+        cacheQueue.sync {
+            projectionCooldownUntil = currentDate.addingTimeInterval(10)
+        }
+    }
+
+    private func staleProjectedPanelsLoad(for key: String,
+                                          currentDate: Date,
+                                          workspaceID: String,
+                                          carrierPanelID: String,
+                                          reason: String) -> ProjectedPanelsLoad? {
+        guard let entry = cacheQueue.sync(execute: { cache[key] }),
+              currentDate.timeIntervalSince(entry.loadedAt) < staleTTL else {
+            return nil
+        }
+        BridgeLogger.server.error("ordinary tmux projection using stale cache workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) reason=\(reason, privacy: .public)")
+        return ProjectedPanelsLoad(panels: entry.panels,
+                                   canSetPaneIdentity: false,
+                                   canReplaceRegistry: false)
     }
 
     private func syncPaneIdentitiesIfNeeded(routes: [OrdinaryTmuxPanelRoute]) {
@@ -332,5 +391,10 @@ final class OrdinaryTmuxPanelProjector {
             route.windowID,
             route.activePaneID,
         ].joined(separator: "|")
+    }
+
+    private static func isTmuxCommandTimeout(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == "OrdinaryTmuxCLIAdapter" && nsError.code == 124
     }
 }
