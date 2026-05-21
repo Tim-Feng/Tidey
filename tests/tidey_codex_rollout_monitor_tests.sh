@@ -149,4 +149,50 @@ PY
 
 run_hook_overlay_json_test
 
+run_config_overlay_features_test() {
+    local tmpdir
+
+    tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/tidey-codex-config-tests.XXXXXX")"
+
+    HOOK_TEST_DIR="$tmpdir" CODEX_UNDER_TEST="$CODEX_UNDER_TEST" bash -c '
+        set -euo pipefail
+        source "$CODEX_UNDER_TEST"
+
+        real_home="$HOOK_TEST_DIR/real-home"
+        overlay_home="$HOOK_TEST_DIR/overlay-home"
+        mkdir -p "$real_home" "$overlay_home"
+        cat > "$real_home/config.toml" <<'"'"'TOML'"'"'
+model = "gpt-5.5"
+
+[features]
+codex_hooks = true
+hooks = false
+
+[projects."/Users/timfeng"]
+trust_level = "trusted"
+TOML
+
+        merge_tidey_config_into_overlay "$real_home" "$overlay_home"
+
+        python3 - "$overlay_home/config.toml" <<'"'"'PY'"'"'
+from pathlib import Path
+import sys
+
+text = Path(sys.argv[1]).read_text()
+if "codex_hooks" in text:
+    raise SystemExit("deprecated codex_hooks feature flag was preserved")
+if "hooks = true" not in text:
+    raise SystemExit("hooks feature flag was not enabled")
+if "hooks = false" in text:
+    raise SystemExit("disabled hooks feature flag was preserved")
+if "[projects.\"/Users/timfeng\"]" not in text:
+    raise SystemExit("existing config sections were not preserved")
+PY
+    '
+
+    rm -rf "$tmpdir"
+}
+
+run_config_overlay_features_test
+
 echo "PASS"
