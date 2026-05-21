@@ -672,15 +672,30 @@ if [ -n "${TIDEY_SOCKET_PATH-}" ] && [ -S "${TIDEY_SOCKET_PATH-}" ]; then
     disown 2>/dev/null
   }
 
-  _tidey_preexec() {
+  _tidey_command_takes_over_terminal() {
     # Don't report "running" for terminal multiplexers. They take over the
     # terminal and never return to a prompt, so the outer shell would be
     # stuck in "Running" state forever.
-    local cmd="${1%% *}"
+    #
+    # Tidey's restore flow wraps attach in an `if tmux has-session ...`
+    # command, so first-token checks are not enough.
+    local command_line="${1//$'\n'/ }"
+    case "$command_line" in
+      *"tmux attach"*|*"tmux a -t"*|*"screen -r"*|*"screen -x"*) return 0 ;;
+    esac
+
+    local cmd="${command_line%% *}"
     cmd="${cmd##*/}"
     case "$cmd" in
-      tmux|screen) return ;;
+      tmux|screen) return 0 ;;
     esac
+    return 1
+  }
+
+  _tidey_preexec() {
+    if _tidey_command_takes_over_terminal "$1"; then
+      return
+    fi
     _tidey_report_shell_state "report_shell_state running"
   }
 
