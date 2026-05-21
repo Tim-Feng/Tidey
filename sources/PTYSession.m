@@ -779,6 +779,8 @@ typedef NS_ENUM(NSUInteger, PTYSessionTurdType) {
     NSString *quotedTmuxPath = [self tideyShellSingleQuotedString:tmuxBinaryPath];
     NSMutableString *command = [NSMutableString string];
     [command appendFormat:@"%@ set-environment -gu __CFBundleIdentifier 2>/dev/null; ", quotedTmuxPath];
+    [command appendFormat:@"%@ set-environment -gu TIDEY_WORKSPACE_ID 2>/dev/null; ", quotedTmuxPath];
+    [command appendFormat:@"%@ set-environment -gu TIDEY_PANEL_ID 2>/dev/null; ", quotedTmuxPath];
     [command appendFormat:@"_tidey_update_environment=\"$(%@ show-option -gqv update-environment 2>/dev/null)\"; ", quotedTmuxPath];
     [command appendString:@"_tidey_filtered_update_environment=\"\"; "];
     [command appendString:@"for _tidey_var in $_tidey_update_environment; do "];

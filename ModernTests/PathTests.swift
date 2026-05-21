@@ -1315,6 +1315,8 @@ final class PathTests: XCTestCase {
         let command = tmuxEnvironmentCleanupCommand(tmuxBinaryPath: "/opt/homebrew/bin/tmux")
 
         XCTAssertTrue(command.contains("set-environment -gu __CFBundleIdentifier"))
+        XCTAssertTrue(command.contains("set-environment -gu TIDEY_WORKSPACE_ID"))
+        XCTAssertTrue(command.contains("set-environment -gu TIDEY_PANEL_ID"))
         XCTAssertFalse(command.contains("set-environment -gu CMUX_SURFACE_ID"))
         XCTAssertFalse(command.contains("set-environment -gu GHOSTTY_BIN_DIR"))
         XCTAssertFalse(command.contains("CMUX_SOCKET_PATH"))
