@@ -236,6 +236,8 @@ if "hooks = false" in text:
     raise SystemExit("disabled hooks feature flag was preserved")
 if "[projects.\"/Users/timfeng\"]" not in text:
     raise SystemExit("existing config sections were not preserved")
+if text.find("suppress_unstable_features_warning = true") > text.find("[features]"):
+    raise SystemExit("unstable feature warning suppress flag was not inserted at top level")
 PY
     '
 

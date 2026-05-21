@@ -147,10 +147,17 @@ else:
     text += "[features]\n"
     text += "hooks = true\n"
 
-if "suppress_unstable_features_warning" not in text:
-    if text and not text.endswith("\n"):
-        text += "\n"
-    text += "suppress_unstable_features_warning = true\n"
+if not re.search(r"(?m)^suppress_unstable_features_warning\s*=", text):
+    line = "suppress_unstable_features_warning = true\n"
+    first_table = re.search(r"(?m)^\[", text)
+    if first_table:
+        prefix = text[:first_table.start()].rstrip("\n")
+        suffix = text[first_table.start():].lstrip("\n")
+        text = (prefix + "\n" if prefix else "") + line + ("\n" + suffix if suffix else "")
+    else:
+        if text and not text.endswith("\n"):
+            text += "\n"
+        text += line
 
 output_path.write_text(text)
 PY
