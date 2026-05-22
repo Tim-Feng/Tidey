@@ -305,14 +305,18 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
                                                       return [
                                                           AgentProcessDescriptor(pid: 95759,
                                                                                  command: "/Users/timfeng/.nvm/versions/node/v24.13.0/bin/node",
-                                                                                 arguments: "/Users/timfeng/.nvm/versions/node/v24.13.0/lib/node_modules/@openai/codex/bin/codex.js"),
+                                                                                 arguments: "/Users/timfeng/.nvm/versions/node/v24.13.0/lib/node_modules/@openai/codex/bin/codex.js resume \(sessionID)"),
                                                           AgentProcessDescriptor(pid: codexPID,
                                                                                  command: "/Users/timfeng/.nvm/versions/node/v24.13.0/lib/node_modules/@openai/codex/vendor/darwin-arm64/codex",
                                                                                  arguments: "codex"),
                                                       ]
                                                   },
-                                                  rolloutPathLookup: { pid in
-                                                      pid == codexPID ? rolloutURL.path : nil
+                                                  rolloutPathLookup: { _ in
+                                                      XCTFail("process resume session should avoid lsof rollout fallback")
+                                                      return nil
+                                                  },
+                                                  codexRolloutBySessionIDLookup: { sessionID in
+                                                      sessionID == "11111111-2222-3333-4444-555555555555" ? rolloutURL.path : nil
                                                   })
         try monitor.start()
 
@@ -333,7 +337,7 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         XCTAssertEqual(record.vendor, "codex")
         XCTAssertEqual(record.workspaceID, "current-workspace")
         XCTAssertEqual(record.panelID, "carrier-panel")
-        XCTAssertEqual(record.pid, codexPID)
+        XCTAssertEqual(record.pid, 95759)
         XCTAssertEqual(record.tmuxPaneID, "%43")
         XCTAssertEqual(record.tmuxSocketPath, "/private/tmp/tmux-501/default")
         XCTAssertEqual(record.transcriptPath, rolloutURL.path)
@@ -344,6 +348,81 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
                                                        tmuxPaneID: "%43",
                                                        tmuxSocketPath: "/private/tmp/tmux-501/default")
         XCTAssertEqual(subsequent?.sessionID, sessionID)
+    }
+
+    func testActiveSessionForSingleWindowCarrierPrefersCodexProcessResumeOverSubagentRecord() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let parentSessionID = "11111111-2222-3333-4444-555555555555"
+        let subagentSessionID = "99999999-8888-7777-6666-555555555555"
+        let parentRolloutURL = supportDirectory
+            .appendingPathComponent(".codex/sessions/2026/05/22", isDirectory: true)
+            .appendingPathComponent("rollout-2026-05-22T00-00-00-\(parentSessionID).jsonl", isDirectory: false)
+        try fileManager.createDirectory(at: parentRolloutURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("[]\n".utf8).write(to: parentRolloutURL)
+
+        let staleRegistryURL = paths.codexAgentSessionsDirectory.appendingPathComponent("codex-\(subagentSessionID).json")
+        let staleRecordData = Data("""
+        {
+          "version": 1,
+          "vendor": "codex",
+          "workspace_id": "current-workspace",
+          "session_id": "\(subagentSessionID)",
+          "panel_id": "carrier-panel",
+          "pid": \(getpid()),
+          "cwd": "/Users/timfeng",
+          "created_at": "2026-05-22T01:00:00Z",
+          "rollout_path": "/Users/timfeng/.codex/sessions/2026/05/22/rollout-2026-05-22T01-00-00-\(subagentSessionID).jsonl",
+          "tmux_pane_id": "%43",
+          "tmux_socket_path": "/private/tmp/tmux-501/default"
+        }
+        """.utf8)
+        try staleRecordData.write(to: staleRegistryURL)
+
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: fileManager,
+                                                  hub: AgentEventHub(),
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+                                                  parentPIDLookup: { _ in nil },
+                                                  descendantProcessLookup: { rootPID in
+                                                      XCTAssertEqual(rootPID, 82923)
+                                                      return [
+                                                          AgentProcessDescriptor(pid: 95759,
+                                                                                 command: "/Users/timfeng/.nvm/versions/node/v24.13.0/bin/node",
+                                                                                 arguments: "/Users/timfeng/.nvm/versions/node/v24.13.0/lib/node_modules/@openai/codex/bin/codex.js resume \(parentSessionID)")
+                                                      ]
+                                                  },
+                                                  rolloutPathLookup: { _ in
+                                                      XCTFail("stale subagent direct record should be corrected without lsof fallback")
+                                                      return nil
+                                                  },
+                                                  codexRolloutBySessionIDLookup: { sessionID in
+                                                      sessionID == parentSessionID ? parentRolloutURL.path : nil
+                                                  })
+        try monitor.start()
+
+        let session = monitor.activeSessionForPanel(workspaceID: "current-workspace",
+                                                    panelID: "carrier-panel",
+                                                    effectiveShellPID: 82923,
+                                                    tmuxPaneID: "%43",
+                                                    tmuxSocketPath: "/private/tmp/tmux-501/default")
+
+        XCTAssertEqual(session?.vendor, "codex")
+        XCTAssertEqual(session?.sessionID, parentSessionID)
+        XCTAssertEqual(session?.workspaceID, "current-workspace")
+        XCTAssertEqual(session?.panelID, "carrier-panel")
+
+        let parentRegistryURL = paths.codexAgentSessionsDirectory.appendingPathComponent("codex-\(parentSessionID).json")
+        XCTAssertTrue(fileManager.fileExists(atPath: parentRegistryURL.path))
+
+        let subsequent = monitor.activeSessionForPanel(workspaceID: "current-workspace",
+                                                       panelID: "carrier-panel")
+        XCTAssertEqual(subsequent?.sessionID, parentSessionID)
     }
 
     func testActiveSessionForSingleWindowCarrierDoesNotSynthesizeWithoutCodexProcess() throws {

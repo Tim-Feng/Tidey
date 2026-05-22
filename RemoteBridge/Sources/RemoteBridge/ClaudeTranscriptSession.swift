@@ -141,6 +141,7 @@ final class AgentSessionRegistryMonitor {
     typealias ParentPIDLookup = @Sendable (Int32) -> Int32?
     typealias DescendantProcessLookup = @Sendable (Int32) -> [AgentProcessDescriptor]
     typealias RolloutPathLookup = @Sendable (Int32) -> String?
+    typealias CodexRolloutBySessionIDLookup = @Sendable (String) -> String?
     private static let liveParentPIDLookup: ParentPIDLookup = { pid in
         guard pid > 0 else {
             return nil
@@ -239,6 +240,30 @@ final class AgentSessionRegistryMonitor {
             .last
     }
 
+    private static let liveCodexRolloutBySessionIDLookup: CodexRolloutBySessionIDLookup = { sessionID in
+        guard !sessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+
+        let sessionsDirectory = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/sessions", isDirectory: true)
+        guard let enumerator = FileManager.default.enumerator(at: sessionsDirectory,
+                                                              includingPropertiesForKeys: [.isRegularFileKey],
+                                                              options: [.skipsHiddenFiles]) else {
+            return nil
+        }
+
+        for case let url as URL in enumerator {
+            guard url.lastPathComponent.hasPrefix("rollout-"),
+                  url.pathExtension == "jsonl",
+                  url.lastPathComponent.contains(sessionID) else {
+                continue
+            }
+            return url.path
+        }
+        return nil
+    }
+
     private static func liveChildPIDs(for pid: Int32) -> [Int32] {
         guard pid > 0 else {
             return []
@@ -309,6 +334,7 @@ final class AgentSessionRegistryMonitor {
     private let parentPIDLookup: ParentPIDLookup
     private let descendantProcessLookup: DescendantProcessLookup
     private let rolloutPathLookup: RolloutPathLookup
+    private let codexRolloutBySessionIDLookup: CodexRolloutBySessionIDLookup
     private let queue = DispatchQueue(label: "com.tidey.remote-bridge.agent-registry")
     private var timer: DispatchSourceTimer?
     private var watchers = [String: DispatchSourceFileSystemObject]()
@@ -327,7 +353,8 @@ final class AgentSessionRegistryMonitor {
          tmuxResolver: TmuxStateResolver = TmuxStateResolver(),
          parentPIDLookup: @escaping ParentPIDLookup = AgentSessionRegistryMonitor.liveParentPIDLookup,
          descendantProcessLookup: @escaping DescendantProcessLookup = AgentSessionRegistryMonitor.liveDescendantProcessLookup,
-         rolloutPathLookup: @escaping RolloutPathLookup = AgentSessionRegistryMonitor.liveRolloutPathLookup) {
+         rolloutPathLookup: @escaping RolloutPathLookup = AgentSessionRegistryMonitor.liveRolloutPathLookup,
+         codexRolloutBySessionIDLookup: @escaping CodexRolloutBySessionIDLookup = AgentSessionRegistryMonitor.liveCodexRolloutBySessionIDLookup) {
         self.paths = paths
         self.fileManager = fileManager
         self.hub = hub
@@ -337,6 +364,7 @@ final class AgentSessionRegistryMonitor {
         self.parentPIDLookup = parentPIDLookup
         self.descendantProcessLookup = descendantProcessLookup
         self.rolloutPathLookup = rolloutPathLookup
+        self.codexRolloutBySessionIDLookup = codexRolloutBySessionIDLookup
     }
 
     func start() throws {
@@ -560,8 +588,32 @@ final class AgentSessionRegistryMonitor {
 
     private func matchedSession(for panel: AgentPanelProcessSnapshot) -> ActiveAgentSessionSnapshot? {
         BridgeLogger.server.debug("agent panel match start workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) effective_shell_pid=\(panel.effectiveShellPID.map(String.init) ?? "-", privacy: .public)")
-        if let direct = activeRecords.values
-            .first(where: { $0.workspaceID == panel.workspaceID && $0.panelID == panel.panelID }) {
+        let liveCodexProcessRecord: AgentSessionRegistryRecord?
+        if let effectiveShellPID = panel.effectiveShellPID, effectiveShellPID > 0 {
+            liveCodexProcessRecord = liveCodexSessionMatch(for: panel,
+                                                           effectiveShellPID: effectiveShellPID,
+                                                           requireProcessResumeSession: true)
+        } else {
+            liveCodexProcessRecord = nil
+        }
+
+        let directMatches = activeRecords.values
+            .filter { $0.workspaceID == panel.workspaceID && $0.panelID == panel.panelID }
+            .sorted(by: Self.isRecordPreferred(_:_:))
+
+        if let liveCodexProcessRecord,
+           directMatches.contains(where: { $0.vendor == "codex" && $0.sessionID != liveCodexProcessRecord.sessionID }) {
+            applyResolvedBinding(sessionID: liveCodexProcessRecord.sessionID,
+                                 workspaceID: panel.workspaceID,
+                                 panelID: panel.panelID)
+            BridgeLogger.server.info("agent panel corrected codex session from live process workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) session_id=\(liveCodexProcessRecord.sessionID, privacy: .public)")
+            return ActiveAgentSessionSnapshot(vendor: liveCodexProcessRecord.vendor,
+                                              workspaceID: panel.workspaceID,
+                                              sessionID: liveCodexProcessRecord.sessionID,
+                                              panelID: panel.panelID)
+        }
+
+        if let direct = directMatches.first {
             applyResolvedBinding(sessionID: direct.sessionID,
                                  workspaceID: panel.workspaceID,
                                  panelID: panel.panelID)
@@ -614,7 +666,7 @@ final class AgentSessionRegistryMonitor {
 
         guard let match = tmuxCandidates.first else {
             BridgeLogger.server.debug("agent panel no tmux match workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public)")
-            if let liveCodexMatch = liveCodexSessionMatch(for: panel, effectiveShellPID: effectiveShellPID) {
+            if let liveCodexMatch = liveCodexProcessRecord ?? liveCodexSessionMatch(for: panel, effectiveShellPID: effectiveShellPID) {
                 applyResolvedBinding(sessionID: liveCodexMatch.sessionID,
                                      workspaceID: panel.workspaceID,
                                      panelID: panel.panelID)
@@ -644,7 +696,8 @@ final class AgentSessionRegistryMonitor {
     }
 
     private func liveCodexSessionMatch(for panel: AgentPanelProcessSnapshot,
-                                       effectiveShellPID: Int32) -> AgentSessionRegistryRecord? {
+                                       effectiveShellPID: Int32,
+                                       requireProcessResumeSession: Bool = false) -> AgentSessionRegistryRecord? {
         guard let tmuxPaneID = panel.tmuxPaneID,
               tmuxPaneID.isEmpty == false,
               let tmuxSocketPath = panel.tmuxSocketPath,
@@ -667,13 +720,32 @@ final class AgentSessionRegistryMonitor {
 
         for candidate in codexCandidates {
             BridgeLogger.server.info("agent panel live codex discovery candidate workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) pid=\(candidate.pid, privacy: .public) command=\(candidate.command, privacy: .public)")
-            guard let rolloutPath = rolloutPathLookup(candidate.pid),
-                  rolloutPath.isEmpty == false else {
-                BridgeLogger.server.info("agent panel live codex discovery no_rollout workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) pid=\(candidate.pid, privacy: .public)")
-                continue
+            let resolved: (sessionID: String, rolloutPath: String)?
+            if let processSessionID = Self.codexResumeSessionID(from: candidate) {
+                if let rolloutPath = codexRolloutBySessionIDLookup(processSessionID) {
+                    resolved = (processSessionID, rolloutPath)
+                    BridgeLogger.server.info("agent panel live codex discovery using_process_resume workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) pid=\(candidate.pid, privacy: .public) session_id=\(processSessionID, privacy: .public)")
+                } else {
+                    BridgeLogger.server.info("agent panel live codex discovery no_rollout_for_process_resume workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) pid=\(candidate.pid, privacy: .public) session_id=\(processSessionID, privacy: .public)")
+                    resolved = nil
+                }
+            } else if requireProcessResumeSession {
+                BridgeLogger.server.info("agent panel live codex discovery no_process_resume workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) pid=\(candidate.pid, privacy: .public)")
+                resolved = nil
+            } else {
+                guard let rolloutPath = rolloutPathLookup(candidate.pid),
+                      rolloutPath.isEmpty == false else {
+                    BridgeLogger.server.info("agent panel live codex discovery no_rollout workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) pid=\(candidate.pid, privacy: .public)")
+                    continue
+                }
+                guard let sessionID = Self.codexSessionID(fromRolloutPath: rolloutPath) else {
+                    BridgeLogger.server.info("agent panel live codex discovery invalid_rollout workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) pid=\(candidate.pid, privacy: .public) rollout_path=\(rolloutPath, privacy: .private)")
+                    continue
+                }
+                resolved = (sessionID, rolloutPath)
             }
-            guard let sessionID = Self.codexSessionID(fromRolloutPath: rolloutPath) else {
-                BridgeLogger.server.info("agent panel live codex discovery invalid_rollout workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) pid=\(candidate.pid, privacy: .public) rollout_path=\(rolloutPath, privacy: .private)")
+
+            guard let (sessionID, rolloutPath) = resolved else {
                 continue
             }
 
@@ -711,6 +783,39 @@ final class AgentSessionRegistryMonitor {
             return true
         }
         return false
+    }
+
+    private static func codexResumeSessionID(from descriptor: AgentProcessDescriptor) -> String? {
+        let combined = descriptor.command + " " + descriptor.arguments
+        let tokens = combined.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard let codexIndex = tokens.lastIndex(where: { token in
+            let component = URL(fileURLWithPath: token).lastPathComponent
+            return component == "codex" || component == "codex.js"
+        }) else {
+            return nil
+        }
+        let remaining = tokens.dropFirst(codexIndex + 1)
+        guard let resumeIndex = remaining.firstIndex(of: "resume") else {
+            return nil
+        }
+        let sessionIndex = remaining.index(after: resumeIndex)
+        guard sessionIndex < tokens.endIndex else {
+            return nil
+        }
+        let sessionID = tokens[sessionIndex]
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+        return Self.isCodexSessionID(sessionID) ? sessionID : nil
+    }
+
+    private static func isCodexSessionID(_ value: String) -> Bool {
+        let parts = value.split(separator: "-")
+        guard parts.count == 5 else {
+            return false
+        }
+        let lengths = [8, 4, 4, 4, 12]
+        return zip(parts, lengths).allSatisfy { part, length in
+            part.count == length && part.allSatisfy(\.isHexDigit)
+        }
     }
 
     private static func codexSessionID(fromRolloutPath rolloutPath: String) -> String? {
