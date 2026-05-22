@@ -562,17 +562,12 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
     private let ordinaryTmuxPanelRegistry: OrdinaryTmuxPanelRegistry
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
-    private lazy var ordinaryTmuxRouteResolver = OrdinaryTmuxRouteResolver(registry: ordinaryTmuxPanelRegistry)
-    private lazy var inputActionHandler = BridgeInputActionHandler(socketSender: socketClient,
-                                                                   sessionResolver: registryMonitor,
-                                                                   ordinaryTmuxInputRouter: OrdinaryTmuxInputRouter(routeResolver: ordinaryTmuxRouteResolver),
-                                                                   chatSubmitEchoRegistry: registryMonitor.chatSubmitEchoRegistry)
-    private lazy var fileActionHandler = BridgeFileActionHandler(rootResolver: TideyPanelFileRootResolver(socketSender: socketClient,
-                                                                                                          ordinaryTmuxRouteResolver: ordinaryTmuxRouteResolver))
-    private lazy var ordinaryTmuxRecentOutputHandler = OrdinaryTmuxRecentOutputHandler(routeResolver: ordinaryTmuxRouteResolver)
-    private lazy var imageUploadHandler = BridgeImageUploadHandler(destinationResolver: ApplicationSupportImageUploadDestinationResolver(),
-                                                                   filenameGenerator: TimestampedImageUploadFilenameGenerator())
-    private lazy var ordinaryTmuxPanelProjector = OrdinaryTmuxPanelProjector(registry: ordinaryTmuxPanelRegistry)
+    private let ordinaryTmuxRouteResolver: OrdinaryTmuxRouteResolver
+    private let inputActionHandler: BridgeInputActionHandler
+    private let fileActionHandler: BridgeFileActionHandler
+    private let ordinaryTmuxRecentOutputHandler: OrdinaryTmuxRecentOutputHandler
+    private let imageUploadHandler: BridgeImageUploadHandler
+    private let ordinaryTmuxPanelProjector: OrdinaryTmuxPanelProjector
     private var agentSubscriptionID: UUID?
     private var workspaceSubscriptionID: UUID?
 
@@ -592,6 +587,18 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
         self.bridgePort = bridgePort
         self.cloudflaredManager = cloudflaredManager
         self.ordinaryTmuxPanelRegistry = ordinaryTmuxPanelRegistry
+        let routeResolver = OrdinaryTmuxRouteResolver(registry: ordinaryTmuxPanelRegistry)
+        self.ordinaryTmuxRouteResolver = routeResolver
+        self.inputActionHandler = BridgeInputActionHandler(socketSender: socketClient,
+                                                           sessionResolver: registryMonitor,
+                                                           ordinaryTmuxInputRouter: OrdinaryTmuxInputRouter(routeResolver: routeResolver),
+                                                           chatSubmitEchoRegistry: registryMonitor.chatSubmitEchoRegistry)
+        self.fileActionHandler = BridgeFileActionHandler(rootResolver: TideyPanelFileRootResolver(socketSender: socketClient,
+                                                                                                  ordinaryTmuxRouteResolver: routeResolver))
+        self.ordinaryTmuxRecentOutputHandler = OrdinaryTmuxRecentOutputHandler(routeResolver: routeResolver)
+        self.imageUploadHandler = BridgeImageUploadHandler(destinationResolver: ApplicationSupportImageUploadDestinationResolver(),
+                                                           filenameGenerator: TimestampedImageUploadFilenameGenerator())
+        self.ordinaryTmuxPanelProjector = OrdinaryTmuxPanelProjector(registry: ordinaryTmuxPanelRegistry)
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
