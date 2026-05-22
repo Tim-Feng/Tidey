@@ -20,7 +20,7 @@ final class OrdinaryTmuxPanelProjector {
     private let cacheQueue = DispatchQueue(label: "com.tidey.remote-bridge.ordinary-tmux-panel-projector-cache")
     private var cache = [String: CacheEntry]()
     private var identityCache = [String: String]()
-    private var projectionCooldownUntil: Date?
+    private var projectionCooldownUntilByKey = [String: Date]()
 
     init(adapter: OrdinaryTmuxWindowProjecting = OrdinaryTmuxCLIAdapter(),
          registry: OrdinaryTmuxPanelRegistry? = nil,
@@ -165,7 +165,7 @@ final class OrdinaryTmuxPanelProjector {
                                        canReplaceRegistry: true)
         }
 
-        if isProjectionInCooldown(at: currentDate) {
+        if isProjectionInCooldown(for: key, at: currentDate) {
             if let staleLoad = staleProjectedPanelsLoad(for: key,
                                                         currentDate: currentDate,
                                                         workspaceID: workspaceID,
@@ -179,7 +179,7 @@ final class OrdinaryTmuxPanelProjector {
                                        canReplaceRegistry: false)
         }
 
-        let recoveredFromCooldown = consumeExpiredProjectionCooldown(at: currentDate)
+        let recoveredFromCooldown = consumeExpiredProjectionCooldown(for: key, at: currentDate)
         do {
             let panels = try adapter.projectedPanels(for: metadata)
             cacheQueue.sync {
@@ -193,7 +193,7 @@ final class OrdinaryTmuxPanelProjector {
                                        canReplaceRegistry: true)
         } catch {
             if Self.isTmuxCommandTimeout(error) {
-                enterProjectionCooldown(at: currentDate)
+                enterProjectionCooldown(for: key, at: currentDate)
                 if let staleLoad = staleProjectedPanelsLoad(for: key,
                                                             currentDate: currentDate,
                                                             workspaceID: workspaceID,
@@ -217,29 +217,29 @@ final class OrdinaryTmuxPanelProjector {
         }
     }
 
-    private func isProjectionInCooldown(at currentDate: Date) -> Bool {
+    private func isProjectionInCooldown(for key: String, at currentDate: Date) -> Bool {
         cacheQueue.sync {
-            guard let projectionCooldownUntil else {
+            guard let projectionCooldownUntil = projectionCooldownUntilByKey[key] else {
                 return false
             }
             return currentDate < projectionCooldownUntil
         }
     }
 
-    private func consumeExpiredProjectionCooldown(at currentDate: Date) -> Bool {
+    private func consumeExpiredProjectionCooldown(for key: String, at currentDate: Date) -> Bool {
         cacheQueue.sync {
-            guard let projectionCooldownUntil,
+            guard let projectionCooldownUntil = projectionCooldownUntilByKey[key],
                   currentDate >= projectionCooldownUntil else {
                 return false
             }
-            self.projectionCooldownUntil = nil
+            self.projectionCooldownUntilByKey[key] = nil
             return true
         }
     }
 
-    private func enterProjectionCooldown(at currentDate: Date) {
+    private func enterProjectionCooldown(for key: String, at currentDate: Date) {
         cacheQueue.sync {
-            projectionCooldownUntil = currentDate.addingTimeInterval(10)
+            projectionCooldownUntilByKey[key] = currentDate.addingTimeInterval(10)
         }
     }
 

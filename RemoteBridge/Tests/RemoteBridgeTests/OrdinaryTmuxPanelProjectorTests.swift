@@ -36,6 +36,30 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
         func setPaneIdentity(route: OrdinaryTmuxPanelRoute) throws {}
     }
 
+    private final class TargetTimeoutAdapter: OrdinaryTmuxWindowProjecting, @unchecked Sendable {
+        private let lock = NSLock()
+        private let successPanels: [OrdinaryTmuxProjectedPanel]
+        private(set) var targetSessions = [String]()
+
+        init(successPanels: [OrdinaryTmuxProjectedPanel]) {
+            self.successPanels = successPanels
+        }
+
+        func projectedPanels(for metadata: OrdinaryTmuxAttachMetadata) throws -> [OrdinaryTmuxProjectedPanel] {
+            lock.lock()
+            targetSessions.append(metadata.targetSession ?? "")
+            lock.unlock()
+            if metadata.targetSession == "adbrewer-cc" {
+                throw NSError(domain: "OrdinaryTmuxCLIAdapter",
+                              code: 124,
+                              userInfo: [NSLocalizedDescriptionKey: "tmux command timed out"])
+            }
+            return successPanels
+        }
+
+        func setPaneIdentity(route: OrdinaryTmuxPanelRoute) throws {}
+    }
+
     private final class MutableAdapter: OrdinaryTmuxWindowProjecting, @unchecked Sendable {
         private let lock = NSLock()
         private var panels: [OrdinaryTmuxProjectedPanel]
@@ -261,6 +285,28 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
         XCTAssertEqual(second["panels"]?.arrayValue?.first?.objectValue?["panel_id"]?.stringValue, "carrier-panel")
     }
 
+    func testProjectionTimeoutForOneCarrierDoesNotCooldownOtherCarrier() throws {
+        let adapter = TargetTimeoutAdapter(successPanels: [
+            projectedPanel(windowID: "@15", index: 0, name: "codex", paneID: "%15", current: true),
+        ])
+        let clock = TestClock(Date(timeIntervalSince1970: 0))
+        let projector = OrdinaryTmuxPanelProjector(adapter: adapter,
+                                                   cacheTTL: 1,
+                                                   staleTTL: 30,
+                                                   now: { clock.now() })
+
+        let result = projector.projectPanelListResult(twoCarrierPanelListResult())
+
+        let panels = result["panels"]?.arrayValue?.compactMap(\.objectValue)
+        XCTAssertEqual(adapter.targetSessions, ["adbrewer-cc", "adbrewer-codex"])
+        XCTAssertEqual(panels?.map { $0["panel_id"]?.stringValue }, ["carrier-cc", "carrier-codex"])
+        XCTAssertNil(panels?.first?["ordinary_tmux_logical"])
+        XCTAssertEqual(panels?.last?["effective_shell_pid"]?.intValue, 1015)
+        let logical = try XCTUnwrap(panels?.last?["ordinary_tmux_logical"]?.objectValue)
+        XCTAssertEqual(logical["active_pane_id"]?.stringValue, "%15")
+        XCTAssertEqual(logical["socket_path"]?.stringValue, "/tmp/tmux-501/default")
+    }
+
     func testProjectionTimeoutUsesStaleCacheAndCooldownSkipsNextAdapterCall() {
         let adapter = MutableAdapter(panels: [
             projectedPanel(windowID: "@15", index: 0, name: "priest", paneID: "%15", current: true),
@@ -361,6 +407,47 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
                     "ordinary_tmux": .object([
                         "client_tty": .string("/dev/ttys010"),
                         "target_session": .string("genesis-extraction"),
+                    ]),
+                ]),
+            ]),
+        ]
+    }
+
+    private func twoCarrierPanelListResult() -> [String: JSONValue] {
+        [
+            "workspace_id": .string("workspace-1"),
+            "selected_panel_id": .string("carrier-codex"),
+            "panels": .array([
+                .object([
+                    "panel_id": .string("carrier-cc"),
+                    "workspace_id": .string("workspace-1"),
+                    "window_guid": .string("window-guid"),
+                    "title": .string("tmux"),
+                    "subtitle": .string("adbrewer-cc"),
+                    "state": .string("idle"),
+                    "selected": .bool(false),
+                    "is_browser": .bool(false),
+                    "panel_index": .number(0),
+                    "workspace_index": .number(0),
+                    "ordinary_tmux": .object([
+                        "client_tty": .string("/dev/ttys003"),
+                        "target_session": .string("adbrewer-cc"),
+                    ]),
+                ]),
+                .object([
+                    "panel_id": .string("carrier-codex"),
+                    "workspace_id": .string("workspace-1"),
+                    "window_guid": .string("window-guid"),
+                    "title": .string("tmux"),
+                    "subtitle": .string("adbrewer-codex"),
+                    "state": .string("idle"),
+                    "selected": .bool(true),
+                    "is_browser": .bool(false),
+                    "panel_index": .number(1),
+                    "workspace_index": .number(0),
+                    "ordinary_tmux": .object([
+                        "client_tty": .string("/dev/ttys004"),
+                        "target_session": .string("adbrewer-codex"),
                     ]),
                 ]),
             ]),
