@@ -568,7 +568,6 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
     private let ordinaryTmuxRecentOutputHandler: OrdinaryTmuxRecentOutputHandler
     private let imageUploadHandler: BridgeImageUploadHandler
     private let ordinaryTmuxPanelProjector: OrdinaryTmuxPanelProjector
-    private let workspaceLivePanelRefreshScheduler: WorkspaceLivePanelRefreshScheduler
     private var agentSubscriptionID: UUID?
     private var workspaceSubscriptionID: UUID?
 
@@ -600,9 +599,6 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
         self.imageUploadHandler = BridgeImageUploadHandler(destinationResolver: ApplicationSupportImageUploadDestinationResolver(),
                                                            filenameGenerator: TimestampedImageUploadFilenameGenerator())
         self.ordinaryTmuxPanelProjector = OrdinaryTmuxPanelProjector(registry: ordinaryTmuxPanelRegistry)
-        self.workspaceLivePanelRefreshScheduler = WorkspaceLivePanelRefreshScheduler(socketSender: socketClient,
-                                                                                    registry: registryMonitor,
-                                                                                    projector: ordinaryTmuxPanelProjector)
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
@@ -1082,7 +1078,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                                   result: augmentPanelListResult(projectedResult),
                                   error: response.error)
         case "list_workspaces":
-            workspaceLivePanelRefreshScheduler.scheduleRefresh(forListedWorkspaces: result)
+            pruneLivePanelsForListedWorkspaces(result)
             return BridgeResponse(id: response.id,
                                   ok: response.ok,
                                   v: response.v,
@@ -1091,6 +1087,14 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
         default:
             return response
         }
+    }
+
+    private func pruneLivePanelsForListedWorkspaces(_ result: [String: JSONValue]) {
+        guard let workspaces = result["workspaces"]?.arrayValue else {
+            return
+        }
+        let workspaceIDs = Set(workspaces.compactMap { $0.objectValue?["workspace_id"]?.stringValue })
+        registryMonitor.pruneLivePanels(toWorkspaceIDs: workspaceIDs)
     }
 
     private func recordPanelListResult(_ result: [String: JSONValue]) {
