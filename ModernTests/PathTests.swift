@@ -11,7 +11,7 @@ import Darwin
 import ObjectiveC.runtime
 
 fileprivate final class URLActionTextDataSource: NSObject, iTermTextDataSource {
-    private let line: ScreenCharArray
+    private let lines: [ScreenCharArray]
     private let widthValue: Int32
     private let externalAttributes: iTermExternalAttributeIndex?
 
@@ -20,16 +20,19 @@ fileprivate final class URLActionTextDataSource: NSObject, iTermTextDataSource {
          externalURL: String? = nil,
          externalRange: NSRange? = nil) {
         widthValue = width
-        var buffer = [screen_char_t](repeating: screen_char_t(), count: Int(width) + 1)
-        for (index, scalar) in text.unicodeScalars.enumerated() where index < Int(width) {
-            buffer[index].code = unichar(scalar.value)
-            buffer[index].complexChar = 0
+        let textLines = text.components(separatedBy: "\n")
+        lines = textLines.map { textLine in
+            var buffer = [screen_char_t](repeating: screen_char_t(), count: Int(width) + 1)
+            for (index, scalar) in textLine.unicodeScalars.enumerated() where index < Int(width) {
+                buffer[index].code = unichar(scalar.value)
+                buffer[index].complexChar = 0
+            }
+            var eol = screen_char_t()
+            eol.code = unichar(EOL_HARD)
+            return ScreenCharArray(copyOfLine: buffer,
+                                   length: width,
+                                   continuation: eol)
         }
-        var eol = screen_char_t()
-        eol.code = unichar(EOL_HARD)
-        line = ScreenCharArray(copyOfLine: buffer,
-                               length: width,
-                               continuation: eol)
 
         if let externalURL,
            let externalRange,
@@ -55,7 +58,7 @@ fileprivate final class URLActionTextDataSource: NSObject, iTermTextDataSource {
     }
 
     func numberOfLines() -> Int32 {
-        return 1
+        return Int32(lines.count)
     }
 
     func totalScrollbackOverflow() -> Int64 {
@@ -63,11 +66,11 @@ fileprivate final class URLActionTextDataSource: NSObject, iTermTextDataSource {
     }
 
     func screenCharArray(forLine line: Int32) -> ScreenCharArray {
-        return self.line
+        return lines[max(0, min(Int(line), lines.count - 1))]
     }
 
     func screenCharArray(atScreenIndex index: Int32) -> ScreenCharArray {
-        return line
+        return screenCharArray(forLine: index)
     }
 
     func externalAttributeIndex(forLine y: Int32) -> (any iTermExternalAttributeIndexReading)? {
@@ -75,7 +78,7 @@ fileprivate final class URLActionTextDataSource: NSObject, iTermTextDataSource {
     }
 
     func fetchLine(_ line: Int32, block: (ScreenCharArray) -> Any?) -> Any? {
-        return block(self.line)
+        return block(screenCharArray(forLine: line))
     }
 
     func date(forLine line: Int32) -> Date? {
@@ -357,6 +360,26 @@ final class PathTests: XCTestCase {
                         ObjCBool(respectHardNewlines)) as String?
     }
 
+    private func shouldSuppressURLLikeCandidate(primary: String,
+                                                recovered: String) -> Bool {
+        guard let factoryClass = NSClassFromString("iTermURLActionFactory") as? AnyClass else {
+            XCTFail("Missing iTermURLActionFactory")
+            return false
+        }
+        let selector = NSSelectorFromString("tideyShouldSuppressURLLikeCandidate:whenRecoveredForm:")
+        guard let method = class_getClassMethod(factoryClass, selector) else {
+            XCTFail("Missing iTermURLActionFactory URL-like suppression helper")
+            return false
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, NSString, NSString) -> ObjCBool
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        return function(factoryClass,
+                        selector,
+                        primary as NSString,
+                        recovered as NSString).boolValue
+    }
+
     private func urlHitCandidate(logicalString: String,
                                  clickIndex: Int,
                                  columns: [Int],
@@ -385,6 +408,7 @@ final class PathTests: XCTestCase {
 
     private func openURLAction(text: String,
                                clickIndex: Int,
+                               width: Int? = nil,
                                externalURL: String? = nil,
                                externalRange: NSRange? = nil) -> [String: Any]? {
         guard let factoryClass = NSClassFromString("iTermURLActionFactory") as? AnyClass else {
@@ -396,21 +420,39 @@ final class PathTests: XCTestCase {
             XCTFail("Missing Tidey open URL action helper")
             return nil
         }
-        let width = Int32(max(80, (text as NSString).length + 1))
+        let longestLine = text.components(separatedBy: "\n").map { ($0 as NSString).length }.max() ?? 0
+        let resolvedWidth = Int32(width ?? max(80, longestLine + 1))
         let dataSource = URLActionTextDataSource(text: text,
-                                                 width: width,
+                                                 width: resolvedWidth,
                                                  externalURL: externalURL,
                                                  externalRange: externalRange)
         let extractor = iTermTextExtractor(dataSource: dataSource)
+        let visualCoord = visualCoordForLinearIndex(clickIndex, in: text)
         typealias Function = @convention(c) (AnyClass, Selector, Int32, Int32, iTermTextExtractor, ObjCBool) -> NSDictionary?
         let implementation = method_getImplementation(method)
         let function = unsafeBitCast(implementation, to: Function.self)
         return function(factoryClass,
                         selector,
-                        Int32(clickIndex),
-                        0,
+                        visualCoord.x,
+                        visualCoord.y,
                         extractor,
                         true) as? [String: Any]
+    }
+
+    private func visualCoordForLinearIndex(_ clickIndex: Int, in text: String) -> (x: Int32, y: Int32) {
+        let nsText = text as NSString
+        let safeIndex = max(0, min(clickIndex, max(0, nsText.length - 1)))
+        var x = 0
+        var y = 0
+        for index in 0..<safeIndex {
+            if nsText.character(at: index) == unichar(("\n" as NSString).character(at: 0)) {
+                x = 0
+                y += 1
+            } else {
+                x += 1
+            }
+        }
+        return (Int32(x), Int32(y))
     }
 
     private func gridCoordinates(for string: String, width: Int) -> (columns: [Int], rows: [Int]) {
@@ -1008,6 +1050,41 @@ final class PathTests: XCTestCase {
                            "https://claude.ai/admin-settings/claude-code",
                            "prefix: \(prefix)")
         }
+    }
+
+    func testWrappedSourcePathFragmentAfterLabelDoesNotOpenAsURL() {
+        let text = """
+        Review 輸出位置：
+
+          - CC：/Users/timfeng/GitHub/adbrewer/docs/strategy/
+            sources/round1-noun-classification/cc-review-batch-
+            001.md
+        """
+        let clickIndex = (text as NSString).range(of: "cc-review-batch").location
+
+        let action = openURLAction(text: text,
+                                   clickIndex: clickIndex,
+                                   width: 120)
+
+        XCTAssertNil(action?["url"] as? String)
+    }
+
+    func testURLLikeCandidateSuppressedWhenRecoveredAsSourcePath() {
+        XCTAssertTrue(shouldSuppressURLLikeCandidate(
+            primary: "sources/round1-noun-classification/cc-review-batch-",
+            recovered: "sources/round1-noun-classification/cc-review-batch-001.md"))
+    }
+
+    func testURLLikeCandidateSuppressionKeepsOrdinarySchemelessURLs() {
+        XCTAssertFalse(shouldSuppressURLLikeCandidate(
+            primary: "example.com/docs-",
+            recovered: "example.com/docs-page"))
+    }
+
+    func testURLLikeCandidateSuppressionKeepsExplicitURLs() {
+        XCTAssertFalse(shouldSuppressURLLikeCandidate(
+            primary: "https://example.com/readme-",
+            recovered: "https://example.com/readme.md"))
     }
 
     func testOSC8LabelPlainClickCandidateOpensExternalURL() {

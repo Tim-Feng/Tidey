@@ -88,6 +88,30 @@ static BOOL iTermStringIsASCIIOnly(NSString *string) {
     return YES;
 }
 
+static NSSet<NSString *> *iTermURLActionFactorySourceLikeExtensions(void) {
+    static NSSet<NSString *> *sourceLikeExtensions;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        sourceLikeExtensions = [NSSet setWithArray:@[
+            @"sh", @"py", @"js", @"ts", @"m", @"h", @"c", @"cpp", @"swift",
+            @"go", @"rs", @"java", @"rb", @"pl", @"md", @"txt", @"json",
+            @"yaml", @"yml", @"xml", @"html", @"css", @"toml", @"cfg",
+            @"conf", @"ini", @"log", @"csv"
+        ]];
+    });
+    return sourceLikeExtensions;
+}
+
+static BOOL iTermURLActionFactoryStringIsSourceLikePath(NSString *string) {
+    if ([string rangeOfString:@"://"].location != NSNotFound ||
+        [string rangeOfString:@"/"].location == NSNotFound) {
+        return NO;
+    }
+    NSString *lastPathComponent = [[string componentsSeparatedByString:@"/"] lastObject];
+    NSString *extension = lastPathComponent.pathExtension.lowercaseString;
+    return extension.length > 0 && [iTermURLActionFactorySourceLikeExtensions() containsObject:extension];
+}
+
 static NSRange iTermURLRangeByTrimmingFullWidthBoundaryPunctuation(NSString *string, NSRange range) {
     if (range.location == NSNotFound || range.length == 0 || NSMaxRange(range) > string.length) {
         return range;
@@ -593,6 +617,18 @@ static NSDictionary *iTermURLActionFactoryTideyDictionaryForAction(URLAction *ac
     return [self tideyURLLikeCandidateInJoinedString:joined clickIndex:clickIndex];
 }
 
++ (BOOL)tideyShouldSuppressURLLikeCandidate:(NSString *)primaryCandidate
+                          whenRecoveredForm:(NSString *)recoveredCandidate {
+    if (!primaryCandidate.length || !recoveredCandidate.length) {
+        return NO;
+    }
+    if (recoveredCandidate.length <= primaryCandidate.length ||
+        ![recoveredCandidate hasPrefix:primaryCandidate]) {
+        return NO;
+    }
+    return iTermURLActionFactoryStringIsSourceLikePath(recoveredCandidate);
+}
+
 + (NSDictionary *)tideyURLHitCandidateDictionaryForLogicalString:(NSString *)logicalString
                                                       clickIndex:(NSInteger)clickIndex
                                                          columns:(NSArray<NSNumber *> *)columns
@@ -937,6 +973,24 @@ static NSDictionary *iTermURLActionFactoryTideyDictionaryForAction(URLAction *ac
     return nil;
 }
 
+- (NSString *)urlLikeCandidateStringWithLocatedPrefix:(iTermLocatedString *)locatedPrefix
+                                         locatedSuffix:(iTermLocatedString *)locatedSuffix {
+    if (!locatedPrefix || !locatedSuffix) {
+        return nil;
+    }
+    NSString *joined = [locatedPrefix.string stringByAppendingString:locatedSuffix.string];
+    int prefixChars = 0;
+    NSString *possibleUrl = [joined substringIncludingOffset:[locatedPrefix.string length]
+                                            fromCharacterSet:[NSCharacterSet urlCharacterSet]
+                                        charsTakenFromPrefix:&prefixChars];
+    NSRange rangeWithoutNearbyPunctuation = [possibleUrl rangeOfURLInString];
+    if (rangeWithoutNearbyPunctuation.location == NSNotFound) {
+        return nil;
+    }
+    rangeWithoutNearbyPunctuation = iTermURLRangeByTrimmingFullWidthBoundaryPunctuation(possibleUrl, rangeWithoutNearbyPunctuation);
+    return [possibleUrl substringWithRange:rangeWithoutNearbyPunctuation];
+}
+
 - (URLAction *)urlActionForURLLikeWithLocatedPrefix:(iTermLocatedString *)locatedPrefix
                                       locatedSuffix:(iTermLocatedString *)locatedSuffix {
     if (!locatedPrefix || !locatedSuffix) {
@@ -1089,8 +1143,20 @@ static NSDictionary *iTermURLActionFactoryTideyDictionaryForAction(URLAction *ac
         return fallbackAction;
     }
 
-    return [self urlActionForURLLikeWithLocatedPrefix:primaryPrefix
-                                        locatedSuffix:primarySuffix];
+    URLAction *primaryGenericAction = [self urlActionForURLLikeWithLocatedPrefix:primaryPrefix
+                                                                     locatedSuffix:primarySuffix];
+    if (!primaryGenericAction) {
+        return [self urlActionForURLLikeWithLocatedPrefix:fallbackPrefix
+                                             locatedSuffix:fallbackSuffix];
+    }
+
+    NSString *recoveredCandidate = [self urlLikeCandidateStringWithLocatedPrefix:fallbackPrefix
+                                                                   locatedSuffix:fallbackSuffix];
+    if ([[self class] tideyShouldSuppressURLLikeCandidate:primaryGenericAction.string
+                                        whenRecoveredForm:recoveredCandidate]) {
+        return nil;
+    }
+    return primaryGenericAction;
 }
 
 - (NSString *)hostnameInSchemelessPossibleURL:(NSString *)url {
@@ -1226,27 +1292,18 @@ static NSDictionary *iTermURLActionFactoryTideyDictionaryForAction(URLAction *ac
         if ([s rangeOfString:@"://"].location == NSNotFound) {
             static NSCharacterSet *cjkCharacterSet;
             static dispatch_once_t onceToken;
-            static NSSet<NSString *> *sourceLikeExtensions;
             dispatch_once(&onceToken, ^{
                 NSMutableCharacterSet *set = [[NSMutableCharacterSet alloc] init];
                 [set addCharactersInRange:NSMakeRange(0x2E80, 0x9FFF - 0x2E80 + 1)];
                 [set addCharactersInRange:NSMakeRange(0xF900, 0xFAFF - 0xF900 + 1)];
                 [set addCharactersInRange:NSMakeRange(0xFF00, 0xFFEF - 0xFF00 + 1)];
                 cjkCharacterSet = [set copy];
-                sourceLikeExtensions = [NSSet setWithArray:@[
-                    @"sh", @"py", @"js", @"ts", @"m", @"h", @"c", @"cpp", @"swift",
-                    @"go", @"rs", @"java", @"rb", @"pl", @"md", @"txt", @"json",
-                    @"yaml", @"yml", @"xml", @"html", @"css", @"toml", @"cfg",
-                    @"conf", @"ini", @"log", @"csv"
-                ]];
             });
             NSString *prefix = [s substringToIndex:slashRange.location];
             if ([prefix rangeOfCharacterFromSet:cjkCharacterSet].location != NSNotFound) {
                 return NO;
             }
-            NSString *lastPathComponent = [[s componentsSeparatedByString:@"/"] lastObject];
-            NSString *extension = lastPathComponent.pathExtension.lowercaseString;
-            if (extension.length > 0 && [sourceLikeExtensions containsObject:extension]) {
+            if (iTermURLActionFactoryStringIsSourceLikePath(s)) {
                 return NO;
             }
         }
