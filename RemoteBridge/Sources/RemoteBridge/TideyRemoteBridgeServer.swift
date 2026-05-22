@@ -568,6 +568,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
     private let ordinaryTmuxRecentOutputHandler: OrdinaryTmuxRecentOutputHandler
     private let imageUploadHandler: BridgeImageUploadHandler
     private let ordinaryTmuxPanelProjector: OrdinaryTmuxPanelProjector
+    private let workspaceLivePanelRefreshScheduler: WorkspaceLivePanelRefreshScheduler
     private var agentSubscriptionID: UUID?
     private var workspaceSubscriptionID: UUID?
 
@@ -599,6 +600,9 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
         self.imageUploadHandler = BridgeImageUploadHandler(destinationResolver: ApplicationSupportImageUploadDestinationResolver(),
                                                            filenameGenerator: TimestampedImageUploadFilenameGenerator())
         self.ordinaryTmuxPanelProjector = OrdinaryTmuxPanelProjector(registry: ordinaryTmuxPanelRegistry)
+        self.workspaceLivePanelRefreshScheduler = WorkspaceLivePanelRefreshScheduler(socketSender: socketClient,
+                                                                                    registry: registryMonitor,
+                                                                                    projector: ordinaryTmuxPanelProjector)
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
@@ -1078,7 +1082,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                                   result: augmentPanelListResult(projectedResult),
                                   error: response.error)
         case "list_workspaces":
-            refreshLivePanelsForListedWorkspaces(result)
+            workspaceLivePanelRefreshScheduler.scheduleRefresh(forListedWorkspaces: result)
             return BridgeResponse(id: response.id,
                                   ok: response.ok,
                                   v: response.v,
@@ -1089,56 +1093,11 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
         }
     }
 
-    private func refreshLivePanelsForListedWorkspaces(_ result: [String: JSONValue]) {
-        guard let workspaces = result["workspaces"]?.arrayValue else {
-            return
-        }
-
-        let workspaceIDs = Set(workspaces.compactMap { $0.objectValue?["workspace_id"]?.stringValue })
-        registryMonitor.pruneLivePanels(toWorkspaceIDs: workspaceIDs)
-
-        for workspaceID in workspaceIDs {
-            let request = BridgeRequest(id: UUID().uuidString,
-                                        action: "list_panels",
-                                        params: ["workspace_id": .string(workspaceID)])
-            let panelResponse = try? socketClient.send(request)
-            guard let panelResult = panelResponse?.result else {
-                registryMonitor.replaceLivePanels(workspaceID: workspaceID, panels: [])
-                continue
-            }
-            recordPanelListResult(ordinaryTmuxPanelProjector.projectPanelListResult(panelResult))
-        }
-    }
-
     private func recordPanelListResult(_ result: [String: JSONValue]) {
-        guard let workspaceID = result["workspace_id"]?.stringValue,
-              let panels = result["panels"]?.arrayValue else {
+        guard let extracted = AgentPanelProcessSnapshotExtractor.snapshots(fromPanelListResult: result) else {
             return
         }
-
-        let snapshots = panels.compactMap { Self.panelProcessSnapshot(from: $0, defaultWorkspaceID: workspaceID) }
-        registryMonitor.replaceLivePanels(workspaceID: workspaceID, panels: snapshots)
-    }
-
-    private static func panelProcessSnapshot(from panelValue: JSONValue,
-                                             defaultWorkspaceID: String) -> AgentPanelProcessSnapshot? {
-        guard let panel = panelValue.objectValue,
-              let panelID = panel["panel_id"]?.stringValue else {
-            return nil
-        }
-
-        let workspaceID = panel["workspace_id"]?.stringValue ?? defaultWorkspaceID
-        let effectiveShellPID = panel["effective_shell_pid"]?.intValue.flatMap(Int32.init)
-        let ordinaryTmux = panel["ordinary_tmux_logical"]?.objectValue
-        let tmuxPaneID = ordinaryTmux?["active_pane_id"]?.stringValue
-        let tmuxSocketPath = ordinaryTmux?["socket_path"]?.stringValue
-        let cwd = panel["cwd"]?.stringValue
-        return AgentPanelProcessSnapshot(workspaceID: workspaceID,
-                                         panelID: panelID,
-                                         effectiveShellPID: effectiveShellPID,
-                                         tmuxPaneID: tmuxPaneID,
-                                         tmuxSocketPath: tmuxSocketPath,
-                                         cwd: cwd)
+        registryMonitor.replaceLivePanels(workspaceID: extracted.workspaceID, panels: extracted.snapshots)
     }
 
     private func augmentPanelListResult(_ result: [String: JSONValue]) -> [String: JSONValue] {
@@ -1152,7 +1111,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                   let panelID = panel["panel_id"]?.stringValue else {
                 return panelValue
             }
-            let snapshot = Self.panelProcessSnapshot(from: panelValue, defaultWorkspaceID: workspaceID)
+            let snapshot = AgentPanelProcessSnapshotExtractor.snapshot(from: panelValue, defaultWorkspaceID: workspaceID)
             if let session = registryMonitor.activeSessionForPanel(workspaceID: workspaceID,
                                                                    panelID: panelID,
                                                                    effectiveShellPID: snapshot?.effectiveShellPID,
