@@ -285,7 +285,7 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
         XCTAssertEqual(second["panels"]?.arrayValue?.first?.objectValue?["panel_id"]?.stringValue, "carrier-panel")
     }
 
-    func testProjectionTimeoutForOneCarrierDoesNotCooldownOtherCarrier() throws {
+    func testProjectionTimeoutSkipsRemainingSameSocketCarrierDuringRequest() {
         let adapter = TargetTimeoutAdapter(successPanels: [
             projectedPanel(windowID: "@15", index: 0, name: "codex", paneID: "%15", current: true),
         ])
@@ -298,13 +298,11 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
         let result = projector.projectPanelListResult(twoCarrierPanelListResult())
 
         let panels = result["panels"]?.arrayValue?.compactMap(\.objectValue)
-        XCTAssertEqual(adapter.targetSessions, ["adbrewer-cc", "adbrewer-codex"])
+        XCTAssertEqual(adapter.targetSessions, ["adbrewer-cc"])
         XCTAssertEqual(panels?.map { $0["panel_id"]?.stringValue }, ["carrier-cc", "carrier-codex"])
         XCTAssertNil(panels?.first?["ordinary_tmux_logical"])
-        XCTAssertEqual(panels?.last?["effective_shell_pid"]?.intValue, 1015)
-        let logical = try XCTUnwrap(panels?.last?["ordinary_tmux_logical"]?.objectValue)
-        XCTAssertEqual(logical["active_pane_id"]?.stringValue, "%15")
-        XCTAssertEqual(logical["socket_path"]?.stringValue, "/tmp/tmux-501/default")
+        XCTAssertNil(panels?.last?["ordinary_tmux_logical"])
+        XCTAssertNil(panels?.last?["effective_shell_pid"])
     }
 
     func testProjectionTimeoutUsesStaleCacheAndCooldownSkipsNextAdapterCall() {

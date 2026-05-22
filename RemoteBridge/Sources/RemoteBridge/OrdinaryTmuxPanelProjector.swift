@@ -10,6 +10,7 @@ final class OrdinaryTmuxPanelProjector {
         let panels: [OrdinaryTmuxProjectedPanel]
         let canSetPaneIdentity: Bool
         let canReplaceRegistry: Bool
+        let timedOutWithoutCache: Bool
     }
 
     private let adapter: OrdinaryTmuxWindowProjecting
@@ -43,6 +44,7 @@ final class OrdinaryTmuxPanelProjector {
         var didProjectCarrier = false
         var nextPanels = [JSONValue]()
         var routes = [OrdinaryTmuxPanelRoute]()
+        var timedOutSocketKeys = Set<String>()
 
         for panelValue in panels {
             guard let carrierPanel = panelValue.objectValue else {
@@ -65,6 +67,12 @@ final class OrdinaryTmuxPanelProjector {
             }
 
             BridgeLogger.server.debug("ordinary tmux projection metadata workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) tty=\(metadata.clientTTY, privacy: .public) target=\(metadata.targetSession ?? "<default>", privacy: .public)")
+            let socketKey = metadata.preferredSocketSelector.cacheKey
+            if timedOutSocketKeys.contains(socketKey) {
+                BridgeLogger.server.info("ordinary tmux projection skipped workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) socket=\(metadata.preferredSocketSelector.logDescription, privacy: .public) reason=socket_timeout_in_request")
+                nextPanels.append(panelValue)
+                continue
+            }
 
             let projectedLoad: ProjectedPanelsLoad
             do {
@@ -77,6 +85,9 @@ final class OrdinaryTmuxPanelProjector {
                 continue
             }
             let projectedPanels = projectedLoad.panels
+            if projectedLoad.timedOutWithoutCache {
+                timedOutSocketKeys.insert(socketKey)
+            }
 
             BridgeLogger.server.info("ordinary tmux projection result workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) tty=\(metadata.clientTTY, privacy: .public) target=\(metadata.targetSession ?? "<default>", privacy: .public) projected_count=\(projectedPanels.count, privacy: .public)")
 
@@ -162,7 +173,8 @@ final class OrdinaryTmuxPanelProjector {
            currentDate.timeIntervalSince(entry.loadedAt) < cacheTTL {
             return ProjectedPanelsLoad(panels: entry.panels,
                                        canSetPaneIdentity: true,
-                                       canReplaceRegistry: true)
+                                       canReplaceRegistry: true,
+                                       timedOutWithoutCache: false)
         }
 
         if isProjectionInCooldown(for: key, at: currentDate) {
@@ -176,7 +188,8 @@ final class OrdinaryTmuxPanelProjector {
             BridgeLogger.server.info("ordinary tmux projection skipped workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) reason=timeout_cooldown_no_cache")
             return ProjectedPanelsLoad(panels: [],
                                        canSetPaneIdentity: false,
-                                       canReplaceRegistry: false)
+                                       canReplaceRegistry: false,
+                                       timedOutWithoutCache: false)
         }
 
         let recoveredFromCooldown = consumeExpiredProjectionCooldown(for: key, at: currentDate)
@@ -190,7 +203,8 @@ final class OrdinaryTmuxPanelProjector {
             }
             return ProjectedPanelsLoad(panels: panels,
                                        canSetPaneIdentity: true,
-                                       canReplaceRegistry: true)
+                                       canReplaceRegistry: true,
+                                       timedOutWithoutCache: false)
         } catch {
             if Self.isTmuxCommandTimeout(error) {
                 enterProjectionCooldown(for: key, at: currentDate)
@@ -204,7 +218,8 @@ final class OrdinaryTmuxPanelProjector {
                 BridgeLogger.server.error("ordinary tmux projection timed out without cache workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) cooldown_seconds=10")
                 return ProjectedPanelsLoad(panels: [],
                                            canSetPaneIdentity: false,
-                                           canReplaceRegistry: false)
+                                           canReplaceRegistry: false,
+                                           timedOutWithoutCache: true)
             }
             if let staleLoad = staleProjectedPanelsLoad(for: key,
                                                         currentDate: currentDate,
@@ -255,7 +270,8 @@ final class OrdinaryTmuxPanelProjector {
         BridgeLogger.server.error("ordinary tmux projection using stale cache workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) reason=\(reason, privacy: .public)")
         return ProjectedPanelsLoad(panels: entry.panels,
                                    canSetPaneIdentity: false,
-                                   canReplaceRegistry: false)
+                                   canReplaceRegistry: false,
+                                   timedOutWithoutCache: false)
     }
 
     private func syncPaneIdentitiesIfNeeded(routes: [OrdinaryTmuxPanelRoute]) {
