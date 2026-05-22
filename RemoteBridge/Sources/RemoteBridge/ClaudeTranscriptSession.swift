@@ -588,7 +588,11 @@ final class AgentSessionRegistryMonitor {
 
     private func matchedSession(for panel: AgentPanelProcessSnapshot) -> ActiveAgentSessionSnapshot? {
         BridgeLogger.server.debug("agent panel match start workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) effective_shell_pid=\(panel.effectiveShellPID.map(String.init) ?? "-", privacy: .public)")
-        let liveCodexProcessRecord: AgentSessionRegistryRecord?
+        let directMatches = activeRecords.values
+            .filter { $0.workspaceID == panel.workspaceID && $0.panelID == panel.panelID }
+            .sorted(by: Self.isRecordPreferred(_:_:))
+
+        var liveCodexProcessRecord: AgentSessionRegistryRecord?
         if let effectiveShellPID = panel.effectiveShellPID, effectiveShellPID > 0 {
             liveCodexProcessRecord = liveCodexSessionMatch(for: panel,
                                                            effectiveShellPID: effectiveShellPID,
@@ -597,9 +601,23 @@ final class AgentSessionRegistryMonitor {
             liveCodexProcessRecord = nil
         }
 
-        let directMatches = activeRecords.values
-            .filter { $0.workspaceID == panel.workspaceID && $0.panelID == panel.panelID }
-            .sorted(by: Self.isRecordPreferred(_:_:))
+        if liveCodexProcessRecord == nil,
+           let staleCodexRecord = directMatches.first(where: {
+               $0.vendor == "codex" &&
+               $0.pid > 0 &&
+               $0.tmuxPaneID?.isEmpty == false &&
+               $0.tmuxSocketPath?.isEmpty == false
+           }) {
+            let fallbackPanel = AgentPanelProcessSnapshot(workspaceID: panel.workspaceID,
+                                                          panelID: panel.panelID,
+                                                          effectiveShellPID: staleCodexRecord.pid,
+                                                          tmuxPaneID: staleCodexRecord.tmuxPaneID,
+                                                          tmuxSocketPath: staleCodexRecord.tmuxSocketPath,
+                                                          cwd: panel.cwd ?? staleCodexRecord.cwd)
+            liveCodexProcessRecord = liveCodexSessionMatch(for: fallbackPanel,
+                                                           effectiveShellPID: staleCodexRecord.pid,
+                                                           requireProcessResumeSession: true)
+        }
 
         if let liveCodexProcessRecord,
            directMatches.contains(where: { $0.vendor == "codex" && $0.sessionID != liveCodexProcessRecord.sessionID }) {

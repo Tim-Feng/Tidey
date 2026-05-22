@@ -301,7 +301,7 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
                                                   tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
                                                   parentPIDLookup: { _ in nil },
                                                   descendantProcessLookup: { rootPID in
-                                                      XCTAssertEqual(rootPID, 82923)
+                                                      XCTAssertTrue(rootPID == 82923 || rootPID == getpid())
                                                       return [
                                                           AgentProcessDescriptor(pid: 95759,
                                                                                  command: "/Users/timfeng/.nvm/versions/node/v24.13.0/bin/node",
@@ -390,7 +390,7 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
                                                   tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
                                                   parentPIDLookup: { _ in nil },
                                                   descendantProcessLookup: { rootPID in
-                                                      XCTAssertEqual(rootPID, 82923)
+                                                      XCTAssertTrue([82923, getpid(), 95759].contains(rootPID))
                                                       return [
                                                           AgentProcessDescriptor(pid: 95759,
                                                                                  command: "/Users/timfeng/.nvm/versions/node/v24.13.0/bin/node",
@@ -423,6 +423,72 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         let subsequent = monitor.activeSessionForPanel(workspaceID: "current-workspace",
                                                        panelID: "carrier-panel")
         XCTAssertEqual(subsequent?.sessionID, parentSessionID)
+    }
+
+    func testActiveSessionForSingleWindowCarrierUsesStaleCodexRecordPaneContextWhenPanelSummaryLacksEnrichment() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let parentSessionID = "11111111-2222-3333-4444-555555555555"
+        let subagentSessionID = "99999999-8888-7777-6666-555555555555"
+        let parentRolloutURL = supportDirectory
+            .appendingPathComponent(".codex/sessions/2026/05/22", isDirectory: true)
+            .appendingPathComponent("rollout-2026-05-22T00-00-00-\(parentSessionID).jsonl", isDirectory: false)
+        try fileManager.createDirectory(at: parentRolloutURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("[]\n".utf8).write(to: parentRolloutURL)
+
+        let staleRegistryURL = paths.codexAgentSessionsDirectory.appendingPathComponent("codex-\(subagentSessionID).json")
+        let staleRecordData = Data("""
+        {
+          "version": 1,
+          "vendor": "codex",
+          "workspace_id": "current-workspace",
+          "session_id": "\(subagentSessionID)",
+          "panel_id": "carrier-panel",
+          "pid": \(getpid()),
+          "cwd": "/Users/timfeng",
+          "created_at": "2026-05-22T01:00:00Z",
+          "rollout_path": "/Users/timfeng/.codex/sessions/2026/05/22/rollout-2026-05-22T01-00-00-\(subagentSessionID).jsonl",
+          "tmux_pane_id": "%43",
+          "tmux_socket_path": "/private/tmp/tmux-501/default"
+        }
+        """.utf8)
+        try staleRecordData.write(to: staleRegistryURL)
+
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: fileManager,
+                                                  hub: AgentEventHub(),
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+                                                  parentPIDLookup: { _ in nil },
+                                                  descendantProcessLookup: { rootPID in
+                                                      XCTAssertEqual(rootPID, getpid())
+                                                      return [
+                                                          AgentProcessDescriptor(pid: 95759,
+                                                                                 command: "/Users/timfeng/.nvm/versions/node/v24.13.0/bin/node",
+                                                                                 arguments: "/Users/timfeng/.nvm/versions/node/v24.13.0/lib/node_modules/@openai/codex/bin/codex.js resume \(parentSessionID)")
+                                                      ]
+                                                  },
+                                                  rolloutPathLookup: { _ in
+                                                      XCTFail("stale direct record should be corrected from process resume without lsof fallback")
+                                                      return nil
+                                                  },
+                                                  codexRolloutBySessionIDLookup: { sessionID in
+                                                      sessionID == parentSessionID ? parentRolloutURL.path : nil
+                                                  })
+        try monitor.start()
+
+        let session = monitor.activeSessionForPanel(workspaceID: "current-workspace",
+                                                    panelID: "carrier-panel")
+
+        XCTAssertEqual(session?.vendor, "codex")
+        XCTAssertEqual(session?.sessionID, parentSessionID)
+
+        let parentRegistryURL = paths.codexAgentSessionsDirectory.appendingPathComponent("codex-\(parentSessionID).json")
+        XCTAssertTrue(fileManager.fileExists(atPath: parentRegistryURL.path))
     }
 
     func testActiveSessionForSingleWindowCarrierDoesNotSynthesizeWithoutCodexProcess() throws {
