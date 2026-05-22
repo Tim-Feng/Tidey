@@ -108,6 +108,12 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
             identityRoutes.append(route)
             lock.unlock()
         }
+
+        func identityRoutesSnapshot() -> [OrdinaryTmuxPanelRoute] {
+            lock.lock()
+            defer { lock.unlock() }
+            return identityRoutes
+        }
     }
 
     private final class TestClock: @unchecked Sendable {
@@ -205,7 +211,8 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
         XCTAssertEqual(logical["active_pane_id"]?.stringValue, "%15")
         XCTAssertEqual(logical["socket_path"]?.stringValue, "/tmp/tmux-501/default")
         XCTAssertEqual(result["selected_panel_id"]?.stringValue, "carrier-panel")
-        XCTAssertEqual(adapter.identityRoutes.map { "\($0.windowID):\($0.activePaneID):\($0.panelID)" }, [
+        let identityRoutes = waitForIdentityRoutes(adapter, count: 1)
+        XCTAssertEqual(identityRoutes.map { "\($0.windowID):\($0.activePaneID):\($0.panelID)" }, [
             "@15:%15:carrier-panel",
         ])
         XCTAssertNotNil(registry.route(forPanelID: "carrier-panel"))
@@ -263,7 +270,8 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
         let panels = stale["panels"]?.arrayValue?.compactMap(\.objectValue)
         XCTAssertEqual(adapter.callCount, 2)
         XCTAssertEqual(panels?.map { $0["title"]?.stringValue }, ["priest", "mother_nature"])
-        XCTAssertEqual(adapter.identityRoutes.map(\.panelID), [
+        let identityRoutes = waitForIdentityRoutes(adapter, count: 2)
+        XCTAssertEqual(identityRoutes.map(\.panelID), [
             "ordinary-tmux:/tmp/tmux-501/default:$7:@15",
             "ordinary-tmux:/tmp/tmux-501/default:$7:@16",
         ])
@@ -367,7 +375,8 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
 
         _ = projector.projectPanelListResult(panelListResult())
 
-        XCTAssertEqual(adapter.identityRoutes.map { "\($0.windowID):\($0.activePaneID):\($0.panelID)" }, [
+        let identityRoutes = waitForIdentityRoutes(adapter, count: 2)
+        XCTAssertEqual(identityRoutes.map { "\($0.windowID):\($0.activePaneID):\($0.panelID)" }, [
             "@15:%15:ordinary-tmux:/tmp/tmux-501/default:$7:@15",
             "@16:%16:ordinary-tmux:/tmp/tmux-501/default:$7:@16",
         ])
@@ -383,7 +392,22 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
         _ = projector.projectPanelListResult(panelListResult())
         _ = projector.projectPanelListResult(panelListResult())
 
-        XCTAssertEqual(adapter.identityRoutes.count, 2)
+        XCTAssertEqual(waitForIdentityRoutes(adapter, count: 2).count, 2)
+    }
+
+    private func waitForIdentityRoutes(_ adapter: MutableAdapter,
+                                       count: Int,
+                                       timeout: TimeInterval = 1,
+                                       file: StaticString = #filePath,
+                                       line: UInt = #line) -> [OrdinaryTmuxPanelRoute] {
+        let deadline = Date().addingTimeInterval(timeout)
+        var routes = adapter.identityRoutesSnapshot()
+        while routes.count < count && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.01)
+            routes = adapter.identityRoutesSnapshot()
+        }
+        XCTAssertGreaterThanOrEqual(routes.count, count, file: file, line: line)
+        return routes
     }
 
     private func panelListResult() -> [String: JSONValue] {

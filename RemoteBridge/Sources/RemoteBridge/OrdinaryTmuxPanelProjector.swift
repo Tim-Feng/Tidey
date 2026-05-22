@@ -19,6 +19,8 @@ final class OrdinaryTmuxPanelProjector {
     private let staleTTL: TimeInterval
     private let now: @Sendable () -> Date
     private let cacheQueue = DispatchQueue(label: "com.tidey.remote-bridge.ordinary-tmux-panel-projector-cache")
+    private let identitySyncQueue = DispatchQueue(label: "com.tidey.remote-bridge.ordinary-tmux-panel-projector-identity",
+                                                  qos: .utility)
     private var cache = [String: CacheEntry]()
     private var identityCache = [String: String]()
     private var projectionCooldownUntilByKey = [String: Date]()
@@ -100,7 +102,7 @@ final class OrdinaryTmuxPanelProjector {
                                            metadata: metadata,
                                            panelID: carrierPanelID)
                     if projectedLoad.canSetPaneIdentity {
-                        syncPaneIdentitiesIfNeeded(routes: [route])
+                        schedulePaneIdentitiesIfNeeded(routes: [route])
                     } else {
                         BridgeLogger.server.info("ordinary tmux pane identity sync skipped workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) reason=stale_single_window_projection")
                     }
@@ -128,7 +130,7 @@ final class OrdinaryTmuxPanelProjector {
                            metadata: metadata)
             }
             if projectedLoad.canSetPaneIdentity {
-                syncPaneIdentitiesIfNeeded(routes: projectedRoutes)
+                schedulePaneIdentitiesIfNeeded(routes: projectedRoutes)
             } else {
                 BridgeLogger.server.info("ordinary tmux pane identity sync skipped workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) reason=stale_projection")
             }
@@ -274,23 +276,45 @@ final class OrdinaryTmuxPanelProjector {
                                    timedOutWithoutCache: false)
     }
 
-    private func syncPaneIdentitiesIfNeeded(routes: [OrdinaryTmuxPanelRoute]) {
+    private func schedulePaneIdentitiesIfNeeded(routes: [OrdinaryTmuxPanelRoute]) {
+        var routesToSync = [OrdinaryTmuxPanelRoute]()
         for route in routes {
             let key = Self.identityCacheKey(route: route)
-            let shouldSet = cacheQueue.sync { identityCache[key] != route.panelID }
+            let shouldSet = cacheQueue.sync { () -> Bool in
+                guard identityCache[key] != route.panelID else {
+                    return false
+                }
+                identityCache[key] = route.panelID
+                return true
+            }
             guard shouldSet else {
                 BridgeLogger.server.info("ordinary tmux pane identity sync skipped workspace_id=\(route.workspaceID, privacy: .public) panel_id=\(route.panelID, privacy: .public) window_id=\(route.windowID, privacy: .public) pane_id=\(route.activePaneID, privacy: .public) reason=already_set")
                 continue
             }
+            routesToSync.append(route)
+        }
 
-            do {
-                try adapter.setPaneIdentity(route: route)
-                cacheQueue.sync {
-                    identityCache[key] = route.panelID
+        guard routesToSync.isEmpty == false else {
+            return
+        }
+
+        identitySyncQueue.async { [weak self] in
+            guard let self else {
+                return
+            }
+            for route in routesToSync {
+                let key = Self.identityCacheKey(route: route)
+                do {
+                    try adapter.setPaneIdentity(route: route)
+                    BridgeLogger.server.info("ordinary tmux pane identity sync set workspace_id=\(route.workspaceID, privacy: .public) panel_id=\(route.panelID, privacy: .public) window_id=\(route.windowID, privacy: .public) pane_id=\(route.activePaneID, privacy: .public)")
+                } catch {
+                    self.cacheQueue.sync {
+                        if self.identityCache[key] == route.panelID {
+                            self.identityCache.removeValue(forKey: key)
+                        }
+                    }
+                    BridgeLogger.server.error("ordinary tmux pane identity sync failed workspace_id=\(route.workspaceID, privacy: .public) panel_id=\(route.panelID, privacy: .public) window_id=\(route.windowID, privacy: .public) pane_id=\(route.activePaneID, privacy: .public) error=\(String(describing: error), privacy: .public)")
                 }
-                BridgeLogger.server.info("ordinary tmux pane identity sync set workspace_id=\(route.workspaceID, privacy: .public) panel_id=\(route.panelID, privacy: .public) window_id=\(route.windowID, privacy: .public) pane_id=\(route.activePaneID, privacy: .public)")
-            } catch {
-                BridgeLogger.server.error("ordinary tmux pane identity sync failed workspace_id=\(route.workspaceID, privacy: .public) panel_id=\(route.panelID, privacy: .public) window_id=\(route.windowID, privacy: .public) pane_id=\(route.activePaneID, privacy: .public) error=\(String(describing: error), privacy: .public)")
             }
         }
     }
