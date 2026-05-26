@@ -6145,7 +6145,12 @@ ITERM_WEAKLY_REFERENCEABLE
         [_contentView.tabView selectTabViewItemAtIndex:tabIndex];
     }
 
-    Profile* addressbookEntry = [[[[[self tabs] objectAtIndex:0] sessions] objectAtIndex:0] profile];
+    PTYSession *firstRestoredSession = self.allSessions.firstObject;
+    if (!firstRestoredSession) {
+        PtyLog(@"Restore arrangement produced no sessions; refusing to restore empty window.");
+        return NO;
+    }
+    Profile* addressbookEntry = firstRestoredSession.profile;
     _spaceSetting = [addressbookEntry[KEY_SPACE] intValue];
     switch ([addressbookEntry[KEY_SPACE] intValue]) {
         case iTermProfileJoinsAllSpaces:

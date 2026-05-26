@@ -906,6 +906,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 @interface iTermRootTerminalView (TideyEditorDropHandling)
 - (BOOL)tideyCanPreviewDroppedFileURL:(NSURL *)url;
 - (BOOL)tideyHandleEditorDroppedFileURL:(NSURL *)url inPane:(TideyRightPanelPane *)pane;
++ (BOOL)tideyShouldOpenPathAsImagePreview:(NSString *)path;
 @end
 
 @interface TideyEditorWebView : WKWebView
@@ -5264,6 +5265,10 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         [self openTideyEditorDirectoryAtPath:normalizedPath];
         return;
     }
+    if ([[self class] tideyShouldOpenPathAsImagePreview:normalizedPath] &&
+        [self tideyOpenImagePreviewAtPath:normalizedPath inPane:pane]) {
+        return;
+    }
     for (NSInteger i = 0; i < (NSInteger)pane.tabs.count; i++) {
         TideyEditorTab *existing = pane.tabs[i];
         if ([[existing.path stringByStandardizingPath] isEqualToString:normalizedPath]) {
@@ -5386,8 +5391,15 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         isDirectory) {
         return NO;
     }
+    if ([[self class] tideyShouldOpenPathAsImagePreview:path]) {
+        return YES;
+    }
     NSString *type = [[NSWorkspace sharedWorkspace] typeOfFile:path error:nil];
     return type.length > 0 && [[NSWorkspace sharedWorkspace] type:type conformsToType:@"public.image"];
+}
+
++ (BOOL)tideyShouldOpenPathAsImagePreview:(NSString *)path {
+    return [path.pathExtension.lowercaseString isEqualToString:@"svg"];
 }
 
 - (BOOL)tideyHandleEditorDroppedFileURL:(NSURL *)url inPane:(TideyRightPanelPane *)pane {
@@ -5625,6 +5637,10 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         return;
     }
     NSString *normalizedPath = [path stringByStandardizingPath];
+    if ([[self class] tideyShouldOpenPathAsImagePreview:normalizedPath] &&
+        [self tideyOpenImagePreviewAtPath:normalizedPath inPane:self.activePane]) {
+        return;
+    }
     NSString *currentEditorPath = [_tideyEditorLoadedPath stringByStandardizingPath];
     if (normalizedPath.length > 0 &&
         currentEditorPath.length > 0 &&
@@ -5695,6 +5711,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
             @"yaml": @"yaml",
             @"yml": @"yaml",
             @"xml": @"xml",
+            @"svg": @"xml",
             @"plist": @"xml",
         };
     });

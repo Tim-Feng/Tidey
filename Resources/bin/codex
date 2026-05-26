@@ -80,113 +80,233 @@ shell_quote() {
     printf "'%s'" "$s"
 }
 
-merge_tidey_hooks_into_overlay() {
-    local real_codex_home="$1"
-    local overlay_codex_home="$2"
-    local dispatch_script="$3"
-    local existing_hooks_path="$real_codex_home/hooks.json"
-    local merged_hooks_path="$overlay_codex_home/hooks.json"
-    local node_script=""
-
-    node_script+='const fs = require("fs");'
-    node_script+='const [existingPath, outputPath, dispatchPath] = process.argv.slice(1);'
-    node_script+='const shellQuote = (s) => `'\''${String(s).replace(/'\''/g, `'\''\\'\'''\''`)}'\''`;'
-    node_script+='let root = {};'
-    node_script+='if (fs.existsSync(existingPath)) {'
-    node_script+='  try { root = JSON.parse(fs.readFileSync(existingPath, "utf8")); } catch { root = {}; }'
-    node_script+='}'
-    node_script+='if (!root || typeof root !== "object") root = {};'
-    node_script+='if (!root.hooks || typeof root.hooks !== "object") root.hooks = {};'
-    node_script+='const entries = [["SessionStart","session-start"],["UserPromptSubmit","user-prompt-submit"],["Stop","stop"]];'
-    node_script+='for (const [eventName, tideyEvent] of entries) {'
-    node_script+='  if (!Array.isArray(root.hooks[eventName])) root.hooks[eventName] = [];'
-    node_script+='  const command = `${shellQuote(dispatchPath)} ${tideyEvent}`;'
-    node_script+='  const exists = root.hooks[eventName].some(group => Array.isArray(group?.hooks) && group.hooks.some(h => h?.type === "command" && h?.command === command));'
-    node_script+='  if (!exists) root.hooks[eventName].push({ hooks: [{ type: "command", command, timeout: 10 }] });'
-    node_script+='}'
-    node_script+='fs.writeFileSync(outputPath, JSON.stringify(root, null, 2) + "\n");'
-
-    node -e "$node_script" "$existing_hooks_path" "$merged_hooks_path" "$dispatch_script"
+toml_escape() {
+    json_escape "$1"
 }
 
-merge_tidey_config_into_overlay() {
-    local real_codex_home="$1"
-    local overlay_codex_home="$2"
-    local existing_config_path="$real_codex_home/config.toml"
-    local merged_config_path="$overlay_codex_home/config.toml"
+codex_profile_component() {
+    local raw="$1"
+    local sanitized=""
 
-    python3 - "$existing_config_path" "$merged_config_path" <<'PY'
+    sanitized="$(printf '%s' "$raw" | LC_ALL=C tr -c 'A-Za-z0-9_-' '-')"
+    sanitized="${sanitized##-}"
+    sanitized="${sanitized%%-}"
+    if [[ -n "$sanitized" ]]; then
+        printf '%s' "$sanitized"
+    else
+        printf 'default'
+    fi
+}
+
+tmux_session_name_from_env() {
+    if [[ -n "${TMUX_PANE:-}" ]]; then
+        tmux display-message -p -t "$TMUX_PANE" "#{session_name}" 2>/dev/null || true
+    fi
+}
+
+stable_codex_profile_name() {
+    local identity="${1:-}"
+
+    printf 'tidey-codex-%s' "$(codex_profile_component "$identity")"
+}
+
+stable_codex_sqlite_home() {
+    local real_codex_home="$1"
+    local identity="${2:-}"
+
+    if [[ -n "$identity" ]]; then
+        printf '%s/.tmp/tidey-codex-sqlite-%s' "$real_codex_home" "$(codex_profile_component "$identity")"
+    else
+        printf '%s/.tmp/tidey-codex-sqlite-default' "$real_codex_home"
+    fi
+}
+
+merge_tidey_hooks_into_user_hooks() {
+    local real_codex_home="$1"
+    local dispatch_script="$2"
+    local hooks_path="$real_codex_home/hooks.json"
+    local tmp_path=""
+
+    mkdir -p "$real_codex_home"
+    tmp_path="$(mktemp "$real_codex_home/.hooks.XXXXXX")"
+
+    python3 - "$hooks_path" "$tmp_path" "$dispatch_script" <<'PY'
 from pathlib import Path
-import re
+import json
+import os
 import sys
 
-existing_path = Path(sys.argv[1])
-output_path = Path(sys.argv[2])
-text = existing_path.read_text() if existing_path.exists() else ""
+hooks_path = Path(sys.argv[1])
+tmp_path = Path(sys.argv[2])
+dispatch_script = sys.argv[3]
 
-if text and not text.endswith("\n"):
-    text += "\n"
+def shell_quote(value: str) -> str:
+    return "'" + value.replace("'", "'\\''") + "'"
 
-pattern = re.compile(r"(?ms)^\[features\]\n(?P<body>.*?)(?=^\[|\Z)")
-match = pattern.search(text)
-if match:
-    body = match.group("body")
-    body = re.sub(r"(?m)^codex_hooks\s*=\s*(true|false)\s*$\n?", "", body)
-    if re.search(r"(?m)^hooks\s*=\s*true\s*$", body):
-        text = text[:match.start("body")] + body + text[match.end("body"):]
-    elif re.search(r"(?m)^hooks\s*=\s*false\s*$", body):
-        body = re.sub(r"(?m)^hooks\s*=\s*false\s*$", "hooks = true", body)
-        text = text[:match.start("body")] + body + text[match.end("body"):]
-    else:
-        insertion = "" if body.endswith("\n") or body == "" else "\n"
-        body = body + insertion + "hooks = true\n"
-        text = text[:match.start("body")] + body + text[match.end("body"):]
+root = {}
+if hooks_path.exists():
+    try:
+        root = json.loads(hooks_path.read_text())
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise SystemExit(0)
+
+if not isinstance(root, dict):
+    root = {}
+
+hooks = root.setdefault("hooks", {})
+if not isinstance(hooks, dict):
+    hooks = {}
+    root["hooks"] = hooks
+
+entries = [
+    ("SessionStart", "session-start"),
+    ("UserPromptSubmit", "user-prompt-submit"),
+    ("Stop", "stop"),
+]
+changed = False
+
+for event_name, tidey_event in entries:
+    groups = hooks.setdefault(event_name, [])
+    if not isinstance(groups, list):
+        groups = []
+        hooks[event_name] = groups
+        changed = True
+
+    command = f"{shell_quote(dispatch_script)} {tidey_event}"
+    exists = False
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        handlers = group.get("hooks")
+        if not isinstance(handlers, list):
+            continue
+        for handler in handlers:
+            if (
+                isinstance(handler, dict)
+                and handler.get("type") == "command"
+                and handler.get("command") == command
+            ):
+                exists = True
+                break
+        if exists:
+            break
+
+    if not exists:
+        groups.append({"hooks": [{"type": "command", "command": command, "timeout": 10}]})
+        changed = True
+
+if changed or not hooks_path.exists():
+    tmp_path.write_text(json.dumps(root, indent=2) + "\n")
+    os.replace(tmp_path, hooks_path)
 else:
-    if text and not text.endswith("\n\n"):
-        text += "\n"
-    text += "[features]\n"
-    text += "hooks = true\n"
-
-if not re.search(r"(?m)^suppress_unstable_features_warning\s*=", text):
-    line = "suppress_unstable_features_warning = true\n"
-    first_table = re.search(r"(?m)^\[", text)
-    if first_table:
-        prefix = text[:first_table.start()].rstrip("\n")
-        suffix = text[first_table.start():].lstrip("\n")
-        text = (prefix + "\n" if prefix else "") + line + ("\n" + suffix if suffix else "")
-    else:
-        if text and not text.endswith("\n"):
-            text += "\n"
-        text += line
-
-output_path.write_text(text)
+    tmp_path.unlink(missing_ok=True)
 PY
 }
 
-prepare_codex_home_overlay() {
+write_tidey_profile_config() {
     local real_codex_home="$1"
-    local overlay_codex_home="$2"
-    local dispatch_script="$3"
-    local entry=""
-    local name=""
+    local profile_name="$2"
+    local sqlite_home="$3"
+    local dispatch_script="$4"
+    local profile_path="$real_codex_home/$profile_name.config.toml"
+    local hooks_path="$real_codex_home/hooks.json"
+    local tmp_path=""
 
-    mkdir -p "$overlay_codex_home"
-    shopt -s dotglob nullglob
-    for entry in "$real_codex_home"/*; do
-        name="${entry##*/}"
-        [[ "$name" == "." || "$name" == ".." || "$name" == "hooks.json" || "$name" == "config.toml" ]] && continue
-        [[ -e "$overlay_codex_home/$name" || -L "$overlay_codex_home/$name" ]] && continue
-        ln -s "$entry" "$overlay_codex_home/$name"
-    done
-    shopt -u dotglob nullglob
+    mkdir -p "$real_codex_home" "$sqlite_home"
+    tmp_path="$(mktemp "$real_codex_home/.${profile_name}.config.XXXXXX")"
 
-    merge_tidey_config_into_overlay "$real_codex_home" "$overlay_codex_home"
-    merge_tidey_hooks_into_overlay "$real_codex_home" "$overlay_codex_home" "$dispatch_script"
+    python3 - "$tmp_path" "$profile_path" "$sqlite_home" "$hooks_path" "$dispatch_script" <<'PY' && mv -f "$tmp_path" "$profile_path" || {
+from pathlib import Path
+import hashlib
+import json
+import sys
+
+tmp_path = Path(sys.argv[1])
+profile_path = sys.argv[2]
+sqlite_home = sys.argv[3]
+hooks_path = Path(sys.argv[4])
+dispatch_script = sys.argv[5]
+
+def toml_string(value: str) -> str:
+    return json.dumps(value)
+
+def shell_quote(value: str) -> str:
+    return "'" + value.replace("'", "'\\''") + "'"
+
+def hook_hash(event_key: str, command: str, timeout: int) -> str:
+    identity = {
+        "event_name": event_key,
+        "hooks": [
+            {
+                "async": False,
+                "command": command,
+                "timeout": timeout,
+                "type": "command",
+            }
+        ],
+    }
+    payload = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+event_key_by_name = {
+    "SessionStart": "session_start",
+    "UserPromptSubmit": "user_prompt_submit",
+    "Stop": "stop",
+}
+event_suffix_by_name = {
+    "SessionStart": "session-start",
+    "UserPromptSubmit": "user-prompt-submit",
+    "Stop": "stop",
 }
 
-stable_codex_home_overlay() {
-    local real_codex_home="$1"
-    printf '%s/.tmp/tidey-codex-home' "$real_codex_home"
+try:
+    root = json.loads(hooks_path.read_text())
+except Exception:
+    root = {}
+
+hooks = root.get("hooks", {}) if isinstance(root, dict) else {}
+state_entries = []
+for event_name, event_key in event_key_by_name.items():
+    groups = hooks.get(event_name, [])
+    if not isinstance(groups, list):
+        continue
+    expected_command = f"{shell_quote(dispatch_script)} {event_suffix_by_name[event_name]}"
+    for group_index, group in enumerate(groups):
+        if not isinstance(group, dict):
+            continue
+        handlers = group.get("hooks", [])
+        if not isinstance(handlers, list):
+            continue
+        for handler_index, handler in enumerate(handlers):
+            if not isinstance(handler, dict):
+                continue
+            if handler.get("type") != "command" or handler.get("command") != expected_command:
+                continue
+            timeout = int(handler.get("timeout", 0) or 0)
+            state_key = f"{hooks_path}:{event_key}:{group_index}:{handler_index}"
+            state_entries.append((state_key, hook_hash(event_key, expected_command, timeout)))
+
+lines = [
+    f"sqlite_home = {toml_string(sqlite_home)}",
+    "suppress_unstable_features_warning = true",
+    "",
+    "[features]",
+    "hooks = true",
+    "",
+]
+for state_key, trusted_hash in state_entries:
+    lines.extend([
+        f"[hooks.state.{toml_string(state_key)}]",
+        f"trusted_hash = {toml_string(trusted_hash)}",
+        "",
+    ])
+
+tmp_path.write_text("\n".join(lines).rstrip() + "\n")
+PY
+        rm -f "$tmp_path"
+        return 1
+    }
 }
 
 resolve_real_codex_home() {
@@ -194,7 +314,7 @@ resolve_real_codex_home() {
     local basename=""
 
     basename="$(basename "$candidate")"
-    if [[ "$basename" == "tidey-codex-home" || "$basename" == tidey-codex-home.* ]]; then
+    if [[ "$basename" == tidey-codex-home* ]]; then
         printf '%s' "$HOME/.codex"
         return 0
     fi
@@ -332,7 +452,9 @@ PY
 main() {
     local real_codex=""
     local real_codex_home=""
-    local overlay_codex_home=""
+    local profile_identity=""
+    local profile_name=""
+    local sqlite_home=""
     local dispatch_script=""
     local created_at=""
     local session_id=""
@@ -346,9 +468,12 @@ main() {
     fi
 
     real_codex_home="$(resolve_real_codex_home)"
-    overlay_codex_home="$(stable_codex_home_overlay "$real_codex_home")"
+    profile_identity="$(tmux_session_name_from_env)"
+    profile_name="$(stable_codex_profile_name "$profile_identity")"
+    sqlite_home="$(stable_codex_sqlite_home "$real_codex_home" "$profile_identity")"
     dispatch_script="$HOOK_DIR/codex-hook-dispatch"
-    prepare_codex_home_overlay "$real_codex_home" "$overlay_codex_home" "$dispatch_script"
+    merge_tidey_hooks_into_user_hooks "$real_codex_home" "$dispatch_script"
+    write_tidey_profile_config "$real_codex_home" "$profile_name" "$sqlite_home" "$dispatch_script"
 
     created_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     session_id="$(initial_session_id)"
@@ -361,7 +486,7 @@ main() {
         "$HOOK_DIR/tidey" codex-hook session-start || true
     fi
 
-    exec env CODEX_HOME="$overlay_codex_home" "$real_codex" "$@"
+    exec env CODEX_HOME="$real_codex_home" "$real_codex" --profile-v2 "$profile_name" "$@"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

@@ -30,6 +30,7 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
 + (NSString *)tideyBrowserDisplayNameForURL:(NSURL *)url pageTitle:(NSString *)pageTitle;
 + (NSInteger)tideyIndexOfExistingBrowserTabForURL:(NSString *)urlString
                                            inTabs:(NSArray<TideyEditorTab *> *)tabs;
++ (BOOL)tideyShouldOpenPathAsImagePreview:(NSString *)path;
 @end
 
 @interface TideyBrowserPanelTests : XCTestCase
@@ -166,6 +167,18 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
 
     NSString *after = [iTermRootTerminalView tideyBrowserDisplayNameForURL:url pageTitle:@"Anthropic \\ AI Safety"];
     XCTAssertEqualObjects(after, @"Anthropic \\ AI Safety");
+}
+
+#pragma mark - File Preview Routing
+
+- (void)testSVGPathsOpenAsImagePreview {
+    XCTAssertTrue([iTermRootTerminalView tideyShouldOpenPathAsImagePreview:@"/tmp/floor-plan.svg"]);
+    XCTAssertTrue([iTermRootTerminalView tideyShouldOpenPathAsImagePreview:@"/tmp/FLOOR-PLAN.SVG"]);
+}
+
+- (void)testNonSVGPathsDoNotForceImagePreview {
+    XCTAssertFalse([iTermRootTerminalView tideyShouldOpenPathAsImagePreview:@"/tmp/floor-plan.txt"]);
+    XCTAssertFalse([iTermRootTerminalView tideyShouldOpenPathAsImagePreview:@"/tmp/floor-plan"]);
 }
 
 @end

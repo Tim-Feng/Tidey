@@ -101,149 +101,123 @@ run_placeholder_cleanup_test() {
 
 run_placeholder_cleanup_test
 
-run_hook_overlay_json_test() {
+run_stable_profile_paths_test() {
     local tmpdir
 
-    tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/tidey-codex-hooks-tests.XXXXXX")"
+    tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/tidey-codex-profile-tests.XXXXXX")"
 
     HOOK_TEST_DIR="$tmpdir" CODEX_UNDER_TEST="$CODEX_UNDER_TEST" bash -c '
         set -euo pipefail
         source "$CODEX_UNDER_TEST"
 
         real_home="$HOOK_TEST_DIR/real-home"
-        overlay_home="$HOOK_TEST_DIR/overlay-home"
+        mkdir -p "$real_home"
+
+        profile_name="$(stable_codex_profile_name "tidey-codex")"
+        [[ "$profile_name" == "tidey-codex-tidey-codex" ]] || fail "profile name is not stable per session"
+
+        sqlite_home="$(stable_codex_sqlite_home "$real_home" "tidey-codex")"
+        [[ "$sqlite_home" == "$real_home/.tmp/tidey-codex-sqlite-tidey-codex" ]] || fail "sqlite home is not stable per session"
+
+        sqlite_home="$(stable_codex_sqlite_home "$real_home")"
+        [[ "$sqlite_home" == "$real_home/.tmp/tidey-codex-sqlite-default" ]] || fail "fallback sqlite home changed"
+    '
+
+    rm -rf "$tmpdir"
+}
+
+run_stable_profile_paths_test
+
+run_profile_config_test() {
+    local tmpdir
+
+    tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/tidey-codex-profile-tests.XXXXXX")"
+
+    HOOK_TEST_DIR="$tmpdir" CODEX_UNDER_TEST="$CODEX_UNDER_TEST" bash -c '
+        set -euo pipefail
+        source "$CODEX_UNDER_TEST"
+
+        real_home="$HOOK_TEST_DIR/real-home"
+        profile_name="$(stable_codex_profile_name "tidey-codex")"
+        sqlite_home="$(stable_codex_sqlite_home "$real_home" "tidey-codex")"
         dispatch_script="/tmp/Tidey Dev.app/Contents/Resources/bin/codex-hook-dispatch"
-        mkdir -p "$real_home" "$overlay_home"
+        mkdir -p "$real_home"
         printf "%s\n" "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"/tmp/user-hook\"}]}]}}" > "$real_home/hooks.json"
 
-        merge_tidey_hooks_into_overlay "$real_home" "$overlay_home" "$dispatch_script"
+        merge_tidey_hooks_into_user_hooks "$real_home" "$dispatch_script"
+        write_tidey_profile_config "$real_home" "$profile_name" "$sqlite_home" "$dispatch_script"
+        merge_tidey_hooks_into_user_hooks "$real_home" "$dispatch_script"
+        write_tidey_profile_config "$real_home" "$profile_name" "$sqlite_home" "$dispatch_script"
 
-        python3 - "$overlay_home/hooks.json" "$dispatch_script" <<'"'"'PY'"'"'
+        [[ -d "$sqlite_home" ]] || fail "sqlite home was not created"
+        [[ -f "$real_home/$profile_name.config.toml" ]] || fail "profile config was not created"
+
+        python3 - "$real_home/$profile_name.config.toml" "$real_home/hooks.json" "$sqlite_home" "$dispatch_script" <<'"'"'PY'"'"'
 from pathlib import Path
 import json
 import sys
 
-path = Path(sys.argv[1])
-dispatch_script = sys.argv[2]
-raw = path.read_bytes()
-if raw.endswith(b"\\n"):
-    raise SystemExit("hooks.json ended with a literal \\n")
+profile_path = sys.argv[1]
+hooks_path = Path(sys.argv[2])
+sqlite_home = sys.argv[3]
+dispatch_script = sys.argv[4]
+text = Path(profile_path).read_text()
+hooks_root = json.loads(hooks_path.read_text())
 
-root = json.loads(raw.decode())
-expected = f"'\''{dispatch_script}'\'' stop"
-stop_hooks = root["hooks"]["Stop"]
-commands = [
-    hook.get("command")
-    for group in stop_hooks
-    for hook in group.get("hooks", [])
-]
-if "/tmp/user-hook" not in commands:
-    raise SystemExit("existing user hook was not preserved")
-if expected not in commands:
-    raise SystemExit("Tidey hook command was not added")
-PY
-    '
-
-    rm -rf "$tmpdir"
-}
-
-run_hook_overlay_json_test
-
-run_stable_overlay_path_test() {
-    local tmpdir
-
-    tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/tidey-codex-overlay-tests.XXXXXX")"
-
-    HOOK_TEST_DIR="$tmpdir" CODEX_UNDER_TEST="$CODEX_UNDER_TEST" bash -c '
-        set -euo pipefail
-        source "$CODEX_UNDER_TEST"
-
-        real_home="$HOOK_TEST_DIR/real-home"
-        mkdir -p "$real_home"
-
-        overlay_home="$(stable_codex_home_overlay "$real_home")"
-        [[ "$overlay_home" == "$real_home/.tmp/tidey-codex-home" ]] || fail "overlay path is not stable"
-    '
-
-    rm -rf "$tmpdir"
-}
-
-run_stable_overlay_path_test
-
-run_prepare_overlay_is_idempotent_test() {
-    local tmpdir
-
-    tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/tidey-codex-overlay-tests.XXXXXX")"
-
-    HOOK_TEST_DIR="$tmpdir" CODEX_UNDER_TEST="$CODEX_UNDER_TEST" bash -c '
-        set -euo pipefail
-        source "$CODEX_UNDER_TEST"
-
-        real_home="$HOOK_TEST_DIR/real-home"
-        overlay_home="$(stable_codex_home_overlay "$real_home")"
-        dispatch_script="/Applications/Tidey.app/Contents/Resources/bin/codex-hook-dispatch"
-        mkdir -p "$real_home"
-        printf "token\n" > "$real_home/auth.json"
-
-        prepare_codex_home_overlay "$real_home" "$overlay_home" "$dispatch_script"
-        prepare_codex_home_overlay "$real_home" "$overlay_home" "$dispatch_script"
-
-        [[ -L "$overlay_home/auth.json" ]] || fail "real home file was not symlinked into overlay"
-        [[ -f "$overlay_home/hooks.json" ]] || fail "hooks.json was not created"
-        [[ -f "$overlay_home/config.toml" ]] || fail "config.toml was not created"
-    '
-
-    rm -rf "$tmpdir"
-}
-
-run_prepare_overlay_is_idempotent_test
-
-run_config_overlay_features_test() {
-    local tmpdir
-
-    tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/tidey-codex-config-tests.XXXXXX")"
-
-    HOOK_TEST_DIR="$tmpdir" CODEX_UNDER_TEST="$CODEX_UNDER_TEST" bash -c '
-        set -euo pipefail
-        source "$CODEX_UNDER_TEST"
-
-        real_home="$HOOK_TEST_DIR/real-home"
-        overlay_home="$HOOK_TEST_DIR/overlay-home"
-        mkdir -p "$real_home" "$overlay_home"
-        cat > "$real_home/config.toml" <<'"'"'TOML'"'"'
-model = "gpt-5.5"
-
-[features]
-codex_hooks = true
-hooks = false
-
-[projects."/Users/timfeng"]
-trust_level = "trusted"
-TOML
-
-        merge_tidey_config_into_overlay "$real_home" "$overlay_home"
-
-        python3 - "$overlay_home/config.toml" <<'"'"'PY'"'"'
-from pathlib import Path
-import sys
-
-text = Path(sys.argv[1]).read_text()
-if "codex_hooks" in text:
-    raise SystemExit("deprecated codex_hooks feature flag was preserved")
+if f"sqlite_home = \"{sqlite_home}\"" not in text:
+    raise SystemExit("sqlite_home was not written")
 if "hooks = true" not in text:
-    raise SystemExit("hooks feature flag was not enabled")
-if "hooks = false" in text:
-    raise SystemExit("disabled hooks feature flag was preserved")
-if "[projects.\"/Users/timfeng\"]" not in text:
-    raise SystemExit("existing config sections were not preserved")
-if text.find("suppress_unstable_features_warning = true") > text.find("[features]"):
-    raise SystemExit("unstable feature warning suppress flag was not inserted at top level")
+    raise SystemExit("hooks feature was not enabled")
+if "\n[hooks]\n" in text or "[[hooks." in text:
+    raise SystemExit("profile config should not declare hooks")
+if "notify" in text:
+    raise SystemExit("profile config should not copy notify from user config")
+if "[projects." in text:
+    raise SystemExit("profile config should not copy project trust sections")
+
+quote = chr(39)
+expected_commands = [
+    f"{quote}{dispatch_script}{quote} session-start",
+    f"{quote}{dispatch_script}{quote} user-prompt-submit",
+    f"{quote}{dispatch_script}{quote} stop",
+]
+for command in expected_commands:
+    if command not in json.dumps(hooks_root):
+        raise SystemExit(f"missing Tidey hook command in hooks.json: {command}")
+
+if "/tmp/user-hook" not in json.dumps(hooks_root):
+    raise SystemExit("existing user hook was not preserved")
+
+for state_fragment in [":session_start:", ":user_prompt_submit:", ":stop:"]:
+    if state_fragment not in text:
+        raise SystemExit(f"missing Tidey hook trust state: {state_fragment}")
 PY
     '
 
     rm -rf "$tmpdir"
 }
 
-run_config_overlay_features_test
+run_profile_config_test
+
+run_resolve_real_codex_home_detects_session_overlay_test() {
+    local tmpdir
+
+    tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/tidey-codex-profile-tests.XXXXXX")"
+
+    HOOK_TEST_DIR="$tmpdir" CODEX_UNDER_TEST="$CODEX_UNDER_TEST" bash -c '
+        set -euo pipefail
+        source "$CODEX_UNDER_TEST"
+
+        HOME="$HOOK_TEST_DIR/home"
+        mkdir -p "$HOME/.codex/.tmp/tidey-codex-home-tidey-codex"
+        CODEX_HOME="$HOME/.codex/.tmp/tidey-codex-home-tidey-codex"
+        resolved="$(resolve_real_codex_home)"
+        [[ "$resolved" == "$HOME/.codex" ]] || fail "session overlay was not resolved back to real CODEX_HOME"
+    '
+
+    rm -rf "$tmpdir"
+}
+
+run_resolve_real_codex_home_detects_session_overlay_test
 
 echo "PASS"
