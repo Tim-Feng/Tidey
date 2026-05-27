@@ -406,6 +406,7 @@ static NSString *TideySubmitLogSuffix(NSString *input) {
                                                               switchingWorkspace:(BOOL)switchingWorkspace
                                                        rebuildingVisibleWorkspace:(BOOL)rebuildingVisibleWorkspace
                                                          readingSidebarSelection:(BOOL)readingSidebarSelection;
++ (BOOL)tideyShouldRefreshSelectedPanelIndexAfterShowingWorkspaceWithChangedWorkspace:(BOOL)changedWorkspace;
 + (NSInteger)tideyEditorOpenRouteForPathExists:(BOOL)pathExists isDirectory:(BOOL)isDirectory;
 + (NSDictionary<NSString *, id> *)tideyDockBadgeStateForBellCount:(NSInteger)bellCount
                                            hasUnreadNotifications:(BOOL)hasUnreadNotifications;
@@ -1319,6 +1320,10 @@ ITERM_WEAKLY_REFERENCEABLE
         return NO;
     }
     return !switchingWorkspace && !rebuildingVisibleWorkspace;
+}
+
++ (BOOL)tideyShouldRefreshSelectedPanelIndexAfterShowingWorkspaceWithChangedWorkspace:(BOOL)changedWorkspace {
+    return !changedWorkspace;
 }
 
 + (NSInteger)tideyEditorOpenRouteForPathExists:(BOOL)pathExists isDirectory:(BOOL)isDirectory {
@@ -2694,7 +2699,8 @@ ITERM_WEAKLY_REFERENCEABLE
         [[self window] makeFirstResponder:self.currentSession.mainResponder];
     }
 
-    if (currentWorkspace != workspace && workspace.panels.count > 0) {
+    if ([[self class] tideyShouldRefreshSelectedPanelIndexAfterShowingWorkspaceWithChangedWorkspace:(currentWorkspace != workspace)] &&
+        workspace.panels.count > 0) {
         [self updateSelectedPanelIndexFromVisibleTabSelection];
     }
 }

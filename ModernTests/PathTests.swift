@@ -603,6 +603,20 @@ final class PathTests: XCTestCase {
                         ObjCBool(readingSidebarSelection)).boolValue
     }
 
+    private func tideyShouldRefreshSelectedPanelAfterShowingWorkspace(changedWorkspace: Bool) -> Bool {
+        let selector = NSSelectorFromString("tideyShouldRefreshSelectedPanelIndexAfterShowingWorkspaceWithChangedWorkspace:")
+        guard let method = class_getClassMethod(PseudoTerminal.self, selector) else {
+            XCTFail("Missing PseudoTerminal selected panel refresh helper")
+            return false
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, ObjCBool) -> ObjCBool
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        return function(PseudoTerminal.self,
+                        selector,
+                        ObjCBool(changedWorkspace)).boolValue
+    }
+
     private func tideyShouldForwardSidebarSelectionChange(ignoreNextSelection: Bool,
                                                           selectedRow: Int,
                                                           modelSelectedRow: Int,
@@ -1303,6 +1317,14 @@ final class PathTests: XCTestCase {
     func testWorkspaceSwitchRebuildDoesNotOverwriteSelectedPanelFromTransientTabSelection() {
         XCTAssertFalse(tideyShouldUpdateSelectedPanelFromVisibleSelection(switchingWorkspace: true))
         XCTAssertFalse(tideyShouldUpdateSelectedPanelFromVisibleSelection(rebuildingVisibleWorkspace: true))
+    }
+
+    func testWorkspaceSwitchDoesNotRefreshSelectedPanelAfterShowingDifferentWorkspace() {
+        XCTAssertFalse(tideyShouldRefreshSelectedPanelAfterShowingWorkspace(changedWorkspace: true))
+    }
+
+    func testSameWorkspaceShowCanRefreshSelectedPanelAfterShowingWorkspace() {
+        XCTAssertTrue(tideyShouldRefreshSelectedPanelAfterShowingWorkspace(changedWorkspace: false))
     }
 
     func testUserPanelSelectionStillUpdatesSelectedPanel() {
