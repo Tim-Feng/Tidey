@@ -333,6 +333,24 @@ find_real_codex() {
     return 1
 }
 
+codex_profile_flag() {
+    local real_codex="$1"
+    local help_text=""
+
+    help_text="$("$real_codex" --help 2>&1 || true)"
+    case "$help_text" in
+        *"--profile-v2"*)
+            printf '%s' "--profile-v2"
+            ;;
+        *"--profile <"*|*"--profile "*)
+            printf '%s' "--profile"
+            ;;
+        *)
+            printf '%s' "--profile"
+            ;;
+    esac
+}
+
 rollout_for_pid() {
     local pid="$1"
     lsof -Fn -p "$pid" 2>/dev/null | sed -n 's/^n//p' | grep -E '/\.codex/sessions/.*/rollout-.*\.jsonl$' | tail -n 1
@@ -459,6 +477,7 @@ main() {
     local created_at=""
     local session_id=""
     local registry_file=""
+    local profile_flag=""
 
     real_codex="$(find_real_codex)" || { echo "Error: codex not found in PATH" >&2; exit 127; }
     tidey_hydrate_tmux_pane_identity
@@ -470,6 +489,7 @@ main() {
     real_codex_home="$(resolve_real_codex_home)"
     profile_identity="$(tmux_session_name_from_env)"
     profile_name="$(stable_codex_profile_name "$profile_identity")"
+    profile_flag="$(codex_profile_flag "$real_codex")"
     sqlite_home="$(stable_codex_sqlite_home "$real_codex_home" "$profile_identity")"
     dispatch_script="$HOOK_DIR/codex-hook-dispatch"
     merge_tidey_hooks_into_user_hooks "$real_codex_home" "$dispatch_script"
@@ -486,7 +506,7 @@ main() {
         "$HOOK_DIR/tidey" codex-hook session-start || true
     fi
 
-    exec env CODEX_HOME="$real_codex_home" "$real_codex" --profile-v2 "$profile_name" "$@"
+    exec env CODEX_HOME="$real_codex_home" "$real_codex" "$profile_flag" "$profile_name" "$@"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

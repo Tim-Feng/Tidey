@@ -220,4 +220,33 @@ run_resolve_real_codex_home_detects_session_overlay_test() {
 
 run_resolve_real_codex_home_detects_session_overlay_test
 
+run_codex_profile_flag_detection_test() {
+    local tmpdir
+    local fake_codex
+
+    tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/tidey-codex-profile-flag-tests.XXXXXX")"
+    fake_codex="$tmpdir/codex"
+
+    CODEX_UNDER_TEST="$CODEX_UNDER_TEST" FAKE_CODEX="$fake_codex" bash -c '
+        set -euo pipefail
+        source "$CODEX_UNDER_TEST"
+
+        printf "%s\n" "#!/usr/bin/env bash" "printf \"%s\\n\" \"Usage: codex --profile-v2 <CONFIG_PROFILE_V2>\"" > "$FAKE_CODEX"
+        chmod +x "$FAKE_CODEX"
+        [[ "$(codex_profile_flag "$FAKE_CODEX")" == "--profile-v2" ]] || fail "legacy profile flag was not detected"
+
+        printf "%s\n" "#!/usr/bin/env bash" "printf \"%s\\n\" \"Usage: codex --profile <CONFIG_PROFILE_V2>\"" > "$FAKE_CODEX"
+        chmod +x "$FAKE_CODEX"
+        [[ "$(codex_profile_flag "$FAKE_CODEX")" == "--profile" ]] || fail "current profile flag was not detected"
+
+        printf "%s\n" "#!/usr/bin/env bash" "printf \"%s\\n\" \"Usage: codex\"" > "$FAKE_CODEX"
+        chmod +x "$FAKE_CODEX"
+        [[ "$(codex_profile_flag "$FAKE_CODEX")" == "--profile" ]] || fail "fallback profile flag changed"
+    '
+
+    rm -rf "$tmpdir"
+}
+
+run_codex_profile_flag_detection_test
+
 echo "PASS"
