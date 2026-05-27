@@ -174,6 +174,8 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
 - (void)testSVGPathsOpenAsImagePreview {
     XCTAssertTrue([iTermRootTerminalView tideyShouldOpenPathAsImagePreview:@"/tmp/floor-plan.svg"]);
     XCTAssertTrue([iTermRootTerminalView tideyShouldOpenPathAsImagePreview:@"/tmp/FLOOR-PLAN.SVG"]);
+    XCTAssertTrue([iTermRootTerminalView tideyShouldOpenPathAsImagePreview:@"/tmp/floor-plan.png"]);
+    XCTAssertTrue([iTermRootTerminalView tideyShouldOpenPathAsImagePreview:@"/tmp/floor-plan.jpg"]);
 }
 
 - (void)testNonSVGPathsDoNotForceImagePreview {

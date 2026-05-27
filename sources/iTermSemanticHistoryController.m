@@ -57,6 +57,7 @@ NSString *const kSemanticHistoryLineNumberKey = @"semanticHistory.lineNumber";
 NSString *const kSemanticHistoryColumnNumberKey = @"semanticHistory.columnNumber";
 
 @interface iTermSemanticHistoryController()<iTermObject>
+- (BOOL)tideyOpenFileInEditor:(NSString *)fullPath window:(NSWindow *)window;
 @end
 
 @interface NSWindowController (TideySemanticHistory)
@@ -727,9 +728,7 @@ NSString *const kSemanticHistoryColumnNumberKey = @"semanticHistory.columnNumber
 
 - (void)openFile:(NSString *)fullPath fragment:(NSString *)fragment target:(NSString *)target window:(NSWindow *)window {
     DLog(@"Open file %@", fullPath);
-    NSWindowController *windowController = window.windowController;
-    if ([windowController respondsToSelector:@selector(tideyOpenFileInEditor:)]) {
-        [windowController tideyOpenFileInEditor:fullPath];
+    if ([self tideyOpenFileInEditor:fullPath window:window]) {
         return;
     }
     [[iTermLaunchServices sharedInstance] openFile:fullPath
@@ -737,6 +736,15 @@ NSString *const kSemanticHistoryColumnNumberKey = @"semanticHistory.columnNumber
                                             target:target
                                             window:window
                                         completion:^(BOOL ok) {}];
+}
+
+- (BOOL)tideyOpenFileInEditor:(NSString *)fullPath window:(NSWindow *)window {
+    NSWindowController *windowController = (window ?: NSApp.keyWindow).windowController;
+    if (![windowController respondsToSelector:@selector(tideyOpenFileInEditor:)]) {
+        return NO;
+    }
+    [windowController tideyOpenFileInEditor:fullPath];
+    return YES;
 }
 
 - (void)openURL:(NSURL *)url editorIdentifier:(NSString *)editorIdentifier {
@@ -941,6 +949,11 @@ NSString *const kSemanticHistoryColumnNumberKey = @"semanticHistory.columnNumber
         [self preferredEditorIdentifier]) {
         // Action is to open in a specific editor, so open it in the editor.
         [self openFileInEditor:path lineNumber:lineNumber columnNumber:columnNumber];
+        completion(YES);
+        return;
+    }
+
+    if ([self tideyOpenFileInEditor:path window:window]) {
         completion(YES);
         return;
     }

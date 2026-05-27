@@ -5399,7 +5399,18 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
 }
 
 + (BOOL)tideyShouldOpenPathAsImagePreview:(NSString *)path {
-    return [path.pathExtension.lowercaseString isEqualToString:@"svg"];
+    static NSSet<NSString *> *knownImageExtensions;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        knownImageExtensions = [[NSSet alloc] initWithArray:@[
+            @"svg", @"png", @"jpg", @"jpeg", @"gif", @"webp", @"tif", @"tiff", @"bmp", @"heic", @"heif"
+        ]];
+    });
+    if ([knownImageExtensions containsObject:path.pathExtension.lowercaseString]) {
+        return YES;
+    }
+    NSString *type = [[NSWorkspace sharedWorkspace] typeOfFile:path error:nil];
+    return type.length > 0 && [[NSWorkspace sharedWorkspace] type:type conformsToType:@"public.image"];
 }
 
 - (BOOL)tideyHandleEditorDroppedFileURL:(NSURL *)url inPane:(TideyRightPanelPane *)pane {
@@ -5433,7 +5444,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         if (candidate.kind == TideyRightPanelTabKindBrowser && [candidate.path isEqualToString:urlString]) {
             [self selectTideyRightPanelTabAtIndex:index inPane:targetPane];
             [self tideyEditorRevealFileAtPath:normalizedPath];
-            [self.window makeFirstResponder:_tideyEditorFileTreeView];
+            [self tideyFocusBrowserInPane:targetPane];
             return YES;
         }
     }
@@ -5443,7 +5454,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     [targetPane.tabs addObject:tab];
     [self selectTideyRightPanelTabAtIndex:targetPane.tabs.count - 1 inPane:targetPane];
     [self tideyEditorRevealFileAtPath:normalizedPath];
-    [self.window makeFirstResponder:_tideyEditorFileTreeView];
+    [self tideyFocusBrowserInPane:targetPane];
     return YES;
 }
 
