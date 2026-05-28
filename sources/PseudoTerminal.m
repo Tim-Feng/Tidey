@@ -2681,7 +2681,6 @@ ITERM_WEAKLY_REFERENCEABLE
         }
     }
 
-    _tideySwitchingWorkspace = NO;
     _tideyPreservingWindowFrame = NO;
 
     if (self.window) {
@@ -2703,6 +2702,7 @@ ITERM_WEAKLY_REFERENCEABLE
         workspace.panels.count > 0) {
         [self updateSelectedPanelIndexFromVisibleTabSelection];
     }
+    _tideySwitchingWorkspace = NO;
 }
 
 - (BOOL)selectWorkspaceAtIndex:(NSInteger)index recordHistory:(BOOL)recordHistory {
