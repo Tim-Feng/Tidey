@@ -410,6 +410,9 @@ static NSString *TideySubmitLogSuffix(NSString *input) {
 + (BOOL)tideyShouldRestoreSelectedPanelAfterShowingWorkspaceWithChangedWorkspace:(BOOL)changedWorkspace
                                                                       panelCount:(NSInteger)panelCount
                                                               selectedPanelIndex:(NSInteger)selectedPanelIndex;
++ (NSInteger)tideySelectedPanelIndexForRestoredPanel:(id)selectedPanel
+                                              panels:(NSArray *)panels
+                                       fallbackIndex:(NSInteger)fallbackIndex;
 + (NSInteger)tideyEditorOpenRouteForPathExists:(BOOL)pathExists isDirectory:(BOOL)isDirectory;
 + (NSDictionary<NSString *, id> *)tideyDockBadgeStateForBellCount:(NSInteger)bellCount
                                            hasUnreadNotifications:(BOOL)hasUnreadNotifications;
@@ -1333,6 +1336,19 @@ ITERM_WEAKLY_REFERENCEABLE
                                                                       panelCount:(NSInteger)panelCount
                                                               selectedPanelIndex:(NSInteger)selectedPanelIndex {
     return changedWorkspace && selectedPanelIndex >= 0 && selectedPanelIndex < panelCount;
+}
+
++ (NSInteger)tideySelectedPanelIndexForRestoredPanel:(id)selectedPanel
+                                              panels:(NSArray *)panels
+                                       fallbackIndex:(NSInteger)fallbackIndex {
+    NSInteger selectedPanelIndex = selectedPanel ? [panels indexOfObjectIdenticalTo:selectedPanel] : NSNotFound;
+    if (selectedPanelIndex != NSNotFound) {
+        return selectedPanelIndex;
+    }
+    if (fallbackIndex >= 0 && fallbackIndex < panels.count) {
+        return fallbackIndex;
+    }
+    return panels.count > 0 ? 0 : -1;
 }
 
 + (NSInteger)tideyEditorOpenRouteForPathExists:(BOOL)pathExists isDirectory:(BOOL)isDirectory {
@@ -2682,9 +2698,10 @@ ITERM_WEAKLY_REFERENCEABLE
         selectedPanelIndex = 0;
         workspace.selectedPanelIndex = selectedPanelIndex;
     }
+    PTYTab *selectedPanel = nil;
     if (workspace.panels.count > 0) {
-        PTYTab *panel = workspace.panels[selectedPanelIndex];
-        NSInteger panelIndex = [self indexOfTab:panel];
+        selectedPanel = [[workspace.panels[selectedPanelIndex] retain] autorelease];
+        NSInteger panelIndex = [self indexOfTab:selectedPanel];
         if (panelIndex != NSNotFound) {
             [_contentView.tabView selectTabViewItemAtIndex:panelIndex];
         }
@@ -2714,6 +2731,9 @@ ITERM_WEAKLY_REFERENCEABLE
     if ([[self class] tideyShouldRestoreSelectedPanelAfterShowingWorkspaceWithChangedWorkspace:(currentWorkspace != workspace)
                                                                                     panelCount:workspace.panels.count
                                                                             selectedPanelIndex:selectedPanelIndex]) {
+        selectedPanelIndex = [[self class] tideySelectedPanelIndexForRestoredPanel:selectedPanel
+                                                                            panels:workspace.panels
+                                                                     fallbackIndex:selectedPanelIndex];
         workspace.selectedPanelIndex = selectedPanelIndex;
         PTYTab *panel = workspace.panels[selectedPanelIndex];
         NSInteger panelIndex = [self indexOfTab:panel];

@@ -635,6 +635,24 @@ final class PathTests: XCTestCase {
                         selectedPanelIndex).boolValue
     }
 
+    private func tideySelectedPanelIndexForRestoredPanel(_ selectedPanel: NSObject?,
+                                                         panels: [NSObject],
+                                                         fallbackIndex: Int) -> Int {
+        let selector = NSSelectorFromString("tideySelectedPanelIndexForRestoredPanel:panels:fallbackIndex:")
+        guard let method = class_getClassMethod(PseudoTerminal.self, selector) else {
+            XCTFail("Missing PseudoTerminal restored panel index helper")
+            return NSNotFound
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, AnyObject?, NSArray, Int) -> Int
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        return function(PseudoTerminal.self,
+                        selector,
+                        selectedPanel,
+                        panels as NSArray,
+                        fallbackIndex)
+    }
+
     private func tideyShouldForwardSidebarSelectionChange(ignoreNextSelection: Bool,
                                                           selectedRow: Int,
                                                           modelSelectedRow: Int,
@@ -1364,6 +1382,16 @@ final class PathTests: XCTestCase {
         XCTAssertFalse(tideyShouldRestoreSelectedPanelAfterShowingWorkspace(changedWorkspace: true,
                                                                             panelCount: 0,
                                                                             selectedPanelIndex: 0))
+    }
+
+    func testWorkspaceSwitchRestoresSelectedPanelByIdentityAfterPanelOrderChanges() {
+        let claudePanel = NSObject()
+        let codexPanel = NSObject()
+
+        XCTAssertEqual(tideySelectedPanelIndexForRestoredPanel(claudePanel,
+                                                               panels: [codexPanel, claudePanel],
+                                                               fallbackIndex: 0),
+                       1)
     }
 
     func testUserPanelSelectionStillUpdatesSelectedPanel() {
