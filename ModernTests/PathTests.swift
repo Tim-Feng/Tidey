@@ -617,6 +617,24 @@ final class PathTests: XCTestCase {
                         ObjCBool(changedWorkspace)).boolValue
     }
 
+    private func tideyShouldRestoreSelectedPanelAfterShowingWorkspace(changedWorkspace: Bool,
+                                                                      panelCount: Int,
+                                                                      selectedPanelIndex: Int) -> Bool {
+        let selector = NSSelectorFromString("tideyShouldRestoreSelectedPanelAfterShowingWorkspaceWithChangedWorkspace:panelCount:selectedPanelIndex:")
+        guard let method = class_getClassMethod(PseudoTerminal.self, selector) else {
+            XCTFail("Missing PseudoTerminal selected panel restore helper")
+            return false
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, ObjCBool, Int, Int) -> ObjCBool
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        return function(PseudoTerminal.self,
+                        selector,
+                        ObjCBool(changedWorkspace),
+                        panelCount,
+                        selectedPanelIndex).boolValue
+    }
+
     private func tideyShouldForwardSidebarSelectionChange(ignoreNextSelection: Bool,
                                                           selectedRow: Int,
                                                           modelSelectedRow: Int,
@@ -1325,6 +1343,27 @@ final class PathTests: XCTestCase {
 
     func testSameWorkspaceShowCanRefreshSelectedPanelAfterShowingWorkspace() {
         XCTAssertTrue(tideyShouldRefreshSelectedPanelAfterShowingWorkspace(changedWorkspace: false))
+    }
+
+    func testWorkspaceSwitchRestoresSavedPanelAfterShowingDifferentWorkspace() {
+        XCTAssertTrue(tideyShouldRestoreSelectedPanelAfterShowingWorkspace(changedWorkspace: true,
+                                                                           panelCount: 2,
+                                                                           selectedPanelIndex: 0))
+    }
+
+    func testSameWorkspaceShowDoesNotForceRestoreSelectedPanel() {
+        XCTAssertFalse(tideyShouldRestoreSelectedPanelAfterShowingWorkspace(changedWorkspace: false,
+                                                                            panelCount: 2,
+                                                                            selectedPanelIndex: 0))
+    }
+
+    func testWorkspaceSwitchDoesNotRestoreInvalidSelectedPanel() {
+        XCTAssertFalse(tideyShouldRestoreSelectedPanelAfterShowingWorkspace(changedWorkspace: true,
+                                                                            panelCount: 2,
+                                                                            selectedPanelIndex: 2))
+        XCTAssertFalse(tideyShouldRestoreSelectedPanelAfterShowingWorkspace(changedWorkspace: true,
+                                                                            panelCount: 0,
+                                                                            selectedPanelIndex: 0))
     }
 
     func testUserPanelSelectionStillUpdatesSelectedPanel() {

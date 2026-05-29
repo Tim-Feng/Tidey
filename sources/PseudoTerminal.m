@@ -407,6 +407,9 @@ static NSString *TideySubmitLogSuffix(NSString *input) {
                                                        rebuildingVisibleWorkspace:(BOOL)rebuildingVisibleWorkspace
                                                          readingSidebarSelection:(BOOL)readingSidebarSelection;
 + (BOOL)tideyShouldRefreshSelectedPanelIndexAfterShowingWorkspaceWithChangedWorkspace:(BOOL)changedWorkspace;
++ (BOOL)tideyShouldRestoreSelectedPanelAfterShowingWorkspaceWithChangedWorkspace:(BOOL)changedWorkspace
+                                                                      panelCount:(NSInteger)panelCount
+                                                              selectedPanelIndex:(NSInteger)selectedPanelIndex;
 + (NSInteger)tideyEditorOpenRouteForPathExists:(BOOL)pathExists isDirectory:(BOOL)isDirectory;
 + (NSDictionary<NSString *, id> *)tideyDockBadgeStateForBellCount:(NSInteger)bellCount
                                            hasUnreadNotifications:(BOOL)hasUnreadNotifications;
@@ -1324,6 +1327,12 @@ ITERM_WEAKLY_REFERENCEABLE
 
 + (BOOL)tideyShouldRefreshSelectedPanelIndexAfterShowingWorkspaceWithChangedWorkspace:(BOOL)changedWorkspace {
     return !changedWorkspace;
+}
+
++ (BOOL)tideyShouldRestoreSelectedPanelAfterShowingWorkspaceWithChangedWorkspace:(BOOL)changedWorkspace
+                                                                      panelCount:(NSInteger)panelCount
+                                                              selectedPanelIndex:(NSInteger)selectedPanelIndex {
+    return changedWorkspace && selectedPanelIndex >= 0 && selectedPanelIndex < panelCount;
 }
 
 + (NSInteger)tideyEditorOpenRouteForPathExists:(BOOL)pathExists isDirectory:(BOOL)isDirectory {
@@ -2701,6 +2710,24 @@ ITERM_WEAKLY_REFERENCEABLE
     if ([[self class] tideyShouldRefreshSelectedPanelIndexAfterShowingWorkspaceWithChangedWorkspace:(currentWorkspace != workspace)] &&
         workspace.panels.count > 0) {
         [self updateSelectedPanelIndexFromVisibleTabSelection];
+    }
+    if ([[self class] tideyShouldRestoreSelectedPanelAfterShowingWorkspaceWithChangedWorkspace:(currentWorkspace != workspace)
+                                                                                    panelCount:workspace.panels.count
+                                                                            selectedPanelIndex:selectedPanelIndex]) {
+        workspace.selectedPanelIndex = selectedPanelIndex;
+        PTYTab *panel = workspace.panels[selectedPanelIndex];
+        NSInteger panelIndex = [self indexOfTab:panel];
+        if (panelIndex != NSNotFound) {
+            [_contentView.tabView selectTabViewItemAtIndex:panelIndex];
+            workspace.selectedPanelIndex = selectedPanelIndex;
+            if (!_fullScreen && self.currentTab) {
+                [self.currentTab updateLabelAttributes];
+                [self setWindowTitle];
+            }
+            if (self.currentSession.mainResponder) {
+                [[self window] makeFirstResponder:self.currentSession.mainResponder];
+            }
+        }
     }
     _tideySwitchingWorkspace = NO;
 }
