@@ -375,7 +375,7 @@ final class AgentSessionRegistryMonitor {
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + .seconds(2), repeating: .seconds(2))
         timer.setEventHandler { [weak self] in
-            self?.scanRegistry()
+            self?.scheduleScan(delay: .milliseconds(0))
         }
         timer.resume()
         self.timer = timer
@@ -506,7 +506,6 @@ final class AgentSessionRegistryMonitor {
             return
         }
         let events = watcher.data
-        tmuxResolver.invalidate()
         scheduleScan()
 
         if events.contains(.rename) || events.contains(.delete) || events.contains(.revoke) {
@@ -516,12 +515,12 @@ final class AgentSessionRegistryMonitor {
         }
     }
 
-    private func scheduleScan() {
+    private func scheduleScan(delay: DispatchTimeInterval = .milliseconds(100)) {
         guard !scanScheduled else {
             return
         }
         scanScheduled = true
-        queue.asyncAfter(deadline: .now() + .milliseconds(100)) { [weak self] in
+        queue.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self else {
                 return
             }

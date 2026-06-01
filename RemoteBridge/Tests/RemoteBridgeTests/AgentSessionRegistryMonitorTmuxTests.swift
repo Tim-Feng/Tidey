@@ -2,6 +2,23 @@ import XCTest
 @testable import RemoteBridge
 
 final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
+    private final class CommandLog: @unchecked Sendable {
+        private let lock = NSLock()
+        private var calls = [[String]]()
+
+        func append(_ arguments: [String]) {
+            lock.lock()
+            calls.append(arguments)
+            lock.unlock()
+        }
+
+        var count: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return calls.count
+        }
+    }
+
     func testScanCorrectsStaleRegistryRecordFromTmuxPaneIdentity() throws {
         let fileManager = FileManager.default
         let supportDirectory = fileManager.temporaryDirectory
@@ -29,16 +46,8 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
 
         let tmuxResolver = TmuxStateResolver(ttl: 60) { socketPath, arguments in
             XCTAssertEqual(socketPath, "/tmp/tmux.sock")
-            XCTAssertEqual(Array(arguments.prefix(5)), ["show-options", "-p", "-v", "-t", "%6"])
-            switch arguments.last {
-            case "@tidey_workspace_id":
-                return "current-workspace\n"
-            case "@tidey_panel_id":
-                return "current-panel\n"
-            default:
-                XCTFail("unexpected tmux arguments \(arguments)")
-                return ""
-            }
+            XCTAssertEqual(arguments, ["list-panes", "-a", "-F", "#{pane_id}|#{@tidey_workspace_id}|#{@tidey_panel_id}"])
+            return "%6|current-workspace|current-panel\n"
         }
         let monitor = AgentSessionRegistryMonitor(paths: paths,
                                                   fileManager: fileManager,
@@ -53,6 +62,57 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         XCTAssertEqual(snapshots.first?.panelID, "current-panel")
         XCTAssertEqual(monitor.activeSessionForWorkspace(workspaceID: "stale-workspace")?.sessionID, nil)
         XCTAssertEqual(monitor.activeSessionForWorkspace(workspaceID: "current-workspace")?.sessionID, "session-stale-env")
+    }
+
+    func testScanBatchesPaneIdentityLookupOncePerSocket() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        try writeRegistryRecord(paths.codexAgentSessionsDirectory.appendingPathComponent("codex-session-1.json"),
+                                vendor: "codex",
+                                workspaceID: "stale-workspace-1",
+                                sessionID: "session-1",
+                                panelID: "stale-panel-1",
+                                paneID: "%1")
+        try writeRegistryRecord(paths.codexAgentSessionsDirectory.appendingPathComponent("codex-session-2.json"),
+                                vendor: "codex",
+                                workspaceID: "stale-workspace-2",
+                                sessionID: "session-2",
+                                panelID: "stale-panel-2",
+                                paneID: "%2")
+        try writeRegistryRecord(paths.claudeAgentSessionsDirectory.appendingPathComponent("claude-session-3.json"),
+                                vendor: "claude",
+                                workspaceID: "stale-workspace-3",
+                                sessionID: "session-3",
+                                panelID: "stale-panel-3",
+                                paneID: "%3")
+
+        let calls = CommandLog()
+        let tmuxResolver = TmuxStateResolver(ttl: 60) { socketPath, arguments in
+            XCTAssertEqual(socketPath, "/tmp/tmux.sock")
+            calls.append(arguments)
+            XCTAssertEqual(arguments, ["list-panes", "-a", "-F", "#{pane_id}|#{@tidey_workspace_id}|#{@tidey_panel_id}"])
+            return "%1|workspace-1|panel-1\n%2|workspace-2|panel-2\n%3||\n"
+        }
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: fileManager,
+                                                  hub: AgentEventHub(),
+                                                  tmuxResolver: tmuxResolver,
+                                                  parentPIDLookup: { _ in nil })
+        try monitor.start()
+
+        let snapshots = Dictionary(uniqueKeysWithValues: monitor.activeSessionSnapshots().map { ($0.sessionID, $0) })
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(snapshots["session-1"]?.workspaceID, "workspace-1")
+        XCTAssertEqual(snapshots["session-1"]?.panelID, "panel-1")
+        XCTAssertEqual(snapshots["session-2"]?.workspaceID, "workspace-2")
+        XCTAssertEqual(snapshots["session-2"]?.panelID, "panel-2")
+        XCTAssertEqual(snapshots["session-3"]?.workspaceID, "stale-workspace-3")
+        XCTAssertEqual(snapshots["session-3"]?.panelID, "stale-panel-3")
     }
 
     func testActiveSessionForPanelFallsBackToTmuxPaneMatchWhenPanelIDsChanged() throws {
@@ -696,5 +756,29 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
                                 afterSeq: nil)
         XCTAssertFalse(fetched.events.isEmpty)
         XCTAssertTrue(fetched.events.allSatisfy { $0.workspaceID == "current-workspace" })
+    }
+
+    private func writeRegistryRecord(_ url: URL,
+                                     vendor: String,
+                                     workspaceID: String,
+                                     sessionID: String,
+                                     panelID: String,
+                                     paneID: String,
+                                     socketPath: String = "/tmp/tmux.sock") throws {
+        let recordData = Data("""
+        {
+          "version": 1,
+          "vendor": "\(vendor)",
+          "workspace_id": "\(workspaceID)",
+          "session_id": "\(sessionID)",
+          "panel_id": "\(panelID)",
+          "pid": \(getpid()),
+          "cwd": "/tmp",
+          "created_at": "2026-05-21T00:00:00Z",
+          "tmux_pane_id": "\(paneID)",
+          "tmux_socket_path": "\(socketPath)"
+        }
+        """.utf8)
+        try recordData.write(to: url)
     }
 }

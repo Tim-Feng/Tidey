@@ -39,6 +39,23 @@ final class TmuxStateResolverTests: XCTestCase {
         }
     }
 
+    private final class CommandLog: @unchecked Sendable {
+        private let lock = NSLock()
+        private var calls = [[String]]()
+
+        func append(_ arguments: [String]) {
+            lock.lock()
+            calls.append(arguments)
+            lock.unlock()
+        }
+
+        var count: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return calls.count
+        }
+    }
+
     func testResolvesPaneToClientPIDsAcrossSharedSession() {
         let resolver = makeResolver(
             panesOutput: "%1|dev\n%2|prod\n",
@@ -115,30 +132,43 @@ final class TmuxStateResolverTests: XCTestCase {
     }
 
     func testPaneIdentityReadsWorkspaceAndPanelOptions() {
+        let calls = CommandLog()
         let resolver = TmuxStateResolver(ttl: 60) { socketPath, arguments in
+            calls.append(arguments)
             XCTAssertEqual(socketPath, "/tmp/tmux.sock")
-            XCTAssertEqual(Array(arguments.prefix(5)), ["show-options", "-p", "-v", "-t", "%1"])
-            switch arguments.last {
-            case "@tidey_workspace_id":
-                return "workspace-1\n"
-            case "@tidey_panel_id":
-                return "panel-1\n"
-            default:
-                XCTFail("unexpected tmux arguments \(arguments)")
-                return ""
-            }
+            XCTAssertEqual(arguments, ["list-panes", "-a", "-F", "#{pane_id}|#{@tidey_workspace_id}|#{@tidey_panel_id}"])
+            return "%1|workspace-1|panel-1\n%2||\n"
         }
 
         XCTAssertEqual(resolver.paneIdentity(forPaneID: "%1", socketPath: "/tmp/tmux.sock"),
                        TmuxPaneIdentity(workspaceID: "workspace-1", panelID: "panel-1"))
+        XCTAssertEqual(calls.count, 1)
     }
 
     func testPaneIdentityReturnsNilWhenOptionsAreMissing() {
+        let calls = CommandLog()
         let resolver = TmuxStateResolver(ttl: 60) { _, arguments in
-            arguments.last == "@tidey_workspace_id" ? "workspace-1\n" : "\n"
+            calls.append(arguments)
+            XCTAssertEqual(arguments, ["list-panes", "-a", "-F", "#{pane_id}|#{@tidey_workspace_id}|#{@tidey_panel_id}"])
+            return "%1|workspace-1|\n%2||panel-2\n"
         }
 
         XCTAssertNil(resolver.paneIdentity(forPaneID: "%1", socketPath: "/tmp/tmux.sock"))
+        XCTAssertNil(resolver.paneIdentity(forPaneID: "%2", socketPath: "/tmp/tmux.sock"))
+        XCTAssertEqual(calls.count, 1)
+    }
+
+    func testPaneIdentityCachesMissingPaneWithinTTL() {
+        let calls = CommandLog()
+        let resolver = TmuxStateResolver(ttl: 60) { _, arguments in
+            calls.append(arguments)
+            XCTAssertEqual(arguments, ["list-panes", "-a", "-F", "#{pane_id}|#{@tidey_workspace_id}|#{@tidey_panel_id}"])
+            return "%1|workspace-1|panel-1\n%2||\n"
+        }
+
+        XCTAssertNil(resolver.paneIdentity(forPaneID: "%2", socketPath: "/tmp/tmux.sock"))
+        XCTAssertNil(resolver.paneIdentity(forPaneID: "%2", socketPath: "/tmp/tmux.sock"))
+        XCTAssertEqual(calls.count, 1)
     }
 
     func testDiscoverTmuxBinaryPathPrefersFirstExecutableCandidate() throws {

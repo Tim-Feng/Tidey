@@ -17,6 +17,10 @@ struct TmuxPaneIdentity: Sendable, Equatable {
     let panelID: String
 }
 
+struct TmuxPaneIdentitySnapshot: Sendable {
+    let identitiesByPaneID: [String: TmuxPaneIdentity]
+}
+
 final class TmuxStateResolver {
     typealias CommandRunner = @Sendable (_ socketPath: String, _ arguments: [String]) throws -> String
     private static let tmuxDiscoveryCandidates = [
@@ -85,10 +89,16 @@ final class TmuxStateResolver {
         let loadedAt: Date
     }
 
+    private struct PaneIdentityCacheEntry {
+        let snapshot: TmuxPaneIdentitySnapshot
+        let loadedAt: Date
+    }
+
     private let queue = DispatchQueue(label: "com.tidey.remote-bridge.tmux-state")
     private let ttl: TimeInterval
     private let commandRunner: CommandRunner
     private var cache = [String: CacheEntry]()
+    private var paneIdentityCache = [String: PaneIdentityCacheEntry]()
 
     init(ttl: TimeInterval = 5,
          commandRunner: @escaping CommandRunner = TmuxStateResolver.liveCommandRunner) {
@@ -115,19 +125,7 @@ final class TmuxStateResolver {
 
     func paneIdentity(forPaneID paneID: String, socketPath: String) -> TmuxPaneIdentity? {
         queue.sync {
-            do {
-                let workspaceID = try commandRunner(socketPath, ["show-options", "-p", "-v", "-t", paneID, "@tidey_workspace_id"])
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                let panelID = try commandRunner(socketPath, ["show-options", "-p", "-v", "-t", paneID, "@tidey_panel_id"])
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !workspaceID.isEmpty, !panelID.isEmpty else {
-                    return nil
-                }
-                return TmuxPaneIdentity(workspaceID: workspaceID, panelID: panelID)
-            } catch {
-                BridgeLogger.server.debug("tmux resolver pane identity failed pane_id=\(paneID, privacy: .public) socket=\(socketPath, privacy: .public) error=\(String(describing: error), privacy: .public)")
-                return nil
-            }
+            loadPaneIdentitySnapshot(socketPath: socketPath)?.identitiesByPaneID[paneID]
         }
     }
 
@@ -135,8 +133,10 @@ final class TmuxStateResolver {
         queue.sync {
             if let socketPath {
                 cache.removeValue(forKey: socketPath)
+                paneIdentityCache.removeValue(forKey: socketPath)
             } else {
                 cache.removeAll()
+                paneIdentityCache.removeAll()
             }
         }
     }
@@ -178,6 +178,34 @@ final class TmuxStateResolver {
                             sessionToClientPIDs: sessionToClientPIDs)
     }
 
+    private func loadPaneIdentitySnapshot(socketPath: String) -> TmuxPaneIdentitySnapshot? {
+        if let entry = paneIdentityCache[socketPath],
+           Date().timeIntervalSince(entry.loadedAt) < ttl {
+            return entry.snapshot
+        }
+
+        do {
+            let output = try commandRunner(socketPath, ["list-panes",
+                                                       "-a",
+                                                       "-F",
+                                                       "#{pane_id}|#{@tidey_workspace_id}|#{@tidey_panel_id}"])
+            let snapshot = Self.paneIdentitySnapshot(output: output)
+            paneIdentityCache[socketPath] = PaneIdentityCacheEntry(snapshot: snapshot,
+                                                                   loadedAt: Date())
+            return snapshot
+        } catch {
+            BridgeLogger.server.debug("tmux resolver pane identity snapshot failed socket=\(socketPath, privacy: .public) error=\(String(describing: error), privacy: .public)")
+            return paneIdentityCache[socketPath]?.snapshot
+        }
+    }
+
+    private static func paneIdentitySnapshot(output: String) -> TmuxPaneIdentitySnapshot {
+        let identities = output
+            .split(whereSeparator: \.isNewline)
+            .compactMap(parsePaneIdentityLine(_:))
+        return TmuxPaneIdentitySnapshot(identitiesByPaneID: Dictionary(uniqueKeysWithValues: identities))
+    }
+
     private static func parsePaneLine(_ line: Substring) -> (String, String)? {
         let parts = line.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
         guard parts.count == 2 else {
@@ -189,6 +217,20 @@ final class TmuxStateResolver {
             return nil
         }
         return (paneID, sessionName)
+    }
+
+    private static func parsePaneIdentityLine(_ line: Substring) -> (String, TmuxPaneIdentity)? {
+        let parts = line.split(separator: "|", maxSplits: 2, omittingEmptySubsequences: false)
+        guard parts.count == 3 else {
+            return nil
+        }
+        let paneID = String(parts[0]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let workspaceID = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let panelID = String(parts[2]).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !paneID.isEmpty, !workspaceID.isEmpty, !panelID.isEmpty else {
+            return nil
+        }
+        return (paneID, TmuxPaneIdentity(workspaceID: workspaceID, panelID: panelID))
     }
 
     private static func parseClientLine(_ line: Substring) -> (clientPID: Int32, sessionName: String)? {
