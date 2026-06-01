@@ -80,10 +80,16 @@ struct OrdinaryTmuxAuthorizedTarget: Equatable, Sendable {
     }
 }
 
+struct OrdinaryTmuxProjectionSnapshot: Equatable, Sendable {
+    let panels: [OrdinaryTmuxProjectedPanel]
+    let observedAt: Date
+}
+
 final class OrdinaryTmuxPanelRegistry: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.tidey.remote-bridge.ordinary-tmux-panel-registry")
     private var routesByPanelID = [String: OrdinaryTmuxPanelRoute]()
     private var authorizedTargets = [String: OrdinaryTmuxAuthorizedTarget]()
+    private var projectionSnapshotsByKey = [String: OrdinaryTmuxProjectionSnapshot]()
     private let authorizationTTL: TimeInterval
 
     init(authorizationTTL: TimeInterval = 600) {
@@ -145,6 +151,31 @@ final class OrdinaryTmuxPanelRegistry: @unchecked Sendable {
                 return true
             }
             return candidates.sorted { $0.authorizedAt > $1.authorizedAt }.first
+        }
+    }
+
+    func storeProjectionSnapshot(key: String,
+                                 panels: [OrdinaryTmuxProjectedPanel],
+                                 observedAt: Date = Date()) {
+        queue.sync {
+            if panels.isEmpty {
+                projectionSnapshotsByKey.removeValue(forKey: key)
+            } else {
+                projectionSnapshotsByKey[key] = OrdinaryTmuxProjectionSnapshot(panels: panels,
+                                                                               observedAt: observedAt)
+            }
+        }
+    }
+
+    func projectionSnapshot(key: String,
+                            maxAge: TimeInterval,
+                            now: Date = Date()) -> OrdinaryTmuxProjectionSnapshot? {
+        queue.sync {
+            guard let snapshot = projectionSnapshotsByKey[key],
+                  now.timeIntervalSince(snapshot.observedAt) <= maxAge else {
+                return nil
+            }
+            return snapshot
         }
     }
 

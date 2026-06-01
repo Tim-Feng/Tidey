@@ -226,6 +226,8 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
         let panels = result["panels"]?.arrayValue?.compactMap(\.objectValue)
         XCTAssertEqual(panels?.count, 1)
         XCTAssertEqual(panels?.first?["panel_id"]?.stringValue, "carrier-panel")
+        XCTAssertEqual(panels?.first?["ordinary_tmux_projection"]?.objectValue?["status"]?.stringValue, "unavailable")
+        XCTAssertEqual(panels?.first?["ordinary_tmux_projection"]?.objectValue?["reason"]?.stringValue, "error_no_cache")
     }
 
     func testProjectionUsesCacheWithinTTL() {
@@ -291,6 +293,86 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
         XCTAssertEqual(adapter.callCount, 1)
         XCTAssertEqual(first["panels"]?.arrayValue?.first?.objectValue?["panel_id"]?.stringValue, "carrier-panel")
         XCTAssertEqual(second["panels"]?.arrayValue?.first?.objectValue?["panel_id"]?.stringValue, "carrier-panel")
+    }
+
+    func testProjectionTimeoutWithoutCacheMarksCarrierUnavailable() {
+        let adapter = TimeoutAdapter()
+        let clock = TestClock(Date(timeIntervalSince1970: 0))
+        let projector = OrdinaryTmuxPanelProjector(adapter: adapter,
+                                                   registry: OrdinaryTmuxPanelRegistry(),
+                                                   cacheTTL: 1,
+                                                   staleTTL: 30,
+                                                   now: { clock.now() })
+
+        let result = projector.projectPanelListResult(panelListResult())
+
+        let panel = result["panels"]?.arrayValue?.first?.objectValue
+        let projection = panel?["ordinary_tmux_projection"]?.objectValue
+        XCTAssertEqual(panel?["panel_id"]?.stringValue, "carrier-panel")
+        XCTAssertEqual(projection?["status"]?.stringValue, "unavailable")
+        XCTAssertEqual(projection?["reason"]?.stringValue, "timeout_no_cache")
+    }
+
+    func testProjectionTimeoutUsesRegistryLastKnownGoodWhenProjectorCacheIsCold() {
+        let registry = OrdinaryTmuxPanelRegistry()
+        let clock = TestClock(Date(timeIntervalSince1970: 0))
+        let firstProjector = OrdinaryTmuxPanelProjector(adapter: StubAdapter(panels: [
+            projectedPanel(windowID: "@15", index: 0, name: "priest", paneID: "%15", current: true),
+            projectedPanel(windowID: "@16", index: 1, name: "mother_nature", paneID: "%16", current: false),
+            projectedPanel(windowID: "@17", index: 2, name: "peon_001", paneID: "%17", current: false),
+        ]),
+                                                   registry: registry,
+                                                   cacheTTL: 1,
+                                                   staleTTL: 30,
+                                                   now: { clock.now() })
+
+        _ = firstProjector.projectPanelListResult(panelListResult())
+        clock.advance(120)
+        let timeoutProjector = OrdinaryTmuxPanelProjector(adapter: TimeoutAdapter(),
+                                                          registry: registry,
+                                                          cacheTTL: 1,
+                                                          staleTTL: 30,
+                                                          now: { clock.now() })
+
+        let result = timeoutProjector.projectPanelListResult(panelListResult())
+
+        let panels = result["panels"]?.arrayValue?.compactMap(\.objectValue)
+        XCTAssertEqual(panels?.map { $0["title"]?.stringValue }, ["priest", "mother_nature", "peon_001"])
+        XCTAssertEqual(panels?.map { $0["ordinary_tmux_projection"]?.objectValue?["status"]?.stringValue }, [
+            "stale",
+            "stale",
+            "stale",
+        ])
+        XCTAssertEqual(panels?.map { $0["ordinary_tmux_projection"]?.objectValue?["reason"]?.stringValue }, [
+            "timeout",
+            "timeout",
+            "timeout",
+        ])
+    }
+
+    func testRegistryStaleProjectionDoesNotReplaceInputRoutes() {
+        let registry = OrdinaryTmuxPanelRegistry()
+        let clock = TestClock(Date(timeIntervalSince1970: 0))
+        let stalePanels = [
+            projectedPanel(windowID: "@99", index: 0, name: "stale_priest", paneID: "%99", current: true),
+            projectedPanel(windowID: "@100", index: 1, name: "stale_mother", paneID: "%100", current: false),
+        ]
+        registry.storeProjectionSnapshot(key: projectionCacheKey(),
+                                         panels: stalePanels,
+                                         observedAt: clock.now())
+        clock.advance(120)
+        let projector = OrdinaryTmuxPanelProjector(adapter: TimeoutAdapter(),
+                                                   registry: registry,
+                                                   cacheTTL: 1,
+                                                   staleTTL: 30,
+                                                   now: { clock.now() })
+
+        let result = projector.projectPanelListResult(panelListResult())
+
+        let panels = result["panels"]?.arrayValue?.compactMap(\.objectValue)
+        XCTAssertEqual(panels?.map { $0["title"]?.stringValue }, ["stale_priest", "stale_mother"])
+        XCTAssertNil(registry.route(forPanelID: stalePanels[0].panelID))
+        XCTAssertNil(registry.route(forPanelID: stalePanels[1].panelID))
     }
 
     func testProjectionTimeoutSkipsRemainingSameSocketCarrierDuringRequest() {
@@ -499,5 +581,15 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
             title: name,
             subtitle: "/Users/timfeng/GitHub/\(name)"
         )
+    }
+
+    private func projectionCacheKey() -> String {
+        [
+            "workspace-1",
+            "carrier-panel",
+            "default",
+            "/dev/ttys010",
+            "genesis-extraction",
+        ].joined(separator: "|")
     }
 }
