@@ -51,25 +51,63 @@ struct InteractivePrompt: Equatable, Sendable {
     }
 }
 
+enum WorkflowConfirmPromptDetection: Equatable, Sendable {
+    case present(InteractivePrompt)
+    case uncertain
+    case absent
+}
+
 struct WorkflowConfirmPromptDetector {
     private static let title = "Run a dynamic workflow?"
     private static let expectedOptionLabels = ["Yes, run it", "View raw script", "No"]
+
+    func detect(ansiOutput: String,
+                workspaceID: String,
+                panelID: String,
+                sessionID: String,
+                vendor: String = "claude") -> WorkflowConfirmPromptDetection {
+        let plainOutput = Self.stripANSI(ansiOutput)
+        let lines = Self.lines(from: plainOutput)
+        let titleIndices = lines.indices.filter { Self.trim(lines[$0]) == Self.title }
+
+        for titleIndex in titleIndices.reversed() {
+            if let prompt = Self.parsePrompt(lines: lines,
+                                             titleIndex: titleIndex,
+                                             workspaceID: workspaceID,
+                                             panelID: panelID,
+                                             sessionID: sessionID,
+                                             vendor: vendor) {
+                return .present(prompt)
+            }
+        }
+
+        if !titleIndices.isEmpty || Self.containsWorkflowConfirmFragment(lines) {
+            return .uncertain
+        }
+        return .absent
+    }
 
     func parse(ansiOutput: String,
                workspaceID: String,
                panelID: String,
                sessionID: String,
                vendor: String = "claude") -> InteractivePrompt? {
-        let plainOutput = Self.stripANSI(ansiOutput)
-        let lines = plainOutput
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\r", with: "\n")
-            .components(separatedBy: "\n")
-
-        guard let titleIndex = lines.firstIndex(where: { Self.trim($0) == Self.title }) else {
-            return nil
+        if case .present(let prompt) = detect(ansiOutput: ansiOutput,
+                                              workspaceID: workspaceID,
+                                              panelID: panelID,
+                                              sessionID: sessionID,
+                                              vendor: vendor) {
+            return prompt
         }
+        return nil
+    }
 
+    private static func parsePrompt(lines: [String],
+                                    titleIndex: Int,
+                                    workspaceID: String,
+                                    panelID: String,
+                                    sessionID: String,
+                                    vendor: String) -> InteractivePrompt? {
         guard let selectedLineIndex = lines.indices.first(where: { index in
             guard index > titleIndex,
                   let parsed = Self.parseOption(lines[index]) else {
@@ -129,6 +167,21 @@ struct WorkflowConfirmPromptDetector {
                                  body: body,
                                  options: options,
                                  selectedIndex: selectedIndex)
+    }
+
+    private static func containsWorkflowConfirmFragment(_ lines: [String]) -> Bool {
+        let normalized = lines.map(trim).joined(separator: "\n")
+        if normalized.contains(Self.title) {
+            return true
+        }
+        return Self.expectedOptionLabels.contains { normalized.contains($0) }
+    }
+
+    private static func lines(from text: String) -> [String] {
+        text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .components(separatedBy: "\n")
     }
 
     private static func inputSequence(selectedIndex: Int, targetIndex: Int) -> String {

@@ -7,20 +7,24 @@ struct InteractivePromptActionHandler {
     private let eventHub: AgentEventHub
     private let inputActionHandler: BridgeInputActionHandler
     private let detector: WorkflowConfirmPromptDetector
-    private let captureLineLimit = 120
+    private let stateStore: InteractivePromptStateStore
+    private let captureLineLimit = 0
+    private let resolvedAbsentThreshold = 3
 
     init(routeResolver: OrdinaryTmuxRouteResolving,
          adapter: OrdinaryTmuxRouteRefreshing = OrdinaryTmuxCLIAdapter(),
          sessionResolver: ActiveAgentSessionResolving,
          eventHub: AgentEventHub,
          inputActionHandler: BridgeInputActionHandler,
-         detector: WorkflowConfirmPromptDetector = WorkflowConfirmPromptDetector()) {
+         detector: WorkflowConfirmPromptDetector = WorkflowConfirmPromptDetector(),
+         stateStore: InteractivePromptStateStore = InteractivePromptStateStore()) {
         self.routeResolver = routeResolver
         self.adapter = adapter
         self.sessionResolver = sessionResolver
         self.eventHub = eventHub
         self.inputActionHandler = inputActionHandler
         self.detector = detector
+        self.stateStore = stateStore
     }
 
     func handle(_ request: BridgeRequest) throws -> BridgeResponse? {
@@ -36,61 +40,72 @@ struct InteractivePromptActionHandler {
 
     private func probe(_ request: BridgeRequest) throws -> BridgeResponse {
         guard let context = try promptContext(from: request, requiresPromptID: false) else {
-            return BridgeResponse(id: request.id,
-                                  ok: true,
-                                  result: ["prompt": .null],
-                                  error: nil)
+            return Self.inactiveResponse(id: request.id, status: "absent")
         }
         guard context.vendor == "claude" else {
-            return BridgeResponse(id: request.id,
-                                  ok: true,
-                                  result: ["prompt": .null],
-                                  error: nil)
+            return Self.inactiveResponse(id: request.id, status: "absent")
         }
 
         let captured = try adapter.captureANSIOutput(route: context.route, maxLines: captureLineLimit)
-        guard let prompt = detector.parse(ansiOutput: captured.output,
-                                          workspaceID: context.workspaceID,
-                                          panelID: context.panelID,
-                                          sessionID: context.sessionID,
-                                          vendor: context.vendor) else {
+        let detection = detector.detect(ansiOutput: captured.output,
+                                        workspaceID: context.workspaceID,
+                                        panelID: context.panelID,
+                                        sessionID: context.sessionID,
+                                        vendor: context.vendor)
+        switch detection {
+        case .present(let prompt):
+            let result = stateStore.recordPresent(key: context.stateKey, prompt: prompt) {
+                makePromptEvent(context: context, prompt: prompt)
+            }
+            if result.shouldPublish {
+                eventHub.publish(result.event)
+                BridgeLogger.server.info("interactive prompt detected workspace_id=\(context.workspaceID, privacy: .public) panel_id=\(context.panelID, privacy: .public) session_id=\(context.sessionID, privacy: .public) source=\(prompt.source, privacy: .public) selected_index=\(prompt.selectedIndex, privacy: .public)")
+            }
             return BridgeResponse(id: request.id,
                                   ok: true,
-                                  result: ["prompt": .null],
+                                  result: Self.activeResult(prompt: prompt,
+                                                            event: result.event,
+                                                            stale: false,
+                                                            published: result.shouldPublish),
                                   error: nil)
-        }
 
-        let seq = eventHub.nextSyntheticSeq(sessionID: context.sessionID)
-        let eventID = "interactive-prompt:\(prompt.promptID):selected:\(prompt.selectedIndex)"
-        let event = AgentEvent(eventID: eventID,
-                               seq: seq,
-                               vendor: context.vendor,
-                               workspaceID: context.workspaceID,
-                               sessionID: context.sessionID,
-                               timestamp: Self.iso8601Now(),
-                               type: .interactivePrompt,
-                               role: nil,
-                               text: prompt.title,
-                               name: nil,
-                               input: nil,
-                               output: nil,
-                               toolCallID: nil,
-                               metadata: [
-                                "panel_id": context.panelID,
-                                "source": prompt.source,
-                                "prompt_id": prompt.promptID,
-                               ],
-                               payload: prompt.jsonValue)
-        eventHub.publish(event)
-        BridgeLogger.server.info("interactive prompt detected workspace_id=\(context.workspaceID, privacy: .public) panel_id=\(context.panelID, privacy: .public) session_id=\(context.sessionID, privacy: .public) source=\(prompt.source, privacy: .public) selected_index=\(prompt.selectedIndex, privacy: .public)")
-        return BridgeResponse(id: request.id,
-                              ok: true,
-                              result: [
-                                "prompt": prompt.jsonValue,
-                                "event": Self.jsonValue(for: event),
-                                "published": .bool(true),
-                              ],
-                              error: nil)
+        case .uncertain:
+            guard let active = stateStore.recordUncertain(key: context.stateKey) else {
+                return Self.inactiveResponse(id: request.id, status: "uncertain")
+            }
+            return BridgeResponse(id: request.id,
+                                  ok: true,
+                                  result: Self.activeResult(prompt: active.prompt,
+                                                            event: active.event,
+                                                            stale: true,
+                                                            published: false),
+                                  error: nil)
+
+        case .absent:
+            let result = stateStore.recordAbsent(key: context.stateKey,
+                                                 threshold: resolvedAbsentThreshold) { prompt in
+                makeResolvedEvent(context: context, prompt: prompt, reason: "absent")
+            }
+            switch result {
+            case .inactive:
+                return Self.inactiveResponse(id: request.id, status: "absent")
+            case .stillActive(let active):
+                return BridgeResponse(id: request.id,
+                                      ok: true,
+                                      result: Self.activeResult(prompt: active.prompt,
+                                                                event: active.event,
+                                                                stale: true,
+                                                                published: false),
+                                      error: nil)
+            case .resolved(let event):
+                eventHub.publish(event)
+                BridgeLogger.server.info("interactive prompt resolved workspace_id=\(context.workspaceID, privacy: .public) panel_id=\(context.panelID, privacy: .public) session_id=\(context.sessionID, privacy: .public) reason=absent")
+                return BridgeResponse(id: request.id,
+                                      ok: true,
+                                      result: Self.resolvedResult(event: event),
+                                      error: nil)
+            }
+        }
     }
 
     private func submit(_ request: BridgeRequest) throws -> BridgeResponse {
@@ -104,16 +119,7 @@ struct InteractivePromptActionHandler {
             throw BridgeInternalError.invalidRequest("submit_interactive_prompt requires prompt_id")
         }
 
-        let captured = try adapter.captureANSIOutput(route: context.route, maxLines: captureLineLimit)
-        guard let prompt = detector.parse(ansiOutput: captured.output,
-                                          workspaceID: context.workspaceID,
-                                          panelID: context.panelID,
-                                          sessionID: context.sessionID,
-                                          vendor: context.vendor),
-              prompt.promptID == requestedPromptID else {
-            throw BridgeInternalError.conflict("interactive prompt is no longer active")
-        }
-
+        let prompt = try activePromptForSubmit(context: context, requestedPromptID: requestedPromptID)
         let input: String
         if let targetIndex = request.params?["target_index"]?.intValue {
             guard targetIndex >= 0 && targetIndex < prompt.options.count else {
@@ -135,7 +141,58 @@ struct InteractivePromptActionHandler {
         guard let response = try inputActionHandler.handle(forwarded) else {
             throw BridgeInternalError.invalidResponse
         }
-        return response
+        guard response.ok else {
+            return response
+        }
+
+        let resolvedEvent = resolveStoredPromptIfNeeded(context: context,
+                                                        prompt: prompt,
+                                                        reason: "submit")
+        eventHub.publish(resolvedEvent)
+        var result = response.result ?? [:]
+        result["status"] = .string("resolved")
+        result["prompt"] = .null
+        result["resolved_event"] = Self.jsonValue(for: resolvedEvent)
+        return BridgeResponse(id: request.id, ok: true, result: result, error: nil)
+    }
+
+    private func activePromptForSubmit(context: PromptContext,
+                                       requestedPromptID: String) throws -> InteractivePrompt {
+        let captured = try adapter.captureANSIOutput(route: context.route, maxLines: captureLineLimit)
+        let detection = detector.detect(ansiOutput: captured.output,
+                                        workspaceID: context.workspaceID,
+                                        panelID: context.panelID,
+                                        sessionID: context.sessionID,
+                                        vendor: context.vendor)
+        switch detection {
+        case .present(let prompt):
+            guard prompt.promptID == requestedPromptID else {
+                throw BridgeInternalError.conflict("interactive prompt is no longer active")
+            }
+            _ = stateStore.recordPresent(key: context.stateKey, prompt: prompt) {
+                makePromptEvent(context: context, prompt: prompt)
+            }
+            return prompt
+        case .uncertain:
+            guard let active = stateStore.activePrompt(key: context.stateKey),
+                  active.promptID == requestedPromptID else {
+                throw BridgeInternalError.conflict("interactive prompt is no longer active")
+            }
+            return active
+        case .absent:
+            throw BridgeInternalError.conflict("interactive prompt is no longer active")
+        }
+    }
+
+    private func resolveStoredPromptIfNeeded(context: PromptContext,
+                                             prompt: InteractivePrompt,
+                                             reason: String) -> AgentEvent {
+        if let event = stateStore.resolve(key: context.stateKey, reason: reason, makeEvent: { prompt in
+            makeResolvedEvent(context: context, prompt: prompt, reason: reason)
+        }) {
+            return event
+        }
+        return makeResolvedEvent(context: context, prompt: prompt, reason: reason)
     }
 
     private func promptContext(from request: BridgeRequest,
@@ -163,6 +220,87 @@ struct InteractivePromptActionHandler {
                              sessionID: sessionID,
                              vendor: vendor,
                              route: route)
+    }
+
+    private func makePromptEvent(context: PromptContext, prompt: InteractivePrompt) -> AgentEvent {
+        let seq = eventHub.nextSyntheticSeq(sessionID: context.sessionID)
+        let eventID = "interactive-prompt:\(prompt.promptID):selected:\(prompt.selectedIndex)"
+        return AgentEvent(eventID: eventID,
+                          seq: seq,
+                          vendor: context.vendor,
+                          workspaceID: context.workspaceID,
+                          sessionID: context.sessionID,
+                          timestamp: Self.iso8601Now(),
+                          type: .interactivePrompt,
+                          role: nil,
+                          text: prompt.title,
+                          name: nil,
+                          input: nil,
+                          output: nil,
+                          toolCallID: nil,
+                          metadata: [
+                            "panel_id": context.panelID,
+                            "source": prompt.source,
+                            "prompt_id": prompt.promptID,
+                          ],
+                          payload: prompt.jsonValue)
+    }
+
+    private func makeResolvedEvent(context: PromptContext,
+                                   prompt: InteractivePrompt,
+                                   reason: String) -> AgentEvent {
+        let seq = eventHub.nextSyntheticSeq(sessionID: context.sessionID)
+        return AgentEvent(eventID: "interactive-prompt-resolved:\(prompt.promptID):\(reason)",
+                          seq: seq,
+                          vendor: context.vendor,
+                          workspaceID: context.workspaceID,
+                          sessionID: context.sessionID,
+                          timestamp: Self.iso8601Now(),
+                          type: .interactivePromptResolved,
+                          role: nil,
+                          text: prompt.title,
+                          name: nil,
+                          input: nil,
+                          output: nil,
+                          toolCallID: nil,
+                          metadata: [
+                            "panel_id": context.panelID,
+                            "source": prompt.source,
+                            "prompt_id": prompt.promptID,
+                            "reason": reason,
+                          ],
+                          payload: prompt.jsonValue)
+    }
+
+    private static func activeResult(prompt: InteractivePrompt,
+                                     event: AgentEvent,
+                                     stale: Bool,
+                                     published: Bool) -> [String: JSONValue] {
+        [
+            "status": .string("active"),
+            "prompt": prompt.jsonValue,
+            "event": jsonValue(for: event),
+            "stale": .bool(stale),
+            "published": .bool(published),
+        ]
+    }
+
+    private static func resolvedResult(event: AgentEvent) -> [String: JSONValue] {
+        [
+            "status": .string("resolved"),
+            "prompt": .null,
+            "resolved_event": jsonValue(for: event),
+        ]
+    }
+
+    private static func inactiveResponse(id: String?, status: String) -> BridgeResponse {
+        BridgeResponse(id: id,
+                       ok: true,
+                       result: [
+                        "status": .string(status),
+                        "prompt": .null,
+                       ],
+                       error: nil)
     }
 
     private static func iso8601Now() -> String {
@@ -214,5 +352,103 @@ struct InteractivePromptActionHandler {
         let sessionID: String
         let vendor: String
         let route: OrdinaryTmuxPanelRoute
+
+        var stateKey: InteractivePromptStateKey {
+            InteractivePromptStateKey(workspaceID: workspaceID,
+                                      panelID: panelID,
+                                      sessionID: sessionID)
+        }
+    }
+}
+
+struct InteractivePromptStateKey: Hashable, Sendable {
+    let workspaceID: String
+    let panelID: String
+    let sessionID: String
+}
+
+struct ActiveInteractivePromptSnapshot: Sendable {
+    let prompt: InteractivePrompt
+    let event: AgentEvent
+}
+
+final class InteractivePromptStateStore: @unchecked Sendable {
+    struct RecordPresentResult: Sendable {
+        let event: AgentEvent
+        let shouldPublish: Bool
+    }
+
+    enum AbsentResult: Sendable {
+        case inactive
+        case stillActive(ActiveInteractivePromptSnapshot)
+        case resolved(AgentEvent)
+    }
+
+    private struct Entry {
+        var prompt: InteractivePrompt
+        var event: AgentEvent
+        var absentCount: Int
+    }
+
+    private let queue = DispatchQueue(label: "com.tidey.remote-bridge.interactive-prompt-state")
+    private var entries = [InteractivePromptStateKey: Entry]()
+
+    func recordPresent(key: InteractivePromptStateKey,
+                       prompt: InteractivePrompt,
+                       makeEvent: () -> AgentEvent) -> RecordPresentResult {
+        queue.sync {
+            if var entry = entries[key], entry.prompt == prompt {
+                entry.absentCount = 0
+                entries[key] = entry
+                return RecordPresentResult(event: entry.event, shouldPublish: false)
+            }
+            let event = makeEvent()
+            entries[key] = Entry(prompt: prompt, event: event, absentCount: 0)
+            return RecordPresentResult(event: event, shouldPublish: true)
+        }
+    }
+
+    func recordUncertain(key: InteractivePromptStateKey) -> ActiveInteractivePromptSnapshot? {
+        queue.sync {
+            guard let entry = entries[key] else {
+                return nil
+            }
+            return ActiveInteractivePromptSnapshot(prompt: entry.prompt, event: entry.event)
+        }
+    }
+
+    func recordAbsent(key: InteractivePromptStateKey,
+                      threshold: Int,
+                      makeEvent: (InteractivePrompt) -> AgentEvent) -> AbsentResult {
+        queue.sync {
+            guard var entry = entries[key] else {
+                return .inactive
+            }
+            entry.absentCount += 1
+            if entry.absentCount >= threshold {
+                entries.removeValue(forKey: key)
+                return .resolved(makeEvent(entry.prompt))
+            }
+            entries[key] = entry
+            return .stillActive(ActiveInteractivePromptSnapshot(prompt: entry.prompt, event: entry.event))
+        }
+    }
+
+    func activePrompt(key: InteractivePromptStateKey) -> InteractivePrompt? {
+        queue.sync {
+            entries[key]?.prompt
+        }
+    }
+
+    func resolve(key: InteractivePromptStateKey,
+                 reason: String,
+                 makeEvent: (InteractivePrompt) -> AgentEvent) -> AgentEvent? {
+        queue.sync {
+            guard let entry = entries.removeValue(forKey: key) else {
+                return nil
+            }
+            _ = reason
+            return makeEvent(entry.prompt)
+        }
     }
 }

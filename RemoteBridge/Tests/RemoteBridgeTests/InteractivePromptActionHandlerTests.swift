@@ -28,7 +28,88 @@ final class InteractivePromptActionHandlerTests: XCTestCase {
         XCTAssertEqual(fetched.events.first?.type, .interactivePrompt)
         XCTAssertEqual(fetched.events.first?.metadata?["panel_id"], route.panelID)
         XCTAssertEqual(fetched.events.first?.payload?.objectValue?["selected_index"]?.intValue, 0)
-        XCTAssertEqual(adapter.maxLines, [120])
+        XCTAssertEqual(response.result?["status"]?.stringValue, "active")
+        XCTAssertEqual(response.result?["stale"]?.boolValue, false)
+        XCTAssertEqual(adapter.maxLines, [0])
+    }
+
+    func testProbeKeepsLastKnownPromptDuringUncertainFrameWithoutRepublishing() throws {
+        let route = ordinaryRoute()
+        let eventHub = AgentEventHub()
+        let adapter = StubPromptAdapter(outputs: [
+            Self.workflowConfirmOutput(selectedOption: 1),
+            Self.uncertainWorkflowConfirmOutput(),
+        ])
+        let handler = makeHandler(route: route,
+                                  adapter: adapter,
+                                  eventHub: eventHub)
+
+        _ = try XCTUnwrap(handler.handle(BridgeRequest(id: "request-1",
+                                                       action: "probe_interactive_prompt",
+                                                       params: [
+                                                        "workspace_id": .string(route.workspaceID),
+                                                        "panel_id": .string(route.panelID),
+                                                       ])))
+        let staleResponse = try XCTUnwrap(handler.handle(BridgeRequest(id: "request-2",
+                                                                       action: "probe_interactive_prompt",
+                                                                       params: [
+                                                                        "workspace_id": .string(route.workspaceID),
+                                                                        "panel_id": .string(route.panelID),
+                                                                       ])))
+
+        XCTAssertEqual(staleResponse.result?["status"]?.stringValue, "active")
+        XCTAssertEqual(staleResponse.result?["stale"]?.boolValue, true)
+        XCTAssertEqual(staleResponse.result?["prompt"]?.objectValue?["title"]?.stringValue, "Run a dynamic workflow?")
+        XCTAssertEqual(eventHub.fetch(workspaceID: route.workspaceID,
+                                      sessionID: route.sessionID,
+                                      limit: 10).events.count, 1)
+    }
+
+    func testProbePublishesResolvedAfterThreeConfidentAbsentFrames() throws {
+        let route = ordinaryRoute()
+        let eventHub = AgentEventHub()
+        let adapter = StubPromptAdapter(outputs: [
+            Self.workflowConfirmOutput(selectedOption: 1),
+            "regular shell output",
+            "regular shell output",
+            "regular shell output",
+        ])
+        let handler = makeHandler(route: route,
+                                  adapter: adapter,
+                                  eventHub: eventHub)
+
+        _ = try XCTUnwrap(handler.handle(BridgeRequest(id: "request-1",
+                                                       action: "probe_interactive_prompt",
+                                                       params: [
+                                                        "workspace_id": .string(route.workspaceID),
+                                                        "panel_id": .string(route.panelID),
+                                                       ])))
+        let firstAbsent = try XCTUnwrap(handler.handle(BridgeRequest(id: "request-2",
+                                                                     action: "probe_interactive_prompt",
+                                                                     params: [
+                                                                        "workspace_id": .string(route.workspaceID),
+                                                                        "panel_id": .string(route.panelID),
+                                                                     ])))
+        let secondAbsent = try XCTUnwrap(handler.handle(BridgeRequest(id: "request-3",
+                                                                      action: "probe_interactive_prompt",
+                                                                      params: [
+                                                                        "workspace_id": .string(route.workspaceID),
+                                                                        "panel_id": .string(route.panelID),
+                                                                      ])))
+        let resolved = try XCTUnwrap(handler.handle(BridgeRequest(id: "request-4",
+                                                                  action: "probe_interactive_prompt",
+                                                                  params: [
+                                                                    "workspace_id": .string(route.workspaceID),
+                                                                    "panel_id": .string(route.panelID),
+                                                                  ])))
+
+        XCTAssertEqual(firstAbsent.result?["status"]?.stringValue, "active")
+        XCTAssertEqual(firstAbsent.result?["stale"]?.boolValue, true)
+        XCTAssertEqual(secondAbsent.result?["status"]?.stringValue, "active")
+        XCTAssertEqual(secondAbsent.result?["stale"]?.boolValue, true)
+        XCTAssertEqual(resolved.result?["status"]?.stringValue, "resolved")
+        XCTAssertEqual(resolved.result?["resolved_event"]?.objectValue?["type"]?.stringValue, "interactive_prompt_resolved")
+        XCTAssertEqual(resolved.result?["resolved_event"]?.objectValue?["metadata"]?.objectValue?["reason"]?.stringValue, "absent")
     }
 
     func testSubmitValidatesPromptBeforeSendingTargetOption() throws {
@@ -51,6 +132,8 @@ final class InteractivePromptActionHandlerTests: XCTestCase {
         XCTAssertTrue(response.ok)
         XCTAssertEqual(router.sentInputs.map(\.panelID), [route.panelID])
         XCTAssertEqual(router.sentInputs.map(\.input), ["\u{1b}[B\u{1b}[B\r"])
+        XCTAssertEqual(response.result?["resolved_event"]?.objectValue?["type"]?.stringValue, "interactive_prompt_resolved")
+        XCTAssertEqual(response.result?["resolved_event"]?.objectValue?["metadata"]?.objectValue?["reason"]?.stringValue, "submit")
     }
 
     func testSubmitRejectsWhenPromptNoLongerActive() {
@@ -139,6 +222,14 @@ final class InteractivePromptActionHandlerTests: XCTestCase {
             \(marker3)3. No
 
           Esc to cancel · Tab to amend
+        """
+    }
+
+    private static func uncertainWorkflowConfirmOutput() -> String {
+        """
+         Run a dynamic workflow?
+
+           ❯ 1. Yes, run it
         """
     }
 }

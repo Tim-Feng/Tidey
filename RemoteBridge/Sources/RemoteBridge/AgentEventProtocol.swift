@@ -6,6 +6,7 @@ enum AgentEventKind: String, Codable, Sendable {
     case assistantMessage = "assistant_message"
     case assistantFinal = "assistant_final"
     case interactivePrompt = "interactive_prompt"
+    case interactivePromptResolved = "interactive_prompt_resolved"
     case thinking
     case toolCall = "tool_call"
     case toolResult = "tool_result"

@@ -55,6 +55,57 @@ final class InteractivePromptDetectorTests: XCTestCase {
         XCTAssertEqual(prompt.options[2].inputSequence, "\u{1b}[B\r")
     }
 
+    func testDetectsUncertainWhenTitleExistsWithoutCompleteOptions() {
+        let ansi = """
+         Run a dynamic workflow?
+
+           ❯ 1. Yes, run it
+        """
+
+        XCTAssertEqual(WorkflowConfirmPromptDetector().detect(ansiOutput: ansi,
+                                                              workspaceID: "workspace-1",
+                                                              panelID: "panel-1",
+                                                              sessionID: "claude-session"),
+                       .uncertain)
+    }
+
+    func testDetectsAbsentWhenNoWorkflowConfirmFragmentsExist() {
+        let output = """
+        Thinking...
+        Jitterbugging...
+        """
+
+        XCTAssertEqual(WorkflowConfirmPromptDetector().detect(ansiOutput: output,
+                                                              workspaceID: "workspace-1",
+                                                              panelID: "panel-1",
+                                                              sessionID: "claude-session"),
+                       .absent)
+    }
+
+    func testDetectsLastCompletePromptWhenEarlierFrameIsIncomplete() throws {
+        let output = """
+         Run a dynamic workflow?
+
+           ❯ 1. Yes, run it
+
+         Some redraw noise
+
+         Run a dynamic workflow?
+
+           1. Yes, run it
+           2. View raw script
+         ❯ 3. No
+        """
+
+        guard case .present(let prompt) = WorkflowConfirmPromptDetector().detect(ansiOutput: output,
+                                                                                 workspaceID: "workspace-1",
+                                                                                 panelID: "panel-1",
+                                                                                 sessionID: "claude-session") else {
+            return XCTFail("expected present prompt")
+        }
+        XCTAssertEqual(prompt.selectedIndex, 2)
+    }
+
     func testRejectsNonWorkflowPromptTerminalOutput() {
         let output = """
         Thinking...
