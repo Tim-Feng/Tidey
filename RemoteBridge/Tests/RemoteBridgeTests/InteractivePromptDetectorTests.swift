@@ -129,7 +129,7 @@ final class InteractivePromptDetectorTests: XCTestCase {
                        .absent)
     }
 
-    func testDetectsCompletePromptWithoutFooterAtBottomAsUncertain() {
+    func testDetectsCompletePromptWithoutFooterAtBottomAsPresent() {
         let output = """
          Run a dynamic workflow?
 
@@ -138,11 +138,52 @@ final class InteractivePromptDetectorTests: XCTestCase {
              3. No
         """
 
+        guard case .present(let prompt) = WorkflowConfirmPromptDetector().detect(ansiOutput: output,
+                                                                                 workspaceID: "workspace-1",
+                                                                                 panelID: "panel-1",
+                                                                                 sessionID: "claude-session") else {
+            return XCTFail("expected present prompt")
+        }
+        XCTAssertEqual(prompt.selectedIndex, 0)
+    }
+
+    func testDetectsCompletePromptWithoutFooterAndStatusLineAsPresent() {
+        let output = """
+         Run a dynamic workflow?
+
+           ❯ 1. Yes, run it
+             2. View raw script
+             3. No
+
+          esc to interrupt
+        """
+
+        guard case .present(let prompt) = WorkflowConfirmPromptDetector().detect(ansiOutput: output,
+                                                                                 workspaceID: "workspace-1",
+                                                                                 panelID: "panel-1",
+                                                                                 sessionID: "claude-session") else {
+            return XCTFail("expected present prompt")
+        }
+        XCTAssertEqual(prompt.selectedIndex, 0)
+    }
+
+    func testDetectsAnsweredWorkflowPromptResidueAsAbsentWhenWorkflowOutputFollows() {
+        let output = """
+         Run a dynamic workflow?
+
+           ❯ 1. Yes, run it
+             2. View raw script
+             3. No
+
+        ⏺ Workflow(Trivial workflow to verify Remote prompt state)
+          ⎿  Dynamic workflow completed
+        """
+
         XCTAssertEqual(WorkflowConfirmPromptDetector().detect(ansiOutput: output,
                                                               workspaceID: "workspace-1",
                                                               panelID: "panel-1",
                                                               sessionID: "claude-session"),
-                       .uncertain)
+                       .absent)
     }
 
     func testRejectsNonWorkflowPromptTerminalOutput() {

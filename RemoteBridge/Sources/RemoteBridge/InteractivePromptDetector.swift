@@ -170,10 +170,9 @@ struct WorkflowConfirmPromptDetector {
         guard let selectedOption = parsedOptions.first(where: \.selected) else {
             return .uncertain
         }
-        guard Self.hasLiveFooter(lines: lines, after: optionEndIndex, before: endIndex) else {
-            return Self.hasNonFooterOutput(lines: lines, after: optionEndIndex, before: endIndex)
-                ? .answeredResidue
-                : .uncertain
+
+        if Self.hasAnsweredEvidence(lines: lines, after: optionEndIndex, before: endIndex) {
+            return .answeredResidue
         }
 
         let firstOptionLineIndex = parsedOptions[0].lineIndex
@@ -198,18 +197,7 @@ struct WorkflowConfirmPromptDetector {
         return .present(prompt)
     }
 
-    private static func hasLiveFooter(lines: [String], after optionEndIndex: Int, before endIndex: Int) -> Bool {
-        guard optionEndIndex + 1 < endIndex else {
-            return false
-        }
-        return lines[(optionEndIndex + 1)..<endIndex].contains { line in
-            let trimmed = trim(line)
-            return (trimmed.contains("Esc to cancel") && trimmed.contains("Tab to amend"))
-                || trimmed.contains("ctrl+g to edit script")
-        }
-    }
-
-    private static func hasNonFooterOutput(lines: [String], after optionEndIndex: Int, before endIndex: Int) -> Bool {
+    private static func hasAnsweredEvidence(lines: [String], after optionEndIndex: Int, before endIndex: Int) -> Bool {
         guard optionEndIndex + 1 < endIndex else {
             return false
         }
@@ -218,9 +206,36 @@ struct WorkflowConfirmPromptDetector {
             guard !trimmed.isEmpty else {
                 return false
             }
-            return !(trimmed.contains("Esc to cancel") && trimmed.contains("Tab to amend"))
-                && !trimmed.contains("ctrl+g to edit script")
+            guard !Self.isLivePromptFooter(trimmed),
+                  !Self.isTransientPromptStatus(trimmed) else {
+                return false
+            }
+            return Self.isWorkflowExecutionOutput(trimmed)
         }
+    }
+
+    private static func isLivePromptFooter(_ trimmed: String) -> Bool {
+        (trimmed.contains("Esc to cancel") && trimmed.contains("Tab to amend"))
+            || trimmed.contains("ctrl+g to edit script")
+    }
+
+    private static func isTransientPromptStatus(_ trimmed: String) -> Bool {
+        let lowercased = trimmed.lowercased()
+        return lowercased == "esc to interrupt"
+            || lowercased.contains("press up to edit queued messages")
+            || lowercased.contains("jitterbugging")
+    }
+
+    private static func isWorkflowExecutionOutput(_ trimmed: String) -> Bool {
+        let lowercased = trimmed.lowercased()
+        return lowercased.hasPrefix("starting dynamic workflow")
+            || lowercased.hasPrefix("phase ")
+            || lowercased.contains("workflow(")
+            || lowercased.contains("dynamic workflow completed")
+            || lowercased.contains("dynamic workflow \"")
+            || trimmed.hasPrefix("⏺")
+            || trimmed.hasPrefix("●")
+            || trimmed.hasPrefix("✔")
     }
 
     private static func containsWorkflowConfirmFragment(_ lines: [String]) -> Bool {
