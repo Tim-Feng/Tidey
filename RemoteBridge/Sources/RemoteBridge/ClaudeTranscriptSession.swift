@@ -1446,6 +1446,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             consumeAssistant(object: object, timestamp: timestamp, lineOffset: lineOffset)
         case "user":
             consumeUser(object: object, timestamp: timestamp, lineOffset: lineOffset)
+        case "attachment":
+            consumeAttachment(object: object, timestamp: timestamp, lineOffset: lineOffset)
         default:
             break
         }
@@ -1600,6 +1602,41 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 ordinal += 1
             }
         }
+    }
+
+    private func consumeAttachment(object: [String: Any], timestamp: String, lineOffset: Int) {
+        guard let uuid = object["uuid"] as? String,
+              let attachment = object["attachment"] as? [String: Any],
+              attachment["type"] as? String == "queued_command",
+              let prompt = attachment["prompt"] as? String else {
+            return
+        }
+
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard shouldPublishUserMessage(trimmed) else {
+            return
+        }
+
+        var metadata = [
+            "queued_command": "true",
+        ]
+        if let commandMode = attachment["commandMode"] as? String,
+           !commandMode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            metadata["command_mode"] = commandMode
+        }
+
+        publishFileBacked(kind: .userMessage,
+                          lineOffset: lineOffset,
+                          ordinal: 0,
+                          eventID: "\(uuid):queued-command:0",
+                          timestamp: timestamp,
+                          role: "user",
+                          text: trimmed,
+                          name: nil,
+                          input: nil,
+                          output: nil,
+                          toolCallID: nil,
+                          metadata: metadata)
     }
 
     private func consumeLocalCommandEnvelope(_ text: String,

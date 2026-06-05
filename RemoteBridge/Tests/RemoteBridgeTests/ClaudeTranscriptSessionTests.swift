@@ -77,6 +77,60 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         XCTAssertEqual(result.events.compactMap(\.text), ["Please explain when to use /exit in docs."])
     }
 
+    func testClaudeQueuedCommandAttachmentAppendPublishesUserMessage() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        try Data().write(to: transcriptURL)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+
+        XCTAssertTrue(waitUntil {
+            let result = hub.fetch(workspaceID: "workspace",
+                                   sessionID: "session",
+                                   limit: 10,
+                                   beforeSeq: nil,
+                                   afterSeq: nil)
+            return result.events.contains { $0.type == .sessionStarted }
+        })
+
+        let handle = try FileHandle(forWritingTo: transcriptURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(makeClaudeQueuedCommandAttachment(uuid: "q1",
+                                                                            prompt: "local queued message")
+            .appending("\n")
+            .utf8))
+        try handle.close()
+
+        XCTAssertTrue(waitUntil {
+            let result = hub.fetch(workspaceID: "workspace",
+                                   sessionID: "session",
+                                   limit: 10,
+                                   beforeSeq: nil,
+                                   afterSeq: nil)
+            return result.events.contains {
+                $0.type == .userMessage && $0.text == "local queued message"
+            }
+        })
+
+        let result = hub.fetch(workspaceID: "workspace",
+                               sessionID: "session",
+                               limit: 10,
+                               beforeSeq: nil,
+                               afterSeq: nil)
+        let userEvent = try XCTUnwrap(result.events.first { $0.type == .userMessage })
+        XCTAssertEqual(userEvent.text, "local queued message")
+        XCTAssertEqual(userEvent.metadata?["queued_command"], "true")
+    }
+
     func testClaudeContextCommandPublishesCleanGeneratedSummary() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
@@ -241,6 +295,22 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
             "message": [
                 "role": "user",
                 "content": content,
+            ],
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        return String(data: data, encoding: .utf8)!
+    }
+
+    private func makeClaudeQueuedCommandAttachment(uuid: String, prompt: String) -> String {
+        let object: [String: Any] = [
+            "type": "attachment",
+            "uuid": uuid,
+            "sessionId": "session",
+            "timestamp": "2026-04-30T00:00:00Z",
+            "attachment": [
+                "type": "queued_command",
+                "prompt": prompt,
+                "commandMode": "prompt",
             ],
         ]
         let data = try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
