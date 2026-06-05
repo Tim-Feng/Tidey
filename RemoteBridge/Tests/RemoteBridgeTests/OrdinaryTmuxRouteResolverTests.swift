@@ -20,6 +20,10 @@ final class OrdinaryTmuxRouteResolverTests: XCTestCase {
         func captureOutput(route: OrdinaryTmuxPanelRoute, maxLines: Int) throws -> OrdinaryTmuxCapturedOutput {
             OrdinaryTmuxCapturedOutput(output: "", cursorRow: nil, cursorColumn: nil)
         }
+
+        func captureANSIOutput(route: OrdinaryTmuxPanelRoute, maxLines: Int) throws -> OrdinaryTmuxCapturedOutput {
+            OrdinaryTmuxCapturedOutput(output: "", cursorRow: nil, cursorColumn: nil)
+        }
     }
 
     func testRebuildsRouteFromAuthorizedLogicalPanelIDWhenRegistryRouteIsMissing() throws {

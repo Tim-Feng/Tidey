@@ -492,6 +492,19 @@ final class OrdinaryTmuxCLIAdapter {
                                           cursorColumn: nil)
     }
 
+    func captureANSIOutput(route: OrdinaryTmuxPanelRoute, maxLines: Int) throws -> OrdinaryTmuxCapturedOutput {
+        let refreshed = try refreshedRoute(route)
+        var arguments = ["capture-pane", "-e", "-p"]
+        if maxLines > 0 {
+            arguments += ["-S", "-\(maxLines)"]
+        }
+        arguments += ["-t", refreshed.activePaneID]
+        let output = try commandRunner(refreshed.socket, arguments, nil)
+        return OrdinaryTmuxCapturedOutput(output: output,
+                                          cursorRow: nil,
+                                          cursorColumn: nil)
+    }
+
     private func verifyPasteBufferDelivery(pasteText: String,
                                            paneID: String,
                                            socket: OrdinaryTmuxSocketSelector,

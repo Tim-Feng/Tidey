@@ -566,6 +566,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
     private let inputActionHandler: BridgeInputActionHandler
     private let fileActionHandler: BridgeFileActionHandler
     private let ordinaryTmuxRecentOutputHandler: OrdinaryTmuxRecentOutputHandler
+    private let interactivePromptActionHandler: InteractivePromptActionHandler
     private let imageUploadHandler: BridgeImageUploadHandler
     private let ordinaryTmuxPanelProjector: OrdinaryTmuxPanelProjector
     private var agentSubscriptionID: UUID?
@@ -596,6 +597,10 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
         self.fileActionHandler = BridgeFileActionHandler(rootResolver: TideyPanelFileRootResolver(socketSender: socketClient,
                                                                                                   ordinaryTmuxRouteResolver: routeResolver))
         self.ordinaryTmuxRecentOutputHandler = OrdinaryTmuxRecentOutputHandler(routeResolver: routeResolver)
+        self.interactivePromptActionHandler = InteractivePromptActionHandler(routeResolver: routeResolver,
+                                                                            sessionResolver: registryMonitor,
+                                                                            eventHub: eventHub,
+                                                                            inputActionHandler: inputActionHandler)
         self.imageUploadHandler = BridgeImageUploadHandler(destinationResolver: ApplicationSupportImageUploadDestinationResolver(),
                                                            filenameGenerator: TimestampedImageUploadFilenameGenerator())
         self.ordinaryTmuxPanelProjector = OrdinaryTmuxPanelProjector(registry: ordinaryTmuxPanelRegistry)
@@ -703,6 +708,11 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                                           workspaceReplayEnvelopes: [])
             }
             if let response = try ordinaryTmuxRecentOutputHandler.handle(request) {
+                return LocalRequestResult(response: response,
+                                          agentReplayEnvelopes: [],
+                                          workspaceReplayEnvelopes: [])
+            }
+            if let response = try interactivePromptActionHandler.handle(request) {
                 return LocalRequestResult(response: response,
                                           agentReplayEnvelopes: [],
                                           workspaceReplayEnvelopes: [])
@@ -1254,6 +1264,9 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
         }
         if let metadata = event.metadata {
             object["metadata"] = .object(metadata.mapValues(JSONValue.string))
+        }
+        if let payload = event.payload {
+            object["payload"] = payload
         }
         return .object(object)
     }

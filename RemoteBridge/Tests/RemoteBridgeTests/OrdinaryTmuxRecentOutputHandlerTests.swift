@@ -24,6 +24,10 @@ final class OrdinaryTmuxRecentOutputHandlerTests: XCTestCase {
             XCTAssertEqual(maxLines, 50)
             return OrdinaryTmuxCapturedOutput(output: "hello\nworld", cursorRow: nil, cursorColumn: nil)
         }
+
+        func captureANSIOutput(route: OrdinaryTmuxPanelRoute, maxLines: Int) throws -> OrdinaryTmuxCapturedOutput {
+            throw BridgeInternalError.notFound("unused")
+        }
     }
 
     func testWrapsCapturedOutputInIOSRecentOutputShape() throws {

@@ -323,7 +323,8 @@ final class AgentEventHub {
                           input: event.input,
                           output: event.output,
                           toolCallID: event.toolCallID,
-                          metadata: metadata.isEmpty ? nil : metadata)
+                          metadata: metadata.isEmpty ? nil : metadata,
+                          payload: event.payload)
     }
 
     private func budgetLimitedEvents(_ events: [AgentEvent],
@@ -409,6 +410,7 @@ final class AgentEventHub {
                           input: input,
                           output: output,
                           toolCallID: event.toolCallID,
-                          metadata: metadata)
+                          metadata: metadata,
+                          payload: event.payload)
     }
 }

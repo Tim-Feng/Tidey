@@ -191,6 +191,7 @@ protocol OrdinaryTmuxRouteRefreshing: Sendable {
     func route(for logicalID: OrdinaryTmuxLogicalPanelID,
                authorizedTarget: OrdinaryTmuxAuthorizedTarget) throws -> OrdinaryTmuxPanelRoute
     func captureOutput(route: OrdinaryTmuxPanelRoute, maxLines: Int) throws -> OrdinaryTmuxCapturedOutput
+    func captureANSIOutput(route: OrdinaryTmuxPanelRoute, maxLines: Int) throws -> OrdinaryTmuxCapturedOutput
 }
 
 struct OrdinaryTmuxCapturedOutput: Equatable, Sendable {

@@ -5,6 +5,7 @@ enum AgentEventKind: String, Codable, Sendable {
     case sessionEnded = "session_ended"
     case assistantMessage = "assistant_message"
     case assistantFinal = "assistant_final"
+    case interactivePrompt = "interactive_prompt"
     case thinking
     case toolCall = "tool_call"
     case toolResult = "tool_result"
@@ -27,6 +28,39 @@ struct AgentEvent: Encodable, Sendable {
     let output: String?
     let toolCallID: String?
     let metadata: [String: String]?
+    let payload: JSONValue?
+
+    init(eventID: String,
+         seq: Int,
+         vendor: String,
+         workspaceID: String,
+         sessionID: String,
+         timestamp: String,
+         type: AgentEventKind,
+         role: String?,
+         text: String?,
+         name: String?,
+         input: String?,
+         output: String?,
+         toolCallID: String?,
+         metadata: [String: String]?,
+         payload: JSONValue? = nil) {
+        self.eventID = eventID
+        self.seq = seq
+        self.vendor = vendor
+        self.workspaceID = workspaceID
+        self.sessionID = sessionID
+        self.timestamp = timestamp
+        self.type = type
+        self.role = role
+        self.text = text
+        self.name = name
+        self.input = input
+        self.output = output
+        self.toolCallID = toolCallID
+        self.metadata = metadata
+        self.payload = payload
+    }
 
     enum CodingKeys: String, CodingKey {
         case eventID = "event_id"
@@ -43,6 +77,7 @@ struct AgentEvent: Encodable, Sendable {
         case output
         case toolCallID = "tool_call_id"
         case metadata
+        case payload
     }
 }
 
