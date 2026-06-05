@@ -57,6 +57,12 @@ enum WorkflowConfirmPromptDetection: Equatable, Sendable {
     case absent
 }
 
+private enum WorkflowConfirmPromptCandidateDetection {
+    case present(InteractivePrompt)
+    case uncertain
+    case answeredResidue
+}
+
 struct WorkflowConfirmPromptDetector {
     private static let title = "Run a dynamic workflow?"
     private static let expectedOptionLabels = ["Yes, run it", "View raw script", "No"]
@@ -69,18 +75,33 @@ struct WorkflowConfirmPromptDetector {
         let plainOutput = Self.stripANSI(ansiOutput)
         let lines = Self.lines(from: plainOutput)
         let titleIndices = lines.indices.filter { Self.trim(lines[$0]) == Self.title }
+        var sawUncertainCandidate = false
+        var sawAnsweredResidue = false
 
         for titleIndex in titleIndices.reversed() {
-            if let prompt = Self.parsePrompt(lines: lines,
-                                             titleIndex: titleIndex,
-                                             workspaceID: workspaceID,
-                                             panelID: panelID,
-                                             sessionID: sessionID,
-                                             vendor: vendor) {
+            let endIndex = titleIndices.first(where: { $0 > titleIndex }) ?? lines.endIndex
+            switch Self.detectCandidate(lines: lines,
+                                        titleIndex: titleIndex,
+                                        endIndex: endIndex,
+                                        workspaceID: workspaceID,
+                                        panelID: panelID,
+                                        sessionID: sessionID,
+                                        vendor: vendor) {
+            case .present(let prompt):
                 return .present(prompt)
+            case .uncertain:
+                sawUncertainCandidate = true
+            case .answeredResidue:
+                sawAnsweredResidue = true
             }
         }
 
+        if sawUncertainCandidate {
+            return .uncertain
+        }
+        if sawAnsweredResidue {
+            return .absent
+        }
         if !titleIndices.isEmpty || Self.containsWorkflowConfirmFragment(lines) {
             return .uncertain
         }
@@ -102,20 +123,22 @@ struct WorkflowConfirmPromptDetector {
         return nil
     }
 
-    private static func parsePrompt(lines: [String],
-                                    titleIndex: Int,
-                                    workspaceID: String,
-                                    panelID: String,
-                                    sessionID: String,
-                                    vendor: String) -> InteractivePrompt? {
+    private static func detectCandidate(lines: [String],
+                                        titleIndex: Int,
+                                        endIndex: Int,
+                                        workspaceID: String,
+                                        panelID: String,
+                                        sessionID: String,
+                                        vendor: String) -> WorkflowConfirmPromptCandidateDetection {
         guard let selectedLineIndex = lines.indices.first(where: { index in
             guard index > titleIndex,
+                  index < endIndex,
                   let parsed = Self.parseOption(lines[index]) else {
                 return false
             }
             return parsed.selected
         }) else {
-            return nil
+            return .uncertain
         }
 
         var optionStartIndex = selectedLineIndex
@@ -125,7 +148,7 @@ struct WorkflowConfirmPromptDetector {
             optionStartIndex -= 1
         }
         var optionEndIndex = selectedLineIndex
-        while optionEndIndex + 1 < lines.endIndex,
+        while optionEndIndex + 1 < endIndex,
               Self.parseOption(lines[optionEndIndex + 1]) != nil {
             optionEndIndex += 1
         }
@@ -133,19 +156,24 @@ struct WorkflowConfirmPromptDetector {
         var parsedOptions = [(lineIndex: Int, selected: Bool, optionIndex: Int, label: String)]()
         for lineIndex in optionStartIndex...optionEndIndex {
             guard let parsed = Self.parseOption(lines[lineIndex]) else {
-                return nil
+                return .uncertain
             }
             parsedOptions.append((lineIndex, parsed.selected, parsed.optionIndex, parsed.label))
         }
 
         guard parsedOptions.count == Self.expectedOptionLabels.count else {
-            return nil
+            return .uncertain
         }
         guard parsedOptions.map(\.label) == Self.expectedOptionLabels else {
-            return nil
+            return .uncertain
         }
         guard let selectedOption = parsedOptions.first(where: \.selected) else {
-            return nil
+            return .uncertain
+        }
+        guard Self.hasLiveFooter(lines: lines, after: optionEndIndex, before: endIndex) else {
+            return Self.hasNonFooterOutput(lines: lines, after: optionEndIndex, before: endIndex)
+                ? .answeredResidue
+                : .uncertain
         }
 
         let firstOptionLineIndex = parsedOptions[0].lineIndex
@@ -156,17 +184,43 @@ struct WorkflowConfirmPromptDetector {
                                     label: parsed.label,
                                     inputSequence: Self.inputSequence(selectedIndex: selectedIndex, targetIndex: offset))
         }
-        return InteractivePrompt(promptID: Self.promptID(workspaceID: workspaceID,
-                                                         panelID: panelID,
-                                                         sessionID: sessionID,
-                                                         title: Self.title,
-                                                         labels: parsedOptions.map(\.label)),
-                                 vendor: vendor,
-                                 source: "workflow_confirm",
-                                 title: Self.title,
-                                 body: body,
-                                 options: options,
-                                 selectedIndex: selectedIndex)
+        let prompt = InteractivePrompt(promptID: Self.promptID(workspaceID: workspaceID,
+                                                               panelID: panelID,
+                                                               sessionID: sessionID,
+                                                               title: Self.title,
+                                                               labels: parsedOptions.map(\.label)),
+                                       vendor: vendor,
+                                       source: "workflow_confirm",
+                                       title: Self.title,
+                                       body: body,
+                                       options: options,
+                                       selectedIndex: selectedIndex)
+        return .present(prompt)
+    }
+
+    private static func hasLiveFooter(lines: [String], after optionEndIndex: Int, before endIndex: Int) -> Bool {
+        guard optionEndIndex + 1 < endIndex else {
+            return false
+        }
+        return lines[(optionEndIndex + 1)..<endIndex].contains { line in
+            let trimmed = trim(line)
+            return (trimmed.contains("Esc to cancel") && trimmed.contains("Tab to amend"))
+                || trimmed.contains("ctrl+g to edit script")
+        }
+    }
+
+    private static func hasNonFooterOutput(lines: [String], after optionEndIndex: Int, before endIndex: Int) -> Bool {
+        guard optionEndIndex + 1 < endIndex else {
+            return false
+        }
+        return lines[(optionEndIndex + 1)..<endIndex].contains { line in
+            let trimmed = trim(line)
+            guard !trimmed.isEmpty else {
+                return false
+            }
+            return !(trimmed.contains("Esc to cancel") && trimmed.contains("Tab to amend"))
+                && !trimmed.contains("ctrl+g to edit script")
+        }
     }
 
     private static func containsWorkflowConfirmFragment(_ lines: [String]) -> Bool {

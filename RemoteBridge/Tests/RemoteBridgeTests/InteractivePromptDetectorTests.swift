@@ -42,6 +42,8 @@ final class InteractivePromptDetectorTests: XCTestCase {
            1. Yes, run it
          \u{1b}[38;5;153m❯ 2. View raw script\u{1b}[0m
            3. No
+
+          Esc to cancel - Tab to amend
         """
 
         let prompt = try XCTUnwrap(WorkflowConfirmPromptDetector().parse(ansiOutput: ansi,
@@ -95,6 +97,8 @@ final class InteractivePromptDetectorTests: XCTestCase {
            1. Yes, run it
            2. View raw script
          ❯ 3. No
+
+          Esc to cancel - Tab to amend
         """
 
         guard case .present(let prompt) = WorkflowConfirmPromptDetector().detect(ansiOutput: output,
@@ -104,6 +108,41 @@ final class InteractivePromptDetectorTests: XCTestCase {
             return XCTFail("expected present prompt")
         }
         XCTAssertEqual(prompt.selectedIndex, 2)
+    }
+
+    func testDetectsAnsweredWorkflowPromptResidueAsAbsentWhenFooterIsGoneAndOutputFollows() {
+        let output = """
+         Run a dynamic workflow?
+
+           ❯ 1. Yes, run it
+             2. View raw script
+             3. No
+
+        Starting dynamic workflow...
+        Phase 1: Extract
+        """
+
+        XCTAssertEqual(WorkflowConfirmPromptDetector().detect(ansiOutput: output,
+                                                              workspaceID: "workspace-1",
+                                                              panelID: "panel-1",
+                                                              sessionID: "claude-session"),
+                       .absent)
+    }
+
+    func testDetectsCompletePromptWithoutFooterAtBottomAsUncertain() {
+        let output = """
+         Run a dynamic workflow?
+
+           ❯ 1. Yes, run it
+             2. View raw script
+             3. No
+        """
+
+        XCTAssertEqual(WorkflowConfirmPromptDetector().detect(ansiOutput: output,
+                                                              workspaceID: "workspace-1",
+                                                              panelID: "panel-1",
+                                                              sessionID: "claude-session"),
+                       .uncertain)
     }
 
     func testRejectsNonWorkflowPromptTerminalOutput() {
