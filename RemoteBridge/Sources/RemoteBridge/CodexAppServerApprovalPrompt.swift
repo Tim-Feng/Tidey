@@ -35,8 +35,9 @@ enum CodexAppServerApprovalDecision: String, CaseIterable, Equatable, Sendable {
     }
 }
 
-struct CodexAppServerApprovalRequest: Equatable, Sendable {
+struct CodexAppServerApprovalRequest: Sendable {
     let requestID: String
+    let requestIDValue: JSONValue
     let method: CodexAppServerApprovalMethod
     let threadID: String
     let turnID: String
@@ -53,14 +54,15 @@ struct CodexAppServerApprovalRequest: Equatable, Sendable {
 
     init?(method methodName: String, requestID: JSONValue, params: [String: JSONValue]) {
         guard let method = CodexAppServerApprovalMethod(rawValue: methodName),
-              let requestID = Self.stringID(from: requestID),
+              let requestIDText = Self.stringID(from: requestID),
               let threadID = params["threadId"]?.stringValue,
               let turnID = params["turnId"]?.stringValue,
               let itemID = params["itemId"]?.stringValue else {
             return nil
         }
 
-        self.requestID = requestID
+        self.requestID = requestIDText
+        requestIDValue = requestID
         self.method = method
         self.threadID = threadID
         self.turnID = turnID
@@ -234,7 +236,7 @@ struct CodexAppServerApprovalRequest: Equatable, Sendable {
     }
 }
 
-struct CodexAppServerApprovalPromptEntry: Equatable, Sendable {
+struct CodexAppServerApprovalPromptEntry: Sendable {
     let request: CodexAppServerApprovalRequest
     let prompt: InteractivePrompt
 }
@@ -260,13 +262,27 @@ final class CodexAppServerApprovalPromptStore: @unchecked Sendable {
     }
 
     func resolve(promptID: String, targetIndex: Int) throws -> JSONValue {
+        let (_, response) = try resolveEntry(promptID: promptID, targetIndex: targetIndex)
+        return response
+    }
+
+    func resolveEntry(promptID: String,
+                      targetIndex: Int) throws -> (entry: CodexAppServerApprovalPromptEntry, response: JSONValue) {
+        try lock.withCodexApprovalLock {
+            guard let entry = entriesByPromptID[promptID] else {
+                throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
+            }
+            let response = try entry.request.response(targetIndex: targetIndex)
+            entriesByPromptID.removeValue(forKey: promptID)
+            return (entry, response)
+        }
+    }
+
+    func remove(promptID: String) -> CodexAppServerApprovalPromptEntry? {
         let entry = lock.withCodexApprovalLock {
             entriesByPromptID.removeValue(forKey: promptID)
         }
-        guard let entry else {
-            throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
-        }
-        return try entry.request.response(targetIndex: targetIndex)
+        return entry
     }
 }
 

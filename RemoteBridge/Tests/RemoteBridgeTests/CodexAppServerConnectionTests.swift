@@ -48,6 +48,108 @@ final class CodexAppServerConnectionTests: XCTestCase {
         XCTAssertEqual(error?["message"]?.stringValue, "Unsupported server request: item/tool/requestUserInput")
     }
 
+    func testCommandApprovalRequestPublishesPromptAndSubmitSendsDecisionReply() throws {
+        let outbound = LineSink()
+        var promptEnvelope: CodexAppServerInteractivePromptEnvelope?
+        var resolvedEvent: AgentEvent?
+        var nextSeq = 41
+        let connection = CodexAppServerConnection(
+            sendLine: { outbound.append($0) },
+            approvalContext: CodexAppServerApprovalContext(workspaceID: "workspace-1",
+                                                           panelID: "panel-1",
+                                                           sessionID: "session-1"),
+            nextSequence: { _ in
+                nextSeq += 1
+                return nextSeq
+            },
+            timestampProvider: { "2026-06-05T12:00:00.000Z" },
+            onInteractivePrompt: { promptEnvelope = $0 },
+            onInteractivePromptResolved: { resolvedEvent = $0 })
+
+        connection.receiveLine("""
+        {"id":"approval-1","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","startedAtMs":1786000000000,"reason":"Needs network.","command":"curl https://example.com","cwd":"/Users/timfeng/GitHub/Tidey"}}
+        """)
+
+        let envelope = try XCTUnwrap(promptEnvelope)
+        XCTAssertEqual(envelope.prompt.vendor, "codex")
+        XCTAssertEqual(envelope.prompt.source, "codex_command_approval")
+        XCTAssertEqual(envelope.prompt.title, "Approve Codex command?")
+        XCTAssertTrue(envelope.prompt.body.contains("Command: curl https://example.com"))
+        XCTAssertEqual(envelope.event.type, .interactivePrompt)
+        XCTAssertEqual(envelope.event.vendor, "codex")
+        XCTAssertEqual(envelope.event.workspaceID, "workspace-1")
+        XCTAssertEqual(envelope.event.sessionID, "session-1")
+        XCTAssertEqual(envelope.event.metadata?["panel_id"], "panel-1")
+        XCTAssertEqual(envelope.event.metadata?["prompt_id"], envelope.prompt.promptID)
+        XCTAssertEqual(envelope.event.payload?.objectValue?["prompt_id"]?.stringValue, envelope.prompt.promptID)
+
+        let resolved = try connection.submitApproval(promptID: envelope.prompt.promptID,
+                                                     targetIndex: 1)
+        XCTAssertEqual(resolved.type, .interactivePromptResolved)
+        XCTAssertEqual(resolved.metadata?["reason"], "submit")
+        XCTAssertEqual(resolvedEvent?.eventID, resolved.eventID)
+
+        let response = try Self.object(from: outbound.lines()[0])
+        XCTAssertEqual(response["id"]?.stringValue, "approval-1")
+        XCTAssertEqual(response["result"]?.objectValue?["decision"]?.stringValue, "acceptForSession")
+    }
+
+    func testFileChangeApprovalRequestPublishesPromptAndSubmitSendsDecisionReply() throws {
+        let outbound = LineSink()
+        var promptEnvelope: CodexAppServerInteractivePromptEnvelope?
+        let connection = CodexAppServerConnection(
+            sendLine: { outbound.append($0) },
+            approvalContext: CodexAppServerApprovalContext(workspaceID: "workspace-1",
+                                                           panelID: "panel-1",
+                                                           sessionID: "session-1"),
+            onInteractivePrompt: { promptEnvelope = $0 })
+
+        connection.receiveLine("""
+        {"id":7,"method":"item/fileChange/requestApproval","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-2","startedAtMs":1786000000000,"reason":"Needs write access.","grantRoot":"/Users/timfeng/GitHub/Tidey"}}
+        """)
+
+        let envelope = try XCTUnwrap(promptEnvelope)
+        XCTAssertEqual(envelope.prompt.source, "codex_file_change_approval")
+        XCTAssertTrue(envelope.prompt.body.contains("Grant root: /Users/timfeng/GitHub/Tidey"))
+
+        try connection.submitApproval(promptID: envelope.prompt.promptID, targetIndex: 2)
+        let response = try Self.object(from: outbound.lines()[0])
+        XCTAssertEqual(response["id"]?.intValue, 7)
+        XCTAssertEqual(response["result"]?.objectValue?["decision"]?.stringValue, "decline")
+    }
+
+    func testInvalidApprovalRequestSendsInvalidParamsError() throws {
+        let outbound = LineSink()
+        let connection = CodexAppServerConnection(
+            sendLine: { outbound.append($0) },
+            approvalContext: CodexAppServerApprovalContext(workspaceID: "workspace-1",
+                                                           panelID: "panel-1",
+                                                           sessionID: "session-1"))
+
+        connection.receiveLine(#"{"id":"approval-1","method":"item/fileChange/requestApproval","params":{"turnId":"turn-1"}}"#)
+
+        let response = try Self.object(from: outbound.lines()[0])
+        XCTAssertEqual(response["id"]?.stringValue, "approval-1")
+        let error = response["error"]?.objectValue
+        XCTAssertEqual(error?["code"]?.intValue, -32602)
+        XCTAssertEqual(error?["message"]?.stringValue, "Invalid Codex approval request: item/fileChange/requestApproval")
+    }
+
+    func testApprovalRequestWithoutContextSendsContextUnavailableError() throws {
+        let outbound = LineSink()
+        let connection = CodexAppServerConnection(sendLine: { outbound.append($0) })
+
+        connection.receiveLine("""
+        {"id":"approval-1","method":"item/fileChange/requestApproval","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","startedAtMs":1786000000000}}
+        """)
+
+        let response = try Self.object(from: outbound.lines()[0])
+        XCTAssertEqual(response["id"]?.stringValue, "approval-1")
+        let error = response["error"]?.objectValue
+        XCTAssertEqual(error?["code"]?.intValue, -32000)
+        XCTAssertEqual(error?["message"]?.stringValue, "Codex approval context is unavailable.")
+    }
+
     func testClosesPendingRequestsWhenJSONLineIsInvalid() throws {
         var failure: CodexAppServerConnectionError?
         let connection = CodexAppServerConnection(sendLine: { _ in })

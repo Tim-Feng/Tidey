@@ -24,21 +24,55 @@ struct CodexAppServerNotification: Sendable {
     let params: [String: JSONValue]
 }
 
+struct CodexAppServerApprovalContext: Sendable {
+    let workspaceID: String
+    let panelID: String
+    let sessionID: String
+}
+
+struct CodexAppServerInteractivePromptEnvelope: Sendable {
+    let request: CodexAppServerApprovalRequest
+    let prompt: InteractivePrompt
+    let event: AgentEvent
+}
+
 final class CodexAppServerConnection {
     typealias SendLine = @Sendable (String) throws -> Void
     typealias ClientResponseHandler = (Result<JSONValue, CodexAppServerConnectionError>) -> Void
     typealias NotificationHandler = (CodexAppServerNotification) -> Void
+    typealias SequenceProvider = (String) -> Int
+    typealias TimestampProvider = () -> String
+    typealias InteractivePromptHandler = (CodexAppServerInteractivePromptEnvelope) -> Void
+    typealias InteractivePromptResolvedHandler = (AgentEvent) -> Void
 
     private var nextRequestID = 1
     private var pendingClientResponses: [String: ClientResponseHandler] = [:]
     private var closed = false
     private let sendLine: SendLine
     private let onNotification: NotificationHandler
+    private let approvalContext: CodexAppServerApprovalContext?
+    private let approvalStore: CodexAppServerApprovalPromptStore
+    private let nextSequence: SequenceProvider
+    private let timestampProvider: TimestampProvider
+    private let onInteractivePrompt: InteractivePromptHandler
+    private let onInteractivePromptResolved: InteractivePromptResolvedHandler
 
     init(sendLine: @escaping SendLine,
-         onNotification: @escaping NotificationHandler = { _ in }) {
+         onNotification: @escaping NotificationHandler = { _ in },
+         approvalContext: CodexAppServerApprovalContext? = nil,
+         approvalStore: CodexAppServerApprovalPromptStore = CodexAppServerApprovalPromptStore(),
+         nextSequence: @escaping SequenceProvider = { _ in 0 },
+         timestampProvider: @escaping TimestampProvider = { CodexAppServerConnection.iso8601Now() },
+         onInteractivePrompt: @escaping InteractivePromptHandler = { _ in },
+         onInteractivePromptResolved: @escaping InteractivePromptResolvedHandler = { _ in }) {
         self.sendLine = sendLine
         self.onNotification = onNotification
+        self.approvalContext = approvalContext
+        self.approvalStore = approvalStore
+        self.nextSequence = nextSequence
+        self.timestampProvider = timestampProvider
+        self.onInteractivePrompt = onInteractivePrompt
+        self.onInteractivePromptResolved = onInteractivePromptResolved
     }
 
     @discardableResult
@@ -101,10 +135,29 @@ final class CodexAppServerConnection {
     }
 
     func handleServerRequest(id: JSONValue, method: String, params: [String: JSONValue]) {
-        _ = params
+        if let request = CodexAppServerApprovalRequest(method: method, requestID: id, params: params) {
+            handleApprovalRequest(request)
+            return
+        }
+        if CodexAppServerApprovalMethod(rawValue: method) != nil {
+            sendError(id: id,
+                      code: -32602,
+                      message: "Invalid Codex approval request: \(method)")
+            return
+        }
         sendError(id: id,
                   code: -32601,
                   message: "Unsupported server request: \(method)")
+    }
+
+    @discardableResult
+    func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent {
+        let (entry, response) = try approvalStore.resolveEntry(promptID: promptID,
+                                                               targetIndex: targetIndex)
+        sendResult(id: entry.request.requestIDValue, result: response)
+        let event = makeResolvedEvent(prompt: entry.prompt, reason: "submit")
+        onInteractivePromptResolved(event)
+        return event
     }
 
     func sendResult(id: JSONValue, result: JSONValue) {
@@ -166,5 +219,76 @@ final class CodexAppServerConnection {
         default:
             return nil
         }
+    }
+
+    private func handleApprovalRequest(_ request: CodexAppServerApprovalRequest) {
+        guard approvalContext != nil else {
+            sendError(id: request.requestIDValue,
+                      code: -32000,
+                      message: "Codex approval context is unavailable.")
+            return
+        }
+        let prompt = approvalStore.record(request)
+        let event = makePromptEvent(prompt: prompt)
+        onInteractivePrompt(CodexAppServerInteractivePromptEnvelope(request: request,
+                                                                    prompt: prompt,
+                                                                    event: event))
+    }
+
+    private func makePromptEvent(prompt: InteractivePrompt) -> AgentEvent {
+        guard let approvalContext else {
+            preconditionFailure("approvalContext must exist before creating prompt events")
+        }
+        return AgentEvent(eventID: "codex-app-server-prompt:\(prompt.promptID)",
+                          seq: nextSequence(approvalContext.sessionID),
+                          vendor: "codex",
+                          workspaceID: approvalContext.workspaceID,
+                          sessionID: approvalContext.sessionID,
+                          timestamp: timestampProvider(),
+                          type: .interactivePrompt,
+                          role: nil,
+                          text: prompt.title,
+                          name: nil,
+                          input: nil,
+                          output: nil,
+                          toolCallID: nil,
+                          metadata: [
+                            "panel_id": approvalContext.panelID,
+                            "source": prompt.source,
+                            "prompt_id": prompt.promptID,
+                          ],
+                          payload: prompt.jsonValue)
+    }
+
+    private func makeResolvedEvent(prompt: InteractivePrompt, reason: String) -> AgentEvent {
+        guard let approvalContext else {
+            preconditionFailure("approvalContext must exist before creating resolved events")
+        }
+        return AgentEvent(eventID: "codex-app-server-prompt-resolved:\(prompt.promptID):\(reason)",
+                          seq: nextSequence(approvalContext.sessionID),
+                          vendor: "codex",
+                          workspaceID: approvalContext.workspaceID,
+                          sessionID: approvalContext.sessionID,
+                          timestamp: timestampProvider(),
+                          type: .interactivePromptResolved,
+                          role: nil,
+                          text: prompt.title,
+                          name: nil,
+                          input: nil,
+                          output: nil,
+                          toolCallID: nil,
+                          metadata: [
+                            "panel_id": approvalContext.panelID,
+                            "source": prompt.source,
+                            "prompt_id": prompt.promptID,
+                            "reason": reason,
+                          ],
+                          payload: prompt.jsonValue)
+    }
+
+    private static func iso8601Now() -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: Date())
     }
 }
