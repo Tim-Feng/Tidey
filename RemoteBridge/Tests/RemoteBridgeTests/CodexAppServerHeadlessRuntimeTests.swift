@@ -53,6 +53,84 @@ final class CodexAppServerHeadlessRuntimeTests: XCTestCase {
         XCTAssertEqual(input["text_elements"]?.arrayValue?.count, 0)
     }
 
+    func testServerNotificationsBecomeAgentEvents() throws {
+        let events = EventSink()
+        let runtime = Self.runtime(events: events)
+        let connection = CodexAppServerConnection(sendLine: { _ in },
+                                                  onNotification: runtime.handleNotification)
+
+        connection.receiveLine("""
+        {"method":"thread/started","params":{"thread":{"id":"thread-1","preview":"Build app-server runtime","name":null}}}
+        """)
+        connection.receiveLine("""
+        {"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1","items":[],"itemsView":{"type":"all"},"status":"running","error":null,"startedAt":1,"completedAt":null,"durationMs":null}}}
+        """)
+        connection.receiveLine("""
+        {"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"msg-1","delta":"hello"}}
+        """)
+        connection.receiveLine("""
+        {"method":"item/commandExecution/outputDelta","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"cmd-1","delta":"stdout line\\n"}}
+        """)
+        connection.receiveLine("""
+        {"method":"item/commandExecution/terminalInteraction","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"cmd-1","processId":"proc-1","stdin":"y\\n"}}
+        """)
+        connection.receiveLine("""
+        {"method":"item/fileChange/patchUpdated","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"patch-1","changes":[]}}
+        """)
+        connection.receiveLine("""
+        {"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","items":[],"itemsView":{"type":"all"},"status":"completed","error":null,"startedAt":1,"completedAt":2,"durationMs":1000}}}
+        """)
+
+        let emitted = events.events()
+        XCTAssertEqual(emitted.map(\.type), [
+            .sessionStarted,
+            .thinking,
+            .assistantMessage,
+            .toolResult,
+            .toolCall,
+            .toolCall,
+            .assistantFinal,
+        ])
+        XCTAssertEqual(emitted[0].text, "Build app-server runtime")
+        XCTAssertEqual(emitted[0].metadata?["thread_id"], "thread-1")
+        XCTAssertEqual(emitted[2].text, "hello")
+        XCTAssertEqual(emitted[2].toolCallID, "msg-1")
+        XCTAssertEqual(emitted[3].name, "terminal_stream")
+        XCTAssertEqual(emitted[3].output, "stdout line\n")
+        XCTAssertEqual(emitted[3].payload?.objectValue?["kind"]?.stringValue, "terminal_stream")
+        XCTAssertEqual(emitted[4].name, "terminal_interaction")
+        XCTAssertEqual(emitted[4].input, "y\n")
+        XCTAssertEqual(emitted[4].metadata?["process_id"], "proc-1")
+        XCTAssertEqual(emitted[5].name, "file_change_patch")
+        XCTAssertEqual(emitted[6].type, .assistantFinal)
+    }
+
+    func testItemLifecycleNotificationsBecomeConversationAndToolEvents() {
+        let events = EventSink()
+        let runtime = Self.runtime(events: events)
+        let connection = CodexAppServerConnection(sendLine: { _ in },
+                                                  onNotification: runtime.handleNotification)
+
+        connection.receiveLine("""
+        {"method":"item/started","params":{"threadId":"thread-1","turnId":"turn-1","item":{"type":"userMessage","id":"user-1","content":[{"type":"text","text":"run tests","text_elements":[]}]}}}
+        """)
+        connection.receiveLine("""
+        {"method":"item/started","params":{"threadId":"thread-1","turnId":"turn-1","item":{"type":"commandExecution","id":"cmd-1","command":"swift test","cwd":"/Users/timfeng/GitHub/Tidey","processId":"proc-1","source":"agent","status":"running","commandActions":[],"aggregatedOutput":null,"exitCode":null,"durationMs":null}}}
+        """)
+        connection.receiveLine("""
+        {"method":"item/completed","params":{"threadId":"thread-1","turnId":"turn-1","item":{"type":"commandExecution","id":"cmd-1","command":"swift test","cwd":"/Users/timfeng/GitHub/Tidey","processId":"proc-1","source":"agent","status":"completed","commandActions":[],"aggregatedOutput":"ok","exitCode":0,"durationMs":42}}}
+        """)
+
+        let emitted = events.events()
+        XCTAssertEqual(emitted.map(\.type), [.userMessage, .toolCall, .toolResult])
+        XCTAssertEqual(emitted[0].text, "run tests")
+        XCTAssertEqual(emitted[1].name, "command_execution")
+        XCTAssertEqual(emitted[1].input, "swift test")
+        XCTAssertEqual(emitted[1].toolCallID, "cmd-1")
+        XCTAssertEqual(emitted[2].output, "ok")
+        XCTAssertEqual(emitted[2].metadata?["process_id"], "proc-1")
+    }
+
     private static func runtime() -> CodexAppServerHeadlessRuntime {
         var seq = 100
         return CodexAppServerHeadlessRuntime(
@@ -67,6 +145,20 @@ final class CodexAppServerHeadlessRuntimeTests: XCTestCase {
             onAgentEvent: { _ in })
     }
 
+    private static func runtime(events: EventSink) -> CodexAppServerHeadlessRuntime {
+        var seq = 100
+        return CodexAppServerHeadlessRuntime(
+            context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                  panelID: "panel-1",
+                                                  sessionID: "session-1"),
+            nextSequence: { _ in
+                seq += 1
+                return seq
+            },
+            timestampProvider: { "2026-06-05T12:00:00.000Z" },
+            onAgentEvent: { events.append($0) })
+    }
+
     private static func object(from line: String,
                                file: StaticString = #filePath,
                                line sourceLine: UInt = #line) throws -> [String: JSONValue] {
@@ -75,6 +167,23 @@ final class CodexAppServerHeadlessRuntimeTests: XCTestCase {
                                  line: sourceLine)
         let value = try JSONDecoder().decode(JSONValue.self, from: data)
         return try XCTUnwrap(value.objectValue, file: file, line: sourceLine)
+    }
+}
+
+private final class EventSink: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [AgentEvent] = []
+
+    func append(_ event: AgentEvent) {
+        lock.lock()
+        storage.append(event)
+        lock.unlock()
+    }
+
+    func events() -> [AgentEvent] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
     }
 }
 
