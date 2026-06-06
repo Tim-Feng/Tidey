@@ -69,6 +69,9 @@ final class CodexAppServerHeadlessRuntimeTests: XCTestCase {
         {"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"msg-1","delta":"hello"}}
         """)
         connection.receiveLine("""
+        {"method":"item/completed","params":{"threadId":"thread-1","turnId":"turn-1","item":{"type":"agentMessage","id":"msg-1","text":"hello"}}}
+        """)
+        connection.receiveLine("""
         {"method":"item/commandExecution/outputDelta","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"cmd-1","delta":"stdout line\\n"}}
         """)
         connection.receiveLine("""
@@ -103,6 +106,19 @@ final class CodexAppServerHeadlessRuntimeTests: XCTestCase {
         XCTAssertEqual(emitted[4].metadata?["process_id"], "proc-1")
         XCTAssertEqual(emitted[5].name, "file_change_patch")
         XCTAssertEqual(emitted[6].type, .assistantFinal)
+    }
+
+    func testAgentMessageDeltasAreNotPublishedAsChatBubbles() throws {
+        let events = EventSink()
+        let runtime = Self.runtime(events: events)
+        let connection = CodexAppServerConnection(sendLine: { _ in },
+                                                  onNotification: runtime.handleNotification)
+
+        connection.receiveLine("""
+        {"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"msg-1","delta":"partial"}}
+        """)
+
+        XCTAssertTrue(events.events().isEmpty)
     }
 
     func testServerWarningsAndFinalErrorsBecomeVisibleMessages() throws {

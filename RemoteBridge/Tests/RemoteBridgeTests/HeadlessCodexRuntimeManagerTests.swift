@@ -83,7 +83,18 @@ final class HeadlessCodexRuntimeManagerTests: XCTestCase {
                                 sessionID: "headless-session",
                                 limit: 10)
         XCTAssertTrue(fetched.events.contains { $0.type == .sessionStarted })
-        XCTAssertTrue(fetched.events.contains { $0.type == .userMessage && $0.text == "run tests" })
+        XCTAssertFalse(fetched.events.contains { $0.type == .userMessage })
+
+        process.emitStdout("""
+        {"method":"item/started","params":{"threadId":"thread-1","turnId":"turn-1","item":{"type":"userMessage","id":"user-1","content":[{"type":"text","text":"run tests","text_elements":[]}]}}}
+        """)
+
+        let afterUserEcho = hub.fetch(workspaceID: "headless-workspace",
+                                      sessionID: "headless-session",
+                                      limit: 10)
+        let userEvents = afterUserEcho.events.filter { $0.type == .userMessage }
+        XCTAssertEqual(userEvents.count, 1)
+        XCTAssertEqual(userEvents.first?.text, "run tests")
     }
 
     func testSecondChatSubmitUsesExistingThreadWithoutStartingAnotherThread() throws {

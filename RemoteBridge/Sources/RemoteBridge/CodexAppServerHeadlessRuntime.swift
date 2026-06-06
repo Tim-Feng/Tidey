@@ -126,18 +126,7 @@ final class CodexAppServerHeadlessRuntime {
         case "item/completed":
             return makeItemCompletedEvent(notification)
         case "item/agentMessage/delta":
-            guard let delta = notification.params["delta"]?.stringValue else {
-                return nil
-            }
-            return makeEvent(method: notification.method,
-                             type: .assistantMessage,
-                             text: delta,
-                             name: nil,
-                             input: nil,
-                             output: nil,
-                             toolCallID: Self.itemID(from: notification.params),
-                             payloadKind: "assistant_delta",
-                             params: notification.params)
+            return nil
         case "command/exec/outputDelta",
              "process/outputDelta",
              "item/commandExecution/outputDelta":

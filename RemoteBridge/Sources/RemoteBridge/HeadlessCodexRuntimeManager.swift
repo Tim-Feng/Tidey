@@ -115,7 +115,6 @@ final class HeadlessCodexRuntimeManager: HeadlessCodexRuntimeControlling {
 
         let clientRequestID = params["client_request_id"]?.stringValue
         let turn = QueuedTurn(text: message, clientRequestID: clientRequestID)
-        publishUserMessage(turn)
         let runtimeSession = try ensureSession()
         let thread = currentThreadID()
         if let thread {
@@ -360,34 +359,6 @@ final class HeadlessCodexRuntimeManager: HeadlessCodexRuntimeControlling {
                                ],
                                payload: .object([
                                 "kind": .string("headless_session_started"),
-                                "source": .string("codex_app_server"),
-                               ]))
-        eventHub.publish(event)
-    }
-
-    private func publishUserMessage(_ turn: QueuedTurn) {
-        let seq = eventHub.nextSyntheticSeq(sessionID: configuration.sessionID)
-        let eventID = turn.clientRequestID.map { "headless-codex-user:\($0)" } ?? "headless-codex-user:\(configuration.sessionID):\(seq)"
-        let event = AgentEvent(eventID: eventID,
-                               seq: seq,
-                               vendor: "codex",
-                               workspaceID: configuration.workspaceID,
-                               sessionID: configuration.sessionID,
-                               timestamp: timestampProvider(),
-                               type: .userMessage,
-                               role: "user",
-                               text: turn.text,
-                               name: nil,
-                               input: nil,
-                               output: nil,
-                               toolCallID: nil,
-                               metadata: [
-                                "panel_id": configuration.panelID,
-                                "source": "codex_app_server",
-                                "client_request_id": turn.clientRequestID ?? "",
-                               ],
-                               payload: .object([
-                                "kind": .string("user_message"),
                                 "source": .string("codex_app_server"),
                                ]))
         eventHub.publish(event)
