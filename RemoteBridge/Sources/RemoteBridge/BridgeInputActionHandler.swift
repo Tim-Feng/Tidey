@@ -26,12 +26,14 @@ struct BridgeInputActionHandler {
     private let sessionResolver: ActiveAgentSessionResolving
     private let ordinaryTmuxInputRouter: OrdinaryTmuxInputRouting?
     private let chatSubmitEchoRegistry: ChatSubmitEchoRegistry?
+    private let headlessCodexRuntime: HeadlessCodexRuntimeControlling?
     private let sleep: @Sendable (UInt64) throws -> Void
 
     init(socketSender: TideyRequestSending,
          sessionResolver: ActiveAgentSessionResolving,
          ordinaryTmuxInputRouter: OrdinaryTmuxInputRouting? = nil,
          chatSubmitEchoRegistry: ChatSubmitEchoRegistry? = nil,
+         headlessCodexRuntime: HeadlessCodexRuntimeControlling? = nil,
          sleep: @escaping @Sendable (UInt64) throws -> Void = { delayNanoseconds in
              guard delayNanoseconds > 0 else {
                  return
@@ -42,6 +44,7 @@ struct BridgeInputActionHandler {
         self.sessionResolver = sessionResolver
         self.ordinaryTmuxInputRouter = ordinaryTmuxInputRouter
         self.chatSubmitEchoRegistry = chatSubmitEchoRegistry
+        self.headlessCodexRuntime = headlessCodexRuntime
         self.sleep = sleep
     }
 
@@ -102,6 +105,9 @@ struct BridgeInputActionHandler {
         let requestedSessionID = params["session_id"]?.stringValue
         let requestedVendor = params["vendor"]?.stringValue
         let clientRequestID = params["client_request_id"]?.stringValue
+        if let response = try headlessCodexRuntime?.handleChatSubmit(request) {
+            return response
+        }
         let activeSession = sessionResolver.activeSessionForPanel(workspaceID: workspaceID, panelID: panelID)
 
         if let requestedSessionID,

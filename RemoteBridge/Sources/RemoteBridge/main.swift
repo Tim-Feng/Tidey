@@ -32,6 +32,9 @@ let resolverPublisher = BridgeResolverPublisher(resolverBaseURL: BridgeResolverC
 let resolverPublicationMonitor = BridgeResolverPublicationMonitor(statusReader: cloudflaredStatusStore,
                                                                   publisher: resolverPublisher)
 let uploadGarbageCollector = BridgeUploadGarbageCollector(uploadDirectory: bridgePaths.uploadsDirectory)
+let headlessCodexRuntime = HeadlessCodexRuntimeConfiguration.devFromEnvironment().map {
+    HeadlessCodexRuntimeManager(configuration: $0, eventHub: eventHub)
+}
 let server = TideyRemoteBridgeServer(token: token,
                                      authenticator: authenticator,
                                      pairingController: pairingController,
@@ -41,7 +44,8 @@ let server = TideyRemoteBridgeServer(token: token,
                                      registryMonitor: registryMonitor,
                                      observability: observability,
                                      cloudflaredManager: cloudflaredManager,
-                                     uploadGarbageCollector: uploadGarbageCollector)
+                                     uploadGarbageCollector: uploadGarbageCollector,
+                                     headlessCodexRuntime: headlessCodexRuntime)
 
 do {
     workspaceEventMonitor.start()

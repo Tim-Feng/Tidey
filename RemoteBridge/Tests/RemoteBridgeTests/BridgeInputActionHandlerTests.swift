@@ -139,6 +139,35 @@ final class BridgeInputActionHandlerTests: XCTestCase {
         XCTAssertEqual(delayRecorder.recordedDelays, [chatSubmitEnterDelayNanoseconds])
     }
 
+    func testChatSubmitRoutesHeadlessCodexWithoutMacSocketForward() throws {
+        let sender = MockTideyRequestSender()
+        let resolver = MockSessionResolver()
+        let runtime = MockHeadlessCodexRuntime(chatResponse: BridgeResponse(id: "request-1",
+                                                                            ok: true,
+                                                                            result: [
+                                                                                "submitted": .bool(true),
+                                                                                "headless": .bool(true),
+                                                                            ],
+                                                                            error: nil))
+        let handler = BridgeInputActionHandler(socketSender: sender,
+                                               sessionResolver: resolver,
+                                               headlessCodexRuntime: runtime)
+
+        let response = try handler.handle(BridgeRequest(id: "request-1",
+                                                        action: "chat_submit",
+                                                        params: [
+                                                            "workspace_id": .string("headless-workspace"),
+                                                            "panel_id": .string("headless-panel"),
+                                                            "message": .string("hello"),
+                                                            "vendor": .string("codex"),
+                                                        ]))
+
+        XCTAssertEqual(response?.ok, true)
+        XCTAssertEqual(response?.result?["headless"]?.boolValue, true)
+        XCTAssertEqual(runtime.chatSubmitRequestIDs, ["request-1"])
+        XCTAssertTrue(sender.sentRequests.isEmpty)
+    }
+
     func testChatSubmitRegistersClientRequestIDForTranscriptEchoMatching() throws {
         let sender = MockTideyRequestSender()
         let resolver = MockSessionResolver(session: ActiveAgentSessionSnapshot(vendor: "codex",
@@ -419,5 +448,31 @@ private final class DelayRecorder: @unchecked Sendable {
         lock.lock()
         storage.append(delay)
         lock.unlock()
+    }
+}
+
+private final class MockHeadlessCodexRuntime: HeadlessCodexRuntimeControlling {
+    private let chatResponse: BridgeResponse?
+    private(set) var chatSubmitRequestIDs = [String]()
+
+    init(chatResponse: BridgeResponse?) {
+        self.chatResponse = chatResponse
+    }
+
+    func mergeWorkspaceListResult(_ result: [String: JSONValue]) -> [String: JSONValue] {
+        result
+    }
+
+    func panelListResult(workspaceID: String) -> [String: JSONValue]? {
+        nil
+    }
+
+    func handleChatSubmit(_ request: BridgeRequest) throws -> BridgeResponse? {
+        chatSubmitRequestIDs.append(request.id)
+        return chatResponse
+    }
+
+    func handleSubmitInteractivePrompt(_ request: BridgeRequest) throws -> BridgeResponse? {
+        nil
     }
 }
