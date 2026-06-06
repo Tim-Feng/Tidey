@@ -13,6 +13,10 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertEqual(runner.startedConfigurations.first?.environment["CODEX_HOME"], "/tmp/tidey-codex-home")
         XCTAssertFalse(runner.startedConfigurations.first?.executablePath.contains("/Applications/Tidey.app") ?? true)
         XCTAssertEqual(session.processID, 4242)
+        let initialize = try Self.object(from: try XCTUnwrap(runner.process?.stdinLines().first))
+        XCTAssertEqual(initialize["method"]?.stringValue, "initialize")
+        XCTAssertEqual(initialize["params"]?.objectValue?["clientInfo"]?.objectValue?["name"]?.stringValue, "tidey-bridge")
+        XCTAssertEqual(initialize["params"]?.objectValue?["capabilities"]?.objectValue?["experimentalApi"]?.boolValue, true)
     }
 
     func testSessionRoutesThreadRequestsToAppServerStdin() throws {
@@ -25,7 +29,7 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
                                 sandbox: .object(["mode": .string("workspace-write")]))
 
         let process = try XCTUnwrap(runner.process)
-        let request = try Self.object(from: process.stdinLines()[0])
+        let request = try Self.object(from: process.stdinLines()[1])
         XCTAssertEqual(request["method"]?.stringValue, "thread/start")
         let params = try XCTUnwrap(request["params"]?.objectValue)
         XCTAssertEqual(params["cwd"]?.stringValue, "/Users/timfeng/GitHub/Tidey")
@@ -69,7 +73,7 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertEqual(resolved?.type, .interactivePromptResolved)
 
         let process = try XCTUnwrap(runner.process)
-        let response = try Self.object(from: process.stdinLines()[0])
+        let response = try Self.object(from: process.stdinLines().last ?? "")
         XCTAssertEqual(response["id"]?.stringValue, "approval-1")
         XCTAssertEqual(response["result"]?.objectValue?["decision"]?.stringValue, "accept")
     }

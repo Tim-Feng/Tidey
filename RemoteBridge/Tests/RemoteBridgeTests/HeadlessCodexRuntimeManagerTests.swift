@@ -66,14 +66,15 @@ final class HeadlessCodexRuntimeManagerTests: XCTestCase {
         XCTAssertEqual(response?.ok, true)
         XCTAssertEqual(response?.result?["headless"]?.boolValue, true)
         let process = try XCTUnwrap(runner.process)
-        XCTAssertEqual(process.stdinLines().count, 1)
-        XCTAssertEqual(try Self.object(from: process.stdinLines()[0])["method"]?.stringValue, "thread/start")
+        XCTAssertEqual(process.stdinLines().count, 2)
+        XCTAssertEqual(try Self.object(from: process.stdinLines()[0])["method"]?.stringValue, "initialize")
+        XCTAssertEqual(try Self.object(from: process.stdinLines()[1])["method"]?.stringValue, "thread/start")
 
-        process.emitStdout(#"{"id":1,"result":{"thread":{"id":"thread-1"}}}"#)
+        process.emitStdout(#"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#)
 
         let lines = process.stdinLines()
-        XCTAssertEqual(lines.count, 2)
-        let turn = try Self.object(from: lines[1])
+        XCTAssertEqual(lines.count, 3)
+        let turn = try Self.object(from: lines[2])
         XCTAssertEqual(turn["method"]?.stringValue, "turn/start")
         XCTAssertEqual(turn["params"]?.objectValue?["threadId"]?.stringValue, "thread-1")
         XCTAssertEqual(turn["params"]?.objectValue?["input"]?.arrayValue?.first?.objectValue?["text"]?.stringValue, "run tests")
@@ -90,13 +91,13 @@ final class HeadlessCodexRuntimeManagerTests: XCTestCase {
         let manager = Self.manager(runner: runner)
         _ = try Self.submit(manager, text: "first")
         let process = try XCTUnwrap(runner.process)
-        process.emitStdout(#"{"id":1,"result":{"thread":{"id":"thread-1"}}}"#)
+        process.emitStdout(#"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#)
 
         _ = try Self.submit(manager, text: "second")
 
         let methods = try process.stdinLines().map { try Self.object(from: $0)["method"]?.stringValue }
-        XCTAssertEqual(methods, ["thread/start", "turn/start", "turn/start"])
-        let secondTurn = try Self.object(from: process.stdinLines()[2])
+        XCTAssertEqual(methods, ["initialize", "thread/start", "turn/start", "turn/start"])
+        let secondTurn = try Self.object(from: process.stdinLines()[3])
         XCTAssertEqual(secondTurn["params"]?.objectValue?["input"]?.arrayValue?.first?.objectValue?["text"]?.stringValue, "second")
     }
 
@@ -107,11 +108,11 @@ final class HeadlessCodexRuntimeManagerTests: XCTestCase {
         _ = try Self.submit(manager, text: "first")
         let process = try XCTUnwrap(runner.process)
 
-        process.emitStdout(#"{"id":1,"result":{}}"#)
+        process.emitStdout(#"{"id":2,"result":{}}"#)
         _ = try Self.submit(manager, text: "second")
 
         let methods = try process.stdinLines().map { try Self.object(from: $0)["method"]?.stringValue }
-        XCTAssertEqual(methods, ["thread/start", "thread/start"])
+        XCTAssertEqual(methods, ["initialize", "thread/start", "thread/start"])
         let fetched = hub.fetch(workspaceID: "headless-workspace",
                                 sessionID: "headless-session",
                                 limit: 20)
@@ -146,7 +147,7 @@ final class HeadlessCodexRuntimeManagerTests: XCTestCase {
         let manager = Self.manager(runner: runner, eventHub: hub)
         _ = try Self.submit(manager, text: "needs approval")
         let process = try XCTUnwrap(runner.process)
-        process.emitStdout(#"{"id":1,"result":{"thread":{"id":"thread-1"}}}"#)
+        process.emitStdout(#"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#)
         process.emitStdout("""
         {"id":"approval-1","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"cmd-1","startedAtMs":1786000000000,"command":"curl https://example.com","reason":"Needs network."}}
         """)

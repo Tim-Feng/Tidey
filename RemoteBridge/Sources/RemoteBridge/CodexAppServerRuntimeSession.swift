@@ -141,6 +141,21 @@ final class CodexAppServerRuntimeSessionFactory {
                                                           runtime: runtime)
         exitRouter.attach(runtimeSession)
         stdoutRouter.attach(connection)
+        try connection.sendClientRequest(method: "initialize",
+                                         params: [
+                                            "clientInfo": .object([
+                                                "name": .string("tidey-bridge"),
+                                                "title": .string("Tidey Remote Bridge"),
+                                                "version": .string("0"),
+                                            ]),
+                                            "capabilities": .object([
+                                                "experimentalApi": .bool(true),
+                                            ]),
+                                         ]) { result in
+            if case .failure(let error) = result {
+                BridgeLogger.server.error("codex app-server initialize failed error=\(String(describing: error), privacy: .public)")
+            }
+        }
         return runtimeSession
     }
 }
