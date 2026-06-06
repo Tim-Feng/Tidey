@@ -88,6 +88,16 @@ struct CodexRemoteTUILaunchConfiguration: Equatable, Sendable {
         return "cd \(Self.shellQuote(workingDirectory)) && " + (environmentPrefix + command).joined(separator: " ")
     }
 
+    func jsonValue() -> [String: JSONValue] {
+        [
+            "executable_path": .string(executablePath),
+            "arguments": .array(arguments.map { .string($0) }),
+            "working_directory": .string(workingDirectory),
+            "environment": .object(environment.mapValues { .string($0) }),
+            "remote_address": .string(remoteAddress),
+        ]
+    }
+
     private static func shellQuote(_ value: String) -> String {
         if value.isEmpty {
             return "''"

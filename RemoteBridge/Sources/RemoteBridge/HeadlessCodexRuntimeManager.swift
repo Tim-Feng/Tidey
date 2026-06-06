@@ -247,6 +247,7 @@ final class HeadlessCodexRuntimeManager: HeadlessCodexRuntimeControlling {
         ]
         if let remoteTUILaunchConfiguration = configuration.remoteTUILaunchConfiguration {
             value["codex_app_server_remote"] = .string(remoteTUILaunchConfiguration.remoteAddress)
+            value["codex_remote_tui"] = .object(remoteTUILaunchConfiguration.jsonValue())
             value["codex_remote_tui_command"] = .string(remoteTUILaunchConfiguration.shellCommand())
         }
         return value

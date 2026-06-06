@@ -102,6 +102,12 @@ final class HeadlessCodexRuntimeManagerTests: XCTestCase {
         let panelResult = try XCTUnwrap(manager.panelListResult(workspaceID: "headless-workspace"))
         let panel = try XCTUnwrap(panelResult["panels"]?.arrayValue?.first?.objectValue)
         XCTAssertEqual(panel["codex_app_server_remote"]?.stringValue, "unix:///tmp/tidey codex/app.sock")
+        let remoteTUI = try XCTUnwrap(panel["codex_remote_tui"]?.objectValue)
+        XCTAssertEqual(remoteTUI["executable_path"]?.stringValue, "/tmp/codex bin")
+        XCTAssertEqual(remoteTUI["arguments"]?.arrayValue?.map(\.stringValue), ["--remote", "unix:///tmp/tidey codex/app.sock"])
+        XCTAssertEqual(remoteTUI["working_directory"]?.stringValue, "/tmp/headless cwd")
+        XCTAssertEqual(remoteTUI["environment"]?.objectValue?["CODEX_HOME"]?.stringValue, "/tmp/headless home")
+        XCTAssertEqual(remoteTUI["remote_address"]?.stringValue, "unix:///tmp/tidey codex/app.sock")
         XCTAssertEqual(
             panel["codex_remote_tui_command"]?.stringValue,
             "cd '/tmp/headless cwd' && CODEX_HOME='/tmp/headless home' '/tmp/codex bin' --remote 'unix:///tmp/tidey codex/app.sock'"
