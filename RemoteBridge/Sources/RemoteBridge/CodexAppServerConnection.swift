@@ -3,8 +3,26 @@ import Foundation
 enum CodexAppServerConnectionError: Error {
     case closed
     case invalidJSONLine(String)
+    case initializationTimedOut
     case requestFailed(CodexAppServerJSONRPCError)
     case unknownPrompt(String)
+}
+
+extension CodexAppServerConnectionError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .closed:
+            return "Codex app-server connection is closed."
+        case .invalidJSONLine(let line):
+            return "Codex app-server sent invalid JSON: \(line)"
+        case .initializationTimedOut:
+            return "Codex app-server did not finish initialization in time."
+        case .requestFailed(let error):
+            return "Codex app-server request failed: \(error.message)"
+        case .unknownPrompt(let promptID):
+            return "Codex app-server prompt is unknown: \(promptID)"
+        }
+    }
 }
 
 struct CodexAppServerJSONRPCError: Codable, Error, Sendable {
@@ -91,6 +109,20 @@ final class CodexAppServerConnection {
             "params": .object(params),
         ]))
         return id
+    }
+
+    func sendClientNotification(method: String,
+                                params: [String: JSONValue]? = nil) throws {
+        guard !closed else {
+            throw CodexAppServerConnectionError.closed
+        }
+        var payload: [String: JSONValue] = [
+            "method": .string(method),
+        ]
+        if let params {
+            payload["params"] = .object(params)
+        }
+        try send(.object(payload))
     }
 
     func receiveLine(_ line: String) {

@@ -127,9 +127,10 @@ final class HeadlessCodexRuntimeManagerTests: XCTestCase {
         XCTAssertEqual(response?.ok, true)
         XCTAssertEqual(response?.result?["headless"]?.boolValue, true)
         let process = try XCTUnwrap(runner.process)
-        XCTAssertEqual(process.stdinLines().count, 2)
+        XCTAssertEqual(process.stdinLines().count, 3)
         XCTAssertEqual(try Self.object(from: process.stdinLines()[0])["method"]?.stringValue, "initialize")
-        XCTAssertEqual(try Self.object(from: process.stdinLines()[1])["method"]?.stringValue, "thread/start")
+        XCTAssertEqual(try Self.object(from: process.stdinLines()[1])["method"]?.stringValue, "initialized")
+        XCTAssertEqual(try Self.object(from: process.stdinLines()[2])["method"]?.stringValue, "thread/start")
 
         let beforeThreadStarted = hub.fetch(workspaceID: "headless-workspace",
                                             sessionID: "headless-session",
@@ -143,8 +144,8 @@ final class HeadlessCodexRuntimeManagerTests: XCTestCase {
         process.emitStdout(#"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#)
 
         let lines = process.stdinLines()
-        XCTAssertEqual(lines.count, 3)
-        let turn = try Self.object(from: lines[2])
+        XCTAssertEqual(lines.count, 4)
+        let turn = try Self.object(from: lines[3])
         XCTAssertEqual(turn["method"]?.stringValue, "turn/start")
         XCTAssertEqual(turn["params"]?.objectValue?["threadId"]?.stringValue, "thread-1")
         XCTAssertEqual(turn["params"]?.objectValue?["input"]?.arrayValue?.first?.objectValue?["text"]?.stringValue, "run tests")
@@ -177,8 +178,8 @@ final class HeadlessCodexRuntimeManagerTests: XCTestCase {
         _ = try Self.submit(manager, text: "second")
 
         let methods = try process.stdinLines().map { try Self.object(from: $0)["method"]?.stringValue }
-        XCTAssertEqual(methods, ["initialize", "thread/start", "turn/start", "turn/start"])
-        let secondTurn = try Self.object(from: process.stdinLines()[3])
+        XCTAssertEqual(methods, ["initialize", "initialized", "thread/start", "turn/start", "turn/start"])
+        let secondTurn = try Self.object(from: process.stdinLines()[4])
         XCTAssertEqual(secondTurn["params"]?.objectValue?["input"]?.arrayValue?.first?.objectValue?["text"]?.stringValue, "second")
     }
 
@@ -193,7 +194,7 @@ final class HeadlessCodexRuntimeManagerTests: XCTestCase {
         _ = try Self.submit(manager, text: "second")
 
         let methods = try process.stdinLines().map { try Self.object(from: $0)["method"]?.stringValue }
-        XCTAssertEqual(methods, ["initialize", "thread/start", "thread/start"])
+        XCTAssertEqual(methods, ["initialize", "initialized", "thread/start", "thread/start"])
         let fetched = hub.fetch(workspaceID: "headless-workspace",
                                 sessionID: "headless-session",
                                 limit: 20)
@@ -243,7 +244,7 @@ final class HeadlessCodexRuntimeManagerTests: XCTestCase {
         XCTAssertFalse(firstProcess === secondProcess)
         XCTAssertEqual(runner.startCount, 2)
         let methods = try secondProcess.stdinLines().map { try Self.object(from: $0)["method"]?.stringValue }
-        XCTAssertEqual(methods, ["initialize", "thread/start"])
+        XCTAssertEqual(methods, ["initialize", "initialized", "thread/start"])
     }
 
     func testStdoutNotificationsArePublishedToAgentEventHub() throws {
@@ -438,6 +439,9 @@ private final class FakeCodexAppServerManagedProcess: CodexAppServerManagedProce
         lock.lock()
         lines.append(line)
         lock.unlock()
+        if let initializeResponse = Self.initializeResponse(for: line) {
+            onStdoutLine(initializeResponse)
+        }
         onSendLine?(line)
     }
 
@@ -455,5 +459,18 @@ private final class FakeCodexAppServerManagedProcess: CodexAppServerManagedProce
         lock.lock()
         defer { lock.unlock() }
         return lines
+    }
+
+    private static func initializeResponse(for line: String) -> String? {
+        guard let data = line.trimmingCharacters(in: .whitespacesAndNewlines).data(using: .utf8),
+              let value = try? JSONDecoder().decode(JSONValue.self, from: data),
+              let object = value.objectValue,
+              object["method"]?.stringValue == "initialize",
+              let id = object["id"],
+              let idData = try? JSONEncoder().encode(id) else {
+            return nil
+        }
+        let idText = String(decoding: idData, as: UTF8.self)
+        return #"{"id":\#(idText),"result":{"serverInfo":{"name":"codex","version":"test"},"capabilities":{}}}"#
     }
 }

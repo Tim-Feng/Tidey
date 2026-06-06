@@ -1,3 +1,7 @@
+import NIOCore
+import NIOHTTP1
+import NIOPosix
+import NIOWebSocket
 import XCTest
 @testable import RemoteBridge
 
@@ -16,12 +20,20 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         let initialize = try Self.object(from: try XCTUnwrap(runner.process?.stdinLines().first))
         XCTAssertEqual(initialize["method"]?.stringValue, "initialize")
         XCTAssertEqual(initialize["params"]?.objectValue?["clientInfo"]?.objectValue?["name"]?.stringValue, "tidey-bridge")
-        XCTAssertEqual(initialize["params"]?.objectValue?["capabilities"]?.objectValue?["experimentalApi"]?.boolValue, true)
+        let capabilities = initialize["params"]?.objectValue?["capabilities"]?.objectValue
+        XCTAssertEqual(capabilities?["experimentalApi"]?.boolValue, true)
+        XCTAssertEqual(capabilities?["requestAttestation"]?.boolValue, false)
+        XCTAssertEqual(capabilities?["optOutNotificationMethods"]?.arrayValue?.count, 0)
+        XCTAssertEqual(runner.process?.stdinLines().count, 1)
+        try Self.acknowledgeInitialize(from: runner.process)
+        let initialized = try Self.object(from: try XCTUnwrap(runner.process?.stdinLines().dropFirst().first))
+        XCTAssertEqual(initialized["method"]?.stringValue, "initialized")
     }
 
     func testSessionRoutesThreadRequestsToAppServerStdin() throws {
         let runner = FakeCodexAppServerProcessRunner()
         let session = try Self.makeSession(runner: runner)
+        try Self.acknowledgeInitialize(from: runner.process)
 
         try session.startThread(cwd: "/Users/timfeng/GitHub/Tidey",
                                 model: "gpt-5",
@@ -29,7 +41,7 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
                                 sandbox: .string("workspace-write"))
 
         let process = try XCTUnwrap(runner.process)
-        let request = try Self.object(from: process.stdinLines()[1])
+        let request = try Self.object(from: process.stdinLines()[2])
         XCTAssertEqual(request["method"]?.stringValue, "thread/start")
         let params = try XCTUnwrap(request["params"]?.objectValue)
         XCTAssertEqual(params["cwd"]?.stringValue, "/Users/timfeng/GitHub/Tidey")
@@ -63,6 +75,10 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         let transport = try XCTUnwrap(connector.transport)
         let initialize = try Self.object(from: try XCTUnwrap(transport.sentLines().first))
         XCTAssertEqual(initialize["method"]?.stringValue, "initialize")
+        XCTAssertEqual(transport.sentLines().count, 1)
+        try Self.acknowledgeInitialize(from: transport)
+        let initialized = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst().first))
+        XCTAssertEqual(initialized["method"]?.stringValue, "initialized")
 
         try session.startThread(cwd: "/Users/timfeng/GitHub/Tidey")
         let request = try Self.object(from: transport.sentLines().last ?? "")
@@ -117,6 +133,7 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
     func testSessionStopTerminatesProcessAndClosesConnection() throws {
         let runner = FakeCodexAppServerProcessRunner()
         let session = try Self.makeSession(runner: runner)
+        try Self.acknowledgeInitialize(from: runner.process)
 
         session.stop()
 
@@ -131,6 +148,7 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
     func testProcessExitClosesPendingClientRequests() throws {
         let runner = FakeCodexAppServerProcessRunner()
         let session = try Self.makeSession(runner: runner)
+        try Self.acknowledgeInitialize(from: runner.process)
         var failure: CodexAppServerConnectionError?
 
         try session.startThread(cwd: nil) { result in
@@ -143,6 +161,75 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         guard case .closed = failure else {
             return XCTFail("expected closed failure")
         }
+    }
+
+    func testUnixWebSocketConnectorWaitsForUpgradeBeforeReturningTransport() throws {
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        defer {
+            XCTAssertNoThrow(try group.syncShutdownGracefully())
+        }
+
+        let socketDirectory = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent("tcw-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: socketDirectory, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: socketDirectory)
+        }
+        let socketPath = socketDirectory.appendingPathComponent("app.sock").path
+        let receivedMessage = expectation(description: "server receives websocket text after upgrade")
+        let receivedEventLoopMessage = expectation(description: "server receives websocket text sent from event loop")
+        let requestURI = RequestURIBox()
+        let clientFrameMask = ClientFrameMaskBox()
+
+        let upgrader = NIOWebSocketServerUpgrader(
+            maxFrameSize: 1 << 20,
+            shouldUpgrade: { channel, request in
+                requestURI.set(request.uri)
+                let promise = channel.eventLoop.makePromise(of: HTTPHeaders?.self)
+                channel.eventLoop.scheduleTask(in: .milliseconds(200)) {
+                    promise.succeed(HTTPHeaders())
+                }
+                return promise.futureResult
+            },
+            upgradePipelineHandler: { channel, _ in
+                channel.pipeline.addHandler(ServerTextFrameHandler { text in
+                    clientFrameMask.setObservedMaskedFrame()
+                    if text == "{\"jsonrpc\":\"2.0\"}" {
+                        receivedMessage.fulfill()
+                    }
+                    if text == "{\"fromEventLoop\":true}" {
+                        receivedEventLoopMessage.fulfill()
+                    }
+                })
+            }
+        )
+        let configuration: NIOHTTPServerUpgradeConfiguration = (
+            upgraders: [upgrader],
+            completionHandler: { _ in }
+        )
+        let server = try ServerBootstrap(group: group)
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
+            .childChannelInitializer { channel in
+                channel.pipeline.configureHTTPServerPipeline(withServerUpgrade: configuration)
+            }
+            .bind(unixDomainSocketPath: socketPath)
+            .wait()
+        defer {
+            XCTAssertNoThrow(try server.close().wait())
+        }
+
+        let connector = CodexAppServerWebSocketTransportConnector(group: group)
+        let transport = try connector.connect(mode: .unixSocket(path: socketPath),
+                                              onLine: { _ in },
+                                              onClose: { _ in })
+
+        XCTAssertNoThrow(try transport.sendLine("{\"jsonrpc\":\"2.0\"}"))
+        XCTAssertNoThrow(try group.next().submit {
+            try transport.sendLine("{\"fromEventLoop\":true}")
+        }.wait())
+        wait(for: [receivedMessage, receivedEventLoopMessage], timeout: 2.0)
+        XCTAssertEqual(requestURI.get(), "/")
+        XCTAssertEqual(clientFrameMask.didObserveMaskedFrame(), true)
     }
 
     private static func makeSession(configuration: CodexAppServerLaunchConfiguration = CodexAppServerLaunchConfiguration(
@@ -181,6 +268,95 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
                                  line: sourceLine)
         let value = try JSONDecoder().decode(JSONValue.self, from: data)
         return try XCTUnwrap(value.objectValue, file: file, line: sourceLine)
+    }
+
+    private static func acknowledgeInitialize(from process: FakeCodexAppServerManagedProcess?,
+                                              file: StaticString = #filePath,
+                                              line sourceLine: UInt = #line) throws {
+        let process = try XCTUnwrap(process, file: file, line: sourceLine)
+        let initialize = try object(from: try XCTUnwrap(process.stdinLines().first,
+                                                        file: file,
+                                                        line: sourceLine),
+                                    file: file,
+                                    line: sourceLine)
+        let response = try initializeResponse(for: try XCTUnwrap(initialize["id"], file: file, line: sourceLine))
+        process.emitStdout(response)
+    }
+
+    private static func acknowledgeInitialize(from transport: FakeCodexAppServerConnectionTransport,
+                                              file: StaticString = #filePath,
+                                              line sourceLine: UInt = #line) throws {
+        let initialize = try object(from: try XCTUnwrap(transport.sentLines().first,
+                                                        file: file,
+                                                        line: sourceLine),
+                                    file: file,
+                                    line: sourceLine)
+        let response = try initializeResponse(for: try XCTUnwrap(initialize["id"], file: file, line: sourceLine))
+        transport.emitLine(response)
+    }
+
+    private static func initializeResponse(for id: JSONValue) throws -> String {
+        let idData = try JSONEncoder().encode(id)
+        let idText = String(decoding: idData, as: UTF8.self)
+        return #"{"id":\#(idText),"result":{"serverInfo":{"name":"codex","version":"test"},"capabilities":{}}}"#
+    }
+}
+
+private final class ServerTextFrameHandler: ChannelInboundHandler {
+    typealias InboundIn = WebSocketFrame
+
+    private let onText: (String) -> Void
+
+    init(onText: @escaping (String) -> Void) {
+        self.onText = onText
+    }
+
+    func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+        let frame = unwrapInboundIn(data)
+        guard frame.opcode == .text else {
+            return
+        }
+        guard frame.maskKey != nil else {
+            return
+        }
+        var payload = frame.unmaskedData
+        if let text = payload.readString(length: payload.readableBytes) {
+            onText(text)
+        }
+    }
+}
+
+private final class ClientFrameMaskBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var masked = false
+
+    func setObservedMaskedFrame() {
+        lock.lock()
+        masked = true
+        lock.unlock()
+    }
+
+    func didObserveMaskedFrame() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return masked
+    }
+}
+
+private final class RequestURIBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var uri: String?
+
+    func set(_ value: String) {
+        lock.lock()
+        uri = value
+        lock.unlock()
+    }
+
+    func get() -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return uri
     }
 }
 
