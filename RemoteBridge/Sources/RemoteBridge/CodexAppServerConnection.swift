@@ -101,7 +101,7 @@ final class CodexAppServerConnection {
         guard let data = trimmed.data(using: .utf8),
               let message = try? JSONDecoder().decode(JSONValue.self, from: data),
               let object = message.objectValue else {
-            close(error: .invalidJSONLine(line))
+            BridgeLogger.server.error("codex app-server ignored non-json stdout line=\(line, privacy: .public)")
             return
         }
 

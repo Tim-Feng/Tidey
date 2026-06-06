@@ -150,20 +150,19 @@ final class CodexAppServerConnectionTests: XCTestCase {
         XCTAssertEqual(error?["message"]?.stringValue, "Codex approval context is unavailable.")
     }
 
-    func testClosesPendingRequestsWhenJSONLineIsInvalid() throws {
-        var failure: CodexAppServerConnectionError?
+    func testIgnoresNonJSONStdoutLineBeforeClientResponse() throws {
+        var response: JSONValue?
         let connection = CodexAppServerConnection(sendLine: { _ in })
         try connection.sendClientRequest(method: "initialize") { result in
-            if case .failure(let error) = result {
-                failure = error
+            if case .success(let value) = result {
+                response = value
             }
         }
 
-        connection.receiveLine("{not-json")
+        connection.receiveLine("2026-06-06T09:07:44.558405Z ERROR codex_api::endpoint::responses_websocket: failed to connect")
+        connection.receiveLine(#"{"id":1,"result":{"ok":true}}"#)
 
-        guard case .invalidJSONLine = failure else {
-            return XCTFail("expected invalidJSONLine failure")
-        }
+        XCTAssertEqual(response?.objectValue?["ok"]?.boolValue, true)
     }
 
     private static func object(from line: String,
