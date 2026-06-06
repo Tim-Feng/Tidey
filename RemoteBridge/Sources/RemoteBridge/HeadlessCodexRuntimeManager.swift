@@ -54,6 +54,16 @@ struct HeadlessCodexRuntimeConfiguration: Sendable {
             BridgeLogger.server.error("headless codex dev disabled reason=missing_absolute_TIDEY_HEADLESS_CODEX_EXECUTABLE")
             return nil
         }
+        let appServerExecutablePath = environment["TIDEY_HEADLESS_CODEX_APP_SERVER_EXECUTABLE"] ?? executablePath
+        guard appServerExecutablePath.hasPrefix("/") else {
+            BridgeLogger.server.error("headless codex dev disabled reason=non_absolute_TIDEY_HEADLESS_CODEX_APP_SERVER_EXECUTABLE")
+            return nil
+        }
+        let remoteTUIExecutablePath = environment["TIDEY_HEADLESS_CODEX_REMOTE_TUI_EXECUTABLE"] ?? executablePath
+        guard remoteTUIExecutablePath.hasPrefix("/") else {
+            BridgeLogger.server.error("headless codex dev disabled reason=non_absolute_TIDEY_HEADLESS_CODEX_REMOTE_TUI_EXECUTABLE")
+            return nil
+        }
         let cwd = environment["TIDEY_HEADLESS_CODEX_CWD"] ?? "/tmp/tidey-headless-codex-work"
         let codexHome = environment["TIDEY_HEADLESS_CODEX_HOME"] ?? "/tmp/tidey-headless-codex-home"
         let workspaceID = environment["TIDEY_HEADLESS_CODEX_WORKSPACE_ID"] ?? "headless-codex-dev"
@@ -69,17 +79,17 @@ struct HeadlessCodexRuntimeConfiguration: Sendable {
         let remoteTUIConfiguration: CodexRemoteTUILaunchConfiguration?
         if let appServerSocketPath,
            appServerSocketPath.isEmpty == false {
-            launchConfiguration = .unixSocket(codexExecutablePath: executablePath,
+            launchConfiguration = .unixSocket(codexExecutablePath: appServerExecutablePath,
                                               socketPath: appServerSocketPath,
                                               workingDirectory: cwd,
                                               environment: ["CODEX_HOME": codexHome])
-            remoteTUIConfiguration = .unixSocket(codexExecutablePath: executablePath,
+            remoteTUIConfiguration = .unixSocket(codexExecutablePath: remoteTUIExecutablePath,
                                                  socketPath: appServerSocketPath,
                                                  workingDirectory: cwd,
                                                  environment: ["CODEX_HOME": codexHome])
         } else {
             launchConfiguration = CodexAppServerLaunchConfiguration(
-                executablePath: executablePath,
+                executablePath: appServerExecutablePath,
                 arguments: ["app-server"],
                 workingDirectory: cwd,
                 environment: ["CODEX_HOME": codexHome])

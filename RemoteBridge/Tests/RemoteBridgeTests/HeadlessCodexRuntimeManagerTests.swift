@@ -54,6 +54,36 @@ final class HeadlessCodexRuntimeManagerTests: XCTestCase {
         )
     }
 
+    func testDevConfigurationCanSplitAppServerAndRemoteTUIExecutables() {
+        XCTAssertNil(HeadlessCodexRuntimeConfiguration.devFromEnvironment([
+            "TIDEY_HEADLESS_CODEX_DEV": "1",
+            "TIDEY_HEADLESS_CODEX_EXECUTABLE": "/tmp/tidey-wrapper",
+            "TIDEY_HEADLESS_CODEX_APP_SERVER_EXECUTABLE": "codex",
+        ]))
+        XCTAssertNil(HeadlessCodexRuntimeConfiguration.devFromEnvironment([
+            "TIDEY_HEADLESS_CODEX_DEV": "1",
+            "TIDEY_HEADLESS_CODEX_EXECUTABLE": "/tmp/tidey-wrapper",
+            "TIDEY_HEADLESS_CODEX_REMOTE_TUI_EXECUTABLE": "codex",
+        ]))
+
+        let config = HeadlessCodexRuntimeConfiguration.devFromEnvironment([
+            "TIDEY_HEADLESS_CODEX_DEV": "1",
+            "TIDEY_HEADLESS_CODEX_EXECUTABLE": "/tmp/tidey-wrapper",
+            "TIDEY_HEADLESS_CODEX_APP_SERVER_EXECUTABLE": "/tmp/real-codex",
+            "TIDEY_HEADLESS_CODEX_REMOTE_TUI_EXECUTABLE": "/tmp/tidey-wrapper",
+            "TIDEY_HEADLESS_CODEX_CWD": "/tmp/headless cwd",
+            "TIDEY_HEADLESS_CODEX_HOME": "/tmp/headless home",
+            "TIDEY_HEADLESS_CODEX_APP_SERVER_SOCKET": "/tmp/tidey codex/app.sock",
+        ])
+
+        XCTAssertEqual(config?.launchConfiguration.executablePath, "/tmp/real-codex")
+        XCTAssertEqual(config?.remoteTUILaunchConfiguration?.executablePath, "/tmp/tidey-wrapper")
+        XCTAssertEqual(
+            config?.remoteTUILaunchConfiguration?.shellCommand(),
+            "cd '/tmp/headless cwd' && CODEX_HOME='/tmp/headless home' /tmp/tidey-wrapper --remote 'unix:///tmp/tidey codex/app.sock'"
+        )
+    }
+
     func testWorkspaceAndPanelOverlayExposeHeadlessCodexAgentSession() throws {
         let manager = Self.manager()
         let merged = manager.mergeWorkspaceListResult([
