@@ -114,6 +114,83 @@ final class HeadlessCodexRuntimeManagerTests: XCTestCase {
         )
     }
 
+    func testCreatePanelForHeadlessWorkspaceCreatesMacWorkspaceAndRemoteTUIPanel() throws {
+        let manager = Self.manager(configuration: Self.sidecarConfiguration())
+        let sender = FakeTideyRequestSender(responses: [
+            BridgeResponse(id: "create-panel.workspace",
+                           ok: true,
+                           result: [
+                            "workspace": .object([
+                                "workspace_id": .string("mac-workspace"),
+                                "title": .string("Headless Codex"),
+                            ]),
+                           ],
+                           error: nil),
+            BridgeResponse(id: "create-panel",
+                           ok: true,
+                           result: [
+                            "panel": .object([
+                                "workspace_id": .string("mac-workspace"),
+                                "panel_id": .string("mac-panel"),
+                            ]),
+                           ],
+                           error: nil),
+        ])
+
+        let response = try manager.handleCreatePanel(BridgeRequest(id: "create-panel",
+                                                                   action: "create_panel",
+                                                                   params: [
+                                                                    "workspace_id": .string("headless-workspace"),
+                                                                    "command": .string("malicious-or-stale-command"),
+                                                                    "working_directory": .string("/tmp/wrong-cwd"),
+                                                                   ]),
+                                                     socketSender: sender)
+
+        XCTAssertEqual(response?.ok, true)
+        XCTAssertEqual(response?.result?["created_workspace"]?.boolValue, true)
+        XCTAssertEqual(response?.result?["headless_remote_tui"]?.boolValue, true)
+        XCTAssertEqual(response?.result?["workspace"]?.objectValue?["workspace_id"]?.stringValue, "mac-workspace")
+        XCTAssertEqual(response?.result?["panel"]?.objectValue?["panel_id"]?.stringValue, "mac-panel")
+        XCTAssertEqual(sender.requests.count, 2)
+        XCTAssertEqual(sender.requests[0].action, "create_workspace")
+        XCTAssertEqual(sender.requests[0].params?["title"]?.stringValue, "Headless Codex")
+        XCTAssertEqual(sender.requests[1].action, "create_panel")
+        XCTAssertEqual(sender.requests[1].params?["workspace_id"]?.stringValue, "mac-workspace")
+        XCTAssertEqual(sender.requests[1].params?["command"]?.stringValue, "'/tmp/codex bin' --remote 'unix:///tmp/tidey codex/app.sock'")
+        XCTAssertEqual(sender.requests[1].params?["working_directory"]?.stringValue, "/tmp/headless cwd")
+        XCTAssertEqual(sender.requests[1].params?["environment"]?.objectValue?["CODEX_HOME"]?.stringValue, "/tmp/headless home")
+    }
+
+    func testCreatePanelForHeadlessWorkspaceRequiresRemoteTUIConfiguration() throws {
+        let manager = Self.manager()
+        let sender = FakeTideyRequestSender(responses: [])
+
+        XCTAssertThrowsError(try manager.handleCreatePanel(BridgeRequest(id: "create-panel",
+                                                                         action: "create_panel",
+                                                                         params: [
+                                                                            "workspace_id": .string("headless-workspace"),
+                                                                         ]),
+                                                           socketSender: sender)) { error in
+            XCTAssertEqual((error as? BridgeInternalError)?.payload.code, "conflict")
+        }
+        XCTAssertTrue(sender.requests.isEmpty)
+    }
+
+    func testCreatePanelForNativeWorkspaceFallsBackToMacSocketPath() throws {
+        let manager = Self.manager(configuration: Self.sidecarConfiguration())
+        let sender = FakeTideyRequestSender(responses: [])
+
+        let response = try manager.handleCreatePanel(BridgeRequest(id: "create-panel",
+                                                                   action: "create_panel",
+                                                                   params: [
+                                                                    "workspace_id": .string("native-workspace"),
+                                                                   ]),
+                                                     socketSender: sender)
+
+        XCTAssertNil(response)
+        XCTAssertTrue(sender.requests.isEmpty)
+    }
+
     func testChatSubmitStartsThreadThenQueuedTurnAndPublishesEvents() throws {
         let runner = FakeCodexAppServerProcessRunner()
         let hub = AgentEventHub()
@@ -399,6 +476,27 @@ final class HeadlessCodexRuntimeManagerTests: XCTestCase {
                                       timestampProvider: { "2026-06-06T00:00:00.000Z" })
     }
 
+    private static func sidecarConfiguration() -> HeadlessCodexRuntimeConfiguration {
+        HeadlessCodexRuntimeConfiguration(
+            workspaceID: "headless-workspace",
+            panelID: "headless-panel",
+            sessionID: "headless-session",
+            title: "Headless Codex",
+            subtitle: "Codex app-server sidecar",
+            cwd: "/tmp/headless cwd",
+            model: "gpt-5",
+            approvalPolicy: "on-request",
+            sandbox: .string("workspace-write"),
+            launchConfiguration: .unixSocket(codexExecutablePath: "/tmp/codex bin",
+                                             socketPath: "/tmp/tidey codex/app.sock",
+                                             workingDirectory: "/tmp/headless cwd",
+                                             environment: ["CODEX_HOME": "/tmp/headless home"]),
+            remoteTUILaunchConfiguration: .unixSocket(codexExecutablePath: "/tmp/codex bin",
+                                                      socketPath: "/tmp/tidey codex/app.sock",
+                                                      workingDirectory: "/tmp/headless cwd",
+                                                      environment: ["CODEX_HOME": "/tmp/headless home"]))
+    }
+
     private static func object(from line: String,
                                file: StaticString = #filePath,
                                line sourceLine: UInt = #line) throws -> [String: JSONValue] {
@@ -423,6 +521,23 @@ private final class FakeCodexAppServerProcessRunner: CodexAppServerProcessRunnin
                                                        onExit: onExit)
         self.process = process
         return process
+    }
+}
+
+private final class FakeTideyRequestSender: TideyRequestSending {
+    private(set) var requests: [BridgeRequest] = []
+    private var responses: [BridgeResponse]
+
+    init(responses: [BridgeResponse]) {
+        self.responses = responses
+    }
+
+    func send(_ request: BridgeRequest) throws -> BridgeResponse {
+        requests.append(request)
+        guard responses.isEmpty == false else {
+            throw BridgeInternalError.invalidResponse
+        }
+        return responses.removeFirst()
     }
 }
 

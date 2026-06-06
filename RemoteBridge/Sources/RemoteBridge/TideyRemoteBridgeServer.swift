@@ -743,6 +743,12 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                                           agentReplayEnvelopes: [],
                                           workspaceReplayEnvelopes: [])
             }
+            if request.action == "create_panel",
+               let response = try headlessCodexRuntime?.handleCreatePanel(request, socketSender: socketClient) {
+                return LocalRequestResult(response: response,
+                                          agentReplayEnvelopes: [],
+                                          workspaceReplayEnvelopes: [])
+            }
             if headlessCodexStandalone,
                request.action == "list_workspaces",
                let result = headlessCodexRuntime?.mergeWorkspaceListResult(["workspaces": .array([])]) {

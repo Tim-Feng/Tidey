@@ -467,6 +467,10 @@ private final class MockHeadlessCodexRuntime: HeadlessCodexRuntimeControlling {
         nil
     }
 
+    func handleCreatePanel(_ request: BridgeRequest, socketSender: TideyRequestSending) throws -> BridgeResponse? {
+        nil
+    }
+
     func handleChatSubmit(_ request: BridgeRequest) throws -> BridgeResponse? {
         chatSubmitRequestIDs.append(request.id)
         return chatResponse

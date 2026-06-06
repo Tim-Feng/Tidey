@@ -3,6 +3,7 @@ import Foundation
 protocol HeadlessCodexRuntimeControlling: AnyObject {
     func mergeWorkspaceListResult(_ result: [String: JSONValue]) -> [String: JSONValue]
     func panelListResult(workspaceID: String) -> [String: JSONValue]?
+    func handleCreatePanel(_ request: BridgeRequest, socketSender: TideyRequestSending) throws -> BridgeResponse?
     func handleChatSubmit(_ request: BridgeRequest) throws -> BridgeResponse?
     func handleSubmitInteractivePrompt(_ request: BridgeRequest) throws -> BridgeResponse?
 }
@@ -142,6 +143,57 @@ final class HeadlessCodexRuntimeManager: HeadlessCodexRuntimeControlling {
         ]
     }
 
+    func handleCreatePanel(_ request: BridgeRequest, socketSender: TideyRequestSending) throws -> BridgeResponse? {
+        guard request.action == "create_panel",
+              request.params?["workspace_id"]?.stringValue == configuration.workspaceID else {
+            return nil
+        }
+        guard let remoteTUILaunchConfiguration = configuration.remoteTUILaunchConfiguration else {
+            throw BridgeInternalError.conflict("Headless Codex has no remote TUI app-server endpoint.")
+        }
+
+        let createWorkspaceResponse = try socketSender.send(BridgeRequest(
+            id: "\(request.id).workspace",
+            action: "create_workspace",
+            params: [
+                "title": .string(configuration.title),
+                "make_selected": .bool(true),
+            ]))
+        guard createWorkspaceResponse.ok else {
+            throw BridgeInternalError.invalidResponse
+        }
+        let macWorkspace = Self.workspaceObject(from: createWorkspaceResponse.result)
+        guard let macWorkspaceID = macWorkspace?["workspace_id"]?.stringValue,
+              macWorkspaceID.isEmpty == false else {
+            throw BridgeInternalError.invalidResponse
+        }
+
+        let environment = remoteTUILaunchConfiguration.environment.mapValues { JSONValue.string($0) }
+        let createPanelResponse = try socketSender.send(BridgeRequest(
+            id: request.id,
+            action: "create_panel",
+            params: [
+                "workspace_id": .string(macWorkspaceID),
+                "command": .string(remoteTUILaunchConfiguration.command()),
+                "working_directory": .string(remoteTUILaunchConfiguration.workingDirectory),
+                "environment": .object(environment),
+                "make_selected": .bool(true),
+            ]))
+        guard createPanelResponse.ok else {
+            return createPanelResponse
+        }
+        var result = createPanelResponse.result ?? [:]
+        if let macWorkspace {
+            result["workspace"] = .object(macWorkspace)
+        }
+        result["created_workspace"] = .bool(true)
+        result["headless_remote_tui"] = .bool(true)
+        return BridgeResponse(id: request.id,
+                              ok: true,
+                              result: result,
+                              error: nil)
+    }
+
     func handleChatSubmit(_ request: BridgeRequest) throws -> BridgeResponse? {
         guard let params = request.params,
               params["workspace_id"]?.stringValue == configuration.workspaceID,
@@ -224,6 +276,16 @@ final class HeadlessCodexRuntimeManager: HeadlessCodexRuntimeControlling {
             "cwd": .string(configuration.cwd),
             "headless_codex": .bool(true),
         ]
+    }
+
+    private static func workspaceObject(from result: [String: JSONValue]?) -> [String: JSONValue]? {
+        if let workspace = result?["workspace"]?.objectValue {
+            return workspace
+        }
+        if let workspaceID = result?["workspace_id"]?.stringValue {
+            return ["workspace_id": .string(workspaceID)]
+        }
+        return nil
     }
 
     private func panelValue() -> [String: JSONValue] {

@@ -282,6 +282,10 @@ private final class StubHeadlessCodexRuntime: HeadlessCodexRuntimeControlling {
         nil
     }
 
+    func handleCreatePanel(_ request: BridgeRequest, socketSender: TideyRequestSending) throws -> BridgeResponse? {
+        nil
+    }
+
     func handleChatSubmit(_ request: BridgeRequest) throws -> BridgeResponse? {
         nil
     }
