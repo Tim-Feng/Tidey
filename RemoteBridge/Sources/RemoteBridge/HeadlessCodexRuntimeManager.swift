@@ -127,7 +127,15 @@ final class HeadlessCodexRuntimeManager: HeadlessCodexRuntimeControlling {
         var merged = result
         var workspaces = merged["workspaces"]?.arrayValue ?? []
         workspaces.removeAll { $0.objectValue?["workspace_id"]?.stringValue == configuration.workspaceID }
-        workspaces.append(.object(workspaceValue()))
+        let hasMacWorkspaceWithSameTitle = workspaces.contains { value in
+            guard let workspace = value.objectValue else {
+                return false
+            }
+            return workspace["title"]?.stringValue == configuration.title
+        }
+        if hasMacWorkspaceWithSameTitle == false {
+            workspaces.append(.object(workspaceValue()))
+        }
         merged["workspaces"] = .array(workspaces)
         return merged
     }
@@ -168,26 +176,42 @@ final class HeadlessCodexRuntimeManager: HeadlessCodexRuntimeControlling {
             throw BridgeInternalError.invalidResponse
         }
 
-        let environment = remoteTUILaunchConfiguration.environment.mapValues { JSONValue.string($0) }
         let createPanelResponse = try socketSender.send(BridgeRequest(
             id: request.id,
             action: "create_panel",
             params: [
                 "workspace_id": .string(macWorkspaceID),
-                "command": .string(remoteTUILaunchConfiguration.command()),
-                "working_directory": .string(remoteTUILaunchConfiguration.workingDirectory),
-                "environment": .object(environment),
                 "make_selected": .bool(true),
             ]))
         guard createPanelResponse.ok else {
             return createPanelResponse
         }
+        let macPanel = Self.panelObject(from: createPanelResponse.result)
+        guard let macPanelID = macPanel?["panel_id"]?.stringValue,
+              macPanelID.isEmpty == false else {
+            throw BridgeInternalError.invalidResponse
+        }
+
+        let launchInput = remoteTUILaunchConfiguration.shellCommand() + "\r"
+        let sendInputResponse = try socketSender.send(BridgeRequest(
+            id: "\(request.id).launch",
+            action: "send_input",
+            params: [
+                "workspace_id": .string(macWorkspaceID),
+                "panel_id": .string(macPanelID),
+                "input": .string(launchInput),
+            ]))
+        guard sendInputResponse.ok else {
+            return sendInputResponse
+        }
+
         var result = createPanelResponse.result ?? [:]
         if let macWorkspace {
             result["workspace"] = .object(macWorkspace)
         }
         result["created_workspace"] = .bool(true)
         result["headless_remote_tui"] = .bool(true)
+        result["headless_remote_tui_input_sent"] = .bool(true)
         return BridgeResponse(id: request.id,
                               ok: true,
                               result: result,
@@ -284,6 +308,16 @@ final class HeadlessCodexRuntimeManager: HeadlessCodexRuntimeControlling {
         }
         if let workspaceID = result?["workspace_id"]?.stringValue {
             return ["workspace_id": .string(workspaceID)]
+        }
+        return nil
+    }
+
+    private static func panelObject(from result: [String: JSONValue]?) -> [String: JSONValue]? {
+        if let panel = result?["panel"]?.objectValue {
+            return panel
+        }
+        if let panelID = result?["panel_id"]?.stringValue {
+            return ["panel_id": .string(panelID)]
         }
         return nil
     }
