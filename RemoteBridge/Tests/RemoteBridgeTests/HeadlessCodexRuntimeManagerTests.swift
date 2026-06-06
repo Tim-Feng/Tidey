@@ -135,6 +135,47 @@ final class HeadlessCodexRuntimeManagerTests: XCTestCase {
         })
     }
 
+    func testProcessExitWhileThreadStartPendingPublishesQueuedTurnFailure() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let hub = AgentEventHub()
+        let manager = Self.manager(runner: runner, eventHub: hub)
+        _ = try Self.submit(manager, text: "first")
+        let process = try XCTUnwrap(runner.process)
+
+        process.emitExit(9)
+
+        let fetched = hub.fetch(workspaceID: "headless-workspace",
+                                sessionID: "headless-session",
+                                limit: 20)
+        XCTAssertTrue(fetched.events.contains {
+            $0.type == .assistantMessage && $0.payload?.objectValue?["kind"]?.stringValue == "bridge_error"
+                && ($0.text ?? "").contains("failed to start thread")
+        })
+        XCTAssertTrue(fetched.events.contains {
+            $0.type == .assistantMessage && $0.text == "Failed to submit queued Codex message: first"
+        })
+        XCTAssertTrue(fetched.events.contains {
+            $0.type == .assistantMessage && ($0.text ?? "").contains("exited with status 9")
+        })
+    }
+
+    func testProcessExitAllowsNextSubmitToStartFreshAppServerSession() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let manager = Self.manager(runner: runner)
+        _ = try Self.submit(manager, text: "first")
+        let firstProcess = try XCTUnwrap(runner.process)
+        firstProcess.emitStdout(#"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#)
+        firstProcess.emitExit(9)
+
+        _ = try Self.submit(manager, text: "second")
+
+        let secondProcess = try XCTUnwrap(runner.process)
+        XCTAssertFalse(firstProcess === secondProcess)
+        XCTAssertEqual(runner.startCount, 2)
+        let methods = try secondProcess.stdinLines().map { try Self.object(from: $0)["method"]?.stringValue }
+        XCTAssertEqual(methods, ["initialize", "thread/start"])
+    }
+
     func testStdoutNotificationsArePublishedToAgentEventHub() throws {
         let runner = FakeCodexAppServerProcessRunner()
         let hub = AgentEventHub()
@@ -247,11 +288,13 @@ final class HeadlessCodexRuntimeManagerTests: XCTestCase {
 
 private final class FakeCodexAppServerProcessRunner: CodexAppServerProcessRunning {
     private(set) var process: FakeCodexAppServerManagedProcess?
+    private(set) var startCount = 0
 
     func start(configuration: CodexAppServerLaunchConfiguration,
                onStdoutLine: @escaping @Sendable (String) -> Void,
                onStderrLine: @escaping @Sendable (String) -> Void,
                onExit: @escaping @Sendable (Int32) -> Void) throws -> CodexAppServerManagedProcess {
+        startCount += 1
         let process = FakeCodexAppServerManagedProcess(onStdoutLine: onStdoutLine,
                                                        onExit: onExit)
         self.process = process
