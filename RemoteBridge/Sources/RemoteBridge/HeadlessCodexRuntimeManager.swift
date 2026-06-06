@@ -275,6 +275,7 @@ final class HeadlessCodexRuntimeManager: HeadlessCodexRuntimeControlling {
                                 sandbox: configuration.sandbox) { [weak self, weak session] result in
             self?.handleStartThreadResponse(result, session: session)
         }
+        publishHeadlessStartingStatus()
     }
 
     private func handleStartThreadResponse(_ result: Result<JSONValue, CodexAppServerConnectionError>,
@@ -366,6 +367,33 @@ final class HeadlessCodexRuntimeManager: HeadlessCodexRuntimeControlling {
 
     private func publishBridgeError(_ message: String) {
         publishAssistantMessage(message, payloadKind: "bridge_error")
+    }
+
+    private func publishHeadlessStartingStatus() {
+        let seq = eventHub.nextSyntheticSeq(sessionID: configuration.sessionID)
+        let event = AgentEvent(eventID: "headless-codex-starting:\(configuration.sessionID):\(seq)",
+                               seq: seq,
+                               vendor: "codex",
+                               workspaceID: configuration.workspaceID,
+                               sessionID: configuration.sessionID,
+                               timestamp: timestampProvider(),
+                               type: .status,
+                               role: nil,
+                               text: "Starting Codex app-server",
+                               name: nil,
+                               input: nil,
+                               output: nil,
+                               toolCallID: nil,
+                               metadata: [
+                                "panel_id": configuration.panelID,
+                                "source": "codex_app_server",
+                                "headless": "true",
+                               ],
+                               payload: .object([
+                                "kind": .string("headless_starting"),
+                                "source": .string("codex_app_server"),
+                               ]))
+        eventHub.publish(event)
     }
 
     private func publishAssistantMessage(_ message: String, payloadKind: String = "assistant_message") {

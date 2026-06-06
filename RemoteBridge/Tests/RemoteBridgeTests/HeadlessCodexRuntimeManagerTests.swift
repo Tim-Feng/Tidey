@@ -70,6 +70,15 @@ final class HeadlessCodexRuntimeManagerTests: XCTestCase {
         XCTAssertEqual(try Self.object(from: process.stdinLines()[0])["method"]?.stringValue, "initialize")
         XCTAssertEqual(try Self.object(from: process.stdinLines()[1])["method"]?.stringValue, "thread/start")
 
+        let beforeThreadStarted = hub.fetch(workspaceID: "headless-workspace",
+                                            sessionID: "headless-session",
+                                            limit: 10)
+        XCTAssertTrue(beforeThreadStarted.events.contains {
+            $0.type == .status
+                && $0.payload?.objectValue?["kind"]?.stringValue == "headless_starting"
+                && $0.text == "Starting Codex app-server"
+        })
+
         process.emitStdout(#"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#)
 
         let lines = process.stdinLines()
