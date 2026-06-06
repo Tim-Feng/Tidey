@@ -68,6 +68,26 @@ static NSString *TideySocketStringParam(NSDictionary *params, NSString *key) {
     return [value isKindOfClass:[NSString class]] ? value : nil;
 }
 
+static NSDictionary<NSString *, NSString *> *TideySocketStringDictionaryParam(NSDictionary *params, NSString *key) {
+    id value = params[key];
+    if (![value isKindOfClass:[NSDictionary class]]) {
+        return nil;
+    }
+    NSMutableDictionary<NSString *, NSString *> *result = [NSMutableDictionary dictionary];
+    [(NSDictionary *)value enumerateKeysAndObjectsUsingBlock:^(id dictKey, id dictValue, BOOL *stop) {
+        if (![dictKey isKindOfClass:[NSString class]] || ![dictValue isKindOfClass:[NSString class]]) {
+            [result removeAllObjects];
+            *stop = YES;
+            return;
+        }
+        result[dictKey] = dictValue;
+    }];
+    if (result.count == 0 && [(NSDictionary *)value count] > 0) {
+        return nil;
+    }
+    return result;
+}
+
 static NSInteger TideySocketIntegerParam(NSDictionary *params, NSString *key, NSInteger defaultValue) {
     id value = params[key];
     if ([value isKindOfClass:[NSNumber class]]) {
@@ -722,7 +742,17 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
 
     if ([action isEqualToString:@"create_panel"]) {
         NSString *workspaceID = TideySocketStringParam(source, @"workspace_id");
+        NSString *command = TideySocketStringParam(source, @"command");
+        NSString *workingDirectory = TideySocketStringParam(source, @"working_directory");
+        NSDictionary<NSString *, NSString *> *environment = TideySocketStringDictionaryParam(source, @"environment");
         (void)TideySocketBoolParam(source, @"make_selected", YES);
+        if (source[@"environment"] && !environment) {
+            [self sendErrorResponseForRequestID:requestID
+                                           code:@"invalid_params"
+                                        message:@"create_panel environment must be a string dictionary."
+                                   onConnection:connection];
+            return;
+        }
         if (workspaceID.length == 0) {
             [self sendErrorResponseForRequestID:requestID
                                            code:@"invalid_params"
@@ -731,7 +761,10 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
             return;
         }
         PseudoTerminal *term = [self tideyTerminalForWorkspaceIdentifier:workspaceID];
-        NSDictionary *result = [term tideyCreatePanelInWorkspaceWithIdentifier:workspaceID];
+        NSDictionary *result = [term tideyCreatePanelInWorkspaceWithIdentifier:workspaceID
+                                                                       command:command
+                                                                   environment:environment
+                                                              workingDirectory:workingDirectory];
         if (!result) {
             [self sendErrorResponseForRequestID:requestID
                                            code:@"workspace_not_found"
