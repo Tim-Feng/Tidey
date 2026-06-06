@@ -1,4 +1,8 @@
 import Foundation
+import NIOCore
+import NIOHTTP1
+import NIOPosix
+import NIOWebSocket
 
 enum CodexAppServerProcessError: Error {
     case closed
@@ -18,17 +22,37 @@ protocol CodexAppServerProcessRunning {
                onExit: @escaping @Sendable (Int32) -> Void) throws -> CodexAppServerManagedProcess
 }
 
+enum CodexAppServerTransportError: Error {
+    case unsupported(CodexAppServerTransportMode)
+    case closed
+    case invalidUTF8
+}
+
+protocol CodexAppServerConnectionTransport: AnyObject {
+    func sendLine(_ line: String) throws
+    func close()
+}
+
+protocol CodexAppServerTransportConnecting {
+    func connect(mode: CodexAppServerTransportMode,
+                 onLine: @escaping @Sendable (String) -> Void,
+                 onClose: @escaping @Sendable (Error?) -> Void) throws -> CodexAppServerConnectionTransport
+}
+
 final class CodexAppServerRuntimeSession {
     private let process: CodexAppServerManagedProcess
+    private let transport: CodexAppServerConnectionTransport
     private let connection: CodexAppServerConnection
     private let runtime: CodexAppServerHeadlessRuntime
     private let lock = NSLock()
     private var stopped = false
 
     init(process: CodexAppServerManagedProcess,
+         transport: CodexAppServerConnectionTransport,
          connection: CodexAppServerConnection,
          runtime: CodexAppServerHeadlessRuntime) {
         self.process = process
+        self.transport = transport
         self.connection = connection
         self.runtime = runtime
     }
@@ -84,6 +108,7 @@ final class CodexAppServerRuntimeSession {
         lock.unlock()
 
         connection.close()
+        transport.close()
         process.terminate()
     }
 
@@ -97,9 +122,12 @@ final class CodexAppServerRuntimeSession {
 
 final class CodexAppServerRuntimeSessionFactory {
     private let processRunner: CodexAppServerProcessRunning
+    private let transportConnector: CodexAppServerTransportConnecting
 
-    init(processRunner: CodexAppServerProcessRunning = CodexAppServerProcessRunner()) {
+    init(processRunner: CodexAppServerProcessRunning = CodexAppServerProcessRunner(),
+         transportConnector: CodexAppServerTransportConnecting = CodexAppServerWebSocketTransportConnector()) {
         self.processRunner = processRunner
+        self.transportConnector = transportConnector
     }
 
     func start(configuration: CodexAppServerLaunchConfiguration,
@@ -121,12 +149,27 @@ final class CodexAppServerRuntimeSessionFactory {
                                               onExit: { exitCode in
                                                   exitRouter.receive(exitCode)
                                               })
+        let transport: CodexAppServerConnectionTransport
+        switch configuration.transport {
+        case .stdio:
+            transport = CodexAppServerStdioTransport(process: process)
+        case .unixSocket:
+            transport = try transportConnector.connect(mode: configuration.transport,
+                                                       onLine: { line in
+                                                           stdoutRouter.receive(line)
+                                                       },
+                                                       onClose: { error in
+                                                           if let error {
+                                                               BridgeLogger.server.error("codex app-server websocket closed error=\(String(describing: error), privacy: .public)")
+                                                           }
+                                                       })
+        }
         let runtime = CodexAppServerHeadlessRuntime(context: context,
                                                     nextSequence: nextSequence,
                                                     timestampProvider: timestampProvider,
                                                     onAgentEvent: onAgentEvent)
         let connection = CodexAppServerConnection(sendLine: { line in
-            try process.sendLine(line)
+            try transport.sendLine(line)
         },
                                                    onNotification: runtime.handleNotification,
                                                    approvalContext: CodexAppServerApprovalContext(workspaceID: context.workspaceID,
@@ -137,6 +180,7 @@ final class CodexAppServerRuntimeSessionFactory {
                                                    onInteractivePrompt: onInteractivePrompt,
                                                    onInteractivePromptResolved: onInteractivePromptResolved)
         let runtimeSession = CodexAppServerRuntimeSession(process: process,
+                                                          transport: transport,
                                                           connection: connection,
                                                           runtime: runtime)
         exitRouter.attach(runtimeSession)
@@ -157,6 +201,178 @@ final class CodexAppServerRuntimeSessionFactory {
             }
         }
         return runtimeSession
+    }
+}
+
+private final class CodexAppServerStdioTransport: CodexAppServerConnectionTransport {
+    private let process: CodexAppServerManagedProcess
+
+    init(process: CodexAppServerManagedProcess) {
+        self.process = process
+    }
+
+    func sendLine(_ line: String) throws {
+        try process.sendLine(line)
+    }
+
+    func close() {}
+}
+
+final class CodexAppServerWebSocketTransportConnector: CodexAppServerTransportConnecting {
+    private static let maximumWebSocketFrameSizeBytes = 16 * 1024 * 1024
+
+    private let group: EventLoopGroup
+    private let ownsGroup: Bool
+
+    init(group: EventLoopGroup? = nil) {
+        if let group {
+            self.group = group
+            self.ownsGroup = false
+        } else {
+            self.group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+            self.ownsGroup = true
+        }
+    }
+
+    func connect(mode: CodexAppServerTransportMode,
+                 onLine: @escaping @Sendable (String) -> Void,
+                 onClose: @escaping @Sendable (Error?) -> Void) throws -> CodexAppServerConnectionTransport {
+        guard case .unixSocket(let socketPath) = mode else {
+            throw CodexAppServerTransportError.unsupported(mode)
+        }
+
+        let frameHandler = CodexAppServerWebSocketFrameHandler(onText: onLine,
+                                                               onClose: onClose)
+        let httpHandler = CodexAppServerWebSocketUpgradeRequestHandler(uri: "/rpc")
+        let upgrader = NIOWebSocketClientUpgrader(
+            maxFrameSize: Self.maximumWebSocketFrameSizeBytes,
+            upgradePipelineHandler: { channel, _ in
+                channel.pipeline.addHandler(frameHandler)
+            }
+        )
+        let bootstrap = ClientBootstrap(group: group)
+            .channelInitializer { channel in
+                let config: NIOHTTPClientUpgradeSendableConfiguration = (
+                    upgraders: [upgrader],
+                    completionHandler: { context in
+                        context.pipeline.removeHandler(httpHandler, promise: nil)
+                    }
+                )
+                return channel.pipeline.addHTTPClientHandlers(withClientUpgrade: config).flatMap {
+                    channel.pipeline.addHandler(httpHandler)
+                }
+            }
+
+        let channel = try bootstrap.connect(unixDomainSocketPath: socketPath).wait()
+        return CodexAppServerWebSocketTransport(channel: channel)
+    }
+
+    deinit {
+        if ownsGroup {
+            try? group.syncShutdownGracefully()
+        }
+    }
+}
+
+private final class CodexAppServerWebSocketUpgradeRequestHandler: ChannelInboundHandler, RemovableChannelHandler, Sendable {
+    typealias InboundIn = HTTPClientResponsePart
+    typealias OutboundOut = HTTPClientRequestPart
+
+    private let uri: String
+
+    init(uri: String) {
+        self.uri = uri
+    }
+
+    func channelActive(context: ChannelHandlerContext) {
+        var headers = HTTPHeaders()
+        headers.add(name: "Host", value: "localhost")
+        headers.add(name: "Content-Length", value: "0")
+        let requestHead = HTTPRequestHead(version: .http1_1,
+                                          method: .GET,
+                                          uri: uri,
+                                          headers: headers)
+        context.write(Self.wrapOutboundOut(.head(requestHead)), promise: nil)
+        context.write(Self.wrapOutboundOut(.body(.byteBuffer(context.channel.allocator.buffer(capacity: 0)))), promise: nil)
+        context.writeAndFlush(Self.wrapOutboundOut(.end(nil)), promise: nil)
+    }
+}
+
+private final class CodexAppServerWebSocketFrameHandler: ChannelInboundHandler, Sendable {
+    typealias InboundIn = WebSocketFrame
+    typealias OutboundOut = WebSocketFrame
+
+    private let onText: @Sendable (String) -> Void
+    private let onClose: @Sendable (Error?) -> Void
+
+    init(onText: @escaping @Sendable (String) -> Void,
+         onClose: @escaping @Sendable (Error?) -> Void) {
+        self.onText = onText
+        self.onClose = onClose
+    }
+
+    func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+        let frame = Self.unwrapInboundIn(data)
+        switch frame.opcode {
+        case .text:
+            var data = frame.unmaskedData
+            if let text = data.readString(length: data.readableBytes) {
+                onText(text)
+            }
+        case .ping:
+            let data = frame.unmaskedData
+            let pong = WebSocketFrame(fin: true,
+                                      opcode: .pong,
+                                      data: data)
+            context.writeAndFlush(Self.wrapOutboundOut(pong), promise: nil)
+        case .connectionClose:
+            onClose(nil)
+            context.close(promise: nil)
+        default:
+            break
+        }
+    }
+
+    func errorCaught(context: ChannelHandlerContext, error: Error) {
+        onClose(error)
+        context.close(promise: nil)
+    }
+}
+
+private final class CodexAppServerWebSocketTransport: CodexAppServerConnectionTransport {
+    private let channel: Channel
+    private let lock = NSLock()
+    private var closed = false
+
+    init(channel: Channel) {
+        self.channel = channel
+    }
+
+    func sendLine(_ line: String) throws {
+        lock.lock()
+        guard closed == false else {
+            lock.unlock()
+            throw CodexAppServerTransportError.closed
+        }
+        lock.unlock()
+
+        let payload = line.hasSuffix("\n") ? String(line.dropLast()) : line
+        let buffer = channel.allocator.buffer(string: payload)
+        let frame = WebSocketFrame(fin: true,
+                                   opcode: .text,
+                                   data: buffer)
+        try channel.writeAndFlush(frame).wait()
+    }
+
+    func close() {
+        lock.lock()
+        let shouldClose = closed == false
+        closed = true
+        lock.unlock()
+        guard shouldClose else {
+            return
+        }
+        _ = channel.close()
     }
 }
 

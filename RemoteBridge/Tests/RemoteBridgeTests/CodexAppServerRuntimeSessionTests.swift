@@ -38,6 +38,42 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertEqual(params["sandbox"]?.stringValue, "workspace-write")
     }
 
+    func testFactoryUsesUnixSocketTransportForSidecarAppServer() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let events = EventSink()
+        let session = try Self.makeSession(
+            configuration: .unixSocket(codexExecutablePath: "/tmp/disposable-codex",
+                                       socketPath: "/tmp/tidey-codex-sidecar/app.sock",
+                                       workingDirectory: "/tmp/tidey-codex-disposable",
+                                       environment: ["CODEX_HOME": "/tmp/tidey-codex-home"]),
+            runner: runner,
+            connector: connector,
+            events: events
+        )
+
+        XCTAssertEqual(runner.startedConfigurations.first?.arguments, [
+            "app-server",
+            "--listen",
+            "unix:///tmp/tidey-codex-sidecar/app.sock",
+        ])
+        XCTAssertEqual(connector.connectedModes, [.unixSocket(path: "/tmp/tidey-codex-sidecar/app.sock")])
+        XCTAssertTrue(runner.process?.stdinLines().isEmpty ?? false)
+
+        let transport = try XCTUnwrap(connector.transport)
+        let initialize = try Self.object(from: try XCTUnwrap(transport.sentLines().first))
+        XCTAssertEqual(initialize["method"]?.stringValue, "initialize")
+
+        try session.startThread(cwd: "/Users/timfeng/GitHub/Tidey")
+        let request = try Self.object(from: transport.sentLines().last ?? "")
+        XCTAssertEqual(request["method"]?.stringValue, "thread/start")
+
+        transport.emitLine("""
+        {"method":"thread/started","params":{"thread":{"id":"thread-1","preview":"Remote TUI Codex","name":null}}}
+        """)
+        XCTAssertEqual(events.events().first?.text, "Remote TUI Codex")
+    }
+
     func testSessionConvertsStdoutNotificationsToAgentEvents() throws {
         let runner = FakeCodexAppServerProcessRunner()
         let events = EventSink()
@@ -109,16 +145,19 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         }
     }
 
-    private static func makeSession(runner: FakeCodexAppServerProcessRunner,
+    private static func makeSession(configuration: CodexAppServerLaunchConfiguration = CodexAppServerLaunchConfiguration(
+                                        executablePath: "/tmp/disposable-codex",
+                                        arguments: ["app-server"],
+                                        workingDirectory: "/tmp/tidey-codex-disposable",
+                                        environment: ["CODEX_HOME": "/tmp/tidey-codex-home"]),
+                                    runner: FakeCodexAppServerProcessRunner,
+                                    connector: FakeCodexAppServerTransportConnector = FakeCodexAppServerTransportConnector(),
                                     events: EventSink = EventSink(),
                                     prompts: PromptSink = PromptSink()) throws -> CodexAppServerRuntimeSession {
         var seq = 10
-        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner)
-        let session = try factory.start(configuration: CodexAppServerLaunchConfiguration(
-            executablePath: "/tmp/disposable-codex",
-            arguments: ["app-server"],
-            workingDirectory: "/tmp/tidey-codex-disposable",
-            environment: ["CODEX_HOME": "/tmp/tidey-codex-home"]),
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let session = try factory.start(configuration: configuration,
                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
                                                                                panelID: "panel-1",
                                                                                sessionID: "session-1"),
@@ -142,6 +181,58 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
                                  line: sourceLine)
         let value = try JSONDecoder().decode(JSONValue.self, from: data)
         return try XCTUnwrap(value.objectValue, file: file, line: sourceLine)
+    }
+}
+
+private final class FakeCodexAppServerTransportConnector: CodexAppServerTransportConnecting {
+    private(set) var connectedModes: [CodexAppServerTransportMode] = []
+    private(set) var transport: FakeCodexAppServerConnectionTransport?
+
+    func connect(mode: CodexAppServerTransportMode,
+                 onLine: @escaping @Sendable (String) -> Void,
+                 onClose: @escaping @Sendable (Error?) -> Void) throws -> CodexAppServerConnectionTransport {
+        connectedModes.append(mode)
+        let transport = FakeCodexAppServerConnectionTransport(onLine: onLine,
+                                                              onClose: onClose)
+        self.transport = transport
+        return transport
+    }
+}
+
+private final class FakeCodexAppServerConnectionTransport: CodexAppServerConnectionTransport {
+    private let lock = NSLock()
+    private var lines: [String] = []
+    private var closed = false
+    private let onLine: @Sendable (String) -> Void
+    private let onClose: @Sendable (Error?) -> Void
+
+    init(onLine: @escaping @Sendable (String) -> Void,
+         onClose: @escaping @Sendable (Error?) -> Void) {
+        self.onLine = onLine
+        self.onClose = onClose
+    }
+
+    func sendLine(_ line: String) throws {
+        lock.lock()
+        lines.append(line)
+        lock.unlock()
+    }
+
+    func close() {
+        lock.lock()
+        closed = true
+        lock.unlock()
+        onClose(nil)
+    }
+
+    func emitLine(_ line: String) {
+        onLine(line)
+    }
+
+    func sentLines() -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return lines
     }
 }
 
