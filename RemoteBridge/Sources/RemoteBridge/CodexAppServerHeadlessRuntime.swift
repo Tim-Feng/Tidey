@@ -157,11 +157,11 @@ final class CodexAppServerHeadlessRuntime {
                              params: notification.params)
         case "item/fileChange/patchUpdated":
             return makeEvent(method: notification.method,
-                             type: .toolCall,
+                             type: .toolResult,
                              text: nil,
                              name: "file_change_patch",
-                             input: nil,
-                             output: nil,
+                             input: Self.fileChangeSummary(from: notification.params),
+                             output: Self.fileChangeOutput(from: notification.params),
                              toolCallID: Self.itemID(from: notification.params),
                              payloadKind: "file_change_patch",
                              params: notification.params)
@@ -288,11 +288,11 @@ final class CodexAppServerHeadlessRuntime {
             return makeEvent(method: notification.method,
                              type: .toolCall,
                              text: nil,
-                             name: "file_change",
-                             input: nil,
+                             name: "file_change_patch",
+                             input: Self.fileChangeSummary(from: notification.params),
                              output: nil,
                              toolCallID: item["id"]?.stringValue,
-                             payloadKind: "file_change_started",
+                             payloadKind: "file_change_patch",
                              params: notification.params)
         default:
             return nil
@@ -319,11 +319,12 @@ final class CodexAppServerHeadlessRuntime {
             return makeEvent(method: notification.method,
                              type: .toolResult,
                              text: nil,
-                             name: "file_change",
+                             name: "file_change_patch",
                              input: nil,
-                             output: nil,
+                             output: Self.fileChangeOutput(from: notification.params)
+                                ?? Self.status(from: notification.params),
                              toolCallID: item["id"]?.stringValue,
-                             payloadKind: "file_change_completed",
+                             payloadKind: "file_change_patch",
                              params: notification.params)
         case "agentMessage":
             guard let text = Self.nonEmptyString(item["text"]) else {
@@ -422,6 +423,10 @@ final class CodexAppServerHeadlessRuntime {
         if let durationMs = Self.durationMs(from: params) {
             metadata["duration_ms"] = String(durationMs)
         }
+        let files = Self.fileChangeFiles(from: params)
+        if !files.isEmpty {
+            metadata["files"] = files.joined(separator: ",")
+        }
         return metadata
     }
 
@@ -468,6 +473,71 @@ final class CodexAppServerHeadlessRuntime {
     private static func durationMs(from params: [String: JSONValue]) -> Int? {
         params["durationMs"]?.intValue
             ?? params["item"]?.objectValue?["durationMs"]?.intValue
+    }
+
+    private static func fileChangeOutput(from params: [String: JSONValue]) -> String? {
+        if let diff = fileChangeDiff(from: params) {
+            return diff
+        }
+        return fileChangeSummary(from: params)
+    }
+
+    private static func fileChangeSummary(from params: [String: JSONValue]) -> String? {
+        let summaries = fileChangeObjects(from: params).compactMap { change -> String? in
+            let path = firstNonEmptyString(in: change, keys: ["path", "file_path", "target_file", "filename"])
+            let kind = firstNonEmptyString(in: change, keys: ["kind", "type", "status"])
+            switch (path, kind) {
+            case let (.some(path), .some(kind)):
+                return "\(path) \(kind)"
+            case let (.some(path), nil):
+                return path
+            case let (nil, .some(kind)):
+                return kind
+            default:
+                return nil
+            }
+        }
+        guard !summaries.isEmpty else {
+            return nil
+        }
+        return summaries.joined(separator: "\n")
+    }
+
+    private static func fileChangeDiff(from params: [String: JSONValue]) -> String? {
+        for change in fileChangeObjects(from: params) {
+            if let diff = firstNonEmptyString(in: change, keys: ["diff", "patch", "unified_diff", "output"]) {
+                return diff
+            }
+        }
+        return nil
+    }
+
+    private static func fileChangeFiles(from params: [String: JSONValue]) -> [String] {
+        var seen = Set<String>()
+        return fileChangeObjects(from: params).compactMap { change -> String? in
+            guard let path = firstNonEmptyString(in: change, keys: ["path", "file_path", "target_file", "filename"]),
+                  seen.insert(path).inserted else {
+                return nil
+            }
+            return path
+        }
+    }
+
+    private static func fileChangeObjects(from params: [String: JSONValue]) -> [[String: JSONValue]] {
+        let changes = params["changes"]?.arrayValue
+            ?? params["item"]?.objectValue?["changes"]?.arrayValue
+            ?? []
+        return changes.compactMap(\.objectValue)
+    }
+
+    private static func firstNonEmptyString(in object: [String: JSONValue],
+                                            keys: [String]) -> String? {
+        for key in keys {
+            if let value = nonEmptyString(object[key]) {
+                return value
+            }
+        }
+        return nil
     }
 
     private static func nonEmptyString(_ value: JSONValue?) -> String? {

@@ -91,7 +91,7 @@ final class CodexAppServerHeadlessRuntimeTests: XCTestCase {
             .assistantMessage,
             .toolResult,
             .toolCall,
-            .toolCall,
+            .toolResult,
             .assistantFinal,
         ])
         XCTAssertEqual(emitted[0].text, "Build app-server runtime")

@@ -84,12 +84,16 @@ final class CodexAppServerEventCatalogTests: XCTestCase {
         }
 
         let emitted = events.events()
-        XCTAssertEqual(emitted.map(\.type), [.toolCall, .toolCall, .toolResult])
-        XCTAssertEqual(emitted.map(\.name), ["file_change", "file_change_patch", "file_change"])
+        XCTAssertEqual(emitted.map(\.type), [.toolCall, .toolResult, .toolResult])
+        XCTAssertEqual(emitted.map(\.name), ["file_change_patch", "file_change_patch", "file_change_patch"])
         XCTAssertEqual(emitted.map(\.toolCallID), ["patch-1", "patch-1", "patch-1"])
-        XCTAssertEqual(emitted[0].payload?.objectValue?["kind"]?.stringValue, "file_change_started")
+        XCTAssertEqual(emitted[0].payload?.objectValue?["kind"]?.stringValue, "file_change_patch")
         XCTAssertEqual(emitted[1].payload?.objectValue?["kind"]?.stringValue, "file_change_patch")
-        XCTAssertEqual(emitted[2].payload?.objectValue?["kind"]?.stringValue, "file_change_completed")
+        XCTAssertEqual(emitted[1].output, "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@\n-old\n+new\n")
+        XCTAssertEqual(emitted[1].metadata?["files"], "README.md")
+        XCTAssertEqual(emitted[2].payload?.objectValue?["kind"]?.stringValue, "file_change_patch")
+        XCTAssertEqual(emitted[2].metadata?["status"], "completed")
+        XCTAssertEqual(emitted[2].metadata?["files"], "README.md")
     }
 
     func testApprovalFixturePublishesPromptAndDecisionReply() throws {
@@ -234,7 +238,7 @@ private enum CodexAppServerEventFixture {
         case .fileChangeStarted:
             return #"{"method":"item/started","params":{"threadId":"thread-1","turnId":"turn-1","item":{"type":"fileChange","id":"patch-1","status":"running"}}}"#
         case .fileChangePatchUpdated:
-            return #"{"method":"item/fileChange/patchUpdated","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"patch-1","changes":[{"path":"README.md","kind":"update"}]}}"#
+            return #"{"method":"item/fileChange/patchUpdated","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"patch-1","changes":[{"path":"README.md","kind":"update","diff":"diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@\n-old\n+new\n"}]}}"#
         case .fileChangeCompleted:
             return #"{"method":"item/completed","params":{"threadId":"thread-1","turnId":"turn-1","item":{"type":"fileChange","id":"patch-1","status":"completed","changes":[{"path":"README.md","kind":"update"}]}}}"#
         case .commandApproval:
