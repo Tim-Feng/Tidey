@@ -35,7 +35,10 @@ let uploadGarbageCollector = BridgeUploadGarbageCollector(uploadDirectory: bridg
 let headlessCodexRuntime = HeadlessCodexRuntimeConfiguration.devFromEnvironment().map {
     HeadlessCodexRuntimeManager(configuration: $0, eventHub: eventHub)
 }
-let server = TideyRemoteBridgeServer(token: token,
+let runtimeConfiguration = BridgeProcessRuntimeConfiguration.from()
+let server = TideyRemoteBridgeServer(host: runtimeConfiguration.host,
+                                     port: runtimeConfiguration.port,
+                                     token: token,
                                      authenticator: authenticator,
                                      pairingController: pairingController,
                                      socketClient: socketClient,
@@ -45,12 +48,19 @@ let server = TideyRemoteBridgeServer(token: token,
                                      observability: observability,
                                      cloudflaredManager: cloudflaredManager,
                                      uploadGarbageCollector: uploadGarbageCollector,
-                                     headlessCodexRuntime: headlessCodexRuntime)
+                                     headlessCodexRuntime: headlessCodexRuntime,
+                                     startRegistryMonitor: runtimeConfiguration.shouldStartRegistryMonitor,
+                                     startCloudflaredSupervisor: runtimeConfiguration.shouldStartCloudflaredSupervisor,
+                                     headlessCodexStandalone: runtimeConfiguration.shouldServeHeadlessCodexStandalone)
 
 do {
-    workspaceEventMonitor.start()
-    resolverPublicationMonitor.start()
-    uploadGarbageCollector.start()
+    if runtimeConfiguration.shouldStartBackgroundServices {
+        workspaceEventMonitor.start()
+        resolverPublicationMonitor.start()
+        uploadGarbageCollector.start()
+    } else {
+        BridgeLogger.server.info("bridge dev isolated mode enabled port=\(runtimeConfiguration.port, privacy: .public)")
+    }
     try server.run()
 } catch {
     fputs("RemoteBridge failed: \(error)\n", stderr)

@@ -20,6 +20,9 @@ final class TideyRemoteBridgeServer {
     private let cloudflaredManager: BridgeCloudflaredManager
     private let uploadGarbageCollector: BridgeUploadGarbageCollector
     private let headlessCodexRuntime: HeadlessCodexRuntimeControlling?
+    private let startRegistryMonitor: Bool
+    private let startCloudflaredSupervisor: Bool
+    private let headlessCodexStandalone: Bool
     private let ordinaryTmuxPanelRegistry = OrdinaryTmuxPanelRegistry()
     private let group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
 
@@ -35,7 +38,10 @@ final class TideyRemoteBridgeServer {
          observability: BridgeObservabilityCenter,
          cloudflaredManager: BridgeCloudflaredManager = BridgeCloudflaredManager(),
          uploadGarbageCollector: BridgeUploadGarbageCollector = BridgeUploadGarbageCollector(uploadDirectory: BridgePaths().uploadsDirectory),
-         headlessCodexRuntime: HeadlessCodexRuntimeControlling? = nil) {
+         headlessCodexRuntime: HeadlessCodexRuntimeControlling? = nil,
+         startRegistryMonitor: Bool = true,
+         startCloudflaredSupervisor: Bool = true,
+         headlessCodexStandalone: Bool = false) {
         self.host = host
         self.port = port
         self.token = token
@@ -49,6 +55,9 @@ final class TideyRemoteBridgeServer {
         self.cloudflaredManager = cloudflaredManager
         self.uploadGarbageCollector = uploadGarbageCollector
         self.headlessCodexRuntime = headlessCodexRuntime
+        self.startRegistryMonitor = startRegistryMonitor
+        self.startCloudflaredSupervisor = startCloudflaredSupervisor
+        self.headlessCodexStandalone = headlessCodexStandalone
     }
 
     func run() throws {
@@ -57,8 +66,12 @@ final class TideyRemoteBridgeServer {
     }
 
     func start() throws -> TideyRemoteBridgeServerHandle {
-        try registryMonitor.start()
-        cloudflaredManager.ensureSupervisorRunning()
+        if startRegistryMonitor {
+            try registryMonitor.start()
+        }
+        if startCloudflaredSupervisor {
+            cloudflaredManager.ensureSupervisorRunning()
+        }
         let upgrader = NIOWebSocketServerUpgrader(
             maxFrameSize: Self.maximumWebSocketFrameSizeBytes,
             shouldUpgrade: { [authenticator] channel, head in
@@ -68,7 +81,7 @@ final class TideyRemoteBridgeServer {
                 }
                 return channel.eventLoop.makeSucceededFuture([:])
             },
-            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub, registryMonitor, observability, ordinaryTmuxPanelRegistry, port, cloudflaredManager, headlessCodexRuntime] channel, _ in
+            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub, registryMonitor, observability, ordinaryTmuxPanelRegistry, port, cloudflaredManager, headlessCodexRuntime, headlessCodexStandalone] channel, _ in
                 channel.pipeline.addHandler(WebSocketFrameHandler(socketClient: socketClient,
                                                                   eventHub: eventHub,
                                                                   workspaceEventHub: workspaceEventHub,
@@ -77,7 +90,8 @@ final class TideyRemoteBridgeServer {
                                                                   bridgePort: port,
                                                                   cloudflaredManager: cloudflaredManager,
                                                                   ordinaryTmuxPanelRegistry: ordinaryTmuxPanelRegistry,
-                                                                  headlessCodexRuntime: headlessCodexRuntime))
+                                                                  headlessCodexRuntime: headlessCodexRuntime,
+                                                                  headlessCodexStandalone: headlessCodexStandalone))
             }
         )
 
@@ -574,6 +588,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
     private let imageUploadHandler: BridgeImageUploadHandler
     private let ordinaryTmuxPanelProjector: OrdinaryTmuxPanelProjector
     private let headlessCodexRuntime: HeadlessCodexRuntimeControlling?
+    private let headlessCodexStandalone: Bool
     private var agentSubscriptionID: UUID?
     private var workspaceSubscriptionID: UUID?
 
@@ -585,7 +600,8 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
          bridgePort: Int,
          cloudflaredManager: BridgeCloudflaredManager,
          ordinaryTmuxPanelRegistry: OrdinaryTmuxPanelRegistry,
-         headlessCodexRuntime: HeadlessCodexRuntimeControlling? = nil) {
+         headlessCodexRuntime: HeadlessCodexRuntimeControlling? = nil,
+         headlessCodexStandalone: Bool = false) {
         self.socketClient = socketClient
         self.eventHub = eventHub
         self.workspaceEventHub = workspaceEventHub
@@ -595,6 +611,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
         self.cloudflaredManager = cloudflaredManager
         self.ordinaryTmuxPanelRegistry = ordinaryTmuxPanelRegistry
         self.headlessCodexRuntime = headlessCodexRuntime
+        self.headlessCodexStandalone = headlessCodexStandalone
         let routeResolver = OrdinaryTmuxRouteResolver(registry: ordinaryTmuxPanelRegistry)
         self.ordinaryTmuxRouteResolver = routeResolver
         self.inputActionHandler = BridgeInputActionHandler(socketSender: socketClient,
@@ -723,6 +740,16 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
             }
             if let response = try interactivePromptActionHandler.handle(request) {
                 return LocalRequestResult(response: response,
+                                          agentReplayEnvelopes: [],
+                                          workspaceReplayEnvelopes: [])
+            }
+            if headlessCodexStandalone,
+               request.action == "list_workspaces",
+               let result = headlessCodexRuntime?.mergeWorkspaceListResult(["workspaces": .array([])]) {
+                return LocalRequestResult(response: BridgeResponse(id: request.id,
+                                                                   ok: true,
+                                                                   result: result,
+                                                                   error: nil),
                                           agentReplayEnvelopes: [],
                                           workspaceReplayEnvelopes: [])
             }
