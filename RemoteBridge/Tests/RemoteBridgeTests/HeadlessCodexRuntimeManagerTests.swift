@@ -21,6 +21,37 @@ final class HeadlessCodexRuntimeManagerTests: XCTestCase {
         XCTAssertEqual(config?.launchConfiguration.executablePath, "/tmp/disposable-codex")
         XCTAssertEqual(config?.launchConfiguration.workingDirectory, "/tmp/headless-cwd")
         XCTAssertEqual(config?.launchConfiguration.environment["CODEX_HOME"], "/tmp/headless-home")
+        XCTAssertEqual(config?.launchConfiguration.transport, .stdio)
+        XCTAssertNil(config?.remoteTUILaunchConfiguration)
+    }
+
+    func testDevConfigurationCanUseSidecarSocketForOriginalCodexTUI() {
+        XCTAssertNil(HeadlessCodexRuntimeConfiguration.devFromEnvironment([
+            "TIDEY_HEADLESS_CODEX_DEV": "1",
+            "TIDEY_HEADLESS_CODEX_EXECUTABLE": "/tmp/disposable-codex",
+            "TIDEY_HEADLESS_CODEX_APP_SERVER_SOCKET": "relative.sock",
+        ]))
+
+        let config = HeadlessCodexRuntimeConfiguration.devFromEnvironment([
+            "TIDEY_HEADLESS_CODEX_DEV": "1",
+            "TIDEY_HEADLESS_CODEX_EXECUTABLE": "/tmp/codex bin",
+            "TIDEY_HEADLESS_CODEX_CWD": "/tmp/headless cwd",
+            "TIDEY_HEADLESS_CODEX_HOME": "/tmp/headless home",
+            "TIDEY_HEADLESS_CODEX_APP_SERVER_SOCKET": "/tmp/tidey codex/app.sock",
+        ])
+
+        XCTAssertEqual(config?.subtitle, "Codex app-server sidecar")
+        XCTAssertEqual(config?.launchConfiguration.arguments, [
+            "app-server",
+            "--listen",
+            "unix:///tmp/tidey codex/app.sock",
+        ])
+        XCTAssertEqual(config?.launchConfiguration.transport, .unixSocket(path: "/tmp/tidey codex/app.sock"))
+        XCTAssertEqual(config?.remoteTUILaunchConfiguration?.arguments, ["--remote", "unix:///tmp/tidey codex/app.sock"])
+        XCTAssertEqual(
+            config?.remoteTUILaunchConfiguration?.shellCommand(),
+            "cd '/tmp/headless cwd' && CODEX_HOME='/tmp/headless home' '/tmp/codex bin' --remote 'unix:///tmp/tidey codex/app.sock'"
+        )
     }
 
     func testWorkspaceAndPanelOverlayExposeHeadlessCodexAgentSession() throws {
@@ -45,6 +76,36 @@ final class HeadlessCodexRuntimeManagerTests: XCTestCase {
         XCTAssertEqual(panel["panel_id"]?.stringValue, "headless-panel")
         XCTAssertEqual(panel["agent_session"]?.objectValue?["vendor"]?.stringValue, "codex")
         XCTAssertEqual(panel["agent_session"]?.objectValue?["session_id"]?.stringValue, "headless-session")
+    }
+
+    func testPanelOverlayExposesRemoteTUICommandWhenSidecarIsConfigured() throws {
+        let manager = Self.manager(configuration: HeadlessCodexRuntimeConfiguration(
+            workspaceID: "headless-workspace",
+            panelID: "headless-panel",
+            sessionID: "headless-session",
+            title: "Headless Codex",
+            subtitle: "Codex app-server sidecar",
+            cwd: "/tmp/headless cwd",
+            model: "gpt-5",
+            approvalPolicy: "on-request",
+            sandbox: .string("workspace-write"),
+            launchConfiguration: .unixSocket(codexExecutablePath: "/tmp/codex bin",
+                                             socketPath: "/tmp/tidey codex/app.sock",
+                                             workingDirectory: "/tmp/headless cwd",
+                                             environment: ["CODEX_HOME": "/tmp/headless home"]),
+            remoteTUILaunchConfiguration: .unixSocket(codexExecutablePath: "/tmp/codex bin",
+                                                      socketPath: "/tmp/tidey codex/app.sock",
+                                                      workingDirectory: "/tmp/headless cwd",
+                                                      environment: ["CODEX_HOME": "/tmp/headless home"])
+        ))
+
+        let panelResult = try XCTUnwrap(manager.panelListResult(workspaceID: "headless-workspace"))
+        let panel = try XCTUnwrap(panelResult["panels"]?.arrayValue?.first?.objectValue)
+        XCTAssertEqual(panel["codex_app_server_remote"]?.stringValue, "unix:///tmp/tidey codex/app.sock")
+        XCTAssertEqual(
+            panel["codex_remote_tui_command"]?.stringValue,
+            "cd '/tmp/headless cwd' && CODEX_HOME='/tmp/headless home' '/tmp/codex bin' --remote 'unix:///tmp/tidey codex/app.sock'"
+        )
     }
 
     func testChatSubmitStartsThreadThenQueuedTurnAndPublishesEvents() throws {
@@ -307,9 +368,10 @@ final class HeadlessCodexRuntimeManagerTests: XCTestCase {
                                                    ]))
     }
 
-    private static func manager(runner: FakeCodexAppServerProcessRunner = FakeCodexAppServerProcessRunner(),
+    private static func manager(configuration: HeadlessCodexRuntimeConfiguration? = nil,
+                                runner: FakeCodexAppServerProcessRunner = FakeCodexAppServerProcessRunner(),
                                 eventHub: AgentEventHub = AgentEventHub()) -> HeadlessCodexRuntimeManager {
-        HeadlessCodexRuntimeManager(configuration: HeadlessCodexRuntimeConfiguration(
+        let runtimeConfiguration = configuration ?? HeadlessCodexRuntimeConfiguration(
             workspaceID: "headless-workspace",
             panelID: "headless-panel",
             sessionID: "headless-session",
@@ -323,7 +385,8 @@ final class HeadlessCodexRuntimeManagerTests: XCTestCase {
                 executablePath: "/tmp/disposable-codex",
                 arguments: ["app-server"],
                 workingDirectory: "/tmp/headless-cwd",
-                environment: ["CODEX_HOME": "/tmp/headless-home"])),
+                environment: ["CODEX_HOME": "/tmp/headless-home"]))
+        return HeadlessCodexRuntimeManager(configuration: runtimeConfiguration,
                                       sessionFactory: CodexAppServerRuntimeSessionFactory(processRunner: runner),
                                       eventHub: eventHub,
                                       timestampProvider: { "2026-06-06T00:00:00.000Z" })

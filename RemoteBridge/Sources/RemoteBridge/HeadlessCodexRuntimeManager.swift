@@ -18,6 +18,31 @@ struct HeadlessCodexRuntimeConfiguration: Sendable {
     let approvalPolicy: String?
     let sandbox: JSONValue?
     let launchConfiguration: CodexAppServerLaunchConfiguration
+    let remoteTUILaunchConfiguration: CodexRemoteTUILaunchConfiguration?
+
+    init(workspaceID: String,
+         panelID: String,
+         sessionID: String,
+         title: String,
+         subtitle: String,
+         cwd: String,
+         model: String?,
+         approvalPolicy: String?,
+         sandbox: JSONValue?,
+         launchConfiguration: CodexAppServerLaunchConfiguration,
+         remoteTUILaunchConfiguration: CodexRemoteTUILaunchConfiguration? = nil) {
+        self.workspaceID = workspaceID
+        self.panelID = panelID
+        self.sessionID = sessionID
+        self.title = title
+        self.subtitle = subtitle
+        self.cwd = cwd
+        self.model = model
+        self.approvalPolicy = approvalPolicy
+        self.sandbox = sandbox
+        self.launchConfiguration = launchConfiguration
+        self.remoteTUILaunchConfiguration = remoteTUILaunchConfiguration
+    }
 
     static func devFromEnvironment(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> HeadlessCodexRuntimeConfiguration? {
         guard environment["TIDEY_HEADLESS_CODEX_DEV"]?.lowercased() == "1" else {
@@ -33,21 +58,44 @@ struct HeadlessCodexRuntimeConfiguration: Sendable {
         let workspaceID = environment["TIDEY_HEADLESS_CODEX_WORKSPACE_ID"] ?? "headless-codex-dev"
         let panelID = environment["TIDEY_HEADLESS_CODEX_PANEL_ID"] ?? "headless-codex-dev-panel"
         let sessionID = environment["TIDEY_HEADLESS_CODEX_SESSION_ID"] ?? "headless-codex-dev-session"
+        let appServerSocketPath = environment["TIDEY_HEADLESS_CODEX_APP_SERVER_SOCKET"]
+        if let appServerSocketPath,
+           appServerSocketPath.hasPrefix("/") == false {
+            BridgeLogger.server.error("headless codex dev disabled reason=non_absolute_TIDEY_HEADLESS_CODEX_APP_SERVER_SOCKET")
+            return nil
+        }
+        let launchConfiguration: CodexAppServerLaunchConfiguration
+        let remoteTUIConfiguration: CodexRemoteTUILaunchConfiguration?
+        if let appServerSocketPath,
+           appServerSocketPath.isEmpty == false {
+            launchConfiguration = .unixSocket(codexExecutablePath: executablePath,
+                                              socketPath: appServerSocketPath,
+                                              workingDirectory: cwd,
+                                              environment: ["CODEX_HOME": codexHome])
+            remoteTUIConfiguration = .unixSocket(codexExecutablePath: executablePath,
+                                                 socketPath: appServerSocketPath,
+                                                 workingDirectory: cwd,
+                                                 environment: ["CODEX_HOME": codexHome])
+        } else {
+            launchConfiguration = CodexAppServerLaunchConfiguration(
+                executablePath: executablePath,
+                arguments: ["app-server"],
+                workingDirectory: cwd,
+                environment: ["CODEX_HOME": codexHome])
+            remoteTUIConfiguration = nil
+        }
         return HeadlessCodexRuntimeConfiguration(
             workspaceID: workspaceID,
             panelID: panelID,
             sessionID: sessionID,
             title: environment["TIDEY_HEADLESS_CODEX_TITLE"] ?? "Headless Codex Dev",
-            subtitle: "Codex app-server",
+            subtitle: remoteTUIConfiguration == nil ? "Codex app-server" : "Codex app-server sidecar",
             cwd: cwd,
             model: environment["TIDEY_HEADLESS_CODEX_MODEL"],
             approvalPolicy: environment["TIDEY_HEADLESS_CODEX_APPROVAL_POLICY"] ?? "on-request",
             sandbox: .string(environment["TIDEY_HEADLESS_CODEX_SANDBOX"] ?? "workspace-write"),
-            launchConfiguration: CodexAppServerLaunchConfiguration(
-                executablePath: executablePath,
-                arguments: ["app-server"],
-                workingDirectory: cwd,
-                environment: ["CODEX_HOME": codexHome])
+            launchConfiguration: launchConfiguration,
+            remoteTUILaunchConfiguration: remoteTUIConfiguration
         )
     }
 }
@@ -179,7 +227,7 @@ final class HeadlessCodexRuntimeManager: HeadlessCodexRuntimeControlling {
     }
 
     private func panelValue() -> [String: JSONValue] {
-        [
+        var value: [String: JSONValue] = [
             "workspace_id": .string(configuration.workspaceID),
             "panel_id": .string(configuration.panelID),
             "window_guid": .string("headless-codex-dev-window"),
@@ -197,6 +245,11 @@ final class HeadlessCodexRuntimeManager: HeadlessCodexRuntimeControlling {
                 "session_id": .string(configuration.sessionID),
             ]),
         ]
+        if let remoteTUILaunchConfiguration = configuration.remoteTUILaunchConfiguration {
+            value["codex_app_server_remote"] = .string(remoteTUILaunchConfiguration.remoteAddress)
+            value["codex_remote_tui_command"] = .string(remoteTUILaunchConfiguration.shellCommand())
+        }
+        return value
     }
 
     private func ensureSession() throws -> CodexAppServerRuntimeSession {
