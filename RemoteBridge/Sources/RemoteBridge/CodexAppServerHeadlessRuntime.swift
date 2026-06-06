@@ -116,7 +116,11 @@ final class CodexAppServerHeadlessRuntime {
         case "turn/started":
             return makeTurnLifecycleEvent(notification, type: .thinking, text: "Codex turn started")
         case "turn/completed":
-            return makeTurnLifecycleEvent(notification, type: .assistantFinal, text: nil)
+            return makeTurnCompletedEvent(notification)
+        case "warning":
+            return makeWarningEvent(notification)
+        case "error":
+            return makeErrorEvent(notification)
         case "item/started":
             return makeItemStartedEvent(notification)
         case "item/completed":
@@ -209,6 +213,58 @@ final class CodexAppServerHeadlessRuntime {
                          output: nil,
                          toolCallID: nil,
                          payloadKind: type == .thinking ? "turn_started" : "turn_completed",
+                         params: notification.params)
+    }
+
+    private func makeTurnCompletedEvent(_ notification: CodexAppServerNotification) -> AgentEvent? {
+        guard let turn = notification.params["turn"]?.objectValue else {
+            return makeTurnLifecycleEvent(notification, type: .assistantFinal, text: nil)
+        }
+        if turn["status"]?.stringValue == "failed" {
+            let message = Self.errorMessage(from: turn["error"]?.objectValue)
+                ?? "Codex turn failed."
+            return makeEvent(method: notification.method,
+                             type: .assistantMessage,
+                             text: message,
+                             name: nil,
+                             input: nil,
+                             output: nil,
+                             toolCallID: nil,
+                             payloadKind: "turn_failed",
+                             params: notification.params)
+        }
+        return makeTurnLifecycleEvent(notification, type: .assistantFinal, text: nil)
+    }
+
+    private func makeWarningEvent(_ notification: CodexAppServerNotification) -> AgentEvent? {
+        guard let message = Self.nonEmptyString(notification.params["message"]) else {
+            return nil
+        }
+        return makeEvent(method: notification.method,
+                         type: .assistantMessage,
+                         text: message,
+                         name: nil,
+                         input: nil,
+                         output: nil,
+                         toolCallID: nil,
+                         payloadKind: "warning",
+                         params: notification.params)
+    }
+
+    private func makeErrorEvent(_ notification: CodexAppServerNotification) -> AgentEvent? {
+        if notification.params["willRetry"]?.boolValue == true {
+            return nil
+        }
+        let message = Self.errorMessage(from: notification.params["error"]?.objectValue)
+            ?? "Codex app-server error."
+        return makeEvent(method: notification.method,
+                         type: .assistantMessage,
+                         text: message,
+                         name: nil,
+                         input: nil,
+                         output: nil,
+                         toolCallID: nil,
+                         payloadKind: "error",
                          params: notification.params)
     }
 
@@ -391,6 +447,24 @@ final class CodexAppServerHeadlessRuntime {
         }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : text
+    }
+
+    private static func errorMessage(from error: [String: JSONValue]?) -> String? {
+        guard let error else {
+            return nil
+        }
+        let message = nonEmptyString(error["message"])
+        let details = nonEmptyString(error["additionalDetails"])
+        switch (message, details) {
+        case let (.some(message), .some(details)) where message != details:
+            return "\(message)\n\(details)"
+        case let (.some(message), _):
+            return message
+        case let (_, .some(details)):
+            return details
+        default:
+            return nil
+        }
     }
 
     private static func userMessageText(from item: [String: JSONValue]) -> String? {

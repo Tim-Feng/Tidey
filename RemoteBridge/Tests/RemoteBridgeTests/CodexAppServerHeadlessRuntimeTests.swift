@@ -105,6 +105,33 @@ final class CodexAppServerHeadlessRuntimeTests: XCTestCase {
         XCTAssertEqual(emitted[6].type, .assistantFinal)
     }
 
+    func testServerWarningsAndFinalErrorsBecomeVisibleMessages() throws {
+        let events = EventSink()
+        let runtime = Self.runtime(events: events)
+        let connection = CodexAppServerConnection(sendLine: { _ in },
+                                                  onNotification: runtime.handleNotification)
+
+        connection.receiveLine("""
+        {"method":"warning","params":{"threadId":"thread-1","message":"Falling back from WebSockets to HTTPS transport."}}
+        """)
+        connection.receiveLine("""
+        {"method":"error","params":{"error":{"message":"Reconnecting... 2/5","additionalDetails":"temporary network issue"},"willRetry":true,"threadId":"thread-1","turnId":"turn-1"}}
+        """)
+        connection.receiveLine("""
+        {"method":"error","params":{"error":{"message":"unexpected status 401 Unauthorized","additionalDetails":"Missing bearer authentication"},"willRetry":false,"threadId":"thread-1","turnId":"turn-1"}}
+        """)
+        connection.receiveLine("""
+        {"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","items":[],"itemsView":"notLoaded","status":"failed","error":{"message":"turn failed","additionalDetails":"request id: req-1"},"startedAt":1,"completedAt":2,"durationMs":1000}}}
+        """)
+
+        let emitted = events.events()
+        XCTAssertEqual(emitted.map(\.type), [.assistantMessage, .assistantMessage, .assistantMessage])
+        XCTAssertEqual(emitted.map { $0.payload?.objectValue?["kind"]?.stringValue }, ["warning", "error", "turn_failed"])
+        XCTAssertEqual(emitted[0].text, "Falling back from WebSockets to HTTPS transport.")
+        XCTAssertEqual(emitted[1].text, "unexpected status 401 Unauthorized\nMissing bearer authentication")
+        XCTAssertEqual(emitted[2].text, "turn failed\nrequest id: req-1")
+    }
+
     func testItemLifecycleNotificationsBecomeConversationAndToolEvents() {
         let events = EventSink()
         let runtime = Self.runtime(events: events)
