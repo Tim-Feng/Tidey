@@ -154,9 +154,9 @@ final class CodexAppServerConnection {
     func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent {
         let (entry, response) = try approvalStore.resolveEntry(promptID: promptID,
                                                                targetIndex: targetIndex)
-        sendResult(id: entry.request.requestIDValue, result: response)
         let event = makeResolvedEvent(prompt: entry.prompt, reason: "submit")
         onInteractivePromptResolved(event)
+        sendResult(id: entry.request.requestIDValue, result: response)
         return event
     }
 

@@ -235,6 +235,51 @@ final class HeadlessCodexRuntimeManagerTests: XCTestCase {
         XCTAssertEqual(approvalResponse["result"]?.objectValue?["decision"]?.stringValue, "acceptForSession")
     }
 
+    func testApprovalResolvedPublishesBeforeImmediateAppServerFollowUpNotification() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let hub = AgentEventHub()
+        let manager = Self.manager(runner: runner, eventHub: hub)
+        _ = try Self.submit(manager, text: "needs approval")
+        let process = try XCTUnwrap(runner.process)
+        process.emitStdout(#"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#)
+        process.emitStdout("""
+        {"id":"approval-1","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"cmd-1","startedAtMs":1786000000000,"command":"curl https://example.com","reason":"Needs network."}}
+        """)
+        let promptID = try XCTUnwrap(hub.fetch(workspaceID: "headless-workspace",
+                                               sessionID: "headless-session",
+                                               limit: 20)
+            .events
+            .first(where: { $0.type == .interactivePrompt })?
+            .metadata?["prompt_id"])
+        process.onSendLine = { line in
+            guard line.contains(#""id":"approval-1""#) else {
+                return
+            }
+            process.emitStdout("""
+            {"method":"item/completed","params":{"threadId":"thread-1","turnId":"turn-1","item":{"type":"commandExecution","id":"cmd-1","command":"curl https://example.com","cwd":"/tmp/headless-cwd","processId":"proc-1","source":"agent","status":"completed","commandActions":[],"aggregatedOutput":"","exitCode":1,"durationMs":1}}}
+            """)
+        }
+
+        _ = try manager.handleSubmitInteractivePrompt(BridgeRequest(id: "submit-approval",
+                                                                    action: "submit_interactive_prompt",
+                                                                    params: [
+                                                                        "workspace_id": .string("headless-workspace"),
+                                                                        "panel_id": .string("headless-panel"),
+                                                                        "prompt_id": .string(promptID),
+                                                                        "target_index": .number(2),
+                                                                    ]))
+
+        let fetched = hub.fetch(workspaceID: "headless-workspace",
+                                sessionID: "headless-session",
+                                limit: 20)
+        let resolved = try XCTUnwrap(fetched.events.first { $0.type == .interactivePromptResolved })
+        let completion = try XCTUnwrap(fetched.events.first {
+            $0.type == .toolResult
+                && $0.payload?.objectValue?["kind"]?.stringValue == "command_execution_completed"
+        })
+        XCTAssertGreaterThan(completion.seq, resolved.seq)
+    }
+
     func testNonHeadlessRequestsAreIgnored() throws {
         let manager = Self.manager()
 
@@ -316,6 +361,7 @@ private final class FakeCodexAppServerManagedProcess: CodexAppServerManagedProce
     private var lines: [String] = []
     private let onStdoutLine: @Sendable (String) -> Void
     private let onExit: @Sendable (Int32) -> Void
+    var onSendLine: ((String) -> Void)?
 
     init(onStdoutLine: @escaping @Sendable (String) -> Void,
          onExit: @escaping @Sendable (Int32) -> Void) {
@@ -329,6 +375,7 @@ private final class FakeCodexAppServerManagedProcess: CodexAppServerManagedProce
         lock.lock()
         lines.append(line)
         lock.unlock()
+        onSendLine?(line)
     }
 
     func terminate() {}
