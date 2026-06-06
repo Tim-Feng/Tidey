@@ -26,7 +26,7 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         try session.startThread(cwd: "/Users/timfeng/GitHub/Tidey",
                                 model: "gpt-5",
                                 approvalPolicy: "on-request",
-                                sandbox: .object(["mode": .string("workspace-write")]))
+                                sandbox: .string("workspace-write"))
 
         let process = try XCTUnwrap(runner.process)
         let request = try Self.object(from: process.stdinLines()[1])
@@ -35,7 +35,7 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertEqual(params["cwd"]?.stringValue, "/Users/timfeng/GitHub/Tidey")
         XCTAssertEqual(params["model"]?.stringValue, "gpt-5")
         XCTAssertEqual(params["approvalPolicy"]?.stringValue, "on-request")
-        XCTAssertEqual(params["sandbox"]?.objectValue?["mode"]?.stringValue, "workspace-write")
+        XCTAssertEqual(params["sandbox"]?.stringValue, "workspace-write")
     }
 
     func testSessionConvertsStdoutNotificationsToAgentEvents() throws {

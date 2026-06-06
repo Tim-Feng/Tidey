@@ -22,7 +22,7 @@ final class CodexAppServerHeadlessRuntimeTests: XCTestCase {
                                 cwd: "/Users/timfeng/GitHub/Tidey",
                                 model: "gpt-5",
                                 approvalPolicy: "on-request",
-                                sandbox: .object(["mode": .string("workspace-write")]))
+                                sandbox: .string("workspace-write"))
         try runtime.startTurn(on: connection,
                               threadID: "thread-1",
                               text: "fix the bridge",
@@ -38,7 +38,7 @@ final class CodexAppServerHeadlessRuntimeTests: XCTestCase {
         XCTAssertEqual(threadParams["cwd"]?.stringValue, "/Users/timfeng/GitHub/Tidey")
         XCTAssertEqual(threadParams["model"]?.stringValue, "gpt-5")
         XCTAssertEqual(threadParams["approvalPolicy"]?.stringValue, "on-request")
-        XCTAssertEqual(threadParams["sandbox"]?.objectValue?["mode"]?.stringValue, "workspace-write")
+        XCTAssertEqual(threadParams["sandbox"]?.stringValue, "workspace-write")
         XCTAssertEqual(threadParams["ephemeral"]?.boolValue, true)
 
         let startTurn = try Self.object(from: lines[1])

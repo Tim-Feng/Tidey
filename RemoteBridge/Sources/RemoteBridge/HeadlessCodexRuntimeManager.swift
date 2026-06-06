@@ -42,7 +42,7 @@ struct HeadlessCodexRuntimeConfiguration: Sendable {
             cwd: cwd,
             model: environment["TIDEY_HEADLESS_CODEX_MODEL"],
             approvalPolicy: environment["TIDEY_HEADLESS_CODEX_APPROVAL_POLICY"] ?? "on-request",
-            sandbox: .object(["mode": .string(environment["TIDEY_HEADLESS_CODEX_SANDBOX"] ?? "workspace-write")]),
+            sandbox: .string(environment["TIDEY_HEADLESS_CODEX_SANDBOX"] ?? "workspace-write"),
             launchConfiguration: CodexAppServerLaunchConfiguration(
                 executablePath: executablePath,
                 arguments: ["app-server"],

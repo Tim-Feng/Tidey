@@ -212,7 +212,7 @@ final class HeadlessCodexRuntimeManagerTests: XCTestCase {
             cwd: "/tmp/headless-cwd",
             model: "gpt-5",
             approvalPolicy: "on-request",
-            sandbox: .object(["mode": .string("workspace-write")]),
+            sandbox: .string("workspace-write"),
             launchConfiguration: CodexAppServerLaunchConfiguration(
                 executablePath: "/tmp/disposable-codex",
                 arguments: ["app-server"],
