@@ -109,7 +109,9 @@ final class BridgeInputActionHandlerTests: XCTestCase {
                                                         ]))
 
         XCTAssertEqual(response?.ok, true)
-        XCTAssertEqual(sender.sentRequests.map { $0.params?["input"]?.stringValue }, [message, "\r"])
+        XCTAssertEqual(sender.sentRequests.map(\.action), ["send_input", "send_key"])
+        XCTAssertEqual(sender.sentRequests[0].params?["input"]?.stringValue, message)
+        XCTAssertEqual(sender.sentRequests[1].params?["key"]?.stringValue, "enter")
         XCTAssertEqual(delayRecorder.recordedDelays, [chatSubmitEnterDelayNanoseconds])
     }
 
@@ -135,7 +137,9 @@ final class BridgeInputActionHandlerTests: XCTestCase {
                                                         ]))
 
         XCTAssertEqual(response?.ok, true)
-        XCTAssertEqual(sender.sentRequests.map { $0.params?["input"]?.stringValue }, ["hello", "\r"])
+        XCTAssertEqual(sender.sentRequests.map(\.action), ["send_input", "send_key"])
+        XCTAssertEqual(sender.sentRequests[0].params?["input"]?.stringValue, "hello")
+        XCTAssertEqual(sender.sentRequests[1].params?["key"]?.stringValue, "enter")
         XCTAssertEqual(delayRecorder.recordedDelays, [chatSubmitEnterDelayNanoseconds])
     }
 
@@ -290,7 +294,9 @@ final class BridgeInputActionHandlerTests: XCTestCase {
 
         XCTAssertEqual(response?.ok, true)
         XCTAssertEqual(router.sentInputs.map(\.input), ["hello"])
-        XCTAssertEqual(sender.sentRequests.map { $0.params?["input"]?.stringValue }, ["hello", "\r"])
+        XCTAssertEqual(sender.sentRequests.map(\.action), ["send_input", "send_key"])
+        XCTAssertEqual(sender.sentRequests[0].params?["input"]?.stringValue, "hello")
+        XCTAssertEqual(sender.sentRequests[1].params?["key"]?.stringValue, "enter")
         XCTAssertEqual(delayRecorder.recordedDelays, [chatSubmitEnterDelayNanoseconds])
     }
 

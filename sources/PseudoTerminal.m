@@ -2130,6 +2130,28 @@ ITERM_WEAKLY_REFERENCEABLE
     return YES;
 }
 
+- (BOOL)tideySendKey:(NSString *)key toPanelWithIdentifier:(NSString *)panelIdentifier {
+    PTYSession *session = [self tideySelectedSessionForPanelIdentifier:panelIdentifier];
+    if (!session || session.isBrowserSession) {
+        return NO;
+    }
+    if ([key isEqualToString:@"enter"]) {
+        NSEvent *event = [NSEvent keyEventWithType:NSEventTypeKeyDown
+                                          location:NSZeroPoint
+                                     modifierFlags:0
+                                         timestamp:[[NSDate date] timeIntervalSinceReferenceDate]
+                                      windowNumber:session.view.window.windowNumber
+                                           context:nil
+                                        characters:@"\r"
+                       charactersIgnoringModifiers:@"\r"
+                                         isARepeat:NO
+                                           keyCode:36];
+        [session keyDown:event];
+        return YES;
+    }
+    return NO;
+}
+
 - (BOOL)tideySendInput:(NSString *)input toWorkspaceWithIdentifier:(NSString *)workspaceIdentifier {
     if (input.length == 0) {
         return NO;

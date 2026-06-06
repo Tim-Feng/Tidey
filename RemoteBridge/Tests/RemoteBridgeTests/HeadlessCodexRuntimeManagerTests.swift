@@ -152,7 +152,13 @@ final class HeadlessCodexRuntimeManagerTests: XCTestCase {
                             ]),
                            ],
                            error: nil),
-            BridgeResponse(id: "create-panel.launch",
+            BridgeResponse(id: "create-panel.launch.input",
+                           ok: true,
+                           result: [
+                            "sent": .bool(true),
+                           ],
+                           error: nil),
+            BridgeResponse(id: "create-panel.launch.enter",
                            ok: true,
                            result: [
                             "sent": .bool(true),
@@ -175,7 +181,7 @@ final class HeadlessCodexRuntimeManagerTests: XCTestCase {
         XCTAssertEqual(response?.result?["headless_remote_tui_input_sent"]?.boolValue, true)
         XCTAssertEqual(response?.result?["workspace"]?.objectValue?["workspace_id"]?.stringValue, "mac-workspace")
         XCTAssertEqual(response?.result?["panel"]?.objectValue?["panel_id"]?.stringValue, "mac-panel")
-        XCTAssertEqual(sender.requests.count, 3)
+        XCTAssertEqual(sender.requests.count, 4)
         XCTAssertEqual(sender.requests[0].action, "create_workspace")
         XCTAssertEqual(sender.requests[0].params?["title"]?.stringValue, "Headless Codex")
         XCTAssertEqual(sender.requests[1].action, "create_panel")
@@ -188,8 +194,12 @@ final class HeadlessCodexRuntimeManagerTests: XCTestCase {
         XCTAssertEqual(sender.requests[2].params?["panel_id"]?.stringValue, "mac-panel")
         XCTAssertEqual(
             sender.requests[2].params?["input"]?.stringValue,
-            "cd '/tmp/headless cwd' && CODEX_HOME='/tmp/headless home' '/tmp/codex bin' --remote 'unix:///tmp/tidey codex/app.sock'\r"
+            "cd '/tmp/headless cwd' && CODEX_HOME='/tmp/headless home' '/tmp/codex bin' --remote 'unix:///tmp/tidey codex/app.sock'"
         )
+        XCTAssertEqual(sender.requests[3].action, "send_key")
+        XCTAssertEqual(sender.requests[3].params?["workspace_id"]?.stringValue, "mac-workspace")
+        XCTAssertEqual(sender.requests[3].params?["panel_id"]?.stringValue, "mac-panel")
+        XCTAssertEqual(sender.requests[3].params?["key"]?.stringValue, "enter")
     }
 
     func testCreatePanelForHeadlessWorkspaceRequiresRemoteTUIConfiguration() throws {

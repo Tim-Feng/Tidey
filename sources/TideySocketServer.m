@@ -573,6 +573,41 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
         return;
     }
 
+    if ([action isEqualToString:@"send_key"]) {
+        NSString *panelID = TideySocketStringParam(source, @"panel_id");
+        NSString *key = TideySocketStringParam(source, @"key");
+        if (panelID.length == 0 || key.length == 0) {
+            [self sendErrorResponseForRequestID:requestID
+                                           code:@"invalid_params"
+                                        message:@"send_key requires panel_id and key."
+                                   onConnection:connection];
+            return;
+        }
+        PseudoTerminal *term = [self tideyTerminalForPanelIdentifier:panelID];
+        NSDictionary *panelSummary = [term tideySocketPanelSummaryForPanelIdentifier:panelID];
+        if (!panelSummary) {
+            [self sendErrorResponseForRequestID:requestID
+                                           code:@"panel_not_found"
+                                        message:@"No panel matched panel_id."
+                                   onConnection:connection];
+            return;
+        }
+        if (![term tideySendKey:key toPanelWithIdentifier:panelID]) {
+            [self sendErrorResponseForRequestID:requestID
+                                           code:@"unsupported_key"
+                                        message:@"The requested key is not supported for this panel."
+                                   onConnection:connection];
+            return;
+        }
+        [self sendSuccessResponseForRequestID:requestID
+                                       result:@{ @"sent": @YES,
+                                                 @"panel_id": panelID,
+                                                 @"workspace_id": panelSummary[@"workspace_id"] ?: @"",
+                                                 @"key": key }
+                                  onConnection:connection];
+        return;
+    }
+
     if ([action isEqualToString:@"get_recent_output"]) {
         NSString *panelID = TideySocketStringParam(source, @"panel_id");
         NSString *workspaceID = TideySocketStringParam(source, @"workspace_id");

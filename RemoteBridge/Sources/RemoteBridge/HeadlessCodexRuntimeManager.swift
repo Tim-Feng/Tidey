@@ -192,9 +192,9 @@ final class HeadlessCodexRuntimeManager: HeadlessCodexRuntimeControlling {
             throw BridgeInternalError.invalidResponse
         }
 
-        let launchInput = remoteTUILaunchConfiguration.shellCommand() + "\r"
+        let launchInput = remoteTUILaunchConfiguration.shellCommand()
         let sendInputResponse = try socketSender.send(BridgeRequest(
-            id: "\(request.id).launch",
+            id: "\(request.id).launch.input",
             action: "send_input",
             params: [
                 "workspace_id": .string(macWorkspaceID),
@@ -203,6 +203,17 @@ final class HeadlessCodexRuntimeManager: HeadlessCodexRuntimeControlling {
             ]))
         guard sendInputResponse.ok else {
             return sendInputResponse
+        }
+        let sendEnterResponse = try socketSender.send(BridgeRequest(
+            id: "\(request.id).launch.enter",
+            action: "send_key",
+            params: [
+                "workspace_id": .string(macWorkspaceID),
+                "panel_id": .string(macPanelID),
+                "key": .string("enter"),
+            ]))
+        guard sendEnterResponse.ok else {
+            return sendEnterResponse
         }
 
         var result = createPanelResponse.result ?? [:]

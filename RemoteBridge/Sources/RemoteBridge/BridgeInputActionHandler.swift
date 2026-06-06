@@ -169,12 +169,22 @@ struct BridgeInputActionHandler {
                 if routeDecision == .macSocketFallback {
                     forceMacSocketForRemainingSteps = true
                 }
-                let stepRequest = BridgeRequest(id: UUID().uuidString,
+                let stepRequest: BridgeRequest
+                if Self.isEnterOnly(step.input) {
+                    stepRequest = BridgeRequest(id: UUID().uuidString,
+                                                action: "send_key",
+                                                params: [
+                                                    "panel_id": .string(panelID),
+                                                    "key": .string("enter"),
+                                                ])
+                } else {
+                    stepRequest = BridgeRequest(id: UUID().uuidString,
                                                 action: "send_input",
                                                 params: [
                                                     "panel_id": .string(panelID),
                                                     "input": .string(step.input),
                                                 ])
+                }
                 let response = try socketSender.send(stepRequest)
                 guard response.ok else {
                     return BridgeResponse(id: request.id,
