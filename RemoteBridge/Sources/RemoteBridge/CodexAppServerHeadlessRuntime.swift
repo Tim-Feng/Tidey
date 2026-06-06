@@ -407,6 +407,21 @@ final class CodexAppServerHeadlessRuntime {
         if let processID = Self.processID(from: params) {
             metadata["process_id"] = processID
         }
+        if let command = Self.command(from: params) {
+            metadata["command"] = command
+        }
+        if let cwd = Self.cwd(from: params) {
+            metadata["cwd"] = cwd
+        }
+        if let status = Self.status(from: params) {
+            metadata["status"] = status
+        }
+        if let exitCode = Self.exitCode(from: params) {
+            metadata["exit_code"] = String(exitCode)
+        }
+        if let durationMs = Self.durationMs(from: params) {
+            metadata["duration_ms"] = String(durationMs)
+        }
         return metadata
     }
 
@@ -428,6 +443,31 @@ final class CodexAppServerHeadlessRuntime {
     private static func processID(from params: [String: JSONValue]) -> String? {
         params["processId"]?.stringValue
             ?? params["item"]?.objectValue?["processId"]?.stringValue
+    }
+
+    private static func command(from params: [String: JSONValue]) -> String? {
+        params["command"]?.stringValue
+            ?? params["item"]?.objectValue?["command"]?.stringValue
+    }
+
+    private static func cwd(from params: [String: JSONValue]) -> String? {
+        params["cwd"]?.stringValue
+            ?? params["item"]?.objectValue?["cwd"]?.stringValue
+    }
+
+    private static func status(from params: [String: JSONValue]) -> String? {
+        params["status"]?.stringValue
+            ?? params["item"]?.objectValue?["status"]?.stringValue
+    }
+
+    private static func exitCode(from params: [String: JSONValue]) -> Int? {
+        params["exitCode"]?.intValue
+            ?? params["item"]?.objectValue?["exitCode"]?.intValue
+    }
+
+    private static func durationMs(from params: [String: JSONValue]) -> Int? {
+        params["durationMs"]?.intValue
+            ?? params["item"]?.objectValue?["durationMs"]?.intValue
     }
 
     private static func nonEmptyString(_ value: JSONValue?) -> String? {

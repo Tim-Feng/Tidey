@@ -67,6 +67,10 @@ final class CodexAppServerEventCatalogTests: XCTestCase {
         XCTAssertEqual(emitted[2].output, "/private/tmp/tidey-headless-codex-work-auth-test\n")
         XCTAssertEqual(emitted[2].payload?.objectValue?["kind"]?.stringValue, "command_execution_completed")
         XCTAssertEqual(emitted[2].metadata?["process_id"], "proc-1")
+        XCTAssertEqual(emitted[2].metadata?["status"], "completed")
+        XCTAssertEqual(emitted[2].metadata?["exit_code"], "0")
+        XCTAssertEqual(emitted[2].metadata?["duration_ms"], "42")
+        XCTAssertEqual(emitted[2].metadata?["cwd"], "/private/tmp/tidey-headless-codex-work-auth-test")
     }
 
     func testFileChangeFixtureMapsToPatchEventContract() {
