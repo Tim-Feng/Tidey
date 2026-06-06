@@ -1,10 +1,41 @@
 import Foundation
 
+enum CodexAppServerTransportMode: Equatable, Sendable {
+    case stdio
+    case unixSocket(path: String)
+
+    var listenArgument: String? {
+        switch self {
+        case .stdio:
+            return nil
+        case .unixSocket(let path):
+            return "unix://\(path)"
+        }
+    }
+
+    var remoteAddress: String? {
+        listenArgument
+    }
+}
+
 struct CodexAppServerLaunchConfiguration: Equatable, Sendable {
     let executablePath: String
     let arguments: [String]
     let workingDirectory: String
     let environment: [String: String]
+    let transport: CodexAppServerTransportMode
+
+    init(executablePath: String,
+         arguments: [String],
+         workingDirectory: String,
+         environment: [String: String],
+         transport: CodexAppServerTransportMode = .stdio) {
+        self.executablePath = executablePath
+        self.arguments = arguments
+        self.workingDirectory = workingDirectory
+        self.environment = environment
+        self.transport = transport
+    }
 
     static func direct(codexExecutablePath: String = "codex",
                        workingDirectory: String,
@@ -12,7 +43,60 @@ struct CodexAppServerLaunchConfiguration: Equatable, Sendable {
         CodexAppServerLaunchConfiguration(executablePath: codexExecutablePath,
                                           arguments: ["app-server"],
                                           workingDirectory: workingDirectory,
+                                          environment: environment,
+                                          transport: .stdio)
+    }
+
+    static func unixSocket(codexExecutablePath: String = "codex",
+                           socketPath: String,
+                           workingDirectory: String,
+                           environment: [String: String] = [:]) -> CodexAppServerLaunchConfiguration {
+        let transport = CodexAppServerTransportMode.unixSocket(path: socketPath)
+        return CodexAppServerLaunchConfiguration(executablePath: codexExecutablePath,
+                                                 arguments: ["app-server", "--listen", transport.listenArgument ?? "stdio://"],
+                                                 workingDirectory: workingDirectory,
+                                                 environment: environment,
+                                                 transport: transport)
+    }
+}
+
+struct CodexRemoteTUILaunchConfiguration: Equatable, Sendable {
+    let executablePath: String
+    let remoteAddress: String
+    let workingDirectory: String
+    let environment: [String: String]
+
+    var arguments: [String] {
+        ["--remote", remoteAddress]
+    }
+
+    static func unixSocket(codexExecutablePath: String = "codex",
+                           socketPath: String,
+                           workingDirectory: String,
+                           environment: [String: String] = [:]) -> CodexRemoteTUILaunchConfiguration {
+        CodexRemoteTUILaunchConfiguration(executablePath: codexExecutablePath,
+                                          remoteAddress: "unix://\(socketPath)",
+                                          workingDirectory: workingDirectory,
                                           environment: environment)
+    }
+
+    func shellCommand() -> String {
+        let environmentPrefix = environment
+            .sorted { $0.key < $1.key }
+            .map { key, value in "\(key)=\(Self.shellQuote(value))" }
+        let command = [Self.shellQuote(executablePath)] + arguments.map(Self.shellQuote)
+        return "cd \(Self.shellQuote(workingDirectory)) && " + (environmentPrefix + command).joined(separator: " ")
+    }
+
+    private static func shellQuote(_ value: String) -> String {
+        if value.isEmpty {
+            return "''"
+        }
+        let safeCharacters = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_@%+=:,./-")
+        if value.unicodeScalars.allSatisfy({ safeCharacters.contains($0) }) {
+            return value
+        }
+        return "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 }
 

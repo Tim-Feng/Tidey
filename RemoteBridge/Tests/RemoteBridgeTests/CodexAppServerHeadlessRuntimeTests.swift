@@ -10,7 +10,39 @@ final class CodexAppServerHeadlessRuntimeTests: XCTestCase {
         XCTAssertEqual(config.arguments, ["app-server"])
         XCTAssertEqual(config.workingDirectory, "/tmp/tidey-codex-test")
         XCTAssertEqual(config.environment["CODEX_HOME"], "/tmp/codex-home")
+        XCTAssertEqual(config.transport, .stdio)
         XCTAssertFalse(config.executablePath.contains("/Applications/Tidey.app"))
+    }
+
+    func testLaunchConfigurationCanUseUnixSocketSidecar() {
+        let config = CodexAppServerLaunchConfiguration.unixSocket(codexExecutablePath: "/tmp/codex bin",
+                                                                  socketPath: "/tmp/tidey codex/app.sock",
+                                                                  workingDirectory: "/tmp/tidey work",
+                                                                  environment: ["CODEX_HOME": "/tmp/codex home"])
+
+        XCTAssertEqual(config.executablePath, "/tmp/codex bin")
+        XCTAssertEqual(config.arguments, ["app-server", "--listen", "unix:///tmp/tidey codex/app.sock"])
+        XCTAssertEqual(config.workingDirectory, "/tmp/tidey work")
+        XCTAssertEqual(config.environment["CODEX_HOME"], "/tmp/codex home")
+        XCTAssertEqual(config.transport, .unixSocket(path: "/tmp/tidey codex/app.sock"))
+    }
+
+    func testRemoteTUILaunchConfigurationUsesOriginalCodexRemoteMode() {
+        let config = CodexRemoteTUILaunchConfiguration.unixSocket(codexExecutablePath: "/tmp/codex bin",
+                                                                  socketPath: "/tmp/tidey codex/app.sock",
+                                                                  workingDirectory: "/tmp/tidey work",
+                                                                  environment: [
+                                                                      "CODEX_HOME": "/tmp/codex home",
+                                                                      "TIDEY_PANEL_ID": "panel-1",
+                                                                  ])
+
+        XCTAssertEqual(config.executablePath, "/tmp/codex bin")
+        XCTAssertEqual(config.remoteAddress, "unix:///tmp/tidey codex/app.sock")
+        XCTAssertEqual(config.arguments, ["--remote", "unix:///tmp/tidey codex/app.sock"])
+        XCTAssertEqual(
+            config.shellCommand(),
+            "cd '/tmp/tidey work' && CODEX_HOME='/tmp/codex home' TIDEY_PANEL_ID=panel-1 '/tmp/codex bin' --remote 'unix:///tmp/tidey codex/app.sock'"
+        )
     }
 
     func testStartThreadAndTurnSendCodexAppServerRequests() throws {
