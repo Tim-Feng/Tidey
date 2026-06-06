@@ -22,9 +22,16 @@ let package = Package(
                 .product(name: "NIOWebSocket", package: "swift-nio"),
             ]
         ),
+        .target(
+            name: "HeadlessCodexTerminalSupport",
+            dependencies: []
+        ),
         .testTarget(
             name: "RemoteBridgeTests",
-            dependencies: ["RemoteBridge"]
+            dependencies: [
+                "RemoteBridge",
+                "HeadlessCodexTerminalSupport",
+            ]
         ),
     ]
 )
