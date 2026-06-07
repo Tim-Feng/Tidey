@@ -141,8 +141,9 @@ run_profile_config_test() {
         profile_name="$(stable_codex_profile_name "tidey-codex")"
         sqlite_home="$(stable_codex_sqlite_home "$real_home" "tidey-codex")"
         dispatch_script="/tmp/Tidey Dev.app/Contents/Resources/bin/codex-hook-dispatch"
+        stale_dispatch_script="/Users/timfeng/GitHub/Tidey/Resources/bin/codex-hook-dispatch"
         mkdir -p "$real_home"
-        printf "%s\n" "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"/tmp/user-hook\"}]}]}}" > "$real_home/hooks.json"
+        printf "%s\n" "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"/tmp/user-hook\"},{\"type\":\"command\",\"command\":\"'\''$stale_dispatch_script'\'' stop\",\"timeout\":10}]}],\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"'\''$stale_dispatch_script'\'' user-prompt-submit\",\"timeout\":10}]}]}}" > "$real_home/hooks.json"
 
         merge_tidey_hooks_into_user_hooks "$real_home" "$dispatch_script"
         write_tidey_profile_config "$real_home" "$profile_name" "$sqlite_home" "$dispatch_script"
@@ -185,8 +186,11 @@ for command in expected_commands:
     if command not in json.dumps(hooks_root):
         raise SystemExit(f"missing Tidey hook command in hooks.json: {command}")
 
-if "/tmp/user-hook" not in json.dumps(hooks_root):
+hooks_json = json.dumps(hooks_root)
+if "/tmp/user-hook" not in hooks_json:
     raise SystemExit("existing user hook was not preserved")
+if "/Users/timfeng/GitHub/Tidey/Resources/bin/codex-hook-dispatch" in hooks_json:
+    raise SystemExit("stale Tidey hook command was not pruned")
 
 for state_fragment in [":session_start:", ":user_prompt_submit:", ":stop:"]:
     if state_fragment not in text:

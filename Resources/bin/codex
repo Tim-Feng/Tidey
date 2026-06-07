@@ -192,13 +192,54 @@ entries = [
 changed = False
 
 for event_name, tidey_event in entries:
+    command = f"{shell_quote(dispatch_script)} {tidey_event}"
+
     groups = hooks.setdefault(event_name, [])
     if not isinstance(groups, list):
         groups = []
         hooks[event_name] = groups
         changed = True
 
-    command = f"{shell_quote(dispatch_script)} {tidey_event}"
+    groups_changed = False
+    pruned_groups = []
+    for group in groups:
+        if not isinstance(group, dict):
+            pruned_groups.append(group)
+            continue
+        handlers = group.get("hooks")
+        if not isinstance(handlers, list):
+            pruned_groups.append(group)
+            continue
+        pruned_handlers = []
+        for handler in handlers:
+            if not isinstance(handler, dict):
+                pruned_handlers.append(handler)
+                continue
+            handler_command = handler.get("command")
+            if (
+                isinstance(handler_command, str)
+                and "codex-hook-dispatch" in handler_command
+                and handler_command.endswith(f" {tidey_event}")
+                and handler_command != command
+            ):
+                changed = True
+                groups_changed = True
+                continue
+            pruned_handlers.append(handler)
+        if len(pruned_handlers) != len(handlers):
+            group = dict(group)
+            group["hooks"] = pruned_handlers
+            groups_changed = True
+        if pruned_handlers:
+            pruned_groups.append(group)
+        else:
+            changed = True
+            groups_changed = True
+    if groups_changed:
+        hooks[event_name] = pruned_groups
+        groups = pruned_groups
+        changed = True
+
     exists = False
     for group in groups:
         if not isinstance(group, dict):
