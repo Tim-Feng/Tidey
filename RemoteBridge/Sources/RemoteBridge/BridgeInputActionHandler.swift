@@ -26,14 +26,12 @@ struct BridgeInputActionHandler {
     private let sessionResolver: ActiveAgentSessionResolving
     private let ordinaryTmuxInputRouter: OrdinaryTmuxInputRouting?
     private let chatSubmitEchoRegistry: ChatSubmitEchoRegistry?
-    private let headlessCodexRuntime: HeadlessCodexRuntimeControlling?
     private let sleep: @Sendable (UInt64) throws -> Void
 
     init(socketSender: TideyRequestSending,
          sessionResolver: ActiveAgentSessionResolving,
          ordinaryTmuxInputRouter: OrdinaryTmuxInputRouting? = nil,
          chatSubmitEchoRegistry: ChatSubmitEchoRegistry? = nil,
-         headlessCodexRuntime: HeadlessCodexRuntimeControlling? = nil,
          sleep: @escaping @Sendable (UInt64) throws -> Void = { delayNanoseconds in
              guard delayNanoseconds > 0 else {
                  return
@@ -44,7 +42,6 @@ struct BridgeInputActionHandler {
         self.sessionResolver = sessionResolver
         self.ordinaryTmuxInputRouter = ordinaryTmuxInputRouter
         self.chatSubmitEchoRegistry = chatSubmitEchoRegistry
-        self.headlessCodexRuntime = headlessCodexRuntime
         self.sleep = sleep
     }
 
@@ -105,10 +102,8 @@ struct BridgeInputActionHandler {
         let requestedSessionID = params["session_id"]?.stringValue
         let requestedVendor = params["vendor"]?.stringValue
         let clientRequestID = params["client_request_id"]?.stringValue
-        if let response = try headlessCodexRuntime?.handleChatSubmit(request) {
-            return response
-        }
         let activeSession = sessionResolver.activeSessionForPanel(workspaceID: workspaceID, panelID: panelID)
+        BridgeLogger.input.info("resolve action=chat_submit request_id=\(request.id, privacy: .public) workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) requested_session_id=\(requestedSessionID ?? "-", privacy: .public) requested_vendor=\(requestedVendor ?? "-", privacy: .public) active_session_id=\(activeSession?.sessionID ?? "-", privacy: .public) active_vendor=\(activeSession?.vendor ?? "-", privacy: .public)")
 
         if let requestedSessionID,
            let activeSession,

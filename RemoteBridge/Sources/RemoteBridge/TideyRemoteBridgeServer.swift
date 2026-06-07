@@ -19,10 +19,8 @@ final class TideyRemoteBridgeServer {
     private let observability: BridgeObservabilityCenter
     private let cloudflaredManager: BridgeCloudflaredManager
     private let uploadGarbageCollector: BridgeUploadGarbageCollector
-    private let headlessCodexRuntime: HeadlessCodexRuntimeControlling?
     private let startRegistryMonitor: Bool
     private let startCloudflaredSupervisor: Bool
-    private let headlessCodexStandalone: Bool
     private let ordinaryTmuxPanelRegistry = OrdinaryTmuxPanelRegistry()
     private let group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
 
@@ -38,10 +36,8 @@ final class TideyRemoteBridgeServer {
          observability: BridgeObservabilityCenter,
          cloudflaredManager: BridgeCloudflaredManager = BridgeCloudflaredManager(),
          uploadGarbageCollector: BridgeUploadGarbageCollector = BridgeUploadGarbageCollector(uploadDirectory: BridgePaths().uploadsDirectory),
-         headlessCodexRuntime: HeadlessCodexRuntimeControlling? = nil,
          startRegistryMonitor: Bool = true,
-         startCloudflaredSupervisor: Bool = true,
-         headlessCodexStandalone: Bool = false) {
+         startCloudflaredSupervisor: Bool = true) {
         self.host = host
         self.port = port
         self.token = token
@@ -54,10 +50,8 @@ final class TideyRemoteBridgeServer {
         self.observability = observability
         self.cloudflaredManager = cloudflaredManager
         self.uploadGarbageCollector = uploadGarbageCollector
-        self.headlessCodexRuntime = headlessCodexRuntime
         self.startRegistryMonitor = startRegistryMonitor
         self.startCloudflaredSupervisor = startCloudflaredSupervisor
-        self.headlessCodexStandalone = headlessCodexStandalone
     }
 
     func run() throws {
@@ -81,7 +75,7 @@ final class TideyRemoteBridgeServer {
                 }
                 return channel.eventLoop.makeSucceededFuture([:])
             },
-            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub, registryMonitor, observability, ordinaryTmuxPanelRegistry, port, cloudflaredManager, headlessCodexRuntime, headlessCodexStandalone] channel, _ in
+            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub, registryMonitor, observability, ordinaryTmuxPanelRegistry, port, cloudflaredManager] channel, _ in
                 channel.pipeline.addHandler(WebSocketFrameHandler(socketClient: socketClient,
                                                                   eventHub: eventHub,
                                                                   workspaceEventHub: workspaceEventHub,
@@ -89,9 +83,7 @@ final class TideyRemoteBridgeServer {
                                                                   observability: observability,
                                                                   bridgePort: port,
                                                                   cloudflaredManager: cloudflaredManager,
-                                                                  ordinaryTmuxPanelRegistry: ordinaryTmuxPanelRegistry,
-                                                                  headlessCodexRuntime: headlessCodexRuntime,
-                                                                  headlessCodexStandalone: headlessCodexStandalone))
+                                                                  ordinaryTmuxPanelRegistry: ordinaryTmuxPanelRegistry))
             }
         )
 
@@ -587,8 +579,6 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
     private let interactivePromptActionHandler: InteractivePromptActionHandler
     private let imageUploadHandler: BridgeImageUploadHandler
     private let ordinaryTmuxPanelProjector: OrdinaryTmuxPanelProjector
-    private let headlessCodexRuntime: HeadlessCodexRuntimeControlling?
-    private let headlessCodexStandalone: Bool
     private var agentSubscriptionID: UUID?
     private var workspaceSubscriptionID: UUID?
 
@@ -599,9 +589,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
          observability: BridgeObservabilityCenter,
          bridgePort: Int,
          cloudflaredManager: BridgeCloudflaredManager,
-         ordinaryTmuxPanelRegistry: OrdinaryTmuxPanelRegistry,
-         headlessCodexRuntime: HeadlessCodexRuntimeControlling? = nil,
-         headlessCodexStandalone: Bool = false) {
+         ordinaryTmuxPanelRegistry: OrdinaryTmuxPanelRegistry) {
         self.socketClient = socketClient
         self.eventHub = eventHub
         self.workspaceEventHub = workspaceEventHub
@@ -610,23 +598,19 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
         self.bridgePort = bridgePort
         self.cloudflaredManager = cloudflaredManager
         self.ordinaryTmuxPanelRegistry = ordinaryTmuxPanelRegistry
-        self.headlessCodexRuntime = headlessCodexRuntime
-        self.headlessCodexStandalone = headlessCodexStandalone
         let routeResolver = OrdinaryTmuxRouteResolver(registry: ordinaryTmuxPanelRegistry)
         self.ordinaryTmuxRouteResolver = routeResolver
         self.inputActionHandler = BridgeInputActionHandler(socketSender: socketClient,
                                                            sessionResolver: registryMonitor,
                                                            ordinaryTmuxInputRouter: OrdinaryTmuxInputRouter(routeResolver: routeResolver),
-                                                           chatSubmitEchoRegistry: registryMonitor.chatSubmitEchoRegistry,
-                                                           headlessCodexRuntime: headlessCodexRuntime)
+                                                           chatSubmitEchoRegistry: registryMonitor.chatSubmitEchoRegistry)
         self.fileActionHandler = BridgeFileActionHandler(rootResolver: TideyPanelFileRootResolver(socketSender: socketClient,
                                                                                                   ordinaryTmuxRouteResolver: routeResolver))
         self.ordinaryTmuxRecentOutputHandler = OrdinaryTmuxRecentOutputHandler(routeResolver: routeResolver)
         self.interactivePromptActionHandler = InteractivePromptActionHandler(routeResolver: routeResolver,
                                                                             sessionResolver: registryMonitor,
                                                                             eventHub: eventHub,
-                                                                            inputActionHandler: inputActionHandler,
-                                                                            headlessCodexRuntime: headlessCodexRuntime)
+                                                                            inputActionHandler: inputActionHandler)
         self.imageUploadHandler = BridgeImageUploadHandler(destinationResolver: ApplicationSupportImageUploadDestinationResolver(),
                                                            filenameGenerator: TimestampedImageUploadFilenameGenerator())
         self.ordinaryTmuxPanelProjector = OrdinaryTmuxPanelProjector(registry: ordinaryTmuxPanelRegistry)
@@ -657,9 +641,13 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                 var agentReplayEnvelopes = [AgentEventEnvelope]()
                 var workspaceReplayEnvelopes = [WorkspaceEventEnvelope]()
                 var responseMessageType = "response.invalid_request"
+                var requestID: String?
+                var requestAction: String?
                 do {
                     let decodeStartedAt = CFAbsoluteTimeGetCurrent()
                     let request = try decoder.decode(BridgeRequest.self, from: Data(text.utf8))
+                    requestID = request.id
+                    requestAction = request.action
                     self.observability.recordPayload(direction: .inbound,
                                                      messageType: "request.\(request.action)",
                                                      byteCount: inboundByteCount,
@@ -680,7 +668,10 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                                                      messageType: "request.invalid",
                                                      byteCount: inboundByteCount,
                                                      durationMs: 0)
-                    response = BridgeResponse(id: nil, ok: false, result: nil, error: error.payload)
+                    if let requestID, let requestAction {
+                        BridgeLogger.server.error("request failed action=\(requestAction, privacy: .public) request_id=\(requestID, privacy: .public) code=\(error.payload.code, privacy: .public) message=\(error.payload.message, privacy: .public)")
+                    }
+                    response = BridgeResponse(id: requestID, ok: false, result: nil, error: error.payload)
                 } catch let error as DecodingError {
                     self.observability.recordPayload(direction: .inbound,
                                                      messageType: "request.invalid_json",
@@ -740,32 +731,6 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
             }
             if let response = try interactivePromptActionHandler.handle(request) {
                 return LocalRequestResult(response: response,
-                                          agentReplayEnvelopes: [],
-                                          workspaceReplayEnvelopes: [])
-            }
-            if request.action == "create_panel",
-               let response = try headlessCodexRuntime?.handleCreatePanel(request, socketSender: socketClient) {
-                return LocalRequestResult(response: response,
-                                          agentReplayEnvelopes: [],
-                                          workspaceReplayEnvelopes: [])
-            }
-            if headlessCodexStandalone,
-               request.action == "list_workspaces",
-               let result = headlessCodexRuntime?.mergeWorkspaceListResult(["workspaces": .array([])]) {
-                return LocalRequestResult(response: BridgeResponse(id: request.id,
-                                                                   ok: true,
-                                                                   result: result,
-                                                                   error: nil),
-                                          agentReplayEnvelopes: [],
-                                          workspaceReplayEnvelopes: [])
-            }
-            if request.action == "list_panels",
-               let workspaceID = request.params?["workspace_id"]?.stringValue,
-               let result = headlessCodexRuntime?.panelListResult(workspaceID: workspaceID) {
-                return LocalRequestResult(response: BridgeResponse(id: request.id,
-                                                                   ok: true,
-                                                                   result: result,
-                                                                   error: nil),
                                           agentReplayEnvelopes: [],
                                           workspaceReplayEnvelopes: [])
             }
@@ -1145,7 +1110,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
             return BridgeResponse(id: response.id,
                                   ok: response.ok,
                                   v: response.v,
-                                  result: headlessCodexRuntime?.mergeWorkspaceListResult(augmented) ?? augmented,
+                                  result: augmented,
                                   error: response.error)
         default:
             return response

@@ -136,38 +136,6 @@ final class InteractivePromptActionHandlerTests: XCTestCase {
         XCTAssertEqual(response.result?["resolved_event"]?.objectValue?["metadata"]?.objectValue?["reason"]?.stringValue, "submit")
     }
 
-    func testSubmitRoutesHeadlessCodexApprovalWithoutTmuxPromptValidation() throws {
-        let runtime = StubHeadlessCodexRuntime(promptResponse: BridgeResponse(id: "request-1",
-                                                                              ok: true,
-                                                                              result: [
-                                                                                "status": .string("resolved"),
-                                                                                "headless": .bool(true),
-                                                                              ],
-                                                                              error: nil))
-        let inputHandler = BridgeInputActionHandler(socketSender: StubPromptRequestSender(),
-                                                    sessionResolver: StubPromptSessionResolver(session: nil),
-                                                    headlessCodexRuntime: runtime)
-        let handler = InteractivePromptActionHandler(routeResolver: StubPromptRouteResolver(route: nil),
-                                                     adapter: StubPromptAdapter(outputs: []),
-                                                     sessionResolver: StubPromptSessionResolver(session: nil),
-                                                     eventHub: AgentEventHub(),
-                                                     inputActionHandler: inputHandler,
-                                                     headlessCodexRuntime: runtime)
-
-        let response = try XCTUnwrap(handler.handle(BridgeRequest(id: "request-1",
-                                                                  action: "submit_interactive_prompt",
-                                                                  params: [
-                                                                    "workspace_id": .string("headless-workspace"),
-                                                                    "panel_id": .string("headless-panel"),
-                                                                    "prompt_id": .string("approval-1"),
-                                                                    "target_index": .number(1),
-                                                                  ])))
-
-        XCTAssertEqual(response.ok, true)
-        XCTAssertEqual(response.result?["headless"]?.boolValue, true)
-        XCTAssertEqual(runtime.submitPromptRequestIDs, ["request-1"])
-    }
-
     func testSubmitRejectsWhenPromptNoLongerActive() {
         let route = ordinaryRoute()
         let router = StubPromptInputRouter(routedPanelIDs: [route.panelID])
@@ -263,36 +231,6 @@ final class InteractivePromptActionHandlerTests: XCTestCase {
 
            ❯ 1. Yes, run it
         """
-    }
-}
-
-private final class StubHeadlessCodexRuntime: HeadlessCodexRuntimeControlling {
-    private let promptResponse: BridgeResponse?
-    private(set) var submitPromptRequestIDs = [String]()
-
-    init(promptResponse: BridgeResponse?) {
-        self.promptResponse = promptResponse
-    }
-
-    func mergeWorkspaceListResult(_ result: [String: JSONValue]) -> [String: JSONValue] {
-        result
-    }
-
-    func panelListResult(workspaceID: String) -> [String: JSONValue]? {
-        nil
-    }
-
-    func handleCreatePanel(_ request: BridgeRequest, socketSender: TideyRequestSending) throws -> BridgeResponse? {
-        nil
-    }
-
-    func handleChatSubmit(_ request: BridgeRequest) throws -> BridgeResponse? {
-        nil
-    }
-
-    func handleSubmitInteractivePrompt(_ request: BridgeRequest) throws -> BridgeResponse? {
-        submitPromptRequestIDs.append(request.id)
-        return promptResponse
     }
 }
 

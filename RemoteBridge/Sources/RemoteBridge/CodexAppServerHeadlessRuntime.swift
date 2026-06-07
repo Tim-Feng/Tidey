@@ -60,60 +60,6 @@ struct CodexAppServerLaunchConfiguration: Equatable, Sendable {
     }
 }
 
-struct CodexRemoteTUILaunchConfiguration: Equatable, Sendable {
-    let executablePath: String
-    let remoteAddress: String
-    let workingDirectory: String
-    let environment: [String: String]
-
-    var arguments: [String] {
-        ["--remote", remoteAddress]
-    }
-
-    static func unixSocket(codexExecutablePath: String = "codex",
-                           socketPath: String,
-                           workingDirectory: String,
-                           environment: [String: String] = [:]) -> CodexRemoteTUILaunchConfiguration {
-        CodexRemoteTUILaunchConfiguration(executablePath: codexExecutablePath,
-                                          remoteAddress: "unix://\(socketPath)",
-                                          workingDirectory: workingDirectory,
-                                          environment: environment)
-    }
-
-    func shellCommand() -> String {
-        let environmentPrefix = environment
-            .sorted { $0.key < $1.key }
-            .map { key, value in "\(key)=\(Self.shellQuote(value))" }
-        let command = [Self.shellQuote(executablePath)] + arguments.map(Self.shellQuote)
-        return "cd \(Self.shellQuote(workingDirectory)) && " + (environmentPrefix + command).joined(separator: " ")
-    }
-
-    func command() -> String {
-        ([executablePath] + arguments).map(Self.shellQuote).joined(separator: " ")
-    }
-
-    func jsonValue() -> [String: JSONValue] {
-        [
-            "executable_path": .string(executablePath),
-            "arguments": .array(arguments.map { .string($0) }),
-            "working_directory": .string(workingDirectory),
-            "environment": .object(environment.mapValues { .string($0) }),
-            "remote_address": .string(remoteAddress),
-        ]
-    }
-
-    private static func shellQuote(_ value: String) -> String {
-        if value.isEmpty {
-            return "''"
-        }
-        let safeCharacters = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_@%+=:,./-")
-        if value.unicodeScalars.allSatisfy({ safeCharacters.contains($0) }) {
-            return value
-        }
-        return "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
-    }
-}
-
 struct CodexAppServerRuntimeContext: Equatable, Sendable {
     let workspaceID: String
     let panelID: String

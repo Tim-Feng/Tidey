@@ -27,30 +27,6 @@ final class CodexAppServerHeadlessRuntimeTests: XCTestCase {
         XCTAssertEqual(config.transport, .unixSocket(path: "/tmp/tidey codex/app.sock"))
     }
 
-    func testRemoteTUILaunchConfigurationUsesOriginalCodexRemoteMode() {
-        let config = CodexRemoteTUILaunchConfiguration.unixSocket(codexExecutablePath: "/tmp/codex bin",
-                                                                  socketPath: "/tmp/tidey codex/app.sock",
-                                                                  workingDirectory: "/tmp/tidey work",
-                                                                  environment: [
-                                                                      "CODEX_HOME": "/tmp/codex home",
-                                                                      "TIDEY_PANEL_ID": "panel-1",
-                                                                  ])
-
-        XCTAssertEqual(config.executablePath, "/tmp/codex bin")
-        XCTAssertEqual(config.remoteAddress, "unix:///tmp/tidey codex/app.sock")
-        XCTAssertEqual(config.arguments, ["--remote", "unix:///tmp/tidey codex/app.sock"])
-        XCTAssertEqual(config.jsonValue()["executable_path"]?.stringValue, "/tmp/codex bin")
-        XCTAssertEqual(config.jsonValue()["arguments"]?.arrayValue?.map(\.stringValue), ["--remote", "unix:///tmp/tidey codex/app.sock"])
-        XCTAssertEqual(config.jsonValue()["working_directory"]?.stringValue, "/tmp/tidey work")
-        XCTAssertEqual(config.jsonValue()["environment"]?.objectValue?["CODEX_HOME"]?.stringValue, "/tmp/codex home")
-        XCTAssertEqual(config.jsonValue()["environment"]?.objectValue?["TIDEY_PANEL_ID"]?.stringValue, "panel-1")
-        XCTAssertEqual(config.jsonValue()["remote_address"]?.stringValue, "unix:///tmp/tidey codex/app.sock")
-        XCTAssertEqual(
-            config.shellCommand(),
-            "cd '/tmp/tidey work' && CODEX_HOME='/tmp/codex home' TIDEY_PANEL_ID=panel-1 '/tmp/codex bin' --remote 'unix:///tmp/tidey codex/app.sock'"
-        )
-    }
-
     func testStartThreadAndTurnSendCodexAppServerRequests() throws {
         let outbound = LineSink()
         let runtime = Self.runtime()

@@ -6,7 +6,6 @@ struct InteractivePromptActionHandler {
     private let sessionResolver: ActiveAgentSessionResolving
     private let eventHub: AgentEventHub
     private let inputActionHandler: BridgeInputActionHandler
-    private let headlessCodexRuntime: HeadlessCodexRuntimeControlling?
     private let detector: WorkflowConfirmPromptDetector
     private let stateStore: InteractivePromptStateStore
     private let captureLineLimit = 0
@@ -17,7 +16,6 @@ struct InteractivePromptActionHandler {
          sessionResolver: ActiveAgentSessionResolving,
          eventHub: AgentEventHub,
          inputActionHandler: BridgeInputActionHandler,
-         headlessCodexRuntime: HeadlessCodexRuntimeControlling? = nil,
          detector: WorkflowConfirmPromptDetector = WorkflowConfirmPromptDetector(),
          stateStore: InteractivePromptStateStore = InteractivePromptStateStore()) {
         self.routeResolver = routeResolver
@@ -25,7 +23,6 @@ struct InteractivePromptActionHandler {
         self.sessionResolver = sessionResolver
         self.eventHub = eventHub
         self.inputActionHandler = inputActionHandler
-        self.headlessCodexRuntime = headlessCodexRuntime
         self.detector = detector
         self.stateStore = stateStore
     }
@@ -112,9 +109,6 @@ struct InteractivePromptActionHandler {
     }
 
     private func submit(_ request: BridgeRequest) throws -> BridgeResponse {
-        if let response = try headlessCodexRuntime?.handleSubmitInteractivePrompt(request) {
-            return response
-        }
         guard let context = try promptContext(from: request, requiresPromptID: true) else {
             throw BridgeInternalError.invalidRequest("submit_interactive_prompt requires workspace_id and panel_id")
         }
