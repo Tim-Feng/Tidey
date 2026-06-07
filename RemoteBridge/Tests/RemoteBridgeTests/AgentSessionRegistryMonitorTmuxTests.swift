@@ -115,6 +115,48 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         XCTAssertEqual(snapshots["session-3"]?.panelID, "stale-panel-3")
     }
 
+    func testScanKeepsCodexAppServerRecordWhenAppServerPIDIsAlive() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let registryURL = paths.codexAgentSessionsDirectory.appendingPathComponent("codex-app-server-panel.json")
+        let recordData = Data("""
+        {
+          "version": 1,
+          "vendor": "codex",
+          "workspace_id": "workspace-app-server",
+          "session_id": "session-app-server",
+          "panel_id": "panel-app-server",
+          "pid": 999999,
+          "cwd": "/tmp",
+          "created_at": "2026-06-07T00:00:00Z",
+          "runtime": "codex_app_server",
+          "app_server_socket": "/tmp/tidey-codex-app-server/app.sock",
+          "app_server_pid": \(getpid())
+        }
+        """.utf8)
+        try recordData.write(to: registryURL)
+
+        let runtimeSyncer = CapturingRuntimeSyncer()
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: fileManager,
+                                                  hub: AgentEventHub(),
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+                                                  parentPIDLookup: { _ in nil },
+                                                  runtimeSyncer: runtimeSyncer)
+        try monitor.start()
+
+        let session = monitor.activeSessionForPanel(workspaceID: "workspace-app-server",
+                                                    panelID: "panel-app-server")
+        XCTAssertEqual(session?.sessionID, "session-app-server")
+        XCTAssertTrue(fileManager.fileExists(atPath: registryURL.path))
+        XCTAssertEqual(runtimeSyncer.latestRecords.map(\.sessionID), ["session-app-server"])
+    }
+
     func testActiveSessionForPanelFallsBackToTmuxPaneMatchWhenPanelIDsChanged() throws {
         let fileManager = FileManager.default
         let supportDirectory = fileManager.temporaryDirectory
@@ -780,5 +822,22 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         }
         """.utf8)
         try recordData.write(to: url)
+    }
+}
+
+private final class CapturingRuntimeSyncer: AgentSessionRuntimeSyncing {
+    private let lock = NSLock()
+    private var records = [AgentSessionRegistryRecord]()
+
+    var latestRecords: [AgentSessionRegistryRecord] {
+        lock.lock()
+        defer { lock.unlock() }
+        return records
+    }
+
+    func sync(records: [AgentSessionRegistryRecord]) {
+        lock.lock()
+        self.records = records
+        lock.unlock()
     }
 }

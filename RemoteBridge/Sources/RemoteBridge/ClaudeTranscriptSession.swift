@@ -1050,13 +1050,21 @@ final class AgentSessionRegistryMonitor {
                   record.vendor == vendor else {
                 continue
             }
-            if processExists(record.pid) {
+            if recordProcessExists(record) {
                 records.append(record)
             } else {
                 try? fileManager.removeItem(at: url)
             }
         }
         return records
+    }
+
+    private func recordProcessExists(_ record: AgentSessionRegistryRecord) -> Bool {
+        if Self.isCodexAppServerRuntimeRecord(record) {
+            let candidatePIDs = [record.appServerPID, record.remoteTUIPID, record.pid].compactMap { $0 }
+            return candidatePIDs.contains { processExists($0) }
+        }
+        return processExists(record.pid)
     }
 
     private func processExists(_ pid: Int32) -> Bool {
