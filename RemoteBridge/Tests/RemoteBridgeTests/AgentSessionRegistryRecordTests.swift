@@ -22,6 +22,10 @@ final class AgentSessionRegistryRecordTests: XCTestCase {
         XCTAssertEqual(record.sessionID, "session-1")
         XCTAssertNil(record.tmuxPaneID)
         XCTAssertNil(record.tmuxSocketPath)
+        XCTAssertNil(record.runtime)
+        XCTAssertNil(record.appServerSocket)
+        XCTAssertNil(record.appServerPID)
+        XCTAssertNil(record.remoteTUIPID)
     }
 
     func testDecodesRegistryRecordWithTmuxMetadata() throws {
@@ -46,5 +50,37 @@ final class AgentSessionRegistryRecordTests: XCTestCase {
         XCTAssertEqual(record.transcriptPath, "/tmp/rollout.jsonl")
         XCTAssertEqual(record.tmuxPaneID, "%42")
         XCTAssertEqual(record.tmuxSocketPath, "/tmp/tmux-501/default")
+    }
+
+    func testDecodesAndEncodesCodexAppServerRuntimeMetadata() throws {
+        let data = Data("""
+        {
+          "version": 1,
+          "vendor": "codex",
+          "workspace_id": "workspace-1",
+          "session_id": "session-1",
+          "panel_id": "panel-1",
+          "pid": 123,
+          "cwd": "/tmp",
+          "created_at": "2026-04-15T00:00:00Z",
+          "runtime": "codex_app_server",
+          "app_server_socket": "/tmp/tidey-codex/session/app.sock",
+          "app_server_pid": 456,
+          "remote_tui_pid": 789
+        }
+        """.utf8)
+
+        let record = try JSONDecoder().decode(AgentSessionRegistryRecord.self, from: data)
+        XCTAssertEqual(record.runtime, "codex_app_server")
+        XCTAssertEqual(record.appServerSocket, "/tmp/tidey-codex/session/app.sock")
+        XCTAssertEqual(record.appServerPID, 456)
+        XCTAssertEqual(record.remoteTUIPID, 789)
+
+        let encoded = try JSONEncoder().encode(record)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        XCTAssertEqual(object["runtime"] as? String, "codex_app_server")
+        XCTAssertEqual(object["app_server_socket"] as? String, "/tmp/tidey-codex/session/app.sock")
+        XCTAssertEqual(object["app_server_pid"] as? Int, 456)
+        XCTAssertEqual(object["remote_tui_pid"] as? Int, 789)
     }
 }

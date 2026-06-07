@@ -19,7 +19,10 @@ let locator = TideySocketLocator()
 let socketClient = TideySocketClient(locator: locator)
 let eventHub = AgentEventHub()
 let workspaceEventHub = WorkspaceEventHub()
-let registryMonitor = AgentSessionRegistryMonitor(hub: eventHub, socketClient: socketClient)
+let codexAppServerPanelRuntime = CodexAppServerPanelRuntimeManager(eventHub: eventHub)
+let registryMonitor = AgentSessionRegistryMonitor(hub: eventHub,
+                                                  socketClient: socketClient,
+                                                  runtimeSyncer: codexAppServerPanelRuntime)
 let workspaceEventMonitor = TideyWorkspaceEventMonitor(locator: locator, hub: workspaceEventHub)
 let observability = BridgeObservabilityCenter()
 let cloudflaredStatusStore = BridgeCloudflaredStatusStore(fileURL: bridgePaths.cloudflaredStateFileURL)
@@ -32,9 +35,6 @@ let resolverPublisher = BridgeResolverPublisher(resolverBaseURL: BridgeResolverC
 let resolverPublicationMonitor = BridgeResolverPublicationMonitor(statusReader: cloudflaredStatusStore,
                                                                   publisher: resolverPublisher)
 let uploadGarbageCollector = BridgeUploadGarbageCollector(uploadDirectory: bridgePaths.uploadsDirectory)
-let headlessCodexRuntime = HeadlessCodexRuntimeConfiguration.devFromEnvironment().map {
-    HeadlessCodexRuntimeManager(configuration: $0, eventHub: eventHub)
-}
 let runtimeConfiguration = BridgeProcessRuntimeConfiguration.from()
 let server = TideyRemoteBridgeServer(host: runtimeConfiguration.host,
                                      port: runtimeConfiguration.port,
@@ -48,10 +48,9 @@ let server = TideyRemoteBridgeServer(host: runtimeConfiguration.host,
                                      observability: observability,
                                      cloudflaredManager: cloudflaredManager,
                                      uploadGarbageCollector: uploadGarbageCollector,
-                                     headlessCodexRuntime: headlessCodexRuntime,
+                                     headlessCodexRuntime: codexAppServerPanelRuntime,
                                      startRegistryMonitor: runtimeConfiguration.shouldStartRegistryMonitor,
-                                     startCloudflaredSupervisor: runtimeConfiguration.shouldStartCloudflaredSupervisor,
-                                     headlessCodexStandalone: runtimeConfiguration.shouldServeHeadlessCodexStandalone)
+                                     startCloudflaredSupervisor: runtimeConfiguration.shouldStartCloudflaredSupervisor)
 
 do {
     if runtimeConfiguration.shouldStartBackgroundServices {

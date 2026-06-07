@@ -11,7 +11,6 @@ final class BridgeProcessRuntimeConfigurationTests: XCTestCase {
         XCTAssertTrue(config.shouldStartBackgroundServices)
         XCTAssertTrue(config.shouldStartRegistryMonitor)
         XCTAssertTrue(config.shouldStartCloudflaredSupervisor)
-        XCTAssertFalse(config.shouldServeHeadlessCodexStandalone)
     }
 
     func testDevIsolatedConfigurationCanUseSeparatePortWithoutBackgroundServices() {
@@ -27,7 +26,6 @@ final class BridgeProcessRuntimeConfigurationTests: XCTestCase {
         XCTAssertFalse(config.shouldStartBackgroundServices)
         XCTAssertFalse(config.shouldStartRegistryMonitor)
         XCTAssertFalse(config.shouldStartCloudflaredSupervisor)
-        XCTAssertTrue(config.shouldServeHeadlessCodexStandalone)
     }
 
     func testInvalidPortFallsBackToProductionPort() {

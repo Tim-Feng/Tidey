@@ -249,4 +249,149 @@ run_codex_profile_flag_detection_test() {
 
 run_codex_profile_flag_detection_test
 
+run_app_server_registry_metadata_test() {
+    local tmpdir
+    local registry
+
+    tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/tidey-codex-app-server-registry-tests.XXXXXX")"
+    registry="$tmpdir/codex-session.json"
+
+    TMPDIR_CASE="$tmpdir" REGISTRY="$registry" CODEX_UNDER_TEST="$CODEX_UNDER_TEST" bash -c '
+        set -euo pipefail
+        source "$CODEX_UNDER_TEST"
+
+        REGISTRY_ROOT="$TMPDIR_CASE"
+        write_registry_file "$REGISTRY" "workspace-1" "session-1" "panel-1" "12345" "/tmp/tidey" "2026-06-07T00:00:00Z" "" "codex_app_server" "/tmp/tidey-codex/app.sock" "23456" "34567"
+    '
+
+    python3 - "$registry" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+root = json.loads(Path(sys.argv[1]).read_text())
+assert root["runtime"] == "codex_app_server"
+assert root["app_server_socket"] == "/tmp/tidey-codex/app.sock"
+assert root["app_server_pid"] == 23456
+assert root["remote_tui_pid"] == 34567
+PY
+
+    rm -rf "$tmpdir"
+}
+
+run_app_server_registry_metadata_test
+
+run_app_server_runtime_selection_test() {
+    local tmpdir
+    local socket
+    local socket_pid
+
+    tmpdir="$(mktemp -d "/private/tmp/tidey-codex-selection.XXXXXX")"
+    socket="$tmpdir/tidey.sock"
+
+    python3 -c 'import socket, sys, time; sock = socket.socket(socket.AF_UNIX); sock.bind(sys.argv[1]); time.sleep(5)' "$socket" &
+    socket_pid="$!"
+    for _ in $(seq 1 50); do
+        [[ -S "$socket" ]] && break
+        sleep 0.02
+    done
+
+    TIDEY_SOCKET_PATH="$socket" TIDEY_WORKSPACE_ID="workspace-1" CODEX_UNDER_TEST="$CODEX_UNDER_TEST" bash -c '
+        set -euo pipefail
+        source "$CODEX_UNDER_TEST"
+        if ! should_use_codex_app_server_runtime; then
+            exit 11
+        fi
+        if should_use_codex_app_server_runtime resume session-1; then
+            exit 12
+        fi
+        TIDEY_CODEX_APP_SERVER_DISABLE=1
+        if should_use_codex_app_server_runtime; then
+            exit 13
+        fi
+    '
+
+    kill "$socket_pid" 2>/dev/null || true
+    wait "$socket_pid" 2>/dev/null || true
+
+    rm -rf "$tmpdir"
+}
+
+run_app_server_runtime_selection_test
+
+run_app_server_runtime_launch_test() {
+    local tmpdir
+    local fake_home
+    local fake_bin
+    local registry_root
+    local socket
+    local socket_pid
+    local codex_log
+
+    tmpdir="$(mktemp -d "/private/tmp/tidey-codex-launch.XXXXXX")"
+    fake_home="$tmpdir/home"
+    fake_bin="$tmpdir/bin"
+    registry_root="$fake_home/Library/Application Support/Tidey Remote Bridge/agent-sessions/codex"
+    socket="$tmpdir/tidey.sock"
+    codex_log="$tmpdir/codex.log"
+    mkdir -p "$fake_bin" "$registry_root"
+
+    cat > "$fake_bin/codex" <<'FAKE_CODEX'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$FAKE_CODEX_LOG"
+if [[ "${1:-}" == "--help" ]]; then
+    printf '%s\n' "Usage: codex --profile <CONFIG_PROFILE_V2>"
+    exit 0
+fi
+if [[ " $* " == *" app-server "* ]]; then
+    listen=""
+    while [[ $# -gt 0 ]]; do
+        if [[ "$1" == "--listen" && $# -ge 2 ]]; then
+            listen="$2"
+            shift 2
+            continue
+        fi
+        shift
+    done
+    socket_path="${listen#unix://}"
+    python3 -c 'import os, socket, sys, time; path = sys.argv[1]; sock = socket.socket(socket.AF_UNIX); sock.bind(path); sock.listen(1); time.sleep(20)' "$socket_path"
+    exit 0
+fi
+if [[ "$*" == *"--remote"* ]]; then
+    sleep 0.2
+    exit 0
+fi
+sleep 0.2
+FAKE_CODEX
+    chmod +x "$fake_bin/codex"
+
+    python3 -c 'import socket, sys, time; sock = socket.socket(socket.AF_UNIX); sock.bind(sys.argv[1]); time.sleep(10)' "$socket" &
+    socket_pid="$!"
+    for _ in $(seq 1 50); do
+        [[ -S "$socket" ]] && break
+        sleep 0.02
+    done
+
+    HOME="$fake_home" \
+        PATH="$fake_bin:/usr/bin:/bin" \
+        TIDEY_SOCKET_PATH="$socket" \
+        TIDEY_WORKSPACE_ID="workspace-1" \
+        TIDEY_PANEL_ID="panel-1" \
+        FAKE_CODEX_LOG="$codex_log" \
+        TMPDIR="$tmpdir" \
+        "$CODEX_UNDER_TEST"
+
+    [[ -z "$(find "$registry_root" -name "codex-*.json" -print -quit)" ]] || fail "app-server registry file was not cleaned up"
+    grep -q "app-server" "$codex_log" || fail "app-server was not launched"
+    grep -q -- "--remote" "$codex_log" || fail "remote TUI was not launched"
+
+    kill "$socket_pid" 2>/dev/null || true
+    wait "$socket_pid" 2>/dev/null || true
+
+    rm -rf "$tmpdir"
+}
+
+run_app_server_runtime_launch_test
+
 echo "PASS"

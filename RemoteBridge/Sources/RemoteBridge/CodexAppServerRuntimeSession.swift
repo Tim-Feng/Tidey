@@ -275,6 +275,91 @@ final class CodexAppServerRuntimeSessionFactory {
         }
         return runtimeSession
     }
+
+    func attach(socketPath: String,
+                processID: Int32?,
+                context: CodexAppServerRuntimeContext,
+                nextSequence: @escaping CodexAppServerConnection.SequenceProvider,
+                timestampProvider: @escaping CodexAppServerConnection.TimestampProvider,
+                onAgentEvent: @escaping CodexAppServerHeadlessRuntime.AgentEventHandler,
+                onInteractivePrompt: @escaping CodexAppServerConnection.InteractivePromptHandler,
+                onInteractivePromptResolved: @escaping CodexAppServerConnection.InteractivePromptResolvedHandler) throws -> CodexAppServerRuntimeSession {
+        let stdoutRouter = CodexAppServerConnectionLineRouter()
+        let process = CodexAppServerExternalProcess(processID: processID)
+        let transport = try transportConnector.connect(mode: .unixSocket(path: socketPath),
+                                                       onLine: { line in
+                                                           stdoutRouter.receive(line)
+                                                       },
+                                                       onClose: { error in
+                                                           if let error {
+                                                               BridgeLogger.server.error("codex app-server panel socket closed error=\(String(describing: error), privacy: .public)")
+                                                           }
+                                                       })
+        let runtime = CodexAppServerHeadlessRuntime(context: context,
+                                                    nextSequence: nextSequence,
+                                                    timestampProvider: timestampProvider,
+                                                    onAgentEvent: onAgentEvent)
+        let connection = CodexAppServerConnection(sendLine: { line in
+            try transport.sendLine(line)
+        },
+                                                   onNotification: runtime.handleNotification,
+                                                   approvalContext: CodexAppServerApprovalContext(workspaceID: context.workspaceID,
+                                                                                                  panelID: context.panelID,
+                                                                                                  sessionID: context.sessionID),
+                                                   nextSequence: nextSequence,
+                                                   timestampProvider: timestampProvider,
+                                                   onInteractivePrompt: onInteractivePrompt,
+                                                   onInteractivePromptResolved: onInteractivePromptResolved)
+        let initialization = CodexAppServerInitializationState()
+        let runtimeSession = CodexAppServerRuntimeSession(process: process,
+                                                          transport: transport,
+                                                          connection: connection,
+                                                          runtime: runtime,
+                                                          initialization: initialization)
+        stdoutRouter.attach(connection)
+        try connection.sendClientRequest(method: "initialize",
+                                         params: [
+                                            "clientInfo": .object([
+                                                "name": .string("tidey-bridge"),
+                                                "title": .string("Tidey Remote Bridge"),
+                                                "version": .string("0"),
+                                            ]),
+                                            "capabilities": .object([
+                                                "experimentalApi": .bool(true),
+                                                "requestAttestation": .bool(false),
+                                                "optOutNotificationMethods": .array([]),
+                                            ]),
+                                         ]) { result in
+            switch result {
+            case .success:
+                do {
+                    try connection.sendClientNotification(method: "initialized")
+                    initialization.succeed()
+                } catch {
+                    initialization.fail(error)
+                    BridgeLogger.server.error("codex app-server panel initialized notification failed error=\(String(describing: error), privacy: .public)")
+                }
+            case .failure(let error):
+                initialization.fail(error)
+                BridgeLogger.server.error("codex app-server panel initialize failed error=\(String(describing: error), privacy: .public)")
+            }
+        }
+        return runtimeSession
+    }
+}
+
+private final class CodexAppServerExternalProcess: CodexAppServerManagedProcess {
+    let processID: Int32?
+
+    init(processID: Int32?) {
+        self.processID = processID
+    }
+
+    func sendLine(_ line: String) throws {
+        throw CodexAppServerProcessError.closed
+    }
+
+    func terminate() {}
 }
 
 private final class CodexAppServerStdioTransport: CodexAppServerConnectionTransport {

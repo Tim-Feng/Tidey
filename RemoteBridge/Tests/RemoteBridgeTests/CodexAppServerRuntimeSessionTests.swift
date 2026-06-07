@@ -90,6 +90,39 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertEqual(events.events().first?.text, "Remote TUI Codex")
     }
 
+    func testFactoryAttachesExistingUnixSocketWithoutStartingProcess() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        var seq = 20
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                              panelID: "panel-1",
+                                                                              sessionID: "session-1"),
+                                         nextSequence: { _ in
+                                             seq += 1
+                                             return seq
+                                         },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in })
+
+        XCTAssertTrue(runner.startedConfigurations.isEmpty)
+        XCTAssertEqual(session.processID, 9001)
+        XCTAssertEqual(connector.connectedModes, [.unixSocket(path: "/tmp/tidey-real-panel/app.sock")])
+
+        let transport = try XCTUnwrap(connector.transport)
+        let initialize = try Self.object(from: try XCTUnwrap(transport.sentLines().first))
+        XCTAssertEqual(initialize["method"]?.stringValue, "initialize")
+        try Self.acknowledgeInitialize(from: transport)
+        try session.startThread(cwd: "/Users/timfeng/GitHub/Tidey")
+        let startThread = try Self.object(from: transport.sentLines().last ?? "")
+        XCTAssertEqual(startThread["method"]?.stringValue, "thread/start")
+    }
+
     func testSessionConvertsStdoutNotificationsToAgentEvents() throws {
         let runner = FakeCodexAppServerProcessRunner()
         let events = EventSink()
