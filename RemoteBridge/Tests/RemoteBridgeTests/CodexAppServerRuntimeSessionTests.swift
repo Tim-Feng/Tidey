@@ -123,6 +123,41 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertEqual(startThread["method"]?.stringValue, "thread/start")
     }
 
+    func testFactoryAttachesExistingUnixSocketResumesLoadedThread() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        _ = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                               processID: 9001,
+                               context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                     panelID: "panel-1",
+                                                                     sessionID: "session-1"),
+                               nextSequence: { _ in 1 },
+                               timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                               onAgentEvent: { _ in },
+                               onInteractivePrompt: { _ in },
+                               onInteractivePromptResolved: { _ in })
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+
+        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        XCTAssertEqual(listLoaded["method"]?.stringValue, "thread/loaded/list")
+        let listLoadedID = try XCTUnwrap(listLoaded["id"])
+        let listLoadedIDData = try JSONEncoder().encode(listLoadedID)
+        let listLoadedIDText = String(decoding: listLoadedIDData, as: UTF8.self)
+        transport.emitLine("""
+        {"id":\(listLoadedIDText),"result":{"threads":[{"id":"thread-live","preview":"Mac TUI Codex","updatedAt":"2026-06-07T00:00:00.000Z"}]}}
+        """)
+
+        let resume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
+        XCTAssertEqual(resume["method"]?.stringValue, "thread/resume")
+        let resumeParams = try XCTUnwrap(resume["params"]?.objectValue)
+        XCTAssertEqual(resumeParams["threadId"]?.stringValue, "thread-live")
+        XCTAssertEqual(resumeParams["excludeTurns"]?.boolValue, false)
+    }
+
     func testSessionConvertsStdoutNotificationsToAgentEvents() throws {
         let runner = FakeCodexAppServerProcessRunner()
         let events = EventSink()

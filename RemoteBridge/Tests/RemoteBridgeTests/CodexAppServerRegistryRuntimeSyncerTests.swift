@@ -65,6 +65,38 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         XCTAssertEqual(secondRuntime.submitAttempts, ["prompt-2"])
     }
 
+    func testAttachedRuntimePublishesConversationEventsToHub() throws {
+        let hub = AgentEventHub()
+        var capturedAgentEventHandler: CodexAppServerHeadlessRuntime.AgentEventHandler?
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { _, _, _, onAgentEvent, _, _ in
+            capturedAgentEventHandler = onAgentEvent
+            return FakeRuntimeSession()
+        })
+
+        syncer.sync(records: [
+            Self.record(sessionID: "app", runtime: "codex_app_server", socketPath: "/tmp/app.sock"),
+        ])
+        let onAgentEvent = try XCTUnwrap(capturedAgentEventHandler)
+
+        onAgentEvent(Self.conversationEvent(eventID: "user-1",
+                                            seq: 1,
+                                            sessionID: "app",
+                                            type: .userMessage,
+                                            text: "test from Mac"))
+        onAgentEvent(Self.conversationEvent(eventID: "assistant-1",
+                                            seq: 2,
+                                            sessionID: "app",
+                                            type: .assistantMessage,
+                                            text: "received"))
+
+        let result = hub.fetch(workspaceID: "workspace-1",
+                               sessionID: "app",
+                               limit: 10)
+
+        XCTAssertEqual(result.events.map(\.type), [.userMessage, .assistantMessage])
+        XCTAssertEqual(result.events.map(\.text), ["test from Mac", "received"])
+    }
+
     private static func record(sessionID: String,
                                runtime: String?,
                                socketPath: String?) -> AgentSessionRegistryRecord {
@@ -100,6 +132,30 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
                     "panel_id": "panel-1",
                     "prompt_id": promptID,
                     "source": "codex_command_approval",
+                   ])
+    }
+
+    private static func conversationEvent(eventID: String,
+                                          seq: Int,
+                                          sessionID: String,
+                                          type: AgentEventKind,
+                                          text: String) -> AgentEvent {
+        AgentEvent(eventID: eventID,
+                   seq: seq,
+                   vendor: "codex",
+                   workspaceID: "workspace-1",
+                   sessionID: sessionID,
+                   timestamp: "2026-06-07T00:00:00.000Z",
+                   type: type,
+                   role: nil,
+                   text: text,
+                   name: nil,
+                   input: nil,
+                   output: nil,
+                   toolCallID: nil,
+                   metadata: [
+                    "panel_id": "panel-1",
+                    "source": "codex_app_server",
                    ])
     }
 }
