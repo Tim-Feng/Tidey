@@ -34,6 +34,8 @@ final class CodexAppServerPanelRuntimeManagerTests: XCTestCase {
         XCTAssertEqual(response?.ok, true)
         let threadStart = try Self.object(from: transport.sentLines().last ?? "")
         XCTAssertEqual(threadStart["method"]?.stringValue, "thread/start")
+        XCTAssertEqual(threadStart["params"]?.objectValue?["approvalPolicy"]?.stringValue, "on-request")
+        XCTAssertEqual(threadStart["params"]?.objectValue?["sandbox"]?.stringValue, "workspace-write")
         try Self.respondToLastRequest(on: transport, result: .object([
             "thread": .object(["id": .string("thread-1")]),
         ]))
@@ -41,6 +43,8 @@ final class CodexAppServerPanelRuntimeManagerTests: XCTestCase {
         let turnStart = try Self.object(from: transport.sentLines().last ?? "")
         XCTAssertEqual(turnStart["method"]?.stringValue, "turn/start")
         XCTAssertEqual(turnStart["params"]?.objectValue?["threadId"]?.stringValue, "thread-1")
+        XCTAssertEqual(turnStart["params"]?.objectValue?["approvalPolicy"]?.stringValue, "on-request")
+        XCTAssertEqual(turnStart["params"]?.objectValue?["sandboxPolicy"]?.stringValue, "workspace-write")
         let input = turnStart["params"]?.objectValue?["input"]?.arrayValue?.first?.objectValue
         XCTAssertEqual(input?["text"]?.stringValue, "Say hello.")
     }
