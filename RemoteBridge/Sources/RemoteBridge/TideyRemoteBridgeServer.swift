@@ -579,7 +579,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
     private let interactivePromptActionHandler: InteractivePromptActionHandler
     private let imageUploadHandler: BridgeImageUploadHandler
     private let ordinaryTmuxPanelProjector: OrdinaryTmuxPanelProjector
-    private var agentSubscriptionID: UUID?
+    private var agentSubscriptions = BridgeAgentSubscriptionSlots()
     private var workspaceSubscriptionID: UUID?
 
     init(socketClient: TideySocketClient,
@@ -996,7 +996,6 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
             }
             let sinceSeq = request.params?["since_seq"]?.intValue
             let noReplay = request.params?["no_replay"]?.boolLikeValue ?? false
-            unsubscribeFromAgentEvents()
 
             let (subscriptionID, replayEnvelopes) = eventHub.subscribe(workspaceID: workspaceID,
                                                                        sessionID: sessionID,
@@ -1008,7 +1007,11 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                     self.send(envelope: envelope, to: context)
                 }
             }
-            self.agentSubscriptionID = subscriptionID
+            if let replacedID = self.agentSubscriptions.replace(workspaceID: workspaceID,
+                                                                sessionID: sessionID,
+                                                                with: subscriptionID) {
+                eventHub.unsubscribe(replacedID)
+            }
             return LocalRequestResult(
                 response: BridgeResponse(id: request.id,
                                          ok: true,
@@ -1078,9 +1081,8 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
     }
 
     private func unsubscribeFromAgentEvents() {
-        if let agentSubscriptionID {
-            eventHub.unsubscribe(agentSubscriptionID)
-            self.agentSubscriptionID = nil
+        for subscriptionID in agentSubscriptions.removeAll() {
+            eventHub.unsubscribe(subscriptionID)
         }
     }
 
