@@ -89,6 +89,17 @@ final class CodexAppServerRuntimeSession {
     }
 
     @discardableResult
+    func resumeThread(threadID: String,
+                      cwd: String?,
+                      onResponse: @escaping CodexAppServerConnection.ClientResponseHandler = { _ in }) throws -> Int {
+        try initialization.wait()
+        return try runtime.resumeThread(on: connection,
+                                        threadID: threadID,
+                                        cwd: cwd,
+                                        onResponse: onResponse)
+    }
+
+    @discardableResult
     func startTurn(threadID: String,
                    text: String,
                    cwd: String? = nil,
@@ -132,6 +143,10 @@ final class CodexAppServerRuntimeSession {
         initialization.fail(CodexAppServerConnectionError.closed)
         connection.close()
     }
+
+    func whenInitialized(_ callback: @escaping @Sendable (Result<Void, Error>) -> Void) {
+        initialization.notify(callback)
+    }
 }
 
 final class CodexAppServerInitializationState: @unchecked Sendable {
@@ -143,6 +158,7 @@ final class CodexAppServerInitializationState: @unchecked Sendable {
 
     private let condition = NSCondition()
     private var state: State = .pending
+    private var callbacks: [@Sendable (Result<Void, Error>) -> Void] = []
 
     func succeed() {
         complete(.ready)
@@ -175,14 +191,48 @@ final class CodexAppServerInitializationState: @unchecked Sendable {
     }
 
     private func complete(_ newState: State) {
+        let result: Result<Void, Error>
+        switch newState {
+        case .ready:
+            result = .success(())
+        case .failed(let error):
+            result = .failure(error)
+        case .pending:
+            return
+        }
+
         condition.lock()
         guard case .pending = state else {
             condition.unlock()
             return
         }
         state = newState
+        let callbacks = callbacks
+        self.callbacks.removeAll()
         condition.broadcast()
         condition.unlock()
+        for callback in callbacks {
+            callback(result)
+        }
+    }
+
+    func notify(_ callback: @escaping @Sendable (Result<Void, Error>) -> Void) {
+        let result: Result<Void, Error>?
+        condition.lock()
+        switch state {
+        case .pending:
+            callbacks.append(callback)
+            result = nil
+        case .ready:
+            result = .success(())
+        case .failed(let error):
+            result = .failure(error)
+        }
+        condition.unlock()
+
+        if let result {
+            callback(result)
+        }
     }
 }
 

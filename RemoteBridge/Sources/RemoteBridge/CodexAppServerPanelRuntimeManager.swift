@@ -213,6 +213,13 @@ final class CodexAppServerPanelRuntimeManager: HeadlessCodexRuntimeControlling, 
         current.session = created
         lock.unlock()
         publishSyntheticSessionStartedIfNeeded(sessionID: sessionID)
+        created.whenInitialized { [weak self, weak created] result in
+            guard case .success = result,
+                  let created else {
+                return
+            }
+            self?.subscribeToLoadedThreadIfNeeded(sessionID: sessionID, session: created)
+        }
         return created
     }
 
@@ -229,8 +236,24 @@ final class CodexAppServerPanelRuntimeManager: HeadlessCodexRuntimeControlling, 
     }
 
     private func startThreadIfNeeded(sessionID: String, session: CodexAppServerRuntimeSession) throws {
+        try resolveThreadIfNeeded(sessionID: sessionID, session: session, startNewThreadIfMissing: true)
+    }
+
+    private func subscribeToLoadedThreadIfNeeded(sessionID: String, session: CodexAppServerRuntimeSession) {
+        do {
+            try resolveThreadIfNeeded(sessionID: sessionID, session: session, startNewThreadIfMissing: false)
+        } catch {
+            finishThreadResolutionWithoutStarting(sessionID: sessionID)
+            BridgeLogger.server.error("codex app-server panel loaded thread subscription failed session_id=\(sessionID, privacy: .public) error=\(String(describing: error), privacy: .public)")
+        }
+    }
+
+    private func resolveThreadIfNeeded(sessionID: String,
+                                       session: CodexAppServerRuntimeSession,
+                                       startNewThreadIfMissing: Bool) throws {
         lock.lock()
         guard let state = states[sessionID],
+              state.threadID == nil,
               state.isStartingThread == false else {
             lock.unlock()
             return
@@ -243,32 +266,90 @@ final class CodexAppServerPanelRuntimeManager: HeadlessCodexRuntimeControlling, 
             self?.handleLoadedThreadsResponse(result,
                                               sessionID: sessionID,
                                               session: session,
-                                              cwd: record.cwd)
+                                              cwd: record.cwd,
+                                              startNewThreadIfMissing: startNewThreadIfMissing)
         }
     }
 
     private func handleLoadedThreadsResponse(_ result: Result<JSONValue, CodexAppServerConnectionError>,
                                              sessionID: String,
                                              session: CodexAppServerRuntimeSession?,
-                                             cwd: String?) {
+                                             cwd: String?,
+                                             startNewThreadIfMissing: Bool) {
         switch result {
         case .success(let value):
             let loadedThreadIDs = Self.loadedThreadIDs(from: value)
             if loadedThreadIDs.count == 1,
                let threadID = loadedThreadIDs.first,
                let session {
-                adoptThread(threadID, sessionID: sessionID, session: session)
+                resumeLoadedThread(threadID, sessionID: sessionID, session: session, cwd: cwd)
                 return
             }
-            startNewThread(sessionID: sessionID, session: session, cwd: cwd)
+            if shouldStartNewThread(sessionID: sessionID, startNewThreadIfMissing: startNewThreadIfMissing) {
+                startNewThread(sessionID: sessionID, session: session, cwd: cwd)
+            } else {
+                finishThreadResolutionWithoutStarting(sessionID: sessionID)
+            }
         case .failure:
-            startNewThread(sessionID: sessionID, session: session, cwd: cwd)
+            if shouldStartNewThread(sessionID: sessionID, startNewThreadIfMissing: startNewThreadIfMissing) {
+                startNewThread(sessionID: sessionID, session: session, cwd: cwd)
+            } else {
+                finishThreadResolutionWithoutStarting(sessionID: sessionID)
+            }
         }
     }
 
-    private func adoptThread(_ threadID: String,
-                             sessionID: String,
-                             session: CodexAppServerRuntimeSession) {
+    private func resumeLoadedThread(_ threadID: String,
+                                    sessionID: String,
+                                    session: CodexAppServerRuntimeSession,
+                                    cwd: String?) {
+        do {
+            try session.resumeThread(threadID: threadID, cwd: cwd) { [weak self, weak session] result in
+                self?.handleResumeThreadResponse(result,
+                                                 requestedThreadID: threadID,
+                                                 sessionID: sessionID,
+                                                 session: session)
+            }
+        } catch {
+            let turns = clearStartingState(sessionID: sessionID)
+            publishBridgeError("Codex app-server failed to resume Mac thread: \(error.localizedDescription)", sessionID: sessionID)
+            for turn in turns {
+                publishAssistantMessage("Failed to submit queued Codex message: \(turn.text)", sessionID: sessionID)
+            }
+        }
+    }
+
+    private func handleResumeThreadResponse(_ result: Result<JSONValue, CodexAppServerConnectionError>,
+                                            requestedThreadID: String,
+                                            sessionID: String,
+                                            session: CodexAppServerRuntimeSession?) {
+        switch result {
+        case .success(let value):
+            guard let session else {
+                let turns = clearStartingState(sessionID: sessionID)
+                publishBridgeError("Codex app-server connection disappeared while resuming Mac thread.", sessionID: sessionID)
+                for turn in turns {
+                    publishAssistantMessage("Failed to submit queued Codex message: \(turn.text)", sessionID: sessionID)
+                }
+                return
+            }
+            activateThread(Self.threadID(from: value) ?? requestedThreadID,
+                           sessionID: sessionID,
+                           session: session,
+                           logMessage: "codex app-server panel resumed loaded thread")
+        case .failure(let error):
+            let turns = clearStartingState(sessionID: sessionID)
+            publishBridgeError("Codex app-server failed to resume Mac thread: \(error.localizedDescription)", sessionID: sessionID)
+            for turn in turns {
+                publishAssistantMessage("Failed to submit queued Codex message: \(turn.text)", sessionID: sessionID)
+            }
+        }
+    }
+
+    private func activateThread(_ threadID: String,
+                                sessionID: String,
+                                session: CodexAppServerRuntimeSession,
+                                logMessage: StaticString? = nil) {
         lock.lock()
         guard let state = states[sessionID] else {
             lock.unlock()
@@ -279,7 +360,9 @@ final class CodexAppServerPanelRuntimeManager: HeadlessCodexRuntimeControlling, 
         let turns = state.queuedTurns
         state.queuedTurns.removeAll()
         lock.unlock()
-        BridgeLogger.server.info("codex app-server panel adopted loaded thread session_id=\(sessionID, privacy: .public) thread_id=\(threadID, privacy: .public)")
+        if let logMessage {
+            BridgeLogger.server.info("\(logMessage, privacy: .public) session_id=\(sessionID, privacy: .public) thread_id=\(threadID, privacy: .public)")
+        }
         for turn in turns {
             do {
                 try startTurn(turn, threadID: threadID, session: session)
@@ -328,22 +411,10 @@ final class CodexAppServerPanelRuntimeManager: HeadlessCodexRuntimeControlling, 
                 return
             }
             lock.lock()
-            guard let state = states[sessionID] else {
-                lock.unlock()
-                return
-            }
-            state.threadID = threadID
-            state.isStartingThread = false
-            let turns = state.queuedTurns
-            state.queuedTurns.removeAll()
+            let hasState = states[sessionID] != nil
             lock.unlock()
-            for turn in turns {
-                do {
-                    try startTurn(turn, threadID: threadID, session: session)
-                } catch {
-                    publishBridgeError("Codex app-server failed to start turn: \(error.localizedDescription)", sessionID: sessionID)
-                }
-            }
+            guard hasState else { return }
+            activateThread(threadID, sessionID: sessionID, session: session)
 
         case .failure(let error):
             let turns = clearStartingState(sessionID: sessionID)
@@ -352,6 +423,19 @@ final class CodexAppServerPanelRuntimeManager: HeadlessCodexRuntimeControlling, 
                 publishAssistantMessage("Failed to submit queued Codex message: \(turn.text)", sessionID: sessionID)
             }
         }
+    }
+
+    private func shouldStartNewThread(sessionID: String, startNewThreadIfMissing: Bool) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let hasQueuedTurns = states[sessionID]?.queuedTurns.isEmpty == false
+        return startNewThreadIfMissing || hasQueuedTurns
+    }
+
+    private func finishThreadResolutionWithoutStarting(sessionID: String) {
+        lock.lock()
+        states[sessionID]?.isStartingThread = false
+        lock.unlock()
     }
 
     @discardableResult

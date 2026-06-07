@@ -176,6 +176,23 @@ final class CodexAppServerHeadlessRuntime {
     }
 
     @discardableResult
+    func resumeThread(on connection: CodexAppServerConnection,
+                      threadID: String,
+                      cwd: String?,
+                      onResponse: @escaping CodexAppServerConnection.ClientResponseHandler = { _ in }) throws -> Int {
+        var params: [String: JSONValue] = [
+            "threadId": .string(threadID),
+            "excludeTurns": .bool(true),
+        ]
+        if let cwd {
+            params["cwd"] = .string(cwd)
+        }
+        return try connection.sendClientRequest(method: "thread/resume",
+                                                params: params,
+                                                onResponse: onResponse)
+    }
+
+    @discardableResult
     func startTurn(on connection: CodexAppServerConnection,
                    threadID: String,
                    text: String,

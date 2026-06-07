@@ -84,11 +84,102 @@ final class CodexAppServerPanelRuntimeManagerTests: XCTestCase {
             "data": .array([.string("mac-thread-1")]),
         ]))
 
+        let resumeThread = try Self.object(from: transport.sentLines().last ?? "")
+        XCTAssertEqual(resumeThread["method"]?.stringValue, "thread/resume")
+        XCTAssertEqual(resumeThread["params"]?.objectValue?["threadId"]?.stringValue, "mac-thread-1")
+        try Self.respond(on: transport, request: resumeThread, result: .object([
+            "thread": .object(["id": .string("mac-thread-1")]),
+        ]))
+
         let turnStart = try Self.object(from: transport.sentLines().last ?? "")
         XCTAssertEqual(turnStart["method"]?.stringValue, "turn/start")
         XCTAssertEqual(turnStart["params"]?.objectValue?["threadId"]?.stringValue, "mac-thread-1")
         XCTAssertFalse(transport.sentLines().contains { line in
             (try? Self.object(from: line))?["method"]?.stringValue == "thread/start"
+        })
+    }
+
+    func testSubsequentRemoteTurnsReuseAdoptedMacThread() throws {
+        let connector = PanelRuntimeFakeTransportConnector()
+        let runner = PanelRuntimeFailingProcessRunner()
+        let eventHub = AgentEventHub()
+        let manager = CodexAppServerPanelRuntimeManager(
+            sessionFactory: CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                                transportConnector: connector),
+            eventHub: eventHub,
+            timestampProvider: { "2026-06-07T00:00:00.000Z" }
+        )
+
+        manager.sync(records: [Self.appServerRecord()])
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+
+        _ = try manager.handleChatSubmit(Self.chatSubmitRequest(id: "chat-1", message: "First Remote message."))
+        let loadedList = try Self.object(from: transport.sentLines().last ?? "")
+        XCTAssertEqual(loadedList["method"]?.stringValue, "thread/loaded/list")
+        try Self.respond(on: transport, request: loadedList, result: .object([
+            "data": .array([.string("mac-thread-1")]),
+        ]))
+
+        let resumeThread = try Self.object(from: transport.sentLines().last ?? "")
+        XCTAssertEqual(resumeThread["method"]?.stringValue, "thread/resume")
+        XCTAssertEqual(resumeThread["params"]?.objectValue?["threadId"]?.stringValue, "mac-thread-1")
+        try Self.respond(on: transport, request: resumeThread, result: .object([
+            "thread": .object(["id": .string("mac-thread-1")]),
+        ]))
+
+        let firstTurnStart = try Self.object(from: transport.sentLines().last ?? "")
+        XCTAssertEqual(firstTurnStart["method"]?.stringValue, "turn/start")
+        XCTAssertEqual(firstTurnStart["params"]?.objectValue?["threadId"]?.stringValue, "mac-thread-1")
+
+        _ = try manager.handleChatSubmit(Self.chatSubmitRequest(id: "chat-2", message: "Second Remote message."))
+        let secondTurnStart = try Self.object(from: transport.sentLines().last ?? "")
+        XCTAssertEqual(secondTurnStart["method"]?.stringValue, "turn/start")
+        XCTAssertEqual(secondTurnStart["params"]?.objectValue?["threadId"]?.stringValue, "mac-thread-1")
+        let input = secondTurnStart["params"]?.objectValue?["input"]?.arrayValue?.first?.objectValue
+        XCTAssertEqual(input?["text"]?.stringValue, "Second Remote message.")
+
+        let sentMethods = transport.sentLines().compactMap { line in
+            (try? Self.object(from: line))?["method"]?.stringValue
+        }
+        XCTAssertEqual(sentMethods.filter { $0 == "thread/loaded/list" }.count, 1)
+        XCTAssertFalse(sentMethods.contains("thread/start"))
+    }
+
+    func testSyncResumesLoadedMacThreadBeforeRemoteSubmit() throws {
+        let connector = PanelRuntimeFakeTransportConnector()
+        let runner = PanelRuntimeFailingProcessRunner()
+        let eventHub = AgentEventHub()
+        let manager = CodexAppServerPanelRuntimeManager(
+            sessionFactory: CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                                transportConnector: connector),
+            eventHub: eventHub,
+            timestampProvider: { "2026-06-07T00:00:00.000Z" }
+        )
+
+        manager.sync(records: [Self.appServerRecord()])
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+
+        let loadedList = try Self.object(from: transport.sentLines().last ?? "")
+        XCTAssertEqual(loadedList["method"]?.stringValue, "thread/loaded/list")
+        try Self.respond(on: transport, request: loadedList, result: .object([
+            "data": .array([.string("mac-thread-1")]),
+        ]))
+
+        let resumeThread = try Self.object(from: transport.sentLines().last ?? "")
+        XCTAssertEqual(resumeThread["method"]?.stringValue, "thread/resume")
+        XCTAssertEqual(resumeThread["params"]?.objectValue?["threadId"]?.stringValue, "mac-thread-1")
+        try Self.respond(on: transport, request: resumeThread, result: .object([
+            "thread": .object(["id": .string("mac-thread-1")]),
+        ]))
+
+        transport.emitLine("""
+        {"method":"turn/started","params":{"threadId":"mac-thread-1","turn":{"id":"mac-turn-1","items":[],"itemsView":{"type":"all"},"status":"running","error":null,"startedAt":1,"completedAt":null,"durationMs":null}}}
+        """)
+        let events = eventHub.fetch(workspaceID: "workspace-1", limit: 10).events
+        XCTAssertTrue(events.contains { event in
+            event.type == .thinking && event.sessionID == "session-1"
         })
     }
 
@@ -145,6 +236,19 @@ final class CodexAppServerPanelRuntimeManagerTests: XCTestCase {
                                    appServerSocket: "/private/tmp/tidey-codex/app.sock",
                                    appServerPID: 2345,
                                    remoteTUIPID: 3456)
+    }
+
+    private static func chatSubmitRequest(id: String, message: String) -> BridgeRequest {
+        BridgeRequest(
+            id: id,
+            action: "chat_submit",
+            params: [
+                "workspace_id": .string("workspace-1"),
+                "panel_id": .string("panel-1"),
+                "vendor": .string("codex"),
+                "session_id": .string("session-1"),
+                "message": .string(message),
+            ])
     }
 
     private static func acknowledgeInitialize(from transport: PanelRuntimeFakeTransport,
