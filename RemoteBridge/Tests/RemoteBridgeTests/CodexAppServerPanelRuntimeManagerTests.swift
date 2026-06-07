@@ -32,6 +32,12 @@ final class CodexAppServerPanelRuntimeManagerTests: XCTestCase {
             ]))
 
         XCTAssertEqual(response?.ok, true)
+        let loadedList = try Self.object(from: transport.sentLines().last ?? "")
+        XCTAssertEqual(loadedList["method"]?.stringValue, "thread/loaded/list")
+        try Self.respond(on: transport, request: loadedList, result: .object([
+            "data": .array([]),
+        ]))
+
         let threadStart = try Self.object(from: transport.sentLines().last ?? "")
         XCTAssertEqual(threadStart["method"]?.stringValue, "thread/start")
         try Self.respondToLastRequest(on: transport, result: .object([
@@ -43,6 +49,47 @@ final class CodexAppServerPanelRuntimeManagerTests: XCTestCase {
         XCTAssertEqual(turnStart["params"]?.objectValue?["threadId"]?.stringValue, "thread-1")
         let input = turnStart["params"]?.objectValue?["input"]?.arrayValue?.first?.objectValue
         XCTAssertEqual(input?["text"]?.stringValue, "Say hello.")
+    }
+
+    func testAdoptsLoadedMacThreadBeforeSubmittingQueuedTurn() throws {
+        let connector = PanelRuntimeFakeTransportConnector()
+        let runner = PanelRuntimeFailingProcessRunner()
+        let eventHub = AgentEventHub()
+        let manager = CodexAppServerPanelRuntimeManager(
+            sessionFactory: CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                                transportConnector: connector),
+            eventHub: eventHub,
+            timestampProvider: { "2026-06-07T00:00:00.000Z" }
+        )
+
+        manager.sync(records: [Self.appServerRecord()])
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+
+        let response = try manager.handleChatSubmit(BridgeRequest(
+            id: "chat-1",
+            action: "chat_submit",
+            params: [
+                "workspace_id": .string("workspace-1"),
+                "panel_id": .string("panel-1"),
+                "vendor": .string("codex"),
+                "session_id": .string("session-1"),
+                "message": .string("Say hello from Remote."),
+            ]))
+
+        XCTAssertEqual(response?.ok, true)
+        let loadedList = try Self.object(from: transport.sentLines().last ?? "")
+        XCTAssertEqual(loadedList["method"]?.stringValue, "thread/loaded/list")
+        try Self.respond(on: transport, request: loadedList, result: .object([
+            "data": .array([.string("mac-thread-1")]),
+        ]))
+
+        let turnStart = try Self.object(from: transport.sentLines().last ?? "")
+        XCTAssertEqual(turnStart["method"]?.stringValue, "turn/start")
+        XCTAssertEqual(turnStart["params"]?.objectValue?["threadId"]?.stringValue, "mac-thread-1")
+        XCTAssertFalse(transport.sentLines().contains { line in
+            (try? Self.object(from: line))?["method"]?.stringValue == "thread/start"
+        })
     }
 
     func testSubmitInteractivePromptRepliesToPanelAppServerApprovalRequest() throws {

@@ -82,6 +82,13 @@ final class CodexAppServerRuntimeSession {
     }
 
     @discardableResult
+    func listLoadedThreads(onResponse: @escaping CodexAppServerConnection.ClientResponseHandler = { _ in }) throws -> Int {
+        try initialization.wait()
+        return try runtime.listLoadedThreads(on: connection,
+                                             onResponse: onResponse)
+    }
+
+    @discardableResult
     func startTurn(threadID: String,
                    text: String,
                    cwd: String? = nil,

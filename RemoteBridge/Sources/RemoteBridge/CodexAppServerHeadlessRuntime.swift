@@ -169,6 +169,13 @@ final class CodexAppServerHeadlessRuntime {
     }
 
     @discardableResult
+    func listLoadedThreads(on connection: CodexAppServerConnection,
+                           onResponse: @escaping CodexAppServerConnection.ClientResponseHandler = { _ in }) throws -> Int {
+        try connection.sendClientRequest(method: "thread/loaded/list",
+                                         onResponse: onResponse)
+    }
+
+    @discardableResult
     func startTurn(on connection: CodexAppServerConnection,
                    threadID: String,
                    text: String,

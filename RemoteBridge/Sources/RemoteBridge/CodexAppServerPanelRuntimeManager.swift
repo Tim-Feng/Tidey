@@ -239,8 +239,77 @@ final class CodexAppServerPanelRuntimeManager: HeadlessCodexRuntimeControlling, 
         let record = state.record
         lock.unlock()
 
-        try session.startThread(cwd: record.cwd) { [weak self, weak session] result in
-            self?.handleStartThreadResponse(result, sessionID: sessionID, session: session)
+        try session.listLoadedThreads { [weak self, weak session] result in
+            self?.handleLoadedThreadsResponse(result,
+                                              sessionID: sessionID,
+                                              session: session,
+                                              cwd: record.cwd)
+        }
+    }
+
+    private func handleLoadedThreadsResponse(_ result: Result<JSONValue, CodexAppServerConnectionError>,
+                                             sessionID: String,
+                                             session: CodexAppServerRuntimeSession?,
+                                             cwd: String?) {
+        switch result {
+        case .success(let value):
+            let loadedThreadIDs = Self.loadedThreadIDs(from: value)
+            if loadedThreadIDs.count == 1,
+               let threadID = loadedThreadIDs.first,
+               let session {
+                adoptThread(threadID, sessionID: sessionID, session: session)
+                return
+            }
+            startNewThread(sessionID: sessionID, session: session, cwd: cwd)
+        case .failure:
+            startNewThread(sessionID: sessionID, session: session, cwd: cwd)
+        }
+    }
+
+    private func adoptThread(_ threadID: String,
+                             sessionID: String,
+                             session: CodexAppServerRuntimeSession) {
+        lock.lock()
+        guard let state = states[sessionID] else {
+            lock.unlock()
+            return
+        }
+        state.threadID = threadID
+        state.isStartingThread = false
+        let turns = state.queuedTurns
+        state.queuedTurns.removeAll()
+        lock.unlock()
+        BridgeLogger.server.info("codex app-server panel adopted loaded thread session_id=\(sessionID, privacy: .public) thread_id=\(threadID, privacy: .public)")
+        for turn in turns {
+            do {
+                try startTurn(turn, threadID: threadID, session: session)
+            } catch {
+                publishBridgeError("Codex app-server failed to start turn: \(error.localizedDescription)", sessionID: sessionID)
+            }
+        }
+    }
+
+    private func startNewThread(sessionID: String,
+                                session: CodexAppServerRuntimeSession?,
+                                cwd: String?) {
+        guard let session else {
+            let turns = clearStartingState(sessionID: sessionID)
+            publishBridgeError("Codex app-server connection disappeared while resolving thread.", sessionID: sessionID)
+            for turn in turns {
+                publishAssistantMessage("Failed to submit queued Codex message: \(turn.text)", sessionID: sessionID)
+            }
+            return
+        }
+        do {
+            try session.startThread(cwd: cwd) { [weak self, weak session] result in
+                self?.handleStartThreadResponse(result, sessionID: sessionID, session: session)
+            }
+        } catch {
+            let turns = clearStartingState(sessionID: sessionID)
+            publishBridgeError("Codex app-server failed to start thread: \(error.localizedDescription)", sessionID: sessionID)
+            for turn in turns {
+                publishAssistantMessage("Failed to submit queued Codex message: \(turn.text)", sessionID: sessionID)
+            }
         }
     }
 
@@ -392,6 +461,10 @@ final class CodexAppServerPanelRuntimeManager: HeadlessCodexRuntimeControlling, 
         value.objectValue?["threadId"]?.stringValue
             ?? value.objectValue?["thread"]?.objectValue?["id"]?.stringValue
             ?? value.objectValue?["id"]?.stringValue
+    }
+
+    private static func loadedThreadIDs(from value: JSONValue) -> [String] {
+        value.objectValue?["data"]?.arrayValue?.compactMap(\.stringValue) ?? []
     }
 
     private static func jsonValue(for event: AgentEvent) -> JSONValue {
