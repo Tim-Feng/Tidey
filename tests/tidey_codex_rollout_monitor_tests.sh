@@ -303,10 +303,6 @@ run_app_server_runtime_selection_test() {
     TIDEY_SOCKET_PATH="$socket" TIDEY_WORKSPACE_ID="workspace-1" CODEX_UNDER_TEST="$CODEX_UNDER_TEST" bash -c '
         set -euo pipefail
         source "$CODEX_UNDER_TEST"
-        if should_use_codex_app_server_runtime; then
-            exit 11
-        fi
-        TIDEY_CODEX_APP_SERVER_ENABLE=1
         if ! should_use_codex_app_server_runtime; then
             exit 14
         fi
@@ -386,7 +382,6 @@ FAKE_CODEX
         TIDEY_SOCKET_PATH="$socket" \
         TIDEY_WORKSPACE_ID="workspace-1" \
         TIDEY_PANEL_ID="panel-1" \
-        TIDEY_CODEX_APP_SERVER_ENABLE=1 \
         FAKE_CODEX_LOG="$codex_log" \
         TMPDIR="$tmpdir" \
         "$CODEX_UNDER_TEST"

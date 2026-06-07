@@ -6,6 +6,7 @@ struct InteractivePromptActionHandler {
     private let sessionResolver: ActiveAgentSessionResolving
     private let eventHub: AgentEventHub
     private let inputActionHandler: BridgeInputActionHandler
+    private let codexApprovalSubmitter: CodexAppServerApprovalSubmitting?
     private let detector: WorkflowConfirmPromptDetector
     private let stateStore: InteractivePromptStateStore
     private let captureLineLimit = 0
@@ -16,6 +17,7 @@ struct InteractivePromptActionHandler {
          sessionResolver: ActiveAgentSessionResolving,
          eventHub: AgentEventHub,
          inputActionHandler: BridgeInputActionHandler,
+         codexApprovalSubmitter: CodexAppServerApprovalSubmitting? = nil,
          detector: WorkflowConfirmPromptDetector = WorkflowConfirmPromptDetector(),
          stateStore: InteractivePromptStateStore = InteractivePromptStateStore()) {
         self.routeResolver = routeResolver
@@ -23,6 +25,7 @@ struct InteractivePromptActionHandler {
         self.sessionResolver = sessionResolver
         self.eventHub = eventHub
         self.inputActionHandler = inputActionHandler
+        self.codexApprovalSubmitter = codexApprovalSubmitter
         self.detector = detector
         self.stateStore = stateStore
     }
@@ -112,6 +115,9 @@ struct InteractivePromptActionHandler {
         guard let context = try promptContext(from: request, requiresPromptID: true) else {
             throw BridgeInternalError.invalidRequest("submit_interactive_prompt requires workspace_id and panel_id")
         }
+        if context.vendor == "codex" {
+            return try submitCodexApproval(request, context: context)
+        }
         guard context.vendor == "claude" else {
             throw BridgeInternalError.invalidRequest("submit_interactive_prompt only supports Claude workflow prompts")
         }
@@ -153,6 +159,32 @@ struct InteractivePromptActionHandler {
         result["status"] = .string("resolved")
         result["prompt"] = .null
         result["resolved_event"] = Self.jsonValue(for: resolvedEvent)
+        return BridgeResponse(id: request.id, ok: true, result: result, error: nil)
+    }
+
+    private func submitCodexApproval(_ request: BridgeRequest, context: PromptContext) throws -> BridgeResponse {
+        guard let codexApprovalSubmitter else {
+            throw BridgeInternalError.invalidRequest("submit_interactive_prompt requires Codex app-server runtime")
+        }
+        guard let promptID = request.params?["prompt_id"]?.stringValue else {
+            throw BridgeInternalError.invalidRequest("submit_interactive_prompt requires prompt_id")
+        }
+        guard let targetIndex = request.params?["target_index"]?.intValue else {
+            throw BridgeInternalError.invalidRequest("submit_interactive_prompt requires target_index for Codex approval prompts")
+        }
+        let resolvedEvent = try codexApprovalSubmitter.submitApproval(promptID: promptID,
+                                                                      targetIndex: targetIndex)
+        var result: [String: JSONValue] = [
+            "submitted": .bool(true),
+            "status": .string("resolved"),
+            "prompt": .null,
+            "resolved_event": Self.jsonValue(for: resolvedEvent),
+        ]
+        if let panelID = resolvedEvent.metadata?["panel_id"] {
+            result["panel_id"] = .string(panelID)
+        } else {
+            result["panel_id"] = .string(context.panelID)
+        }
         return BridgeResponse(id: request.id, ok: true, result: result, error: nil)
     }
 

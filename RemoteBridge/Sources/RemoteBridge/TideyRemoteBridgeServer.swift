@@ -16,6 +16,7 @@ final class TideyRemoteBridgeServer {
     private let eventHub: AgentEventHub
     private let workspaceEventHub: WorkspaceEventHub
     private let registryMonitor: AgentSessionRegistryMonitor
+    private let codexApprovalSubmitter: CodexAppServerApprovalSubmitting?
     private let observability: BridgeObservabilityCenter
     private let cloudflaredManager: BridgeCloudflaredManager
     private let uploadGarbageCollector: BridgeUploadGarbageCollector
@@ -33,6 +34,7 @@ final class TideyRemoteBridgeServer {
          eventHub: AgentEventHub,
          workspaceEventHub: WorkspaceEventHub,
          registryMonitor: AgentSessionRegistryMonitor,
+         codexApprovalSubmitter: CodexAppServerApprovalSubmitting? = nil,
          observability: BridgeObservabilityCenter,
          cloudflaredManager: BridgeCloudflaredManager = BridgeCloudflaredManager(),
          uploadGarbageCollector: BridgeUploadGarbageCollector = BridgeUploadGarbageCollector(uploadDirectory: BridgePaths().uploadsDirectory),
@@ -47,6 +49,7 @@ final class TideyRemoteBridgeServer {
         self.eventHub = eventHub
         self.workspaceEventHub = workspaceEventHub
         self.registryMonitor = registryMonitor
+        self.codexApprovalSubmitter = codexApprovalSubmitter
         self.observability = observability
         self.cloudflaredManager = cloudflaredManager
         self.uploadGarbageCollector = uploadGarbageCollector
@@ -75,11 +78,12 @@ final class TideyRemoteBridgeServer {
                 }
                 return channel.eventLoop.makeSucceededFuture([:])
             },
-            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub, registryMonitor, observability, ordinaryTmuxPanelRegistry, port, cloudflaredManager] channel, _ in
+            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub, registryMonitor, codexApprovalSubmitter, observability, ordinaryTmuxPanelRegistry, port, cloudflaredManager] channel, _ in
                 channel.pipeline.addHandler(WebSocketFrameHandler(socketClient: socketClient,
                                                                   eventHub: eventHub,
                                                                   workspaceEventHub: workspaceEventHub,
                                                                   registryMonitor: registryMonitor,
+                                                                  codexApprovalSubmitter: codexApprovalSubmitter,
                                                                   observability: observability,
                                                                   bridgePort: port,
                                                                   cloudflaredManager: cloudflaredManager,
@@ -566,6 +570,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
     private let eventHub: AgentEventHub
     private let workspaceEventHub: WorkspaceEventHub
     private let registryMonitor: AgentSessionRegistryMonitor
+    private let codexApprovalSubmitter: CodexAppServerApprovalSubmitting?
     private let observability: BridgeObservabilityCenter
     private let bridgePort: Int
     private let cloudflaredManager: BridgeCloudflaredManager
@@ -586,6 +591,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
          eventHub: AgentEventHub,
          workspaceEventHub: WorkspaceEventHub,
          registryMonitor: AgentSessionRegistryMonitor,
+         codexApprovalSubmitter: CodexAppServerApprovalSubmitting? = nil,
          observability: BridgeObservabilityCenter,
          bridgePort: Int,
          cloudflaredManager: BridgeCloudflaredManager,
@@ -594,6 +600,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
         self.eventHub = eventHub
         self.workspaceEventHub = workspaceEventHub
         self.registryMonitor = registryMonitor
+        self.codexApprovalSubmitter = codexApprovalSubmitter
         self.observability = observability
         self.bridgePort = bridgePort
         self.cloudflaredManager = cloudflaredManager
@@ -610,7 +617,8 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
         self.interactivePromptActionHandler = InteractivePromptActionHandler(routeResolver: routeResolver,
                                                                             sessionResolver: registryMonitor,
                                                                             eventHub: eventHub,
-                                                                            inputActionHandler: inputActionHandler)
+                                                                            inputActionHandler: inputActionHandler,
+                                                                            codexApprovalSubmitter: codexApprovalSubmitter)
         self.imageUploadHandler = BridgeImageUploadHandler(destinationResolver: ApplicationSupportImageUploadDestinationResolver(),
                                                            filenameGenerator: TimestampedImageUploadFilenameGenerator())
         self.ordinaryTmuxPanelProjector = OrdinaryTmuxPanelProjector(registry: ordinaryTmuxPanelRegistry)

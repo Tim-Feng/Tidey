@@ -19,8 +19,10 @@ let locator = TideySocketLocator()
 let socketClient = TideySocketClient(locator: locator)
 let eventHub = AgentEventHub()
 let workspaceEventHub = WorkspaceEventHub()
+let codexRuntimeSyncer = CodexAppServerRegistryRuntimeSyncer(eventHub: eventHub)
 let registryMonitor = AgentSessionRegistryMonitor(hub: eventHub,
-                                                  socketClient: socketClient)
+                                                  socketClient: socketClient,
+                                                  runtimeSyncer: codexRuntimeSyncer)
 let workspaceEventMonitor = TideyWorkspaceEventMonitor(locator: locator, hub: workspaceEventHub)
 let observability = BridgeObservabilityCenter()
 let cloudflaredStatusStore = BridgeCloudflaredStatusStore(fileURL: bridgePaths.cloudflaredStateFileURL)
@@ -43,6 +45,7 @@ let server = TideyRemoteBridgeServer(host: runtimeConfiguration.host,
                                      eventHub: eventHub,
                                      workspaceEventHub: workspaceEventHub,
                                      registryMonitor: registryMonitor,
+                                     codexApprovalSubmitter: codexRuntimeSyncer,
                                      observability: observability,
                                      cloudflaredManager: cloudflaredManager,
                                      uploadGarbageCollector: uploadGarbageCollector,
