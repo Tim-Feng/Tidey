@@ -73,7 +73,7 @@ final class CodexAppServerPanelRuntimeManagerTests: XCTestCase {
                 "workspace_id": .string("workspace-1"),
                 "panel_id": .string("panel-1"),
                 "prompt_id": .string(promptID),
-                "target_index": .number(2),
+                "target_index": .number(1),
             ]))
 
         XCTAssertEqual(response?.ok, true)

@@ -448,7 +448,7 @@ final class HeadlessCodexRuntimeManagerTests: XCTestCase {
         XCTAssertEqual(response?.result?["headless"]?.boolValue, true)
         let approvalResponse = try Self.object(from: process.stdinLines().last ?? "")
         XCTAssertEqual(approvalResponse["id"]?.stringValue, "approval-1")
-        XCTAssertEqual(approvalResponse["result"]?.objectValue?["decision"]?.stringValue, "acceptForSession")
+        XCTAssertEqual(approvalResponse["result"]?.objectValue?["decision"]?.stringValue, "decline")
     }
 
     func testApprovalResolvedPublishesBeforeImmediateAppServerFollowUpNotification() throws {
@@ -482,7 +482,7 @@ final class HeadlessCodexRuntimeManagerTests: XCTestCase {
                                                                         "workspace_id": .string("headless-workspace"),
                                                                         "panel_id": .string("headless-panel"),
                                                                         "prompt_id": .string(promptID),
-                                                                        "target_index": .number(2),
+                                                                        "target_index": .number(1),
                                                                     ]))
 
         let fetched = hub.fetch(workspaceID: "headless-workspace",

@@ -91,7 +91,7 @@ final class CodexAppServerConnectionTests: XCTestCase {
 
         let response = try Self.object(from: outbound.lines()[0])
         XCTAssertEqual(response["id"]?.stringValue, "approval-1")
-        XCTAssertEqual(response["result"]?.objectValue?["decision"]?.stringValue, "acceptForSession")
+        XCTAssertEqual(response["result"]?.objectValue?["decision"]?.stringValue, "decline")
     }
 
     func testFileChangeApprovalRequestPublishesPromptAndSubmitSendsDecisionReply() throws {
@@ -112,7 +112,7 @@ final class CodexAppServerConnectionTests: XCTestCase {
         XCTAssertEqual(envelope.prompt.source, "codex_file_change_approval")
         XCTAssertTrue(envelope.prompt.body.contains("Grant root: /Users/timfeng/GitHub/Tidey"))
 
-        try connection.submitApproval(promptID: envelope.prompt.promptID, targetIndex: 2)
+        try connection.submitApproval(promptID: envelope.prompt.promptID, targetIndex: 1)
         let response = try Self.object(from: outbound.lines()[0])
         XCTAssertEqual(response["id"]?.intValue, 7)
         XCTAssertEqual(response["result"]?.objectValue?["decision"]?.stringValue, "decline")

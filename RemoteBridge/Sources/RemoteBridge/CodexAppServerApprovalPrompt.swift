@@ -30,6 +30,17 @@ enum CodexAppServerApprovalDecision: String, CaseIterable, Equatable, Sendable {
         }
     }
 
+    func label(for method: CodexAppServerApprovalMethod) -> String {
+        switch (method, self) {
+        case (.commandExecution, .accept):
+            return "Yes, proceed"
+        case (.commandExecution, .decline):
+            return "No"
+        default:
+            return label
+        }
+    }
+
     var jsonValue: JSONValue {
         .string(rawValue)
     }
@@ -109,15 +120,16 @@ struct CodexAppServerApprovalRequest: Sendable {
                           source: promptSource,
                           title: title,
                           body: body,
-                          options: Self.options,
+                          options: options,
                           selectedIndex: 0)
     }
 
     func response(targetIndex: Int) throws -> JSONValue {
-        guard Self.options.indices.contains(targetIndex) else {
+        let decisions = optionDecisions
+        guard decisions.indices.contains(targetIndex) else {
             throw BridgeInternalError.invalidRequest("Unknown Codex approval option index.")
         }
-        let decision = CodexAppServerApprovalDecision.allCases[targetIndex]
+        let decision = decisions[targetIndex]
         return .object(["decision": decision.jsonValue])
     }
 
@@ -178,10 +190,21 @@ struct CodexAppServerApprovalRequest: Sendable {
         return lines.joined(separator: "\n")
     }
 
-    private static let options: [InteractivePromptOption] = CodexAppServerApprovalDecision.allCases.enumerated().map { offset, decision in
-        InteractivePromptOption(index: offset,
-                                label: decision.label,
-                                inputSequence: decision.rawValue)
+    private var optionDecisions: [CodexAppServerApprovalDecision] {
+        switch method {
+        case .commandExecution:
+            return [.accept, .decline]
+        case .fileChange:
+            return [.accept, .decline]
+        }
+    }
+
+    private var options: [InteractivePromptOption] {
+        optionDecisions.enumerated().map { offset, decision in
+            InteractivePromptOption(index: offset,
+                                    label: decision.label(for: method),
+                                    inputSequence: decision.rawValue)
+        }
     }
 
     private static func stringID(from value: JSONValue) -> String? {

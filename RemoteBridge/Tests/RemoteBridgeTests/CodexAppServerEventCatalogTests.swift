@@ -116,7 +116,7 @@ final class CodexAppServerEventCatalogTests: XCTestCase {
         XCTAssertEqual(envelope.event.type, .interactivePrompt)
         XCTAssertEqual(envelope.prompt.vendor, "codex")
         XCTAssertEqual(envelope.prompt.source, "codex_command_approval")
-        XCTAssertEqual(envelope.prompt.options.map(\.inputSequence), ["accept", "acceptForSession", "decline", "cancel"])
+        XCTAssertEqual(envelope.prompt.options.map(\.inputSequence), ["accept", "decline"])
 
         let resolved = try connection.submitApproval(promptID: envelope.prompt.promptID,
                                                      targetIndex: 1)
@@ -125,7 +125,7 @@ final class CodexAppServerEventCatalogTests: XCTestCase {
 
         let response = try Self.object(from: outbound.lines()[0])
         XCTAssertEqual(response["id"]?.stringValue, "approval-1")
-        XCTAssertEqual(response["result"]?.objectValue?["decision"]?.stringValue, "acceptForSession")
+        XCTAssertEqual(response["result"]?.objectValue?["decision"]?.stringValue, "decline")
     }
 
     func testFailureFixtureMapsToVisibleAssistantMessage() {
