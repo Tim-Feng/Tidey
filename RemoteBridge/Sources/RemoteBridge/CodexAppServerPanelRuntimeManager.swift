@@ -5,9 +5,6 @@ protocol AgentSessionRuntimeSyncing: AnyObject {
 }
 
 final class CodexAppServerPanelRuntimeManager: HeadlessCodexRuntimeControlling, AgentSessionRuntimeSyncing {
-    private static let remoteTurnApprovalPolicy = "on-request"
-    private static let remoteTurnSandboxPolicy: JSONValue = .string("workspace-write")
-
     private final class RuntimeState {
         var record: AgentSessionRegistryRecord
         var session: CodexAppServerRuntimeSession?
@@ -238,9 +235,7 @@ final class CodexAppServerPanelRuntimeManager: HeadlessCodexRuntimeControlling, 
         let record = state.record
         lock.unlock()
 
-        try session.startThread(cwd: record.cwd,
-                                approvalPolicy: Self.remoteTurnApprovalPolicy,
-                                sandbox: Self.remoteTurnSandboxPolicy) { [weak self, weak session] result in
+        try session.startThread(cwd: record.cwd) { [weak self, weak session] result in
             self?.handleStartThreadResponse(result, sessionID: sessionID, session: session)
         }
     }
@@ -303,9 +298,7 @@ final class CodexAppServerPanelRuntimeManager: HeadlessCodexRuntimeControlling, 
                            threadID: String,
                            session: CodexAppServerRuntimeSession) throws {
         try session.startTurn(threadID: threadID,
-                              text: turn.text,
-                              approvalPolicy: Self.remoteTurnApprovalPolicy,
-                              sandboxPolicy: Self.remoteTurnSandboxPolicy)
+                              text: turn.text)
     }
 
     private func publishSyntheticSessionStartedIfNeeded(sessionID: String) {
