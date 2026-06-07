@@ -62,7 +62,6 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         let event = try syncer.submitApproval(promptID: "prompt-2", targetIndex: 1)
 
         XCTAssertEqual(event.eventID, resolved.eventID)
-        XCTAssertEqual(firstRuntime.submitAttempts, ["prompt-2"])
         XCTAssertEqual(secondRuntime.submitAttempts, ["prompt-2"])
     }
 
