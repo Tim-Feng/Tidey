@@ -558,15 +558,10 @@ run_codex_app_server_runtime() {
         "$HOOK_DIR/tidey" codex-hook session-start || true
     fi
 
-    env CODEX_HOME="$real_codex_home" "$real_codex" "$profile_flag" "$profile_name" --remote "unix://$socket_path" "$@" &
-    remote_tui_pid="$!"
-    write_registry_file "$registry_file" "$TIDEY_WORKSPACE_ID" "$session_id" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$created_at" "" "codex_app_server" "$socket_path" "$app_server_pid" "$remote_tui_pid"
-
     set +e
-    wait "$remote_tui_pid"
+    env CODEX_HOME="$real_codex_home" "$real_codex" "$profile_flag" "$profile_name" --remote "unix://$socket_path" "$@"
     remote_status=$?
     set -e
-    remote_tui_pid=""
     return "$remote_status"
 }
 
