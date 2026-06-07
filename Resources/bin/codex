@@ -523,6 +523,9 @@ start_rollout_monitor_if_needed() {
 }
 
 should_use_codex_app_server_runtime() {
+    if [[ "${TIDEY_CODEX_APP_SERVER_ENABLE:-}" != "1" ]]; then
+        return 1
+    fi
     if [[ "${TIDEY_CODEX_APP_SERVER_DISABLE:-}" == "1" ]]; then
         return 1
     fi
