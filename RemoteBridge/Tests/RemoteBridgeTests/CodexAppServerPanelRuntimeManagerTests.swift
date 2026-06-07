@@ -183,6 +183,42 @@ final class CodexAppServerPanelRuntimeManagerTests: XCTestCase {
         })
     }
 
+    func testSyncRetriesLoadedMacThreadSubscriptionAfterInitialEmptyList() throws {
+        let connector = PanelRuntimeFakeTransportConnector()
+        let runner = PanelRuntimeFailingProcessRunner()
+        let eventHub = AgentEventHub()
+        let manager = CodexAppServerPanelRuntimeManager(
+            sessionFactory: CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                                transportConnector: connector),
+            eventHub: eventHub,
+            timestampProvider: { "2026-06-07T00:00:00.000Z" }
+        )
+
+        manager.sync(records: [Self.appServerRecord()])
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+
+        let initialLoadedList = try Self.object(from: transport.sentLines().last ?? "")
+        XCTAssertEqual(initialLoadedList["method"]?.stringValue, "thread/loaded/list")
+        try Self.respond(on: transport, request: initialLoadedList, result: .object([
+            "data": .array([]),
+        ]))
+
+        let sentLineCountBeforeRetry = transport.sentLines().count
+        manager.sync(records: [Self.appServerRecord()])
+
+        let retriedLoadedList = try Self.object(from: transport.sentLines().last ?? "")
+        XCTAssertGreaterThan(transport.sentLines().count, sentLineCountBeforeRetry)
+        XCTAssertEqual(retriedLoadedList["method"]?.stringValue, "thread/loaded/list")
+        try Self.respond(on: transport, request: retriedLoadedList, result: .object([
+            "data": .array([.string("mac-thread-1")]),
+        ]))
+
+        let resumeThread = try Self.object(from: transport.sentLines().last ?? "")
+        XCTAssertEqual(resumeThread["method"]?.stringValue, "thread/resume")
+        XCTAssertEqual(resumeThread["params"]?.objectValue?["threadId"]?.stringValue, "mac-thread-1")
+    }
+
     func testSubmitInteractivePromptRepliesToPanelAppServerApprovalRequest() throws {
         let connector = PanelRuntimeFakeTransportConnector()
         let eventHub = AgentEventHub()

@@ -9,6 +9,7 @@ final class CodexAppServerPanelRuntimeManager: HeadlessCodexRuntimeControlling, 
         var record: AgentSessionRegistryRecord
         var session: CodexAppServerRuntimeSession?
         var threadID: String?
+        var didInitialize = false
         var isStartingThread = false
         var queuedTurns: [QueuedTurn] = []
         var didPublishSessionStarted = false
@@ -21,6 +22,11 @@ final class CodexAppServerPanelRuntimeManager: HeadlessCodexRuntimeControlling, 
     private struct QueuedTurn {
         let text: String
         let clientRequestID: String?
+    }
+
+    private struct LoadedThreadSubscriptionCandidate {
+        let sessionID: String
+        let session: CodexAppServerRuntimeSession
     }
 
     private let sessionFactory: CodexAppServerRuntimeSessionFactory
@@ -60,6 +66,16 @@ final class CodexAppServerPanelRuntimeManager: HeadlessCodexRuntimeControlling, 
             }
             return state
         }
+        let statesToRetrySubscription = appServerRecords.compactMap { record -> LoadedThreadSubscriptionCandidate? in
+            guard let state = states[record.sessionID],
+                  let session = state.session,
+                  state.didInitialize,
+                  state.threadID == nil,
+                  state.isStartingThread == false else {
+                return nil
+            }
+            return LoadedThreadSubscriptionCandidate(sessionID: record.sessionID, session: session)
+        }
         lock.unlock()
 
         for state in statesToAttach {
@@ -68,6 +84,9 @@ final class CodexAppServerPanelRuntimeManager: HeadlessCodexRuntimeControlling, 
             } catch {
                 BridgeLogger.server.error("codex app-server panel attach failed session_id=\(state.record.sessionID, privacy: .public) panel_id=\(state.record.panelID ?? "-", privacy: .public) error=\(String(describing: error), privacy: .public)")
             }
+        }
+        for candidate in statesToRetrySubscription {
+            subscribeToLoadedThreadIfNeeded(sessionID: candidate.sessionID, session: candidate.session)
         }
     }
 
@@ -218,9 +237,16 @@ final class CodexAppServerPanelRuntimeManager: HeadlessCodexRuntimeControlling, 
                   let created else {
                 return
             }
+            self?.markSessionInitialized(sessionID: sessionID)
             self?.subscribeToLoadedThreadIfNeeded(sessionID: sessionID, session: created)
         }
         return created
+    }
+
+    private func markSessionInitialized(sessionID: String) {
+        lock.lock()
+        states[sessionID]?.didInitialize = true
+        lock.unlock()
     }
 
     private func threadID(for sessionID: String) -> String? {
