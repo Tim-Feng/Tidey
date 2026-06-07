@@ -600,7 +600,7 @@ run_codex_app_server_runtime() {
     fi
 
     set +e
-    env CODEX_HOME="$real_codex_home" "$real_codex" "$profile_flag" "$profile_name" --remote "unix://$socket_path" "$@"
+    env CODEX_HOME="$real_codex_home" "$real_codex" --remote "unix://$socket_path" "$@"
     remote_status=$?
     set -e
     return "$remote_status"

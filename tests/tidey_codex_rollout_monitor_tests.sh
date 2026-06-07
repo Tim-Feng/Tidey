@@ -401,7 +401,7 @@ remote_lines = [line for line in lines if "--remote" in line]
 assert app_server_lines, "app-server was not launched"
 assert remote_lines, "remote TUI was not launched"
 assert all("--profile " not in line and "--profile-v2 " not in line for line in app_server_lines), app_server_lines
-assert any(("--profile " in line or "--profile-v2 " in line) and "--remote" in line for line in remote_lines), remote_lines
+assert all("--profile " not in line and "--profile-v2 " not in line for line in remote_lines), remote_lines
 PY
 
     kill "$socket_pid" 2>/dev/null || true
