@@ -140,6 +140,7 @@ final class CodexAppServerConnection {
         let id = object["id"]
         let method = object["method"]?.stringValue
         if let id, let method {
+            BridgeLogger.server.info("codex app-server server request received method=\(method, privacy: .public) id=\(Self.idKey(from: id) ?? "-", privacy: .public)")
             handleServerRequest(id: id, method: method, params: object["params"]?.objectValue ?? [:])
             return
         }
@@ -262,6 +263,7 @@ final class CodexAppServerConnection {
         }
         let prompt = approvalStore.record(request)
         let event = makePromptEvent(prompt: prompt)
+        BridgeLogger.server.info("codex app-server approval prompt publishing method=\(request.method.rawValue, privacy: .public) prompt_id=\(prompt.promptID, privacy: .public) source=\(prompt.source, privacy: .public)")
         onInteractivePrompt(CodexAppServerInteractivePromptEnvelope(request: request,
                                                                     prompt: prompt,
                                                                     event: event))

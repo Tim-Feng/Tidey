@@ -93,6 +93,8 @@ final class CodexAppServerPanelRuntimeManager: HeadlessCodexRuntimeControlling, 
             return nil
         }
 
+        BridgeLogger.input.info("route action=chat_submit request_id=\(request.id, privacy: .public) workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) session_id=\(state.record.sessionID, privacy: .public) transport=codex_app_server length=\(message.count)")
+
         if let requestedSessionID = params["session_id"]?.stringValue,
            requestedSessionID != state.record.sessionID {
             throw BridgeInternalError.invalidRequest("chat_submit session_id does not match the active panel session")
@@ -194,6 +196,8 @@ final class CodexAppServerPanelRuntimeManager: HeadlessCodexRuntimeControlling, 
                                                 onInteractivePromptResolved: { [eventHub] event in
                                                     eventHub.publish(event)
                                                 })
+
+        BridgeLogger.server.info("codex app-server panel attached workspace_id=\(record.workspaceID, privacy: .public) panel_id=\(record.panelID ?? "-", privacy: .public) session_id=\(record.sessionID, privacy: .public) socket=\(socketPath, privacy: .public) app_server_pid=\(record.appServerPID.map(String.init) ?? "-", privacy: .public)")
 
         lock.lock()
         guard let current = states[sessionID] else {
