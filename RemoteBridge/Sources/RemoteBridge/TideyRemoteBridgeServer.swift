@@ -1007,23 +1007,25 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                     self.send(envelope: envelope, to: context)
                 }
             }
-            if let replacedID = self.agentSubscriptions.replace(workspaceID: workspaceID,
+            let installResult = self.agentSubscriptions.install(workspaceID: workspaceID,
                                                                 sessionID: sessionID,
-                                                                with: subscriptionID) {
-                eventHub.unsubscribe(replacedID)
+                                                                id: subscriptionID)
+            for unsubscribeID in installResult.unsubscribeIDs {
+                eventHub.unsubscribe(unsubscribeID)
             }
+            let effectiveReplayEnvelopes = installResult.accepted ? replayEnvelopes : []
             return LocalRequestResult(
                 response: BridgeResponse(id: request.id,
                                          ok: true,
                                          result: [
-                                            "subscribed": .bool(true),
+                                            "subscribed": .bool(installResult.accepted),
                                             "workspace_id": workspaceID.map(JSONValue.string) ?? .null,
                                             "session_id": sessionID.map(JSONValue.string) ?? .null,
                                             "no_replay": .bool(noReplay),
-                                            "replay_count": .number(Double(replayEnvelopes.count)),
+                                            "replay_count": .number(Double(effectiveReplayEnvelopes.count)),
                                          ],
                                          error: nil),
-                agentReplayEnvelopes: replayEnvelopes,
+                agentReplayEnvelopes: effectiveReplayEnvelopes,
                 workspaceReplayEnvelopes: []
             )
 

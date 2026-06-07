@@ -2,19 +2,41 @@ import XCTest
 @testable import RemoteBridge
 
 final class BridgeAgentSubscriptionSlotsTests: XCTestCase {
-    func testWorkspaceAndSessionSubscriptionsCanCoexist() {
+    func testSessionSubscriptionReplacesWorkspaceWideSubscriptionForSameWorkspace() {
         var slots = BridgeAgentSubscriptionSlots()
         let workspaceID = UUID()
         let sessionID = UUID()
 
-        XCTAssertNil(slots.replace(workspaceID: "workspace-1", sessionID: nil, with: workspaceID))
-        XCTAssertNil(slots.replace(workspaceID: "workspace-1", sessionID: "session-1", with: sessionID))
+        let workspaceResult = slots.install(workspaceID: "workspace-1", sessionID: nil, id: workspaceID)
+        XCTAssertTrue(workspaceResult.accepted)
+        XCTAssertEqual(workspaceResult.unsubscribeIDs, [])
 
-        XCTAssertTrue(slots.contains(workspaceID: "workspace-1", sessionID: nil))
+        let sessionResult = slots.install(workspaceID: "workspace-1", sessionID: "session-1", id: sessionID)
+        XCTAssertTrue(sessionResult.accepted)
+        XCTAssertEqual(sessionResult.unsubscribeIDs, [workspaceID])
+
+        XCTAssertFalse(slots.contains(workspaceID: "workspace-1", sessionID: nil))
         XCTAssertTrue(slots.contains(workspaceID: "workspace-1", sessionID: "session-1"))
 
         let removed = Set(slots.removeAll())
-        XCTAssertEqual(removed, [workspaceID, sessionID])
+        XCTAssertEqual(removed, [sessionID])
+    }
+
+    func testWorkspaceWideSubscriptionIsRejectedWhenSessionSubscriptionExistsForWorkspace() {
+        var slots = BridgeAgentSubscriptionSlots()
+        let sessionID = UUID()
+        let workspaceID = UUID()
+
+        let sessionResult = slots.install(workspaceID: "workspace-1", sessionID: "session-1", id: sessionID)
+        XCTAssertTrue(sessionResult.accepted)
+        XCTAssertEqual(sessionResult.unsubscribeIDs, [])
+
+        let workspaceResult = slots.install(workspaceID: "workspace-1", sessionID: nil, id: workspaceID)
+        XCTAssertFalse(workspaceResult.accepted)
+        XCTAssertEqual(workspaceResult.unsubscribeIDs, [workspaceID])
+
+        XCTAssertFalse(slots.contains(workspaceID: "workspace-1", sessionID: nil))
+        XCTAssertTrue(slots.contains(workspaceID: "workspace-1", sessionID: "session-1"))
     }
 
     func testReplacingSameSubscriptionKeyReturnsOnlyPreviousID() {
@@ -23,9 +45,17 @@ final class BridgeAgentSubscriptionSlotsTests: XCTestCase {
         let oldChatID = UUID()
         let newChatID = UUID()
 
-        XCTAssertNil(slots.replace(workspaceID: "workspace-1", sessionID: nil, with: monitorID))
-        XCTAssertNil(slots.replace(workspaceID: "workspace-1", sessionID: "session-1", with: oldChatID))
-        XCTAssertEqual(slots.replace(workspaceID: "workspace-1", sessionID: "session-1", with: newChatID), oldChatID)
+        let monitorResult = slots.install(workspaceID: "workspace-2", sessionID: nil, id: monitorID)
+        XCTAssertTrue(monitorResult.accepted)
+        XCTAssertEqual(monitorResult.unsubscribeIDs, [])
+
+        let oldChatResult = slots.install(workspaceID: "workspace-1", sessionID: "session-1", id: oldChatID)
+        XCTAssertTrue(oldChatResult.accepted)
+        XCTAssertEqual(oldChatResult.unsubscribeIDs, [])
+
+        let newChatResult = slots.install(workspaceID: "workspace-1", sessionID: "session-1", id: newChatID)
+        XCTAssertTrue(newChatResult.accepted)
+        XCTAssertEqual(newChatResult.unsubscribeIDs, [oldChatID])
 
         let removed = Set(slots.removeAll())
         XCTAssertEqual(removed, [monitorID, newChatID])
