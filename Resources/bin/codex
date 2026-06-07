@@ -531,7 +531,7 @@ run_codex_app_server_runtime() {
     }
     trap cleanup_codex_app_server_runtime EXIT HUP INT TERM
 
-    env CODEX_HOME="$real_codex_home" "$real_codex" "$profile_flag" "$profile_name" app-server \
+    env CODEX_HOME="$real_codex_home" "$real_codex" app-server \
         -c "sqlite_home=$(toml_inline_string "$sqlite_home")" \
         --listen "unix://$socket_path" >"$app_server_log" 2>&1 &
     app_server_pid="$!"
