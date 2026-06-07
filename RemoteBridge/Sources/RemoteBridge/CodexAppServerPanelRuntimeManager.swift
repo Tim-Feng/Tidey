@@ -13,6 +13,7 @@ final class CodexAppServerPanelRuntimeManager: HeadlessCodexRuntimeControlling, 
         var isStartingThread = false
         var queuedTurns: [QueuedTurn] = []
         var didPublishSessionStarted = false
+        var ignoredLoadedThreadIDs = Set<String>()
 
         init(record: AgentSessionRegistryRecord) {
             self.record = record
@@ -304,7 +305,7 @@ final class CodexAppServerPanelRuntimeManager: HeadlessCodexRuntimeControlling, 
                                              startNewThreadIfMissing: Bool) {
         switch result {
         case .success(let value):
-            let loadedThreadIDs = Self.loadedThreadIDs(from: value)
+            let loadedThreadIDs = usableLoadedThreadIDs(from: value, sessionID: sessionID)
             if loadedThreadIDs.count == 1,
                let threadID = loadedThreadIDs.first,
                let session {
@@ -338,9 +339,14 @@ final class CodexAppServerPanelRuntimeManager: HeadlessCodexRuntimeControlling, 
             }
         } catch {
             let turns = clearStartingState(sessionID: sessionID)
-            publishBridgeError("Codex app-server failed to resume Mac thread: \(error.localizedDescription)", sessionID: sessionID)
-            for turn in turns {
-                publishAssistantMessage("Failed to submit queued Codex message: \(turn.text)", sessionID: sessionID)
+            ignoreLoadedThread(threadID, sessionID: sessionID)
+            if turns.isEmpty {
+                BridgeLogger.server.error("codex app-server panel loaded thread resume failed without queued turns session_id=\(sessionID, privacy: .public) thread_id=\(threadID, privacy: .public) error=\(String(describing: error), privacy: .public)")
+            } else {
+                publishBridgeError("Codex app-server failed to resume Mac thread: \(error.localizedDescription)", sessionID: sessionID)
+                for turn in turns {
+                    publishAssistantMessage("Failed to submit queued Codex message: \(turn.text)", sessionID: sessionID)
+                }
             }
         }
     }
@@ -365,9 +371,14 @@ final class CodexAppServerPanelRuntimeManager: HeadlessCodexRuntimeControlling, 
                            logMessage: "codex app-server panel resumed loaded thread")
         case .failure(let error):
             let turns = clearStartingState(sessionID: sessionID)
-            publishBridgeError("Codex app-server failed to resume Mac thread: \(error.localizedDescription)", sessionID: sessionID)
-            for turn in turns {
-                publishAssistantMessage("Failed to submit queued Codex message: \(turn.text)", sessionID: sessionID)
+            ignoreLoadedThread(requestedThreadID, sessionID: sessionID)
+            if turns.isEmpty {
+                BridgeLogger.server.error("codex app-server panel loaded thread resume failed without queued turns session_id=\(sessionID, privacy: .public) thread_id=\(requestedThreadID, privacy: .public) error=\(String(describing: error), privacy: .public)")
+            } else {
+                publishBridgeError("Codex app-server failed to resume Mac thread: \(error.localizedDescription)", sessionID: sessionID)
+                for turn in turns {
+                    publishAssistantMessage("Failed to submit queued Codex message: \(turn.text)", sessionID: sessionID)
+                }
             }
         }
     }
@@ -396,6 +407,20 @@ final class CodexAppServerPanelRuntimeManager: HeadlessCodexRuntimeControlling, 
                 publishBridgeError("Codex app-server failed to start turn: \(error.localizedDescription)", sessionID: sessionID)
             }
         }
+    }
+
+    private func usableLoadedThreadIDs(from value: JSONValue, sessionID: String) -> [String] {
+        let loadedThreadIDs = Self.loadedThreadIDs(from: value)
+        lock.lock()
+        let ignored = states[sessionID]?.ignoredLoadedThreadIDs ?? []
+        lock.unlock()
+        return loadedThreadIDs.filter { ignored.contains($0) == false }
+    }
+
+    private func ignoreLoadedThread(_ threadID: String, sessionID: String) {
+        lock.lock()
+        states[sessionID]?.ignoredLoadedThreadIDs.insert(threadID)
+        lock.unlock()
     }
 
     private func startNewThread(sessionID: String,

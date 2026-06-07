@@ -219,6 +219,55 @@ final class CodexAppServerPanelRuntimeManagerTests: XCTestCase {
         XCTAssertEqual(resumeThread["params"]?.objectValue?["threadId"]?.stringValue, "mac-thread-1")
     }
 
+    func testBackgroundLoadedMacThreadResumeFailureDoesNotPublishOrRetrySameThread() throws {
+        let connector = PanelRuntimeFakeTransportConnector()
+        let runner = PanelRuntimeFailingProcessRunner()
+        let eventHub = AgentEventHub()
+        let manager = CodexAppServerPanelRuntimeManager(
+            sessionFactory: CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                                transportConnector: connector),
+            eventHub: eventHub,
+            timestampProvider: { "2026-06-07T00:00:00.000Z" }
+        )
+
+        manager.sync(records: [Self.appServerRecord()])
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+
+        let loadedList = try Self.object(from: transport.sentLines().last ?? "")
+        XCTAssertEqual(loadedList["method"]?.stringValue, "thread/loaded/list")
+        try Self.respond(on: transport, request: loadedList, result: .object([
+            "data": .array([.string("mac-thread-no-rollout")]),
+        ]))
+
+        let resumeThread = try Self.object(from: transport.sentLines().last ?? "")
+        XCTAssertEqual(resumeThread["method"]?.stringValue, "thread/resume")
+        XCTAssertEqual(resumeThread["params"]?.objectValue?["threadId"]?.stringValue, "mac-thread-no-rollout")
+        try Self.respondError(on: transport,
+                              request: resumeThread,
+                              code: -32000,
+                              message: "no rollout found for thread id mac-thread-no-rollout")
+
+        let eventsAfterFailure = eventHub.fetch(workspaceID: "workspace-1", limit: 20).events
+        XCTAssertFalse(eventsAfterFailure.contains { event in
+            event.payload?.objectValue?["kind"]?.stringValue == "bridge_error" ||
+            event.text?.contains("failed to resume Mac thread") == true
+        })
+
+        manager.sync(records: [Self.appServerRecord()])
+        let retriedLoadedList = try Self.object(from: transport.sentLines().last ?? "")
+        XCTAssertEqual(retriedLoadedList["method"]?.stringValue, "thread/loaded/list")
+        try Self.respond(on: transport, request: retriedLoadedList, result: .object([
+            "data": .array([.string("mac-thread-no-rollout")]),
+        ]))
+
+        let sentMethods = transport.sentLines().compactMap { line in
+            (try? Self.object(from: line))?["method"]?.stringValue
+        }
+        XCTAssertEqual(sentMethods.filter { $0 == "thread/resume" }.count, 1)
+        XCTAssertEqual(sentMethods.filter { $0 == "thread/start" }.count, 0)
+    }
+
     func testSubmitInteractivePromptRepliesToPanelAppServerApprovalRequest() throws {
         let connector = PanelRuntimeFakeTransportConnector()
         let eventHub = AgentEventHub()
@@ -333,6 +382,18 @@ final class CodexAppServerPanelRuntimeManagerTests: XCTestCase {
         let encodedID = String(decoding: try JSONEncoder().encode(id), as: UTF8.self)
         let encodedResult = String(decoding: try JSONEncoder().encode(result), as: UTF8.self)
         transport.emitLine(#"{"id":\#(encodedID),"result":\#(encodedResult)}"#)
+    }
+
+    private static func respondError(on transport: PanelRuntimeFakeTransport,
+                                     request: [String: JSONValue],
+                                     code: Int,
+                                     message: String,
+                                     file: StaticString = #filePath,
+                                     line sourceLine: UInt = #line) throws {
+        let id = try XCTUnwrap(request["id"], file: file, line: sourceLine)
+        let encodedID = String(decoding: try JSONEncoder().encode(id), as: UTF8.self)
+        let encodedMessage = String(decoding: try JSONEncoder().encode(JSONValue.string(message)), as: UTF8.self)
+        transport.emitLine(#"{"id":\#(encodedID),"error":{"code":\#(code),"message":\#(encodedMessage)}}"#)
     }
 
     private static func object(from line: String,
