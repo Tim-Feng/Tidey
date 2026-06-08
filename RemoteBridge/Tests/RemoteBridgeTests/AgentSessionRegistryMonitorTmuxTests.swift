@@ -192,7 +192,12 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         try recordData.write(to: registryURL)
 
         let hub = AgentEventHub()
-        let runtimeSyncer = CapturingRuntimeSyncer()
+        var capturedAgentEventHandler: CodexAppServerHeadlessRuntime.AgentEventHandler?
+        let runtimeSyncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub,
+                                                               attachHandler: { _, _, _, onAgentEvent, _, _ in
+            capturedAgentEventHandler = onAgentEvent
+            return RegistryMonitorFakeRuntimeSession()
+        })
         let monitor = AgentSessionRegistryMonitor(paths: paths,
                                                   fileManager: fileManager,
                                                   hub: hub,
@@ -215,7 +220,44 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
                        ["Message from Mac TUI"])
         XCTAssertEqual(result.events.filter { $0.type == .assistantMessage }.map(\.text),
                        ["Message visible on Remote"])
-        XCTAssertEqual(runtimeSyncer.latestRecords.map(\.sessionID), ["session-app-server"])
+
+        let onAgentEvent = try XCTUnwrap(capturedAgentEventHandler)
+        onAgentEvent(AgentEvent(eventID: "runtime-user-duplicate",
+                                seq: 10_000,
+                                vendor: "codex",
+                                workspaceID: "workspace-app-server",
+                                sessionID: "session-app-server",
+                                timestamp: "2026-06-08T22:06:26.000Z",
+                                type: .userMessage,
+                                role: nil,
+                                text: "Message from Mac TUI",
+                                name: nil,
+                                input: nil,
+                                output: nil,
+                                toolCallID: nil,
+                                metadata: ["source": "codex_app_server"]))
+        onAgentEvent(AgentEvent(eventID: "runtime-assistant-duplicate",
+                                seq: 10_001,
+                                vendor: "codex",
+                                workspaceID: "workspace-app-server",
+                                sessionID: "session-app-server",
+                                timestamp: "2026-06-08T22:06:27.000Z",
+                                type: .assistantMessage,
+                                role: nil,
+                                text: "Message visible on Remote",
+                                name: nil,
+                                input: nil,
+                                output: nil,
+                                toolCallID: nil,
+                                metadata: ["source": "codex_app_server"]))
+
+        let deduplicated = hub.fetch(workspaceID: "workspace-app-server",
+                                     sessionID: "session-app-server",
+                                     limit: 10)
+        XCTAssertEqual(deduplicated.events.filter { $0.type == .userMessage }.map(\.text),
+                       ["Message from Mac TUI"])
+        XCTAssertEqual(deduplicated.events.filter { $0.type == .assistantMessage }.map(\.text),
+                       ["Message visible on Remote"])
     }
 
     func testActiveSessionForPanelFallsBackToTmuxPaneMatchWhenPanelIDsChanged() throws {
@@ -932,4 +974,18 @@ private final class CapturingRuntimeSyncer: AgentSessionRuntimeSyncing {
         self.records = records
         lock.unlock()
     }
+}
+
+private final class RegistryMonitorFakeRuntimeSession: CodexAppServerRuntimeSessionControlling {
+    func canSubmitMessage() -> Bool {
+        true
+    }
+
+    func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent {
+        throw BridgeInternalError.notFound("No prompts in registry monitor fake runtime.")
+    }
+
+    func submitMessage(text: String) throws {}
+
+    func stop() {}
 }

@@ -86,7 +86,7 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         XCTAssertEqual(secondRuntime.submittedMessages, ["hello from remote"])
     }
 
-    func testAttachedRuntimePublishesConversationEventsToHub() throws {
+    func testAttachedRuntimeDoesNotPublishConversationEventsToHub() throws {
         let hub = AgentEventHub()
         var capturedAgentEventHandler: CodexAppServerHeadlessRuntime.AgentEventHandler?
         let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { _, _, _, onAgentEvent, _, _ in
@@ -114,8 +114,53 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
                                sessionID: "app",
                                limit: 10)
 
-        XCTAssertEqual(result.events.map(\.type), [.userMessage, .assistantMessage])
-        XCTAssertEqual(result.events.map(\.text), ["test from Mac", "received"])
+        XCTAssertTrue(result.events.isEmpty)
+    }
+
+    func testAttachedRuntimeStillPublishesApprovalPromptEventsToHub() throws {
+        let hub = AgentEventHub()
+        var capturedPromptHandler: CodexAppServerConnection.InteractivePromptHandler?
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { _, _, _, _, onInteractivePrompt, _ in
+            capturedPromptHandler = onInteractivePrompt
+            return FakeRuntimeSession()
+        })
+
+        syncer.sync(records: [
+            Self.record(sessionID: "app", runtime: "codex_app_server", socketPath: "/tmp/app.sock"),
+        ])
+        let onInteractivePrompt = try XCTUnwrap(capturedPromptHandler)
+        let request = try XCTUnwrap(CodexAppServerApprovalRequest(
+            method: "item/commandExecution/requestApproval",
+            requestID: .string("approval-1"),
+            params: [
+                "threadId": .string("thread-1"),
+                "turnId": .string("turn-1"),
+                "itemId": .string("item-1"),
+                "command": .string("python3 -c 'print(1)'"),
+                "cwd": .string("/tmp"),
+            ]))
+        let prompt = InteractivePrompt(promptID: "prompt-approval",
+                                       vendor: "codex",
+                                       source: "codex_command_approval",
+                                       title: "Approve Codex command?",
+                                       body: "Command: python3 -c 'print(1)'",
+                                       options: [
+                                        InteractivePromptOption(index: 0, label: "Yes, proceed", inputSequence: "\r"),
+                                        InteractivePromptOption(index: 1, label: "No", inputSequence: "\u{1b}[B\r"),
+                                       ],
+                                       selectedIndex: 0)
+        let event = Self.interactivePromptEvent(sessionID: "app", promptID: prompt.promptID)
+
+        onInteractivePrompt(CodexAppServerInteractivePromptEnvelope(request: request,
+                                                                    prompt: prompt,
+                                                                    event: event))
+
+        let result = hub.fetch(workspaceID: "workspace-1",
+                               sessionID: "app",
+                               limit: 10)
+
+        XCTAssertEqual(result.events.map(\.eventID), [event.eventID])
+        XCTAssertEqual(result.events.map(\.type), [.interactivePrompt])
     }
 
     private static func record(sessionID: String,
@@ -145,6 +190,27 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
                    type: .interactivePromptResolved,
                    role: nil,
                    text: nil,
+                   name: nil,
+                   input: nil,
+                   output: nil,
+                   toolCallID: nil,
+                   metadata: [
+                    "panel_id": "panel-1",
+                    "prompt_id": promptID,
+                    "source": "codex_command_approval",
+                   ])
+    }
+
+    private static func interactivePromptEvent(sessionID: String, promptID: String) -> AgentEvent {
+        AgentEvent(eventID: "prompt-\(promptID)",
+                   seq: 1,
+                   vendor: "codex",
+                   workspaceID: "workspace-1",
+                   sessionID: sessionID,
+                   timestamp: "2026-06-07T00:00:00.000Z",
+                   type: .interactivePrompt,
+                   role: nil,
+                   text: "Approve Codex command?",
                    name: nil,
                    input: nil,
                    output: nil,

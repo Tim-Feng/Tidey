@@ -132,9 +132,7 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
             let session = try attachHandler(record,
                                             { [eventHub] sessionID in eventHub.nextSyntheticSeq(sessionID: sessionID) },
                                             timestampProvider,
-                                            { [eventHub] event in
-                                                eventHub.publish(event)
-                                            },
+                                            { _ in },
                                             { [eventHub] envelope in
                                                 eventHub.publish(envelope.event)
                                                 BridgeLogger.server.info("codex app-server approval prompt published workspace_id=\(envelope.event.workspaceID, privacy: .public) panel_id=\(envelope.event.metadata?["panel_id"] ?? "-", privacy: .public) session_id=\(envelope.event.sessionID, privacy: .public) prompt_id=\(envelope.prompt.promptID, privacy: .public)")
