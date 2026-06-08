@@ -205,13 +205,10 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertEqual(retryListLoaded["method"]?.stringValue, "thread/loaded/list")
         let retryListLoadedID = try XCTUnwrap(retryListLoaded["id"])
         transport.emitLine(try Self.responseText(id: retryListLoadedID, result: .object([
-            "threads": .array([
-                .object([
-                    "id": .string("thread-live"),
-                    "preview": .string("Mac TUI Codex"),
-                    "updatedAt": .string("2026-06-07T00:00:00.000Z"),
-                ]),
+            "data": .array([
+                .string("thread-live"),
             ]),
+            "nextCursor": .null,
         ])))
 
         wait(for: [submitCompleted], timeout: 2.0)

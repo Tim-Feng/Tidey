@@ -148,9 +148,11 @@ final class CodexAppServerRuntimeSession {
             condition.lock()
             switch response {
             case .success(let value):
-                let threadID = Self.loadedThreadID(from: value)
+                let threadID = codexAppServerLoadedThreadID(from: value)
                 if let threadID {
                     self.activeThreadStore.setThreadID(threadID)
+                } else {
+                    BridgeLogger.server.info("codex app-server submit loaded thread list returned no thread shape=\(codexAppServerLoadedThreadShapeDescription(from: value), privacy: .public)")
                 }
                 result = .success(threadID)
             case .failure(let error):
@@ -196,18 +198,6 @@ final class CodexAppServerRuntimeSession {
 
     func whenInitialized(_ callback: @escaping @Sendable (Result<Void, Error>) -> Void) {
         initialization.notify(callback)
-    }
-}
-
-private extension CodexAppServerRuntimeSession {
-    static func loadedThreadID(from value: JSONValue) -> String? {
-        let threads = value.objectValue?["threads"]?.arrayValue
-            ?? value.objectValue?["items"]?.arrayValue
-            ?? value.arrayValue
-            ?? []
-        return threads
-            .compactMap { $0.objectValue?["id"]?.stringValue ?? $0.objectValue?["threadId"]?.stringValue }
-            .last
     }
 }
 
@@ -497,7 +487,8 @@ final class CodexAppServerRuntimeSessionFactory {
             try connection.sendClientRequest(method: "thread/loaded/list") { result in
                 switch result {
                 case .success(let value):
-                    guard let threadID = loadedThreadID(from: value) else {
+                    guard let threadID = codexAppServerLoadedThreadID(from: value) else {
+                        BridgeLogger.server.info("codex app-server panel loaded thread list returned no thread shape=\(codexAppServerLoadedThreadShapeDescription(from: value), privacy: .public)")
                         return
                     }
                     activeThreadStore.setThreadID(threadID)
@@ -524,15 +515,63 @@ final class CodexAppServerRuntimeSessionFactory {
         }
     }
 
-    private static func loadedThreadID(from value: JSONValue) -> String? {
-        let threads = value.objectValue?["threads"]?.arrayValue
-            ?? value.objectValue?["items"]?.arrayValue
-            ?? value.arrayValue
-            ?? []
-        return threads
-            .compactMap { $0.objectValue?["id"]?.stringValue ?? $0.objectValue?["threadId"]?.stringValue }
-            .last
+}
+
+private func codexAppServerLoadedThreadID(from value: JSONValue) -> String? {
+    if let object = value.objectValue {
+        if let thread = object["thread"]?.objectValue,
+           let id = thread["id"]?.stringValue ?? thread["threadId"]?.stringValue {
+            return id
+        }
+        if let thread = object["currentThread"]?.objectValue,
+           let id = thread["id"]?.stringValue ?? thread["threadId"]?.stringValue {
+            return id
+        }
     }
+    let threads = value.objectValue?["threads"]?.arrayValue
+        ?? value.objectValue?["items"]?.arrayValue
+        ?? value.objectValue?["loadedThreads"]?.arrayValue
+        ?? value.objectValue?["data"]?.arrayValue
+        ?? value.arrayValue
+        ?? []
+    return threads
+        .compactMap { item -> String? in
+            if let id = item.stringValue {
+                return id
+            }
+            if let id = item.objectValue?["id"]?.stringValue ?? item.objectValue?["threadId"]?.stringValue {
+                return id
+            }
+            if let thread = item.objectValue?["thread"]?.objectValue {
+                return thread["id"]?.stringValue ?? thread["threadId"]?.stringValue
+            }
+            return nil
+        }
+        .last
+}
+
+private func codexAppServerLoadedThreadShapeDescription(from value: JSONValue) -> String {
+    if let object = value.objectValue {
+        let keys = object.keys.sorted().joined(separator: ",")
+        let collectionCount = object["threads"]?.arrayValue?.count
+            ?? object["items"]?.arrayValue?.count
+            ?? object["loadedThreads"]?.arrayValue?.count
+            ?? object["data"]?.arrayValue?.count
+            ?? -1
+        let firstKeys = (object["threads"]?.arrayValue?.first?.objectValue
+            ?? object["items"]?.arrayValue?.first?.objectValue
+            ?? object["loadedThreads"]?.arrayValue?.first?.objectValue
+            ?? object["data"]?.arrayValue?.first?.objectValue)?
+            .keys
+            .sorted()
+            .joined(separator: ",") ?? "-"
+        return "object_keys=\(keys) collection_count=\(collectionCount) first_object_keys=\(firstKeys)"
+    }
+    if let array = value.arrayValue {
+        let firstKeys = array.first?.objectValue?.keys.sorted().joined(separator: ",") ?? "-"
+        return "array_count=\(array.count) first_object_keys=\(firstKeys)"
+    }
+    return "scalar"
 }
 
 private final class CodexAppServerExternalProcess: CodexAppServerManagedProcess {
