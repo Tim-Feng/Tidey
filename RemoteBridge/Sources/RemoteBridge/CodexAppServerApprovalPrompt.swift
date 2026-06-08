@@ -121,7 +121,8 @@ struct CodexAppServerApprovalRequest: Sendable {
                           title: title,
                           body: body,
                           options: options,
-                          selectedIndex: 0)
+                          selectedIndex: 0,
+                          submitChannel: InteractivePromptSubmitChannel.codexAppServer)
     }
 
     func response(targetIndex: Int) throws -> JSONValue {

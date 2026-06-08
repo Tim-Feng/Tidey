@@ -204,13 +204,59 @@ final class InteractivePromptActionHandlerTests: XCTestCase {
         XCTAssertEqual(response.result?["resolved_event"]?.objectValue?["type"]?.stringValue, "interactive_prompt_resolved")
     }
 
-    private func makeHandler(route: OrdinaryTmuxPanelRoute,
+    func testSubmitCodexApprovalDoesNotRequireOrdinaryTmuxRoute() throws {
+        let route = ordinaryRoute()
+        let submitter = StubCodexApprovalSubmitter()
+        let resolved = AgentEvent(eventID: "resolved-prompt-1",
+                                  seq: 10,
+                                  vendor: "codex",
+                                  workspaceID: route.workspaceID,
+                                  sessionID: route.sessionID,
+                                  timestamp: "2026-06-07T00:00:00.000Z",
+                                  type: .interactivePromptResolved,
+                                  role: nil,
+                                  text: nil,
+                                  name: nil,
+                                  input: nil,
+                                  output: nil,
+                                  toolCallID: nil,
+                                  metadata: [
+                                    "panel_id": route.panelID,
+                                    "prompt_id": "prompt-1",
+                                    "source": "codex_command_approval",
+                                  ])
+        submitter.resolvedEvent = resolved
+        let handler = makeHandler(route: nil,
+                                  adapter: StubPromptAdapter(outputs: []),
+                                  activeSessionOverride: activeSession(route: route, vendor: "codex"),
+                                  codexApprovalSubmitter: submitter)
+
+        let response = try XCTUnwrap(handler.handle(BridgeRequest(id: "request-1",
+                                                                  action: "submit_interactive_prompt",
+                                                                  params: [
+                                                                    "workspace_id": .string(route.workspaceID),
+                                                                    "panel_id": .string(route.panelID),
+                                                                    "session_id": .string(route.sessionID),
+                                                                    "vendor": .string("codex"),
+                                                                    "prompt_id": .string("prompt-1"),
+                                                                    "submit_channel": .string("codex_app_server"),
+                                                                    "target_index": .number(1),
+                                                                  ])))
+
+        XCTAssertTrue(response.ok)
+        XCTAssertEqual(submitter.submissions.map(\.promptID), ["prompt-1"])
+        XCTAssertEqual(submitter.submissions.map(\.targetIndex), [1])
+        XCTAssertEqual(response.result?["status"]?.stringValue, "resolved")
+    }
+
+    private func makeHandler(route: OrdinaryTmuxPanelRoute?,
                              adapter: StubPromptAdapter,
                              eventHub: AgentEventHub = AgentEventHub(),
                              router: StubPromptInputRouter = StubPromptInputRouter(routedPanelIDs: []),
                              activeVendor: String = "claude",
+                             activeSessionOverride: ActiveAgentSessionSnapshot? = nil,
                              codexApprovalSubmitter: CodexAppServerApprovalSubmitting? = nil) -> InteractivePromptActionHandler {
-        let sessionResolver = StubPromptSessionResolver(session: activeSession(route: route, vendor: activeVendor))
+        let sessionResolver = StubPromptSessionResolver(session: activeSessionOverride ?? route.map { activeSession(route: $0, vendor: activeVendor) })
         let inputHandler = BridgeInputActionHandler(socketSender: StubPromptRequestSender(),
                                                     sessionResolver: sessionResolver,
                                                     ordinaryTmuxInputRouter: router)

@@ -43,6 +43,7 @@ final class CodexAppServerApprovalPromptTests: XCTestCase {
         XCTAssertEqual(prompt.options.map(\.label), ["Yes, proceed", "No"])
         XCTAssertEqual(prompt.options.map(\.inputSequence), ["accept", "decline"])
         XCTAssertEqual(prompt.selectedIndex, 0)
+        XCTAssertEqual(prompt.jsonValue.objectValue?["submit_channel"]?.stringValue, "codex_app_server")
 
         let response = try request.response(targetIndex: 1)
         XCTAssertEqual(response.objectValue?["decision"]?.stringValue, "decline")

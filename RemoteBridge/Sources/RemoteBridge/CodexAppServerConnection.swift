@@ -298,6 +298,14 @@ final class CodexAppServerConnection {
         guard let approvalContext else {
             preconditionFailure("approvalContext must exist before creating prompt events")
         }
+        var metadata = [
+            "panel_id": approvalContext.panelID,
+            "source": prompt.source,
+            "prompt_id": prompt.promptID,
+        ]
+        if let submitChannel = prompt.submitChannel {
+            metadata["submit_channel"] = submitChannel
+        }
         return AgentEvent(eventID: "codex-app-server-prompt:\(prompt.promptID)",
                           seq: nextSequence(approvalContext.sessionID),
                           vendor: "codex",
@@ -311,17 +319,22 @@ final class CodexAppServerConnection {
                           input: nil,
                           output: nil,
                           toolCallID: nil,
-                          metadata: [
-                            "panel_id": approvalContext.panelID,
-                            "source": prompt.source,
-                            "prompt_id": prompt.promptID,
-                          ],
+                          metadata: metadata,
                           payload: prompt.jsonValue)
     }
 
     private func makeResolvedEvent(prompt: InteractivePrompt, reason: String) -> AgentEvent {
         guard let approvalContext else {
             preconditionFailure("approvalContext must exist before creating resolved events")
+        }
+        var metadata = [
+            "panel_id": approvalContext.panelID,
+            "source": prompt.source,
+            "prompt_id": prompt.promptID,
+            "reason": reason,
+        ]
+        if let submitChannel = prompt.submitChannel {
+            metadata["submit_channel"] = submitChannel
         }
         return AgentEvent(eventID: "codex-app-server-prompt-resolved:\(prompt.promptID):\(reason)",
                           seq: nextSequence(approvalContext.sessionID),
@@ -336,12 +349,7 @@ final class CodexAppServerConnection {
                           input: nil,
                           output: nil,
                           toolCallID: nil,
-                          metadata: [
-                            "panel_id": approvalContext.panelID,
-                            "source": prompt.source,
-                            "prompt_id": prompt.promptID,
-                            "reason": reason,
-                          ],
+                          metadata: metadata,
                           payload: prompt.jsonValue)
     }
 

@@ -503,6 +503,22 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertNoThrow(try store.claimForSubmit(threadID: "thread-live"))
     }
 
+    func testTurnStateStoreThreadStatusIdleClearsAppServerOriginTurnActive() throws {
+        let store = CodexAppServerTurnStateStore()
+        store.markStarted(threadID: "thread-live", turnID: "tui-turn")
+
+        XCTAssertThrowsError(try store.claimForSubmit(threadID: "thread-live")) { error in
+            guard case BridgeInternalError.invalidRequest(let message) = error else {
+                return XCTFail("expected invalid request, got \(error)")
+            }
+            XCTAssertEqual(message, "Codex app-server turn is already running.")
+        }
+
+        store.markThreadIdle(threadID: "thread-live")
+
+        XCTAssertNoThrow(try store.claimForSubmit(threadID: "thread-live"))
+    }
+
     func testSubmitMessageReleasesBusyGuardWhenTurnStartRequestFails() throws {
         let runner = FakeCodexAppServerProcessRunner()
         let connector = FakeCodexAppServerTransportConnector()

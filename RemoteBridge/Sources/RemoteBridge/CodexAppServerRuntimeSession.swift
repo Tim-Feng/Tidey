@@ -219,9 +219,15 @@ final class CodexAppServerRuntimeSession {
 }
 
 final class CodexAppServerTurnStateStore: @unchecked Sendable {
+    private enum TurnOrigin {
+        case remoteSubmit
+        case appServer
+    }
+
     private struct TurnActivity {
         let turnID: String
         let startedAt: Date
+        let origin: TurnOrigin
     }
 
     private struct State {
@@ -281,8 +287,9 @@ final class CodexAppServerTurnStateStore: @unchecked Sendable {
     func markStarted(threadID: String, turnID: String) {
         lock.lock()
         updateStateLocked(threadID: threadID) { state in
+            let origin: TurnOrigin = state.pendingSubmitStartedAt == nil ? .appServer : .remoteSubmit
             state.pendingSubmitStartedAt = nil
-            state.turn = TurnActivity(turnID: turnID, startedAt: now())
+            state.turn = TurnActivity(turnID: turnID, startedAt: now(), origin: origin)
         }
         lock.unlock()
     }
@@ -309,6 +316,9 @@ final class CodexAppServerTurnStateStore: @unchecked Sendable {
         lock.lock()
         updateStateLocked(threadID: threadID) { state in
             state.threadStatusActiveStartedAt = nil
+            if state.turn?.origin == .appServer {
+                state.turn = nil
+            }
         }
         lock.unlock()
     }
