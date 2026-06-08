@@ -285,6 +285,47 @@ PY
 
 run_app_server_registry_metadata_test
 
+run_stale_app_server_registry_cleanup_test() {
+    local tmpdir
+    local live_registry
+    local stale_registry
+    local socket
+    local socket_pid
+
+    tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/tidey-codex-stale-registry-tests.XXXXXX")"
+    live_registry="$tmpdir/codex-live.json"
+    stale_registry="$tmpdir/codex-stale.json"
+    socket="$tmpdir/live.sock"
+
+    python3 -c 'import socket, sys, time; sock = socket.socket(socket.AF_UNIX); sock.bind(sys.argv[1]); time.sleep(10)' "$socket" &
+    socket_pid="$!"
+    for _ in $(seq 1 50); do
+        [[ -S "$socket" ]] && break
+        sleep 0.02
+    done
+
+    TMPDIR_CASE="$tmpdir" LIVE_REGISTRY="$live_registry" STALE_REGISTRY="$stale_registry" SOCKET="$socket" CODEX_UNDER_TEST="$CODEX_UNDER_TEST" bash -c '
+        set -euo pipefail
+        source "$CODEX_UNDER_TEST"
+
+        REGISTRY_ROOT="$TMPDIR_CASE"
+        write_registry_file "$LIVE_REGISTRY" "workspace-live" "live" "panel-live" "$$" "/tmp/tidey" "2026-06-07T00:00:00Z" "" "codex_app_server" "$SOCKET" "$$" ""
+        write_registry_file "$STALE_REGISTRY" "workspace-stale" "stale" "panel-stale" "99999999" "/tmp/tidey" "2026-06-07T00:00:00Z" "" "codex_app_server" "$TMPDIR_CASE/missing.sock" "99999998" "99999997"
+
+        cleanup_stale_app_server_registry_records
+
+        [[ -f "$LIVE_REGISTRY" ]] || fail "live app-server registry was removed"
+        [[ ! -f "$STALE_REGISTRY" ]] || fail "stale app-server registry was not removed"
+    '
+
+    kill "$socket_pid" 2>/dev/null || true
+    wait "$socket_pid" 2>/dev/null || true
+
+    rm -rf "$tmpdir"
+}
+
+run_stale_app_server_registry_cleanup_test
+
 run_app_server_runtime_selection_test() {
     local tmpdir
     local socket
@@ -407,6 +448,8 @@ run_app_server_runtime_launch_test() {
     local socket_pid
     local codex_log
     local app_server_child_pid_file
+    local remote_tui_pid_file
+    local remote_tui_registry_ok_file
 
     tmpdir="$(mktemp -d "/private/tmp/tidey-codex-launch.XXXXXX")"
     fake_home="$tmpdir/home"
@@ -415,6 +458,8 @@ run_app_server_runtime_launch_test() {
     socket="$tmpdir/tidey.sock"
     codex_log="$tmpdir/codex.log"
     app_server_child_pid_file="$tmpdir/app-server-child.pid"
+    remote_tui_pid_file="$tmpdir/remote-tui.pid"
+    remote_tui_registry_ok_file="$tmpdir/remote-tui-registry.ok"
     mkdir -p "$fake_bin" "$registry_root"
 
     cat > "$fake_bin/codex" <<'FAKE_CODEX'
@@ -440,6 +485,14 @@ if [[ " $* " == *" app-server "* ]]; then
     exit 0
 fi
 if [[ "$*" == *"--remote"* ]]; then
+    printf '%s\n' "$$" > "$FAKE_REMOTE_TUI_PID_FILE"
+    for _ in $(seq 1 50); do
+        if grep -q "\"remote_tui_pid\":$$" "$FAKE_REGISTRY_ROOT"/codex-*.json 2>/dev/null; then
+            printf 'ok\n' > "$FAKE_REMOTE_TUI_REGISTRY_OK_FILE"
+            break
+        fi
+        sleep 0.02
+    done
     sleep 0.2
     exit 0
 fi
@@ -462,12 +515,17 @@ FAKE_CODEX
         TIDEY_PANEL_ID="panel-1" \
         FAKE_CODEX_LOG="$codex_log" \
         FAKE_APP_SERVER_CHILD_PID_FILE="$app_server_child_pid_file" \
+        FAKE_REMOTE_TUI_PID_FILE="$remote_tui_pid_file" \
+        FAKE_REMOTE_TUI_REGISTRY_OK_FILE="$remote_tui_registry_ok_file" \
+        FAKE_REGISTRY_ROOT="$registry_root" \
         TMPDIR="$tmpdir" \
         "$CODEX_UNDER_TEST"
 
     [[ -z "$(find "$registry_root" -name "codex-*.json" -print -quit)" ]] || fail "app-server registry file was not cleaned up"
     grep -q "app-server" "$codex_log" || fail "app-server was not launched"
     grep -q -- "--remote" "$codex_log" || fail "remote TUI was not launched"
+    [[ -f "$remote_tui_pid_file" ]] || fail "remote TUI pid was not recorded"
+    [[ -f "$remote_tui_registry_ok_file" ]] || fail "remote TUI pid was not written to registry"
     [[ -f "$app_server_child_pid_file" ]] || fail "app-server child pid was not recorded"
     app_server_child_pid="$(cat "$app_server_child_pid_file")"
     for _ in $(seq 1 50); do

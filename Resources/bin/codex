@@ -460,6 +460,94 @@ kill_processes_matching_text() {
     done < <(process_pids_matching_text "$needle")
 }
 
+cleanup_stale_app_server_registry_records() {
+    local cleanup_rows=""
+    local registry_path=""
+    local app_server_pid=""
+    local remote_tui_pid=""
+
+    mkdir -p "$REGISTRY_ROOT"
+    cleanup_rows="$(python3 - "$REGISTRY_ROOT" <<'PY'
+from pathlib import Path
+import json
+import os
+import stat
+import sys
+
+root = Path(sys.argv[1])
+
+def int_value(value):
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+def pid_alive(pid):
+    if not pid or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+def socket_alive(path):
+    if not isinstance(path, str) or not path:
+        return False
+    try:
+        mode = os.stat(path).st_mode
+    except OSError:
+        return False
+    return stat.S_ISSOCK(mode)
+
+if not root.exists():
+    raise SystemExit(0)
+
+for path in root.glob("codex-*.json"):
+    try:
+        record = json.loads(path.read_text())
+    except Exception:
+        continue
+    if record.get("runtime") != "codex_app_server":
+        continue
+
+    owner_pid = int_value(record.get("pid"))
+    app_server_pid = int_value(record.get("app_server_pid"))
+    remote_tui_pid = int_value(record.get("remote_tui_pid"))
+    app_server_socket = record.get("app_server_socket")
+
+    stale = (
+        not pid_alive(owner_pid)
+        or not pid_alive(app_server_pid)
+        or not socket_alive(app_server_socket)
+    )
+    if not stale:
+        continue
+
+    fields = [
+        str(path),
+        str(app_server_pid or ""),
+        str(remote_tui_pid or ""),
+    ]
+    print("\t".join(fields))
+PY
+)"
+
+    while IFS=$'\t' read -r registry_path app_server_pid remote_tui_pid; do
+        [[ -n "$registry_path" ]] || continue
+        if [[ -n "$remote_tui_pid" ]]; then
+            kill_pid_tree "$remote_tui_pid"
+        fi
+        if [[ -n "$app_server_pid" ]]; then
+            kill_pid_tree "$app_server_pid"
+        fi
+        rm -f "$registry_path"
+    done <<< "$cleanup_rows"
+}
+
 rollout_for_pid_tree() {
     local root_pid="$1"
     local queue=("$root_pid")
@@ -639,7 +727,10 @@ run_codex_app_server_runtime() {
     fi
 
     set +e
-    env CODEX_HOME="$real_codex_home" "$real_codex" --remote "unix://$socket_path" "$@"
+    env CODEX_HOME="$real_codex_home" "$real_codex" --remote "unix://$socket_path" "$@" &
+    remote_tui_pid="$!"
+    write_registry_file "$registry_file" "$TIDEY_WORKSPACE_ID" "$session_id" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$created_at" "" "codex_app_server" "$socket_path" "$app_server_pid" "$remote_tui_pid"
+    wait "$remote_tui_pid"
     remote_status=$?
     set -e
     cleanup_codex_app_server_runtime "$remote_status"
@@ -687,6 +778,7 @@ main() {
     created_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     session_id="$(initial_session_id)"
     registry_file="$REGISTRY_ROOT/codex-$session_id.json"
+    cleanup_stale_app_server_registry_records
     write_registry_file "$registry_file" "$TIDEY_WORKSPACE_ID" "$session_id" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$created_at" ""
 
     if should_use_codex_app_server_runtime "$@"; then
