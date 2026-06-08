@@ -118,6 +118,49 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         XCTAssertEqual(result.events.map(\.text), ["test from Mac", "received"])
     }
 
+    func testThreadStartedRolloutPathStartsTranscriptTailingForRegistrySession() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexAppServerRegistryRuntimeSyncerTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let rolloutURL = directory.appendingPathComponent("rollout-2026-06-08T22-06-25-\(Self.codexThreadID).jsonl")
+        let lines = [
+            makeCodexMessageLine(role: "user", content: "Message from Mac TUI"),
+            makeCodexMessageLine(role: "assistant", content: "Message visible on Remote"),
+        ].joined(separator: "\n") + "\n"
+        try lines.write(to: rolloutURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        var capturedAgentEventHandler: CodexAppServerHeadlessRuntime.AgentEventHandler?
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { _, _, _, onAgentEvent, _, _ in
+            capturedAgentEventHandler = onAgentEvent
+            return FakeRuntimeSession()
+        })
+
+        syncer.sync(records: [
+            Self.record(sessionID: "registry-session", runtime: "codex_app_server", socketPath: "/tmp/app.sock"),
+        ])
+        let onAgentEvent = try XCTUnwrap(capturedAgentEventHandler)
+
+        onAgentEvent(Self.threadStartedEvent(sessionID: "registry-session", rolloutPath: rolloutURL.path))
+
+        XCTAssertTrue(waitUntil {
+            let result = hub.fetch(workspaceID: "workspace-1",
+                                   sessionID: "registry-session",
+                                   limit: 10)
+            return result.events.contains { $0.text == "Message visible on Remote" }
+        })
+
+        let result = hub.fetch(workspaceID: "workspace-1",
+                               sessionID: "registry-session",
+                               limit: 10)
+        XCTAssertEqual(result.events.filter { $0.type == .userMessage }.map(\.text),
+                       ["Message from Mac TUI"])
+        XCTAssertEqual(result.events.filter { $0.type == .assistantMessage }.map(\.text),
+                       ["Message visible on Remote"])
+    }
+
     private static func record(sessionID: String,
                                runtime: String?,
                                socketPath: String?) -> AgentSessionRegistryRecord {
@@ -178,6 +221,72 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
                     "panel_id": "panel-1",
                     "source": "codex_app_server",
                    ])
+    }
+
+    private static let codexThreadID = "019ea78e-5aee-7a40-848c-7e9b78025fc9"
+
+    private static func threadStartedEvent(sessionID: String, rolloutPath: String) -> AgentEvent {
+        AgentEvent(eventID: "thread-started",
+                   seq: 1,
+                   vendor: "codex",
+                   workspaceID: "workspace-1",
+                   sessionID: sessionID,
+                   timestamp: "2026-06-08T22:06:25.000Z",
+                   type: .sessionStarted,
+                   role: nil,
+                   text: codexThreadID,
+                   name: nil,
+                   input: nil,
+                   output: nil,
+                   toolCallID: nil,
+                   metadata: [
+                    "panel_id": "panel-1",
+                    "source": "codex_app_server",
+                    "thread_id": codexThreadID,
+                   ],
+                   payload: .object([
+                    "kind": .string("thread_started"),
+                    "source": .string("codex_app_server"),
+                    "method": .string("thread/started"),
+                    "thread_id": .string(codexThreadID),
+                    "params": .object([
+                        "thread": .object([
+                            "id": .string(codexThreadID),
+                            "path": .string(rolloutPath),
+                        ]),
+                    ]),
+                   ]))
+    }
+
+    private func makeCodexMessageLine(role: String, content: String) -> String {
+        let object: [String: Any] = [
+            "type": "response_item",
+            "timestamp": "2026-06-08T22:06:25Z",
+            "payload": [
+                "type": "message",
+                "role": role,
+                "content": [
+                    [
+                        "type": role == "user" ? "input_text" : "output_text",
+                        "text": content,
+                    ],
+                ],
+            ],
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        return String(data: data, encoding: .utf8)!
+    }
+
+    private func waitUntil(timeout: TimeInterval = 2,
+                           condition: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() {
+                return true
+            }
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+        }
+        return condition()
     }
 }
 
