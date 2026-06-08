@@ -258,6 +258,38 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertEqual(transport.sentLines().count, 4)
     }
 
+    func testFactoryDoesNotUsePaginatedSingleLoadedThread() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in })
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+
+        let initialListLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        let initialListLoadedID = try XCTUnwrap(initialListLoaded["id"])
+        transport.emitLine(try Self.responseText(id: initialListLoadedID, result: .object([
+            "data": .array([
+                .string("thread-first-page"),
+            ]),
+            "nextCursor": .string("next-page"),
+        ])))
+
+        XCTAssertFalse(session.canSubmitMessage())
+        XCTAssertEqual(transport.sentLines().count, 3)
+    }
+
     func testSubmitMessageLoadsThreadWhenAttachedRuntimeWasNotReady() throws {
         let runner = FakeCodexAppServerProcessRunner()
         let connector = FakeCodexAppServerTransportConnector()
@@ -365,6 +397,68 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertEqual(turnStart["method"]?.stringValue, "turn/start")
         let turnParams = try XCTUnwrap(turnStart["params"]?.objectValue)
         XCTAssertEqual(turnParams["input"]?.arrayValue?.first?.objectValue?["text"]?.stringValue, "after completion")
+    }
+
+    func testTUIThreadStatusActiveBlocksRemoteSubmitUntilIdle() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in })
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+        try Self.loadThread("thread-live", on: transport)
+
+        transport.emitLine("""
+        {"method":"thread/status/changed","params":{"threadId":"thread-live","status":{"type":"active","activeFlags":[]}}}
+        """)
+        let sentCountAfterActive = transport.sentLines().count
+
+        XCTAssertThrowsError(try session.submitMessage(text: "remote while TUI active")) { error in
+            guard case BridgeInternalError.invalidRequest(let message) = error else {
+                return XCTFail("expected invalid request, got \(error)")
+            }
+            XCTAssertEqual(message, "Codex app-server turn is already running.")
+        }
+        XCTAssertEqual(transport.sentLines().count, sentCountAfterActive)
+
+        transport.emitLine("""
+        {"method":"thread/status/changed","params":{"threadId":"thread-live","status":{"type":"idle"}}}
+        """)
+
+        try session.submitMessage(text: "remote after TUI idle")
+        let turnStart = try Self.object(from: try XCTUnwrap(transport.sentLines().last))
+        XCTAssertEqual(turnStart["method"]?.stringValue, "turn/start")
+        XCTAssertEqual(turnStart["params"]?.objectValue?["input"]?.arrayValue?.first?.objectValue?["text"]?.stringValue,
+                       "remote after TUI idle")
+    }
+
+    func testTurnStateStoreExpiresStuckActiveTurn() throws {
+        var now = Date(timeIntervalSince1970: 100)
+        let store = CodexAppServerTurnStateStore(timeout: 1) {
+            now
+        }
+        store.markThreadActive(threadID: "thread-live")
+
+        XCTAssertThrowsError(try store.claimForSubmit(threadID: "thread-live")) { error in
+            guard case BridgeInternalError.invalidRequest(let message) = error else {
+                return XCTFail("expected invalid request, got \(error)")
+            }
+            XCTAssertEqual(message, "Codex app-server turn is already running.")
+        }
+
+        now = now.addingTimeInterval(2)
+        XCTAssertNoThrow(try store.claimForSubmit(threadID: "thread-live"))
     }
 
     func testSubmitMessageReleasesBusyGuardWhenTurnStartRequestFails() throws {

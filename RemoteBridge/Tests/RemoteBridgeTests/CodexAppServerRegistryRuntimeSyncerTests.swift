@@ -183,9 +183,14 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
 
 private final class FakeRuntimeSession: CodexAppServerRuntimeSessionControlling {
     var stopped = false
+    var canSubmit = true
     var submitAttempts = [String]()
     var submittedMessages = [String]()
     var resolvedEventsByPromptID = [String: AgentEvent]()
+
+    func canSubmitMessage() -> Bool {
+        canSubmit
+    }
 
     func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent {
         submitAttempts.append(promptID)

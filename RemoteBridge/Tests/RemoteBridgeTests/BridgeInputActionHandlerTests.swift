@@ -187,6 +187,50 @@ final class BridgeInputActionHandlerTests: XCTestCase {
         ])
     }
 
+    func testChatSubmitForCodexAppServerRuntimeFallsBackWhenRuntimeCannotSubmit() throws {
+        let sender = MockTideyRequestSender()
+        let resolver = MockSessionResolver(
+            session: ActiveAgentSessionSnapshot(vendor: "codex",
+                                                workspaceID: "workspace-1",
+                                                sessionID: "session-1",
+                                                panelID: "panel-1"),
+            recordsBySessionID: [
+                "session-1": AgentSessionRegistryRecord(version: 1,
+                                                        vendor: "codex",
+                                                        workspaceID: "workspace-1",
+                                                        sessionID: "session-1",
+                                                        panelID: "panel-1",
+                                                        pid: 123,
+                                                        cwd: "/tmp",
+                                                        createdAt: "2026-06-08T00:00:00Z",
+                                                        transcriptPath: nil,
+                                                        runtime: "codex_app_server",
+                                                        appServerSocket: "/tmp/app.sock",
+                                                        appServerPID: 456),
+            ])
+        let appServerSubmitter = MockCodexAppServerChatSubmitter()
+        appServerSubmitter.canSubmit = false
+        let handler = BridgeInputActionHandler(socketSender: sender,
+                                               sessionResolver: resolver,
+                                               codexAppServerChatSubmitter: appServerSubmitter)
+
+        let response = try handler.handle(BridgeRequest(id: "request-1",
+                                                        action: "chat_submit",
+                                                        params: [
+                                                            "workspace_id": .string("workspace-1"),
+                                                            "panel_id": .string("panel-1"),
+                                                            "message": .string("hello from terminal fallback"),
+                                                            "session_id": .string("session-1"),
+                                                            "vendor": .string("codex"),
+                                                        ]))
+
+        XCTAssertEqual(response?.ok, true)
+        XCTAssertTrue(appServerSubmitter.submissions.isEmpty)
+        XCTAssertEqual(sender.sentRequests.map(\.action), ["send_input", "send_key"])
+        XCTAssertEqual(sender.sentRequests[0].params?["input"]?.stringValue, "hello from terminal fallback")
+        XCTAssertEqual(sender.sentRequests[1].params?["key"]?.stringValue, "enter")
+    }
+
     func testChatSubmitRegistersClientRequestIDForTranscriptEchoMatching() throws {
         let sender = MockTideyRequestSender()
         let resolver = MockSessionResolver(session: ActiveAgentSessionSnapshot(vendor: "codex",
@@ -439,6 +483,11 @@ private final class MockCodexAppServerChatSubmitter: CodexAppServerChatSubmittin
     }
 
     private(set) var submissions = [Submission]()
+    var canSubmit = true
+
+    func canSubmitMessage(sessionID: String) -> Bool {
+        canSubmit
+    }
 
     func submitMessage(sessionID: String, text: String) throws {
         submissions.append(Submission(sessionID: sessionID, text: text))

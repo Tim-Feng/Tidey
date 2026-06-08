@@ -72,6 +72,7 @@ final class CodexAppServerHeadlessRuntime {
     typealias AgentEventHandler = (AgentEvent) -> Void
     typealias ThreadIDHandler = (String) -> Void
     typealias TurnLifecycleHandler = (_ threadID: String, _ turnID: String) -> Void
+    typealias ThreadStatusHandler = (_ threadID: String) -> Void
 
     private let context: CodexAppServerRuntimeContext
     private let nextSequence: SequenceProvider
@@ -80,6 +81,8 @@ final class CodexAppServerHeadlessRuntime {
     private let onThreadID: ThreadIDHandler
     private let onTurnStarted: TurnLifecycleHandler
     private let onTurnCompleted: TurnLifecycleHandler
+    private let onThreadActive: ThreadStatusHandler
+    private let onThreadIdle: ThreadStatusHandler
 
     init(context: CodexAppServerRuntimeContext,
          nextSequence: @escaping SequenceProvider,
@@ -87,7 +90,9 @@ final class CodexAppServerHeadlessRuntime {
          onAgentEvent: @escaping AgentEventHandler,
          onThreadID: @escaping ThreadIDHandler = { _ in },
          onTurnStarted: @escaping TurnLifecycleHandler = { _, _ in },
-         onTurnCompleted: @escaping TurnLifecycleHandler = { _, _ in }) {
+         onTurnCompleted: @escaping TurnLifecycleHandler = { _, _ in },
+         onThreadActive: @escaping ThreadStatusHandler = { _ in },
+         onThreadIdle: @escaping ThreadStatusHandler = { _ in }) {
         self.context = context
         self.nextSequence = nextSequence
         self.timestampProvider = timestampProvider
@@ -95,6 +100,8 @@ final class CodexAppServerHeadlessRuntime {
         self.onThreadID = onThreadID
         self.onTurnStarted = onTurnStarted
         self.onTurnCompleted = onTurnCompleted
+        self.onThreadActive = onThreadActive
+        self.onThreadIdle = onThreadIdle
     }
 
     @discardableResult
@@ -194,6 +201,18 @@ final class CodexAppServerHeadlessRuntime {
            let threadID = Self.threadID(from: notification.params),
            let turnID = Self.turnID(from: notification.params) {
             onTurnCompleted(threadID, turnID)
+        }
+        if notification.method == "thread/status/changed",
+           let threadID = Self.threadID(from: notification.params),
+           let status = notification.params["status"]?.objectValue?["type"]?.stringValue {
+            switch status {
+            case "active":
+                onThreadActive(threadID)
+            case "idle":
+                onThreadIdle(threadID)
+            default:
+                break
+            }
         }
         guard let event = makeEvent(from: notification) else {
             return

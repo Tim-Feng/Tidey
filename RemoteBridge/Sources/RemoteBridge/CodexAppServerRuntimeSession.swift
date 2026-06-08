@@ -147,6 +147,10 @@ final class CodexAppServerRuntimeSession {
         }
     }
 
+    func canSubmitMessage() -> Bool {
+        activeThreadStore.currentThreadID() != nil
+    }
+
     private func currentThreadIDForSubmit() throws -> String? {
         if let threadID = activeThreadStore.currentThreadID() {
             return threadID
@@ -216,20 +220,29 @@ final class CodexAppServerRuntimeSession {
 
 final class CodexAppServerTurnStateStore: @unchecked Sendable {
     private enum State {
-        case pendingSubmit
-        case active(turnID: String)
+        case pendingSubmit(startedAt: Date)
+        case active(turnID: String?, startedAt: Date)
     }
 
     private let lock = NSLock()
+    private let timeout: TimeInterval
+    private let now: () -> Date
     private var statesByThreadID = [String: State]()
+
+    init(timeout: TimeInterval = 15 * 60,
+         now: @escaping () -> Date = Date.init) {
+        self.timeout = timeout
+        self.now = now
+    }
 
     func claimForSubmit(threadID: String) throws {
         lock.lock()
         defer { lock.unlock() }
+        pruneExpiredLocked(now: now())
         if statesByThreadID[threadID] != nil {
             throw BridgeInternalError.invalidRequest("Codex app-server turn is already running.")
         }
-        statesByThreadID[threadID] = .pendingSubmit
+        statesByThreadID[threadID] = .pendingSubmit(startedAt: now())
     }
 
     func releasePendingSubmit(threadID: String) {
@@ -242,19 +255,40 @@ final class CodexAppServerTurnStateStore: @unchecked Sendable {
 
     func markStarted(threadID: String, turnID: String) {
         lock.lock()
-        statesByThreadID[threadID] = .active(turnID: turnID)
+        statesByThreadID[threadID] = .active(turnID: turnID, startedAt: now())
         lock.unlock()
     }
 
     func markCompleted(threadID: String, turnID: String) {
         lock.lock()
-        if case .active(let activeTurnID)? = statesByThreadID[threadID],
+        if case .active(let activeTurnID?, _)? = statesByThreadID[threadID],
            activeTurnID != turnID {
             lock.unlock()
             return
         }
         statesByThreadID.removeValue(forKey: threadID)
         lock.unlock()
+    }
+
+    func markThreadActive(threadID: String) {
+        lock.lock()
+        statesByThreadID[threadID] = .active(turnID: nil, startedAt: now())
+        lock.unlock()
+    }
+
+    func markThreadIdle(threadID: String) {
+        lock.lock()
+        statesByThreadID.removeValue(forKey: threadID)
+        lock.unlock()
+    }
+
+    private func pruneExpiredLocked(now: Date) {
+        statesByThreadID = statesByThreadID.filter { _, state in
+            switch state {
+            case .pendingSubmit(let startedAt), .active(_, let startedAt):
+                return now.timeIntervalSince(startedAt) < timeout
+            }
+        }
     }
 }
 
@@ -414,7 +448,9 @@ final class CodexAppServerRuntimeSessionFactory {
                                                     onAgentEvent: onAgentEvent,
                                                     onThreadID: activeThreadStore.setThreadID,
                                                     onTurnStarted: turnStateStore.markStarted,
-                                                    onTurnCompleted: turnStateStore.markCompleted)
+                                                    onTurnCompleted: turnStateStore.markCompleted,
+                                                    onThreadActive: turnStateStore.markThreadActive,
+                                                    onThreadIdle: turnStateStore.markThreadIdle)
         let connection = CodexAppServerConnection(sendLine: { line in
             try transport.sendLine(line)
         },
@@ -493,7 +529,9 @@ final class CodexAppServerRuntimeSessionFactory {
                                                     onAgentEvent: onAgentEvent,
                                                     onThreadID: activeThreadStore.setThreadID,
                                                     onTurnStarted: turnStateStore.markStarted,
-                                                    onTurnCompleted: turnStateStore.markCompleted)
+                                                    onTurnCompleted: turnStateStore.markCompleted,
+                                                    onThreadActive: turnStateStore.markThreadActive,
+                                                    onThreadIdle: turnStateStore.markThreadIdle)
         let connection = CodexAppServerConnection(sendLine: { line in
             try transport.sendLine(line)
         },
@@ -592,6 +630,9 @@ private func codexAppServerLoadedThreadID(from value: JSONValue) -> String? {
            let id = thread["id"]?.stringValue ?? thread["threadId"]?.stringValue {
             return id
         }
+        if codexAppServerLoadedThreadListIsPaginated(object) {
+            return nil
+        }
     }
     let threads = value.objectValue?["threads"]?.arrayValue
         ?? value.objectValue?["items"]?.arrayValue
@@ -608,6 +649,16 @@ private func codexAppServerLoadedThreadID(from value: JSONValue) -> String? {
         return currentCandidates[0].id
     }
     return nil
+}
+
+private func codexAppServerLoadedThreadListIsPaginated(_ object: [String: JSONValue]) -> Bool {
+    guard let nextCursor = object["nextCursor"] else {
+        return false
+    }
+    if case .null = nextCursor {
+        return false
+    }
+    return true
 }
 
 private struct CodexAppServerLoadedThreadCandidate {

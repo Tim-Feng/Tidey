@@ -17,6 +17,7 @@ protocol ActiveAgentSessionResolving {
 extension AgentSessionRegistryMonitor: ActiveAgentSessionResolving {}
 
 protocol CodexAppServerChatSubmitting: AnyObject {
+    func canSubmitMessage(sessionID: String) -> Bool
     func submitMessage(sessionID: String, text: String) throws
 }
 
@@ -148,23 +149,24 @@ struct BridgeInputActionHandler {
         if vendor.id == "codex",
            let activeSession,
            sessionResolver.activeRecord(sessionID: activeSession.sessionID)?.runtime == "codex_app_server" {
-            guard let codexAppServerChatSubmitter else {
-                throw BridgeInternalError.invalidRequest("Codex app-server runtime is unavailable.")
+            if let codexAppServerChatSubmitter,
+               codexAppServerChatSubmitter.canSubmitMessage(sessionID: activeSession.sessionID) {
+                try codexAppServerChatSubmitter.submitMessage(sessionID: activeSession.sessionID,
+                                                              text: message)
+                if let clientRequestID {
+                    chatSubmitEchoRegistry?.register(workspaceID: workspaceID,
+                                                     panelID: panelID,
+                                                     sessionID: activeSession.sessionID,
+                                                     vendor: vendor.id,
+                                                     text: message,
+                                                     clientRequestID: clientRequestID)
+                }
+                return Self.submittedResponse(for: request,
+                                              vendorID: vendor.id,
+                                              sessionID: activeSession.sessionID,
+                                              deduplicated: false)
             }
-            try codexAppServerChatSubmitter.submitMessage(sessionID: activeSession.sessionID,
-                                                          text: message)
-            if let clientRequestID {
-                chatSubmitEchoRegistry?.register(workspaceID: workspaceID,
-                                                 panelID: panelID,
-                                                 sessionID: activeSession.sessionID,
-                                                 vendor: vendor.id,
-                                                 text: message,
-                                                 clientRequestID: clientRequestID)
-            }
-            return Self.submittedResponse(for: request,
-                                          vendorID: vendor.id,
-                                          sessionID: activeSession.sessionID,
-                                          deduplicated: false)
+            BridgeLogger.input.info("codex app-server runtime not ready; falling back to terminal input session_id=\(activeSession.sessionID, privacy: .public)")
         }
 
         var previousStepUsedOrdinaryTmux = false

@@ -5,6 +5,7 @@ protocol CodexAppServerApprovalSubmitting: AnyObject {
 }
 
 protocol CodexAppServerRuntimeSessionControlling: AnyObject {
+    func canSubmitMessage() -> Bool
     func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent
     func submitMessage(text: String) throws
     func stop()
@@ -117,6 +118,13 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
             throw BridgeInternalError.notFound("Unknown Codex app-server session.")
         }
         try session.submitMessage(text: text)
+    }
+
+    func canSubmitMessage(sessionID: String) -> Bool {
+        let session = lock.withCodexRuntimeSyncerLock {
+            entriesBySessionID[sessionID]?.session
+        }
+        return session?.canSubmitMessage() == true
     }
 
     private func attach(record: AgentSessionRegistryRecord) {
