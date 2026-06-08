@@ -331,6 +331,7 @@ run_app_server_runtime_launch_test() {
     local socket
     local socket_pid
     local codex_log
+    local app_server_child_pid_file
 
     tmpdir="$(mktemp -d "/private/tmp/tidey-codex-launch.XXXXXX")"
     fake_home="$tmpdir/home"
@@ -338,6 +339,7 @@ run_app_server_runtime_launch_test() {
     registry_root="$fake_home/Library/Application Support/Tidey Remote Bridge/agent-sessions/codex"
     socket="$tmpdir/tidey.sock"
     codex_log="$tmpdir/codex.log"
+    app_server_child_pid_file="$tmpdir/app-server-child.pid"
     mkdir -p "$fake_bin" "$registry_root"
 
     cat > "$fake_bin/codex" <<'FAKE_CODEX'
@@ -359,7 +361,7 @@ if [[ " $* " == *" app-server "* ]]; then
         shift
     done
     socket_path="${listen#unix://}"
-    python3 -c 'import os, socket, sys, time; path = sys.argv[1]; sock = socket.socket(socket.AF_UNIX); sock.bind(path); sock.listen(1); time.sleep(20)' "$socket_path"
+    python3 -c 'import os, socket, sys, time; path = sys.argv[1]; pid_path = sys.argv[2]; open(pid_path, "w").write(str(os.getpid())); sock = socket.socket(socket.AF_UNIX); sock.bind(path); sock.listen(1); time.sleep(20)' "$socket_path" "$FAKE_APP_SERVER_CHILD_PID_FILE"
     exit 0
 fi
 if [[ "$*" == *"--remote"* ]]; then
@@ -383,12 +385,27 @@ FAKE_CODEX
         TIDEY_WORKSPACE_ID="workspace-1" \
         TIDEY_PANEL_ID="panel-1" \
         FAKE_CODEX_LOG="$codex_log" \
+        FAKE_APP_SERVER_CHILD_PID_FILE="$app_server_child_pid_file" \
         TMPDIR="$tmpdir" \
         "$CODEX_UNDER_TEST"
 
     [[ -z "$(find "$registry_root" -name "codex-*.json" -print -quit)" ]] || fail "app-server registry file was not cleaned up"
     grep -q "app-server" "$codex_log" || fail "app-server was not launched"
     grep -q -- "--remote" "$codex_log" || fail "remote TUI was not launched"
+    [[ -f "$app_server_child_pid_file" ]] || fail "app-server child pid was not recorded"
+    app_server_child_pid="$(cat "$app_server_child_pid_file")"
+    for _ in $(seq 1 50); do
+        child_state="$(ps -o stat= -p "$app_server_child_pid" 2>/dev/null | tr -d " " || true)"
+        if [[ -z "$child_state" || "$child_state" == Z* ]]; then
+            break
+        fi
+        sleep 0.02
+    done
+    child_state="$(ps -o stat= -p "$app_server_child_pid" 2>/dev/null | tr -d " " || true)"
+    if [[ -n "$child_state" && "$child_state" != Z* ]]; then
+        kill "$app_server_child_pid" 2>/dev/null || true
+        fail "app-server child process was not cleaned up: state=$child_state"
+    fi
 
     python3 - "$codex_log" <<'PY'
 from pathlib import Path

@@ -427,6 +427,39 @@ child_pids_for_pid() {
     pgrep -P "$pid" 2>/dev/null || true
 }
 
+kill_pid_tree() {
+    local pid="$1"
+    local child=""
+
+    [[ -n "$pid" ]] || return 0
+    while IFS= read -r child; do
+        [[ -n "$child" ]] || continue
+        kill_pid_tree "$child"
+    done < <(child_pids_for_pid "$pid")
+    kill "$pid" 2>/dev/null || true
+}
+
+process_pids_matching_text() {
+    local needle="$1"
+    local pid=""
+
+    [[ -n "$needle" ]] || return 0
+    pgrep -f "$needle" 2>/dev/null | while IFS= read -r pid; do
+        [[ -n "$pid" && "$pid" != "$$" ]] || continue
+        printf '%s\n' "$pid"
+    done
+}
+
+kill_processes_matching_text() {
+    local needle="$1"
+    local pid=""
+
+    while IFS= read -r pid; do
+        [[ -n "$pid" ]] || continue
+        kill_pid_tree "$pid"
+    done < <(process_pids_matching_text "$needle")
+}
+
 rollout_for_pid_tree() {
     local root_pid="$1"
     local queue=("$root_pid")
@@ -558,13 +591,16 @@ run_codex_app_server_runtime() {
     app_server_log="$socket_dir/app-server.log"
 
     cleanup_codex_app_server_runtime() {
-        local status=$?
+        local status="${1:-$?}"
         if [[ -n "${remote_tui_pid:-}" ]]; then
-            kill "$remote_tui_pid" 2>/dev/null || true
+            kill_pid_tree "$remote_tui_pid"
         fi
         if [[ -n "${app_server_pid:-}" ]]; then
-            kill "$app_server_pid" 2>/dev/null || true
+            kill_pid_tree "$app_server_pid"
             wait "$app_server_pid" 2>/dev/null || true
+        fi
+        if [[ -n "${socket_path:-}" ]]; then
+            kill_processes_matching_text "$socket_path"
         fi
         rm -f "${registry_file:-}"
         rm -rf "${socket_dir:-}"
@@ -583,14 +619,14 @@ run_codex_app_server_runtime() {
         fi
         if ! kill -0 "$app_server_pid" 2>/dev/null; then
             cat "$app_server_log" >&2 || true
-            return 1
+            cleanup_codex_app_server_runtime 1
         fi
         sleep 0.05
     done
     if [[ ! -S "$socket_path" ]]; then
         echo "Error: codex app-server did not create socket: $socket_path" >&2
         cat "$app_server_log" >&2 || true
-        return 1
+        cleanup_codex_app_server_runtime 1
     fi
 
     write_registry_file "$registry_file" "$TIDEY_WORKSPACE_ID" "$session_id" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$created_at" "" "codex_app_server" "$socket_path" "$app_server_pid" ""
@@ -603,7 +639,7 @@ run_codex_app_server_runtime() {
     env CODEX_HOME="$real_codex_home" "$real_codex" --remote "unix://$socket_path" "$@"
     remote_status=$?
     set -e
-    return "$remote_status"
+    cleanup_codex_app_server_runtime "$remote_status"
 }
 
 initial_session_id() {
