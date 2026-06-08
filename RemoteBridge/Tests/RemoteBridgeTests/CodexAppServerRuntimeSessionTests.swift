@@ -165,6 +165,65 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertEqual(turnParams["input"]?.arrayValue?.first?.objectValue?["text"]?.stringValue, "hello from remote")
     }
 
+    func testSubmitMessageLoadsThreadWhenAttachedRuntimeWasNotReady() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in })
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+
+        let initialListLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        XCTAssertEqual(initialListLoaded["method"]?.stringValue, "thread/loaded/list")
+        let initialListLoadedID = try XCTUnwrap(initialListLoaded["id"])
+        transport.emitLine(try Self.responseText(id: initialListLoadedID, result: .object(["threads": .array([])])))
+
+        let submitCompleted = expectation(description: "submitMessage completes after loading thread")
+        var submitError: Error?
+        DispatchQueue.global().async {
+            do {
+                try session.submitMessage(text: "hello after delayed thread")
+            } catch {
+                submitError = error
+            }
+            submitCompleted.fulfill()
+        }
+
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
+        let retryListLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
+        XCTAssertEqual(retryListLoaded["method"]?.stringValue, "thread/loaded/list")
+        let retryListLoadedID = try XCTUnwrap(retryListLoaded["id"])
+        transport.emitLine(try Self.responseText(id: retryListLoadedID, result: .object([
+            "threads": .array([
+                .object([
+                    "id": .string("thread-live"),
+                    "preview": .string("Mac TUI Codex"),
+                    "updatedAt": .string("2026-06-07T00:00:00.000Z"),
+                ]),
+            ]),
+        ])))
+
+        wait(for: [submitCompleted], timeout: 2.0)
+        XCTAssertNil(submitError)
+
+        let turnStart = try Self.object(from: try XCTUnwrap(transport.sentLines().last))
+        XCTAssertEqual(turnStart["method"]?.stringValue, "turn/start")
+        let turnParams = try XCTUnwrap(turnStart["params"]?.objectValue)
+        XCTAssertEqual(turnParams["threadId"]?.stringValue, "thread-live")
+        XCTAssertEqual(turnParams["input"]?.arrayValue?.first?.objectValue?["text"]?.stringValue, "hello after delayed thread")
+    }
+
     func testSessionConvertsStdoutNotificationsToAgentEvents() throws {
         let runner = FakeCodexAppServerProcessRunner()
         let events = EventSink()
@@ -371,9 +430,34 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
     }
 
     private static func initializeResponse(for id: JSONValue) throws -> String {
+        try responseText(id: id, result: .object([
+            "serverInfo": .object([
+                "name": .string("codex"),
+                "version": .string("test"),
+            ]),
+            "capabilities": .object([:]),
+        ]))
+    }
+
+    private static func responseText(id: JSONValue, result: JSONValue) throws -> String {
         let idData = try JSONEncoder().encode(id)
         let idText = String(decoding: idData, as: UTF8.self)
-        return #"{"id":\#(idText),"result":{"serverInfo":{"name":"codex","version":"test"},"capabilities":{}}}"#
+        let resultData = try JSONEncoder().encode(result)
+        let resultText = String(decoding: resultData, as: UTF8.self)
+        return #"{"id":\#(idText),"result":\#(resultText)}"#
+    }
+
+    private static func waitForSentLineCount(_ count: Int,
+                                             transport: FakeCodexAppServerConnectionTransport,
+                                             timeout: TimeInterval = 2.0) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if transport.sentLines().count >= count {
+                return true
+            }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        return transport.sentLines().count >= count
     }
 }
 

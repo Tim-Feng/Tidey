@@ -126,12 +126,49 @@ final class CodexAppServerRuntimeSession {
 
     func submitMessage(text: String) throws {
         try initialization.wait()
-        guard let threadID = activeThreadStore.currentThreadID() else {
+        guard let threadID = try currentThreadIDForSubmit() else {
             throw BridgeInternalError.invalidRequest("Codex app-server thread is not ready.")
         }
         try runtime.startTurn(on: connection,
                               threadID: threadID,
                               text: text)
+    }
+
+    private func currentThreadIDForSubmit() throws -> String? {
+        if let threadID = activeThreadStore.currentThreadID() {
+            return threadID
+        }
+        return try loadCurrentThreadID()
+    }
+
+    private func loadCurrentThreadID(timeout: TimeInterval = 5) throws -> String? {
+        let condition = NSCondition()
+        var result: Result<String?, Error>?
+        try connection.sendClientRequest(method: "thread/loaded/list") { response in
+            condition.lock()
+            switch response {
+            case .success(let value):
+                let threadID = Self.loadedThreadID(from: value)
+                if let threadID {
+                    self.activeThreadStore.setThreadID(threadID)
+                }
+                result = .success(threadID)
+            case .failure(let error):
+                result = .failure(error)
+            }
+            condition.broadcast()
+            condition.unlock()
+        }
+
+        let deadline = Date().addingTimeInterval(timeout)
+        condition.lock()
+        defer { condition.unlock() }
+        while result == nil {
+            if condition.wait(until: deadline) == false {
+                throw CodexAppServerConnectionError.initializationTimedOut
+            }
+        }
+        return try result?.get()
     }
 
     func stop() {
@@ -159,6 +196,18 @@ final class CodexAppServerRuntimeSession {
 
     func whenInitialized(_ callback: @escaping @Sendable (Result<Void, Error>) -> Void) {
         initialization.notify(callback)
+    }
+}
+
+private extension CodexAppServerRuntimeSession {
+    static func loadedThreadID(from value: JSONValue) -> String? {
+        let threads = value.objectValue?["threads"]?.arrayValue
+            ?? value.objectValue?["items"]?.arrayValue
+            ?? value.arrayValue
+            ?? []
+        return threads
+            .compactMap { $0.objectValue?["id"]?.stringValue ?? $0.objectValue?["threadId"]?.stringValue }
+            .last
     }
 }
 
