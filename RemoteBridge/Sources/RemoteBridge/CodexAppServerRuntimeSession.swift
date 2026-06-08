@@ -46,6 +46,7 @@ final class CodexAppServerRuntimeSession {
     private let runtime: CodexAppServerHeadlessRuntime
     private let initialization: CodexAppServerInitializationState
     private let activeThreadStore: CodexAppServerActiveThreadStore
+    private let turnStateStore: CodexAppServerTurnStateStore
     private let lock = NSLock()
     private var stopped = false
 
@@ -54,13 +55,15 @@ final class CodexAppServerRuntimeSession {
          connection: CodexAppServerConnection,
          runtime: CodexAppServerHeadlessRuntime,
          initialization: CodexAppServerInitializationState = CodexAppServerInitializationState(),
-         activeThreadStore: CodexAppServerActiveThreadStore = CodexAppServerActiveThreadStore()) {
+         activeThreadStore: CodexAppServerActiveThreadStore = CodexAppServerActiveThreadStore(),
+         turnStateStore: CodexAppServerTurnStateStore = CodexAppServerTurnStateStore()) {
         self.process = process
         self.transport = transport
         self.connection = connection
         self.runtime = runtime
         self.initialization = initialization
         self.activeThreadStore = activeThreadStore
+        self.turnStateStore = turnStateStore
     }
 
     var processID: Int32? {
@@ -129,9 +132,19 @@ final class CodexAppServerRuntimeSession {
         guard let threadID = try currentThreadIDForSubmit() else {
             throw BridgeInternalError.invalidRequest("Codex app-server thread is not ready.")
         }
-        try runtime.startTurn(on: connection,
-                              threadID: threadID,
-                              text: text)
+        try turnStateStore.claimForSubmit(threadID: threadID)
+        do {
+            try runtime.startTurn(on: connection,
+                                  threadID: threadID,
+                                  text: text) { [turnStateStore] response in
+                if case .failure = response {
+                    turnStateStore.releasePendingSubmit(threadID: threadID)
+                }
+            }
+        } catch {
+            turnStateStore.releasePendingSubmit(threadID: threadID)
+            throw error
+        }
     }
 
     private func currentThreadIDForSubmit() throws -> String? {
@@ -198,6 +211,50 @@ final class CodexAppServerRuntimeSession {
 
     func whenInitialized(_ callback: @escaping @Sendable (Result<Void, Error>) -> Void) {
         initialization.notify(callback)
+    }
+}
+
+final class CodexAppServerTurnStateStore: @unchecked Sendable {
+    private enum State {
+        case pendingSubmit
+        case active(turnID: String)
+    }
+
+    private let lock = NSLock()
+    private var statesByThreadID = [String: State]()
+
+    func claimForSubmit(threadID: String) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        if statesByThreadID[threadID] != nil {
+            throw BridgeInternalError.invalidRequest("Codex app-server turn is already running.")
+        }
+        statesByThreadID[threadID] = .pendingSubmit
+    }
+
+    func releasePendingSubmit(threadID: String) {
+        lock.lock()
+        if case .pendingSubmit? = statesByThreadID[threadID] {
+            statesByThreadID.removeValue(forKey: threadID)
+        }
+        lock.unlock()
+    }
+
+    func markStarted(threadID: String, turnID: String) {
+        lock.lock()
+        statesByThreadID[threadID] = .active(turnID: turnID)
+        lock.unlock()
+    }
+
+    func markCompleted(threadID: String, turnID: String) {
+        lock.lock()
+        if case .active(let activeTurnID)? = statesByThreadID[threadID],
+           activeTurnID != turnID {
+            lock.unlock()
+            return
+        }
+        statesByThreadID.removeValue(forKey: threadID)
+        lock.unlock()
     }
 }
 
@@ -350,11 +407,14 @@ final class CodexAppServerRuntimeSessionFactory {
                                                        })
         }
         let activeThreadStore = CodexAppServerActiveThreadStore()
+        let turnStateStore = CodexAppServerTurnStateStore()
         let runtime = CodexAppServerHeadlessRuntime(context: context,
                                                     nextSequence: nextSequence,
                                                     timestampProvider: timestampProvider,
                                                     onAgentEvent: onAgentEvent,
-                                                    onThreadID: activeThreadStore.setThreadID)
+                                                    onThreadID: activeThreadStore.setThreadID,
+                                                    onTurnStarted: turnStateStore.markStarted,
+                                                    onTurnCompleted: turnStateStore.markCompleted)
         let connection = CodexAppServerConnection(sendLine: { line in
             try transport.sendLine(line)
         },
@@ -372,7 +432,8 @@ final class CodexAppServerRuntimeSessionFactory {
                                                           connection: connection,
                                                           runtime: runtime,
                                                           initialization: initialization,
-                                                          activeThreadStore: activeThreadStore)
+                                                          activeThreadStore: activeThreadStore,
+                                                          turnStateStore: turnStateStore)
         exitRouter.attach(runtimeSession)
         stdoutRouter.attach(connection)
         try connection.sendClientRequest(method: "initialize",
@@ -425,11 +486,14 @@ final class CodexAppServerRuntimeSessionFactory {
                                                            }
                                                        })
         let activeThreadStore = CodexAppServerActiveThreadStore()
+        let turnStateStore = CodexAppServerTurnStateStore()
         let runtime = CodexAppServerHeadlessRuntime(context: context,
                                                     nextSequence: nextSequence,
                                                     timestampProvider: timestampProvider,
                                                     onAgentEvent: onAgentEvent,
-                                                    onThreadID: activeThreadStore.setThreadID)
+                                                    onThreadID: activeThreadStore.setThreadID,
+                                                    onTurnStarted: turnStateStore.markStarted,
+                                                    onTurnCompleted: turnStateStore.markCompleted)
         let connection = CodexAppServerConnection(sendLine: { line in
             try transport.sendLine(line)
         },
@@ -447,7 +511,8 @@ final class CodexAppServerRuntimeSessionFactory {
                                                           connection: connection,
                                                           runtime: runtime,
                                                           initialization: initialization,
-                                                          activeThreadStore: activeThreadStore)
+                                                          activeThreadStore: activeThreadStore,
+                                                          turnStateStore: turnStateStore)
         stdoutRouter.attach(connection)
         try connection.sendClientRequest(method: "initialize",
                                          params: [

@@ -221,6 +221,92 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertEqual(turnParams["input"]?.arrayValue?.first?.objectValue?["text"]?.stringValue, "hello after delayed thread")
     }
 
+    func testSubmitMessageRejectsSecondTurnWhileThreadIsBusy() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in })
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+        try Self.loadThread("thread-live", on: transport)
+
+        try session.submitMessage(text: "first")
+        let sentCountAfterFirstSubmit = transport.sentLines().count
+
+        XCTAssertThrowsError(try session.submitMessage(text: "second")) { error in
+            guard case BridgeInternalError.invalidRequest(let message) = error else {
+                return XCTFail("expected invalid request, got \(error)")
+            }
+            XCTAssertEqual(message, "Codex app-server turn is already running.")
+        }
+        XCTAssertEqual(transport.sentLines().count, sentCountAfterFirstSubmit)
+
+        transport.emitLine("""
+        {"method":"turn/started","params":{"threadId":"thread-live","turn":{"id":"turn-1","items":[],"itemsView":{"type":"all"},"status":"running","error":null,"startedAt":1,"completedAt":null,"durationMs":null}}}
+        """)
+        XCTAssertThrowsError(try session.submitMessage(text: "still busy")) { error in
+            guard case BridgeInternalError.invalidRequest = error else {
+                return XCTFail("expected invalid request, got \(error)")
+            }
+        }
+        XCTAssertEqual(transport.sentLines().count, sentCountAfterFirstSubmit)
+
+        transport.emitLine("""
+        {"method":"turn/completed","params":{"threadId":"thread-live","turn":{"id":"turn-1","items":[],"itemsView":{"type":"all"},"status":"completed","error":null,"startedAt":1,"completedAt":2,"durationMs":1000}}}
+        """)
+
+        try session.submitMessage(text: "after completion")
+        XCTAssertEqual(transport.sentLines().count, sentCountAfterFirstSubmit + 1)
+        let turnStart = try Self.object(from: try XCTUnwrap(transport.sentLines().last))
+        XCTAssertEqual(turnStart["method"]?.stringValue, "turn/start")
+        let turnParams = try XCTUnwrap(turnStart["params"]?.objectValue)
+        XCTAssertEqual(turnParams["input"]?.arrayValue?.first?.objectValue?["text"]?.stringValue, "after completion")
+    }
+
+    func testSubmitMessageReleasesBusyGuardWhenTurnStartRequestFails() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in })
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+        try Self.loadThread("thread-live", on: transport)
+
+        try session.submitMessage(text: "first")
+        let firstTurnStart = try Self.object(from: try XCTUnwrap(transport.sentLines().last))
+        let firstTurnStartID = try XCTUnwrap(firstTurnStart["id"])
+        transport.emitLine(try Self.errorResponseText(id: firstTurnStartID,
+                                                      code: "turn_failed",
+                                                      message: "turn start failed"))
+
+        try session.submitMessage(text: "retry after failure")
+        let turnStart = try Self.object(from: try XCTUnwrap(transport.sentLines().last))
+        let turnParams = try XCTUnwrap(turnStart["params"]?.objectValue)
+        XCTAssertEqual(turnParams["input"]?.arrayValue?.first?.objectValue?["text"]?.stringValue, "retry after failure")
+    }
+
     func testSessionConvertsStdoutNotificationsToAgentEvents() throws {
         let runner = FakeCodexAppServerProcessRunner()
         let events = EventSink()
@@ -442,6 +528,39 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         let resultData = try JSONEncoder().encode(result)
         let resultText = String(decoding: resultData, as: UTF8.self)
         return #"{"id":\#(idText),"result":\#(resultText)}"#
+    }
+
+    private static func errorResponseText(id: JSONValue, code: String, message: String) throws -> String {
+        let idData = try JSONEncoder().encode(id)
+        let idText = String(decoding: idData, as: UTF8.self)
+        let errorData = try JSONEncoder().encode(JSONValue.object([
+            "code": .string(code),
+            "message": .string(message),
+        ]))
+        let errorText = String(decoding: errorData, as: UTF8.self)
+        return #"{"id":\#(idText),"error":\#(errorText)}"#
+    }
+
+    private static func loadThread(_ threadID: String,
+                                   on transport: FakeCodexAppServerConnectionTransport,
+                                   file: StaticString = #filePath,
+                                   line sourceLine: UInt = #line) throws {
+        let listLoaded = try object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first,
+                                                        file: file,
+                                                        line: sourceLine),
+                                    file: file,
+                                    line: sourceLine)
+        XCTAssertEqual(listLoaded["method"]?.stringValue, "thread/loaded/list", file: file, line: sourceLine)
+        let listLoadedID = try XCTUnwrap(listLoaded["id"], file: file, line: sourceLine)
+        transport.emitLine(try responseText(id: listLoadedID, result: .object([
+            "threads": .array([
+                .object([
+                    "id": .string(threadID),
+                    "preview": .string("Mac TUI Codex"),
+                    "updatedAt": .string("2026-06-07T00:00:00.000Z"),
+                ]),
+            ]),
+        ])))
     }
 
     private static func waitForSentLineCount(_ count: Int,

@@ -71,23 +71,30 @@ final class CodexAppServerHeadlessRuntime {
     typealias TimestampProvider = () -> String
     typealias AgentEventHandler = (AgentEvent) -> Void
     typealias ThreadIDHandler = (String) -> Void
+    typealias TurnLifecycleHandler = (_ threadID: String, _ turnID: String) -> Void
 
     private let context: CodexAppServerRuntimeContext
     private let nextSequence: SequenceProvider
     private let timestampProvider: TimestampProvider
     private let onAgentEvent: AgentEventHandler
     private let onThreadID: ThreadIDHandler
+    private let onTurnStarted: TurnLifecycleHandler
+    private let onTurnCompleted: TurnLifecycleHandler
 
     init(context: CodexAppServerRuntimeContext,
          nextSequence: @escaping SequenceProvider,
          timestampProvider: @escaping TimestampProvider,
          onAgentEvent: @escaping AgentEventHandler,
-         onThreadID: @escaping ThreadIDHandler = { _ in }) {
+         onThreadID: @escaping ThreadIDHandler = { _ in },
+         onTurnStarted: @escaping TurnLifecycleHandler = { _, _ in },
+         onTurnCompleted: @escaping TurnLifecycleHandler = { _, _ in }) {
         self.context = context
         self.nextSequence = nextSequence
         self.timestampProvider = timestampProvider
         self.onAgentEvent = onAgentEvent
         self.onThreadID = onThreadID
+        self.onTurnStarted = onTurnStarted
+        self.onTurnCompleted = onTurnCompleted
     }
 
     @discardableResult
@@ -177,6 +184,16 @@ final class CodexAppServerHeadlessRuntime {
     func handleNotification(_ notification: CodexAppServerNotification) {
         if let threadID = Self.threadID(from: notification.params) {
             onThreadID(threadID)
+        }
+        if notification.method == "turn/started",
+           let threadID = Self.threadID(from: notification.params),
+           let turnID = Self.turnID(from: notification.params) {
+            onTurnStarted(threadID, turnID)
+        }
+        if notification.method == "turn/completed",
+           let threadID = Self.threadID(from: notification.params),
+           let turnID = Self.turnID(from: notification.params) {
+            onTurnCompleted(threadID, turnID)
         }
         guard let event = makeEvent(from: notification) else {
             return
