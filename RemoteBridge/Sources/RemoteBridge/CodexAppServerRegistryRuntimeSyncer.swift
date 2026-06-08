@@ -6,12 +6,13 @@ protocol CodexAppServerApprovalSubmitting: AnyObject {
 
 protocol CodexAppServerRuntimeSessionControlling: AnyObject {
     func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent
+    func submitMessage(text: String) throws
     func stop()
 }
 
 extension CodexAppServerRuntimeSession: CodexAppServerRuntimeSessionControlling {}
 
-final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, CodexAppServerApprovalSubmitting {
+final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, CodexAppServerApprovalSubmitting, CodexAppServerChatSubmitting {
     typealias AttachHandler = (_ record: AgentSessionRegistryRecord,
                                _ nextSequence: @escaping CodexAppServerConnection.SequenceProvider,
                                _ timestampProvider: @escaping CodexAppServerConnection.TimestampProvider,
@@ -106,6 +107,16 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
             throw lastError
         }
         throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
+    }
+
+    func submitMessage(sessionID: String, text: String) throws {
+        let session = lock.withCodexRuntimeSyncerLock {
+            entriesBySessionID[sessionID]?.session
+        }
+        guard let session else {
+            throw BridgeInternalError.notFound("Unknown Codex app-server session.")
+        }
+        try session.submitMessage(text: text)
     }
 
     private func attach(record: AgentSessionRegistryRecord) {

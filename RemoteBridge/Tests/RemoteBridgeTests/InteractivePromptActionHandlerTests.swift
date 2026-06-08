@@ -327,6 +327,10 @@ private final class StubPromptSessionResolver: ActiveAgentSessionResolving {
     func activeSessionForPanel(workspaceID: String, panelID: String) -> ActiveAgentSessionSnapshot? {
         session
     }
+
+    func activeRecord(sessionID: String) -> AgentSessionRegistryRecord? {
+        nil
+    }
 }
 
 private final class StubPromptRequestSender: TideyRequestSending {

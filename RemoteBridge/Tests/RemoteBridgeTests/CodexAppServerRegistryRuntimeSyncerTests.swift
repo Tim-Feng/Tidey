@@ -65,6 +65,27 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         XCTAssertEqual(secondRuntime.submitAttempts, ["prompt-2"])
     }
 
+    func testSubmitMessageRoutesToMatchingRuntimeSession() throws {
+        let hub = AgentEventHub()
+        let firstRuntime = FakeRuntimeSession()
+        let secondRuntime = FakeRuntimeSession()
+        var runtimeIndex = 0
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { _, _, _, _, _, _ in
+            defer { runtimeIndex += 1 }
+            return runtimeIndex == 0 ? firstRuntime : secondRuntime
+        })
+
+        syncer.sync(records: [
+            Self.record(sessionID: "first", runtime: "codex_app_server", socketPath: "/tmp/first.sock"),
+            Self.record(sessionID: "second", runtime: "codex_app_server", socketPath: "/tmp/second.sock"),
+        ])
+
+        try syncer.submitMessage(sessionID: "second", text: "hello from remote")
+
+        XCTAssertTrue(firstRuntime.submittedMessages.isEmpty)
+        XCTAssertEqual(secondRuntime.submittedMessages, ["hello from remote"])
+    }
+
     func testAttachedRuntimePublishesConversationEventsToHub() throws {
         let hub = AgentEventHub()
         var capturedAgentEventHandler: CodexAppServerHeadlessRuntime.AgentEventHandler?
@@ -163,6 +184,7 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
 private final class FakeRuntimeSession: CodexAppServerRuntimeSessionControlling {
     var stopped = false
     var submitAttempts = [String]()
+    var submittedMessages = [String]()
     var resolvedEventsByPromptID = [String: AgentEvent]()
 
     func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent {
@@ -171,6 +193,10 @@ private final class FakeRuntimeSession: CodexAppServerRuntimeSessionControlling 
             throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
         }
         return event
+    }
+
+    func submitMessage(text: String) throws {
+        submittedMessages.append(text)
     }
 
     func stop() {

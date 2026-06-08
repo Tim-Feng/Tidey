@@ -11,9 +11,14 @@ extension TideySocketClient: TideyRequestSending {}
 
 protocol ActiveAgentSessionResolving {
     func activeSessionForPanel(workspaceID: String, panelID: String) -> ActiveAgentSessionSnapshot?
+    func activeRecord(sessionID: String) -> AgentSessionRegistryRecord?
 }
 
 extension AgentSessionRegistryMonitor: ActiveAgentSessionResolving {}
+
+protocol CodexAppServerChatSubmitting: AnyObject {
+    func submitMessage(sessionID: String, text: String) throws
+}
 
 struct BridgeInputActionHandler {
     private enum OrdinaryTmuxRouteDecision {
@@ -24,12 +29,14 @@ struct BridgeInputActionHandler {
 
     private let socketSender: TideyRequestSending
     private let sessionResolver: ActiveAgentSessionResolving
+    private let codexAppServerChatSubmitter: CodexAppServerChatSubmitting?
     private let ordinaryTmuxInputRouter: OrdinaryTmuxInputRouting?
     private let chatSubmitEchoRegistry: ChatSubmitEchoRegistry?
     private let sleep: @Sendable (UInt64) throws -> Void
 
     init(socketSender: TideyRequestSending,
          sessionResolver: ActiveAgentSessionResolving,
+         codexAppServerChatSubmitter: CodexAppServerChatSubmitting? = nil,
          ordinaryTmuxInputRouter: OrdinaryTmuxInputRouting? = nil,
          chatSubmitEchoRegistry: ChatSubmitEchoRegistry? = nil,
          sleep: @escaping @Sendable (UInt64) throws -> Void = { delayNanoseconds in
@@ -40,6 +47,7 @@ struct BridgeInputActionHandler {
         }) {
         self.socketSender = socketSender
         self.sessionResolver = sessionResolver
+        self.codexAppServerChatSubmitter = codexAppServerChatSubmitter
         self.ordinaryTmuxInputRouter = ordinaryTmuxInputRouter
         self.chatSubmitEchoRegistry = chatSubmitEchoRegistry
         self.sleep = sleep
@@ -136,6 +144,28 @@ struct BridgeInputActionHandler {
         }
 
         BridgeLogger.input.info("dispatch action=chat_submit request_id=\(request.id, privacy: .public) workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) session_id=\(activeSession?.sessionID ?? requestedSessionID ?? "-", privacy: .public) vendor=\(vendor.id, privacy: .public) length=\(message.count) has_cr=\(message.contains("\r")) has_lf=\(message.contains("\n")) tail=\(summarizedTail(message), privacy: .public)")
+
+        if vendor.id == "codex",
+           let activeSession,
+           sessionResolver.activeRecord(sessionID: activeSession.sessionID)?.runtime == "codex_app_server" {
+            guard let codexAppServerChatSubmitter else {
+                throw BridgeInternalError.invalidRequest("Codex app-server runtime is unavailable.")
+            }
+            try codexAppServerChatSubmitter.submitMessage(sessionID: activeSession.sessionID,
+                                                          text: message)
+            if let clientRequestID {
+                chatSubmitEchoRegistry?.register(workspaceID: workspaceID,
+                                                 panelID: panelID,
+                                                 sessionID: activeSession.sessionID,
+                                                 vendor: vendor.id,
+                                                 text: message,
+                                                 clientRequestID: clientRequestID)
+            }
+            return Self.submittedResponse(for: request,
+                                          vendorID: vendor.id,
+                                          sessionID: activeSession.sessionID,
+                                          deduplicated: false)
+        }
 
         var previousStepUsedOrdinaryTmux = false
         var forceMacSocketForRemainingSteps = false

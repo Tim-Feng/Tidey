@@ -128,16 +128,16 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         let connector = FakeCodexAppServerTransportConnector()
         let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
                                                           transportConnector: connector)
-        _ = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
-                               processID: 9001,
-                               context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
-                                                                     panelID: "panel-1",
-                                                                     sessionID: "session-1"),
-                               nextSequence: { _ in 1 },
-                               timestampProvider: { "2026-06-07T00:00:00.000Z" },
-                               onAgentEvent: { _ in },
-                               onInteractivePrompt: { _ in },
-                               onInteractivePromptResolved: { _ in })
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in })
 
         let transport = try XCTUnwrap(connector.transport)
         try Self.acknowledgeInitialize(from: transport)
@@ -156,6 +156,13 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         let resumeParams = try XCTUnwrap(resume["params"]?.objectValue)
         XCTAssertEqual(resumeParams["threadId"]?.stringValue, "thread-live")
         XCTAssertEqual(resumeParams["excludeTurns"]?.boolValue, false)
+
+        try session.submitMessage(text: "hello from remote")
+        let turnStart = try Self.object(from: try XCTUnwrap(transport.sentLines().last))
+        XCTAssertEqual(turnStart["method"]?.stringValue, "turn/start")
+        let turnParams = try XCTUnwrap(turnStart["params"]?.objectValue)
+        XCTAssertEqual(turnParams["threadId"]?.stringValue, "thread-live")
+        XCTAssertEqual(turnParams["input"]?.arrayValue?.first?.objectValue?["text"]?.stringValue, "hello from remote")
     }
 
     func testSessionConvertsStdoutNotificationsToAgentEvents() throws {

@@ -70,20 +70,24 @@ final class CodexAppServerHeadlessRuntime {
     typealias SequenceProvider = (String) -> Int
     typealias TimestampProvider = () -> String
     typealias AgentEventHandler = (AgentEvent) -> Void
+    typealias ThreadIDHandler = (String) -> Void
 
     private let context: CodexAppServerRuntimeContext
     private let nextSequence: SequenceProvider
     private let timestampProvider: TimestampProvider
     private let onAgentEvent: AgentEventHandler
+    private let onThreadID: ThreadIDHandler
 
     init(context: CodexAppServerRuntimeContext,
          nextSequence: @escaping SequenceProvider,
          timestampProvider: @escaping TimestampProvider,
-         onAgentEvent: @escaping AgentEventHandler) {
+         onAgentEvent: @escaping AgentEventHandler,
+         onThreadID: @escaping ThreadIDHandler = { _ in }) {
         self.context = context
         self.nextSequence = nextSequence
         self.timestampProvider = timestampProvider
         self.onAgentEvent = onAgentEvent
+        self.onThreadID = onThreadID
     }
 
     @discardableResult
@@ -171,6 +175,9 @@ final class CodexAppServerHeadlessRuntime {
     }
 
     func handleNotification(_ notification: CodexAppServerNotification) {
+        if let threadID = Self.threadID(from: notification.params) {
+            onThreadID(threadID)
+        }
         guard let event = makeEvent(from: notification) else {
             return
         }

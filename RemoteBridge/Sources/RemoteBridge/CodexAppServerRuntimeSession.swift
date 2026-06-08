@@ -45,6 +45,7 @@ final class CodexAppServerRuntimeSession {
     private let connection: CodexAppServerConnection
     private let runtime: CodexAppServerHeadlessRuntime
     private let initialization: CodexAppServerInitializationState
+    private let activeThreadStore: CodexAppServerActiveThreadStore
     private let lock = NSLock()
     private var stopped = false
 
@@ -52,12 +53,14 @@ final class CodexAppServerRuntimeSession {
          transport: CodexAppServerConnectionTransport,
          connection: CodexAppServerConnection,
          runtime: CodexAppServerHeadlessRuntime,
-         initialization: CodexAppServerInitializationState = CodexAppServerInitializationState()) {
+         initialization: CodexAppServerInitializationState = CodexAppServerInitializationState(),
+         activeThreadStore: CodexAppServerActiveThreadStore = CodexAppServerActiveThreadStore()) {
         self.process = process
         self.transport = transport
         self.connection = connection
         self.runtime = runtime
         self.initialization = initialization
+        self.activeThreadStore = activeThreadStore
     }
 
     var processID: Int32? {
@@ -121,6 +124,16 @@ final class CodexAppServerRuntimeSession {
         try connection.submitApproval(promptID: promptID, targetIndex: targetIndex)
     }
 
+    func submitMessage(text: String) throws {
+        try initialization.wait()
+        guard let threadID = activeThreadStore.currentThreadID() else {
+            throw BridgeInternalError.invalidRequest("Codex app-server thread is not ready.")
+        }
+        try runtime.startTurn(on: connection,
+                              threadID: threadID,
+                              text: text)
+    }
+
     func stop() {
         lock.lock()
         guard stopped == false else {
@@ -146,6 +159,23 @@ final class CodexAppServerRuntimeSession {
 
     func whenInitialized(_ callback: @escaping @Sendable (Result<Void, Error>) -> Void) {
         initialization.notify(callback)
+    }
+}
+
+final class CodexAppServerActiveThreadStore: @unchecked Sendable {
+    private let lock = NSLock()
+    private var threadID: String?
+
+    func setThreadID(_ threadID: String) {
+        lock.lock()
+        self.threadID = threadID
+        lock.unlock()
+    }
+
+    func currentThreadID() -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return threadID
     }
 }
 
@@ -280,10 +310,12 @@ final class CodexAppServerRuntimeSessionFactory {
                                                            }
                                                        })
         }
+        let activeThreadStore = CodexAppServerActiveThreadStore()
         let runtime = CodexAppServerHeadlessRuntime(context: context,
                                                     nextSequence: nextSequence,
                                                     timestampProvider: timestampProvider,
-                                                    onAgentEvent: onAgentEvent)
+                                                    onAgentEvent: onAgentEvent,
+                                                    onThreadID: activeThreadStore.setThreadID)
         let connection = CodexAppServerConnection(sendLine: { line in
             try transport.sendLine(line)
         },
@@ -300,7 +332,8 @@ final class CodexAppServerRuntimeSessionFactory {
                                                           transport: transport,
                                                           connection: connection,
                                                           runtime: runtime,
-                                                          initialization: initialization)
+                                                          initialization: initialization,
+                                                          activeThreadStore: activeThreadStore)
         exitRouter.attach(runtimeSession)
         stdoutRouter.attach(connection)
         try connection.sendClientRequest(method: "initialize",
@@ -352,10 +385,12 @@ final class CodexAppServerRuntimeSessionFactory {
                                                                BridgeLogger.server.error("codex app-server panel socket closed error=\(String(describing: error), privacy: .public)")
                                                            }
                                                        })
+        let activeThreadStore = CodexAppServerActiveThreadStore()
         let runtime = CodexAppServerHeadlessRuntime(context: context,
                                                     nextSequence: nextSequence,
                                                     timestampProvider: timestampProvider,
-                                                    onAgentEvent: onAgentEvent)
+                                                    onAgentEvent: onAgentEvent,
+                                                    onThreadID: activeThreadStore.setThreadID)
         let connection = CodexAppServerConnection(sendLine: { line in
             try transport.sendLine(line)
         },
@@ -372,7 +407,8 @@ final class CodexAppServerRuntimeSessionFactory {
                                                           transport: transport,
                                                           connection: connection,
                                                           runtime: runtime,
-                                                          initialization: initialization)
+                                                          initialization: initialization,
+                                                          activeThreadStore: activeThreadStore)
         stdoutRouter.attach(connection)
         try connection.sendClientRequest(method: "initialize",
                                          params: [
@@ -392,7 +428,8 @@ final class CodexAppServerRuntimeSessionFactory {
                 do {
                     try connection.sendClientNotification(method: "initialized")
                     initialization.succeed()
-                    Self.resumeLoadedThreadIfAvailable(on: connection)
+                    Self.resumeLoadedThreadIfAvailable(on: connection,
+                                                       activeThreadStore: activeThreadStore)
                 } catch {
                     initialization.fail(error)
                     BridgeLogger.server.error("codex app-server panel initialized notification failed error=\(String(describing: error), privacy: .public)")
@@ -405,7 +442,8 @@ final class CodexAppServerRuntimeSessionFactory {
         return runtimeSession
     }
 
-    private static func resumeLoadedThreadIfAvailable(on connection: CodexAppServerConnection) {
+    private static func resumeLoadedThreadIfAvailable(on connection: CodexAppServerConnection,
+                                                      activeThreadStore: CodexAppServerActiveThreadStore) {
         do {
             try connection.sendClientRequest(method: "thread/loaded/list") { result in
                 switch result {
@@ -413,6 +451,7 @@ final class CodexAppServerRuntimeSessionFactory {
                     guard let threadID = loadedThreadID(from: value) else {
                         return
                     }
+                    activeThreadStore.setThreadID(threadID)
                     do {
                         try connection.sendClientRequest(method: "thread/resume",
                                                         params: [
