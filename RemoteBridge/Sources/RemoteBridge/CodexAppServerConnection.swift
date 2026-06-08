@@ -63,6 +63,7 @@ final class CodexAppServerConnection {
     typealias InteractivePromptHandler = (CodexAppServerInteractivePromptEnvelope) -> Void
     typealias InteractivePromptResolvedHandler = (AgentEvent) -> Void
 
+    private let stateLock = NSRecursiveLock()
     private var nextRequestID = 1
     private var pendingClientResponses: [String: ClientResponseHandler] = [:]
     private var closed = false
@@ -97,32 +98,38 @@ final class CodexAppServerConnection {
     func sendClientRequest(method: String,
                            params: [String: JSONValue] = [:],
                            onResponse: @escaping ClientResponseHandler) throws -> Int {
+        stateLock.lock()
         guard !closed else {
+            stateLock.unlock()
             throw CodexAppServerConnectionError.closed
         }
         let id = nextRequestID
         nextRequestID += 1
         pendingClientResponses[String(id)] = onResponse
-        try send(.object([
-            "id": .number(Double(id)),
-            "method": .string(method),
-            "params": .object(params),
-        ]))
+        do {
+            try sendLocked(.object([
+                "id": .number(Double(id)),
+                "method": .string(method),
+                "params": .object(params),
+            ]))
+            stateLock.unlock()
+        } catch {
+            pendingClientResponses.removeValue(forKey: String(id))
+            stateLock.unlock()
+            throw error
+        }
         return id
     }
 
     func sendClientNotification(method: String,
                                 params: [String: JSONValue]? = nil) throws {
-        guard !closed else {
-            throw CodexAppServerConnectionError.closed
-        }
         var payload: [String: JSONValue] = [
             "method": .string(method),
         ]
         if let params {
             payload["params"] = .object(params)
         }
-        try send(.object(payload))
+        try sendIfOpen(.object(payload))
     }
 
     func receiveLine(_ line: String) {
@@ -155,13 +162,17 @@ final class CodexAppServerConnection {
     }
 
     func close(error: CodexAppServerConnectionError? = nil) {
+        let pending: [String: ClientResponseHandler]
+        stateLock.lock()
         guard !closed else {
+            stateLock.unlock()
             return
         }
         closed = true
         let failure = error ?? .closed
-        let pending = pendingClientResponses
+        pending = pendingClientResponses
         pendingClientResponses.removeAll()
+        stateLock.unlock()
         for handler in pending.values {
             handler(.failure(failure))
         }
@@ -194,7 +205,7 @@ final class CodexAppServerConnection {
     }
 
     func sendResult(id: JSONValue, result: JSONValue) {
-        try? send(.object([
+        try? sendIfOpen(.object([
             "id": id,
             "result": result,
         ]))
@@ -208,15 +219,20 @@ final class CodexAppServerConnection {
         if let data {
             error["data"] = data
         }
-        try? send(.object([
+        try? sendIfOpen(.object([
             "id": id,
             "error": .object(error),
         ]))
     }
 
     private func handleClientResponse(id: JSONValue, result: JSONValue?, error: JSONValue?) {
-        guard let key = Self.idKey(from: id),
-              let handler = pendingClientResponses.removeValue(forKey: key) else {
+        guard let key = Self.idKey(from: id) else {
+            return
+        }
+        stateLock.lock()
+        let handler = pendingClientResponses.removeValue(forKey: key)
+        stateLock.unlock()
+        guard let handler else {
             return
         }
         if let errorObject = error?.objectValue {
@@ -230,7 +246,16 @@ final class CodexAppServerConnection {
         handler(.success(result ?? .object([:])))
     }
 
-    private func send(_ value: JSONValue) throws {
+    private func sendIfOpen(_ value: JSONValue) throws {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard !closed else {
+            throw CodexAppServerConnectionError.closed
+        }
+        try sendLocked(value)
+    }
+
+    private func sendLocked(_ value: JSONValue) throws {
         let data = try JSONEncoder().encode(value)
         guard let line = String(data: data, encoding: .utf8) else {
             throw CodexAppServerConnectionError.invalidJSONLine("<encoding failed>")

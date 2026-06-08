@@ -165,6 +165,44 @@ final class CodexAppServerConnectionTests: XCTestCase {
         XCTAssertEqual(response?.objectValue?["ok"]?.boolValue, true)
     }
 
+    func testConcurrentClientRequestsResolveAllHandlers() throws {
+        let outbound = LineSink()
+        let responseIDs = LockedStringSet()
+        let connection = CodexAppServerConnection(sendLine: { outbound.append($0) })
+        let requestCount = 50
+        let group = DispatchGroup()
+
+        for _ in 0..<requestCount {
+            group.enter()
+            DispatchQueue.global(qos: .userInitiated).async {
+                defer { group.leave() }
+                do {
+                    try connection.sendClientRequest(method: "thread/loaded/list") { result in
+                        if case .success(let value) = result,
+                           let id = value.objectValue?["request_id"]?.stringValue {
+                            responseIDs.insert(id)
+                        }
+                    }
+                } catch {
+                    XCTFail("sendClientRequest failed: \(error)")
+                }
+            }
+        }
+
+        XCTAssertEqual(group.wait(timeout: .now() + 2.0), .success)
+        let requests = try outbound.lines().map { try Self.object(from: $0) }
+        let ids = requests.compactMap { $0["id"]?.intValue }.sorted()
+        XCTAssertEqual(ids, Array(1...requestCount))
+
+        DispatchQueue.concurrentPerform(iterations: requestCount) { offset in
+            let id = ids[offset]
+            connection.receiveLine(#"{"id":\#(id),"result":{"request_id":"\#(id)"}}"#)
+        }
+
+        XCTAssertTrue(responseIDs.waitForCount(requestCount))
+        XCTAssertEqual(responseIDs.values(), Set((1...requestCount).map(String.init)))
+    }
+
     private static func object(from line: String,
                                file: StaticString = #filePath,
                                line sourceLine: UInt = #line) throws -> [String: JSONValue] {
@@ -190,5 +228,33 @@ private final class LineSink: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return storage
+    }
+}
+
+private final class LockedStringSet: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage = Set<String>()
+
+    func insert(_ value: String) {
+        lock.lock()
+        storage.insert(value)
+        lock.unlock()
+    }
+
+    func values() -> Set<String> {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
+    }
+
+    func waitForCount(_ count: Int, timeout: TimeInterval = 2.0) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if values().count == count {
+                return true
+            }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        return values().count == count
     }
 }
