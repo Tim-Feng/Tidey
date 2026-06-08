@@ -1008,10 +1008,6 @@ final class AgentSessionRegistryMonitor {
     private func syncRecords(_ records: [AgentSessionRegistryRecord]) {
         let activeSessionIDs = Set(records.map(\.sessionID))
         for record in records {
-            if Self.isCodexAppServerRuntimeRecord(record) {
-                sessions.removeValue(forKey: record.sessionID)?.stop()
-                continue
-            }
             if let session = sessions[record.sessionID] {
                 session.update(record: record)
                 continue

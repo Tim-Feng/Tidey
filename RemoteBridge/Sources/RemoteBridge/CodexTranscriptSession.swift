@@ -232,16 +232,30 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     }
 
     private func resolveTranscriptURLFromProcessTree() -> URL? {
-        guard let path = Self.rolloutPathForPIDTree(rootPID: record.pid),
-              !path.isEmpty else {
-            return nil
+        for rootPID in transcriptResolutionRootPIDs() {
+            guard let path = Self.rolloutPathForPIDTree(rootPID: rootPID),
+                  !path.isEmpty else {
+                continue
+            }
+            let expanded = NSString(string: path).expandingTildeInPath
+            let url = URL(fileURLWithPath: expanded)
+            guard fileManager.fileExists(atPath: url.path) else {
+                continue
+            }
+            return url
         }
-        let expanded = NSString(string: path).expandingTildeInPath
-        let url = URL(fileURLWithPath: expanded)
-        guard fileManager.fileExists(atPath: url.path) else {
-            return nil
+        return nil
+    }
+
+    private func transcriptResolutionRootPIDs() -> [Int32] {
+        let candidates = [record.appServerPID, record.remoteTUIPID, record.pid].compactMap { $0 }
+        var seen = Set<Int32>()
+        return candidates.filter { pid in
+            guard pid > 0 else {
+                return false
+            }
+            return seen.insert(pid).inserted
         }
-        return url
     }
 
     private func consume(line: String, lineOffset: Int) {
