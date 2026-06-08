@@ -3,7 +3,7 @@ import XCTest
 
 final class BridgeAgentSubscriptionSlotsTests: XCTestCase {
     func testSessionSubscriptionReplacesWorkspaceWideSubscriptionForSameWorkspace() {
-        var slots = BridgeAgentSubscriptionSlots()
+        let slots = BridgeAgentSubscriptionSlots()
         let workspaceID = UUID()
         let sessionID = UUID()
 
@@ -23,7 +23,7 @@ final class BridgeAgentSubscriptionSlotsTests: XCTestCase {
     }
 
     func testWorkspaceWideSubscriptionIsRejectedWhenSessionSubscriptionExistsForWorkspace() {
-        var slots = BridgeAgentSubscriptionSlots()
+        let slots = BridgeAgentSubscriptionSlots()
         let sessionID = UUID()
         let workspaceID = UUID()
 
@@ -40,7 +40,7 @@ final class BridgeAgentSubscriptionSlotsTests: XCTestCase {
     }
 
     func testReplacingSameSubscriptionKeyReturnsOnlyPreviousID() {
-        var slots = BridgeAgentSubscriptionSlots()
+        let slots = BridgeAgentSubscriptionSlots()
         let monitorID = UUID()
         let oldChatID = UUID()
         let newChatID = UUID()
@@ -59,5 +59,28 @@ final class BridgeAgentSubscriptionSlotsTests: XCTestCase {
 
         let removed = Set(slots.removeAll())
         XCTAssertEqual(removed, [monitorID, newChatID])
+    }
+
+    func testConcurrentInstallAndRemoveAllDoesNotCorruptSlots() {
+        let slots = BridgeAgentSubscriptionSlots()
+        let iterations = 100
+        let group = DispatchGroup()
+
+        for index in 0..<iterations {
+            group.enter()
+            DispatchQueue.global(qos: .userInitiated).async {
+                _ = slots.install(workspaceID: "workspace-\(index % 5)",
+                                  sessionID: index.isMultiple(of: 2) ? "session-\(index)" : nil,
+                                  id: UUID())
+                if index.isMultiple(of: 7) {
+                    _ = slots.removeAll()
+                }
+                group.leave()
+            }
+        }
+
+        XCTAssertEqual(group.wait(timeout: .now() + 2.0), .success)
+        _ = slots.removeAll()
+        XCTAssertFalse(slots.contains(workspaceID: "workspace-1", sessionID: "session-1"))
     }
 }

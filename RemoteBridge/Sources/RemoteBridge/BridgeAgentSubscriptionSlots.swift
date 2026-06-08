@@ -5,15 +5,18 @@ struct BridgeAgentSubscriptionSlotKey: Hashable {
     let sessionID: String?
 }
 
-struct BridgeAgentSubscriptionSlots {
+final class BridgeAgentSubscriptionSlots: @unchecked Sendable {
     struct InstallResult {
         let accepted: Bool
         let unsubscribeIDs: [UUID]
     }
 
+    private let lock = NSLock()
     private var subscriptions = [BridgeAgentSubscriptionSlotKey: UUID]()
 
-    mutating func install(workspaceID: String?, sessionID: String?, id: UUID) -> InstallResult {
+    func install(workspaceID: String?, sessionID: String?, id: UUID) -> InstallResult {
+        lock.lock()
+        defer { lock.unlock() }
         let key = BridgeAgentSubscriptionSlotKey(workspaceID: workspaceID, sessionID: sessionID)
         var unsubscribeIDs = [UUID]()
 
@@ -36,13 +39,17 @@ struct BridgeAgentSubscriptionSlots {
         return InstallResult(accepted: true, unsubscribeIDs: unsubscribeIDs)
     }
 
-    mutating func removeAll() -> [UUID] {
+    func removeAll() -> [UUID] {
+        lock.lock()
+        defer { lock.unlock() }
         let ids = Array(subscriptions.values)
         subscriptions.removeAll()
         return ids
     }
 
     func contains(workspaceID: String?, sessionID: String?) -> Bool {
-        subscriptions[BridgeAgentSubscriptionSlotKey(workspaceID: workspaceID, sessionID: sessionID)] != nil
+        lock.lock()
+        defer { lock.unlock() }
+        return subscriptions[BridgeAgentSubscriptionSlotKey(workspaceID: workspaceID, sessionID: sessionID)] != nil
     }
 }
