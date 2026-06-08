@@ -13,20 +13,14 @@ enum CodexAppServerApprovalPromptSource {
 
 enum CodexAppServerApprovalDecision: String, CaseIterable, Equatable, Sendable {
     case accept
-    case acceptForSession
     case decline
-    case cancel
 
     var label: String {
         switch self {
         case .accept:
             return "Approve"
-        case .acceptForSession:
-            return "Approve for session"
         case .decline:
             return "Decline"
-        case .cancel:
-            return "Cancel"
         }
     }
 
