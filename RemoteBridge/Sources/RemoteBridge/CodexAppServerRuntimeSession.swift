@@ -219,9 +219,34 @@ final class CodexAppServerRuntimeSession {
 }
 
 final class CodexAppServerTurnStateStore: @unchecked Sendable {
-    private enum State {
-        case pendingSubmit(startedAt: Date)
-        case active(turnID: String?, startedAt: Date)
+    private struct TurnActivity {
+        let turnID: String
+        let startedAt: Date
+    }
+
+    private struct State {
+        var pendingSubmitStartedAt: Date?
+        var turn: TurnActivity?
+        var threadStatusActiveStartedAt: Date?
+
+        var isBusy: Bool {
+            pendingSubmitStartedAt != nil || turn != nil || threadStatusActiveStartedAt != nil
+        }
+
+        mutating func pruneExpired(now: Date, timeout: TimeInterval) {
+            if let startedAt = pendingSubmitStartedAt,
+               now.timeIntervalSince(startedAt) >= timeout {
+                pendingSubmitStartedAt = nil
+            }
+            if let activeTurn = turn,
+               now.timeIntervalSince(activeTurn.startedAt) >= timeout {
+                turn = nil
+            }
+            if let startedAt = threadStatusActiveStartedAt,
+               now.timeIntervalSince(startedAt) >= timeout {
+                threadStatusActiveStartedAt = nil
+            }
+        }
     }
 
     private let lock = NSLock()
@@ -239,55 +264,76 @@ final class CodexAppServerTurnStateStore: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         pruneExpiredLocked(now: now())
-        if statesByThreadID[threadID] != nil {
+        if statesByThreadID[threadID]?.isBusy == true {
             throw BridgeInternalError.invalidRequest("Codex app-server turn is already running.")
         }
-        statesByThreadID[threadID] = .pendingSubmit(startedAt: now())
+        statesByThreadID[threadID] = State(pendingSubmitStartedAt: now())
     }
 
     func releasePendingSubmit(threadID: String) {
         lock.lock()
-        if case .pendingSubmit? = statesByThreadID[threadID] {
-            statesByThreadID.removeValue(forKey: threadID)
+        updateStateLocked(threadID: threadID) { state in
+            state.pendingSubmitStartedAt = nil
         }
         lock.unlock()
     }
 
     func markStarted(threadID: String, turnID: String) {
         lock.lock()
-        statesByThreadID[threadID] = .active(turnID: turnID, startedAt: now())
+        updateStateLocked(threadID: threadID) { state in
+            state.pendingSubmitStartedAt = nil
+            state.turn = TurnActivity(turnID: turnID, startedAt: now())
+        }
         lock.unlock()
     }
 
     func markCompleted(threadID: String, turnID: String) {
         lock.lock()
-        if case .active(let activeTurnID?, _)? = statesByThreadID[threadID],
-           activeTurnID != turnID {
-            lock.unlock()
-            return
+        updateStateLocked(threadID: threadID) { state in
+            if state.turn?.turnID == turnID {
+                state.turn = nil
+            }
         }
-        statesByThreadID.removeValue(forKey: threadID)
         lock.unlock()
     }
 
     func markThreadActive(threadID: String) {
         lock.lock()
-        statesByThreadID[threadID] = .active(turnID: nil, startedAt: now())
+        updateStateLocked(threadID: threadID) { state in
+            state.threadStatusActiveStartedAt = now()
+        }
         lock.unlock()
     }
 
     func markThreadIdle(threadID: String) {
         lock.lock()
-        statesByThreadID.removeValue(forKey: threadID)
+        updateStateLocked(threadID: threadID) { state in
+            state.threadStatusActiveStartedAt = nil
+        }
         lock.unlock()
     }
 
     private func pruneExpiredLocked(now: Date) {
-        statesByThreadID = statesByThreadID.filter { _, state in
-            switch state {
-            case .pendingSubmit(let startedAt), .active(_, let startedAt):
-                return now.timeIntervalSince(startedAt) < timeout
+        for threadID in Array(statesByThreadID.keys) {
+            guard var state = statesByThreadID[threadID] else {
+                continue
             }
+            state.pruneExpired(now: now, timeout: timeout)
+            if state.isBusy {
+                statesByThreadID[threadID] = state
+            } else {
+                statesByThreadID.removeValue(forKey: threadID)
+            }
+        }
+    }
+
+    private func updateStateLocked(threadID: String, mutate: (inout State) -> Void) {
+        var state = statesByThreadID[threadID] ?? State()
+        mutate(&state)
+        if state.isBusy {
+            statesByThreadID[threadID] = state
+        } else {
+            statesByThreadID.removeValue(forKey: threadID)
         }
     }
 }

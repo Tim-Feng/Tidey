@@ -461,6 +461,48 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertNoThrow(try store.claimForSubmit(threadID: "thread-live"))
     }
 
+    func testTurnStateStoreStaleTurnCompletedDoesNotClearThreadStatusActive() throws {
+        let store = CodexAppServerTurnStateStore()
+        store.markThreadActive(threadID: "thread-live")
+        store.markCompleted(threadID: "thread-live", turnID: "stale-remote-turn")
+
+        XCTAssertThrowsError(try store.claimForSubmit(threadID: "thread-live")) { error in
+            guard case BridgeInternalError.invalidRequest(let message) = error else {
+                return XCTFail("expected invalid request, got \(error)")
+            }
+            XCTAssertEqual(message, "Codex app-server turn is already running.")
+        }
+
+        store.markThreadIdle(threadID: "thread-live")
+        XCTAssertNoThrow(try store.claimForSubmit(threadID: "thread-live"))
+    }
+
+    func testTurnStateStoreThreadStatusIdleDoesNotClearRemotePendingOrTurnActive() throws {
+        let store = CodexAppServerTurnStateStore()
+        try store.claimForSubmit(threadID: "thread-live")
+        store.markThreadIdle(threadID: "thread-live")
+
+        XCTAssertThrowsError(try store.claimForSubmit(threadID: "thread-live")) { error in
+            guard case BridgeInternalError.invalidRequest(let message) = error else {
+                return XCTFail("expected invalid request, got \(error)")
+            }
+            XCTAssertEqual(message, "Codex app-server turn is already running.")
+        }
+
+        store.markStarted(threadID: "thread-live", turnID: "remote-turn")
+        store.markThreadIdle(threadID: "thread-live")
+
+        XCTAssertThrowsError(try store.claimForSubmit(threadID: "thread-live")) { error in
+            guard case BridgeInternalError.invalidRequest(let message) = error else {
+                return XCTFail("expected invalid request, got \(error)")
+            }
+            XCTAssertEqual(message, "Codex app-server turn is already running.")
+        }
+
+        store.markCompleted(threadID: "thread-live", turnID: "remote-turn")
+        XCTAssertNoThrow(try store.claimForSubmit(threadID: "thread-live"))
+    }
+
     func testSubmitMessageReleasesBusyGuardWhenTurnStartRequestFails() throws {
         let runner = FakeCodexAppServerProcessRunner()
         let connector = FakeCodexAppServerTransportConnector()
