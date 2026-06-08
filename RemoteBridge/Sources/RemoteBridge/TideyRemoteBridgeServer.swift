@@ -564,6 +564,18 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
         let response: BridgeResponse
         let agentReplayEnvelopes: [AgentEventEnvelope]
         let workspaceReplayEnvelopes: [WorkspaceEventEnvelope]
+
+        let agentLiveGate: BridgeAgentEventReplayGate?
+
+        init(response: BridgeResponse,
+             agentReplayEnvelopes: [AgentEventEnvelope],
+             workspaceReplayEnvelopes: [WorkspaceEventEnvelope],
+             agentLiveGate: BridgeAgentEventReplayGate? = nil) {
+            self.response = response
+            self.agentReplayEnvelopes = agentReplayEnvelopes
+            self.workspaceReplayEnvelopes = workspaceReplayEnvelopes
+            self.agentLiveGate = agentLiveGate
+        }
     }
 
     private let socketClient: TideySocketClient
@@ -649,6 +661,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                 let response: BridgeResponse
                 var agentReplayEnvelopes = [AgentEventEnvelope]()
                 var workspaceReplayEnvelopes = [WorkspaceEventEnvelope]()
+                var agentLiveGate: BridgeAgentEventReplayGate?
                 var responseMessageType = "response.invalid_request"
                 var requestID: String?
                 var requestAction: String?
@@ -669,6 +682,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                         response = localResult.response
                         agentReplayEnvelopes = localResult.agentReplayEnvelopes
                         workspaceReplayEnvelopes = localResult.workspaceReplayEnvelopes
+                        agentLiveGate = localResult.agentLiveGate
                     } else {
                         response = self.augment(response: try socketClient.send(request), for: request)
                     }
@@ -697,6 +711,11 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                     }
                     for envelope in workspaceReplayEnvelopes {
                         self.send(workspaceEnvelope: envelope, to: context)
+                    }
+                    if let agentLiveGate {
+                        for envelope in agentLiveGate.open() {
+                            self.send(envelope: envelope, to: context)
+                        }
                     }
                 }
             }
@@ -1005,11 +1024,15 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
             }
             let sinceSeq = request.params?["since_seq"]?.intValue
             let noReplay = request.params?["no_replay"]?.boolLikeValue ?? false
+            let liveGate = BridgeAgentEventReplayGate()
 
             let (subscriptionID, replayEnvelopes) = eventHub.subscribe(workspaceID: workspaceID,
                                                                        sessionID: sessionID,
                                                                        sinceSeq: noReplay ? Int.max : sinceSeq) { [weak self, weak context] envelope in
                 guard let self, let context else {
+                    return
+                }
+                guard let envelope = liveGate.receive(envelope) else {
                     return
                 }
                 context.eventLoop.execute {
@@ -1035,7 +1058,8 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                                          ],
                                          error: nil),
                 agentReplayEnvelopes: effectiveReplayEnvelopes,
-                workspaceReplayEnvelopes: []
+                workspaceReplayEnvelopes: [],
+                agentLiveGate: liveGate
             )
 
         case "unsubscribe_agent_events":
