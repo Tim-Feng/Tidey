@@ -303,6 +303,10 @@ run_app_server_runtime_selection_test() {
     TIDEY_SOCKET_PATH="$socket" TIDEY_WORKSPACE_ID="workspace-1" CODEX_UNDER_TEST="$CODEX_UNDER_TEST" bash -c '
         set -euo pipefail
         source "$CODEX_UNDER_TEST"
+        if should_use_codex_app_server_runtime; then
+            exit 11
+        fi
+        TIDEY_CODEX_APP_SERVER_ENABLE=1
         if ! should_use_codex_app_server_runtime; then
             exit 14
         fi
@@ -313,6 +317,16 @@ run_app_server_runtime_selection_test() {
         if should_use_codex_app_server_runtime; then
             exit 13
         fi
+        unset TIDEY_CODEX_APP_SERVER_DISABLE
+        TIDEY_SOCKET_PATH="$TMPDIR/missing.sock"
+        if should_use_codex_app_server_runtime; then
+            exit 15
+        fi
+        TIDEY_SOCKET_PATH="'"$socket"'"
+        TIDEY_WORKSPACE_ID=""
+        if should_use_codex_app_server_runtime; then
+            exit 16
+        fi
     '
 
     kill "$socket_pid" 2>/dev/null || true
@@ -322,6 +336,67 @@ run_app_server_runtime_selection_test() {
 }
 
 run_app_server_runtime_selection_test
+
+run_app_server_runtime_plain_path_without_enable_test() {
+    local tmpdir
+    local fake_home
+    local fake_bin
+    local registry_root
+    local socket
+    local socket_pid
+    local codex_log
+
+    tmpdir="$(mktemp -d "/private/tmp/tidey-codex-plain-path.XXXXXX")"
+    fake_home="$tmpdir/home"
+    fake_bin="$tmpdir/bin"
+    registry_root="$fake_home/Library/Application Support/Tidey Remote Bridge/agent-sessions/codex"
+    socket="$tmpdir/tidey.sock"
+    codex_log="$tmpdir/codex.log"
+    mkdir -p "$fake_bin" "$registry_root"
+
+    cat > "$fake_bin/codex" <<'FAKE_CODEX'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$FAKE_CODEX_LOG"
+if [[ "${1:-}" == "--help" ]]; then
+    printf '%s\n' "Usage: codex --profile <CONFIG_PROFILE_V2>"
+    exit 0
+fi
+exit 0
+FAKE_CODEX
+    chmod +x "$fake_bin/codex"
+
+    python3 -c 'import socket, sys, time; sock = socket.socket(socket.AF_UNIX); sock.bind(sys.argv[1]); time.sleep(10)' "$socket" &
+    socket_pid="$!"
+    for _ in $(seq 1 50); do
+        [[ -S "$socket" ]] && break
+        sleep 0.02
+    done
+
+    HOME="$fake_home" \
+        PATH="$fake_bin:/usr/bin:/bin" \
+        TIDEY_SOCKET_PATH="$socket" \
+        TIDEY_WORKSPACE_ID="workspace-1" \
+        TIDEY_PANEL_ID="panel-1" \
+        FAKE_CODEX_LOG="$codex_log" \
+        TMPDIR="$tmpdir" \
+        "$CODEX_UNDER_TEST"
+
+    grep -q -- "--profile" "$codex_log" || fail "plain Codex path was not launched"
+    if grep -q "app-server" "$codex_log"; then
+        fail "app-server was launched without TIDEY_CODEX_APP_SERVER_ENABLE"
+    fi
+    if grep -q -- "--remote" "$codex_log"; then
+        fail "remote TUI was launched without TIDEY_CODEX_APP_SERVER_ENABLE"
+    fi
+
+    kill "$socket_pid" 2>/dev/null || true
+    wait "$socket_pid" 2>/dev/null || true
+
+    rm -rf "$tmpdir"
+}
+
+run_app_server_runtime_plain_path_without_enable_test
 
 run_app_server_runtime_launch_test() {
     local tmpdir
@@ -381,6 +456,7 @@ FAKE_CODEX
 
     HOME="$fake_home" \
         PATH="$fake_bin:/usr/bin:/bin" \
+        TIDEY_CODEX_APP_SERVER_ENABLE=1 \
         TIDEY_SOCKET_PATH="$socket" \
         TIDEY_WORKSPACE_ID="workspace-1" \
         TIDEY_PANEL_ID="panel-1" \

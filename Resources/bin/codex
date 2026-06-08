@@ -556,6 +556,9 @@ start_rollout_monitor_if_needed() {
 }
 
 should_use_codex_app_server_runtime() {
+    if [[ "${TIDEY_CODEX_APP_SERVER_ENABLE:-}" != "1" ]]; then
+        return 1
+    fi
     if [[ "${TIDEY_CODEX_APP_SERVER_DISABLE:-}" == "1" ]]; then
         return 1
     fi
@@ -693,7 +696,7 @@ main() {
 
     start_rollout_monitor_if_needed "$$" "${TIDEY_WORKSPACE_ID:-}" "${TIDEY_PANEL_ID:-}" "$PWD" "$created_at" "$registry_file" "$session_id"
 
-    if [[ -n "${TIDEY_SOCKET_PATH:-}" && -n "${TIDEY_WORKSPACE_ID:-}" ]]; then
+    if [[ -n "${TIDEY_SOCKET_PATH:-}" && -n "${TIDEY_WORKSPACE_ID:-}" && -x "$HOOK_DIR/tidey" ]]; then
         "$HOOK_DIR/tidey" codex-hook session-start || true
     fi
 
