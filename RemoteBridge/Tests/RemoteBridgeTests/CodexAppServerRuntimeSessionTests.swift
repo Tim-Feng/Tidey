@@ -165,6 +165,99 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertEqual(turnParams["input"]?.arrayValue?.first?.objectValue?["text"]?.stringValue, "hello from remote")
     }
 
+    func testFactoryAttachesExplicitCurrentLoadedThread() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in })
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+
+        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        let listLoadedID = try XCTUnwrap(listLoaded["id"])
+        transport.emitLine(try Self.responseText(id: listLoadedID, result: .object([
+            "threads": .array([
+                .object([
+                    "id": .string("thread-old"),
+                    "preview": .string("Old thread"),
+                ]),
+                .object([
+                    "id": .string("thread-current"),
+                    "preview": .string("Current thread"),
+                    "isCurrent": .bool(true),
+                ]),
+            ]),
+        ])))
+
+        let resume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
+        XCTAssertEqual(resume["method"]?.stringValue, "thread/resume")
+        XCTAssertEqual(resume["params"]?.objectValue?["threadId"]?.stringValue, "thread-current")
+
+        try session.submitMessage(text: "hello current")
+        let turnStart = try Self.object(from: try XCTUnwrap(transport.sentLines().last))
+        XCTAssertEqual(turnStart["params"]?.objectValue?["threadId"]?.stringValue, "thread-current")
+    }
+
+    func testFactoryDoesNotGuessAmbiguousLoadedThread() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in })
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+
+        let initialListLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        let initialListLoadedID = try XCTUnwrap(initialListLoaded["id"])
+        transport.emitLine(try Self.responseText(id: initialListLoadedID, result: Self.ambiguousLoadedThreadsResult()))
+        XCTAssertEqual(transport.sentLines().count, 3)
+
+        let submitCompleted = expectation(description: "ambiguous submit fails")
+        var submitError: Error?
+        DispatchQueue.global().async {
+            do {
+                try session.submitMessage(text: "must not guess")
+            } catch {
+                submitError = error
+            }
+            submitCompleted.fulfill()
+        }
+
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
+        let retryListLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
+        XCTAssertEqual(retryListLoaded["method"]?.stringValue, "thread/loaded/list")
+        let retryListLoadedID = try XCTUnwrap(retryListLoaded["id"])
+        transport.emitLine(try Self.responseText(id: retryListLoadedID, result: Self.ambiguousLoadedThreadsResult()))
+
+        wait(for: [submitCompleted], timeout: 2.0)
+        guard case BridgeInternalError.invalidRequest(let message)? = submitError else {
+            return XCTFail("expected invalid request, got \(String(describing: submitError))")
+        }
+        XCTAssertEqual(message, "Codex app-server thread is not ready.")
+        XCTAssertEqual(transport.sentLines().count, 4)
+    }
+
     func testSubmitMessageLoadsThreadWhenAttachedRuntimeWasNotReady() throws {
         let runner = FakeCodexAppServerProcessRunner()
         let connector = FakeCodexAppServerTransportConnector()
@@ -528,6 +621,21 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         let resultData = try JSONEncoder().encode(result)
         let resultText = String(decoding: resultData, as: UTF8.self)
         return #"{"id":\#(idText),"result":\#(resultText)}"#
+    }
+
+    private static func ambiguousLoadedThreadsResult() -> JSONValue {
+        .object([
+            "threads": .array([
+                .object([
+                    "id": .string("thread-a"),
+                    "preview": .string("Thread A"),
+                ]),
+                .object([
+                    "id": .string("thread-b"),
+                    "preview": .string("Thread B"),
+                ]),
+            ]),
+        ])
     }
 
     private static func errorResponseText(id: JSONValue, code: String, message: String) throws -> String {

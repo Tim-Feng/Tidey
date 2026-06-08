@@ -599,20 +599,48 @@ private func codexAppServerLoadedThreadID(from value: JSONValue) -> String? {
         ?? value.objectValue?["data"]?.arrayValue
         ?? value.arrayValue
         ?? []
-    return threads
-        .compactMap { item -> String? in
-            if let id = item.stringValue {
-                return id
-            }
-            if let id = item.objectValue?["id"]?.stringValue ?? item.objectValue?["threadId"]?.stringValue {
-                return id
-            }
-            if let thread = item.objectValue?["thread"]?.objectValue {
-                return thread["id"]?.stringValue ?? thread["threadId"]?.stringValue
-            }
-            return nil
-        }
-        .last
+    let candidates = threads.compactMap(codexAppServerLoadedThreadCandidate(from:))
+    if candidates.count == 1 {
+        return candidates[0].id
+    }
+    let currentCandidates = candidates.filter(\.isCurrent)
+    if currentCandidates.count == 1 {
+        return currentCandidates[0].id
+    }
+    return nil
+}
+
+private struct CodexAppServerLoadedThreadCandidate {
+    let id: String
+    let isCurrent: Bool
+}
+
+private func codexAppServerLoadedThreadCandidate(from value: JSONValue) -> CodexAppServerLoadedThreadCandidate? {
+    if let id = value.stringValue {
+        return CodexAppServerLoadedThreadCandidate(id: id, isCurrent: false)
+    }
+    guard let object = value.objectValue else {
+        return nil
+    }
+    if let id = object["id"]?.stringValue ?? object["threadId"]?.stringValue {
+        return CodexAppServerLoadedThreadCandidate(id: id,
+                                                   isCurrent: codexAppServerLoadedThreadIsCurrent(object))
+    }
+    if let thread = object["thread"]?.objectValue,
+       let id = thread["id"]?.stringValue ?? thread["threadId"]?.stringValue {
+        return CodexAppServerLoadedThreadCandidate(id: id,
+                                                   isCurrent: codexAppServerLoadedThreadIsCurrent(object)
+                                                    || codexAppServerLoadedThreadIsCurrent(thread))
+    }
+    return nil
+}
+
+private func codexAppServerLoadedThreadIsCurrent(_ object: [String: JSONValue]) -> Bool {
+    object["current"]?.boolValue == true
+        || object["isCurrent"]?.boolValue == true
+        || object["active"]?.boolValue == true
+        || object["isActive"]?.boolValue == true
+        || object["selected"]?.boolValue == true
 }
 
 private func codexAppServerLoadedThreadShapeDescription(from value: JSONValue) -> String {
