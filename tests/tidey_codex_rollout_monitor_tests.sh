@@ -450,6 +450,7 @@ run_app_server_runtime_launch_test() {
     local app_server_child_pid_file
     local remote_tui_pid_file
     local remote_tui_registry_ok_file
+    local stale_registry
 
     tmpdir="$(mktemp -d "/private/tmp/tidey-codex-launch.XXXXXX")"
     fake_home="$tmpdir/home"
@@ -460,6 +461,7 @@ run_app_server_runtime_launch_test() {
     app_server_child_pid_file="$tmpdir/app-server-child.pid"
     remote_tui_pid_file="$tmpdir/remote-tui.pid"
     remote_tui_registry_ok_file="$tmpdir/remote-tui-registry.ok"
+    stale_registry="$registry_root/codex-stale-session.json"
     mkdir -p "$fake_bin" "$registry_root"
 
     cat > "$fake_bin/codex" <<'FAKE_CODEX'
@@ -493,6 +495,10 @@ if [[ "$*" == *"--remote"* ]]; then
         fi
         sleep 0.02
     done
+    if [[ -e "$FAKE_STALE_REGISTRY" ]]; then
+        echo "stale registry survived current launch" >&2
+        exit 31
+    fi
     sleep 0.2
     exit 0
 fi
@@ -507,6 +513,10 @@ FAKE_CODEX
         sleep 0.02
     done
 
+    cat > "$stale_registry" <<'JSON'
+{"version":1,"vendor":"codex","workspace_id":"stale-workspace","session_id":"stale-session","panel_id":"stale-panel","pid":99999999,"cwd":"/tmp","created_at":"2026-06-09T00:00:00Z","rollout_path":"","transcript_path":"","runtime":"codex_app_server","app_server_socket":"/tmp/missing-tidey-codex-app-server.sock","app_server_pid":99999998}
+JSON
+
     HOME="$fake_home" \
         PATH="$fake_bin:/usr/bin:/bin" \
         TIDEY_CODEX_APP_SERVER_ENABLE=1 \
@@ -518,6 +528,7 @@ FAKE_CODEX
         FAKE_REMOTE_TUI_PID_FILE="$remote_tui_pid_file" \
         FAKE_REMOTE_TUI_REGISTRY_OK_FILE="$remote_tui_registry_ok_file" \
         FAKE_REGISTRY_ROOT="$registry_root" \
+        FAKE_STALE_REGISTRY="$stale_registry" \
         TMPDIR="$tmpdir" \
         "$CODEX_UNDER_TEST"
 
