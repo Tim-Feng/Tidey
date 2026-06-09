@@ -8,6 +8,7 @@ let package = Package(
     ],
     products: [
         .executable(name: "tidey-remote-bridge", targets: ["RemoteBridge"]),
+        .executable(name: "tidey-headless-codex-terminal", targets: ["HeadlessCodexTerminal"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.75.0"),
@@ -22,9 +23,20 @@ let package = Package(
                 .product(name: "NIOWebSocket", package: "swift-nio"),
             ]
         ),
+        .target(
+            name: "HeadlessCodexTerminalSupport",
+            dependencies: []
+        ),
+        .executableTarget(
+            name: "HeadlessCodexTerminal",
+            dependencies: ["HeadlessCodexTerminalSupport"]
+        ),
         .testTarget(
             name: "RemoteBridgeTests",
-            dependencies: ["RemoteBridge"]
+            dependencies: [
+                "RemoteBridge",
+                "HeadlessCodexTerminalSupport",
+            ]
         ),
     ]
 )

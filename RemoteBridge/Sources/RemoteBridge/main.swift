@@ -19,7 +19,10 @@ let locator = TideySocketLocator()
 let socketClient = TideySocketClient(locator: locator)
 let eventHub = AgentEventHub()
 let workspaceEventHub = WorkspaceEventHub()
-let registryMonitor = AgentSessionRegistryMonitor(hub: eventHub, socketClient: socketClient)
+let codexRuntimeSyncer = CodexAppServerRegistryRuntimeSyncer(eventHub: eventHub)
+let registryMonitor = AgentSessionRegistryMonitor(hub: eventHub,
+                                                  socketClient: socketClient,
+                                                  runtimeSyncer: codexRuntimeSyncer)
 let workspaceEventMonitor = TideyWorkspaceEventMonitor(locator: locator, hub: workspaceEventHub)
 let observability = BridgeObservabilityCenter()
 let cloudflaredStatusStore = BridgeCloudflaredStatusStore(fileURL: bridgePaths.cloudflaredStateFileURL)
@@ -32,21 +35,31 @@ let resolverPublisher = BridgeResolverPublisher(resolverBaseURL: BridgeResolverC
 let resolverPublicationMonitor = BridgeResolverPublicationMonitor(statusReader: cloudflaredStatusStore,
                                                                   publisher: resolverPublisher)
 let uploadGarbageCollector = BridgeUploadGarbageCollector(uploadDirectory: bridgePaths.uploadsDirectory)
-let server = TideyRemoteBridgeServer(token: token,
+let runtimeConfiguration = BridgeProcessRuntimeConfiguration.from()
+let server = TideyRemoteBridgeServer(host: runtimeConfiguration.host,
+                                     port: runtimeConfiguration.port,
+                                     token: token,
                                      authenticator: authenticator,
                                      pairingController: pairingController,
                                      socketClient: socketClient,
                                      eventHub: eventHub,
                                      workspaceEventHub: workspaceEventHub,
                                      registryMonitor: registryMonitor,
+                                     codexApprovalSubmitter: codexRuntimeSyncer,
                                      observability: observability,
                                      cloudflaredManager: cloudflaredManager,
-                                     uploadGarbageCollector: uploadGarbageCollector)
+                                     uploadGarbageCollector: uploadGarbageCollector,
+                                     startRegistryMonitor: runtimeConfiguration.shouldStartRegistryMonitor,
+                                     startCloudflaredSupervisor: runtimeConfiguration.shouldStartCloudflaredSupervisor)
 
 do {
-    workspaceEventMonitor.start()
-    resolverPublicationMonitor.start()
-    uploadGarbageCollector.start()
+    if runtimeConfiguration.shouldStartBackgroundServices {
+        workspaceEventMonitor.start()
+        resolverPublicationMonitor.start()
+        uploadGarbageCollector.start()
+    } else {
+        BridgeLogger.server.info("bridge dev isolated mode enabled port=\(runtimeConfiguration.port, privacy: .public)")
+    }
     try server.run()
 } catch {
     fputs("RemoteBridge failed: \(error)\n", stderr)

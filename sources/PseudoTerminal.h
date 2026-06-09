@@ -271,6 +271,9 @@ extern NSString *const PseudoTerminalTideyWorkspaceEventNotification;
 // Sends terminal input to the selected session for the given panel. Returns YES on success.
 - (BOOL)tideySendInput:(NSString *)input toPanelWithIdentifier:(NSString *)panelIdentifier;
 
+// Sends a terminal key press to the selected session for the given panel. Returns YES on success.
+- (BOOL)tideySendKey:(NSString *)key toPanelWithIdentifier:(NSString *)panelIdentifier;
+
 // Sends terminal input to the selected session for the given workspace. Returns YES on success.
 - (BOOL)tideySendInput:(NSString *)input toWorkspaceWithIdentifier:(NSString *)workspaceIdentifier;
 
@@ -289,6 +292,10 @@ extern NSString *const PseudoTerminalTideyWorkspaceEventNotification;
 // Workspace and panel control used by RemoteBridge.
 - (nullable NSDictionary *)tideyCreateWorkspaceWithCustomTitle:(nullable NSString *)title;
 - (nullable NSDictionary *)tideyCreatePanelInWorkspaceWithIdentifier:(NSString *)workspaceIdentifier;
+- (nullable NSDictionary *)tideyCreatePanelInWorkspaceWithIdentifier:(NSString *)workspaceIdentifier
+                                                             command:(nullable NSString *)command
+                                                         environment:(nullable NSDictionary<NSString *, NSString *> *)environment
+                                                    workingDirectory:(nullable NSString *)workingDirectory;
 - (BOOL)tideyCloseWorkspaceWithIdentifier:(NSString *)workspaceIdentifier;
 - (BOOL)tideyRenameWorkspaceWithIdentifier:(NSString *)workspaceIdentifier title:(NSString *)title;
 - (BOOL)tideyRenamePanelWithIdentifier:(NSString *)panelIdentifier title:(NSString *)title;

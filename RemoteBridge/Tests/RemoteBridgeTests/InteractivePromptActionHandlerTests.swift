@@ -161,22 +161,115 @@ final class InteractivePromptActionHandlerTests: XCTestCase {
         XCTAssertTrue(router.sentInputs.isEmpty)
     }
 
-    private func makeHandler(route: OrdinaryTmuxPanelRoute,
+    func testSubmitCodexApprovalRoutesToAppServerSubmitter() throws {
+        let route = ordinaryRoute()
+        let submitter = StubCodexApprovalSubmitter()
+        let resolved = AgentEvent(eventID: "resolved-prompt-1",
+                                  seq: 10,
+                                  vendor: "codex",
+                                  workspaceID: route.workspaceID,
+                                  sessionID: route.sessionID,
+                                  timestamp: "2026-06-07T00:00:00.000Z",
+                                  type: .interactivePromptResolved,
+                                  role: nil,
+                                  text: nil,
+                                  name: nil,
+                                  input: nil,
+                                  output: nil,
+                                  toolCallID: nil,
+                                  metadata: [
+                                    "panel_id": route.panelID,
+                                    "prompt_id": "prompt-1",
+                                    "source": "codex_command_approval",
+                                  ])
+        submitter.resolvedEvent = resolved
+        let handler = makeHandler(route: route,
+                                  adapter: StubPromptAdapter(outputs: []),
+                                  activeVendor: "codex",
+                                  codexApprovalSubmitter: submitter)
+
+        let response = try XCTUnwrap(handler.handle(BridgeRequest(id: "request-1",
+                                                                  action: "submit_interactive_prompt",
+                                                                  params: [
+                                                                    "workspace_id": .string(route.workspaceID),
+                                                                    "panel_id": .string(route.panelID),
+                                                                    "prompt_id": .string("prompt-1"),
+                                                                    "target_index": .number(1),
+                                                                  ])))
+
+        XCTAssertTrue(response.ok)
+        XCTAssertEqual(submitter.submissions.map(\.promptID), ["prompt-1"])
+        XCTAssertEqual(submitter.submissions.map(\.targetIndex), [1])
+        XCTAssertEqual(response.result?["status"]?.stringValue, "resolved")
+        XCTAssertEqual(response.result?["resolved_event"]?.objectValue?["type"]?.stringValue, "interactive_prompt_resolved")
+    }
+
+    func testSubmitCodexApprovalDoesNotRequireOrdinaryTmuxRoute() throws {
+        let route = ordinaryRoute()
+        let submitter = StubCodexApprovalSubmitter()
+        let resolved = AgentEvent(eventID: "resolved-prompt-1",
+                                  seq: 10,
+                                  vendor: "codex",
+                                  workspaceID: route.workspaceID,
+                                  sessionID: route.sessionID,
+                                  timestamp: "2026-06-07T00:00:00.000Z",
+                                  type: .interactivePromptResolved,
+                                  role: nil,
+                                  text: nil,
+                                  name: nil,
+                                  input: nil,
+                                  output: nil,
+                                  toolCallID: nil,
+                                  metadata: [
+                                    "panel_id": route.panelID,
+                                    "prompt_id": "prompt-1",
+                                    "source": "codex_command_approval",
+                                  ])
+        submitter.resolvedEvent = resolved
+        let handler = makeHandler(route: nil,
+                                  adapter: StubPromptAdapter(outputs: []),
+                                  activeSessionOverride: activeSession(route: route, vendor: "codex"),
+                                  codexApprovalSubmitter: submitter)
+
+        let response = try XCTUnwrap(handler.handle(BridgeRequest(id: "request-1",
+                                                                  action: "submit_interactive_prompt",
+                                                                  params: [
+                                                                    "workspace_id": .string(route.workspaceID),
+                                                                    "panel_id": .string(route.panelID),
+                                                                    "session_id": .string(route.sessionID),
+                                                                    "vendor": .string("codex"),
+                                                                    "prompt_id": .string("prompt-1"),
+                                                                    "submit_channel": .string("codex_app_server"),
+                                                                    "target_index": .number(1),
+                                                                  ])))
+
+        XCTAssertTrue(response.ok)
+        XCTAssertEqual(submitter.submissions.map(\.promptID), ["prompt-1"])
+        XCTAssertEqual(submitter.submissions.map(\.targetIndex), [1])
+        XCTAssertEqual(response.result?["status"]?.stringValue, "resolved")
+    }
+
+    private func makeHandler(route: OrdinaryTmuxPanelRoute?,
                              adapter: StubPromptAdapter,
                              eventHub: AgentEventHub = AgentEventHub(),
-                             router: StubPromptInputRouter = StubPromptInputRouter(routedPanelIDs: [])) -> InteractivePromptActionHandler {
+                             router: StubPromptInputRouter = StubPromptInputRouter(routedPanelIDs: []),
+                             activeVendor: String = "claude",
+                             activeSessionOverride: ActiveAgentSessionSnapshot? = nil,
+                             codexApprovalSubmitter: CodexAppServerApprovalSubmitting? = nil) -> InteractivePromptActionHandler {
+        let sessionResolver = StubPromptSessionResolver(session: activeSessionOverride ?? route.map { activeSession(route: $0, vendor: activeVendor) })
         let inputHandler = BridgeInputActionHandler(socketSender: StubPromptRequestSender(),
-                                                    sessionResolver: StubPromptSessionResolver(session: activeSession(route: route)),
+                                                    sessionResolver: sessionResolver,
                                                     ordinaryTmuxInputRouter: router)
         return InteractivePromptActionHandler(routeResolver: StubPromptRouteResolver(route: route),
                                               adapter: adapter,
-                                              sessionResolver: StubPromptSessionResolver(session: activeSession(route: route)),
+                                              sessionResolver: sessionResolver,
                                               eventHub: eventHub,
-                                              inputActionHandler: inputHandler)
+                                              inputActionHandler: inputHandler,
+                                              codexApprovalSubmitter: codexApprovalSubmitter)
     }
 
-    private func activeSession(route: OrdinaryTmuxPanelRoute) -> ActiveAgentSessionSnapshot {
-        ActiveAgentSessionSnapshot(vendor: "claude",
+    private func activeSession(route: OrdinaryTmuxPanelRoute, vendor: String = "claude") -> ActiveAgentSessionSnapshot {
+        ActiveAgentSessionSnapshot(vendor: vendor,
                                    workspaceID: route.workspaceID,
                                    sessionID: route.sessionID,
                                    panelID: route.panelID)
@@ -280,6 +373,10 @@ private final class StubPromptSessionResolver: ActiveAgentSessionResolving {
     func activeSessionForPanel(workspaceID: String, panelID: String) -> ActiveAgentSessionSnapshot? {
         session
     }
+
+    func activeRecord(sessionID: String) -> AgentSessionRegistryRecord? {
+        nil
+    }
 }
 
 private final class StubPromptRequestSender: TideyRequestSending {
@@ -310,5 +407,18 @@ private final class StubPromptInputRouter: OrdinaryTmuxInputRouting, @unchecked 
         }
         sentInputs.append((panelID, input))
         return true
+    }
+}
+
+private final class StubCodexApprovalSubmitter: CodexAppServerApprovalSubmitting {
+    var resolvedEvent: AgentEvent?
+    private(set) var submissions = [(promptID: String, targetIndex: Int)]()
+
+    func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent {
+        submissions.append((promptID: promptID, targetIndex: targetIndex))
+        guard let resolvedEvent else {
+            throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
+        }
+        return resolvedEvent
     }
 }

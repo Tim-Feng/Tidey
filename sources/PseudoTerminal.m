@@ -2130,6 +2130,28 @@ ITERM_WEAKLY_REFERENCEABLE
     return YES;
 }
 
+- (BOOL)tideySendKey:(NSString *)key toPanelWithIdentifier:(NSString *)panelIdentifier {
+    PTYSession *session = [self tideySelectedSessionForPanelIdentifier:panelIdentifier];
+    if (!session || session.isBrowserSession) {
+        return NO;
+    }
+    if ([key isEqualToString:@"enter"]) {
+        NSEvent *event = [NSEvent keyEventWithType:NSEventTypeKeyDown
+                                          location:NSZeroPoint
+                                     modifierFlags:0
+                                         timestamp:[[NSDate date] timeIntervalSinceReferenceDate]
+                                      windowNumber:session.view.window.windowNumber
+                                           context:nil
+                                        characters:@"\r"
+                       charactersIgnoringModifiers:@"\r"
+                                         isARepeat:NO
+                                           keyCode:36];
+        [session keyDown:event];
+        return YES;
+    }
+    return NO;
+}
+
 - (BOOL)tideySendInput:(NSString *)input toWorkspaceWithIdentifier:(NSString *)workspaceIdentifier {
     if (input.length == 0) {
         return NO;
@@ -2312,6 +2334,16 @@ ITERM_WEAKLY_REFERENCEABLE
 }
 
 - (NSDictionary *)tideyCreatePanelInWorkspaceWithIdentifier:(NSString *)workspaceIdentifier {
+    return [self tideyCreatePanelInWorkspaceWithIdentifier:workspaceIdentifier
+                                                   command:nil
+                                               environment:nil
+                                          workingDirectory:nil];
+}
+
+- (NSDictionary *)tideyCreatePanelInWorkspaceWithIdentifier:(NSString *)workspaceIdentifier
+                                                    command:(NSString *)command
+                                                environment:(NSDictionary<NSString *, NSString *> *)environment
+                                           workingDirectory:(NSString *)workingDirectory {
     NSInteger workspaceIndex = NSNotFound;
     Workspace *workspace = [self tideyWorkspaceWithIdentifier:workspaceIdentifier index:&workspaceIndex];
     if (!workspace) {
@@ -2319,13 +2351,32 @@ ITERM_WEAKLY_REFERENCEABLE
     }
 
     PTYSession *sourceSession = workspace.selectedPanel.activeSession;
-    NSString *previousDirectory = sourceSession.currentLocalWorkingDirectory;
+    NSString *previousDirectory = workingDirectory.length > 0 ? workingDirectory : sourceSession.currentLocalWorkingDirectory;
     __block PTYSession *session = nil;
     [self performTideyWorkspaceMutationPreservingWindowFrame:^{
         [self selectWorkspaceAtIndex:workspaceIndex recordHistory:YES];
-        session = [self tideyCreateDefaultSessionWithTargetWorkspaceIndex:workspaceIndex
-                                                          createWorkspace:NO
-                                                        previousDirectory:previousDirectory];
+        if (command.length > 0) {
+            Profile *profile = [ProfileModel profileForCreatingNewSessionBasedOn:[[ProfileModel sharedInstance] defaultBookmark]];
+            if (!profile) {
+                profile = [[ProfileModel sharedInstance] defaultBookmark];
+            }
+            if (profile) {
+                _pendingWorkspaceIndexForInsertedPanel = workspaceIndex;
+                _pendingInsertedPanelCreatesWorkspace = NO;
+                _pendingInsertedPanelShouldAssignInitialTitle = YES;
+                session = [self createTabWithProfile:profile
+                                         withCommand:command
+                                         environment:environment
+                                            tabIndex:nil
+                                   previousDirectory:previousDirectory
+                                              parent:nil
+                                          completion:nil];
+            }
+        } else {
+            session = [self tideyCreateDefaultSessionWithTargetWorkspaceIndex:workspaceIndex
+                                                              createWorkspace:NO
+                                                            previousDirectory:previousDirectory];
+        }
     }];
     return session ? [self tideySocketCreationResultForSession:session] : nil;
 }

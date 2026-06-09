@@ -115,6 +115,192 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         XCTAssertEqual(snapshots["session-3"]?.panelID, "stale-panel-3")
     }
 
+    func testScanKeepsCodexAppServerRecordWhenAppServerPIDIsAlive() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let registryURL = paths.codexAgentSessionsDirectory.appendingPathComponent("codex-app-server-panel.json")
+        let recordData = Data("""
+        {
+          "version": 1,
+          "vendor": "codex",
+          "workspace_id": "workspace-app-server",
+          "session_id": "session-app-server",
+          "panel_id": "panel-app-server",
+          "pid": 999999,
+          "cwd": "/tmp",
+          "created_at": "2026-06-07T00:00:00Z",
+          "runtime": "codex_app_server",
+          "app_server_socket": "/tmp/tidey-codex-app-server/app.sock",
+          "app_server_pid": \(getpid())
+        }
+        """.utf8)
+        try recordData.write(to: registryURL)
+
+        let runtimeSyncer = CapturingRuntimeSyncer()
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: fileManager,
+                                                  hub: AgentEventHub(),
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+                                                  parentPIDLookup: { _ in nil },
+                                                  runtimeSyncer: runtimeSyncer)
+        try monitor.start()
+
+        let session = monitor.activeSessionForPanel(workspaceID: "workspace-app-server",
+                                                    panelID: "panel-app-server")
+        XCTAssertEqual(session?.sessionID, "session-app-server")
+        XCTAssertTrue(fileManager.fileExists(atPath: registryURL.path))
+        XCTAssertEqual(runtimeSyncer.latestRecords.map(\.sessionID), ["session-app-server"])
+    }
+
+    func testScanPicksUpCodexAppServerRecordCreatedAfterStart() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let runtimeSyncer = CapturingRuntimeSyncer()
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: fileManager,
+                                                  hub: AgentEventHub(),
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+                                                  parentPIDLookup: { _ in nil },
+                                                  runtimeSyncer: runtimeSyncer)
+        try monitor.start()
+        XCTAssertEqual(runtimeSyncer.latestRecords.map(\.sessionID), [])
+
+        let registryURL = paths.codexAgentSessionsDirectory.appendingPathComponent("codex-app-server-panel.json")
+        let recordData = Data("""
+        {
+          "version": 1,
+          "vendor": "codex",
+          "workspace_id": "workspace-app-server",
+          "session_id": "session-app-server",
+          "panel_id": "panel-app-server",
+          "pid": 999999,
+          "cwd": "/tmp",
+          "created_at": "2026-06-07T00:00:00Z",
+          "runtime": "codex_app_server",
+          "app_server_socket": "/tmp/tidey-codex-app-server/app.sock",
+          "app_server_pid": \(getpid())
+        }
+        """.utf8)
+        try recordData.write(to: registryURL)
+
+        XCTAssertTrue(waitUntil {
+            runtimeSyncer.latestRecords.map(\.sessionID) == ["session-app-server"]
+        })
+    }
+
+    func testCodexAppServerRecordStartsTranscriptSessionFromRolloutPath() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let rolloutURL = supportDirectory.appendingPathComponent("rollout-2026-06-08T22-06-25-019ea78e-5aee-7a40-848c-7e9b78025fc9.jsonl")
+        let lines = [
+            makeCodexMessageLine(role: "user", content: "Message from Mac TUI"),
+            makeCodexMessageLine(role: "assistant", content: "Message visible on Remote"),
+        ].joined(separator: "\n") + "\n"
+        try lines.write(to: rolloutURL, atomically: true, encoding: .utf8)
+
+        let registryURL = paths.codexAgentSessionsDirectory.appendingPathComponent("codex-app-server-panel.json")
+        let recordData = Data("""
+        {
+          "version": 1,
+          "vendor": "codex",
+          "workspace_id": "workspace-app-server",
+          "session_id": "session-app-server",
+          "panel_id": "panel-app-server",
+          "pid": 999999,
+          "cwd": "/tmp",
+          "created_at": "2026-06-07T00:00:00Z",
+          "runtime": "codex_app_server",
+          "app_server_socket": "/tmp/tidey-codex-app-server/app.sock",
+          "app_server_pid": \(getpid()),
+          "rollout_path": "\(rolloutURL.path)"
+        }
+        """.utf8)
+        try recordData.write(to: registryURL)
+
+        let hub = AgentEventHub()
+        var capturedAgentEventHandler: CodexAppServerHeadlessRuntime.AgentEventHandler?
+        let runtimeSyncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub,
+                                                               attachHandler: { _, _, _, onAgentEvent, _, _ in
+            capturedAgentEventHandler = onAgentEvent
+            return RegistryMonitorFakeRuntimeSession()
+        })
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: fileManager,
+                                                  hub: hub,
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+                                                  parentPIDLookup: { _ in nil },
+                                                  runtimeSyncer: runtimeSyncer)
+        try monitor.start()
+
+        XCTAssertTrue(waitUntil {
+            let result = hub.fetch(workspaceID: "workspace-app-server",
+                                   sessionID: "session-app-server",
+                                   limit: 10)
+            return result.events.contains { $0.text == "Message visible on Remote" }
+        })
+
+        let result = hub.fetch(workspaceID: "workspace-app-server",
+                               sessionID: "session-app-server",
+                               limit: 10)
+        XCTAssertEqual(result.events.filter { $0.type == .userMessage }.map(\.text),
+                       ["Message from Mac TUI"])
+        XCTAssertEqual(result.events.filter { $0.type == .assistantMessage }.map(\.text),
+                       ["Message visible on Remote"])
+
+        let onAgentEvent = try XCTUnwrap(capturedAgentEventHandler)
+        onAgentEvent(AgentEvent(eventID: "runtime-user-duplicate",
+                                seq: 10_000,
+                                vendor: "codex",
+                                workspaceID: "workspace-app-server",
+                                sessionID: "session-app-server",
+                                timestamp: "2026-06-08T22:06:26.000Z",
+                                type: .userMessage,
+                                role: nil,
+                                text: "Message from Mac TUI",
+                                name: nil,
+                                input: nil,
+                                output: nil,
+                                toolCallID: nil,
+                                metadata: ["source": "codex_app_server"]))
+        onAgentEvent(AgentEvent(eventID: "runtime-assistant-duplicate",
+                                seq: 10_001,
+                                vendor: "codex",
+                                workspaceID: "workspace-app-server",
+                                sessionID: "session-app-server",
+                                timestamp: "2026-06-08T22:06:27.000Z",
+                                type: .assistantMessage,
+                                role: nil,
+                                text: "Message visible on Remote",
+                                name: nil,
+                                input: nil,
+                                output: nil,
+                                toolCallID: nil,
+                                metadata: ["source": "codex_app_server"]))
+
+        let deduplicated = hub.fetch(workspaceID: "workspace-app-server",
+                                     sessionID: "session-app-server",
+                                     limit: 10)
+        XCTAssertEqual(deduplicated.events.filter { $0.type == .userMessage }.map(\.text),
+                       ["Message from Mac TUI"])
+        XCTAssertEqual(deduplicated.events.filter { $0.type == .assistantMessage }.map(\.text),
+                       ["Message visible on Remote"])
+    }
+
     func testActiveSessionForPanelFallsBackToTmuxPaneMatchWhenPanelIDsChanged() throws {
         let fileManager = FileManager.default
         let supportDirectory = fileManager.temporaryDirectory
@@ -781,4 +967,68 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         """.utf8)
         try recordData.write(to: url)
     }
+
+    private func makeCodexMessageLine(role: String, content: String) -> String {
+        let object: [String: Any] = [
+            "type": "response_item",
+            "timestamp": "2026-06-08T22:06:25Z",
+            "payload": [
+                "type": "message",
+                "role": role,
+                "content": [
+                    [
+                        "type": role == "user" ? "input_text" : "output_text",
+                        "text": content,
+                    ],
+                ],
+            ],
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        return String(data: data, encoding: .utf8)!
+    }
+
+    private func waitUntil(timeout: TimeInterval = 2,
+                           condition: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() {
+                return true
+            }
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+        }
+        return condition()
+    }
+}
+
+private final class CapturingRuntimeSyncer: AgentSessionRuntimeSyncing {
+    private let lock = NSLock()
+    private var records = [AgentSessionRegistryRecord]()
+
+    var latestRecords: [AgentSessionRegistryRecord] {
+        lock.lock()
+        defer { lock.unlock() }
+        return records
+    }
+
+    func sync(records: [AgentSessionRegistryRecord]) {
+        lock.lock()
+        self.records = records
+        lock.unlock()
+    }
+}
+
+private final class RegistryMonitorFakeRuntimeSession: CodexAppServerRuntimeSessionControlling {
+    func canSubmitMessage() -> Bool {
+        true
+    }
+
+    func ensureThreadSubscription() {}
+
+    func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent {
+        throw BridgeInternalError.notFound("No prompts in registry monitor fake runtime.")
+    }
+
+    func submitMessage(text: String) throws {}
+
+    func stop() {}
 }

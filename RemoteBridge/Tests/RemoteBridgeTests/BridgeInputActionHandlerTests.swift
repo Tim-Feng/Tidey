@@ -109,7 +109,9 @@ final class BridgeInputActionHandlerTests: XCTestCase {
                                                         ]))
 
         XCTAssertEqual(response?.ok, true)
-        XCTAssertEqual(sender.sentRequests.map { $0.params?["input"]?.stringValue }, [message, "\r"])
+        XCTAssertEqual(sender.sentRequests.map(\.action), ["send_input", "send_key"])
+        XCTAssertEqual(sender.sentRequests[0].params?["input"]?.stringValue, message)
+        XCTAssertEqual(sender.sentRequests[1].params?["key"]?.stringValue, "enter")
         XCTAssertEqual(delayRecorder.recordedDelays, [chatSubmitEnterDelayNanoseconds])
     }
 
@@ -135,8 +137,98 @@ final class BridgeInputActionHandlerTests: XCTestCase {
                                                         ]))
 
         XCTAssertEqual(response?.ok, true)
-        XCTAssertEqual(sender.sentRequests.map { $0.params?["input"]?.stringValue }, ["hello", "\r"])
+        XCTAssertEqual(sender.sentRequests.map(\.action), ["send_input", "send_key"])
+        XCTAssertEqual(sender.sentRequests[0].params?["input"]?.stringValue, "hello")
+        XCTAssertEqual(sender.sentRequests[1].params?["key"]?.stringValue, "enter")
         XCTAssertEqual(delayRecorder.recordedDelays, [chatSubmitEnterDelayNanoseconds])
+    }
+
+    func testChatSubmitForCodexAppServerRuntimeSubmitsToRuntime() throws {
+        let sender = MockTideyRequestSender()
+        let resolver = MockSessionResolver(
+            session: ActiveAgentSessionSnapshot(vendor: "codex",
+                                                workspaceID: "workspace-1",
+                                                sessionID: "session-1",
+                                                panelID: "panel-1"),
+            recordsBySessionID: [
+                "session-1": AgentSessionRegistryRecord(version: 1,
+                                                        vendor: "codex",
+                                                        workspaceID: "workspace-1",
+                                                        sessionID: "session-1",
+                                                        panelID: "panel-1",
+                                                        pid: 123,
+                                                        cwd: "/tmp",
+                                                        createdAt: "2026-06-08T00:00:00Z",
+                                                        transcriptPath: nil,
+                                                        runtime: "codex_app_server",
+                                                        appServerSocket: "/tmp/app.sock",
+                                                        appServerPID: 456),
+            ])
+        let appServerSubmitter = MockCodexAppServerChatSubmitter()
+        let handler = BridgeInputActionHandler(socketSender: sender,
+                                               sessionResolver: resolver,
+                                               codexAppServerChatSubmitter: appServerSubmitter)
+
+        let response = try handler.handle(BridgeRequest(id: "request-1",
+                                                        action: "chat_submit",
+                                                        params: [
+                                                            "workspace_id": .string("workspace-1"),
+                                                            "panel_id": .string("panel-1"),
+                                                            "message": .string("hello from remote"),
+                                                            "session_id": .string("session-1"),
+                                                            "vendor": .string("codex"),
+                                                        ]))
+
+        XCTAssertEqual(response?.ok, true)
+        XCTAssertTrue(sender.sentRequests.isEmpty)
+        XCTAssertEqual(appServerSubmitter.submissions, [
+            MockCodexAppServerChatSubmitter.Submission(sessionID: "session-1",
+                                                       text: "hello from remote"),
+        ])
+    }
+
+    func testChatSubmitForCodexAppServerRuntimeFallsBackWhenRuntimeCannotSubmit() throws {
+        let sender = MockTideyRequestSender()
+        let resolver = MockSessionResolver(
+            session: ActiveAgentSessionSnapshot(vendor: "codex",
+                                                workspaceID: "workspace-1",
+                                                sessionID: "session-1",
+                                                panelID: "panel-1"),
+            recordsBySessionID: [
+                "session-1": AgentSessionRegistryRecord(version: 1,
+                                                        vendor: "codex",
+                                                        workspaceID: "workspace-1",
+                                                        sessionID: "session-1",
+                                                        panelID: "panel-1",
+                                                        pid: 123,
+                                                        cwd: "/tmp",
+                                                        createdAt: "2026-06-08T00:00:00Z",
+                                                        transcriptPath: nil,
+                                                        runtime: "codex_app_server",
+                                                        appServerSocket: "/tmp/app.sock",
+                                                        appServerPID: 456),
+            ])
+        let appServerSubmitter = MockCodexAppServerChatSubmitter()
+        appServerSubmitter.canSubmit = false
+        let handler = BridgeInputActionHandler(socketSender: sender,
+                                               sessionResolver: resolver,
+                                               codexAppServerChatSubmitter: appServerSubmitter)
+
+        let response = try handler.handle(BridgeRequest(id: "request-1",
+                                                        action: "chat_submit",
+                                                        params: [
+                                                            "workspace_id": .string("workspace-1"),
+                                                            "panel_id": .string("panel-1"),
+                                                            "message": .string("hello from terminal fallback"),
+                                                            "session_id": .string("session-1"),
+                                                            "vendor": .string("codex"),
+                                                        ]))
+
+        XCTAssertEqual(response?.ok, true)
+        XCTAssertTrue(appServerSubmitter.submissions.isEmpty)
+        XCTAssertEqual(sender.sentRequests.map(\.action), ["send_input", "send_key"])
+        XCTAssertEqual(sender.sentRequests[0].params?["input"]?.stringValue, "hello from terminal fallback")
+        XCTAssertEqual(sender.sentRequests[1].params?["key"]?.stringValue, "enter")
     }
 
     func testChatSubmitRegistersClientRequestIDForTranscriptEchoMatching() throws {
@@ -261,7 +353,9 @@ final class BridgeInputActionHandlerTests: XCTestCase {
 
         XCTAssertEqual(response?.ok, true)
         XCTAssertEqual(router.sentInputs.map(\.input), ["hello"])
-        XCTAssertEqual(sender.sentRequests.map { $0.params?["input"]?.stringValue }, ["hello", "\r"])
+        XCTAssertEqual(sender.sentRequests.map(\.action), ["send_input", "send_key"])
+        XCTAssertEqual(sender.sentRequests[0].params?["input"]?.stringValue, "hello")
+        XCTAssertEqual(sender.sentRequests[1].params?["key"]?.stringValue, "enter")
         XCTAssertEqual(delayRecorder.recordedDelays, [chatSubmitEnterDelayNanoseconds])
     }
 
@@ -353,13 +447,20 @@ final class BridgeInputActionHandlerTests: XCTestCase {
 
 private final class MockSessionResolver: ActiveAgentSessionResolving {
     private let session: ActiveAgentSessionSnapshot?
+    private let recordsBySessionID: [String: AgentSessionRegistryRecord]
 
-    init(session: ActiveAgentSessionSnapshot? = nil) {
+    init(session: ActiveAgentSessionSnapshot? = nil,
+         recordsBySessionID: [String: AgentSessionRegistryRecord] = [:]) {
         self.session = session
+        self.recordsBySessionID = recordsBySessionID
     }
 
     func activeSessionForPanel(workspaceID: String, panelID: String) -> ActiveAgentSessionSnapshot? {
         session
+    }
+
+    func activeRecord(sessionID: String) -> AgentSessionRegistryRecord? {
+        recordsBySessionID[sessionID]
     }
 }
 
@@ -372,6 +473,24 @@ private final class MockTideyRequestSender: TideyRequestSending {
                               ok: true,
                               result: ["ok": .bool(true)],
                               error: nil)
+    }
+}
+
+private final class MockCodexAppServerChatSubmitter: CodexAppServerChatSubmitting {
+    struct Submission: Equatable {
+        let sessionID: String
+        let text: String
+    }
+
+    private(set) var submissions = [Submission]()
+    var canSubmit = true
+
+    func canSubmitMessage(sessionID: String) -> Bool {
+        canSubmit
+    }
+
+    func submitMessage(sessionID: String, text: String) throws {
+        submissions.append(Submission(sessionID: sessionID, text: text))
     }
 }
 

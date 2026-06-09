@@ -11,9 +11,15 @@ extension TideySocketClient: TideyRequestSending {}
 
 protocol ActiveAgentSessionResolving {
     func activeSessionForPanel(workspaceID: String, panelID: String) -> ActiveAgentSessionSnapshot?
+    func activeRecord(sessionID: String) -> AgentSessionRegistryRecord?
 }
 
 extension AgentSessionRegistryMonitor: ActiveAgentSessionResolving {}
+
+protocol CodexAppServerChatSubmitting: AnyObject {
+    func canSubmitMessage(sessionID: String) -> Bool
+    func submitMessage(sessionID: String, text: String) throws
+}
 
 struct BridgeInputActionHandler {
     private enum OrdinaryTmuxRouteDecision {
@@ -24,12 +30,14 @@ struct BridgeInputActionHandler {
 
     private let socketSender: TideyRequestSending
     private let sessionResolver: ActiveAgentSessionResolving
+    private let codexAppServerChatSubmitter: CodexAppServerChatSubmitting?
     private let ordinaryTmuxInputRouter: OrdinaryTmuxInputRouting?
     private let chatSubmitEchoRegistry: ChatSubmitEchoRegistry?
     private let sleep: @Sendable (UInt64) throws -> Void
 
     init(socketSender: TideyRequestSending,
          sessionResolver: ActiveAgentSessionResolving,
+         codexAppServerChatSubmitter: CodexAppServerChatSubmitting? = nil,
          ordinaryTmuxInputRouter: OrdinaryTmuxInputRouting? = nil,
          chatSubmitEchoRegistry: ChatSubmitEchoRegistry? = nil,
          sleep: @escaping @Sendable (UInt64) throws -> Void = { delayNanoseconds in
@@ -40,6 +48,7 @@ struct BridgeInputActionHandler {
         }) {
         self.socketSender = socketSender
         self.sessionResolver = sessionResolver
+        self.codexAppServerChatSubmitter = codexAppServerChatSubmitter
         self.ordinaryTmuxInputRouter = ordinaryTmuxInputRouter
         self.chatSubmitEchoRegistry = chatSubmitEchoRegistry
         self.sleep = sleep
@@ -103,6 +112,7 @@ struct BridgeInputActionHandler {
         let requestedVendor = params["vendor"]?.stringValue
         let clientRequestID = params["client_request_id"]?.stringValue
         let activeSession = sessionResolver.activeSessionForPanel(workspaceID: workspaceID, panelID: panelID)
+        BridgeLogger.input.info("resolve action=chat_submit request_id=\(request.id, privacy: .public) workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) requested_session_id=\(requestedSessionID ?? "-", privacy: .public) requested_vendor=\(requestedVendor ?? "-", privacy: .public) active_session_id=\(activeSession?.sessionID ?? "-", privacy: .public) active_vendor=\(activeSession?.vendor ?? "-", privacy: .public)")
 
         if let requestedSessionID,
            let activeSession,
@@ -136,6 +146,55 @@ struct BridgeInputActionHandler {
 
         BridgeLogger.input.info("dispatch action=chat_submit request_id=\(request.id, privacy: .public) workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) session_id=\(activeSession?.sessionID ?? requestedSessionID ?? "-", privacy: .public) vendor=\(vendor.id, privacy: .public) length=\(message.count) has_cr=\(message.contains("\r")) has_lf=\(message.contains("\n")) tail=\(summarizedTail(message), privacy: .public)")
 
+        let activeRecord = activeSession.flatMap { sessionResolver.activeRecord(sessionID: $0.sessionID) }
+        let canSubmitViaAppServer: Bool?
+        if vendor.id == "codex",
+           let activeSession,
+           activeRecord?.runtime == "codex_app_server",
+           let codexAppServerChatSubmitter {
+            canSubmitViaAppServer = codexAppServerChatSubmitter.canSubmitMessage(sessionID: activeSession.sessionID)
+        } else {
+            canSubmitViaAppServer = nil
+        }
+        if vendor.id == "codex",
+           activeRecord?.runtime == "codex_app_server" {
+            if codexAppServerChatSubmitter != nil,
+               canSubmitViaAppServer == true {
+                BridgeLogger.input.debug("codex app-server submit gate request_id=\(request.id, privacy: .public) workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) session_id=\(activeSession?.sessionID ?? "-", privacy: .public) active_record_runtime=\(activeRecord?.runtime ?? "-", privacy: .public) has_submitter=true can_submit=true")
+            } else {
+                BridgeLogger.input.info("codex app-server submit gate blocked request_id=\(request.id, privacy: .public) workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) session_id=\(activeSession?.sessionID ?? "-", privacy: .public) active_record_runtime=\(activeRecord?.runtime ?? "-", privacy: .public) has_submitter=\((codexAppServerChatSubmitter != nil), privacy: .public) can_submit=\(canSubmitViaAppServer.map(String.init) ?? "-", privacy: .public)")
+            }
+        }
+
+        if vendor.id == "codex",
+           let activeSession,
+           activeRecord?.runtime == "codex_app_server" {
+            if let codexAppServerChatSubmitter,
+               canSubmitViaAppServer == true {
+                try codexAppServerChatSubmitter.submitMessage(sessionID: activeSession.sessionID,
+                                                              text: message)
+                if let clientRequestID {
+                    chatSubmitEchoRegistry?.register(workspaceID: workspaceID,
+                                                     panelID: panelID,
+                                                     sessionID: activeSession.sessionID,
+                                                     vendor: vendor.id,
+                                                     text: message,
+                                                     clientRequestID: clientRequestID)
+                }
+                return Self.submittedResponse(for: request,
+                                              vendorID: vendor.id,
+                                              sessionID: activeSession.sessionID,
+                                              deduplicated: false)
+            }
+            let fallbackReason: String
+            if codexAppServerChatSubmitter == nil {
+                fallbackReason = "missing_submitter"
+            } else {
+                fallbackReason = "can_submit_false"
+            }
+            BridgeLogger.input.info("codex app-server runtime not ready; falling back to terminal input session_id=\(activeSession.sessionID, privacy: .public) reason=\(fallbackReason, privacy: .public)")
+        }
+
         var previousStepUsedOrdinaryTmux = false
         var forceMacSocketForRemainingSteps = false
         for (index, step) in vendor.submitMessagePlan(text: message).enumerated() {
@@ -163,12 +222,22 @@ struct BridgeInputActionHandler {
                 if routeDecision == .macSocketFallback {
                     forceMacSocketForRemainingSteps = true
                 }
-                let stepRequest = BridgeRequest(id: UUID().uuidString,
+                let stepRequest: BridgeRequest
+                if Self.isEnterOnly(step.input) {
+                    stepRequest = BridgeRequest(id: UUID().uuidString,
+                                                action: "send_key",
+                                                params: [
+                                                    "panel_id": .string(panelID),
+                                                    "key": .string("enter"),
+                                                ])
+                } else {
+                    stepRequest = BridgeRequest(id: UUID().uuidString,
                                                 action: "send_input",
                                                 params: [
                                                     "panel_id": .string(panelID),
                                                     "input": .string(step.input),
                                                 ])
+                }
                 let response = try socketSender.send(stepRequest)
                 guard response.ok else {
                     return BridgeResponse(id: request.id,

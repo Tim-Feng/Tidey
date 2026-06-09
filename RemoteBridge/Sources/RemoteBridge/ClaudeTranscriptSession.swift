@@ -22,6 +22,10 @@ struct AgentSessionRegistryRecord: Codable, Sendable {
     let transcriptPath: String?
     let tmuxPaneID: String?
     let tmuxSocketPath: String?
+    let runtime: String?
+    let appServerSocket: String?
+    let appServerPID: Int32?
+    let remoteTUIPID: Int32?
 
     enum CodingKeys: String, CodingKey {
         case version
@@ -36,6 +40,10 @@ struct AgentSessionRegistryRecord: Codable, Sendable {
         case rolloutPath = "rollout_path"
         case tmuxPaneID = "tmux_pane_id"
         case tmuxSocketPath = "tmux_socket_path"
+        case runtime
+        case appServerSocket = "app_server_socket"
+        case appServerPID = "app_server_pid"
+        case remoteTUIPID = "remote_tui_pid"
     }
 
     init(version: Int,
@@ -48,7 +56,11 @@ struct AgentSessionRegistryRecord: Codable, Sendable {
          createdAt: String,
          transcriptPath: String?,
          tmuxPaneID: String? = nil,
-         tmuxSocketPath: String? = nil) {
+         tmuxSocketPath: String? = nil,
+         runtime: String? = nil,
+         appServerSocket: String? = nil,
+         appServerPID: Int32? = nil,
+         remoteTUIPID: Int32? = nil) {
         self.version = version
         self.vendor = vendor
         self.workspaceID = workspaceID
@@ -60,6 +72,10 @@ struct AgentSessionRegistryRecord: Codable, Sendable {
         self.transcriptPath = transcriptPath
         self.tmuxPaneID = tmuxPaneID
         self.tmuxSocketPath = tmuxSocketPath
+        self.runtime = runtime
+        self.appServerSocket = appServerSocket
+        self.appServerPID = appServerPID
+        self.remoteTUIPID = remoteTUIPID
     }
 
     init(from decoder: Decoder) throws {
@@ -77,6 +93,10 @@ struct AgentSessionRegistryRecord: Codable, Sendable {
             container.decodeIfPresent(String.self, forKey: .rolloutPath)
         tmuxPaneID = try container.decodeIfPresent(String.self, forKey: .tmuxPaneID)
         tmuxSocketPath = try container.decodeIfPresent(String.self, forKey: .tmuxSocketPath)
+        runtime = try container.decodeIfPresent(String.self, forKey: .runtime)
+        appServerSocket = try container.decodeIfPresent(String.self, forKey: .appServerSocket)
+        appServerPID = try container.decodeIfPresent(Int32.self, forKey: .appServerPID)
+        remoteTUIPID = try container.decodeIfPresent(Int32.self, forKey: .remoteTUIPID)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -93,6 +113,10 @@ struct AgentSessionRegistryRecord: Codable, Sendable {
         try container.encodeIfPresent(transcriptPath, forKey: .rolloutPath)
         try container.encodeIfPresent(tmuxPaneID, forKey: .tmuxPaneID)
         try container.encodeIfPresent(tmuxSocketPath, forKey: .tmuxSocketPath)
+        try container.encodeIfPresent(runtime, forKey: .runtime)
+        try container.encodeIfPresent(appServerSocket, forKey: .appServerSocket)
+        try container.encodeIfPresent(appServerPID, forKey: .appServerPID)
+        try container.encodeIfPresent(remoteTUIPID, forKey: .remoteTUIPID)
     }
 }
 
@@ -335,6 +359,7 @@ final class AgentSessionRegistryMonitor {
     private let descendantProcessLookup: DescendantProcessLookup
     private let rolloutPathLookup: RolloutPathLookup
     private let codexRolloutBySessionIDLookup: CodexRolloutBySessionIDLookup
+    private let runtimeSyncer: AgentSessionRuntimeSyncing?
     private let queue = DispatchQueue(label: "com.tidey.remote-bridge.agent-registry")
     private var timer: DispatchSourceTimer?
     private var watchers = [String: DispatchSourceFileSystemObject]()
@@ -343,6 +368,8 @@ final class AgentSessionRegistryMonitor {
     private var activeRecords = [String: AgentSessionRegistryRecord]()
     private var resolvedPanelBindings = [String: ResolvedPanelBinding]()
     private var livePanelsByWorkspace = [String: [AgentPanelProcessSnapshot]]()
+    private var lastLoggedAppServerSessionIDs = Set<String>()
+    private var lastLoggedPaneIdentityCorrectionKeyBySessionID = [String: String]()
     private var scanScheduled = false
 
     init(paths: BridgePaths = BridgePaths(),
@@ -354,7 +381,8 @@ final class AgentSessionRegistryMonitor {
          parentPIDLookup: @escaping ParentPIDLookup = AgentSessionRegistryMonitor.liveParentPIDLookup,
          descendantProcessLookup: @escaping DescendantProcessLookup = AgentSessionRegistryMonitor.liveDescendantProcessLookup,
          rolloutPathLookup: @escaping RolloutPathLookup = AgentSessionRegistryMonitor.liveRolloutPathLookup,
-         codexRolloutBySessionIDLookup: @escaping CodexRolloutBySessionIDLookup = AgentSessionRegistryMonitor.liveCodexRolloutBySessionIDLookup) {
+         codexRolloutBySessionIDLookup: @escaping CodexRolloutBySessionIDLookup = AgentSessionRegistryMonitor.liveCodexRolloutBySessionIDLookup,
+         runtimeSyncer: AgentSessionRuntimeSyncing? = nil) {
         self.paths = paths
         self.fileManager = fileManager
         self.hub = hub
@@ -365,6 +393,7 @@ final class AgentSessionRegistryMonitor {
         self.descendantProcessLookup = descendantProcessLookup
         self.rolloutPathLookup = rolloutPathLookup
         self.codexRolloutBySessionIDLookup = codexRolloutBySessionIDLookup
+        self.runtimeSyncer = runtimeSyncer
     }
 
     func start() throws {
@@ -536,10 +565,21 @@ final class AgentSessionRegistryMonitor {
         }
         let activeSessionIDs = Set(sourceRecords.map(\.sessionID))
         resolvedPanelBindings = resolvedPanelBindings.filter { activeSessionIDs.contains($0.key) }
+        lastLoggedPaneIdentityCorrectionKeyBySessionID = lastLoggedPaneIdentityCorrectionKeyBySessionID
+            .filter { activeSessionIDs.contains($0.key) }
         let effectiveRecords = sourceRecords
             .map(recordWithPaneIdentityIfAvailable(_:))
             .map(effectiveRecord(for:))
+        let appServerRecords = effectiveRecords.filter {
+            $0.vendor == "codex" && $0.runtime == "codex_app_server"
+        }
+        let appServerSessionIDs = Set(appServerRecords.map(\.sessionID))
+        if appServerSessionIDs != lastLoggedAppServerSessionIDs {
+            BridgeLogger.server.info("codex app-server diagnostic scan registry app_server_count=\(appServerRecords.count, privacy: .public) session_ids=\(appServerRecords.map(\.sessionID).joined(separator: ","), privacy: .public)")
+            lastLoggedAppServerSessionIDs = appServerSessionIDs
+        }
         syncRecords(effectiveRecords)
+        runtimeSyncer?.sync(records: effectiveRecords)
         activeRecords = Dictionary(uniqueKeysWithValues: effectiveRecords.map { ($0.sessionID, $0) })
         for record in effectiveRecords where resolvedPanelBindings[record.sessionID] != nil {
             applyResolvedBinding(sessionID: record.sessionID,
@@ -558,7 +598,16 @@ final class AgentSessionRegistryMonitor {
             return record
         }
 
-        BridgeLogger.server.info("agent registry corrected from tmux pane identity session_id=\(record.sessionID, privacy: .public) vendor=\(record.vendor, privacy: .public) pane_id=\(paneID, privacy: .public) old_workspace_id=\(record.workspaceID, privacy: .public) old_panel_id=\(record.panelID ?? "-", privacy: .public) workspace_id=\(identity.workspaceID, privacy: .public) panel_id=\(identity.panelID, privacy: .public)")
+        let correctionKey = [
+            record.workspaceID,
+            record.panelID ?? "-",
+            identity.workspaceID,
+            identity.panelID,
+        ].joined(separator: "|")
+        if lastLoggedPaneIdentityCorrectionKeyBySessionID[record.sessionID] != correctionKey {
+            BridgeLogger.server.info("agent registry corrected from tmux pane identity session_id=\(record.sessionID, privacy: .public) vendor=\(record.vendor, privacy: .public) pane_id=\(paneID, privacy: .public) old_workspace_id=\(record.workspaceID, privacy: .public) old_panel_id=\(record.panelID ?? "-", privacy: .public) workspace_id=\(identity.workspaceID, privacy: .public) panel_id=\(identity.panelID, privacy: .public)")
+            lastLoggedPaneIdentityCorrectionKeyBySessionID[record.sessionID] = correctionKey
+        }
         return AgentSessionRegistryRecord(version: record.version,
                                           vendor: record.vendor,
                                           workspaceID: identity.workspaceID,
@@ -569,7 +618,11 @@ final class AgentSessionRegistryMonitor {
                                           createdAt: record.createdAt,
                                           transcriptPath: record.transcriptPath,
                                           tmuxPaneID: record.tmuxPaneID,
-                                          tmuxSocketPath: record.tmuxSocketPath)
+                                          tmuxSocketPath: record.tmuxSocketPath,
+                                          runtime: record.runtime,
+                                          appServerSocket: record.appServerSocket,
+                                          appServerPID: record.appServerPID,
+                                          remoteTUIPID: record.remoteTUIPID)
     }
 
     private func directSessionForWorkspace(workspaceID: String) -> ActiveAgentSessionSnapshot? {
@@ -947,7 +1000,11 @@ final class AgentSessionRegistryMonitor {
                                           createdAt: record.createdAt,
                                           transcriptPath: record.transcriptPath,
                                           tmuxPaneID: record.tmuxPaneID,
-                                          tmuxSocketPath: record.tmuxSocketPath)
+                                          tmuxSocketPath: record.tmuxSocketPath,
+                                          runtime: record.runtime,
+                                          appServerSocket: record.appServerSocket,
+                                          appServerPID: record.appServerPID,
+                                          remoteTUIPID: record.remoteTUIPID)
     }
 
     private func applyResolvedBinding(sessionID: String,
@@ -1010,7 +1067,7 @@ final class AgentSessionRegistryMonitor {
                   record.vendor == vendor else {
                 continue
             }
-            if processExists(record.pid) {
+            if recordProcessExists(record) {
                 records.append(record)
             } else {
                 try? fileManager.removeItem(at: url)
@@ -1019,11 +1076,23 @@ final class AgentSessionRegistryMonitor {
         return records
     }
 
+    private func recordProcessExists(_ record: AgentSessionRegistryRecord) -> Bool {
+        if Self.isCodexAppServerRuntimeRecord(record) {
+            let candidatePIDs = [record.appServerPID, record.remoteTUIPID, record.pid].compactMap { $0 }
+            return candidatePIDs.contains { processExists($0) }
+        }
+        return processExists(record.pid)
+    }
+
     private func processExists(_ pid: Int32) -> Bool {
         guard pid > 0 else {
             return false
         }
         return kill(pid, 0) == 0 || errno == EPERM
+    }
+
+    private static func isCodexAppServerRuntimeRecord(_ record: AgentSessionRegistryRecord) -> Bool {
+        record.vendor == "codex" && record.runtime == "codex_app_server"
     }
 }
 

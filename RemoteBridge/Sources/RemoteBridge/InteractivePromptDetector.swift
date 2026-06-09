@@ -15,6 +15,11 @@ struct InteractivePromptOption: Equatable, Sendable {
     }
 }
 
+enum InteractivePromptSubmitChannel {
+    static let terminalInput = "terminal_input"
+    static let codexAppServer = "codex_app_server"
+}
+
 struct InteractivePrompt: Equatable, Sendable {
     let promptID: String
     let vendor: String
@@ -23,6 +28,25 @@ struct InteractivePrompt: Equatable, Sendable {
     let body: String
     let options: [InteractivePromptOption]
     let selectedIndex: Int
+    let submitChannel: String?
+
+    init(promptID: String,
+         vendor: String,
+         source: String,
+         title: String,
+         body: String,
+         options: [InteractivePromptOption],
+         selectedIndex: Int,
+         submitChannel: String? = nil) {
+        self.promptID = promptID
+        self.vendor = vendor
+        self.source = source
+        self.title = title
+        self.body = body
+        self.options = options
+        self.selectedIndex = selectedIndex
+        self.submitChannel = submitChannel
+    }
 
     var selectedInputSequence: String {
         inputSequence(targetIndex: selectedIndex)
@@ -38,7 +62,7 @@ struct InteractivePrompt: Equatable, Sendable {
     }
 
     var jsonValue: JSONValue {
-        .object([
+        var object: [String: JSONValue] = [
             "prompt_id": .string(promptID),
             "vendor": .string(vendor),
             "source": .string(source),
@@ -47,7 +71,11 @@ struct InteractivePrompt: Equatable, Sendable {
             "options": .array(options.map(\.jsonValue)),
             "selected_index": .number(Double(selectedIndex)),
             "input_sequence": .string(selectedInputSequence),
-        ])
+        ]
+        if let submitChannel {
+            object["submit_channel"] = .string(submitChannel)
+        }
+        return .object(object)
     }
 }
 
@@ -193,7 +221,8 @@ struct WorkflowConfirmPromptDetector {
                                        title: Self.title,
                                        body: body,
                                        options: options,
-                                       selectedIndex: selectedIndex)
+                                       selectedIndex: selectedIndex,
+                                       submitChannel: InteractivePromptSubmitChannel.terminalInput)
         return .present(prompt)
     }
 

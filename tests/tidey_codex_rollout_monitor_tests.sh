@@ -141,8 +141,9 @@ run_profile_config_test() {
         profile_name="$(stable_codex_profile_name "tidey-codex")"
         sqlite_home="$(stable_codex_sqlite_home "$real_home" "tidey-codex")"
         dispatch_script="/tmp/Tidey Dev.app/Contents/Resources/bin/codex-hook-dispatch"
+        stale_dispatch_script="/Users/timfeng/GitHub/Tidey/Resources/bin/codex-hook-dispatch"
         mkdir -p "$real_home"
-        printf "%s\n" "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"/tmp/user-hook\"}]}]}}" > "$real_home/hooks.json"
+        printf "%s\n" "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"/tmp/user-hook\"},{\"type\":\"command\",\"command\":\"'\''$stale_dispatch_script'\'' stop\",\"timeout\":10}]}],\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"'\''$stale_dispatch_script'\'' user-prompt-submit\",\"timeout\":10}]}]}}" > "$real_home/hooks.json"
 
         merge_tidey_hooks_into_user_hooks "$real_home" "$dispatch_script"
         write_tidey_profile_config "$real_home" "$profile_name" "$sqlite_home" "$dispatch_script"
@@ -185,8 +186,11 @@ for command in expected_commands:
     if command not in json.dumps(hooks_root):
         raise SystemExit(f"missing Tidey hook command in hooks.json: {command}")
 
-if "/tmp/user-hook" not in json.dumps(hooks_root):
+hooks_json = json.dumps(hooks_root)
+if "/tmp/user-hook" not in hooks_json:
     raise SystemExit("existing user hook was not preserved")
+if "/Users/timfeng/GitHub/Tidey/Resources/bin/codex-hook-dispatch" in hooks_json:
+    raise SystemExit("stale Tidey hook command was not pruned")
 
 for state_fragment in [":session_start:", ":user_prompt_submit:", ":stop:"]:
     if state_fragment not in text:
@@ -248,5 +252,330 @@ run_codex_profile_flag_detection_test() {
 }
 
 run_codex_profile_flag_detection_test
+
+run_app_server_registry_metadata_test() {
+    local tmpdir
+    local registry
+
+    tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/tidey-codex-app-server-registry-tests.XXXXXX")"
+    registry="$tmpdir/codex-session.json"
+
+    TMPDIR_CASE="$tmpdir" REGISTRY="$registry" CODEX_UNDER_TEST="$CODEX_UNDER_TEST" bash -c '
+        set -euo pipefail
+        source "$CODEX_UNDER_TEST"
+
+        REGISTRY_ROOT="$TMPDIR_CASE"
+        write_registry_file "$REGISTRY" "workspace-1" "session-1" "panel-1" "12345" "/tmp/tidey" "2026-06-07T00:00:00Z" "" "codex_app_server" "/tmp/tidey-codex/app.sock" "23456" "34567"
+    '
+
+    python3 - "$registry" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+root = json.loads(Path(sys.argv[1]).read_text())
+assert root["runtime"] == "codex_app_server"
+assert root["app_server_socket"] == "/tmp/tidey-codex/app.sock"
+assert root["app_server_pid"] == 23456
+assert root["remote_tui_pid"] == 34567
+PY
+
+    rm -rf "$tmpdir"
+}
+
+run_app_server_registry_metadata_test
+
+run_stale_app_server_registry_cleanup_test() {
+    local tmpdir
+    local live_registry
+    local stale_registry
+    local stale_starting_registry
+    local socket
+    local socket_pid
+
+    tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/tidey-codex-stale-registry-tests.XXXXXX")"
+    live_registry="$tmpdir/codex-live.json"
+    stale_registry="$tmpdir/codex-stale.json"
+    stale_starting_registry="$tmpdir/codex-stale-starting.json"
+    socket="$tmpdir/live.sock"
+
+    python3 -c 'import socket, sys, time; sock = socket.socket(socket.AF_UNIX); sock.bind(sys.argv[1]); time.sleep(10)' "$socket" &
+    socket_pid="$!"
+    for _ in $(seq 1 50); do
+        [[ -S "$socket" ]] && break
+        sleep 0.02
+    done
+
+    TMPDIR_CASE="$tmpdir" LIVE_REGISTRY="$live_registry" STALE_REGISTRY="$stale_registry" STALE_STARTING_REGISTRY="$stale_starting_registry" SOCKET="$socket" CODEX_UNDER_TEST="$CODEX_UNDER_TEST" bash -c '
+        set -euo pipefail
+        source "$CODEX_UNDER_TEST"
+
+        REGISTRY_ROOT="$TMPDIR_CASE"
+        write_registry_file "$LIVE_REGISTRY" "workspace-live" "live" "panel-live" "$$" "/tmp/tidey" "2026-06-07T00:00:00Z" "" "codex_app_server" "$SOCKET" "$$" ""
+        write_registry_file "$STALE_REGISTRY" "workspace-stale" "stale" "panel-stale" "99999999" "/tmp/tidey" "2026-06-07T00:00:00Z" "" "codex_app_server" "$TMPDIR_CASE/missing.sock" "99999998" "99999997"
+        write_registry_file "$STALE_STARTING_REGISTRY" "workspace-stale-starting" "stale-starting" "panel-stale-starting" "99999996" "/tmp/tidey" "2026-06-07T00:00:00Z" "" "codex_app_server_starting" "$TMPDIR_CASE/missing-starting.sock" "99999995" ""
+
+        cleanup_stale_app_server_registry_records
+
+        [[ -f "$LIVE_REGISTRY" ]] || fail "live app-server registry was removed"
+        [[ ! -f "$STALE_REGISTRY" ]] || fail "stale app-server registry was not removed"
+        [[ ! -f "$STALE_STARTING_REGISTRY" ]] || fail "stale starting app-server registry was not removed"
+    '
+
+    kill "$socket_pid" 2>/dev/null || true
+    wait "$socket_pid" 2>/dev/null || true
+
+    rm -rf "$tmpdir"
+}
+
+run_stale_app_server_registry_cleanup_test
+
+run_app_server_runtime_selection_test() {
+    local tmpdir
+    local socket
+    local socket_pid
+
+    tmpdir="$(mktemp -d "/private/tmp/tidey-codex-selection.XXXXXX")"
+    socket="$tmpdir/tidey.sock"
+
+    python3 -c 'import socket, sys, time; sock = socket.socket(socket.AF_UNIX); sock.bind(sys.argv[1]); time.sleep(5)' "$socket" &
+    socket_pid="$!"
+    for _ in $(seq 1 50); do
+        [[ -S "$socket" ]] && break
+        sleep 0.02
+    done
+
+    TIDEY_SOCKET_PATH="$socket" TIDEY_WORKSPACE_ID="workspace-1" CODEX_UNDER_TEST="$CODEX_UNDER_TEST" bash -c '
+        set -euo pipefail
+        source "$CODEX_UNDER_TEST"
+        if should_use_codex_app_server_runtime; then
+            exit 11
+        fi
+        TIDEY_CODEX_APP_SERVER_ENABLE=1
+        if ! should_use_codex_app_server_runtime; then
+            exit 14
+        fi
+        if should_use_codex_app_server_runtime resume session-1; then
+            exit 12
+        fi
+        TIDEY_CODEX_APP_SERVER_DISABLE=1
+        if should_use_codex_app_server_runtime; then
+            exit 13
+        fi
+        unset TIDEY_CODEX_APP_SERVER_DISABLE
+        TIDEY_SOCKET_PATH="$TMPDIR/missing.sock"
+        if should_use_codex_app_server_runtime; then
+            exit 15
+        fi
+        TIDEY_SOCKET_PATH="'"$socket"'"
+        TIDEY_WORKSPACE_ID=""
+        if should_use_codex_app_server_runtime; then
+            exit 16
+        fi
+    '
+
+    kill "$socket_pid" 2>/dev/null || true
+    wait "$socket_pid" 2>/dev/null || true
+
+    rm -rf "$tmpdir"
+}
+
+run_app_server_runtime_selection_test
+
+run_app_server_runtime_plain_path_without_enable_test() {
+    local tmpdir
+    local fake_home
+    local fake_bin
+    local registry_root
+    local socket
+    local socket_pid
+    local codex_log
+
+    tmpdir="$(mktemp -d "/private/tmp/tidey-codex-plain-path.XXXXXX")"
+    fake_home="$tmpdir/home"
+    fake_bin="$tmpdir/bin"
+    registry_root="$fake_home/Library/Application Support/Tidey Remote Bridge/agent-sessions/codex"
+    socket="$tmpdir/tidey.sock"
+    codex_log="$tmpdir/codex.log"
+    mkdir -p "$fake_bin" "$registry_root"
+
+    cat > "$fake_bin/codex" <<'FAKE_CODEX'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$FAKE_CODEX_LOG"
+if [[ "${1:-}" == "--help" ]]; then
+    printf '%s\n' "Usage: codex --profile <CONFIG_PROFILE_V2>"
+    exit 0
+fi
+exit 0
+FAKE_CODEX
+    chmod +x "$fake_bin/codex"
+
+    python3 -c 'import socket, sys, time; sock = socket.socket(socket.AF_UNIX); sock.bind(sys.argv[1]); time.sleep(10)' "$socket" &
+    socket_pid="$!"
+    for _ in $(seq 1 50); do
+        [[ -S "$socket" ]] && break
+        sleep 0.02
+    done
+
+    HOME="$fake_home" \
+        PATH="$fake_bin:/usr/bin:/bin" \
+        TIDEY_SOCKET_PATH="$socket" \
+        TIDEY_WORKSPACE_ID="workspace-1" \
+        TIDEY_PANEL_ID="panel-1" \
+        FAKE_CODEX_LOG="$codex_log" \
+        TMPDIR="$tmpdir" \
+        "$CODEX_UNDER_TEST"
+
+    grep -q -- "--profile" "$codex_log" || fail "plain Codex path was not launched"
+    if grep -q "app-server" "$codex_log"; then
+        fail "app-server was launched without TIDEY_CODEX_APP_SERVER_ENABLE"
+    fi
+    if grep -q -- "--remote" "$codex_log"; then
+        fail "remote TUI was launched without TIDEY_CODEX_APP_SERVER_ENABLE"
+    fi
+
+    kill "$socket_pid" 2>/dev/null || true
+    wait "$socket_pid" 2>/dev/null || true
+
+    rm -rf "$tmpdir"
+}
+
+run_app_server_runtime_plain_path_without_enable_test
+
+run_app_server_runtime_launch_test() {
+    local tmpdir
+    local fake_home
+    local fake_bin
+    local registry_root
+    local socket
+    local socket_pid
+    local codex_log
+    local app_server_child_pid_file
+    local remote_tui_pid_file
+    local remote_tui_registry_ok_file
+    local stale_registry
+
+    tmpdir="$(mktemp -d "/private/tmp/tidey-codex-launch.XXXXXX")"
+    fake_home="$tmpdir/home"
+    fake_bin="$tmpdir/bin"
+    registry_root="$fake_home/Library/Application Support/Tidey Remote Bridge/agent-sessions/codex"
+    socket="$tmpdir/tidey.sock"
+    codex_log="$tmpdir/codex.log"
+    app_server_child_pid_file="$tmpdir/app-server-child.pid"
+    remote_tui_pid_file="$tmpdir/remote-tui.pid"
+    remote_tui_registry_ok_file="$tmpdir/remote-tui-registry.ok"
+    stale_registry="$registry_root/codex-stale-session.json"
+    mkdir -p "$fake_bin" "$registry_root"
+
+    cat > "$fake_bin/codex" <<'FAKE_CODEX'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$FAKE_CODEX_LOG"
+if [[ "${1:-}" == "--help" ]]; then
+    printf '%s\n' "Usage: codex --profile <CONFIG_PROFILE_V2>"
+    exit 0
+fi
+if [[ " $* " == *" app-server "* ]]; then
+    listen=""
+    while [[ $# -gt 0 ]]; do
+        if [[ "$1" == "--listen" && $# -ge 2 ]]; then
+            listen="$2"
+            shift 2
+            continue
+        fi
+        shift
+    done
+    socket_path="${listen#unix://}"
+    python3 -c 'import os, socket, sys, time; path = sys.argv[1]; pid_path = sys.argv[2]; open(pid_path, "w").write(str(os.getpid())); sock = socket.socket(socket.AF_UNIX); sock.bind(path); sock.listen(1); time.sleep(20)' "$socket_path" "$FAKE_APP_SERVER_CHILD_PID_FILE"
+    exit 0
+fi
+if [[ "$*" == *"--remote"* ]]; then
+    printf '%s\n' "$$" > "$FAKE_REMOTE_TUI_PID_FILE"
+    for _ in $(seq 1 50); do
+        if grep -q "\"remote_tui_pid\":$$" "$FAKE_REGISTRY_ROOT"/codex-*.json 2>/dev/null; then
+            printf 'ok\n' > "$FAKE_REMOTE_TUI_REGISTRY_OK_FILE"
+            break
+        fi
+        sleep 0.02
+    done
+    if [[ -e "$FAKE_STALE_REGISTRY" ]]; then
+        echo "stale registry survived current launch" >&2
+        exit 31
+    fi
+    sleep 0.2
+    exit 0
+fi
+sleep 0.2
+FAKE_CODEX
+    chmod +x "$fake_bin/codex"
+
+    python3 -c 'import socket, sys, time; sock = socket.socket(socket.AF_UNIX); sock.bind(sys.argv[1]); time.sleep(10)' "$socket" &
+    socket_pid="$!"
+    for _ in $(seq 1 50); do
+        [[ -S "$socket" ]] && break
+        sleep 0.02
+    done
+
+    cat > "$stale_registry" <<'JSON'
+{"version":1,"vendor":"codex","workspace_id":"stale-workspace","session_id":"stale-session","panel_id":"stale-panel","pid":99999999,"cwd":"/tmp","created_at":"2026-06-09T00:00:00Z","rollout_path":"","transcript_path":"","runtime":"codex_app_server","app_server_socket":"/tmp/missing-tidey-codex-app-server.sock","app_server_pid":99999998}
+JSON
+
+    HOME="$fake_home" \
+        PATH="$fake_bin:/usr/bin:/bin" \
+        TIDEY_CODEX_APP_SERVER_ENABLE=1 \
+        TIDEY_SOCKET_PATH="$socket" \
+        TIDEY_WORKSPACE_ID="workspace-1" \
+        TIDEY_PANEL_ID="panel-1" \
+        FAKE_CODEX_LOG="$codex_log" \
+        FAKE_APP_SERVER_CHILD_PID_FILE="$app_server_child_pid_file" \
+        FAKE_REMOTE_TUI_PID_FILE="$remote_tui_pid_file" \
+        FAKE_REMOTE_TUI_REGISTRY_OK_FILE="$remote_tui_registry_ok_file" \
+        FAKE_REGISTRY_ROOT="$registry_root" \
+        FAKE_STALE_REGISTRY="$stale_registry" \
+        TMPDIR="$tmpdir" \
+        "$CODEX_UNDER_TEST"
+
+    [[ -z "$(find "$registry_root" -name "codex-*.json" -print -quit)" ]] || fail "app-server registry file was not cleaned up"
+    grep -q "app-server" "$codex_log" || fail "app-server was not launched"
+    grep -q -- "--remote" "$codex_log" || fail "remote TUI was not launched"
+    [[ -f "$remote_tui_pid_file" ]] || fail "remote TUI pid was not recorded"
+    [[ -f "$remote_tui_registry_ok_file" ]] || fail "remote TUI pid was not written to registry"
+    [[ -f "$app_server_child_pid_file" ]] || fail "app-server child pid was not recorded"
+    app_server_child_pid="$(cat "$app_server_child_pid_file")"
+    for _ in $(seq 1 50); do
+        child_state="$(ps -o stat= -p "$app_server_child_pid" 2>/dev/null | tr -d " " || true)"
+        if [[ -z "$child_state" || "$child_state" == Z* ]]; then
+            break
+        fi
+        sleep 0.02
+    done
+    child_state="$(ps -o stat= -p "$app_server_child_pid" 2>/dev/null | tr -d " " || true)"
+    if [[ -n "$child_state" && "$child_state" != Z* ]]; then
+        kill "$app_server_child_pid" 2>/dev/null || true
+        fail "app-server child process was not cleaned up: state=$child_state"
+    fi
+
+    python3 - "$codex_log" <<'PY'
+from pathlib import Path
+import sys
+
+lines = Path(sys.argv[1]).read_text().splitlines()
+app_server_lines = [line for line in lines if line.startswith("app-server ")]
+remote_lines = [line for line in lines if "--remote" in line]
+
+assert app_server_lines, "app-server was not launched"
+assert remote_lines, "remote TUI was not launched"
+assert all("--profile " not in line and "--profile-v2 " not in line for line in app_server_lines), app_server_lines
+assert all("--profile " not in line and "--profile-v2 " not in line for line in remote_lines), remote_lines
+PY
+
+    kill "$socket_pid" 2>/dev/null || true
+    wait "$socket_pid" 2>/dev/null || true
+
+    rm -rf "$tmpdir"
+}
+
+run_app_server_runtime_launch_test
 
 echo "PASS"
