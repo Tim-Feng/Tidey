@@ -165,6 +165,70 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertEqual(turnParams["input"]?.arrayValue?.first?.objectValue?["text"]?.stringValue, "hello from remote")
     }
 
+    func testAttachedRuntimeRetriesThreadSubscriptionWhenThreadLoadsLater() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in })
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+
+        let initialListLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        XCTAssertEqual(initialListLoaded["method"]?.stringValue, "thread/loaded/list")
+        let initialListLoadedID = try XCTUnwrap(initialListLoaded["id"])
+        transport.emitLine(try Self.responseText(id: initialListLoadedID, result: .object([
+            "threads": .array([]),
+        ])))
+        XCTAssertEqual(transport.sentLines().count, 3)
+
+        session.ensureThreadSubscription()
+
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
+        let retryListLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
+        XCTAssertEqual(retryListLoaded["method"]?.stringValue, "thread/loaded/list")
+        let retryListLoadedID = try XCTUnwrap(retryListLoaded["id"])
+        transport.emitLine(try Self.responseText(id: retryListLoadedID, result: .object([
+            "threads": .array([
+                .object([
+                    "id": .string("thread-late"),
+                    "preview": .string("Late loaded thread"),
+                    "updatedAt": .string("2026-06-07T00:00:01.000Z"),
+                ]),
+            ]),
+        ])))
+
+        XCTAssertTrue(Self.waitForSentLineCount(5, transport: transport))
+        let resume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(4).first))
+        XCTAssertEqual(resume["method"]?.stringValue, "thread/resume")
+        let resumeParams = try XCTUnwrap(resume["params"]?.objectValue)
+        XCTAssertEqual(resumeParams["threadId"]?.stringValue, "thread-late")
+        XCTAssertEqual(resumeParams["excludeTurns"]?.boolValue, false)
+        XCTAssertNil(resumeParams["approvalsReviewer"])
+
+        let resumeID = try XCTUnwrap(resume["id"])
+        transport.emitLine(try Self.responseText(id: resumeID, result: .object([
+            "thread": .object([
+                "id": .string("thread-late"),
+            ]),
+            "approvalsReviewer": .string("user"),
+            "approvalPolicy": .string("on-request"),
+        ])))
+
+        session.ensureThreadSubscription()
+        XCTAssertEqual(transport.sentLines().count, 5)
+    }
+
     func testFactoryAttachesExplicitCurrentLoadedThread() throws {
         let runner = FakeCodexAppServerProcessRunner()
         let connector = FakeCodexAppServerTransportConnector()

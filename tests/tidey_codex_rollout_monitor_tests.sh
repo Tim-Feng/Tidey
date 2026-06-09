@@ -289,12 +289,14 @@ run_stale_app_server_registry_cleanup_test() {
     local tmpdir
     local live_registry
     local stale_registry
+    local stale_starting_registry
     local socket
     local socket_pid
 
     tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/tidey-codex-stale-registry-tests.XXXXXX")"
     live_registry="$tmpdir/codex-live.json"
     stale_registry="$tmpdir/codex-stale.json"
+    stale_starting_registry="$tmpdir/codex-stale-starting.json"
     socket="$tmpdir/live.sock"
 
     python3 -c 'import socket, sys, time; sock = socket.socket(socket.AF_UNIX); sock.bind(sys.argv[1]); time.sleep(10)' "$socket" &
@@ -304,18 +306,20 @@ run_stale_app_server_registry_cleanup_test() {
         sleep 0.02
     done
 
-    TMPDIR_CASE="$tmpdir" LIVE_REGISTRY="$live_registry" STALE_REGISTRY="$stale_registry" SOCKET="$socket" CODEX_UNDER_TEST="$CODEX_UNDER_TEST" bash -c '
+    TMPDIR_CASE="$tmpdir" LIVE_REGISTRY="$live_registry" STALE_REGISTRY="$stale_registry" STALE_STARTING_REGISTRY="$stale_starting_registry" SOCKET="$socket" CODEX_UNDER_TEST="$CODEX_UNDER_TEST" bash -c '
         set -euo pipefail
         source "$CODEX_UNDER_TEST"
 
         REGISTRY_ROOT="$TMPDIR_CASE"
         write_registry_file "$LIVE_REGISTRY" "workspace-live" "live" "panel-live" "$$" "/tmp/tidey" "2026-06-07T00:00:00Z" "" "codex_app_server" "$SOCKET" "$$" ""
         write_registry_file "$STALE_REGISTRY" "workspace-stale" "stale" "panel-stale" "99999999" "/tmp/tidey" "2026-06-07T00:00:00Z" "" "codex_app_server" "$TMPDIR_CASE/missing.sock" "99999998" "99999997"
+        write_registry_file "$STALE_STARTING_REGISTRY" "workspace-stale-starting" "stale-starting" "panel-stale-starting" "99999996" "/tmp/tidey" "2026-06-07T00:00:00Z" "" "codex_app_server_starting" "$TMPDIR_CASE/missing-starting.sock" "99999995" ""
 
         cleanup_stale_app_server_registry_records
 
         [[ -f "$LIVE_REGISTRY" ]] || fail "live app-server registry was removed"
         [[ ! -f "$STALE_REGISTRY" ]] || fail "stale app-server registry was not removed"
+        [[ ! -f "$STALE_STARTING_REGISTRY" ]] || fail "stale starting app-server registry was not removed"
     '
 
     kill "$socket_pid" 2>/dev/null || true

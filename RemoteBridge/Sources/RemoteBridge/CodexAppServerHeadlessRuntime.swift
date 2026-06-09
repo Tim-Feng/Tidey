@@ -84,6 +84,10 @@ final class CodexAppServerHeadlessRuntime {
     private let onThreadActive: ThreadStatusHandler
     private let onThreadIdle: ThreadStatusHandler
 
+    var contextSessionID: String {
+        context.sessionID
+    }
+
     init(context: CodexAppServerRuntimeContext,
          nextSequence: @escaping SequenceProvider,
          timestampProvider: @escaping TimestampProvider,

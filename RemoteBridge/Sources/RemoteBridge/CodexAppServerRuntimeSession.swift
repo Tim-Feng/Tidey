@@ -49,6 +49,36 @@ final class CodexAppServerRuntimeSession {
     private let turnStateStore: CodexAppServerTurnStateStore
     private let lock = NSLock()
     private var stopped = false
+    private var attachSubscriptionState = AttachSubscriptionState.noLoadedThread
+
+    enum AttachSubscriptionState: Equatable {
+        case noLoadedThread
+        case resumePending
+        case subscribed(threadID: String)
+        case failed(String)
+
+        var logValue: String {
+            switch self {
+            case .noLoadedThread:
+                return "no_loaded_thread"
+            case .resumePending:
+                return "resume_pending"
+            case .subscribed(let threadID):
+                return "subscribed:\(threadID)"
+            case .failed(let reason):
+                return "failed:\(reason)"
+            }
+        }
+
+        var shouldRetry: Bool {
+            switch self {
+            case .noLoadedThread, .failed:
+                return true
+            case .resumePending, .subscribed:
+                return false
+            }
+        }
+    }
 
     init(process: CodexAppServerManagedProcess,
          transport: CodexAppServerConnectionTransport,
@@ -162,6 +192,19 @@ final class CodexAppServerRuntimeSession {
         return result
     }
 
+    func ensureThreadSubscription() {
+        let initializationStatus = initialization.diagnosticStatus()
+        guard case .ready = initializationStatus else {
+            BridgeLogger.server.info("codex app-server subscription ensure skipped init_status=\(initializationStatus.logValue, privacy: .public) state=\(self.attachSubscriptionStateSnapshot().logValue, privacy: .public)")
+            return
+        }
+        guard beginSubscriptionAttempt() else {
+            BridgeLogger.server.info("codex app-server subscription ensure skipped init_status=ready state=\(self.attachSubscriptionStateSnapshot().logValue, privacy: .public)")
+            return
+        }
+        sendLoadedThreadRequestForSubscription()
+    }
+
     private func currentThreadIDForSubmit() throws -> String? {
         if let threadID = activeThreadStore.currentThreadID() {
             return threadID
@@ -226,6 +269,84 @@ final class CodexAppServerRuntimeSession {
 
     func whenInitialized(_ callback: @escaping @Sendable (Result<Void, Error>) -> Void) {
         initialization.notify(callback)
+    }
+
+    private func attachSubscriptionStateSnapshot() -> AttachSubscriptionState {
+        lock.lock()
+        defer { lock.unlock() }
+        return attachSubscriptionState
+    }
+
+    private func beginSubscriptionAttempt() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard stopped == false else {
+            return false
+        }
+        guard attachSubscriptionState.shouldRetry else {
+            return false
+        }
+        attachSubscriptionState = .resumePending
+        return true
+    }
+
+    private func setAttachSubscriptionState(_ state: AttachSubscriptionState) {
+        lock.lock()
+        attachSubscriptionState = state
+        lock.unlock()
+    }
+
+    private func sendLoadedThreadRequestForSubscription() {
+        do {
+            try connection.sendClientRequest(method: "thread/loaded/list") { [weak self] result in
+                guard let self else {
+                    return
+                }
+                switch result {
+                case .success(let value):
+                    guard let threadID = codexAppServerLoadedThreadID(from: value) else {
+                        BridgeLogger.server.info("codex app-server subscription no loaded thread shape=\(codexAppServerLoadedThreadShapeDescription(from: value), privacy: .public)")
+                        self.setAttachSubscriptionState(.noLoadedThread)
+                        return
+                    }
+                    self.activeThreadStore.setThreadID(threadID)
+                    self.sendThreadResumeForSubscription(threadID: threadID)
+                case .failure(let error):
+                    BridgeLogger.server.error("codex app-server subscription loaded thread list failed error=\(String(describing: error), privacy: .public)")
+                    self.setAttachSubscriptionState(.failed("loaded_thread_list_failed"))
+                }
+            }
+        } catch {
+            BridgeLogger.server.error("codex app-server subscription loaded thread list request failed error=\(String(describing: error), privacy: .public)")
+            setAttachSubscriptionState(.failed("loaded_thread_list_request_failed"))
+        }
+    }
+
+    private func sendThreadResumeForSubscription(threadID: String) {
+        BridgeLogger.server.info("codex app-server diagnostic resume request session_id=\(self.runtime.contextSessionID, privacy: .public) thread_id=\(threadID, privacy: .public) request_has_approvalsReviewer=false cwd=- source=subscription_ensure")
+        do {
+            try connection.sendClientRequest(method: "thread/resume",
+                                             params: [
+                                                "threadId": .string(threadID),
+                                                "excludeTurns": .bool(false),
+                                             ],
+                                             onResponse: { [weak self] response in
+                                                CodexAppServerHeadlessRuntime.logThreadResumeResponse(response,
+                                                                                                      sessionID: self?.runtime.contextSessionID ?? "-",
+                                                                                                      threadID: threadID,
+                                                                                                      requestHasApprovalsReviewer: false)
+                                                switch response {
+                                                case .success:
+                                                    self?.setAttachSubscriptionState(.subscribed(threadID: threadID))
+                                                case .failure(let error):
+                                                    BridgeLogger.server.error("codex app-server subscription thread resume failed thread_id=\(threadID, privacy: .public) error=\(String(describing: error), privacy: .public)")
+                                                    self?.setAttachSubscriptionState(.failed("thread_resume_failed"))
+                                                }
+                                             })
+        } catch {
+            BridgeLogger.server.error("codex app-server subscription thread resume request failed thread_id=\(threadID, privacy: .public) error=\(String(describing: error), privacy: .public)")
+            setAttachSubscriptionState(.failed("thread_resume_request_failed"))
+        }
     }
 }
 
@@ -695,9 +816,7 @@ final class CodexAppServerRuntimeSessionFactory {
                 do {
                     try connection.sendClientNotification(method: "initialized")
                     initialization.succeed()
-                    Self.resumeLoadedThreadIfAvailable(on: connection,
-                                                       sessionID: context.sessionID,
-                                                       activeThreadStore: activeThreadStore)
+                    runtimeSession.ensureThreadSubscription()
                 } catch {
                     initialization.fail(error)
                     BridgeLogger.server.error("codex app-server panel initialized notification failed error=\(String(describing: error), privacy: .public)")
@@ -709,47 +828,6 @@ final class CodexAppServerRuntimeSessionFactory {
         }
         return runtimeSession
     }
-
-    private static func resumeLoadedThreadIfAvailable(on connection: CodexAppServerConnection,
-                                                      sessionID: String,
-                                                      activeThreadStore: CodexAppServerActiveThreadStore) {
-        do {
-            try connection.sendClientRequest(method: "thread/loaded/list") { result in
-                switch result {
-                case .success(let value):
-                    guard let threadID = codexAppServerLoadedThreadID(from: value) else {
-                        BridgeLogger.server.info("codex app-server panel loaded thread list returned no thread shape=\(codexAppServerLoadedThreadShapeDescription(from: value), privacy: .public)")
-                        return
-                    }
-                    activeThreadStore.setThreadID(threadID)
-                    BridgeLogger.server.info("codex app-server diagnostic resume request session_id=\(sessionID, privacy: .public) thread_id=\(threadID, privacy: .public) request_has_approvalsReviewer=false cwd=- source=attached_panel")
-                    do {
-                        try connection.sendClientRequest(method: "thread/resume",
-                                                        params: [
-                                                            "threadId": .string(threadID),
-                                                            "excludeTurns": .bool(false),
-                                                        ],
-                                                        onResponse: { response in
-                                                            CodexAppServerHeadlessRuntime.logThreadResumeResponse(response,
-                                                                                                                  sessionID: sessionID,
-                                                                                                                  threadID: threadID,
-                                                                                                                  requestHasApprovalsReviewer: false)
-                                                            if case .failure(let error) = response {
-                                                                BridgeLogger.server.error("codex app-server panel thread resume failed thread_id=\(threadID, privacy: .public) error=\(String(describing: error), privacy: .public)")
-                                                            }
-                                                        })
-                    } catch {
-                        BridgeLogger.server.error("codex app-server panel thread resume request failed thread_id=\(threadID, privacy: .public) error=\(String(describing: error), privacy: .public)")
-                    }
-                case .failure(let error):
-                    BridgeLogger.server.error("codex app-server panel loaded thread list failed error=\(String(describing: error), privacy: .public)")
-                }
-            }
-        } catch {
-            BridgeLogger.server.error("codex app-server panel loaded thread list request failed error=\(String(describing: error), privacy: .public)")
-        }
-    }
-
 }
 
 private func codexAppServerLoadedThreadID(from value: JSONValue) -> String? {

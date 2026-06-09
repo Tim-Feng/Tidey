@@ -6,6 +6,7 @@ protocol CodexAppServerApprovalSubmitting: AnyObject {
 
 protocol CodexAppServerRuntimeSessionControlling: AnyObject {
     func canSubmitMessage() -> Bool
+    func ensureThreadSubscription()
     func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent
     func submitMessage(text: String) throws
     func stop()
@@ -96,6 +97,13 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
 
         for record in recordsToAttach {
             attach(record: record)
+        }
+
+        let reusedSessions = lock.withCodexRuntimeSyncerLock {
+            reusedRecords.compactMap { entriesBySessionID[$0.sessionID]?.session }
+        }
+        for session in reusedSessions {
+            session.ensureThreadSubscription()
         }
     }
 

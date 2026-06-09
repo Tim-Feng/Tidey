@@ -86,6 +86,21 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         XCTAssertEqual(secondRuntime.submittedMessages, ["hello from remote"])
     }
 
+    func testSyncEnsuresThreadSubscriptionForReusedRuntime() {
+        let hub = AgentEventHub()
+        let runtime = FakeRuntimeSession()
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { _, _, _, _, _, _ in
+            runtime
+        })
+        let record = Self.record(sessionID: "app", runtime: "codex_app_server", socketPath: "/tmp/app.sock")
+
+        syncer.sync(records: [record])
+        syncer.sync(records: [record])
+
+        XCTAssertEqual(runtime.ensureThreadSubscriptionCallCount, 1)
+        XCTAssertFalse(runtime.stopped)
+    }
+
     func testAttachedRuntimeDoesNotPublishConversationEventsToHub() throws {
         let hub = AgentEventHub()
         var capturedAgentEventHandler: CodexAppServerHeadlessRuntime.AgentEventHandler?
@@ -251,12 +266,17 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
 private final class FakeRuntimeSession: CodexAppServerRuntimeSessionControlling {
     var stopped = false
     var canSubmit = true
+    var ensureThreadSubscriptionCallCount = 0
     var submitAttempts = [String]()
     var submittedMessages = [String]()
     var resolvedEventsByPromptID = [String: AgentEvent]()
 
     func canSubmitMessage() -> Bool {
         canSubmit
+    }
+
+    func ensureThreadSubscription() {
+        ensureThreadSubscriptionCallCount += 1
     }
 
     func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent {
