@@ -147,7 +147,11 @@ final class CodexAppServerConnection {
         let id = object["id"]
         let method = object["method"]?.stringValue
         if let id, let method {
-            BridgeLogger.server.info("codex app-server server request received method=\(method, privacy: .public) id=\(Self.idKey(from: id) ?? "-", privacy: .public)")
+            if CodexAppServerApprovalMethod(rawValue: method) != nil {
+                BridgeLogger.server.info("codex app-server server request received method=\(method, privacy: .public) id=\(Self.idKey(from: id) ?? "-", privacy: .public)")
+            } else {
+                BridgeLogger.server.debug("codex app-server server request received method=\(method, privacy: .public) id=\(Self.idKey(from: id) ?? "-", privacy: .public)")
+            }
             handleServerRequest(id: id, method: method, params: object["params"]?.objectValue ?? [:])
             return
         }

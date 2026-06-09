@@ -191,7 +191,7 @@ final class CodexAppServerRuntimeSession {
         } else {
             falseReason = "initialization_\(initializationStatus.logValue)"
         }
-        BridgeLogger.server.info("codex app-server diagnostic runtime can_submit result=\(result, privacy: .public) init_status=\(initializationStatus.logValue, privacy: .public) thread_id=\(threadID ?? "-", privacy: .public) busy=\(busySummary, privacy: .public) false_reason=\(falseReason, privacy: .public)")
+        BridgeLogger.server.debug("codex app-server diagnostic runtime can_submit result=\(result, privacy: .public) init_status=\(initializationStatus.logValue, privacy: .public) thread_id=\(threadID ?? "-", privacy: .public) busy=\(busySummary, privacy: .public) false_reason=\(falseReason, privacy: .public)")
         return result
     }
 
@@ -322,7 +322,7 @@ final class CodexAppServerRuntimeSession {
                 switch result {
                 case .success(let value):
                     guard let threadID = codexAppServerLoadedThreadID(from: value) else {
-                        BridgeLogger.server.info("codex app-server subscription no loaded thread shape=\(codexAppServerLoadedThreadShapeDescription(from: value), privacy: .public)")
+                        BridgeLogger.server.debug("codex app-server subscription no loaded thread shape=\(codexAppServerLoadedThreadShapeDescription(from: value), privacy: .public)")
                         self.setAttachSubscriptionState(.noLoadedThread, reason: "loaded_thread_missing")
                         return
                     }
@@ -340,7 +340,7 @@ final class CodexAppServerRuntimeSession {
     }
 
     private func sendThreadResumeForSubscription(threadID: String) {
-        BridgeLogger.server.info("codex app-server diagnostic resume request session_id=\(self.runtime.contextSessionID, privacy: .public) thread_id=\(threadID, privacy: .public) request_has_approvalsReviewer=false cwd=- source=subscription_ensure")
+        BridgeLogger.server.debug("codex app-server diagnostic resume request session_id=\(self.runtime.contextSessionID, privacy: .public) thread_id=\(threadID, privacy: .public) request_has_approvalsReviewer=false cwd=- source=subscription_ensure")
         do {
             try connection.sendClientRequest(method: "thread/resume",
                                              params: [

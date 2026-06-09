@@ -156,8 +156,14 @@ struct BridgeInputActionHandler {
         } else {
             canSubmitViaAppServer = nil
         }
-        if vendor.id == "codex" {
-            BridgeLogger.input.info("codex app-server submit gate request_id=\(request.id, privacy: .public) workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) session_id=\(activeSession?.sessionID ?? "-", privacy: .public) active_record_runtime=\(activeRecord?.runtime ?? "-", privacy: .public) has_submitter=\((codexAppServerChatSubmitter != nil), privacy: .public) can_submit=\(canSubmitViaAppServer.map(String.init) ?? "-", privacy: .public)")
+        if vendor.id == "codex",
+           activeRecord?.runtime == "codex_app_server" {
+            if codexAppServerChatSubmitter != nil,
+               canSubmitViaAppServer == true {
+                BridgeLogger.input.debug("codex app-server submit gate request_id=\(request.id, privacy: .public) workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) session_id=\(activeSession?.sessionID ?? "-", privacy: .public) active_record_runtime=\(activeRecord?.runtime ?? "-", privacy: .public) has_submitter=true can_submit=true")
+            } else {
+                BridgeLogger.input.info("codex app-server submit gate blocked request_id=\(request.id, privacy: .public) workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) session_id=\(activeSession?.sessionID ?? "-", privacy: .public) active_record_runtime=\(activeRecord?.runtime ?? "-", privacy: .public) has_submitter=\((codexAppServerChatSubmitter != nil), privacy: .public) can_submit=\(canSubmitViaAppServer.map(String.init) ?? "-", privacy: .public)")
+            }
         }
 
         if vendor.id == "codex",
