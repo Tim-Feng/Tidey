@@ -145,13 +145,12 @@
     completion();
 }
 
-- (BOOL)openFile:(NSString *)fullPath fragment:(NSString *)fragment {
+- (void)openFile:(NSString *)fullPath fragment:(NSString *)fragment target:(NSString *)target window:(NSWindow *)window {
     if (fragment) {
         self.openedFile = [NSString stringWithFormat:@"%@#%@", fullPath, fragment];
     } else {
         self.openedFile = fullPath;
     }
-    return YES;
 }
 
 - (BOOL)openURL:(NSURL *)url editorIdentifier:(NSString *)editorIdentifier {
@@ -600,10 +599,13 @@
     [_semanticHistoryController openPath:path
                            orRawFilename:rawFileName
                                 fragment:nil
+                                  target:nil
                            substitutions:substitutions
                                    scope:_scope
                               lineNumber:lineNumber
-                            columnNumber:columnNumber completion:^(BOOL ok) {
+                            columnNumber:columnNumber
+                                  window:nil
+                              completion:^(BOOL ok) {
                                 result = ok;
                                 dispatch_group_leave(group);
                             }];

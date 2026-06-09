@@ -1019,7 +1019,6 @@
 		F0A10D1E3A31000100000001 /* TideyEditorFileTreeWatcherTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A31000100000000 /* TideyEditorFileTreeWatcherTests.m */; };
 		F0A10D1E3A32000100000001 /* TideyEditorExternalChangeTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A32000100000000 /* TideyEditorExternalChangeTests.m */; };
 		F0A10D1E3A34000100000001 /* TideyRightPanelTabGroupingTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A34000100000000 /* TideyRightPanelTabGroupingTests.m */; };
-		F0A10D1E3A37000100000001 /* TideyBrowserTabTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A37000100000000 /* TideyBrowserTabTests.m */; };
 		TIDE7B00001A000000000001 /* TideyBrowserPanelTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDE7B00001A000000000000 /* TideyBrowserPanelTests.m */; };
 		TIDEAPP0001A00000000001 /* TideyAppShortcutBehaviorTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEAPP0001A00000000000 /* TideyAppShortcutBehaviorTests.m */; };
 		TIDEAPP0001A00000000002 /* TideyAppShortcutBehaviorTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEAPP0001A00000000000 /* TideyAppShortcutBehaviorTests.m */; };
@@ -6456,7 +6455,6 @@
 		F0A10D1E3A31000100000000 /* TideyEditorFileTreeWatcherTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyEditorFileTreeWatcherTests.m; sourceTree = "<group>"; };
 		F0A10D1E3A32000100000000 /* TideyEditorExternalChangeTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyEditorExternalChangeTests.m; sourceTree = "<group>"; };
 		F0A10D1E3A34000100000000 /* TideyRightPanelTabGroupingTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyRightPanelTabGroupingTests.m; sourceTree = "<group>"; };
-		F0A10D1E3A37000100000000 /* TideyBrowserTabTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyBrowserTabTests.m; sourceTree = "<group>"; };
 		TIDE7B00001A000000000000 /* TideyBrowserPanelTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyBrowserPanelTests.m; sourceTree = "<group>"; };
 		TIDEAPP0001A00000000000 /* TideyAppShortcutBehaviorTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyAppShortcutBehaviorTests.m; sourceTree = "<group>"; };
 		TIDEBOOT0001A00000000000 /* TideyFirstRunCompatibilityBootstrapTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyFirstRunCompatibilityBootstrapTests.m; sourceTree = "<group>"; };
@@ -13748,7 +13746,6 @@
 				F0A10D1E3A31000100000000 /* TideyEditorFileTreeWatcherTests.m */,
 				F0A10D1E3A32000100000000 /* TideyEditorExternalChangeTests.m */,
 				F0A10D1E3A34000100000000 /* TideyRightPanelTabGroupingTests.m */,
-				F0A10D1E3A37000100000000 /* TideyBrowserTabTests.m */,
 				TIDE7B00001A000000000000 /* TideyBrowserPanelTests.m */,
 				TIDEAPP0001A00000000000 /* TideyAppShortcutBehaviorTests.m */,
 				TIDEBOOT0001A00000000000 /* TideyFirstRunCompatibilityBootstrapTests.m */,
@@ -20621,7 +20618,6 @@
 				F0A10D1E3A31000100000001 /* TideyEditorFileTreeWatcherTests.m in Sources */,
 				F0A10D1E3A32000100000001 /* TideyEditorExternalChangeTests.m in Sources */,
 				F0A10D1E3A34000100000001 /* TideyRightPanelTabGroupingTests.m in Sources */,
-				F0A10D1E3A37000100000001 /* TideyBrowserTabTests.m in Sources */,
 				TIDEAPP0001A00000000001 /* TideyAppShortcutBehaviorTests.m in Sources */,
 				TIDEBOOT0001A00000000001 /* TideyFirstRunCompatibilityBootstrapTests.m in Sources */,
 				TIDEMOUSE0001A00000000001 /* PTYMouseHandlerSelectionTests.m in Sources */,
@@ -24765,7 +24761,7 @@
 				SDKROOT = macosx;
 				SWIFT_OBJC_BRIDGING_HEADER = "$PROJECT_DIR/sources/iTerm2SharedARC-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Tidey.app/Contents/MacOS/Tidey";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Tidey Dev.app/Contents/MacOS/Tidey Dev";
 				USER_HEADER_SEARCH_PATHS = "$(CONFIGURATION_TEMP_DIR)/iTerm2SharedARC.build/DerivedSources";
 				VALID_ARCHS = "$(ARCHS_STANDARD)";
 				WARNING_CFLAGS = (
