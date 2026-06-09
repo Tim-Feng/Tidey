@@ -151,9 +151,16 @@ final class CodexAppServerHeadlessRuntime {
         if let cwd {
             params["cwd"] = .string(cwd)
         }
+        BridgeLogger.server.info("codex app-server diagnostic resume request session_id=\(self.context.sessionID, privacy: .public) thread_id=\(threadID, privacy: .public) request_has_approvalsReviewer=\((params["approvalsReviewer"] != nil), privacy: .public) cwd=\(cwd ?? "-", privacy: .public)")
         return try connection.sendClientRequest(method: "thread/resume",
                                                 params: params,
-                                                onResponse: onResponse)
+                                                onResponse: { response in
+                                                    Self.logThreadResumeResponse(response,
+                                                                                 sessionID: self.context.sessionID,
+                                                                                 threadID: threadID,
+                                                                                 requestHasApprovalsReviewer: params["approvalsReviewer"] != nil)
+                                                    onResponse(response)
+                                                })
     }
 
     @discardableResult
@@ -183,9 +190,16 @@ final class CodexAppServerHeadlessRuntime {
         if let sandboxPolicy {
             params["sandboxPolicy"] = sandboxPolicy
         }
+        BridgeLogger.server.info("codex app-server diagnostic turn_start request session_id=\(self.context.sessionID, privacy: .public) thread_id=\(threadID, privacy: .public) request_has_approvalsReviewer=\((params["approvalsReviewer"] != nil), privacy: .public) approvalPolicy=\(approvalPolicy ?? "-", privacy: .public) cwd=\(cwd ?? "-", privacy: .public)")
         return try connection.sendClientRequest(method: "turn/start",
                                                 params: params,
-                                                onResponse: onResponse)
+                                                onResponse: { response in
+                                                    Self.logTurnStartResponse(response,
+                                                                              sessionID: self.context.sessionID,
+                                                                              threadID: threadID,
+                                                                              requestHasApprovalsReviewer: params["approvalsReviewer"] != nil)
+                                                    onResponse(response)
+                                                })
     }
 
     func handleNotification(_ notification: CodexAppServerNotification) {
@@ -692,5 +706,72 @@ final class CodexAppServerHeadlessRuntime {
             return nil
         }
         return parts.joined(separator: "\n")
+    }
+
+    static func logThreadResumeResponse(_ response: Result<JSONValue, CodexAppServerConnectionError>,
+                                        sessionID: String,
+                                        threadID: String,
+                                        requestHasApprovalsReviewer: Bool) {
+        switch response {
+        case .success(let value):
+            let object = value.objectValue
+            BridgeLogger.server.info("codex app-server diagnostic resume response status=success session_id=\(sessionID, privacy: .public) thread_id=\(threadID, privacy: .public) request_has_approvalsReviewer=\(requestHasApprovalsReviewer, privacy: .public) approvalsReviewer=\(diagnosticField(object, keys: ["approvalsReviewer", "approvals_reviewer"]), privacy: .public) approvalPolicy=\(diagnosticField(object, keys: ["approvalPolicy", "approval_policy"]), privacy: .public) subscribed=\(diagnosticField(object, keys: ["subscribed", "isSubscribed", "listener", "listenerAttached", "connectionId", "connection_id", "subscribedConnectionIds", "subscribed_connection_ids"]), privacy: .public) response_keys=\(diagnosticKeys(object), privacy: .public)")
+        case .failure(let error):
+            BridgeLogger.server.error("codex app-server diagnostic resume response status=failure session_id=\(sessionID, privacy: .public) thread_id=\(threadID, privacy: .public) request_has_approvalsReviewer=\(requestHasApprovalsReviewer, privacy: .public) error=\(String(describing: error), privacy: .public)")
+        }
+    }
+
+    static func logTurnStartResponse(_ response: Result<JSONValue, CodexAppServerConnectionError>,
+                                     sessionID: String,
+                                     threadID: String,
+                                     requestHasApprovalsReviewer: Bool) {
+        switch response {
+        case .success(let value):
+            let object = value.objectValue
+            BridgeLogger.server.info("codex app-server diagnostic turn_start response status=success session_id=\(sessionID, privacy: .public) thread_id=\(threadID, privacy: .public) request_has_approvalsReviewer=\(requestHasApprovalsReviewer, privacy: .public) approvalsReviewer=\(diagnosticField(object, keys: ["approvalsReviewer", "approvals_reviewer"]), privacy: .public) approvalPolicy=\(diagnosticField(object, keys: ["approvalPolicy", "approval_policy"]), privacy: .public) response_keys=\(diagnosticKeys(object), privacy: .public)")
+        case .failure(let error):
+            BridgeLogger.server.error("codex app-server diagnostic turn_start response status=failure session_id=\(sessionID, privacy: .public) thread_id=\(threadID, privacy: .public) request_has_approvalsReviewer=\(requestHasApprovalsReviewer, privacy: .public) error=\(String(describing: error), privacy: .public)")
+        }
+    }
+
+    private static func diagnosticField(_ object: [String: JSONValue]?, keys: [String]) -> String {
+        guard let object else {
+            return "-"
+        }
+        for key in keys {
+            if let value = object[key] {
+                return diagnosticDescription(value)
+            }
+        }
+        return "-"
+    }
+
+    private static func diagnosticKeys(_ object: [String: JSONValue]?) -> String {
+        guard let object else {
+            return "-"
+        }
+        return object.keys.sorted().joined(separator: ",")
+    }
+
+    private static func diagnosticDescription(_ value: JSONValue) -> String {
+        switch value {
+        case .string(let string):
+            return string
+        case .number(let number):
+            if number.isFinite,
+               number.rounded(.towardZero) == number,
+               let intValue = Int(exactly: number) {
+                return String(intValue)
+            }
+            return String(number)
+        case .bool(let bool):
+            return String(bool)
+        case .null:
+            return "null"
+        case .array(let array):
+            return "array[count=\(array.count)]"
+        case .object(let object):
+            return "object[keys=\(object.keys.sorted().joined(separator: ","))]"
+        }
     }
 }

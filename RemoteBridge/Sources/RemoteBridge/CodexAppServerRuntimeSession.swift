@@ -696,6 +696,7 @@ final class CodexAppServerRuntimeSessionFactory {
                     try connection.sendClientNotification(method: "initialized")
                     initialization.succeed()
                     Self.resumeLoadedThreadIfAvailable(on: connection,
+                                                       sessionID: context.sessionID,
                                                        activeThreadStore: activeThreadStore)
                 } catch {
                     initialization.fail(error)
@@ -710,6 +711,7 @@ final class CodexAppServerRuntimeSessionFactory {
     }
 
     private static func resumeLoadedThreadIfAvailable(on connection: CodexAppServerConnection,
+                                                      sessionID: String,
                                                       activeThreadStore: CodexAppServerActiveThreadStore) {
         do {
             try connection.sendClientRequest(method: "thread/loaded/list") { result in
@@ -720,6 +722,7 @@ final class CodexAppServerRuntimeSessionFactory {
                         return
                     }
                     activeThreadStore.setThreadID(threadID)
+                    BridgeLogger.server.info("codex app-server diagnostic resume request session_id=\(sessionID, privacy: .public) thread_id=\(threadID, privacy: .public) request_has_approvalsReviewer=false cwd=- source=attached_panel")
                     do {
                         try connection.sendClientRequest(method: "thread/resume",
                                                         params: [
@@ -727,6 +730,10 @@ final class CodexAppServerRuntimeSessionFactory {
                                                             "excludeTurns": .bool(false),
                                                         ],
                                                         onResponse: { response in
+                                                            CodexAppServerHeadlessRuntime.logThreadResumeResponse(response,
+                                                                                                                  sessionID: sessionID,
+                                                                                                                  threadID: threadID,
+                                                                                                                  requestHasApprovalsReviewer: false)
                                                             if case .failure(let error) = response {
                                                                 BridgeLogger.server.error("codex app-server panel thread resume failed thread_id=\(threadID, privacy: .public) error=\(String(describing: error), privacy: .public)")
                                                             }
