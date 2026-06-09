@@ -334,6 +334,7 @@ run_app_server_runtime_selection_test() {
     local tmpdir
     local socket
     local socket_pid
+    local resume_id="019eac34-764c-7893-9599-5b6000037cea"
 
     tmpdir="$(mktemp -d "/private/tmp/tidey-codex-selection.XXXXXX")"
     socket="$tmpdir/tidey.sock"
@@ -355,8 +356,23 @@ run_app_server_runtime_selection_test() {
         if ! should_use_codex_app_server_runtime; then
             exit 14
         fi
+        if ! should_use_codex_app_server_runtime resume "'"$resume_id"'"; then
+            exit 17
+        fi
+        if [[ "$(app_server_resume_session_id resume "'"$resume_id"'")" != "'"$resume_id"'" ]]; then
+            exit 18
+        fi
         if should_use_codex_app_server_runtime resume session-1; then
             exit 12
+        fi
+        if should_use_codex_app_server_runtime resume --last; then
+            exit 19
+        fi
+        if should_use_codex_app_server_runtime resume "'"$resume_id"'" --help; then
+            exit 20
+        fi
+        if should_use_codex_app_server_runtime exec echo hi; then
+            exit 21
         fi
         TIDEY_CODEX_APP_SERVER_DISABLE=1
         if should_use_codex_app_server_runtime; then
@@ -381,6 +397,82 @@ run_app_server_runtime_selection_test() {
 }
 
 run_app_server_runtime_selection_test
+
+run_app_server_runtime_double_open_rejects_resume_test() {
+    local tmpdir
+    local fake_home
+    local fake_bin
+    local registry_root
+    local socket
+    local socket_pid
+    local codex_log
+    local resume_id="019eac34-764c-7893-9599-5b6000037cea"
+    local registry
+    local stderr_log
+
+    tmpdir="$(mktemp -d "/private/tmp/tidey-codex-double-open.XXXXXX")"
+    fake_home="$tmpdir/home"
+    fake_bin="$tmpdir/bin"
+    registry_root="$fake_home/Library/Application Support/Tidey Remote Bridge/agent-sessions/codex"
+    socket="$tmpdir/live.sock"
+    codex_log="$tmpdir/codex.log"
+    registry="$registry_root/codex-$resume_id.json"
+    stderr_log="$tmpdir/stderr.log"
+    mkdir -p "$fake_bin" "$registry_root"
+
+    cat > "$fake_bin/codex" <<'FAKE_CODEX'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$FAKE_CODEX_LOG"
+if [[ "${1:-}" == "--help" ]]; then
+    printf '%s\n' "Usage: codex --profile <CONFIG_PROFILE_V2>"
+    exit 0
+fi
+exit 0
+FAKE_CODEX
+    chmod +x "$fake_bin/codex"
+
+    python3 -c 'import socket, sys, time; sock = socket.socket(socket.AF_UNIX); sock.bind(sys.argv[1]); time.sleep(10)' "$socket" &
+    socket_pid="$!"
+    for _ in $(seq 1 50); do
+        [[ -S "$socket" ]] && break
+        sleep 0.02
+    done
+
+    cat > "$registry" <<JSON
+{"version":1,"vendor":"codex","workspace_id":"workspace-live","session_id":"$resume_id","panel_id":"panel-live","pid":$socket_pid,"cwd":"/tmp","created_at":"2026-06-09T00:00:00Z","rollout_path":"","transcript_path":"","runtime":"codex_app_server","app_server_socket":"$socket","app_server_pid":$socket_pid}
+JSON
+
+    set +e
+    HOME="$fake_home" \
+        PATH="$fake_bin:/usr/bin:/bin" \
+        TIDEY_CODEX_APP_SERVER_ENABLE=1 \
+        TIDEY_SOCKET_PATH="$socket" \
+        TIDEY_WORKSPACE_ID="workspace-1" \
+        TIDEY_PANEL_ID="panel-1" \
+        FAKE_CODEX_LOG="$codex_log" \
+        TMPDIR="$tmpdir" \
+        "$CODEX_UNDER_TEST" resume "$resume_id" 2>"$stderr_log"
+    status=$?
+    set -e
+
+    [[ "$status" -ne 0 ]] || fail "double-open resume was allowed"
+    grep -q "already active" "$stderr_log" || fail "double-open resume error was not reported"
+    if grep -q "app-server" "$codex_log"; then
+        fail "app-server was launched for double-open resume"
+    fi
+    if grep -q -- "--remote" "$codex_log"; then
+        fail "remote TUI was launched for double-open resume"
+    fi
+    [[ -f "$registry" ]] || fail "live registry was removed by double-open check"
+
+    kill "$socket_pid" 2>/dev/null || true
+    wait "$socket_pid" 2>/dev/null || true
+
+    rm -rf "$tmpdir"
+}
+
+run_app_server_runtime_double_open_rejects_resume_test
 
 run_app_server_runtime_plain_path_without_enable_test() {
     local tmpdir
@@ -577,5 +669,208 @@ PY
 }
 
 run_app_server_runtime_launch_test
+
+run_app_server_runtime_resume_launch_test() {
+    local tmpdir
+    local fake_home
+    local fake_bin
+    local registry_root
+    local socket
+    local socket_pid
+    local codex_log
+    local app_server_child_pid_file
+    local remote_tui_registry_ok_file
+    local resume_id="019eac34-764c-7893-9599-5b6000037cea"
+
+    tmpdir="$(mktemp -d "/private/tmp/tidey-codex-resume-launch.XXXXXX")"
+    fake_home="$tmpdir/home"
+    fake_bin="$tmpdir/bin"
+    registry_root="$fake_home/Library/Application Support/Tidey Remote Bridge/agent-sessions/codex"
+    socket="$tmpdir/tidey.sock"
+    codex_log="$tmpdir/codex.log"
+    app_server_child_pid_file="$tmpdir/app-server-child.pid"
+    remote_tui_registry_ok_file="$tmpdir/remote-tui-registry.ok"
+    mkdir -p "$fake_bin" "$registry_root"
+
+    cat > "$fake_bin/codex" <<'FAKE_CODEX'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$FAKE_CODEX_LOG"
+if [[ "${1:-}" == "--help" ]]; then
+    printf '%s\n' "Usage: codex --profile <CONFIG_PROFILE_V2>"
+    exit 0
+fi
+if [[ " $* " == *" app-server "* ]]; then
+    listen=""
+    while [[ $# -gt 0 ]]; do
+        if [[ "$1" == "--listen" && $# -ge 2 ]]; then
+            listen="$2"
+            shift 2
+            continue
+        fi
+        shift
+    done
+    socket_path="${listen#unix://}"
+    python3 -c 'import os, socket, sys, time; path = sys.argv[1]; pid_path = sys.argv[2]; open(pid_path, "w").write(str(os.getpid())); sock = socket.socket(socket.AF_UNIX); sock.bind(path); sock.listen(1); time.sleep(20)' "$socket_path" "$FAKE_APP_SERVER_CHILD_PID_FILE"
+    exit 0
+fi
+if [[ "$*" == *"--remote"* ]]; then
+    for _ in $(seq 1 50); do
+        if grep -q "\"session_id\":\"$FAKE_RESUME_ID\"" "$FAKE_REGISTRY_ROOT"/codex-"$FAKE_RESUME_ID".json 2>/dev/null \
+            && grep -q "\"remote_tui_pid\":$$" "$FAKE_REGISTRY_ROOT"/codex-"$FAKE_RESUME_ID".json 2>/dev/null; then
+            printf 'ok\n' > "$FAKE_REMOTE_TUI_REGISTRY_OK_FILE"
+            break
+        fi
+        sleep 0.02
+    done
+    sleep 0.2
+    exit 0
+fi
+sleep 0.2
+FAKE_CODEX
+    chmod +x "$fake_bin/codex"
+
+    python3 -c 'import socket, sys, time; sock = socket.socket(socket.AF_UNIX); sock.bind(sys.argv[1]); time.sleep(10)' "$socket" &
+    socket_pid="$!"
+    for _ in $(seq 1 50); do
+        [[ -S "$socket" ]] && break
+        sleep 0.02
+    done
+
+    HOME="$fake_home" \
+        PATH="$fake_bin:/usr/bin:/bin" \
+        TIDEY_CODEX_APP_SERVER_ENABLE=1 \
+        TIDEY_SOCKET_PATH="$socket" \
+        TIDEY_WORKSPACE_ID="workspace-1" \
+        TIDEY_PANEL_ID="panel-1" \
+        FAKE_CODEX_LOG="$codex_log" \
+        FAKE_APP_SERVER_CHILD_PID_FILE="$app_server_child_pid_file" \
+        FAKE_REMOTE_TUI_REGISTRY_OK_FILE="$remote_tui_registry_ok_file" \
+        FAKE_REGISTRY_ROOT="$registry_root" \
+        FAKE_RESUME_ID="$resume_id" \
+        TMPDIR="$tmpdir" \
+        "$CODEX_UNDER_TEST" resume "$resume_id"
+
+    [[ -z "$(find "$registry_root" -name "codex-*.json" -print -quit)" ]] || fail "resume app-server registry file was not cleaned up"
+    grep -q "app-server" "$codex_log" || fail "resume app-server was not launched"
+    grep -q -- "--remote .* resume $resume_id" "$codex_log" || fail "resume remote TUI was not launched with resume id"
+    [[ -f "$remote_tui_registry_ok_file" ]] || fail "resume session id was not written to registry"
+    [[ -f "$app_server_child_pid_file" ]] || fail "resume app-server child pid was not recorded"
+    app_server_child_pid="$(cat "$app_server_child_pid_file")"
+    for _ in $(seq 1 50); do
+        child_state="$(ps -o stat= -p "$app_server_child_pid" 2>/dev/null | tr -d " " || true)"
+        if [[ -z "$child_state" || "$child_state" == Z* ]]; then
+            break
+        fi
+        sleep 0.02
+    done
+    child_state="$(ps -o stat= -p "$app_server_child_pid" 2>/dev/null | tr -d " " || true)"
+    if [[ -n "$child_state" && "$child_state" != Z* ]]; then
+        kill "$app_server_child_pid" 2>/dev/null || true
+        fail "resume app-server child process was not cleaned up: state=$child_state"
+    fi
+
+    kill "$socket_pid" 2>/dev/null || true
+    wait "$socket_pid" 2>/dev/null || true
+
+    rm -rf "$tmpdir"
+}
+
+run_app_server_runtime_resume_launch_test
+
+run_app_server_runtime_resume_failure_cleanup_test() {
+    local tmpdir
+    local fake_home
+    local fake_bin
+    local registry_root
+    local socket
+    local socket_pid
+    local codex_log
+    local app_server_child_pid_file
+    local resume_id="019eac34-764c-7893-9599-5b6000037cea"
+
+    tmpdir="$(mktemp -d "/private/tmp/tidey-codex-resume-failure.XXXXXX")"
+    fake_home="$tmpdir/home"
+    fake_bin="$tmpdir/bin"
+    registry_root="$fake_home/Library/Application Support/Tidey Remote Bridge/agent-sessions/codex"
+    socket="$tmpdir/tidey.sock"
+    codex_log="$tmpdir/codex.log"
+    app_server_child_pid_file="$tmpdir/app-server-child.pid"
+    mkdir -p "$fake_bin" "$registry_root"
+
+    cat > "$fake_bin/codex" <<'FAKE_CODEX'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$FAKE_CODEX_LOG"
+if [[ "${1:-}" == "--help" ]]; then
+    printf '%s\n' "Usage: codex --profile <CONFIG_PROFILE_V2>"
+    exit 0
+fi
+if [[ " $* " == *" app-server "* ]]; then
+    listen=""
+    while [[ $# -gt 0 ]]; do
+        if [[ "$1" == "--listen" && $# -ge 2 ]]; then
+            listen="$2"
+            shift 2
+            continue
+        fi
+        shift
+    done
+    socket_path="${listen#unix://}"
+    python3 -c 'import os, socket, sys, time; path = sys.argv[1]; pid_path = sys.argv[2]; open(pid_path, "w").write(str(os.getpid())); sock = socket.socket(socket.AF_UNIX); sock.bind(path); sock.listen(1); time.sleep(20)' "$socket_path" "$FAKE_APP_SERVER_CHILD_PID_FILE"
+    exit 0
+fi
+if [[ "$*" == *"--remote"* ]]; then
+    exit 42
+fi
+exit 0
+FAKE_CODEX
+    chmod +x "$fake_bin/codex"
+
+    python3 -c 'import socket, sys, time; sock = socket.socket(socket.AF_UNIX); sock.bind(sys.argv[1]); time.sleep(10)' "$socket" &
+    socket_pid="$!"
+    for _ in $(seq 1 50); do
+        [[ -S "$socket" ]] && break
+        sleep 0.02
+    done
+
+    set +e
+    HOME="$fake_home" \
+        PATH="$fake_bin:/usr/bin:/bin" \
+        TIDEY_CODEX_APP_SERVER_ENABLE=1 \
+        TIDEY_SOCKET_PATH="$socket" \
+        TIDEY_WORKSPACE_ID="workspace-1" \
+        TIDEY_PANEL_ID="panel-1" \
+        FAKE_CODEX_LOG="$codex_log" \
+        FAKE_APP_SERVER_CHILD_PID_FILE="$app_server_child_pid_file" \
+        TMPDIR="$tmpdir" \
+        "$CODEX_UNDER_TEST" resume "$resume_id"
+    status=$?
+    set -e
+
+    [[ "$status" == "42" ]] || fail "resume remote TUI failure status was not propagated"
+    [[ -z "$(find "$registry_root" -name "codex-*.json" -print -quit)" ]] || fail "failed resume registry file was not cleaned up"
+    [[ -f "$app_server_child_pid_file" ]] || fail "failed resume app-server child pid was not recorded"
+    app_server_child_pid="$(cat "$app_server_child_pid_file")"
+    for _ in $(seq 1 50); do
+        child_state="$(ps -o stat= -p "$app_server_child_pid" 2>/dev/null | tr -d " " || true)"
+        if [[ -z "$child_state" || "$child_state" == Z* ]]; then
+            break
+        fi
+        sleep 0.02
+    done
+    child_state="$(ps -o stat= -p "$app_server_child_pid" 2>/dev/null | tr -d " " || true)"
+    if [[ -n "$child_state" && "$child_state" != Z* ]]; then
+        kill "$app_server_child_pid" 2>/dev/null || true
+        fail "failed resume app-server child process was not cleaned up: state=$child_state"
+    fi
+
+    kill "$socket_pid" 2>/dev/null || true
+    wait "$socket_pid" 2>/dev/null || true
+
+    rm -rf "$tmpdir"
+}
+
+run_app_server_runtime_resume_failure_cleanup_test
 
 echo "PASS"

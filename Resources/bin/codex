@@ -548,6 +548,109 @@ PY
     done <<< "$cleanup_rows"
 }
 
+is_uuid() {
+    local value="${1:-}"
+    [[ "$value" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]]
+}
+
+codex_args_contain_info_flag() {
+    local arg=""
+
+    for arg in "$@"; do
+        case "$arg" in
+            -h|--help|-V|--version)
+                return 0
+                ;;
+        esac
+    done
+    return 1
+}
+
+app_server_resume_session_id() {
+    local session_id=""
+
+    [[ $# -ge 2 ]] || return 1
+    [[ "${1:-}" == "resume" ]] || return 1
+    if codex_args_contain_info_flag "$@"; then
+        return 1
+    fi
+
+    session_id="${2:-}"
+    is_uuid "$session_id" || return 1
+    printf '%s' "$session_id" | tr '[:upper:]' '[:lower:]'
+}
+
+is_app_server_runtime_command() {
+    if [[ $# -eq 0 ]]; then
+        return 0
+    fi
+    app_server_resume_session_id "$@" >/dev/null
+}
+
+app_server_session_has_live_record() {
+    local session_id="$1"
+
+    python3 - "$REGISTRY_ROOT" "$session_id" <<'PY'
+from pathlib import Path
+import json
+import os
+import stat
+import sys
+
+root = Path(sys.argv[1])
+session_id = sys.argv[2]
+
+def int_value(value):
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+def pid_alive(pid):
+    if not pid or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+def socket_alive(path):
+    if not isinstance(path, str) or not path:
+        return False
+    try:
+        mode = os.stat(path).st_mode
+    except OSError:
+        return False
+    return stat.S_ISSOCK(mode)
+
+if not root.exists():
+    raise SystemExit(1)
+
+for path in root.glob("codex-*.json"):
+    try:
+        record = json.loads(path.read_text())
+    except Exception:
+        continue
+    if record.get("session_id") != session_id:
+        continue
+    if record.get("runtime") not in {"codex_app_server", "codex_app_server_starting"}:
+        continue
+    if not pid_alive(int_value(record.get("pid"))):
+        continue
+    if not pid_alive(int_value(record.get("app_server_pid"))):
+        continue
+    if not socket_alive(record.get("app_server_socket")):
+        continue
+    raise SystemExit(0)
+
+raise SystemExit(1)
+PY
+}
+
 rollout_for_pid_tree() {
     local root_pid="$1"
     local queue=("$root_pid")
@@ -650,7 +753,7 @@ should_use_codex_app_server_runtime() {
     if [[ "${TIDEY_CODEX_APP_SERVER_DISABLE:-}" == "1" ]]; then
         return 1
     fi
-    if [[ $# -ne 0 ]]; then
+    if ! is_app_server_runtime_command "$@"; then
         return 1
     fi
     if [[ -z "${TIDEY_SOCKET_PATH:-}" || ! -S "${TIDEY_SOCKET_PATH:-}" || -z "${TIDEY_WORKSPACE_ID:-}" ]]; then
@@ -756,6 +859,8 @@ main() {
     local dispatch_script=""
     local created_at=""
     local session_id=""
+    local app_server_runtime_session_id=""
+    local use_app_server_runtime=0
     local registry_file=""
     local profile_flag=""
 
@@ -777,15 +882,26 @@ main() {
 
     created_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     session_id="$(initial_session_id)"
+    app_server_runtime_session_id="$(app_server_resume_session_id "$@" || true)"
+    if should_use_codex_app_server_runtime "$@"; then
+        use_app_server_runtime=1
+        if [[ -n "$app_server_runtime_session_id" ]]; then
+            session_id="$app_server_runtime_session_id"
+        fi
+    fi
     registry_file="$REGISTRY_ROOT/codex-$session_id.json"
     cleanup_stale_app_server_registry_records
-    write_registry_file "$registry_file" "$TIDEY_WORKSPACE_ID" "$session_id" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$created_at" ""
 
-    if should_use_codex_app_server_runtime "$@"; then
+    if [[ "$use_app_server_runtime" == "1" ]]; then
+        if [[ -n "$app_server_runtime_session_id" ]] && app_server_session_has_live_record "$session_id"; then
+            echo "Error: Codex app-server session is already active: codex resume $session_id" >&2
+            exit 1
+        fi
         run_codex_app_server_runtime "$real_codex" "$real_codex_home" "$profile_flag" "$profile_name" "$sqlite_home" "$registry_file" "$session_id" "$created_at" "$@"
         exit $?
     fi
 
+    write_registry_file "$registry_file" "$TIDEY_WORKSPACE_ID" "$session_id" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$created_at" ""
     start_rollout_monitor_if_needed "$$" "${TIDEY_WORKSPACE_ID:-}" "${TIDEY_PANEL_ID:-}" "$PWD" "$created_at" "$registry_file" "$session_id"
 
     if [[ -n "${TIDEY_SOCKET_PATH:-}" && -n "${TIDEY_WORKSPACE_ID:-}" && -x "$HOOK_DIR/tidey" ]]; then
