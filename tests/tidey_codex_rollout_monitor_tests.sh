@@ -288,6 +288,7 @@ run_app_server_registry_metadata_test
 run_stale_app_server_registry_cleanup_test() {
     local tmpdir
     local live_registry
+    local live_owner_dead_registry
     local stale_registry
     local stale_starting_registry
     local socket
@@ -295,6 +296,7 @@ run_stale_app_server_registry_cleanup_test() {
 
     tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/tidey-codex-stale-registry-tests.XXXXXX")"
     live_registry="$tmpdir/codex-live.json"
+    live_owner_dead_registry="$tmpdir/codex-live-owner-dead.json"
     stale_registry="$tmpdir/codex-stale.json"
     stale_starting_registry="$tmpdir/codex-stale-starting.json"
     socket="$tmpdir/live.sock"
@@ -306,18 +308,20 @@ run_stale_app_server_registry_cleanup_test() {
         sleep 0.02
     done
 
-    TMPDIR_CASE="$tmpdir" LIVE_REGISTRY="$live_registry" STALE_REGISTRY="$stale_registry" STALE_STARTING_REGISTRY="$stale_starting_registry" SOCKET="$socket" CODEX_UNDER_TEST="$CODEX_UNDER_TEST" bash -c '
+    TMPDIR_CASE="$tmpdir" LIVE_REGISTRY="$live_registry" LIVE_OWNER_DEAD_REGISTRY="$live_owner_dead_registry" STALE_REGISTRY="$stale_registry" STALE_STARTING_REGISTRY="$stale_starting_registry" SOCKET="$socket" CODEX_UNDER_TEST="$CODEX_UNDER_TEST" bash -c '
         set -euo pipefail
         source "$CODEX_UNDER_TEST"
 
         REGISTRY_ROOT="$TMPDIR_CASE"
         write_registry_file "$LIVE_REGISTRY" "workspace-live" "live" "panel-live" "$$" "/tmp/tidey" "2026-06-07T00:00:00Z" "" "codex_app_server" "$SOCKET" "$$" ""
+        write_registry_file "$LIVE_OWNER_DEAD_REGISTRY" "workspace-live-owner-dead" "live-owner-dead" "panel-live-owner-dead" "99999994" "/tmp/tidey" "2026-06-07T00:00:00Z" "" "codex_app_server" "$SOCKET" "$$" ""
         write_registry_file "$STALE_REGISTRY" "workspace-stale" "stale" "panel-stale" "99999999" "/tmp/tidey" "2026-06-07T00:00:00Z" "" "codex_app_server" "$TMPDIR_CASE/missing.sock" "99999998" "99999997"
         write_registry_file "$STALE_STARTING_REGISTRY" "workspace-stale-starting" "stale-starting" "panel-stale-starting" "99999996" "/tmp/tidey" "2026-06-07T00:00:00Z" "" "codex_app_server_starting" "$TMPDIR_CASE/missing-starting.sock" "99999995" ""
 
         cleanup_stale_app_server_registry_records
 
         [[ -f "$LIVE_REGISTRY" ]] || fail "live app-server registry was removed"
+        [[ -f "$LIVE_OWNER_DEAD_REGISTRY" ]] || fail "live app-server registry with dead owner pid was removed"
         [[ ! -f "$STALE_REGISTRY" ]] || fail "stale app-server registry was not removed"
         [[ ! -f "$STALE_STARTING_REGISTRY" ]] || fail "stale starting app-server registry was not removed"
     '
@@ -440,7 +444,7 @@ FAKE_CODEX
     done
 
     cat > "$registry" <<JSON
-{"version":1,"vendor":"codex","workspace_id":"workspace-live","session_id":"$resume_id","panel_id":"panel-live","pid":$socket_pid,"cwd":"/tmp","created_at":"2026-06-09T00:00:00Z","rollout_path":"","transcript_path":"","runtime":"codex_app_server","app_server_socket":"$socket","app_server_pid":$socket_pid}
+{"version":1,"vendor":"codex","workspace_id":"workspace-live","session_id":"$resume_id","panel_id":"panel-live","pid":99999994,"cwd":"/tmp","created_at":"2026-06-09T00:00:00Z","rollout_path":"","transcript_path":"","runtime":"codex_app_server","app_server_socket":"$socket","app_server_pid":$socket_pid}
 JSON
 
     set +e
@@ -465,6 +469,8 @@ JSON
         fail "remote TUI was launched for double-open resume"
     fi
     [[ -f "$registry" ]] || fail "live registry was removed by double-open check"
+    grep -q "\"runtime\":\"codex_app_server\"" "$registry" || fail "live registry was clobbered by double-open check"
+    grep -q "\"app_server_pid\":$socket_pid" "$registry" || fail "live registry app-server pid was clobbered by double-open check"
 
     kill "$socket_pid" 2>/dev/null || true
     wait "$socket_pid" 2>/dev/null || true

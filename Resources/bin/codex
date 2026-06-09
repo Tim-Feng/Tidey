@@ -514,15 +514,14 @@ for path in root.glob("codex-*.json"):
     if record.get("runtime") not in {"codex_app_server", "codex_app_server_starting"}:
         continue
 
-    owner_pid = int_value(record.get("pid"))
     app_server_pid = int_value(record.get("app_server_pid"))
     remote_tui_pid = int_value(record.get("remote_tui_pid"))
     app_server_socket = record.get("app_server_socket")
 
     stale = (
-        not pid_alive(owner_pid)
-        or not pid_alive(app_server_pid)
+        not pid_alive(app_server_pid)
         or not socket_alive(app_server_socket)
+        or (remote_tui_pid is not None and not pid_alive(remote_tui_pid))
     )
     if not stale:
         continue
@@ -638,8 +637,6 @@ for path in root.glob("codex-*.json"):
     if record.get("session_id") != session_id:
         continue
     if record.get("runtime") not in {"codex_app_server", "codex_app_server_starting"}:
-        continue
-    if not pid_alive(int_value(record.get("pid"))):
         continue
     if not pid_alive(int_value(record.get("app_server_pid"))):
         continue
@@ -902,16 +899,17 @@ main() {
         fi
     fi
     registry_file="$REGISTRY_ROOT/codex-$session_id.json"
-    cleanup_stale_app_server_registry_records
-
     if [[ "$use_app_server_runtime" == "1" ]]; then
         if [[ -n "$app_server_runtime_session_id" ]] && app_server_session_has_live_record "$session_id"; then
             echo "Error: Codex app-server session is already active: codex resume $session_id" >&2
             exit 1
         fi
+        cleanup_stale_app_server_registry_records
         run_codex_app_server_runtime "$real_codex" "$real_codex_home" "$profile_flag" "$profile_name" "$sqlite_home" "$registry_file" "$session_id" "$created_at" "$app_server_runtime_rollout_path" "$@"
         exit $?
     fi
+
+    cleanup_stale_app_server_registry_records
 
     write_registry_file "$registry_file" "$TIDEY_WORKSPACE_ID" "$session_id" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$created_at" ""
     start_rollout_monitor_if_needed "$$" "${TIDEY_WORKSPACE_ID:-}" "${TIDEY_PANEL_ID:-}" "$PWD" "$created_at" "$registry_file" "$session_id"
