@@ -570,7 +570,8 @@ final class AgentSessionRegistryMonitor {
         let effectiveRecords = sourceRecords
             .map(recordWithPaneIdentityIfAvailable(_:))
             .map(effectiveRecord(for:))
-        let appServerRecords = effectiveRecords.filter {
+        let activeRecords = recordsWithObsoleteCodexAppServerPanelRecordsRemoved(effectiveRecords)
+        let appServerRecords = activeRecords.filter {
             $0.vendor == "codex" && $0.runtime == "codex_app_server"
         }
         let appServerSessionIDs = Set(appServerRecords.map(\.sessionID))
@@ -578,14 +579,41 @@ final class AgentSessionRegistryMonitor {
             BridgeLogger.server.info("codex app-server diagnostic scan registry app_server_count=\(appServerRecords.count, privacy: .public) session_ids=\(appServerRecords.map(\.sessionID).joined(separator: ","), privacy: .public)")
             lastLoggedAppServerSessionIDs = appServerSessionIDs
         }
-        syncRecords(effectiveRecords)
-        runtimeSyncer?.sync(records: effectiveRecords)
-        activeRecords = Dictionary(uniqueKeysWithValues: effectiveRecords.map { ($0.sessionID, $0) })
-        for record in effectiveRecords where resolvedPanelBindings[record.sessionID] != nil {
+        syncRecords(activeRecords)
+        runtimeSyncer?.sync(records: activeRecords)
+        self.activeRecords = Dictionary(uniqueKeysWithValues: activeRecords.map { ($0.sessionID, $0) })
+        for record in activeRecords where resolvedPanelBindings[record.sessionID] != nil {
             applyResolvedBinding(sessionID: record.sessionID,
                                  workspaceID: record.workspaceID,
                                  panelID: record.panelID)
         }
+    }
+
+    private func recordsWithObsoleteCodexAppServerPanelRecordsRemoved(_ records: [AgentSessionRegistryRecord]) -> [AgentSessionRegistryRecord] {
+        var preferredByPanelKey = [String: AgentSessionRegistryRecord]()
+        var obsoleteSessionIDs = Set<String>()
+
+        for record in records where Self.isCodexAppServerRuntimeRecord(record) {
+            guard let panelID = record.panelID, !panelID.isEmpty else {
+                continue
+            }
+            let key = "\(record.workspaceID)|\(panelID)"
+            if let current = preferredByPanelKey[key] {
+                if Self.isRecordPreferred(record, current) {
+                    obsoleteSessionIDs.insert(current.sessionID)
+                    preferredByPanelKey[key] = record
+                } else {
+                    obsoleteSessionIDs.insert(record.sessionID)
+                }
+            } else {
+                preferredByPanelKey[key] = record
+            }
+        }
+
+        guard obsoleteSessionIDs.isEmpty == false else {
+            return records
+        }
+        return records.filter { obsoleteSessionIDs.contains($0.sessionID) == false }
     }
 
     private func recordWithPaneIdentityIfAvailable(_ record: AgentSessionRegistryRecord) -> AgentSessionRegistryRecord {

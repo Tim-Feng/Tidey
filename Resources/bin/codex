@@ -651,6 +651,15 @@ raise SystemExit(1)
 PY
 }
 
+codex_rollout_path_for_session_id() {
+    local real_codex_home="$1"
+    local session_id="$2"
+    local sessions_root="$real_codex_home/sessions"
+
+    [[ -d "$sessions_root" ]] || return 1
+    find "$sessions_root" -type f -name "rollout-*-$session_id.jsonl" -print 2>/dev/null | sort | tail -n 1
+}
+
 rollout_for_pid_tree() {
     local root_pid="$1"
     local queue=("$root_pid")
@@ -771,7 +780,8 @@ run_codex_app_server_runtime() {
     local registry_file="$6"
     local session_id="$7"
     local created_at="$8"
-    shift 8
+    local rollout_path="$9"
+    shift 9
 
     local socket_dir=""
     local socket_path=""
@@ -823,7 +833,7 @@ run_codex_app_server_runtime() {
         cleanup_codex_app_server_runtime 1
     fi
 
-    write_registry_file "$registry_file" "$TIDEY_WORKSPACE_ID" "$session_id" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$created_at" "" "codex_app_server_starting" "$socket_path" "$app_server_pid" ""
+    write_registry_file "$registry_file" "$TIDEY_WORKSPACE_ID" "$session_id" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$created_at" "$rollout_path" "codex_app_server_starting" "$socket_path" "$app_server_pid" ""
 
     if [[ -n "${TIDEY_SOCKET_PATH:-}" && -n "${TIDEY_WORKSPACE_ID:-}" && -x "$HOOK_DIR/tidey" ]]; then
         "$HOOK_DIR/tidey" codex-hook session-start || true
@@ -832,7 +842,7 @@ run_codex_app_server_runtime() {
     set +e
     env CODEX_HOME="$real_codex_home" "$real_codex" --remote "unix://$socket_path" "$@" &
     remote_tui_pid="$!"
-    write_registry_file "$registry_file" "$TIDEY_WORKSPACE_ID" "$session_id" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$created_at" "" "codex_app_server" "$socket_path" "$app_server_pid" "$remote_tui_pid"
+    write_registry_file "$registry_file" "$TIDEY_WORKSPACE_ID" "$session_id" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$created_at" "$rollout_path" "codex_app_server" "$socket_path" "$app_server_pid" "$remote_tui_pid"
     wait "$remote_tui_pid"
     remote_status=$?
     set -e
@@ -860,6 +870,7 @@ main() {
     local created_at=""
     local session_id=""
     local app_server_runtime_session_id=""
+    local app_server_runtime_rollout_path=""
     local use_app_server_runtime=0
     local registry_file=""
     local profile_flag=""
@@ -887,6 +898,7 @@ main() {
         use_app_server_runtime=1
         if [[ -n "$app_server_runtime_session_id" ]]; then
             session_id="$app_server_runtime_session_id"
+            app_server_runtime_rollout_path="$(codex_rollout_path_for_session_id "$real_codex_home" "$session_id" || true)"
         fi
     fi
     registry_file="$REGISTRY_ROOT/codex-$session_id.json"
@@ -897,7 +909,7 @@ main() {
             echo "Error: Codex app-server session is already active: codex resume $session_id" >&2
             exit 1
         fi
-        run_codex_app_server_runtime "$real_codex" "$real_codex_home" "$profile_flag" "$profile_name" "$sqlite_home" "$registry_file" "$session_id" "$created_at" "$@"
+        run_codex_app_server_runtime "$real_codex" "$real_codex_home" "$profile_flag" "$profile_name" "$sqlite_home" "$registry_file" "$session_id" "$created_at" "$app_server_runtime_rollout_path" "$@"
         exit $?
     fi
 

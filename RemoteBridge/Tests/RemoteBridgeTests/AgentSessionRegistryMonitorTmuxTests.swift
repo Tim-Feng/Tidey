@@ -301,6 +301,62 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
                        ["Message visible on Remote"])
     }
 
+    func testScanPrefersNewestCodexAppServerRecordForSamePanel() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let oldRecordURL = paths.codexAgentSessionsDirectory.appendingPathComponent("codex-old-app-server.json")
+        let newRecordURL = paths.codexAgentSessionsDirectory.appendingPathComponent("codex-new-app-server.json")
+        try Data("""
+        {
+          "version": 1,
+          "vendor": "codex",
+          "workspace_id": "workspace-app-server",
+          "session_id": "old-session",
+          "panel_id": "panel-app-server",
+          "pid": \(getpid()),
+          "cwd": "/tmp",
+          "created_at": "2026-06-07T00:00:00Z",
+          "runtime": "codex_app_server",
+          "app_server_socket": "/tmp/tidey-codex-app-server/old.sock",
+          "app_server_pid": \(getpid())
+        }
+        """.utf8).write(to: oldRecordURL)
+        try Data("""
+        {
+          "version": 1,
+          "vendor": "codex",
+          "workspace_id": "workspace-app-server",
+          "session_id": "new-session",
+          "panel_id": "panel-app-server",
+          "pid": \(getpid()),
+          "cwd": "/tmp",
+          "created_at": "2026-06-07T00:01:00Z",
+          "runtime": "codex_app_server",
+          "app_server_socket": "/tmp/tidey-codex-app-server/new.sock",
+          "app_server_pid": \(getpid())
+        }
+        """.utf8).write(to: newRecordURL)
+
+        let runtimeSyncer = CapturingRuntimeSyncer()
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: fileManager,
+                                                  hub: AgentEventHub(),
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+                                                  parentPIDLookup: { _ in nil },
+                                                  runtimeSyncer: runtimeSyncer)
+        try monitor.start()
+
+        let session = monitor.activeSessionForPanel(workspaceID: "workspace-app-server",
+                                                    panelID: "panel-app-server")
+        XCTAssertEqual(session?.sessionID, "new-session")
+        XCTAssertEqual(runtimeSyncer.latestRecords.map(\.sessionID), ["new-session"])
+    }
+
     func testActiveSessionForPanelFallsBackToTmuxPaneMatchWhenPanelIDsChanged() throws {
         let fileManager = FileManager.default
         let supportDirectory = fileManager.temporaryDirectory

@@ -681,6 +681,7 @@ run_app_server_runtime_resume_launch_test() {
     local app_server_child_pid_file
     local remote_tui_registry_ok_file
     local resume_id="019eac34-764c-7893-9599-5b6000037cea"
+    local resume_rollout_path
 
     tmpdir="$(mktemp -d "/private/tmp/tidey-codex-resume-launch.XXXXXX")"
     fake_home="$tmpdir/home"
@@ -690,7 +691,10 @@ run_app_server_runtime_resume_launch_test() {
     codex_log="$tmpdir/codex.log"
     app_server_child_pid_file="$tmpdir/app-server-child.pid"
     remote_tui_registry_ok_file="$tmpdir/remote-tui-registry.ok"
+    resume_rollout_path="$fake_home/.codex/sessions/2026/06/09/rollout-2026-06-09T22-00-00-$resume_id.jsonl"
     mkdir -p "$fake_bin" "$registry_root"
+    mkdir -p "$(dirname "$resume_rollout_path")"
+    printf '[]\n' > "$resume_rollout_path"
 
     cat > "$fake_bin/codex" <<'FAKE_CODEX'
 #!/usr/bin/env bash
@@ -716,8 +720,9 @@ if [[ " $* " == *" app-server "* ]]; then
 fi
 if [[ "$*" == *"--remote"* ]]; then
     for _ in $(seq 1 50); do
-        if grep -q "\"session_id\":\"$FAKE_RESUME_ID\"" "$FAKE_REGISTRY_ROOT"/codex-"$FAKE_RESUME_ID".json 2>/dev/null \
-            && grep -q "\"remote_tui_pid\":$$" "$FAKE_REGISTRY_ROOT"/codex-"$FAKE_RESUME_ID".json 2>/dev/null; then
+        if grep -Fq "\"session_id\":\"$FAKE_RESUME_ID\"" "$FAKE_REGISTRY_ROOT"/codex-"$FAKE_RESUME_ID".json 2>/dev/null \
+            && grep -Fq "\"remote_tui_pid\":$$" "$FAKE_REGISTRY_ROOT"/codex-"$FAKE_RESUME_ID".json 2>/dev/null \
+            && grep -Fq "\"rollout_path\":\"$FAKE_RESUME_ROLLOUT_PATH\"" "$FAKE_REGISTRY_ROOT"/codex-"$FAKE_RESUME_ID".json 2>/dev/null; then
             printf 'ok\n' > "$FAKE_REMOTE_TUI_REGISTRY_OK_FILE"
             break
         fi
@@ -738,6 +743,7 @@ FAKE_CODEX
     done
 
     HOME="$fake_home" \
+        CODEX_HOME="$fake_home/.codex" \
         PATH="$fake_bin:/usr/bin:/bin" \
         TIDEY_CODEX_APP_SERVER_ENABLE=1 \
         TIDEY_SOCKET_PATH="$socket" \
@@ -748,13 +754,14 @@ FAKE_CODEX
         FAKE_REMOTE_TUI_REGISTRY_OK_FILE="$remote_tui_registry_ok_file" \
         FAKE_REGISTRY_ROOT="$registry_root" \
         FAKE_RESUME_ID="$resume_id" \
+        FAKE_RESUME_ROLLOUT_PATH="$resume_rollout_path" \
         TMPDIR="$tmpdir" \
         "$CODEX_UNDER_TEST" resume "$resume_id"
 
     [[ -z "$(find "$registry_root" -name "codex-*.json" -print -quit)" ]] || fail "resume app-server registry file was not cleaned up"
     grep -q "app-server" "$codex_log" || fail "resume app-server was not launched"
     grep -q -- "--remote .* resume $resume_id" "$codex_log" || fail "resume remote TUI was not launched with resume id"
-    [[ -f "$remote_tui_registry_ok_file" ]] || fail "resume session id was not written to registry"
+    [[ -f "$remote_tui_registry_ok_file" ]] || fail "resume session id and rollout path were not written to registry"
     [[ -f "$app_server_child_pid_file" ]] || fail "resume app-server child pid was not recorded"
     app_server_child_pid="$(cat "$app_server_child_pid_file")"
     for _ in $(seq 1 50); do
