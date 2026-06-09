@@ -79,7 +79,16 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
                 existing.record.panelID != record.panelID
         }
         let replacedEntries = recordsToAttach.compactMap { entriesBySessionID.removeValue(forKey: $0.sessionID) }
+        let reusedRecords = runtimeRecords.filter { record in
+            entriesBySessionID[record.sessionID] != nil &&
+                recordsToAttach.contains(where: { $0.sessionID == record.sessionID }) == false
+        }
         lock.unlock()
+
+        BridgeLogger.server.info("codex app-server diagnostic sync runtime_count=\(runtimeRecords.count, privacy: .public) attach_count=\(recordsToAttach.count, privacy: .public) reuse_count=\(reusedRecords.count, privacy: .public) stale_count=\(staleEntries.count, privacy: .public) replace_count=\(replacedEntries.count, privacy: .public) session_ids=\(runtimeRecords.map(\.sessionID).joined(separator: ","), privacy: .public)")
+        for record in reusedRecords {
+            BridgeLogger.server.info("codex app-server diagnostic sync reused workspace_id=\(record.workspaceID, privacy: .public) panel_id=\(record.panelID ?? "-", privacy: .public) session_id=\(record.sessionID, privacy: .public)")
+        }
 
         for entry in staleEntries + replacedEntries {
             entry.session.stop()
@@ -124,7 +133,9 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
         let session = lock.withCodexRuntimeSyncerLock {
             entriesBySessionID[sessionID]?.session
         }
-        return session?.canSubmitMessage() == true
+        let result = session?.canSubmitMessage() == true
+        BridgeLogger.server.info("codex app-server diagnostic can_submit session_id=\(sessionID, privacy: .public) entry_exists=\((session != nil), privacy: .public) result=\(result, privacy: .public)")
+        return result
     }
 
     private func attach(record: AgentSessionRegistryRecord) {

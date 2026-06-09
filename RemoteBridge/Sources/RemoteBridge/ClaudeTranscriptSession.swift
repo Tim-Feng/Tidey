@@ -566,6 +566,12 @@ final class AgentSessionRegistryMonitor {
         let effectiveRecords = sourceRecords
             .map(recordWithPaneIdentityIfAvailable(_:))
             .map(effectiveRecord(for:))
+        let appServerRecords = effectiveRecords.filter {
+            $0.vendor == "codex" && $0.runtime == "codex_app_server"
+        }
+        if appServerRecords.isEmpty == false {
+            BridgeLogger.server.info("codex app-server diagnostic scan registry app_server_count=\(appServerRecords.count, privacy: .public) session_ids=\(appServerRecords.map(\.sessionID).joined(separator: ","), privacy: .public)")
+        }
         syncRecords(effectiveRecords)
         runtimeSyncer?.sync(records: effectiveRecords)
         activeRecords = Dictionary(uniqueKeysWithValues: effectiveRecords.map { ($0.sessionID, $0) })

@@ -148,7 +148,18 @@ final class CodexAppServerRuntimeSession {
     }
 
     func canSubmitMessage() -> Bool {
-        activeThreadStore.currentThreadID() != nil
+        let initializationStatus = initialization.diagnosticStatus()
+        let threadID = activeThreadStore.currentThreadID()
+        let busySummary = threadID.map { turnStateStore.diagnosticBusySummary(threadID: $0) } ?? "unknown_thread"
+        let result = threadID != nil
+        let falseReason: String
+        if case .ready = initializationStatus {
+            falseReason = threadID == nil ? "active_thread_unknown" : "-"
+        } else {
+            falseReason = "initialization_\(initializationStatus.logValue)"
+        }
+        BridgeLogger.server.info("codex app-server diagnostic runtime can_submit result=\(result, privacy: .public) init_status=\(initializationStatus.logValue, privacy: .public) thread_id=\(threadID ?? "-", privacy: .public) busy=\(busySummary, privacy: .public) false_reason=\(falseReason, privacy: .public)")
+        return result
     }
 
     private func currentThreadIDForSubmit() throws -> String? {
@@ -222,6 +233,15 @@ final class CodexAppServerTurnStateStore: @unchecked Sendable {
     private enum TurnOrigin {
         case remoteSubmit
         case appServer
+
+        var logValue: String {
+            switch self {
+            case .remoteSubmit:
+                return "remote_submit"
+            case .appServer:
+                return "app_server"
+            }
+        }
     }
 
     private struct TurnActivity {
@@ -323,6 +343,25 @@ final class CodexAppServerTurnStateStore: @unchecked Sendable {
         lock.unlock()
     }
 
+    func diagnosticBusySummary(threadID: String) -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let state = statesByThreadID[threadID] else {
+            return "idle"
+        }
+        var parts = [String]()
+        if state.pendingSubmitStartedAt != nil {
+            parts.append("pending_submit")
+        }
+        if let turn = state.turn {
+            parts.append("turn:\(turn.origin.logValue)")
+        }
+        if state.threadStatusActiveStartedAt != nil {
+            parts.append("thread_status_active")
+        }
+        return parts.isEmpty ? "idle" : parts.joined(separator: "+")
+    }
+
     private func pruneExpiredLocked(now: Date) {
         for threadID in Array(statesByThreadID.keys) {
             guard var state = statesByThreadID[threadID] else {
@@ -366,6 +405,23 @@ final class CodexAppServerActiveThreadStore: @unchecked Sendable {
 }
 
 final class CodexAppServerInitializationState: @unchecked Sendable {
+    enum DiagnosticStatus {
+        case pending
+        case ready
+        case failed
+
+        var logValue: String {
+            switch self {
+            case .pending:
+                return "pending"
+            case .ready:
+                return "ready"
+            case .failed:
+                return "failed"
+            }
+        }
+    }
+
     private enum State {
         case pending
         case ready
@@ -403,6 +459,19 @@ final class CodexAppServerInitializationState: @unchecked Sendable {
                     throw CodexAppServerConnectionError.initializationTimedOut
                 }
             }
+        }
+    }
+
+    func diagnosticStatus() -> DiagnosticStatus {
+        condition.lock()
+        defer { condition.unlock() }
+        switch state {
+        case .pending:
+            return .pending
+        case .ready:
+            return .ready
+        case .failed:
+            return .failed
         }
     }
 
