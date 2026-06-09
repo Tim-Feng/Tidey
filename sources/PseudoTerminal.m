@@ -383,6 +383,11 @@ static NSString *TideySubmitLogSuffix(NSString *input) {
                                      panelID:(NSString *)panelID
                                    workspace:(NSDictionary *)workspaceSummary
                                        panel:(NSDictionary *)panelSummary;
+- (void)tideyRestoreSelectedPanel:(PTYTab *)selectedPanel
+                       inWorkspace:(Workspace *)workspace
+                     fallbackIndex:(NSInteger)fallbackIndex
+                  changedWorkspace:(BOOL)changedWorkspace
+           suppressSelectionEffects:(BOOL)suppressSelectionEffects;
 - (void)tideyPostWorkspaceEventForKind:(NSString *)kind
                            workspaceID:(NSString *)workspaceID
                                panelID:(NSString *)panelID
@@ -2712,6 +2717,46 @@ ITERM_WEAKLY_REFERENCEABLE
     }
 }
 
+- (void)tideyRestoreSelectedPanel:(PTYTab *)selectedPanel
+                       inWorkspace:(Workspace *)workspace
+                     fallbackIndex:(NSInteger)fallbackIndex
+                  changedWorkspace:(BOOL)changedWorkspace
+           suppressSelectionEffects:(BOOL)suppressSelectionEffects {
+    if (![[self class] tideyShouldRestoreSelectedPanelAfterShowingWorkspaceWithChangedWorkspace:changedWorkspace
+                                                                                     panelCount:workspace.panels.count
+                                                                             selectedPanelIndex:fallbackIndex]) {
+        return;
+    }
+    NSInteger selectedPanelIndex = [[self class] tideySelectedPanelIndexForRestoredPanel:selectedPanel
+                                                                                  panels:workspace.panels
+                                                                           fallbackIndex:fallbackIndex];
+    if (selectedPanelIndex < 0 || selectedPanelIndex >= workspace.panels.count) {
+        return;
+    }
+
+    BOOL previousSwitchingWorkspace = _tideySwitchingWorkspace;
+    if (suppressSelectionEffects) {
+        _tideySwitchingWorkspace = YES;
+    }
+    workspace.selectedPanelIndex = selectedPanelIndex;
+    PTYTab *panel = workspace.panels[selectedPanelIndex];
+    NSInteger panelIndex = [self indexOfTab:panel];
+    if (panelIndex != NSNotFound) {
+        [_contentView.tabView selectTabViewItemAtIndex:panelIndex];
+        workspace.selectedPanelIndex = selectedPanelIndex;
+        if (!_fullScreen && self.currentTab) {
+            [self.currentTab updateLabelAttributes];
+            [self setWindowTitle];
+        }
+        if (self.currentSession.mainResponder) {
+            [[self window] makeFirstResponder:self.currentSession.mainResponder];
+        }
+    }
+    if (suppressSelectionEffects) {
+        _tideySwitchingWorkspace = previousSwitchingWorkspace;
+    }
+}
+
 - (void)showWorkspaceAtIndex:(NSInteger)index {
     [self ensureTideyWorkspacesInitialized];
     Workspace *workspace = [self workspaceAtIndex:index];
@@ -2779,27 +2824,11 @@ ITERM_WEAKLY_REFERENCEABLE
         workspace.panels.count > 0) {
         [self updateSelectedPanelIndexFromVisibleTabSelection];
     }
-    if ([[self class] tideyShouldRestoreSelectedPanelAfterShowingWorkspaceWithChangedWorkspace:(currentWorkspace != workspace)
-                                                                                    panelCount:workspace.panels.count
-                                                                            selectedPanelIndex:selectedPanelIndex]) {
-        selectedPanelIndex = [[self class] tideySelectedPanelIndexForRestoredPanel:selectedPanel
-                                                                            panels:workspace.panels
-                                                                     fallbackIndex:selectedPanelIndex];
-        workspace.selectedPanelIndex = selectedPanelIndex;
-        PTYTab *panel = workspace.panels[selectedPanelIndex];
-        NSInteger panelIndex = [self indexOfTab:panel];
-        if (panelIndex != NSNotFound) {
-            [_contentView.tabView selectTabViewItemAtIndex:panelIndex];
-            workspace.selectedPanelIndex = selectedPanelIndex;
-            if (!_fullScreen && self.currentTab) {
-                [self.currentTab updateLabelAttributes];
-                [self setWindowTitle];
-            }
-            if (self.currentSession.mainResponder) {
-                [[self window] makeFirstResponder:self.currentSession.mainResponder];
-            }
-        }
-    }
+    [self tideyRestoreSelectedPanel:selectedPanel
+                        inWorkspace:workspace
+                      fallbackIndex:selectedPanelIndex
+                   changedWorkspace:(currentWorkspace != workspace)
+            suppressSelectionEffects:NO];
     _tideySwitchingWorkspace = NO;
 }
 
@@ -2809,6 +2838,9 @@ ITERM_WEAKLY_REFERENCEABLE
     if (!workspace || workspace.panels.count == 0) {
         return NO;
     }
+    BOOL changedWorkspace = (self.selectedWorkspaceIndex != index);
+    NSInteger targetSelectedPanelIndex = workspace.selectedPanelIndex;
+    PTYTab *targetSelectedPanel = [[workspace.selectedPanel retain] autorelease];
     [self updateSelectedPanelIndexFromVisibleTabSelection];
     if (recordHistory &&
         self.selectedWorkspaceIndex >= 0 &&
@@ -2831,6 +2863,11 @@ ITERM_WEAKLY_REFERENCEABLE
     }
     [self showWorkspaceAtIndex:index];
     [self tideyMarkWorkspaceReadAtIndex:index];
+    [self tideyRestoreSelectedPanel:targetSelectedPanel
+                        inWorkspace:workspace
+                      fallbackIndex:targetSelectedPanelIndex
+                   changedWorkspace:changedWorkspace
+            suppressSelectionEffects:YES];
     return YES;
 }
 
