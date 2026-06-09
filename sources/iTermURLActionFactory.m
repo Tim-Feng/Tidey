@@ -66,6 +66,15 @@ typedef enum {
 
 static NSMutableArray<iTermURLActionFactory *> *sFactories;
 
+@interface iTermURLActionFactory (TideyTesting)
++ (BOOL)tideyShouldPreferRawExistingFileResult:(NSString *)rawFilename
+                                rawPrefixChars:(int)rawPrefixChars
+                                rawSuffixChars:(int)rawSuffixChars
+                                  overFilename:(NSString *)filename
+                                   prefixChars:(int)prefixChars
+                                   suffixChars:(int)suffixChars;
+@end
+
 static NSCharacterSet *iTermCJKURLBoundaryCharacterSet(void) {
     static NSCharacterSet *characterSet;
     static dispatch_once_t onceToken;
@@ -329,6 +338,30 @@ static NSDictionary *iTermURLActionFactoryTideyDictionaryForAction(URLAction *ac
 @implementation iTermURLActionFactory {
     BOOL _finished;
     id<iTermCancelable> _pathFinderCanceler;
+}
+
++ (BOOL)tideyShouldPreferRawExistingFileResult:(NSString *)rawFilename
+                                rawPrefixChars:(int)rawPrefixChars
+                                rawSuffixChars:(int)rawSuffixChars
+                                  overFilename:(NSString *)filename
+                                   prefixChars:(int)prefixChars
+                                   suffixChars:(int)suffixChars {
+    if (rawFilename.length == 0) {
+        return NO;
+    }
+    if (filename.length == 0) {
+        return YES;
+    }
+    if ([rawFilename isEqualToString:filename]) {
+        return NO;
+    }
+    if ([rawFilename rangeOfCharacterFromSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]].location == NSNotFound) {
+        return NO;
+    }
+
+    const int rawChars = MAX(0, rawPrefixChars) + MAX(0, rawSuffixChars);
+    const int initialChars = MAX(0, prefixChars) + MAX(0, suffixChars);
+    return rawChars > initialChars;
 }
 
 + (instancetype)urlActionAtCoord:(VT100GridCoord)coord
@@ -817,8 +850,14 @@ static NSDictionary *iTermURLActionFactoryTideyDictionaryForAction(URLAction *ac
          (![rawPrefix isEqualToString:possibleFilePart1] || ![rawSuffix isEqualToString:possibleFilePart2]));
 
     __weak __typeof(self) weakSelf = self;
-    __block void (^request)(NSString *, NSString *, BOOL);
-    request = ^(NSString *prefix, NSString *suffix, BOOL usingRawContext) {
+    __block void (^request)(NSString *, NSString *, BOOL, NSString *, int, int, BOOL);
+    request = ^(NSString *prefix,
+                NSString *suffix,
+                BOOL usingRawContext,
+                NSString *originalFilename,
+                int originalPrefixChars,
+                int originalSuffixChars,
+                BOOL originalWorkingDirectoryIsLocal) {
         __strong __typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) {
             completion(nil, NO);
@@ -834,20 +873,40 @@ static NSDictionary *iTermURLActionFactoryTideyDictionaryForAction(URLAction *ac
                                                                                       int suffixChars,
                                                                                       BOOL workingDirectoryIsLocal) {
             DLog(@"Semantic history controller returned filename %@ with %@ prefix and %@ suffix chars", filename, @(prefixChars), @(suffixChars));
-            if (!filename && !usingRawContext && shouldRetryWithRawContext) {
+            if (!usingRawContext && shouldRetryWithRawContext) {
                 DLog(@"Retry existing-file lookup with raw located strings");
-                request(rawPrefix, rawSuffix, YES);
+                request(rawPrefix,
+                        rawSuffix,
+                        YES,
+                        filename,
+                        prefixChars,
+                        suffixChars,
+                        workingDirectoryIsLocal);
                 return;
+            }
+            BOOL finalWorkingDirectoryIsLocal = workingDirectoryIsLocal;
+            if (usingRawContext &&
+                originalFilename &&
+                ![iTermURLActionFactory tideyShouldPreferRawExistingFileResult:filename
+                                                                rawPrefixChars:prefixChars
+                                                                rawSuffixChars:suffixChars
+                                                                  overFilename:originalFilename
+                                                                   prefixChars:originalPrefixChars
+                                                                   suffixChars:originalSuffixChars]) {
+                filename = originalFilename;
+                prefixChars = originalPrefixChars;
+                suffixChars = originalSuffixChars;
+                finalWorkingDirectoryIsLocal = originalWorkingDirectoryIsLocal;
             }
             URLAction *action = [strongSelf urlActionForFilename:filename
                                                    locatedPrefix:locatedPrefix
                                                    locatedSuffix:locatedSuffix
                                                      prefixChars:prefixChars
                                                      suffixChars:suffixChars];
-            completion(action, workingDirectoryIsLocal);
+            completion(action, finalWorkingDirectoryIsLocal);
         }];
     };
-    request(possibleFilePart1, possibleFilePart2, NO);
+    request(possibleFilePart1, possibleFilePart2, NO, nil, 0, 0, NO);
 }
 
 - (URLAction *)urlActionForFilename:(NSString *)filename

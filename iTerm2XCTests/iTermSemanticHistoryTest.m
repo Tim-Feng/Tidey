@@ -10,6 +10,7 @@
 
 #import "iTermObject.h"
 #import "iTermSemanticHistoryPrefsController.h"
+#import "iTermURLActionFactory.h"
 #import "iTermVariables.h"
 #import "iTermVariableScope.h"
 #import "NSFileManager+iTerm.h"
@@ -17,6 +18,15 @@
 #import <XCTest/XCTest.h>
 
 @interface iTermSemanticHistoryTest : XCTestCase<iTermObject>
+@end
+
+@interface iTermURLActionFactory (TideyTesting)
++ (BOOL)tideyShouldPreferRawExistingFileResult:(NSString *)rawFilename
+                                rawPrefixChars:(int)rawPrefixChars
+                                rawSuffixChars:(int)rawSuffixChars
+                                  overFilename:(NSString *)filename
+                                   prefixChars:(int)prefixChars
+                                   suffixChars:(int)suffixChars;
 @end
 
 @interface iTermFakeFileManager : NSFileManager
@@ -1073,6 +1083,47 @@
                                                                     trimWhitespace:NO];
     XCTAssert([kRelativeFilename isEqualToString:path]);
     XCTAssert(numCharsFromPrefix == [@"five six " length]);
+}
+
+- (void)testPathOfExistingFileFindsAbsolutePathWithSpacesFromRawContext {
+    int numCharsFromPrefix;
+    int numCharsFromSuffix;
+    NSString *kWorkingDirectory = @"/Users/timfeng";
+    NSString *kFilename = @"/Users/timfeng/Downloads/embryo 74/0-practical-master-board.png";
+    [_semanticHistoryController.fakeFileManager.files addObject:kFilename];
+    [_semanticHistoryController.fakeFileManager.directories addObject:kWorkingDirectory];
+
+    NSString *path = [_semanticHistoryController pathOfExistingFileFoundWithPrefix:@"open /Users/timfeng/Downloads/embryo "
+                                                                            suffix:@"74/0-practical-master-board.png now"
+                                                                  workingDirectory:kWorkingDirectory
+                                                              charsTakenFromPrefix:&numCharsFromPrefix
+                                                              charsTakenFromSuffix:&numCharsFromSuffix
+                                                                    trimWhitespace:NO];
+    XCTAssertEqualObjects(kFilename, path);
+    XCTAssertEqual(numCharsFromPrefix, (int)[@"/Users/timfeng/Downloads/embryo " length]);
+    XCTAssertEqual(numCharsFromSuffix, (int)[@"74/0-practical-master-board.png" length]);
+}
+
+- (void)testURLActionFactoryPrefersLongerRawPathWithSpaces {
+    BOOL preferRaw =
+        [iTermURLActionFactory tideyShouldPreferRawExistingFileResult:@"/Users/timfeng/Downloads/embryo 74/0-practical-master-board.png"
+                                                        rawPrefixChars:32
+                                                        rawSuffixChars:32
+                                                          overFilename:@"/Users/timfeng/Downloads/embryo"
+                                                           prefixChars:31
+                                                           suffixChars:0];
+    XCTAssertTrue(preferRaw);
+}
+
+- (void)testURLActionFactoryKeepsShortPathWhenRawResultIsNotLonger {
+    BOOL preferRaw =
+        [iTermURLActionFactory tideyShouldPreferRawExistingFileResult:@"/Users/timfeng/Downloads/embryo 74"
+                                                        rawPrefixChars:31
+                                                        rawSuffixChars:0
+                                                          overFilename:@"/Users/timfeng/Downloads/embryo"
+                                                           prefixChars:31
+                                                           suffixChars:0];
+    XCTAssertFalse(preferRaw);
 }
 
 // This test simulates what happens if you select a full line (including hard eol) and do Open Selection.
