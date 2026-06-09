@@ -40,6 +40,8 @@ protocol CodexAppServerTransportConnecting {
 }
 
 final class CodexAppServerRuntimeSession {
+    private static let subscriptionRetryBackoff: TimeInterval = 1.0
+
     private let process: CodexAppServerManagedProcess
     private let transport: CodexAppServerConnectionTransport
     private let connection: CodexAppServerConnection
@@ -50,6 +52,7 @@ final class CodexAppServerRuntimeSession {
     private let lock = NSLock()
     private var stopped = false
     private var attachSubscriptionState = AttachSubscriptionState.noLoadedThread
+    private var nextSubscriptionRetryAt: Date?
 
     enum AttachSubscriptionState: Equatable {
         case noLoadedThread
@@ -275,11 +278,16 @@ final class CodexAppServerRuntimeSession {
             lock.unlock()
             return false
         }
+        if let nextSubscriptionRetryAt, nextSubscriptionRetryAt > Date() {
+            lock.unlock()
+            return false
+        }
         guard attachSubscriptionState.shouldRetry else {
             lock.unlock()
             return false
         }
         let previousState = attachSubscriptionState
+        nextSubscriptionRetryAt = nil
         attachSubscriptionState = .resumePending
         lock.unlock()
         logAttachSubscriptionTransition(from: previousState,
@@ -348,6 +356,9 @@ final class CodexAppServerRuntimeSession {
                                                 case .success:
                                                     self?.setAttachSubscriptionState(.subscribed(threadID: threadID), reason: "thread_resume_success")
                                                 case .failure(let error):
+                                                    if self?.handleThreadResumeNoRollout(error, threadID: threadID) == true {
+                                                        return
+                                                    }
                                                     BridgeLogger.server.error("codex app-server subscription thread resume failed thread_id=\(threadID, privacy: .public) error=\(String(describing: error), privacy: .public)")
                                                     self?.setAttachSubscriptionState(.failed("thread_resume_failed"), reason: "thread_resume_failed")
                                                 }
@@ -356,6 +367,22 @@ final class CodexAppServerRuntimeSession {
             BridgeLogger.server.error("codex app-server subscription thread resume request failed thread_id=\(threadID, privacy: .public) error=\(String(describing: error), privacy: .public)")
             setAttachSubscriptionState(.failed("thread_resume_request_failed"), reason: "thread_resume_request_failed")
         }
+    }
+
+    private func handleThreadResumeNoRollout(_ error: CodexAppServerConnectionError, threadID: String) -> Bool {
+        guard case .requestFailed(let rpcError) = error,
+              rpcError.code == -32600,
+              rpcError.message.localizedCaseInsensitiveContains("no rollout found") else {
+            return false
+        }
+
+        activeThreadStore.clearThreadID(ifEqualTo: threadID)
+        lock.lock()
+        nextSubscriptionRetryAt = Date().addingTimeInterval(Self.subscriptionRetryBackoff)
+        lock.unlock()
+        BridgeLogger.server.info("codex app-server subscription waiting for rollout thread_id=\(threadID, privacy: .public) retry_after_seconds=\(Self.subscriptionRetryBackoff, privacy: .public)")
+        setAttachSubscriptionState(.noLoadedThread, reason: "thread_resume_no_rollout")
+        return true
     }
 }
 
@@ -531,6 +558,14 @@ final class CodexAppServerActiveThreadStore: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return threadID
+    }
+
+    func clearThreadID(ifEqualTo expectedThreadID: String) {
+        lock.lock()
+        if threadID == expectedThreadID {
+            threadID = nil
+        }
+        lock.unlock()
     }
 }
 

@@ -229,6 +229,85 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertEqual(transport.sentLines().count, 5)
     }
 
+    func testAttachedRuntimeTreatsNoRolloutResumeFailureAsThreadNotReady() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in })
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+
+        let initialListLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        XCTAssertEqual(initialListLoaded["method"]?.stringValue, "thread/loaded/list")
+        let initialListLoadedID = try XCTUnwrap(initialListLoaded["id"])
+        transport.emitLine(try Self.responseText(id: initialListLoadedID, result: .object([
+            "threads": .array([
+                .object([
+                    "id": .string("thread-without-rollout"),
+                    "preview": .string("Visible before rollout"),
+                    "updatedAt": .string("2026-06-07T00:00:00.000Z"),
+                ]),
+            ]),
+        ])))
+
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
+        let firstResume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
+        XCTAssertEqual(firstResume["method"]?.stringValue, "thread/resume")
+        XCTAssertEqual(firstResume["params"]?.objectValue?["threadId"]?.stringValue, "thread-without-rollout")
+        let firstResumeID = try XCTUnwrap(firstResume["id"])
+        transport.emitLine(try Self.errorResponseText(id: firstResumeID,
+                                                      code: -32600,
+                                                      message: "no rollout found for thread id thread-without-rollout"))
+
+        XCTAssertFalse(session.canSubmitMessage())
+        session.ensureThreadSubscription()
+        XCTAssertEqual(transport.sentLines().count, 4)
+
+        Thread.sleep(forTimeInterval: 1.1)
+        session.ensureThreadSubscription()
+
+        XCTAssertTrue(Self.waitForSentLineCount(5, transport: transport))
+        let retryListLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(4).first))
+        XCTAssertEqual(retryListLoaded["method"]?.stringValue, "thread/loaded/list")
+        let retryListLoadedID = try XCTUnwrap(retryListLoaded["id"])
+        transport.emitLine(try Self.responseText(id: retryListLoadedID, result: .object([
+            "threads": .array([
+                .object([
+                    "id": .string("thread-without-rollout"),
+                    "preview": .string("Visible after rollout"),
+                    "updatedAt": .string("2026-06-07T00:00:01.000Z"),
+                ]),
+            ]),
+        ])))
+
+        XCTAssertTrue(Self.waitForSentLineCount(6, transport: transport))
+        let retryResume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(5).first))
+        XCTAssertEqual(retryResume["method"]?.stringValue, "thread/resume")
+        XCTAssertEqual(retryResume["params"]?.objectValue?["threadId"]?.stringValue, "thread-without-rollout")
+        let retryResumeID = try XCTUnwrap(retryResume["id"])
+        transport.emitLine(try Self.responseText(id: retryResumeID, result: .object([
+            "thread": .object([
+                "id": .string("thread-without-rollout"),
+            ]),
+            "approvalsReviewer": .string("user"),
+            "approvalPolicy": .string("on-request"),
+        ])))
+
+        session.ensureThreadSubscription()
+        XCTAssertEqual(transport.sentLines().count, 6)
+    }
+
     func testFactoryAttachesExplicitCurrentLoadedThread() throws {
         let runner = FakeCodexAppServerProcessRunner()
         let connector = FakeCodexAppServerTransportConnector()
@@ -607,7 +686,7 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         let firstTurnStart = try Self.object(from: try XCTUnwrap(transport.sentLines().last))
         let firstTurnStartID = try XCTUnwrap(firstTurnStart["id"])
         transport.emitLine(try Self.errorResponseText(id: firstTurnStartID,
-                                                      code: "turn_failed",
+                                                      code: -32000,
                                                       message: "turn start failed"))
 
         try session.submitMessage(text: "retry after failure")
@@ -854,11 +933,11 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         ])
     }
 
-    private static func errorResponseText(id: JSONValue, code: String, message: String) throws -> String {
+    private static func errorResponseText(id: JSONValue, code: Int, message: String) throws -> String {
         let idData = try JSONEncoder().encode(id)
         let idText = String(decoding: idData, as: UTF8.self)
         let errorData = try JSONEncoder().encode(JSONValue.object([
-            "code": .string(code),
+            "code": .number(Double(code)),
             "message": .string(message),
         ]))
         let errorText = String(decoding: errorData, as: UTF8.self)
