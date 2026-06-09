@@ -368,6 +368,8 @@ final class AgentSessionRegistryMonitor {
     private var activeRecords = [String: AgentSessionRegistryRecord]()
     private var resolvedPanelBindings = [String: ResolvedPanelBinding]()
     private var livePanelsByWorkspace = [String: [AgentPanelProcessSnapshot]]()
+    private var lastLoggedAppServerSessionIDs = Set<String>()
+    private var lastLoggedPaneIdentityCorrectionKeyBySessionID = [String: String]()
     private var scanScheduled = false
 
     init(paths: BridgePaths = BridgePaths(),
@@ -563,14 +565,18 @@ final class AgentSessionRegistryMonitor {
         }
         let activeSessionIDs = Set(sourceRecords.map(\.sessionID))
         resolvedPanelBindings = resolvedPanelBindings.filter { activeSessionIDs.contains($0.key) }
+        lastLoggedPaneIdentityCorrectionKeyBySessionID = lastLoggedPaneIdentityCorrectionKeyBySessionID
+            .filter { activeSessionIDs.contains($0.key) }
         let effectiveRecords = sourceRecords
             .map(recordWithPaneIdentityIfAvailable(_:))
             .map(effectiveRecord(for:))
         let appServerRecords = effectiveRecords.filter {
             $0.vendor == "codex" && $0.runtime == "codex_app_server"
         }
-        if appServerRecords.isEmpty == false {
+        let appServerSessionIDs = Set(appServerRecords.map(\.sessionID))
+        if appServerSessionIDs != lastLoggedAppServerSessionIDs {
             BridgeLogger.server.info("codex app-server diagnostic scan registry app_server_count=\(appServerRecords.count, privacy: .public) session_ids=\(appServerRecords.map(\.sessionID).joined(separator: ","), privacy: .public)")
+            lastLoggedAppServerSessionIDs = appServerSessionIDs
         }
         syncRecords(effectiveRecords)
         runtimeSyncer?.sync(records: effectiveRecords)
@@ -592,7 +598,16 @@ final class AgentSessionRegistryMonitor {
             return record
         }
 
-        BridgeLogger.server.info("agent registry corrected from tmux pane identity session_id=\(record.sessionID, privacy: .public) vendor=\(record.vendor, privacy: .public) pane_id=\(paneID, privacy: .public) old_workspace_id=\(record.workspaceID, privacy: .public) old_panel_id=\(record.panelID ?? "-", privacy: .public) workspace_id=\(identity.workspaceID, privacy: .public) panel_id=\(identity.panelID, privacy: .public)")
+        let correctionKey = [
+            record.workspaceID,
+            record.panelID ?? "-",
+            identity.workspaceID,
+            identity.panelID,
+        ].joined(separator: "|")
+        if lastLoggedPaneIdentityCorrectionKeyBySessionID[record.sessionID] != correctionKey {
+            BridgeLogger.server.info("agent registry corrected from tmux pane identity session_id=\(record.sessionID, privacy: .public) vendor=\(record.vendor, privacy: .public) pane_id=\(paneID, privacy: .public) old_workspace_id=\(record.workspaceID, privacy: .public) old_panel_id=\(record.panelID ?? "-", privacy: .public) workspace_id=\(identity.workspaceID, privacy: .public) panel_id=\(identity.panelID, privacy: .public)")
+            lastLoggedPaneIdentityCorrectionKeyBySessionID[record.sessionID] = correctionKey
+        }
         return AgentSessionRegistryRecord(version: record.version,
                                           vendor: record.vendor,
                                           workspaceID: identity.workspaceID,

@@ -195,11 +195,9 @@ final class CodexAppServerRuntimeSession {
     func ensureThreadSubscription() {
         let initializationStatus = initialization.diagnosticStatus()
         guard case .ready = initializationStatus else {
-            BridgeLogger.server.info("codex app-server subscription ensure skipped init_status=\(initializationStatus.logValue, privacy: .public) state=\(self.attachSubscriptionStateSnapshot().logValue, privacy: .public)")
             return
         }
         guard beginSubscriptionAttempt() else {
-            BridgeLogger.server.info("codex app-server subscription ensure skipped init_status=ready state=\(self.attachSubscriptionStateSnapshot().logValue, privacy: .public)")
             return
         }
         sendLoadedThreadRequestForSubscription()
@@ -271,29 +269,40 @@ final class CodexAppServerRuntimeSession {
         initialization.notify(callback)
     }
 
-    private func attachSubscriptionStateSnapshot() -> AttachSubscriptionState {
-        lock.lock()
-        defer { lock.unlock() }
-        return attachSubscriptionState
-    }
-
     private func beginSubscriptionAttempt() -> Bool {
         lock.lock()
-        defer { lock.unlock() }
         guard stopped == false else {
+            lock.unlock()
             return false
         }
         guard attachSubscriptionState.shouldRetry else {
+            lock.unlock()
             return false
         }
+        let previousState = attachSubscriptionState
         attachSubscriptionState = .resumePending
+        lock.unlock()
+        logAttachSubscriptionTransition(from: previousState,
+                                        to: .resumePending,
+                                        reason: "ensure_retry")
         return true
     }
 
-    private func setAttachSubscriptionState(_ state: AttachSubscriptionState) {
+    private func setAttachSubscriptionState(_ state: AttachSubscriptionState, reason: String) {
         lock.lock()
+        let previousState = attachSubscriptionState
         attachSubscriptionState = state
         lock.unlock()
+        logAttachSubscriptionTransition(from: previousState, to: state, reason: reason)
+    }
+
+    private func logAttachSubscriptionTransition(from previousState: AttachSubscriptionState,
+                                                 to state: AttachSubscriptionState,
+                                                 reason: String) {
+        guard previousState != state else {
+            return
+        }
+        BridgeLogger.server.info("codex app-server subscription state changed session_id=\(self.runtime.contextSessionID, privacy: .public) from=\(previousState.logValue, privacy: .public) to=\(state.logValue, privacy: .public) reason=\(reason, privacy: .public)")
     }
 
     private func sendLoadedThreadRequestForSubscription() {
@@ -306,19 +315,19 @@ final class CodexAppServerRuntimeSession {
                 case .success(let value):
                     guard let threadID = codexAppServerLoadedThreadID(from: value) else {
                         BridgeLogger.server.info("codex app-server subscription no loaded thread shape=\(codexAppServerLoadedThreadShapeDescription(from: value), privacy: .public)")
-                        self.setAttachSubscriptionState(.noLoadedThread)
+                        self.setAttachSubscriptionState(.noLoadedThread, reason: "loaded_thread_missing")
                         return
                     }
                     self.activeThreadStore.setThreadID(threadID)
                     self.sendThreadResumeForSubscription(threadID: threadID)
                 case .failure(let error):
                     BridgeLogger.server.error("codex app-server subscription loaded thread list failed error=\(String(describing: error), privacy: .public)")
-                    self.setAttachSubscriptionState(.failed("loaded_thread_list_failed"))
+                    self.setAttachSubscriptionState(.failed("loaded_thread_list_failed"), reason: "loaded_thread_list_failed")
                 }
             }
         } catch {
             BridgeLogger.server.error("codex app-server subscription loaded thread list request failed error=\(String(describing: error), privacy: .public)")
-            setAttachSubscriptionState(.failed("loaded_thread_list_request_failed"))
+            setAttachSubscriptionState(.failed("loaded_thread_list_request_failed"), reason: "loaded_thread_list_request_failed")
         }
     }
 
@@ -337,15 +346,15 @@ final class CodexAppServerRuntimeSession {
                                                                                                       requestHasApprovalsReviewer: false)
                                                 switch response {
                                                 case .success:
-                                                    self?.setAttachSubscriptionState(.subscribed(threadID: threadID))
+                                                    self?.setAttachSubscriptionState(.subscribed(threadID: threadID), reason: "thread_resume_success")
                                                 case .failure(let error):
                                                     BridgeLogger.server.error("codex app-server subscription thread resume failed thread_id=\(threadID, privacy: .public) error=\(String(describing: error), privacy: .public)")
-                                                    self?.setAttachSubscriptionState(.failed("thread_resume_failed"))
+                                                    self?.setAttachSubscriptionState(.failed("thread_resume_failed"), reason: "thread_resume_failed")
                                                 }
                                              })
         } catch {
             BridgeLogger.server.error("codex app-server subscription thread resume request failed thread_id=\(threadID, privacy: .public) error=\(String(describing: error), privacy: .public)")
-            setAttachSubscriptionState(.failed("thread_resume_request_failed"))
+            setAttachSubscriptionState(.failed("thread_resume_request_failed"), reason: "thread_resume_request_failed")
         }
     }
 }
