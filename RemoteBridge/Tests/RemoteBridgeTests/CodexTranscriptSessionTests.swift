@@ -119,16 +119,62 @@ final class CodexTranscriptSessionTests: XCTestCase {
         XCTAssertFalse(result.events.contains { ($0.text ?? "").contains("<current_date>2026-05-03</current_date>") })
     }
 
-    private func makeRecord(transcriptPath: String) -> AgentSessionRegistryRecord {
+    func testAppServerResumeThreadMetadataPublishesUnderInstanceSession() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let transcriptURL = directory.appendingPathComponent("rollout-thread-session.jsonl", isDirectory: false)
+        let lines = [
+            makeCodexSessionMetaLine(sessionID: "thread-session", cliVersion: "999.0.0"),
+        ].joined(separator: "\n") + "\n"
+        try lines.write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path,
+                                                                sessionID: "instance-session",
+                                                                threadID: "thread-session",
+                                                                resumeThreadID: "thread-session"),
+                                             fileManager: .default,
+                                             hub: hub)
+        session.start()
+        defer { session.stop() }
+
+        XCTAssertTrue(waitUntil {
+            let result = hub.fetch(workspaceID: "workspace",
+                                   sessionID: "instance-session",
+                                   limit: 10,
+                                   beforeSeq: nil,
+                                   afterSeq: nil)
+            return result.events.contains { $0.type == .status }
+        })
+
+        let result = hub.fetch(workspaceID: "workspace",
+                               sessionID: "instance-session",
+                               limit: 10,
+                               beforeSeq: nil,
+                               afterSeq: nil)
+        let status = try XCTUnwrap(result.events.first { $0.type == .status })
+        XCTAssertEqual(status.sessionID, "instance-session")
+        XCTAssertEqual(status.eventID, "status:instance-session:unsupported-version:999.0.0")
+    }
+
+    private func makeRecord(transcriptPath: String,
+                            sessionID: String = "session",
+                            threadID: String? = nil,
+                            resumeThreadID: String? = nil) -> AgentSessionRegistryRecord {
         AgentSessionRegistryRecord(version: 1,
                                    vendor: "codex",
                                    workspaceID: "workspace",
-                                   sessionID: "session",
+                                   sessionID: sessionID,
                                    panelID: "panel",
                                    pid: Int32(ProcessInfo.processInfo.processIdentifier),
                                    cwd: "/tmp",
                                    createdAt: "2026-05-15T00:00:00Z",
-                                   transcriptPath: transcriptPath)
+                                   transcriptPath: transcriptPath,
+                                   threadID: threadID,
+                                   resumeThreadID: resumeThreadID)
     }
 
     private func makeCodexMessageLine(role: String, content: String) -> String {
@@ -144,6 +190,19 @@ final class CodexTranscriptSessionTests: XCTestCase {
                         "text": content,
                     ],
                 ],
+            ],
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        return String(data: data, encoding: .utf8)!
+    }
+
+    private func makeCodexSessionMetaLine(sessionID: String, cliVersion: String) -> String {
+        let object: [String: Any] = [
+            "type": "session_meta",
+            "timestamp": "2026-05-15T00:00:00Z",
+            "payload": [
+                "id": sessionID,
+                "cli_version": cliVersion,
             ],
         ]
         let data = try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])

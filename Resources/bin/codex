@@ -43,6 +43,8 @@ write_registry_file() {
     local app_server_socket="${10:-}"
     local app_server_pid="${11:-}"
     local remote_tui_pid="${12:-}"
+    local thread_id="${13:-}"
+    local resume_thread_id="${14:-}"
     local tmp_path=""
     local tmux_pane_id=""
     local tmux_socket_path=""
@@ -69,6 +71,12 @@ write_registry_file() {
     fi
     if [[ -n "$remote_tui_pid" ]]; then
         runtime_fields+=",\"remote_tui_pid\":$remote_tui_pid"
+    fi
+    if [[ -n "$thread_id" ]]; then
+        runtime_fields+=",\"thread_id\":\"$(json_escape "$thread_id")\""
+    fi
+    if [[ -n "$resume_thread_id" ]]; then
+        runtime_fields+=",\"resume_thread_id\":\"$(json_escape "$resume_thread_id")\""
     fi
 
     mkdir -p "$REGISTRY_ROOT"
@@ -586,68 +594,6 @@ is_app_server_runtime_command() {
     app_server_resume_session_id "$@" >/dev/null
 }
 
-app_server_session_has_live_record() {
-    local session_id="$1"
-
-    python3 - "$REGISTRY_ROOT" "$session_id" <<'PY'
-from pathlib import Path
-import json
-import os
-import stat
-import sys
-
-root = Path(sys.argv[1])
-session_id = sys.argv[2]
-
-def int_value(value):
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str) and value.isdigit():
-        return int(value)
-    return None
-
-def pid_alive(pid):
-    if not pid or pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-def socket_alive(path):
-    if not isinstance(path, str) or not path:
-        return False
-    try:
-        mode = os.stat(path).st_mode
-    except OSError:
-        return False
-    return stat.S_ISSOCK(mode)
-
-if not root.exists():
-    raise SystemExit(1)
-
-for path in root.glob("codex-*.json"):
-    try:
-        record = json.loads(path.read_text())
-    except Exception:
-        continue
-    if record.get("session_id") != session_id:
-        continue
-    if record.get("runtime") not in {"codex_app_server", "codex_app_server_starting"}:
-        continue
-    if not pid_alive(int_value(record.get("app_server_pid"))):
-        continue
-    if not socket_alive(record.get("app_server_socket")):
-        continue
-    raise SystemExit(0)
-
-raise SystemExit(1)
-PY
-}
-
 codex_rollout_path_for_session_id() {
     local real_codex_home="$1"
     local session_id="$2"
@@ -778,7 +724,8 @@ run_codex_app_server_runtime() {
     local session_id="$7"
     local created_at="$8"
     local rollout_path="$9"
-    shift 9
+    local thread_id="${10:-}"
+    shift 10
 
     local socket_dir=""
     local socket_path=""
@@ -830,7 +777,7 @@ run_codex_app_server_runtime() {
         cleanup_codex_app_server_runtime 1
     fi
 
-    write_registry_file "$registry_file" "$TIDEY_WORKSPACE_ID" "$session_id" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$created_at" "$rollout_path" "codex_app_server_starting" "$socket_path" "$app_server_pid" ""
+    write_registry_file "$registry_file" "$TIDEY_WORKSPACE_ID" "$session_id" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$created_at" "$rollout_path" "codex_app_server_starting" "$socket_path" "$app_server_pid" "" "$thread_id" "$thread_id"
 
     if [[ -n "${TIDEY_SOCKET_PATH:-}" && -n "${TIDEY_WORKSPACE_ID:-}" && -x "$HOOK_DIR/tidey" ]]; then
         "$HOOK_DIR/tidey" codex-hook session-start || true
@@ -839,7 +786,7 @@ run_codex_app_server_runtime() {
     set +e
     env CODEX_HOME="$real_codex_home" "$real_codex" --remote "unix://$socket_path" "$@" &
     remote_tui_pid="$!"
-    write_registry_file "$registry_file" "$TIDEY_WORKSPACE_ID" "$session_id" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$created_at" "$rollout_path" "codex_app_server" "$socket_path" "$app_server_pid" "$remote_tui_pid"
+    write_registry_file "$registry_file" "$TIDEY_WORKSPACE_ID" "$session_id" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$created_at" "$rollout_path" "codex_app_server" "$socket_path" "$app_server_pid" "$remote_tui_pid" "$thread_id" "$thread_id"
     wait "$remote_tui_pid"
     remote_status=$?
     set -e
@@ -867,6 +814,7 @@ main() {
     local created_at=""
     local session_id=""
     local app_server_runtime_session_id=""
+    local app_server_runtime_thread_id=""
     local app_server_runtime_rollout_path=""
     local use_app_server_runtime=0
     local registry_file=""
@@ -894,18 +842,14 @@ main() {
     if should_use_codex_app_server_runtime "$@"; then
         use_app_server_runtime=1
         if [[ -n "$app_server_runtime_session_id" ]]; then
-            session_id="$app_server_runtime_session_id"
-            app_server_runtime_rollout_path="$(codex_rollout_path_for_session_id "$real_codex_home" "$session_id" || true)"
+            app_server_runtime_thread_id="$app_server_runtime_session_id"
+            app_server_runtime_rollout_path="$(codex_rollout_path_for_session_id "$real_codex_home" "$app_server_runtime_thread_id" || true)"
         fi
     fi
     registry_file="$REGISTRY_ROOT/codex-$session_id.json"
     if [[ "$use_app_server_runtime" == "1" ]]; then
-        if [[ -n "$app_server_runtime_session_id" ]] && app_server_session_has_live_record "$session_id"; then
-            echo "Error: Codex app-server session is already active: codex resume $session_id" >&2
-            exit 1
-        fi
         cleanup_stale_app_server_registry_records
-        run_codex_app_server_runtime "$real_codex" "$real_codex_home" "$profile_flag" "$profile_name" "$sqlite_home" "$registry_file" "$session_id" "$created_at" "$app_server_runtime_rollout_path" "$@"
+        run_codex_app_server_runtime "$real_codex" "$real_codex_home" "$profile_flag" "$profile_name" "$sqlite_home" "$registry_file" "$session_id" "$created_at" "$app_server_runtime_rollout_path" "$app_server_runtime_thread_id" "$@"
         exit $?
     fi
 

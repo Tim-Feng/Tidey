@@ -223,12 +223,25 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         for case let url as URL in enumerator {
             guard url.lastPathComponent.hasPrefix("rollout-"),
                   url.pathExtension == "jsonl",
-                  url.lastPathComponent.contains(record.sessionID) else {
+                  transcriptSessionIDs.contains(where: { url.lastPathComponent.contains($0) }) else {
                 continue
             }
             return url
         }
         return nil
+    }
+
+    private var transcriptSessionIDs: [String] {
+        var values = [String]()
+        for value in [record.sessionID, record.threadID, record.resumeThreadID] {
+            guard let value,
+                  !value.isEmpty,
+                  !values.contains(value) else {
+                continue
+            }
+            values.append(value)
+        }
+        return values
     }
 
     private func resolveTranscriptURLFromProcessTree() -> URL? {
@@ -282,7 +295,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
 
     private func consumeSessionMeta(payload: [String: Any], timestamp: String, lineOffset: Int) {
         guard let sessionID = payload["id"] as? String,
-              sessionID == record.sessionID else {
+              transcriptSessionIDs.contains(sessionID) else {
             return
         }
         if let cliVersion = payload["cli_version"] as? String,

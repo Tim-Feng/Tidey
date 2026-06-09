@@ -265,7 +265,7 @@ run_app_server_registry_metadata_test() {
         source "$CODEX_UNDER_TEST"
 
         REGISTRY_ROOT="$TMPDIR_CASE"
-        write_registry_file "$REGISTRY" "workspace-1" "session-1" "panel-1" "12345" "/tmp/tidey" "2026-06-07T00:00:00Z" "" "codex_app_server" "/tmp/tidey-codex/app.sock" "23456" "34567"
+        write_registry_file "$REGISTRY" "workspace-1" "session-1" "panel-1" "12345" "/tmp/tidey" "2026-06-07T00:00:00Z" "" "codex_app_server" "/tmp/tidey-codex/app.sock" "23456" "34567" "thread-1" "resume-thread-1"
     '
 
     python3 - "$registry" <<'PY'
@@ -278,6 +278,8 @@ assert root["runtime"] == "codex_app_server"
 assert root["app_server_socket"] == "/tmp/tidey-codex/app.sock"
 assert root["app_server_pid"] == 23456
 assert root["remote_tui_pid"] == 34567
+assert root["thread_id"] == "thread-1"
+assert root["resume_thread_id"] == "resume-thread-1"
 PY
 
     rm -rf "$tmpdir"
@@ -402,7 +404,7 @@ run_app_server_runtime_selection_test() {
 
 run_app_server_runtime_selection_test
 
-run_app_server_runtime_double_open_rejects_resume_test() {
+run_app_server_runtime_resume_allows_second_instance_without_clobbering_live_record_test() {
     local tmpdir
     local fake_home
     local fake_bin
@@ -410,18 +412,20 @@ run_app_server_runtime_double_open_rejects_resume_test() {
     local socket
     local socket_pid
     local codex_log
+    local app_server_child_pid_file
+    local remote_tui_registry_ok_file
     local resume_id="019eac34-764c-7893-9599-5b6000037cea"
     local registry
-    local stderr_log
 
-    tmpdir="$(mktemp -d "/private/tmp/tidey-codex-double-open.XXXXXX")"
+    tmpdir="$(mktemp -d "/private/tmp/tidey-codex-double-instance.XXXXXX")"
     fake_home="$tmpdir/home"
     fake_bin="$tmpdir/bin"
     registry_root="$fake_home/Library/Application Support/Tidey Remote Bridge/agent-sessions/codex"
     socket="$tmpdir/live.sock"
     codex_log="$tmpdir/codex.log"
-    registry="$registry_root/codex-$resume_id.json"
-    stderr_log="$tmpdir/stderr.log"
+    app_server_child_pid_file="$tmpdir/app-server-child.pid"
+    remote_tui_registry_ok_file="$tmpdir/remote-tui-registry.ok"
+    registry="$registry_root/codex-existing-instance.json"
     mkdir -p "$fake_bin" "$registry_root"
 
     cat > "$fake_bin/codex" <<'FAKE_CODEX'
@@ -432,7 +436,73 @@ if [[ "${1:-}" == "--help" ]]; then
     printf '%s\n' "Usage: codex --profile <CONFIG_PROFILE_V2>"
     exit 0
 fi
-exit 0
+if [[ " $* " == *" app-server "* ]]; then
+    listen=""
+    while [[ $# -gt 0 ]]; do
+        if [[ "$1" == "--listen" && $# -ge 2 ]]; then
+            listen="$2"
+            shift 2
+            continue
+        fi
+        shift
+    done
+    socket_path="${listen#unix://}"
+    python3 -c 'import os, socket, sys, time; path = sys.argv[1]; pid_path = sys.argv[2]; open(pid_path, "w").write(str(os.getpid())); sock = socket.socket(socket.AF_UNIX); sock.bind(path); sock.listen(1); time.sleep(20)' "$socket_path" "$FAKE_APP_SERVER_CHILD_PID_FILE"
+    exit 0
+fi
+if [[ "$*" == *"--remote"* ]]; then
+    python3 - "$FAKE_REGISTRY_ROOT" "$FAKE_RESUME_ID" "$$" "$FAKE_EXISTING_REGISTRY" "$FAKE_EXISTING_APP_SERVER_PID" "$FAKE_REMOTE_TUI_REGISTRY_OK_FILE" <<'PY'
+from pathlib import Path
+import json
+import sys
+import time
+
+root = Path(sys.argv[1])
+resume_id = sys.argv[2]
+remote_tui_pid = int(sys.argv[3])
+existing_path = Path(sys.argv[4])
+existing_app_server_pid = int(sys.argv[5])
+ok_path = Path(sys.argv[6])
+
+deadline = time.time() + 2
+while time.time() < deadline:
+    try:
+        existing = json.loads(existing_path.read_text())
+    except Exception:
+        time.sleep(0.02)
+        continue
+    records = []
+    for path in root.glob("codex-*.json"):
+        try:
+            record = json.loads(path.read_text())
+        except Exception:
+            continue
+        record["_path"] = str(path)
+        records.append(record)
+    new_records = [
+        record for record in records
+        if record.get("session_id") != existing.get("session_id")
+        and record.get("thread_id") == resume_id
+        and record.get("resume_thread_id") == resume_id
+        and record.get("runtime") == "codex_app_server"
+        and record.get("remote_tui_pid") == remote_tui_pid
+    ]
+    if (
+        existing.get("runtime") == "codex_app_server"
+        and existing.get("app_server_pid") == existing_app_server_pid
+        and existing.get("thread_id") == resume_id
+        and existing.get("resume_thread_id") == resume_id
+        and new_records
+        and all(not record["_path"].endswith(f"codex-{resume_id}.json") for record in new_records)
+    ):
+        ok_path.write_text("ok\n")
+        break
+    time.sleep(0.02)
+PY
+    sleep 0.2
+    exit 0
+fi
+sleep 0.2
 FAKE_CODEX
     chmod +x "$fake_bin/codex"
 
@@ -444,10 +514,9 @@ FAKE_CODEX
     done
 
     cat > "$registry" <<JSON
-{"version":1,"vendor":"codex","workspace_id":"workspace-live","session_id":"$resume_id","panel_id":"panel-live","pid":99999994,"cwd":"/tmp","created_at":"2026-06-09T00:00:00Z","rollout_path":"","transcript_path":"","runtime":"codex_app_server","app_server_socket":"$socket","app_server_pid":$socket_pid}
+{"version":1,"vendor":"codex","workspace_id":"workspace-live","session_id":"existing-instance","panel_id":"panel-live","pid":99999994,"cwd":"/tmp","created_at":"2026-06-09T00:00:00Z","rollout_path":"","transcript_path":"","runtime":"codex_app_server","app_server_socket":"$socket","app_server_pid":$socket_pid,"thread_id":"$resume_id","resume_thread_id":"$resume_id"}
 JSON
 
-    set +e
     HOME="$fake_home" \
         PATH="$fake_bin:/usr/bin:/bin" \
         TIDEY_CODEX_APP_SERVER_ENABLE=1 \
@@ -455,22 +524,21 @@ JSON
         TIDEY_WORKSPACE_ID="workspace-1" \
         TIDEY_PANEL_ID="panel-1" \
         FAKE_CODEX_LOG="$codex_log" \
+        FAKE_APP_SERVER_CHILD_PID_FILE="$app_server_child_pid_file" \
+        FAKE_REMOTE_TUI_REGISTRY_OK_FILE="$remote_tui_registry_ok_file" \
+        FAKE_REGISTRY_ROOT="$registry_root" \
+        FAKE_RESUME_ID="$resume_id" \
+        FAKE_EXISTING_REGISTRY="$registry" \
+        FAKE_EXISTING_APP_SERVER_PID="$socket_pid" \
         TMPDIR="$tmpdir" \
-        "$CODEX_UNDER_TEST" resume "$resume_id" 2>"$stderr_log"
-    status=$?
-    set -e
+        "$CODEX_UNDER_TEST" resume "$resume_id"
 
-    [[ "$status" -ne 0 ]] || fail "double-open resume was allowed"
-    grep -q "already active" "$stderr_log" || fail "double-open resume error was not reported"
-    if grep -q "app-server" "$codex_log"; then
-        fail "app-server was launched for double-open resume"
-    fi
-    if grep -q -- "--remote" "$codex_log"; then
-        fail "remote TUI was launched for double-open resume"
-    fi
     [[ -f "$registry" ]] || fail "live registry was removed by double-open check"
     grep -q "\"runtime\":\"codex_app_server\"" "$registry" || fail "live registry was clobbered by double-open check"
     grep -q "\"app_server_pid\":$socket_pid" "$registry" || fail "live registry app-server pid was clobbered by double-open check"
+    [[ -f "$remote_tui_registry_ok_file" ]] || fail "second resume instance registry was not written without clobbering live record"
+    grep -q "app-server" "$codex_log" || fail "app-server was not launched for second resume instance"
+    grep -q -- "--remote .* resume $resume_id" "$codex_log" || fail "remote TUI was not launched for second resume instance"
 
     kill "$socket_pid" 2>/dev/null || true
     wait "$socket_pid" 2>/dev/null || true
@@ -478,7 +546,7 @@ JSON
     rm -rf "$tmpdir"
 }
 
-run_app_server_runtime_double_open_rejects_resume_test
+run_app_server_runtime_resume_allows_second_instance_without_clobbering_live_record_test
 
 run_app_server_runtime_plain_path_without_enable_test() {
     local tmpdir
@@ -726,9 +794,33 @@ if [[ " $* " == *" app-server "* ]]; then
 fi
 if [[ "$*" == *"--remote"* ]]; then
     for _ in $(seq 1 50); do
-        if grep -Fq "\"session_id\":\"$FAKE_RESUME_ID\"" "$FAKE_REGISTRY_ROOT"/codex-"$FAKE_RESUME_ID".json 2>/dev/null \
-            && grep -Fq "\"remote_tui_pid\":$$" "$FAKE_REGISTRY_ROOT"/codex-"$FAKE_RESUME_ID".json 2>/dev/null \
-            && grep -Fq "\"rollout_path\":\"$FAKE_RESUME_ROLLOUT_PATH\"" "$FAKE_REGISTRY_ROOT"/codex-"$FAKE_RESUME_ID".json 2>/dev/null; then
+        if python3 - "$FAKE_REGISTRY_ROOT" "$FAKE_RESUME_ID" "$FAKE_RESUME_ROLLOUT_PATH" "$$" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+root = Path(sys.argv[1])
+resume_id = sys.argv[2]
+rollout_path = sys.argv[3]
+remote_tui_pid = int(sys.argv[4])
+
+for path in root.glob("codex-*.json"):
+    try:
+        record = json.loads(path.read_text())
+    except Exception:
+        continue
+    if (
+        record.get("session_id") != resume_id
+        and record.get("thread_id") == resume_id
+        and record.get("resume_thread_id") == resume_id
+        and record.get("remote_tui_pid") == remote_tui_pid
+        and record.get("rollout_path") == rollout_path
+        and not path.name.endswith(f"{resume_id}.json")
+    ):
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+        then
             printf 'ok\n' > "$FAKE_REMOTE_TUI_REGISTRY_OK_FILE"
             break
         fi

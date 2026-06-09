@@ -66,7 +66,9 @@ final class AgentSessionRegistryRecordTests: XCTestCase {
           "runtime": "codex_app_server",
           "app_server_socket": "/tmp/tidey-codex/session/app.sock",
           "app_server_pid": 456,
-          "remote_tui_pid": 789
+          "remote_tui_pid": 789,
+          "thread_id": "thread-1",
+          "resume_thread_id": "thread-1"
         }
         """.utf8)
 
@@ -75,6 +77,8 @@ final class AgentSessionRegistryRecordTests: XCTestCase {
         XCTAssertEqual(record.appServerSocket, "/tmp/tidey-codex/session/app.sock")
         XCTAssertEqual(record.appServerPID, 456)
         XCTAssertEqual(record.remoteTUIPID, 789)
+        XCTAssertEqual(record.threadID, "thread-1")
+        XCTAssertEqual(record.resumeThreadID, "thread-1")
 
         let encoded = try JSONEncoder().encode(record)
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
@@ -82,5 +86,7 @@ final class AgentSessionRegistryRecordTests: XCTestCase {
         XCTAssertEqual(object["app_server_socket"] as? String, "/tmp/tidey-codex/session/app.sock")
         XCTAssertEqual(object["app_server_pid"] as? Int, 456)
         XCTAssertEqual(object["remote_tui_pid"] as? Int, 789)
+        XCTAssertEqual(object["thread_id"] as? String, "thread-1")
+        XCTAssertEqual(object["resume_thread_id"] as? String, "thread-1")
     }
 }

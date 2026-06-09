@@ -86,6 +86,63 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         XCTAssertEqual(secondRuntime.submittedMessages, ["hello from remote"])
     }
 
+    func testSyncTreatsSameThreadRecordsAsSeparateRuntimeInstances() {
+        let hub = AgentEventHub()
+        var attachedRecords = [AgentSessionRegistryRecord]()
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { record, _, _, _, _, _ in
+            attachedRecords.append(record)
+            return FakeRuntimeSession()
+        })
+
+        syncer.sync(records: [
+            Self.record(sessionID: "instance-a",
+                        runtime: "codex_app_server",
+                        socketPath: "/tmp/instance-a.sock",
+                        panelID: "panel-a",
+                        threadID: "thread-shared"),
+            Self.record(sessionID: "instance-b",
+                        runtime: "codex_app_server",
+                        socketPath: "/tmp/instance-b.sock",
+                        panelID: "panel-b",
+                        threadID: "thread-shared"),
+        ])
+
+        XCTAssertEqual(attachedRecords.map(\.sessionID), ["instance-a", "instance-b"])
+        XCTAssertEqual(attachedRecords.map(\.threadID), ["thread-shared", "thread-shared"])
+    }
+
+    func testSubmitApprovalWithSameThreadRecordsRoutesToOwningRuntimeInstance() throws {
+        let hub = AgentEventHub()
+        let firstRuntime = FakeRuntimeSession()
+        let secondRuntime = FakeRuntimeSession()
+        let resolved = Self.event(sessionID: "instance-b", promptID: "prompt-shared")
+        secondRuntime.resolvedEventsByPromptID["prompt-shared"] = resolved
+        var runtimeIndex = 0
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { _, _, _, _, _, _ in
+            defer { runtimeIndex += 1 }
+            return runtimeIndex == 0 ? firstRuntime : secondRuntime
+        })
+
+        syncer.sync(records: [
+            Self.record(sessionID: "instance-a",
+                        runtime: "codex_app_server",
+                        socketPath: "/tmp/instance-a.sock",
+                        panelID: "panel-a",
+                        threadID: "thread-shared"),
+            Self.record(sessionID: "instance-b",
+                        runtime: "codex_app_server",
+                        socketPath: "/tmp/instance-b.sock",
+                        panelID: "panel-b",
+                        threadID: "thread-shared"),
+        ])
+
+        let event = try syncer.submitApproval(promptID: "prompt-shared", targetIndex: 0)
+
+        XCTAssertEqual(event.sessionID, "instance-b")
+        XCTAssertEqual(firstRuntime.submitAttempts, ["prompt-shared"])
+        XCTAssertEqual(secondRuntime.submitAttempts, ["prompt-shared"])
+    }
+
     func testSyncEnsuresThreadSubscriptionForReusedRuntime() {
         let hub = AgentEventHub()
         let runtime = FakeRuntimeSession()
@@ -180,19 +237,23 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
 
     private static func record(sessionID: String,
                                runtime: String?,
-                               socketPath: String?) -> AgentSessionRegistryRecord {
+                               socketPath: String?,
+                               panelID: String = "panel-1",
+                               threadID: String? = nil) -> AgentSessionRegistryRecord {
         AgentSessionRegistryRecord(version: 1,
                                    vendor: "codex",
                                    workspaceID: "workspace-1",
                                    sessionID: sessionID,
-                                   panelID: "panel-1",
+                                   panelID: panelID,
                                    pid: Int32(getpid()),
                                    cwd: "/tmp",
                                    createdAt: "2026-06-07T00:00:00Z",
                                    transcriptPath: nil,
                                    runtime: runtime,
                                    appServerSocket: socketPath,
-                                   appServerPID: Int32(getpid()))
+                                   appServerPID: Int32(getpid()),
+                                   threadID: threadID,
+                                   resumeThreadID: threadID)
     }
 
     private static func event(sessionID: String, promptID: String) -> AgentEvent {

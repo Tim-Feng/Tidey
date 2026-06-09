@@ -26,6 +26,8 @@ struct AgentSessionRegistryRecord: Codable, Sendable {
     let appServerSocket: String?
     let appServerPID: Int32?
     let remoteTUIPID: Int32?
+    let threadID: String?
+    let resumeThreadID: String?
 
     enum CodingKeys: String, CodingKey {
         case version
@@ -44,6 +46,8 @@ struct AgentSessionRegistryRecord: Codable, Sendable {
         case appServerSocket = "app_server_socket"
         case appServerPID = "app_server_pid"
         case remoteTUIPID = "remote_tui_pid"
+        case threadID = "thread_id"
+        case resumeThreadID = "resume_thread_id"
     }
 
     init(version: Int,
@@ -60,7 +64,9 @@ struct AgentSessionRegistryRecord: Codable, Sendable {
          runtime: String? = nil,
          appServerSocket: String? = nil,
          appServerPID: Int32? = nil,
-         remoteTUIPID: Int32? = nil) {
+         remoteTUIPID: Int32? = nil,
+         threadID: String? = nil,
+         resumeThreadID: String? = nil) {
         self.version = version
         self.vendor = vendor
         self.workspaceID = workspaceID
@@ -76,6 +82,8 @@ struct AgentSessionRegistryRecord: Codable, Sendable {
         self.appServerSocket = appServerSocket
         self.appServerPID = appServerPID
         self.remoteTUIPID = remoteTUIPID
+        self.threadID = threadID ?? resumeThreadID
+        self.resumeThreadID = resumeThreadID
     }
 
     init(from decoder: Decoder) throws {
@@ -97,6 +105,10 @@ struct AgentSessionRegistryRecord: Codable, Sendable {
         appServerSocket = try container.decodeIfPresent(String.self, forKey: .appServerSocket)
         appServerPID = try container.decodeIfPresent(Int32.self, forKey: .appServerPID)
         remoteTUIPID = try container.decodeIfPresent(Int32.self, forKey: .remoteTUIPID)
+        let decodedThreadID = try container.decodeIfPresent(String.self, forKey: .threadID)
+        let decodedResumeThreadID = try container.decodeIfPresent(String.self, forKey: .resumeThreadID)
+        threadID = decodedThreadID ?? decodedResumeThreadID
+        resumeThreadID = decodedResumeThreadID
     }
 
     func encode(to encoder: Encoder) throws {
@@ -117,6 +129,8 @@ struct AgentSessionRegistryRecord: Codable, Sendable {
         try container.encodeIfPresent(appServerSocket, forKey: .appServerSocket)
         try container.encodeIfPresent(appServerPID, forKey: .appServerPID)
         try container.encodeIfPresent(remoteTUIPID, forKey: .remoteTUIPID)
+        try container.encodeIfPresent(threadID, forKey: .threadID)
+        try container.encodeIfPresent(resumeThreadID, forKey: .resumeThreadID)
     }
 }
 
@@ -650,7 +664,9 @@ final class AgentSessionRegistryMonitor {
                                           runtime: record.runtime,
                                           appServerSocket: record.appServerSocket,
                                           appServerPID: record.appServerPID,
-                                          remoteTUIPID: record.remoteTUIPID)
+                                          remoteTUIPID: record.remoteTUIPID,
+                                          threadID: record.threadID,
+                                          resumeThreadID: record.resumeThreadID)
     }
 
     private func directSessionForWorkspace(workspaceID: String) -> ActiveAgentSessionSnapshot? {
@@ -1032,7 +1048,9 @@ final class AgentSessionRegistryMonitor {
                                           runtime: record.runtime,
                                           appServerSocket: record.appServerSocket,
                                           appServerPID: record.appServerPID,
-                                          remoteTUIPID: record.remoteTUIPID)
+                                          remoteTUIPID: record.remoteTUIPID,
+                                          threadID: record.threadID,
+                                          resumeThreadID: record.resumeThreadID)
     }
 
     private func applyResolvedBinding(sessionID: String,
