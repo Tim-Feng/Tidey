@@ -11,33 +11,10 @@ enum CodexAppServerApprovalPromptSource {
     static let fileChange = "codex_file_change_approval"
 }
 
-enum CodexAppServerApprovalDecision: String, CaseIterable, Equatable, Sendable {
-    case accept
-    case decline
-
-    var label: String {
-        switch self {
-        case .accept:
-            return "Approve"
-        case .decline:
-            return "Decline"
-        }
-    }
-
-    func label(for method: CodexAppServerApprovalMethod) -> String {
-        switch (method, self) {
-        case (.commandExecution, .accept):
-            return "Yes, proceed"
-        case (.commandExecution, .decline):
-            return "No"
-        default:
-            return label
-        }
-    }
-
-    var jsonValue: JSONValue {
-        .string(rawValue)
-    }
+struct CodexAppServerApprovalOption: Sendable {
+    let decision: JSONValue
+    let label: String
+    let inputSequence: String
 }
 
 struct CodexAppServerApprovalRequest: Sendable {
@@ -55,6 +32,9 @@ struct CodexAppServerApprovalRequest: Sendable {
     let commandActions: [String]
     let networkHost: String?
     let networkProtocol: String?
+    let proposedExecpolicyAmendment: JSONValue?
+    let proposedNetworkPolicyAmendments: [JSONValue]
+    let availableDecisions: [JSONValue]
     let grantRoot: String?
 
     init?(method methodName: String, requestID: JSONValue, params: [String: JSONValue]) {
@@ -82,6 +62,9 @@ struct CodexAppServerApprovalRequest: Sendable {
         let networkContext = params["networkApprovalContext"]?.objectValue
         networkHost = Self.nonEmptyString(networkContext?["host"])
         networkProtocol = Self.nonEmptyString(networkContext?["protocol"])
+        proposedExecpolicyAmendment = params["proposedExecpolicyAmendment"] ?? params["proposed_execpolicy_amendment"]
+        proposedNetworkPolicyAmendments = Self.arrayValues(params["proposedNetworkPolicyAmendments"] ?? params["proposed_network_policy_amendments"])
+        availableDecisions = Self.arrayValues(params["availableDecisions"] ?? params["available_decisions"])
         grantRoot = Self.nonEmptyString(params["grantRoot"])
     }
 
@@ -120,12 +103,11 @@ struct CodexAppServerApprovalRequest: Sendable {
     }
 
     func response(targetIndex: Int) throws -> JSONValue {
-        let decisions = optionDecisions
-        guard decisions.indices.contains(targetIndex) else {
+        let options = approvalOptions
+        guard options.indices.contains(targetIndex) else {
             throw BridgeInternalError.invalidRequest("Unknown Codex approval option index.")
         }
-        let decision = decisions[targetIndex]
-        return .object(["decision": decision.jsonValue])
+        return .object(["decision": options[targetIndex].decision])
     }
 
     private var title: String {
@@ -185,20 +167,139 @@ struct CodexAppServerApprovalRequest: Sendable {
         return lines.joined(separator: "\n")
     }
 
-    private var optionDecisions: [CodexAppServerApprovalDecision] {
+    private var approvalOptions: [CodexAppServerApprovalOption] {
+        if !availableDecisions.isEmpty {
+            return availableDecisions.map { Self.option(for: $0, method: method) }
+        }
         switch method {
         case .commandExecution:
-            return [.accept, .decline]
+            var options = [
+                Self.option(for: .string("accept"), method: method),
+            ]
+            if let proposedExecpolicyAmendment {
+                options.append(Self.option(for: .object([
+                    "acceptWithExecpolicyAmendment": .object([
+                        "execpolicy_amendment": proposedExecpolicyAmendment,
+                    ]),
+                ]), method: method))
+            }
+            options.append(contentsOf: proposedNetworkPolicyAmendments.map { amendment in
+                Self.option(for: .object([
+                    "applyNetworkPolicyAmendment": .object([
+                        "network_policy_amendment": amendment,
+                    ]),
+                ]), method: method)
+            })
+            options.append(Self.option(for: .string("decline"), method: method))
+            return options
         case .fileChange:
-            return [.accept, .decline]
+            var options = [
+                Self.option(for: .string("accept"), method: method),
+            ]
+            if grantRoot != nil {
+                options.append(Self.option(for: .string("acceptForSession"), method: method))
+            }
+            options.append(Self.option(for: .string("decline"), method: method))
+            return options
         }
     }
 
     private var options: [InteractivePromptOption] {
-        optionDecisions.enumerated().map { offset, decision in
+        approvalOptions.enumerated().map { offset, option in
             InteractivePromptOption(index: offset,
-                                    label: decision.label(for: method),
-                                    inputSequence: decision.rawValue)
+                                    label: option.label,
+                                    inputSequence: option.inputSequence)
+        }
+    }
+
+    private static func option(for decision: JSONValue, method: CodexAppServerApprovalMethod) -> CodexAppServerApprovalOption {
+        let inputSequence = decisionIdentifier(decision)
+        return CodexAppServerApprovalOption(decision: decision,
+                                            label: label(for: decision, method: method),
+                                            inputSequence: inputSequence)
+    }
+
+    private static func decisionIdentifier(_ decision: JSONValue) -> String {
+        if let value = decision.stringValue {
+            return value
+        }
+        if let object = decision.objectValue,
+           let key = object.keys.sorted().first {
+            return key
+        }
+        return "decision"
+    }
+
+    private static func label(for decision: JSONValue, method: CodexAppServerApprovalMethod) -> String {
+        switch decision {
+        case .string(let value):
+            return label(forDecisionName: value, method: method)
+        case .object(let object):
+            if let payload = object["acceptWithExecpolicyAmendment"]?.objectValue,
+               let amendment = payload["execpolicy_amendment"] {
+                return "Yes, and don't ask again for commands that start with `\(execpolicyDisplay(amendment))` (p)"
+            }
+            if let payload = object["applyNetworkPolicyAmendment"]?.objectValue,
+               let amendment = payload["network_policy_amendment"]?.objectValue {
+                return networkPolicyLabel(amendment)
+            }
+            if let key = object.keys.sorted().first {
+                return label(forDecisionName: key, method: method)
+            }
+            return "Approve"
+        default:
+            return "Approve"
+        }
+    }
+
+    private static func label(forDecisionName decision: String, method: CodexAppServerApprovalMethod) -> String {
+        switch decision {
+        case "accept":
+            switch method {
+            case .commandExecution:
+                return "Yes, proceed (y)"
+            case .fileChange:
+                return "Yes, make edits (y)"
+            }
+        case "acceptForSession":
+            switch method {
+            case .commandExecution:
+                return "Yes, and don't ask again for this command in this session (p)"
+            case .fileChange:
+                return "Yes, and don't ask again for these files (p)"
+            }
+        case "decline":
+            return "No, and tell Codex what to do differently (esc)"
+        case "cancel":
+            return "Cancel"
+        case "approved_execpolicy_amendment", "acceptWithExecpolicyAmendment":
+            return "Yes, and don't ask again for similar commands (p)"
+        case "network_policy_amendment", "applyNetworkPolicyAmendment":
+            return "Yes, and allow this host for this conversation (p)"
+        case "denied":
+            return "No, and tell Codex what to do differently (esc)"
+        case "abort":
+            return "Cancel"
+        default:
+            return decision
+        }
+    }
+
+    private static func execpolicyDisplay(_ value: JSONValue) -> String {
+        guard let parts = value.arrayValue?.compactMap(\.stringValue),
+              !parts.isEmpty else {
+            return "this command"
+        }
+        return parts.joined(separator: " ")
+    }
+
+    private static func networkPolicyLabel(_ amendment: [String: JSONValue]) -> String {
+        let host = nonEmptyString(amendment["host"]) ?? "this host"
+        switch amendment["action"]?.stringValue {
+        case "deny":
+            return "No, and block \(host) in the future"
+        default:
+            return "Yes, and allow \(host) for this conversation"
         }
     }
 
@@ -224,6 +325,10 @@ struct CodexAppServerApprovalRequest: Sendable {
         }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : text
+    }
+
+    private static func arrayValues(_ value: JSONValue?) -> [JSONValue] {
+        value?.arrayValue ?? []
     }
 
     private static func commandActionSummaries(from value: JSONValue?) -> [String] {
