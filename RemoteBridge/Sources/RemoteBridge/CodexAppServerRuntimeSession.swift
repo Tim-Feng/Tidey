@@ -1005,12 +1005,15 @@ private final class CodexAppServerStdioTransport: CodexAppServerConnectionTransp
 }
 
 final class CodexAppServerWebSocketTransportConnector: CodexAppServerTransportConnecting {
-    private static let maximumWebSocketFrameSizeBytes = 16 * 1024 * 1024
+    private static let defaultMaximumWebSocketFrameSizeBytes = 256 * 1024 * 1024
 
     private let group: EventLoopGroup
     private let ownsGroup: Bool
+    private let maximumWebSocketFrameSizeBytes: Int
 
-    init(group: EventLoopGroup? = nil) {
+    init(group: EventLoopGroup? = nil,
+         maximumWebSocketFrameSizeBytes: Int = CodexAppServerWebSocketTransportConnector.defaultMaximumWebSocketFrameSizeBytes) {
+        self.maximumWebSocketFrameSizeBytes = maximumWebSocketFrameSizeBytes
         if let group {
             self.group = group
             self.ownsGroup = false
@@ -1050,7 +1053,7 @@ final class CodexAppServerWebSocketTransportConnector: CodexAppServerTransportCo
         let httpHandler = CodexAppServerWebSocketUpgradeRequestHandler(uri: "/")
         let upgradeState = CodexAppServerWebSocketUpgradeState()
         let upgrader = NIOWebSocketClientUpgrader(
-            maxFrameSize: Self.maximumWebSocketFrameSizeBytes,
+            maxFrameSize: maximumWebSocketFrameSizeBytes,
             upgradePipelineHandler: { channel, _ in
                 channel.pipeline.addHandler(frameHandler).map {
                     upgradeState.succeed()

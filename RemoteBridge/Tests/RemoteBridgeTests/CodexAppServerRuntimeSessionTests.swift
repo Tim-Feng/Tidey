@@ -837,6 +837,66 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertEqual(clientFrameMask.didObserveMaskedFrame(), true)
     }
 
+    func testUnixWebSocketConnectorAcceptsLargeReplayFrames() throws {
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        defer {
+            XCTAssertNoThrow(try group.syncShutdownGracefully())
+        }
+
+        let socketDirectory = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent("tcw-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: socketDirectory, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: socketDirectory)
+        }
+        let socketPath = socketDirectory.appendingPathComponent("app.sock").path
+        let replayPayload = String(repeating: "x", count: 17 * 1024 * 1024)
+        let receivedReplay = expectation(description: "client receives app-server replay frame larger than 16 MB")
+
+        let upgrader = NIOWebSocketServerUpgrader(
+            maxFrameSize: 1 << 20,
+            shouldUpgrade: { _, _ in
+                let promise = group.next().makePromise(of: HTTPHeaders?.self)
+                promise.succeed(HTTPHeaders())
+                return promise.futureResult
+            },
+            upgradePipelineHandler: { channel, _ in
+                var buffer = channel.allocator.buffer(capacity: replayPayload.utf8.count)
+                buffer.writeString(replayPayload)
+                let frame = WebSocketFrame(fin: true, opcode: .text, data: buffer)
+                channel.eventLoop.scheduleTask(in: .milliseconds(10)) {
+                    channel.writeAndFlush(frame, promise: nil)
+                }
+                return channel.eventLoop.makeSucceededFuture(())
+            }
+        )
+        let configuration: NIOHTTPServerUpgradeConfiguration = (
+            upgraders: [upgrader],
+            completionHandler: { _ in }
+        )
+        let server = try ServerBootstrap(group: group)
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
+            .childChannelInitializer { channel in
+                channel.pipeline.configureHTTPServerPipeline(withServerUpgrade: configuration)
+            }
+            .bind(unixDomainSocketPath: socketPath)
+            .wait()
+        defer {
+            XCTAssertNoThrow(try server.close().wait())
+        }
+
+        let connector = CodexAppServerWebSocketTransportConnector(group: group)
+        _ = try connector.connect(mode: .unixSocket(path: socketPath),
+                                  onLine: { text in
+                                      if text.count == replayPayload.count {
+                                          receivedReplay.fulfill()
+                                      }
+                                  },
+                                  onClose: { _ in })
+
+        wait(for: [receivedReplay], timeout: 5.0)
+    }
+
     private static func makeSession(configuration: CodexAppServerLaunchConfiguration = CodexAppServerLaunchConfiguration(
                                         executablePath: "/tmp/disposable-codex",
                                         arguments: ["app-server"],
