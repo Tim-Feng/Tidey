@@ -121,6 +121,21 @@ run_stable_profile_paths_test() {
 
         sqlite_home="$(stable_codex_sqlite_home "$real_home")"
         [[ "$sqlite_home" == "$real_home/.tmp/tidey-codex-sqlite-default" ]] || fail "fallback sqlite home changed"
+
+        unset TMUX_PANE
+        TIDEY_WORKSPACE_ID="workspace-1"
+        TIDEY_PANEL_ID="panel-1"
+        profile_identity="$(codex_runtime_identity_from_env)"
+        [[ "$profile_identity" == "panel-workspace-1-panel-1" ]] || fail "non-tmux Tidey panel identity was not derived from workspace/panel"
+
+        profile_name="$(stable_codex_profile_name "$profile_identity")"
+        [[ "$profile_name" == "tidey-codex-panel-workspace-1-panel-1" ]] || fail "non-tmux Tidey panel profile name is not isolated"
+
+        sqlite_home="$(stable_codex_sqlite_home "$real_home" "$profile_identity")"
+        [[ "$sqlite_home" == "$real_home/.tmp/tidey-codex-sqlite-panel-workspace-1-panel-1" ]] || fail "non-tmux Tidey panel sqlite home is not isolated"
+
+        unset TIDEY_PANEL_ID
+        [[ -z "$(codex_runtime_identity_from_env)" ]] || fail "panel identity should require a Tidey panel id"
     '
 
     rm -rf "$tmpdir"
@@ -727,6 +742,8 @@ remote_lines = [line for line in lines if "--remote" in line]
 
 assert app_server_lines, "app-server was not launched"
 assert remote_lines, "remote TUI was not launched"
+assert any("tidey-codex-sqlite-panel-workspace-1-panel-1" in line for line in app_server_lines), app_server_lines
+assert all("tidey-codex-sqlite-default" not in line for line in app_server_lines), app_server_lines
 assert all("--profile " not in line and "--profile-v2 " not in line for line in app_server_lines), app_server_lines
 assert all("--profile " not in line and "--profile-v2 " not in line for line in remote_lines), remote_lines
 PY

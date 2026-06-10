@@ -137,6 +137,22 @@ tmux_session_name_from_env() {
     fi
 }
 
+tidey_panel_identity_from_env() {
+    if [[ -n "${TIDEY_WORKSPACE_ID:-}" && -n "${TIDEY_PANEL_ID:-}" ]]; then
+        printf 'panel-%s-%s' "$TIDEY_WORKSPACE_ID" "$TIDEY_PANEL_ID"
+    fi
+}
+
+codex_runtime_identity_from_env() {
+    local tmux_identity=""
+    tmux_identity="$(tmux_session_name_from_env)"
+    if [[ -n "$tmux_identity" ]]; then
+        printf '%s' "$tmux_identity"
+        return 0
+    fi
+    tidey_panel_identity_from_env
+}
+
 stable_codex_profile_name() {
     local identity="${1:-}"
 
@@ -862,7 +878,7 @@ main() {
     fi
 
     real_codex_home="$(resolve_real_codex_home)"
-    profile_identity="$(tmux_session_name_from_env)"
+    profile_identity="$(codex_runtime_identity_from_env)"
     profile_name="$(stable_codex_profile_name "$profile_identity")"
     profile_flag="$(codex_profile_flag "$real_codex")"
     sqlite_home="$(stable_codex_sqlite_home "$real_codex_home" "$profile_identity")"
