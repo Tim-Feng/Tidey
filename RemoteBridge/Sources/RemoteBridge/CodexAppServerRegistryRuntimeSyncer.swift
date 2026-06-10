@@ -20,6 +20,7 @@ protocol CodexAppServerRuntimeSessionControlling: AnyObject {
 extension CodexAppServerRuntimeSession: CodexAppServerRuntimeSessionControlling {}
 
 final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, CodexAppServerApprovalPromptProviding, CodexAppServerChatSubmitting {
+    typealias SidebarMessageSender = (String) throws -> Void
     typealias AttachHandler = (_ record: AgentSessionRegistryRecord,
                                _ nextSequence: @escaping CodexAppServerConnection.SequenceProvider,
                                _ timestampProvider: @escaping CodexAppServerConnection.TimestampProvider,
@@ -33,16 +34,21 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
     }
 
     private let eventHub: AgentEventHub
+    private let sidebarMessageSender: SidebarMessageSender
+    private let sidebarQueue = DispatchQueue(label: "com.tidey.remote-bridge.codex-app-server-sidebar")
     private let timestampProvider: CodexAppServerConnection.TimestampProvider
     private let attachHandler: AttachHandler
     private let lock = NSLock()
     private var entriesBySessionID = [String: RuntimeEntry]()
+    private var lastAssistantTextBySessionID = [String: String]()
 
     init(eventHub: AgentEventHub,
          factory: CodexAppServerRuntimeSessionFactory = CodexAppServerRuntimeSessionFactory(),
+         sidebarMessageSender: @escaping SidebarMessageSender = { _ in },
          timestampProvider: @escaping CodexAppServerConnection.TimestampProvider = CodexAppServerRegistryRuntimeSyncer.iso8601Now,
          attachHandler: AttachHandler? = nil) {
         self.eventHub = eventHub
+        self.sidebarMessageSender = sidebarMessageSender
         self.timestampProvider = timestampProvider
         if let attachHandler {
             self.attachHandler = attachHandler
@@ -97,6 +103,11 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
 
         for entry in staleEntries + replacedEntries {
             entry.session.stop()
+        }
+        lock.withCodexRuntimeSyncerLock {
+            for entry in staleEntries + replacedEntries {
+                lastAssistantTextBySessionID.removeValue(forKey: entry.record.sessionID)
+            }
         }
 
         for record in recordsToAttach {
@@ -206,7 +217,9 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
             let session = try attachHandler(record,
                                             { [eventHub] sessionID in eventHub.nextSyntheticSeq(sessionID: sessionID) },
                                             timestampProvider,
-                                            { _ in },
+                                            { [weak self] event in
+                                                self?.handleSidebarEvent(event, record: record)
+                                            },
                                             { [eventHub] envelope in
                                                 eventHub.publish(envelope.event)
                                                 BridgeLogger.server.info("codex app-server approval prompt published workspace_id=\(envelope.event.workspaceID, privacy: .public) panel_id=\(envelope.event.metadata?["panel_id"] ?? "-", privacy: .public) session_id=\(envelope.event.sessionID, privacy: .public) prompt_id=\(envelope.prompt.promptID, privacy: .public)")
@@ -220,6 +233,59 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
             BridgeLogger.server.info("codex app-server registry runtime attached workspace_id=\(record.workspaceID, privacy: .public) panel_id=\(record.panelID ?? "-", privacy: .public) session_id=\(record.sessionID, privacy: .public)")
         } catch {
             BridgeLogger.server.error("codex app-server registry runtime attach failed workspace_id=\(record.workspaceID, privacy: .public) panel_id=\(record.panelID ?? "-", privacy: .public) session_id=\(record.sessionID, privacy: .public) error=\(String(describing: error), privacy: .public)")
+        }
+    }
+
+    private func handleSidebarEvent(_ event: AgentEvent, record: AgentSessionRegistryRecord) {
+        let payloadKind = event.payload?.objectValue?["kind"]?.stringValue
+        switch (event.type, payloadKind) {
+        case (.thinking, "turn_started"):
+            sendSidebar(messages: CodexSidebarMessages.running(workspaceID: record.workspaceID),
+                        sessionID: record.sessionID)
+
+        case (.assistantMessage, "assistant_message"):
+            guard let text = event.text,
+                  text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+                return
+            }
+            lock.withCodexRuntimeSyncerLock {
+                lastAssistantTextBySessionID[record.sessionID] = text
+            }
+
+        case (.assistantFinal, "turn_completed"):
+            let body = lock.withCodexRuntimeSyncerLock {
+                lastAssistantTextBySessionID.removeValue(forKey: record.sessionID)
+            } ?? "Task completed"
+            sendSidebar(messages: CodexSidebarMessages.completed(workspaceID: record.workspaceID,
+                                                                 body: body),
+                        sessionID: record.sessionID)
+
+        case (.assistantMessage, "turn_failed"),
+             (.assistantMessage, "error"):
+            let body = event.text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                ? event.text!
+                : "Codex turn failed."
+            _ = lock.withCodexRuntimeSyncerLock {
+                lastAssistantTextBySessionID.removeValue(forKey: record.sessionID)
+            }
+            sendSidebar(messages: CodexSidebarMessages.completed(workspaceID: record.workspaceID,
+                                                                 body: body),
+                        sessionID: record.sessionID)
+
+        default:
+            break
+        }
+    }
+
+    private func sendSidebar(messages: [String], sessionID: String) {
+        sidebarQueue.async { [sidebarMessageSender] in
+            for message in messages {
+                do {
+                    try sidebarMessageSender(message)
+                } catch {
+                    BridgeLogger.server.error("codex app-server sidebar message failed session_id=\(sessionID, privacy: .public) message=\(message, privacy: .public) error=\(String(describing: error), privacy: .public)")
+                }
+            }
         }
     }
 

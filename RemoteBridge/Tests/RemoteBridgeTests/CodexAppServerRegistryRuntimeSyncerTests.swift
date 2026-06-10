@@ -161,7 +161,15 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
     func testAttachedRuntimeDoesNotPublishConversationEventsToHub() throws {
         let hub = AgentEventHub()
         var capturedAgentEventHandler: CodexAppServerHeadlessRuntime.AgentEventHandler?
-        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { _, _, _, onAgentEvent, _, _ in
+        let sidebarLock = NSLock()
+        var sidebarMessages = [String]()
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub,
+                                                        sidebarMessageSender: { message in
+                                                            sidebarLock.lock()
+                                                            sidebarMessages.append(message)
+                                                            sidebarLock.unlock()
+                                                        },
+                                                        attachHandler: { _, _, _, onAgentEvent, _, _ in
             capturedAgentEventHandler = onAgentEvent
             return FakeRuntimeSession()
         })
@@ -176,17 +184,47 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
                                             sessionID: "app",
                                             type: .userMessage,
                                             text: "test from Mac"))
+        onAgentEvent(Self.appServerEvent(eventID: "turn-started",
+                                         seq: 2,
+                                         sessionID: "app",
+                                         type: .thinking,
+                                         text: "Codex turn started",
+                                         payloadKind: "turn_started"))
         onAgentEvent(Self.conversationEvent(eventID: "assistant-1",
-                                            seq: 2,
+                                            seq: 3,
                                             sessionID: "app",
                                             type: .assistantMessage,
                                             text: "received"))
+        onAgentEvent(Self.appServerEvent(eventID: "assistant-text",
+                                         seq: 4,
+                                         sessionID: "app",
+                                         type: .assistantMessage,
+                                         text: "received",
+                                         payloadKind: "assistant_message"))
+        onAgentEvent(Self.appServerEvent(eventID: "turn-completed",
+                                         seq: 5,
+                                         sessionID: "app",
+                                         type: .assistantFinal,
+                                         text: nil,
+                                         payloadKind: "turn_completed"))
 
         let result = hub.fetch(workspaceID: "workspace-1",
                                sessionID: "app",
                                limit: 10)
 
         XCTAssertTrue(result.events.isEmpty)
+        XCTAssertTrue(Self.waitUntil {
+            sidebarLock.lock()
+            defer { sidebarLock.unlock() }
+            return sidebarMessages.count == 3
+        })
+        sidebarLock.lock()
+        let messages = sidebarMessages
+        sidebarLock.unlock()
+        XCTAssertEqual(messages[0], "report_shell_state running --workspace_id=workspace-1")
+        XCTAssertTrue(messages[1].contains(#""action":"notification.create""#))
+        XCTAssertTrue(messages[1].contains(#""body":"received""#))
+        XCTAssertEqual(messages[2], "report_shell_state prompt --workspace_id=workspace-1")
     }
 
     func testAttachedRuntimeStillPublishesApprovalPromptEventsToHub() throws {
@@ -356,6 +394,47 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
                     "panel_id": "panel-1",
                     "source": "codex_app_server",
                    ])
+    }
+
+    private static func appServerEvent(eventID: String,
+                                       seq: Int,
+                                       sessionID: String,
+                                       type: AgentEventKind,
+                                       text: String?,
+                                       payloadKind: String) -> AgentEvent {
+        AgentEvent(eventID: eventID,
+                   seq: seq,
+                   vendor: "codex",
+                   workspaceID: "workspace-1",
+                   sessionID: sessionID,
+                   timestamp: "2026-06-07T00:00:00.000Z",
+                   type: type,
+                   role: nil,
+                   text: text,
+                   name: nil,
+                   input: nil,
+                   output: nil,
+                   toolCallID: nil,
+                   metadata: [
+                    "panel_id": "panel-1",
+                    "source": "codex_app_server",
+                   ],
+                   payload: .object([
+                    "kind": .string(payloadKind),
+                    "source": .string("codex_app_server"),
+                   ]))
+    }
+
+    private static func waitUntil(timeout: TimeInterval = 2,
+                                  condition: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        return condition()
     }
 
 }

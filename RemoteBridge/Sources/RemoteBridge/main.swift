@@ -19,7 +19,10 @@ let locator = TideySocketLocator()
 let socketClient = TideySocketClient(locator: locator)
 let eventHub = AgentEventHub()
 let workspaceEventHub = WorkspaceEventHub()
-let codexRuntimeSyncer = CodexAppServerRegistryRuntimeSyncer(eventHub: eventHub)
+let codexRuntimeSyncer = CodexAppServerRegistryRuntimeSyncer(eventHub: eventHub,
+                                                             sidebarMessageSender: { command in
+                                                                 try socketClient.send(command: command)
+                                                             })
 let registryMonitor = AgentSessionRegistryMonitor(hub: eventHub,
                                                   socketClient: socketClient,
                                                   runtimeSyncer: codexRuntimeSyncer)
