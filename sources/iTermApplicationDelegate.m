@@ -4173,7 +4173,7 @@ static iTermKeyEventReplayer *gReplayer;
     }
     NSString *workspaceID = notification.request.content.userInfo[@"workspaceID"];
     PseudoTerminal *currentTerminal = [[iTermController sharedInstance] currentTerminal];
-    NSString *selectedID = currentTerminal.isShowingTideySidebar ? [currentTerminal tideySelectedWorkspaceIdentifier] : nil;
+    NSString *selectedID = [currentTerminal tideySelectedWorkspaceIdentifier];
     if ([PseudoTerminal tideyShouldSuppressSystemNotificationForSelectedWorkspaceID:selectedID
                                                             notificationWorkspaceID:workspaceID
                                                                         appIsActive:[NSApp isActive]
