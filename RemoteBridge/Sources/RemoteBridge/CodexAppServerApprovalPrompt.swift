@@ -271,7 +271,12 @@ struct CodexAppServerApprovalRequest: Sendable {
         case "decline":
             return "No, and tell Codex what to do differently (esc)"
         case "cancel":
-            return "Cancel"
+            switch method {
+            case .commandExecution:
+                return "No, and tell Codex what to do differently (esc)"
+            case .fileChange:
+                return "Cancel"
+            }
         case "approved_execpolicy_amendment", "acceptWithExecpolicyAmendment":
             return "Yes, and don't ask again for similar commands (p)"
         case "network_policy_amendment", "applyNetworkPolicyAmendment":

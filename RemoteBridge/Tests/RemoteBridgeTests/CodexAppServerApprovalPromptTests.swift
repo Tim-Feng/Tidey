@@ -144,6 +144,44 @@ final class CodexAppServerApprovalPromptTests: XCTestCase {
         XCTAssertEqual(try request.response(targetIndex: 0).objectValue?["decision"]?.stringValue, "decline")
     }
 
+    func testCommandApprovalLabelsCancelDecisionLikeNativeNoOption() throws {
+        let request = try XCTUnwrap(CodexAppServerApprovalRequest(
+            method: "item/commandExecution/requestApproval",
+            requestID: .string("req-1"),
+            params: [
+                "threadId": .string("thread-1"),
+                "turnId": .string("turn-1"),
+                "itemId": .string("item-1"),
+                "startedAtMs": .number(1_786_000_000_000),
+                "availableDecisions": .array([
+                    .string("accept"),
+                    .object([
+                        "acceptWithExecpolicyAmendment": .object([
+                            "execpolicy_amendment": .array([
+                                .string("python3"),
+                                .string("-c"),
+                            ]),
+                        ]),
+                    ]),
+                    .string("cancel"),
+                ]),
+            ]))
+
+        let prompt = request.makePrompt()
+
+        XCTAssertEqual(prompt.options.map(\.label), [
+            "Yes, proceed (y)",
+            "Yes, and don't ask again for commands that start with `python3 -c` (p)",
+            "No, and tell Codex what to do differently (esc)",
+        ])
+        XCTAssertEqual(prompt.options.map(\.inputSequence), [
+            "accept",
+            "acceptWithExecpolicyAmendment",
+            "cancel",
+        ])
+        XCTAssertEqual(try request.response(targetIndex: 2).objectValue?["decision"]?.stringValue, "cancel")
+    }
+
     func testCommandApprovalIncludesNetworkPolicyAmendmentOption() throws {
         let request = try XCTUnwrap(CodexAppServerApprovalRequest(
             method: "item/commandExecution/requestApproval",
