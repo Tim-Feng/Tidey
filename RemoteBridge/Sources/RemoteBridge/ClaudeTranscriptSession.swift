@@ -182,6 +182,11 @@ struct AgentPanelProcessSnapshot: Sendable {
     }
 }
 
+private struct LoadedAgentSessionRegistryRecord {
+    let record: AgentSessionRegistryRecord
+    let url: URL
+}
+
 struct AgentProcessDescriptor: Equatable, Sendable {
     let pid: Int32
     let command: String
@@ -587,16 +592,23 @@ final class AgentSessionRegistryMonitor {
     }
 
     private func scanRegistry() {
-        let sourceRecords = AgentVendorRegistry.all.flatMap { vendor in
-            loadRecords(at: paths.agentSessionsDirectory(for: vendor.registryDirectoryName),
-                        vendor: vendor.id)
+        let loadedRecords = AgentVendorRegistry.all.flatMap { vendor in
+            loadRecordEntries(at: paths.agentSessionsDirectory(for: vendor.registryDirectoryName),
+                              vendor: vendor.id)
         }
+        let sourceRecords = loadedRecords.map(\.record)
         let activeSessionIDs = Set(sourceRecords.map(\.sessionID))
         resolvedPanelBindings = resolvedPanelBindings.filter { activeSessionIDs.contains($0.key) }
         lastLoggedPaneIdentityCorrectionKeyBySessionID = lastLoggedPaneIdentityCorrectionKeyBySessionID
             .filter { activeSessionIDs.contains($0.key) }
-        let effectiveRecords = sourceRecords
-            .map(recordWithPaneIdentityIfAvailable(_:))
+        let paneCorrectedRecords = loadedRecords.map { loadedRecord in
+            let correctedRecord = recordWithPaneIdentityIfAvailable(loadedRecord.record)
+            persistCanonicalizedRecordIfNeeded(sourceRecord: loadedRecord.record,
+                                               correctedRecord: correctedRecord,
+                                               url: loadedRecord.url)
+            return correctedRecord
+        }
+        let effectiveRecords = paneCorrectedRecords
             .map(effectiveRecord(for:))
         let activeRecords = recordsWithObsoleteCodexAppServerPanelRecordsRemoved(effectiveRecords)
         let appServerRecords = activeRecords.filter {
@@ -620,6 +632,11 @@ final class AgentSessionRegistryMonitor {
     private func recordsWithObsoleteCodexAppServerPanelRecordsRemoved(_ records: [AgentSessionRegistryRecord]) -> [AgentSessionRegistryRecord] {
         var preferredByPanelKey = [String: AgentSessionRegistryRecord]()
         var obsoleteSessionIDs = Set<String>()
+        let appServerPaneRestoreKeys = Set(
+            records
+                .filter(Self.isCodexAppServerRuntimeRecord)
+                .compactMap(Self.codexPaneRestoreKey(for:))
+        )
 
         for record in records where Self.isCodexAppServerRuntimeRecord(record) {
             guard let panelID = record.panelID, !panelID.isEmpty else {
@@ -638,10 +655,32 @@ final class AgentSessionRegistryMonitor {
             }
         }
 
+        for record in records where record.vendor == "codex" && !Self.isCodexAppServerRuntimeRecord(record) {
+            guard let key = Self.codexPaneRestoreKey(for: record),
+                  appServerPaneRestoreKeys.contains(key) else {
+                continue
+            }
+            obsoleteSessionIDs.insert(record.sessionID)
+        }
+
         guard obsoleteSessionIDs.isEmpty == false else {
             return records
         }
         return records.filter { obsoleteSessionIDs.contains($0.sessionID) == false }
+    }
+
+    private static func codexPaneRestoreKey(for record: AgentSessionRegistryRecord) -> String? {
+        guard record.vendor == "codex",
+              let paneID = record.tmuxPaneID,
+              !paneID.isEmpty else {
+            return nil
+        }
+        let restoreID = restoreSessionID(for: record)
+        guard !restoreID.isEmpty else {
+            return nil
+        }
+        let socketPath = record.tmuxSocketPath.map(normalizeSocketPath) ?? ""
+        return "\(socketPath)|\(paneID)|\(restoreID)"
     }
 
     private func recordWithPaneIdentityIfAvailable(_ record: AgentSessionRegistryRecord) -> AgentSessionRegistryRecord {
@@ -681,6 +720,24 @@ final class AgentSessionRegistryMonitor {
                                           remoteTUIPID: record.remoteTUIPID,
                                           threadID: record.threadID,
                                           resumeThreadID: record.resumeThreadID)
+    }
+
+    private func persistCanonicalizedRecordIfNeeded(sourceRecord: AgentSessionRegistryRecord,
+                                                    correctedRecord: AgentSessionRegistryRecord,
+                                                    url: URL) {
+        guard sourceRecord.workspaceID != correctedRecord.workspaceID ||
+              sourceRecord.panelID != correctedRecord.panelID else {
+            return
+        }
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            let data = try encoder.encode(correctedRecord)
+            try data.write(to: url, options: [.atomic])
+            BridgeLogger.server.info("agent registry canonicalized pane identity session_id=\(correctedRecord.sessionID, privacy: .public) vendor=\(correctedRecord.vendor, privacy: .public) workspace_id=\(correctedRecord.workspaceID, privacy: .public) panel_id=\(correctedRecord.panelID ?? "-", privacy: .public)")
+        } catch {
+            BridgeLogger.server.error("agent registry canonicalize_failed session_id=\(correctedRecord.sessionID, privacy: .public) vendor=\(correctedRecord.vendor, privacy: .public) error=\(String(describing: error), privacy: .public)")
+        }
     }
 
     private func directSessionForWorkspace(workspaceID: String) -> ActiveAgentSessionSnapshot? {
@@ -1124,14 +1181,14 @@ final class AgentSessionRegistryMonitor {
         }
     }
 
-    private func loadRecords(at directory: URL, vendor: String) -> [AgentSessionRegistryRecord] {
+    private func loadRecordEntries(at directory: URL, vendor: String) -> [LoadedAgentSessionRegistryRecord] {
         guard let enumerator = fileManager.enumerator(at: directory,
                                                       includingPropertiesForKeys: [.isRegularFileKey],
                                                       options: [.skipsHiddenFiles]) else {
             return []
         }
 
-        var records = [AgentSessionRegistryRecord]()
+        var records = [LoadedAgentSessionRegistryRecord]()
         for case let url as URL in enumerator {
             guard url.pathExtension == "json",
                   let data = try? Data(contentsOf: url),
@@ -1141,7 +1198,7 @@ final class AgentSessionRegistryMonitor {
                 continue
             }
             if recordProcessExists(record) {
-                records.append(record)
+                records.append(LoadedAgentSessionRegistryRecord(record: record, url: url))
             } else {
                 try? fileManager.removeItem(at: url)
             }

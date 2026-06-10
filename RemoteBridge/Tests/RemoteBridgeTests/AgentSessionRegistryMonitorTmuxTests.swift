@@ -62,6 +62,11 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         XCTAssertEqual(snapshots.first?.panelID, "current-panel")
         XCTAssertEqual(monitor.activeSessionForWorkspace(workspaceID: "stale-workspace")?.sessionID, nil)
         XCTAssertEqual(monitor.activeSessionForWorkspace(workspaceID: "current-workspace")?.sessionID, "session-stale-env")
+
+        let canonicalizedData = try Data(contentsOf: registryURL)
+        let canonicalizedRecord = try JSONDecoder().decode(AgentSessionRegistryRecord.self, from: canonicalizedData)
+        XCTAssertEqual(canonicalizedRecord.workspaceID, "current-workspace")
+        XCTAssertEqual(canonicalizedRecord.panelID, "current-panel")
     }
 
     func testScanBatchesPaneIdentityLookupOncePerSocket() throws {
@@ -358,6 +363,67 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
                                                     panelID: "panel-app-server")
         XCTAssertEqual(session?.sessionID, "new-session")
         XCTAssertEqual(runtimeSyncer.latestRecords.map(\.sessionID), ["new-session"])
+    }
+
+    func testScanDropsLegacyCodexRecordDuplicatedByAppServerPaneAndRestoreID() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let restoreSessionID = "019d70fe-fd27-7a12-a3f7-9c89ae5048b6"
+        let legacyRecordURL = paths.codexAgentSessionsDirectory.appendingPathComponent("codex-\(restoreSessionID).json")
+        let appServerRecordURL = paths.codexAgentSessionsDirectory.appendingPathComponent("codex-instance-session.json")
+        try Data("""
+        {
+          "version": 1,
+          "vendor": "codex",
+          "workspace_id": "workspace-current",
+          "session_id": "\(restoreSessionID)",
+          "panel_id": "panel-current",
+          "pid": \(getpid()),
+          "cwd": "/tmp",
+          "created_at": "2026-06-07T00:00:00Z",
+          "rollout_path": "/tmp/rollout-\(restoreSessionID).jsonl",
+          "tmux_pane_id": "%1",
+          "tmux_socket_path": "/tmp/tmux.sock"
+        }
+        """.utf8).write(to: legacyRecordURL)
+        try Data("""
+        {
+          "version": 1,
+          "vendor": "codex",
+          "workspace_id": "workspace-current",
+          "session_id": "instance-session",
+          "panel_id": "panel-current",
+          "pid": 999999,
+          "cwd": "/tmp",
+          "created_at": "2026-06-07T00:01:00Z",
+          "runtime": "codex_app_server",
+          "app_server_socket": "/tmp/tidey-codex-app-server/app.sock",
+          "app_server_pid": \(getpid()),
+          "thread_id": "\(restoreSessionID)",
+          "resume_thread_id": "\(restoreSessionID)",
+          "tmux_pane_id": "%1",
+          "tmux_socket_path": "/tmp/tmux.sock"
+        }
+        """.utf8).write(to: appServerRecordURL)
+
+        let runtimeSyncer = CapturingRuntimeSyncer()
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: fileManager,
+                                                  hub: AgentEventHub(),
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+                                                  parentPIDLookup: { _ in nil },
+                                                  runtimeSyncer: runtimeSyncer)
+        try monitor.start()
+
+        let snapshots = monitor.activeSessionSnapshots()
+        XCTAssertEqual(snapshots.map(\.sessionID), ["instance-session"])
+        XCTAssertEqual(snapshots.first?.restoreSessionID, restoreSessionID)
+        XCTAssertEqual(runtimeSyncer.latestRecords.map(\.sessionID), ["instance-session"])
     }
 
     func testActiveSessionForPanelFallsBackToTmuxPaneMatchWhenPanelIDsChanged() throws {

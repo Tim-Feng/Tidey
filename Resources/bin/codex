@@ -809,6 +809,7 @@ run_codex_app_server_runtime() {
         fallback_to_plain_codex "socket was not ready before timeout" "$@"
     fi
 
+    tidey_hydrate_tmux_pane_identity
     write_registry_file "$registry_file" "$TIDEY_WORKSPACE_ID" "$session_id" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$created_at" "$rollout_path" "codex_app_server_starting" "$socket_path" "$app_server_pid" "" "$thread_id" "$thread_id"
 
     if [[ -n "${TIDEY_SOCKET_PATH:-}" && -n "${TIDEY_WORKSPACE_ID:-}" && -x "$HOOK_DIR/tidey" ]]; then
@@ -818,6 +819,7 @@ run_codex_app_server_runtime() {
     set +e
     env CODEX_HOME="$real_codex_home" "$real_codex" --remote "unix://$socket_path" "$@" &
     remote_tui_pid="$!"
+    tidey_hydrate_tmux_pane_identity
     write_registry_file "$registry_file" "$TIDEY_WORKSPACE_ID" "$session_id" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$created_at" "$rollout_path" "codex_app_server" "$socket_path" "$app_server_pid" "$remote_tui_pid" "$thread_id" "$thread_id"
     wait "$remote_tui_pid"
     remote_status=$?
