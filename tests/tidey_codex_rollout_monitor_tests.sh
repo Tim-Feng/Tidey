@@ -355,30 +355,26 @@ run_app_server_runtime_selection_test() {
     TIDEY_SOCKET_PATH="$socket" TIDEY_WORKSPACE_ID="workspace-1" CODEX_UNDER_TEST="$CODEX_UNDER_TEST" bash -c '
         set -euo pipefail
         source "$CODEX_UNDER_TEST"
-        if should_use_codex_app_server_runtime; then
+        if ! should_use_codex_app_server_runtime; then
             exit 11
         fi
-        TIDEY_CODEX_APP_SERVER_ENABLE=1
-        if ! should_use_codex_app_server_runtime; then
+        if ! should_use_codex_app_server_runtime resume "'"$resume_id"'"; then
             exit 14
         fi
-        if ! should_use_codex_app_server_runtime resume "'"$resume_id"'"; then
-            exit 17
-        fi
         if [[ "$(app_server_resume_session_id resume "'"$resume_id"'")" != "'"$resume_id"'" ]]; then
-            exit 18
+            exit 17
         fi
         if should_use_codex_app_server_runtime resume session-1; then
             exit 12
         fi
         if should_use_codex_app_server_runtime resume --last; then
-            exit 19
+            exit 18
         fi
         if should_use_codex_app_server_runtime resume "'"$resume_id"'" --help; then
-            exit 20
+            exit 19
         fi
         if should_use_codex_app_server_runtime exec echo hi; then
-            exit 21
+            exit 20
         fi
         TIDEY_CODEX_APP_SERVER_DISABLE=1
         if should_use_codex_app_server_runtime; then
@@ -519,7 +515,6 @@ JSON
 
     HOME="$fake_home" \
         PATH="$fake_bin:/usr/bin:/bin" \
-        TIDEY_CODEX_APP_SERVER_ENABLE=1 \
         TIDEY_SOCKET_PATH="$socket" \
         TIDEY_WORKSPACE_ID="workspace-1" \
         TIDEY_PANEL_ID="panel-1" \
@@ -548,7 +543,7 @@ JSON
 
 run_app_server_runtime_resume_allows_second_instance_without_clobbering_live_record_test
 
-run_app_server_runtime_plain_path_without_enable_test() {
+run_app_server_runtime_disable_path_test() {
     local tmpdir
     local fake_home
     local fake_bin
@@ -586,6 +581,7 @@ FAKE_CODEX
 
     HOME="$fake_home" \
         PATH="$fake_bin:/usr/bin:/bin" \
+        TIDEY_CODEX_APP_SERVER_DISABLE=1 \
         TIDEY_SOCKET_PATH="$socket" \
         TIDEY_WORKSPACE_ID="workspace-1" \
         TIDEY_PANEL_ID="panel-1" \
@@ -595,10 +591,10 @@ FAKE_CODEX
 
     grep -q -- "--profile" "$codex_log" || fail "plain Codex path was not launched"
     if grep -q "app-server" "$codex_log"; then
-        fail "app-server was launched without TIDEY_CODEX_APP_SERVER_ENABLE"
+        fail "app-server was launched with TIDEY_CODEX_APP_SERVER_DISABLE"
     fi
     if grep -q -- "--remote" "$codex_log"; then
-        fail "remote TUI was launched without TIDEY_CODEX_APP_SERVER_ENABLE"
+        fail "remote TUI was launched with TIDEY_CODEX_APP_SERVER_DISABLE"
     fi
 
     kill "$socket_pid" 2>/dev/null || true
@@ -607,7 +603,7 @@ FAKE_CODEX
     rm -rf "$tmpdir"
 }
 
-run_app_server_runtime_plain_path_without_enable_test
+run_app_server_runtime_disable_path_test
 
 run_app_server_runtime_launch_test() {
     local tmpdir
@@ -689,7 +685,6 @@ JSON
 
     HOME="$fake_home" \
         PATH="$fake_bin:/usr/bin:/bin" \
-        TIDEY_CODEX_APP_SERVER_ENABLE=1 \
         TIDEY_SOCKET_PATH="$socket" \
         TIDEY_WORKSPACE_ID="workspace-1" \
         TIDEY_PANEL_ID="panel-1" \
@@ -843,7 +838,6 @@ FAKE_CODEX
     HOME="$fake_home" \
         CODEX_HOME="$fake_home/.codex" \
         PATH="$fake_bin:/usr/bin:/bin" \
-        TIDEY_CODEX_APP_SERVER_ENABLE=1 \
         TIDEY_SOCKET_PATH="$socket" \
         TIDEY_WORKSPACE_ID="workspace-1" \
         TIDEY_PANEL_ID="panel-1" \
@@ -942,7 +936,6 @@ FAKE_CODEX
     set +e
     HOME="$fake_home" \
         PATH="$fake_bin:/usr/bin:/bin" \
-        TIDEY_CODEX_APP_SERVER_ENABLE=1 \
         TIDEY_SOCKET_PATH="$socket" \
         TIDEY_WORKSPACE_ID="workspace-1" \
         TIDEY_PANEL_ID="panel-1" \
@@ -1030,7 +1023,6 @@ FAKE_CODEX
     set +e
     HOME="$fake_home" \
         PATH="$fake_bin:/usr/bin:/bin" \
-        TIDEY_CODEX_APP_SERVER_ENABLE=1 \
         TIDEY_SOCKET_PATH="$socket" \
         TIDEY_WORKSPACE_ID="workspace-1" \
         TIDEY_PANEL_ID="panel-1" \
@@ -1117,7 +1109,6 @@ FAKE_CODEX
     set +e
     HOME="$fake_home" \
         PATH="$fake_bin:/usr/bin:/bin" \
-        TIDEY_CODEX_APP_SERVER_ENABLE=1 \
         TIDEY_SOCKET_PATH="$socket" \
         TIDEY_WORKSPACE_ID="workspace-1" \
         TIDEY_PANEL_ID="panel-1" \
