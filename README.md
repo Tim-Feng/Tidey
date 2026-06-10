@@ -14,7 +14,7 @@ A terminal-first IDE for AI agents. Run agents in workspaces, edit code side by 
 
 ## Install
 
-**Download:** [Tidey.dmg](https://github.com/Tim-Feng/Tidey/releases/download/v0.5.0/Tidey.dmg) (macOS 12+, Apple Silicon & Intel)
+**Download:** [Tidey.dmg](https://github.com/Tim-Feng/Tidey/releases/download/v0.5.1/Tidey.dmg) (macOS 12+, Apple Silicon & Intel)
 
 1. Open the DMG, drag Tidey to Applications
 2. First launch: right-click → Open
