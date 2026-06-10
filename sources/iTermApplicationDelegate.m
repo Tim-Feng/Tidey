@@ -4167,21 +4167,20 @@ static iTermKeyEventReplayer *gReplayer;
        willPresentNotification:(UNNotification *)notification
          withCompletionHandler:(void (^)(UNNotificationPresentationOptions))completionHandler {
     NSString *categoryID = notification.request.content.categoryIdentifier;
-    if (![categoryID isEqualToString:@"TIDEY_WORKSPACE_NOTIFICATION"]) {
+    if (![categoryID isEqualToString:kTideySystemNotificationCategoryIdentifier]) {
         completionHandler(UNNotificationPresentationOptionNone);
         return;
     }
     NSString *workspaceID = notification.request.content.userInfo[@"workspaceID"];
-    if ([NSApp isActive] && workspaceID.length > 0) {
-        PseudoTerminal *keyWindow = [[iTermController sharedInstance] currentTerminal];
-        if (keyWindow && keyWindow.isShowingTideySidebar) {
-            NSString *selectedID = [keyWindow tideySelectedWorkspaceIdentifier];
-            if ([selectedID isEqualToString:workspaceID]) {
-                // This workspace is currently focused and the app is active - suppress.
-                completionHandler(UNNotificationPresentationOptionNone);
-                return;
-            }
-        }
+    PseudoTerminal *currentTerminal = [[iTermController sharedInstance] currentTerminal];
+    NSString *selectedID = currentTerminal.isShowingTideySidebar ? [currentTerminal tideySelectedWorkspaceIdentifier] : nil;
+    if ([PseudoTerminal tideyShouldSuppressSystemNotificationForSelectedWorkspaceID:selectedID
+                                                            notificationWorkspaceID:workspaceID
+                                                                        appIsActive:[NSApp isActive]
+                                                                   isCurrentTerminal:(currentTerminal != nil)
+                                                                        isKeyWindow:currentTerminal.window.isKeyWindow]) {
+        completionHandler(UNNotificationPresentationOptionNone);
+        return;
     }
     completionHandler(UNNotificationPresentationOptionBanner | UNNotificationPresentationOptionSound);
 }

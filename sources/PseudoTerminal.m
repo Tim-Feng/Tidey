@@ -4848,6 +4848,20 @@ ITERM_WEAKLY_REFERENCEABLE
     return [workspaceID isEqualToString:selectedWorkspaceID] || [workspaceID isEqualToString:@"*"];
 }
 
++ (BOOL)tideyShouldSuppressSystemNotificationForSelectedWorkspaceID:(NSString *)selectedWorkspaceID
+                                            notificationWorkspaceID:(NSString *)workspaceID
+                                                        appIsActive:(BOOL)appIsActive
+                                                   isCurrentTerminal:(BOOL)isCurrentTerminal
+                                                        isKeyWindow:(BOOL)isKeyWindow {
+    if (selectedWorkspaceID.length == 0 || workspaceID.length == 0) {
+        return NO;
+    }
+    if (!appIsActive || !isCurrentTerminal || !isKeyWindow) {
+        return NO;
+    }
+    return [workspaceID isEqualToString:selectedWorkspaceID];
+}
+
 + (BOOL)tideyShouldAutoMarkReadWorkspaceOnFocusGainForSelectedWorkspaceID:(NSString *)selectedWorkspaceID
                                             selectedWorkspaceHasUnreadNotifications:(BOOL)hasUnreadNotifications
                                                                         appIsActive:(BOOL)appIsActive

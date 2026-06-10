@@ -38,10 +38,12 @@
 #import "PseudoTerminal.h"
 #import "PTYSession.h"
 #import "PTYTab.h"
+#import "TideyNotificationStore.h"
 
 @interface iTermNotificationController ()
 - (void)notificationWasClicked:(id)clickContext;
 - (void)ensureNotificationPermissionsWithCompletion:(void (^)(BOOL granted))completion;
+- (BOOL)tideyHandleNotificationResponseIfNeeded:(UNNotificationResponse *)response;
 @property (nonatomic, strong) NSMutableArray<void (^)(BOOL granted)> *pendingPermissionCompletions;
 @property (nonatomic, assign) BOOL checkingPermissions;
 @end
@@ -413,14 +415,56 @@
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center
        willPresentNotification:(UNNotification *)notification
          withCompletionHandler:(void (^)(UNNotificationPresentationOptions))completionHandler {
+    NSString *categoryID = notification.request.content.categoryIdentifier;
+    if ([categoryID isEqualToString:kTideySystemNotificationCategoryIdentifier]) {
+        NSString *workspaceID = notification.request.content.userInfo[@"workspaceID"];
+        PseudoTerminal *currentTerminal = [[iTermController sharedInstance] currentTerminal];
+        NSString *selectedID = currentTerminal.isShowingTideySidebar ? [currentTerminal tideySelectedWorkspaceIdentifier] : nil;
+        if ([PseudoTerminal tideyShouldSuppressSystemNotificationForSelectedWorkspaceID:selectedID
+                                                                notificationWorkspaceID:workspaceID
+                                                                            appIsActive:[NSApp isActive]
+                                                                       isCurrentTerminal:(currentTerminal != nil)
+                                                                            isKeyWindow:currentTerminal.window.isKeyWindow]) {
+            completionHandler(UNNotificationPresentationOptionNone);
+            return;
+        }
+    }
     completionHandler(UNNotificationPresentationOptionBanner | UNNotificationPresentationOptionSound);
 }
 
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center
 didReceiveNotificationResponse:(UNNotificationResponse *)response
          withCompletionHandler:(void (^)(void))completionHandler {
+    if ([self tideyHandleNotificationResponseIfNeeded:response]) {
+        completionHandler();
+        return;
+    }
     [self notificationWasClicked:response.notification.request.content.userInfo];
     completionHandler();
+}
+
+- (BOOL)tideyHandleNotificationResponseIfNeeded:(UNNotificationResponse *)response {
+    NSString *categoryID = response.notification.request.content.categoryIdentifier;
+    if (![categoryID isEqualToString:kTideySystemNotificationCategoryIdentifier]) {
+        return NO;
+    }
+
+    NSString *workspaceID = response.notification.request.content.userInfo[@"workspaceID"];
+    if (workspaceID.length == 0) {
+        return YES;
+    }
+
+    [NSApp activateIgnoringOtherApps:YES];
+    for (PseudoTerminal *terminal in [[iTermController sharedInstance] terminals]) {
+        if (!terminal.isShowingTideySidebar) {
+            continue;
+        }
+        if ([terminal tideySelectWorkspaceWithIdentifier:workspaceID]) {
+            [terminal.window makeKeyAndOrderFront:nil];
+            break;
+        }
+    }
+    return YES;
 }
 
 @end

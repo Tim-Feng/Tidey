@@ -23,6 +23,11 @@
                                                                          appIsActive:(BOOL)appIsActive
                                                                     isCurrentTerminal:(BOOL)isCurrentTerminal
                                                                           isKeyWindow:(BOOL)isKeyWindow;
++ (BOOL)tideyShouldSuppressSystemNotificationForSelectedWorkspaceID:(NSString *)selectedWorkspaceID
+                                            notificationWorkspaceID:(NSString *)workspaceID
+                                                        appIsActive:(BOOL)appIsActive
+                                                   isCurrentTerminal:(BOOL)isCurrentTerminal
+                                                        isKeyWindow:(BOOL)isKeyWindow;
 + (BOOL)tideyShouldAutoMarkReadWorkspaceOnFocusGainForSelectedWorkspaceID:(NSString *)selectedWorkspaceID
                                             selectedWorkspaceHasUnreadNotifications:(BOOL)hasUnreadNotifications
                                                                         appIsActive:(BOOL)appIsActive
@@ -165,7 +170,39 @@
                                                                               notificationWorkspaceID:@"*"
                                                                                           appIsActive:YES
                                                                                      isCurrentTerminal:YES
-                                                                                           isKeyWindow:YES]);
+                                                                                            isKeyWindow:YES]);
+}
+
+- (void)testFocusedSelectedWorkspaceSystemNotificationIsSuppressed {
+    XCTAssertTrue([PseudoTerminal tideyShouldSuppressSystemNotificationForSelectedWorkspaceID:@"workspace-1"
+                                                                      notificationWorkspaceID:@"workspace-1"
+                                                                                  appIsActive:YES
+                                                                             isCurrentTerminal:YES
+                                                                                  isKeyWindow:YES]);
+}
+
+- (void)testOtherWorkspaceSystemNotificationIsPresented {
+    XCTAssertFalse([PseudoTerminal tideyShouldSuppressSystemNotificationForSelectedWorkspaceID:@"workspace-1"
+                                                                       notificationWorkspaceID:@"workspace-2"
+                                                                                   appIsActive:YES
+                                                                              isCurrentTerminal:YES
+                                                                                   isKeyWindow:YES]);
+}
+
+- (void)testBackgroundFocusedWorkspaceSystemNotificationIsPresented {
+    XCTAssertFalse([PseudoTerminal tideyShouldSuppressSystemNotificationForSelectedWorkspaceID:@"workspace-1"
+                                                                       notificationWorkspaceID:@"workspace-1"
+                                                                                   appIsActive:NO
+                                                                              isCurrentTerminal:YES
+                                                                                   isKeyWindow:YES]);
+}
+
+- (void)testBroadcastSystemNotificationIsPresented {
+    XCTAssertFalse([PseudoTerminal tideyShouldSuppressSystemNotificationForSelectedWorkspaceID:@"workspace-1"
+                                                                       notificationWorkspaceID:@"*"
+                                                                                   appIsActive:YES
+                                                                              isCurrentTerminal:YES
+                                                                                   isKeyWindow:YES]);
 }
 
 - (void)testNotificationStoreChangeWithoutNotificationIDDoesNotCountAsArrival {

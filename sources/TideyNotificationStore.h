@@ -4,6 +4,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 extern NSNotificationName const TideyNotificationStoreDidChangeNotification;
 extern NSNotificationName const TideyStatusStoreDidChangeNotification;
+extern NSString *const kTideySystemNotificationCategoryIdentifier;
 
 #pragma mark - TideyNotificationItem
 

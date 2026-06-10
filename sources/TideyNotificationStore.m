@@ -7,7 +7,7 @@
 NSNotificationName const TideyNotificationStoreDidChangeNotification = @"TideyNotificationStoreDidChangeNotification";
 NSNotificationName const TideyStatusStoreDidChangeNotification = @"TideyStatusStoreDidChangeNotification";
 static NSString *const kTideyBroadcastWorkspaceIdentifier = @"*";
-static NSString *const kTideySystemNotificationCategoryIdentifier = @"TIDEY_WORKSPACE_NOTIFICATION";
+NSString *const kTideySystemNotificationCategoryIdentifier = @"TIDEY_WORKSPACE_NOTIFICATION";
 
 #pragma mark - TideyNotificationItem
 
