@@ -16,6 +16,8 @@
 + (NSArray<NSString *> *)tideyTmuxPaneIdentityCommandsForPane:(int)pane
                                                   workspaceID:(NSString *)workspaceID
                                                       panelID:(NSString *)panelID;
++ (NSArray<NSString *> *)tideyInputChunksForInput:(NSString *)input
+                                   maxChunkLength:(NSUInteger)maxChunkLength;
 + (BOOL)tideyShouldAutoMarkReadWorkspaceOnNotificationArrivalForSelectedWorkspaceID:(NSString *)selectedWorkspaceID
                                                              notificationWorkspaceID:(NSString *)workspaceID
                                                                          appIsActive:(BOOL)appIsActive
@@ -243,6 +245,33 @@
                                                             workspaceID:@"workspace-123"
                                                                 panelID:nil].count,
                    0);
+}
+
+- (void)testSocketInputChunksLongCommandsWithoutLosingContent {
+    NSMutableString *input = [NSMutableString stringWithString:@"if true; then "];
+    for (NSInteger i = 0; i < 120; i++) {
+        [input appendFormat:@"printf '%03ld'; ", (long)i];
+    }
+    [input appendString:@"else echo fail; fi\r"];
+
+    NSArray<NSString *> *chunks = [PseudoTerminal tideyInputChunksForInput:input
+                                                            maxChunkLength:256];
+
+    XCTAssertGreaterThan(chunks.count, 1);
+    for (NSString *chunk in chunks) {
+        XCTAssertLessThanOrEqual(chunk.length, 256);
+    }
+    XCTAssertEqualObjects([chunks componentsJoinedByString:@""], input);
+}
+
+- (void)testSocketInputChunksDoNotSplitComposedCharacters {
+    NSString *input = @"ab👨‍👩‍👧‍👦cd\r";
+
+    NSArray<NSString *> *chunks = [PseudoTerminal tideyInputChunksForInput:input
+                                                            maxChunkLength:3];
+
+    XCTAssertEqualObjects([chunks componentsJoinedByString:@""], input);
+    XCTAssertTrue([chunks containsObject:@"👨‍👩‍👧‍👦"]);
 }
 
 - (void)testQuitConfirmationRequiresSecondCommandQWithinTimeout {

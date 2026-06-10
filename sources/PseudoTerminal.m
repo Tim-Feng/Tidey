@@ -2116,6 +2116,54 @@ ITERM_WEAKLY_REFERENCEABLE
     return panel.activeSession;
 }
 
++ (NSArray<NSString *> *)tideyInputChunksForInput:(NSString *)input maxChunkLength:(NSUInteger)maxChunkLength {
+    if (input.length == 0) {
+        return @[];
+    }
+    if (maxChunkLength == 0 || input.length <= maxChunkLength) {
+        return @[ input ];
+    }
+
+    NSMutableArray<NSString *> *chunks = [NSMutableArray array];
+    __block NSMutableString *currentChunk = [NSMutableString string];
+    [input enumerateSubstringsInRange:NSMakeRange(0, input.length)
+                              options:NSStringEnumerationByComposedCharacterSequences
+                           usingBlock:^(NSString *substring, NSRange substringRange, NSRange enclosingRange, BOOL *stop) {
+        if (substring.length == 0) {
+            return;
+        }
+        if (currentChunk.length > 0 && currentChunk.length + substring.length > maxChunkLength) {
+            [chunks addObject:[currentChunk copy]];
+            [currentChunk setString:@""];
+        }
+        [currentChunk appendString:substring];
+    }];
+    if (currentChunk.length > 0) {
+        [chunks addObject:[currentChunk copy]];
+    }
+    return chunks;
+}
+
+- (void)tideyWriteInput:(NSString *)input toSession:(PTYSession *)session {
+    const NSUInteger kDirectWriteLimit = 512;
+    const NSUInteger kChunkLength = 256;
+    const NSTimeInterval kChunkDelay = 0.01;
+
+    NSArray<NSString *> *chunks = [PseudoTerminal tideyInputChunksForInput:input
+                                                            maxChunkLength:input.length <= kDirectWriteLimit ? 0 : kChunkLength];
+    if (chunks.count <= 1) {
+        [session writeTaskNoBroadcast:input];
+        return;
+    }
+
+    [chunks enumerateObjectsUsingBlock:^(NSString *chunk, NSUInteger index, BOOL *stop) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kChunkDelay * index * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            [session writeTaskNoBroadcast:chunk];
+        });
+    }];
+}
+
 - (BOOL)tideySendInput:(NSString *)input toPanelWithIdentifier:(NSString *)panelIdentifier {
     if (input.length == 0) {
         return NO;
@@ -2131,7 +2179,7 @@ ITERM_WEAKLY_REFERENCEABLE
           [input containsString:@"\r"] ? @"YES" : @"NO",
           [input containsString:@"\n"] ? @"YES" : @"NO",
           TideySubmitLogSuffix(input));
-    [session writeTaskNoBroadcast:input];
+    [self tideyWriteInput:input toSession:session];
     return YES;
 }
 
@@ -2172,7 +2220,7 @@ ITERM_WEAKLY_REFERENCEABLE
           [input containsString:@"\r"] ? @"YES" : @"NO",
           [input containsString:@"\n"] ? @"YES" : @"NO",
           TideySubmitLogSuffix(input));
-    [session writeTaskNoBroadcast:input];
+    [self tideyWriteInput:input toSession:session];
     return YES;
 }
 
