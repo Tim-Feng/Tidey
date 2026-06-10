@@ -748,10 +748,7 @@ run_codex_app_server_runtime() {
     local remote_status=0
     local socket_wait_attempts="${TIDEY_CODEX_APP_SERVER_SOCKET_WAIT_ATTEMPTS:-1200}"
     local socket_wait_interval="${TIDEY_CODEX_APP_SERVER_SOCKET_WAIT_INTERVAL:-0.05}"
-    local socket_wait_message_after_attempts="${TIDEY_CODEX_APP_SERVER_SOCKET_WAIT_MESSAGE_AFTER_ATTEMPTS:-20}"
     local socket_wait_iteration=0
-    local waiting_reported=0
-    local backfill_reported=0
 
     socket_dir="$(mktemp -d "${TMPDIR:-/tmp}/tidey-codex-app-server.XXXXXX")"
     socket_path="$socket_dir/app.sock"
@@ -780,11 +777,15 @@ run_codex_app_server_runtime() {
 
     fallback_to_plain_codex() {
         local reason="$1"
+        local fallback_log="$real_codex_home/.tmp/tidey-codex-app-server-startup-fallback.log"
         shift
-        echo "Warning: codex app-server startup failed (${reason}); falling back to plain codex." >&2
-        if [[ -s "${app_server_log:-}" ]]; then
-            cat "$app_server_log" >&2 || true
-        fi
+        mkdir -p "$real_codex_home/.tmp" 2>/dev/null || true
+        {
+            printf 'reason=%s\n' "$reason"
+            if [[ -s "${app_server_log:-}" ]]; then
+                cat "$app_server_log"
+            fi
+        } > "$fallback_log" 2>/dev/null || true
         cleanup_codex_app_server_artifacts
         trap - EXIT HUP INT TERM
         exec env CODEX_HOME="$real_codex_home" "$real_codex" "$profile_flag" "$profile_name" "$@"
@@ -794,9 +795,6 @@ run_codex_app_server_runtime() {
 
     if ! [[ "$socket_wait_attempts" =~ ^[0-9]+$ ]] || [[ "$socket_wait_attempts" -lt 1 ]]; then
         socket_wait_attempts=1200
-    fi
-    if ! [[ "$socket_wait_message_after_attempts" =~ ^[0-9]+$ ]] || [[ "$socket_wait_message_after_attempts" -lt 1 ]]; then
-        socket_wait_message_after_attempts=20
     fi
 
     env CODEX_HOME="$real_codex_home" "$real_codex" app-server \
@@ -810,14 +808,6 @@ run_codex_app_server_runtime() {
         fi
         if ! kill -0 "$app_server_pid" 2>/dev/null; then
             fallback_to_plain_codex "app-server exited before socket was ready" "$@"
-        fi
-        if [[ "$waiting_reported" -eq 0 && "$socket_wait_iteration" -ge "$socket_wait_message_after_attempts" ]]; then
-            echo "Waiting for codex app-server socket..." >&2
-            waiting_reported=1
-        fi
-        if [[ "$backfill_reported" -eq 0 && -f "$app_server_log" ]] && grep -q "state db backfill is running" "$app_server_log"; then
-            echo "Codex app-server state database backfill is running; continuing to wait..." >&2
-            backfill_reported=1
         fi
         sleep "$socket_wait_interval"
     done

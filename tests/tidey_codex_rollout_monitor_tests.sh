@@ -997,6 +997,7 @@ run_app_server_runtime_startup_exit_falls_back_to_plain_test() {
     local socket_pid
     local codex_log
     local stderr_log
+    local fallback_log
     local resume_id="019eac34-764c-7893-9599-5b6000037cea"
     local status
 
@@ -1007,6 +1008,7 @@ run_app_server_runtime_startup_exit_falls_back_to_plain_test() {
     socket="$tmpdir/tidey.sock"
     codex_log="$tmpdir/codex.log"
     stderr_log="$tmpdir/stderr.log"
+    fallback_log="$fake_home/.codex/.tmp/tidey-codex-app-server-startup-fallback.log"
     mkdir -p "$fake_bin" "$registry_root"
 
     cat > "$fake_bin/codex" <<'FAKE_CODEX'
@@ -1039,6 +1041,7 @@ FAKE_CODEX
 
     set +e
     HOME="$fake_home" \
+        CODEX_HOME="$fake_home/.codex" \
         PATH="$fake_bin:/usr/bin:/bin" \
         TIDEY_SOCKET_PATH="$socket" \
         TIDEY_WORKSPACE_ID="workspace-1" \
@@ -1058,8 +1061,9 @@ FAKE_CODEX
         fail "remote TUI was launched after app-server startup exit"
     fi
     [[ -z "$(find "$registry_root" -name "codex-*.json" -print -quit)" ]] || fail "startup exit fallback left registry files"
-    grep -q "falling back to plain codex" "$stderr_log" || fail "startup exit fallback warning was not printed"
-    grep -q "fake app-server startup failed" "$stderr_log" || fail "app-server failure log was not printed"
+    [[ ! -s "$stderr_log" ]] || fail "startup exit fallback printed user-facing output"
+    grep -q "reason=app-server exited before socket was ready" "$fallback_log" || fail "startup exit fallback reason was not logged"
+    grep -q "fake app-server startup failed" "$fallback_log" || fail "app-server failure log was not captured"
 
     kill "$socket_pid" 2>/dev/null || true
     wait "$socket_pid" 2>/dev/null || true
@@ -1078,6 +1082,7 @@ run_app_server_runtime_socket_timeout_falls_back_to_plain_test() {
     local socket_pid
     local codex_log
     local stderr_log
+    local fallback_log
     local app_server_pid_file
     local app_server_pid
     local child_state
@@ -1090,6 +1095,7 @@ run_app_server_runtime_socket_timeout_falls_back_to_plain_test() {
     socket="$tmpdir/tidey.sock"
     codex_log="$tmpdir/codex.log"
     stderr_log="$tmpdir/stderr.log"
+    fallback_log="$fake_home/.codex/.tmp/tidey-codex-app-server-startup-fallback.log"
     app_server_pid_file="$tmpdir/app-server.pid"
     mkdir -p "$fake_bin" "$registry_root"
 
@@ -1125,6 +1131,7 @@ FAKE_CODEX
 
     set +e
     HOME="$fake_home" \
+        CODEX_HOME="$fake_home/.codex" \
         PATH="$fake_bin:/usr/bin:/bin" \
         TIDEY_SOCKET_PATH="$socket" \
         TIDEY_WORKSPACE_ID="workspace-1" \
@@ -1146,9 +1153,9 @@ FAKE_CODEX
         fail "remote TUI was launched after app-server socket timeout"
     fi
     [[ -z "$(find "$registry_root" -name "codex-*.json" -print -quit)" ]] || fail "socket timeout fallback left registry files"
-    grep -q "Waiting for codex app-server socket" "$stderr_log" || fail "startup wait message was not printed"
-    grep -q "state database backfill is running" "$stderr_log" || fail "backfill wait message was not printed"
-    grep -q "falling back to plain codex" "$stderr_log" || fail "socket timeout fallback warning was not printed"
+    [[ ! -s "$stderr_log" ]] || fail "socket timeout fallback printed user-facing output"
+    grep -q "reason=socket was not ready before timeout" "$fallback_log" || fail "socket timeout fallback reason was not logged"
+    grep -q "state db backfill is running" "$fallback_log" || fail "backfill log was not captured"
 
     [[ -f "$app_server_pid_file" ]] || fail "timeout app-server pid was not recorded"
     app_server_pid="$(cat "$app_server_pid_file")"
