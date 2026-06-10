@@ -30,6 +30,24 @@ final class BridgeObservabilityCenterTests: XCTestCase {
         XCTAssertEqual(snapshot.fetchStats.lastFetch?.afterSeq, 120)
         XCTAssertEqual(snapshot.fetchStats.lastFetch?.returnedCount, 18)
         XCTAssertEqual(snapshot.activeSessions.first?.sessionID, "session-1")
+        XCTAssertEqual(snapshot.activeSessions.first?.restoreSessionID, "session-1")
+    }
+
+    func testActiveSessionStatusEncodesRestoreSessionID() throws {
+        let status = BridgeActiveSessionStatus(vendor: "codex",
+                                               workspaceID: "workspace-1",
+                                               sessionID: "instance-1",
+                                               panelID: "panel-1",
+                                               restoreSessionID: "thread-1",
+                                               bufferedEventCount: 0,
+                                               oldestSeq: nil,
+                                               newestSeq: nil,
+                                               isActive: true)
+
+        let data = try JSONEncoder().encode(status)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(object["session_id"] as? String, "instance-1")
+        XCTAssertEqual(object["restore_session_id"] as? String, "thread-1")
     }
 
     func testSlowFetchIsRecordedAsSlowOperation() {

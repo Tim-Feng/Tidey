@@ -136,7 +136,9 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
           "created_at": "2026-06-07T00:00:00Z",
           "runtime": "codex_app_server",
           "app_server_socket": "/tmp/tidey-codex-app-server/app.sock",
-          "app_server_pid": \(getpid())
+          "app_server_pid": \(getpid()),
+          "thread_id": "thread-current",
+          "resume_thread_id": "thread-resume"
         }
         """.utf8)
         try recordData.write(to: registryURL)
@@ -153,6 +155,7 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         let session = monitor.activeSessionForPanel(workspaceID: "workspace-app-server",
                                                     panelID: "panel-app-server")
         XCTAssertEqual(session?.sessionID, "session-app-server")
+        XCTAssertEqual(session?.restoreSessionID, "thread-resume")
         XCTAssertTrue(fileManager.fileExists(atPath: registryURL.path))
         XCTAssertEqual(runtimeSyncer.latestRecords.map(\.sessionID), ["session-app-server"])
     }

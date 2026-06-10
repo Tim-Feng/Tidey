@@ -500,6 +500,7 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
                                              workspaceID: session.workspaceID,
                                              sessionID: session.sessionID,
                                              panelID: session.panelID,
+                                             restoreSessionID: session.restoreSessionID,
                                              bufferedEventCount: eventSnapshot?.bufferedEventCount ?? 0,
                                              oldestSeq: eventSnapshot?.oldestSeq,
                                              newestSeq: eventSnapshot?.newestSeq,

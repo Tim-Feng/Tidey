@@ -138,7 +138,20 @@ struct ActiveAgentSessionSnapshot: Sendable {
     let vendor: String
     let workspaceID: String
     let sessionID: String
+    let restoreSessionID: String
     let panelID: String?
+
+    init(vendor: String,
+         workspaceID: String,
+         sessionID: String,
+         panelID: String?,
+         restoreSessionID: String? = nil) {
+        self.vendor = vendor
+        self.workspaceID = workspaceID
+        self.sessionID = sessionID
+        self.restoreSessionID = restoreSessionID ?? sessionID
+        self.panelID = panelID
+    }
 }
 
 struct ResolvedPanelBinding: Equatable, Sendable {
@@ -463,7 +476,8 @@ final class AgentSessionRegistryMonitor {
                 ActiveAgentSessionSnapshot(vendor: $0.vendor,
                                            workspaceID: $0.workspaceID,
                                            sessionID: $0.sessionID,
-                                           panelID: $0.panelID)
+                                           panelID: $0.panelID,
+                                           restoreSessionID: Self.restoreSessionID(for: $0))
             }
         }
     }
@@ -678,7 +692,8 @@ final class AgentSessionRegistryMonitor {
                 ActiveAgentSessionSnapshot(vendor: $0.vendor,
                                            workspaceID: workspaceID,
                                            sessionID: $0.sessionID,
-                                           panelID: $0.panelID)
+                                           panelID: $0.panelID,
+                                           restoreSessionID: Self.restoreSessionID(for: $0))
             }
     }
 
@@ -724,7 +739,8 @@ final class AgentSessionRegistryMonitor {
             return ActiveAgentSessionSnapshot(vendor: liveCodexProcessRecord.vendor,
                                               workspaceID: panel.workspaceID,
                                               sessionID: liveCodexProcessRecord.sessionID,
-                                              panelID: panel.panelID)
+                                              panelID: panel.panelID,
+                                              restoreSessionID: Self.restoreSessionID(for: liveCodexProcessRecord))
         }
 
         if let direct = directMatches.first {
@@ -735,7 +751,8 @@ final class AgentSessionRegistryMonitor {
             return ActiveAgentSessionSnapshot(vendor: direct.vendor,
                                               workspaceID: panel.workspaceID,
                                               sessionID: direct.sessionID,
-                                              panelID: panel.panelID)
+                                              panelID: panel.panelID,
+                                              restoreSessionID: Self.restoreSessionID(for: direct))
         }
 
         guard let effectiveShellPID = panel.effectiveShellPID, effectiveShellPID > 0 else {
@@ -753,7 +770,8 @@ final class AgentSessionRegistryMonitor {
             return ActiveAgentSessionSnapshot(vendor: ordinaryTmuxMatch.vendor,
                                               workspaceID: panel.workspaceID,
                                               sessionID: ordinaryTmuxMatch.sessionID,
-                                              panelID: panel.panelID)
+                                              panelID: panel.panelID,
+                                              restoreSessionID: Self.restoreSessionID(for: ordinaryTmuxMatch))
         }
 
         let tmuxCandidates = self.activeRecords.values
@@ -788,7 +806,8 @@ final class AgentSessionRegistryMonitor {
                 return ActiveAgentSessionSnapshot(vendor: liveCodexMatch.vendor,
                                                   workspaceID: panel.workspaceID,
                                                   sessionID: liveCodexMatch.sessionID,
-                                                  panelID: panel.panelID)
+                                                  panelID: panel.panelID,
+                                                  restoreSessionID: Self.restoreSessionID(for: liveCodexMatch))
             }
             logPanelMatchFailure(panel, matchedReason: "none")
             return nil
@@ -801,7 +820,15 @@ final class AgentSessionRegistryMonitor {
         return ActiveAgentSessionSnapshot(vendor: match.vendor,
                                           workspaceID: panel.workspaceID,
                                           sessionID: match.sessionID,
-                                          panelID: panel.panelID)
+                                          panelID: panel.panelID,
+                                          restoreSessionID: Self.restoreSessionID(for: match))
+    }
+
+    private static func restoreSessionID(for record: AgentSessionRegistryRecord) -> String {
+        if isCodexAppServerRuntimeRecord(record) {
+            return record.resumeThreadID ?? record.threadID ?? record.sessionID
+        }
+        return record.sessionID
     }
 
     private func logPanelMatchFailure(_ panel: AgentPanelProcessSnapshot,

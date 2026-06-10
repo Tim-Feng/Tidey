@@ -5,16 +5,38 @@ struct BridgeActiveSessionStatus: Codable, Equatable {
     let vendor: String
     let workspaceID: String
     let sessionID: String
+    let restoreSessionID: String
     let panelID: String?
     let bufferedEventCount: Int
     let oldestSeq: Int?
     let newestSeq: Int?
     let isActive: Bool
 
+    init(vendor: String,
+         workspaceID: String,
+         sessionID: String,
+         panelID: String?,
+         restoreSessionID: String? = nil,
+         bufferedEventCount: Int,
+         oldestSeq: Int?,
+         newestSeq: Int?,
+         isActive: Bool) {
+        self.vendor = vendor
+        self.workspaceID = workspaceID
+        self.sessionID = sessionID
+        self.panelID = panelID
+        self.restoreSessionID = restoreSessionID ?? sessionID
+        self.bufferedEventCount = bufferedEventCount
+        self.oldestSeq = oldestSeq
+        self.newestSeq = newestSeq
+        self.isActive = isActive
+    }
+
     enum CodingKeys: String, CodingKey {
         case vendor
         case workspaceID = "workspace_id"
         case sessionID = "session_id"
+        case restoreSessionID = "restore_session_id"
         case panelID = "panel_id"
         case bufferedEventCount = "buffered_event_count"
         case oldestSeq = "oldest_seq"
