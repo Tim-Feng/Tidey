@@ -3,7 +3,6 @@
 #import <UserNotifications/UserNotifications.h>
 
 #import "DebugLogging.h"
-#import "iTermNotificationController.h"
 
 NSNotificationName const TideyNotificationStoreDidChangeNotification = @"TideyNotificationStoreDidChangeNotification";
 NSNotificationName const TideyStatusStoreDidChangeNotification = @"TideyStatusStoreDidChangeNotification";
@@ -311,11 +310,7 @@ NSString *const kTideySystemNotificationCategoryIdentifier = @"TIDEY_WORKSPACE_N
         return;
     }
 
-    // Ensure foreground Tidey notifications always go through a live delegate.
-    // The delegate handles fine-grained suppression, such as focused workspaces.
-    [UNUserNotificationCenter currentNotificationCenter].delegate = [iTermNotificationController sharedInstance];
-
-    // The UNUserNotificationCenterDelegate handles
+    // The UNUserNotificationCenterDelegate (in iTermApplicationDelegate) handles
     // fine-grained suppression (e.g. suppressing when the workspace is focused).
     // Here we just create and submit the notification request.
     UNMutableNotificationContent *content = [[UNMutableNotificationContent alloc] init];
