@@ -75,7 +75,7 @@ final class CodexAppServerConnectionTests: XCTestCase {
         XCTAssertEqual(envelope.prompt.source, "codex_command_approval")
         XCTAssertEqual(envelope.prompt.title, "Approve Codex command?")
         XCTAssertTrue(envelope.prompt.body.contains("Command: python3 -c 'print(1)'"))
-        XCTAssertEqual(envelope.prompt.options.map(\.inputSequence), ["accept", "acceptWithExecpolicyAmendment", "decline"])
+        XCTAssertEqual(envelope.prompt.options.map(\.inputSequence), ["accept", "decline"])
         XCTAssertEqual(envelope.event.type, .interactivePrompt)
         XCTAssertEqual(envelope.event.vendor, "codex")
         XCTAssertEqual(envelope.event.workspaceID, "workspace-1")
@@ -92,10 +92,7 @@ final class CodexAppServerConnectionTests: XCTestCase {
 
         let response = try Self.object(from: outbound.lines()[0])
         XCTAssertEqual(response["id"]?.stringValue, "approval-1")
-        let decision = try XCTUnwrap(response["result"]?.objectValue?["decision"]?.objectValue)
-        let amendmentContainer = try XCTUnwrap(decision["acceptWithExecpolicyAmendment"]?.objectValue)
-        let amendment = try XCTUnwrap(amendmentContainer["execpolicy_amendment"]?.arrayValue)
-        XCTAssertEqual(amendment.compactMap(\.stringValue), ["python3", "-c"])
+        XCTAssertEqual(response["result"]?.objectValue?["decision"]?.stringValue, "decline")
     }
 
     func testFileChangeApprovalRequestPublishesPromptAndSubmitSendsDecisionReply() throws {

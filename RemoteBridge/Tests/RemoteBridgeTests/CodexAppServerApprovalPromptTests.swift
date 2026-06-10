@@ -80,7 +80,7 @@ final class CodexAppServerApprovalPromptTests: XCTestCase {
         XCTAssertEqual(response.objectValue?["decision"]?.stringValue, "decline")
     }
 
-    func testCommandApprovalIncludesExecpolicyAmendmentOption() throws {
+    func testCommandApprovalFallbackDoesNotInventExecpolicyAmendmentOption() throws {
         let request = try XCTUnwrap(CodexAppServerApprovalRequest(
             method: "item/commandExecution/requestApproval",
             requestID: .string("req-1"),
@@ -100,20 +100,15 @@ final class CodexAppServerApprovalPromptTests: XCTestCase {
 
         XCTAssertEqual(prompt.options.map(\.label), [
             "Yes, proceed (y)",
-            "Yes, and don't ask again for commands that start with `python3 -c` (p)",
             "No, and tell Codex what to do differently (esc)",
         ])
         XCTAssertEqual(prompt.options.map(\.inputSequence), [
             "accept",
-            "acceptWithExecpolicyAmendment",
             "decline",
         ])
 
         let response = try request.response(targetIndex: 1)
-        let decision = try XCTUnwrap(response.objectValue?["decision"]?.objectValue)
-        let amendmentContainer = try XCTUnwrap(decision["acceptWithExecpolicyAmendment"]?.objectValue)
-        let amendment = try XCTUnwrap(amendmentContainer["execpolicy_amendment"]?.arrayValue)
-        XCTAssertEqual(amendment.compactMap(\.stringValue), ["python3", "-c"])
+        XCTAssertEqual(response.objectValue?["decision"]?.stringValue, "decline")
     }
 
     func testCommandApprovalUsesAvailableDecisionOrderWhenPresent() throws {
@@ -182,7 +177,7 @@ final class CodexAppServerApprovalPromptTests: XCTestCase {
         XCTAssertEqual(try request.response(targetIndex: 2).objectValue?["decision"]?.stringValue, "cancel")
     }
 
-    func testCommandApprovalIncludesNetworkPolicyAmendmentOption() throws {
+    func testCommandApprovalFallbackDoesNotInventNetworkPolicyAmendmentOption() throws {
         let request = try XCTUnwrap(CodexAppServerApprovalRequest(
             method: "item/commandExecution/requestApproval",
             requestID: .string("req-1"),
@@ -204,21 +199,15 @@ final class CodexAppServerApprovalPromptTests: XCTestCase {
 
         XCTAssertEqual(prompt.options.map(\.label), [
             "Yes, proceed (y)",
-            "Yes, and allow example.com for this conversation",
             "No, and tell Codex what to do differently (esc)",
         ])
         XCTAssertEqual(prompt.options.map(\.inputSequence), [
             "accept",
-            "applyNetworkPolicyAmendment",
             "decline",
         ])
 
         let response = try request.response(targetIndex: 1)
-        let decision = try XCTUnwrap(response.objectValue?["decision"]?.objectValue)
-        let amendmentContainer = try XCTUnwrap(decision["applyNetworkPolicyAmendment"]?.objectValue)
-        let amendment = try XCTUnwrap(amendmentContainer["network_policy_amendment"]?.objectValue)
-        XCTAssertEqual(amendment["host"]?.stringValue, "example.com")
-        XCTAssertEqual(amendment["action"]?.stringValue, "allow")
+        XCTAssertEqual(response.objectValue?["decision"]?.stringValue, "decline")
     }
 
     func testRejectsUnsupportedApprovalMethod() {

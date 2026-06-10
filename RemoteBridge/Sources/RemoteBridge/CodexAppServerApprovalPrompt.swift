@@ -173,25 +173,10 @@ struct CodexAppServerApprovalRequest: Sendable {
         }
         switch method {
         case .commandExecution:
-            var options = [
+            return [
                 Self.option(for: .string("accept"), method: method),
+                Self.option(for: .string("decline"), method: method),
             ]
-            if let proposedExecpolicyAmendment {
-                options.append(Self.option(for: .object([
-                    "acceptWithExecpolicyAmendment": .object([
-                        "execpolicy_amendment": proposedExecpolicyAmendment,
-                    ]),
-                ]), method: method))
-            }
-            options.append(contentsOf: proposedNetworkPolicyAmendments.map { amendment in
-                Self.option(for: .object([
-                    "applyNetworkPolicyAmendment": .object([
-                        "network_policy_amendment": amendment,
-                    ]),
-                ]), method: method)
-            })
-            options.append(Self.option(for: .string("decline"), method: method))
-            return options
         case .fileChange:
             var options = [
                 Self.option(for: .string("accept"), method: method),
