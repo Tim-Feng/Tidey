@@ -227,6 +227,68 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         XCTAssertEqual(messages[2], "report_shell_state prompt --workspace_id=workspace-1")
     }
 
+    func testSidebarMessagesUseResolvedCurrentWorkspaceID() throws {
+        let hub = AgentEventHub()
+        var capturedAgentEventHandler: CodexAppServerHeadlessRuntime.AgentEventHandler?
+        let sidebarLock = NSLock()
+        var sidebarMessages = [String]()
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub,
+                                                        sidebarMessageSender: { message in
+                                                            sidebarLock.lock()
+                                                            sidebarMessages.append(message)
+                                                            sidebarLock.unlock()
+                                                        },
+                                                        sidebarWorkspaceIDResolver: { record in
+                                                            record.sessionID == "app" ? "current-workspace" : nil
+                                                        },
+                                                        attachHandler: { _, _, _, onAgentEvent, _, _ in
+            capturedAgentEventHandler = onAgentEvent
+            return FakeRuntimeSession()
+        })
+
+        syncer.sync(records: [
+            Self.record(sessionID: "app",
+                        runtime: "codex_app_server",
+                        socketPath: "/tmp/app.sock",
+                        workspaceID: "stale-workspace"),
+        ])
+        let onAgentEvent = try XCTUnwrap(capturedAgentEventHandler)
+
+        onAgentEvent(Self.appServerEvent(eventID: "turn-started",
+                                         seq: 1,
+                                         sessionID: "app",
+                                         type: .thinking,
+                                         text: "Codex turn started",
+                                         payloadKind: "turn_started",
+                                         workspaceID: "stale-workspace"))
+        onAgentEvent(Self.appServerEvent(eventID: "assistant-text",
+                                         seq: 2,
+                                         sessionID: "app",
+                                         type: .assistantMessage,
+                                         text: "done",
+                                         payloadKind: "assistant_message",
+                                         workspaceID: "stale-workspace"))
+        onAgentEvent(Self.appServerEvent(eventID: "turn-completed",
+                                         seq: 3,
+                                         sessionID: "app",
+                                         type: .assistantFinal,
+                                         text: nil,
+                                         payloadKind: "turn_completed",
+                                         workspaceID: "stale-workspace"))
+
+        XCTAssertTrue(Self.waitUntil {
+            sidebarLock.lock()
+            defer { sidebarLock.unlock() }
+            return sidebarMessages.count == 3
+        })
+        sidebarLock.lock()
+        let messages = sidebarMessages
+        sidebarLock.unlock()
+        XCTAssertEqual(messages[0], "report_shell_state running --workspace_id=current-workspace")
+        XCTAssertTrue(messages[1].contains(#""workspace_id":"current-workspace""#))
+        XCTAssertEqual(messages[2], "report_shell_state prompt --workspace_id=current-workspace")
+    }
+
     func testAttachedRuntimeStillPublishesApprovalPromptEventsToHub() throws {
         let hub = AgentEventHub()
         var capturedPromptHandler: CodexAppServerConnection.InteractivePromptHandler?
@@ -313,10 +375,11 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
                                runtime: String?,
                                socketPath: String?,
                                panelID: String = "panel-1",
+                               workspaceID: String = "workspace-1",
                                threadID: String? = nil) -> AgentSessionRegistryRecord {
         AgentSessionRegistryRecord(version: 1,
                                    vendor: "codex",
-                                   workspaceID: "workspace-1",
+                                   workspaceID: workspaceID,
                                    sessionID: sessionID,
                                    panelID: panelID,
                                    pid: Int32(getpid()),
@@ -401,11 +464,12 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
                                        sessionID: String,
                                        type: AgentEventKind,
                                        text: String?,
-                                       payloadKind: String) -> AgentEvent {
+                                       payloadKind: String,
+                                       workspaceID: String = "workspace-1") -> AgentEvent {
         AgentEvent(eventID: eventID,
                    seq: seq,
                    vendor: "codex",
-                   workspaceID: "workspace-1",
+                   workspaceID: workspaceID,
                    sessionID: sessionID,
                    timestamp: "2026-06-07T00:00:00.000Z",
                    type: type,

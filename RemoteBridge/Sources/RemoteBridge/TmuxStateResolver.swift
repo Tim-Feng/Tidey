@@ -129,6 +129,16 @@ final class TmuxStateResolver {
         }
     }
 
+    func sessionName(forPaneID paneID: String, socketPath: String) -> String? {
+        queue.sync {
+            if let snapshot = loadSnapshot(socketPath: socketPath, forceRefresh: false),
+               let sessionName = snapshot.paneToSessionName[paneID] {
+                return sessionName
+            }
+            return loadSnapshot(socketPath: socketPath, forceRefresh: true)?.paneToSessionName[paneID]
+        }
+    }
+
     func invalidate(socketPath: String? = nil) {
         queue.sync {
             if let socketPath {
