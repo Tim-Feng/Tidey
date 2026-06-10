@@ -733,13 +733,18 @@ run_codex_app_server_runtime() {
     local remote_tui_pid=""
     local app_server_log=""
     local remote_status=0
+    local socket_wait_attempts="${TIDEY_CODEX_APP_SERVER_SOCKET_WAIT_ATTEMPTS:-1200}"
+    local socket_wait_interval="${TIDEY_CODEX_APP_SERVER_SOCKET_WAIT_INTERVAL:-0.05}"
+    local socket_wait_message_after_attempts="${TIDEY_CODEX_APP_SERVER_SOCKET_WAIT_MESSAGE_AFTER_ATTEMPTS:-20}"
+    local socket_wait_iteration=0
+    local waiting_reported=0
+    local backfill_reported=0
 
     socket_dir="$(mktemp -d "${TMPDIR:-/tmp}/tidey-codex-app-server.XXXXXX")"
     socket_path="$socket_dir/app.sock"
     app_server_log="$socket_dir/app-server.log"
 
-    cleanup_codex_app_server_runtime() {
-        local status="${1:-$?}"
+    cleanup_codex_app_server_artifacts() {
         if [[ -n "${remote_tui_pid:-}" ]]; then
             kill_pid_tree "$remote_tui_pid"
         fi
@@ -752,29 +757,59 @@ run_codex_app_server_runtime() {
         fi
         rm -f "${registry_file:-}"
         rm -rf "${socket_dir:-}"
+    }
+
+    cleanup_codex_app_server_runtime() {
+        local status="${1:-$?}"
+        cleanup_codex_app_server_artifacts
         exit "$status"
     }
+
+    fallback_to_plain_codex() {
+        local reason="$1"
+        shift
+        echo "Warning: codex app-server startup failed (${reason}); falling back to plain codex." >&2
+        if [[ -s "${app_server_log:-}" ]]; then
+            cat "$app_server_log" >&2 || true
+        fi
+        cleanup_codex_app_server_artifacts
+        trap - EXIT HUP INT TERM
+        exec env CODEX_HOME="$real_codex_home" "$real_codex" "$profile_flag" "$profile_name" "$@"
+    }
+
     trap cleanup_codex_app_server_runtime EXIT HUP INT TERM
+
+    if ! [[ "$socket_wait_attempts" =~ ^[0-9]+$ ]] || [[ "$socket_wait_attempts" -lt 1 ]]; then
+        socket_wait_attempts=1200
+    fi
+    if ! [[ "$socket_wait_message_after_attempts" =~ ^[0-9]+$ ]] || [[ "$socket_wait_message_after_attempts" -lt 1 ]]; then
+        socket_wait_message_after_attempts=20
+    fi
 
     env CODEX_HOME="$real_codex_home" "$real_codex" app-server \
         -c "sqlite_home=$(toml_inline_string "$sqlite_home")" \
         --listen "unix://$socket_path" >"$app_server_log" 2>&1 &
     app_server_pid="$!"
 
-    for _ in $(seq 1 100); do
+    for socket_wait_iteration in $(seq 1 "$socket_wait_attempts"); do
         if [[ -S "$socket_path" ]]; then
             break
         fi
         if ! kill -0 "$app_server_pid" 2>/dev/null; then
-            cat "$app_server_log" >&2 || true
-            cleanup_codex_app_server_runtime 1
+            fallback_to_plain_codex "app-server exited before socket was ready" "$@"
         fi
-        sleep 0.05
+        if [[ "$waiting_reported" -eq 0 && "$socket_wait_iteration" -ge "$socket_wait_message_after_attempts" ]]; then
+            echo "Waiting for codex app-server socket..." >&2
+            waiting_reported=1
+        fi
+        if [[ "$backfill_reported" -eq 0 && -f "$app_server_log" ]] && grep -q "state db backfill is running" "$app_server_log"; then
+            echo "Codex app-server state database backfill is running; continuing to wait..." >&2
+            backfill_reported=1
+        fi
+        sleep "$socket_wait_interval"
     done
     if [[ ! -S "$socket_path" ]]; then
-        echo "Error: codex app-server did not create socket: $socket_path" >&2
-        cat "$app_server_log" >&2 || true
-        cleanup_codex_app_server_runtime 1
+        fallback_to_plain_codex "socket was not ready before timeout" "$@"
     fi
 
     write_registry_file "$registry_file" "$TIDEY_WORKSPACE_ID" "$session_id" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$created_at" "$rollout_path" "codex_app_server_starting" "$socket_path" "$app_server_pid" "" "$thread_id" "$thread_id"

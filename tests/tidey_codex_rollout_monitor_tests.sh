@@ -978,4 +978,191 @@ FAKE_CODEX
 
 run_app_server_runtime_resume_failure_cleanup_test
 
+run_app_server_runtime_startup_exit_falls_back_to_plain_test() {
+    local tmpdir
+    local fake_home
+    local fake_bin
+    local registry_root
+    local socket
+    local socket_pid
+    local codex_log
+    local stderr_log
+    local resume_id="019eac34-764c-7893-9599-5b6000037cea"
+    local status
+
+    tmpdir="$(mktemp -d "/private/tmp/tidey-codex-startup-exit.XXXXXX")"
+    fake_home="$tmpdir/home"
+    fake_bin="$tmpdir/bin"
+    registry_root="$fake_home/Library/Application Support/Tidey Remote Bridge/agent-sessions/codex"
+    socket="$tmpdir/tidey.sock"
+    codex_log="$tmpdir/codex.log"
+    stderr_log="$tmpdir/stderr.log"
+    mkdir -p "$fake_bin" "$registry_root"
+
+    cat > "$fake_bin/codex" <<'FAKE_CODEX'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'args:%s\n' "$*" >> "$FAKE_CODEX_LOG"
+if [[ "${1:-}" == "--help" ]]; then
+    printf '%s\n' "Usage: codex --profile <CONFIG_PROFILE_V2>"
+    exit 0
+fi
+if [[ " $* " == *" app-server "* ]]; then
+    echo "fake app-server startup failed" >&2
+    exit 23
+fi
+if [[ "$*" == *"--remote"* ]]; then
+    printf 'remote:%s\n' "$*" >> "$FAKE_CODEX_LOG"
+    exit 31
+fi
+printf 'plain:%s\n' "$*" >> "$FAKE_CODEX_LOG"
+exit 0
+FAKE_CODEX
+    chmod +x "$fake_bin/codex"
+
+    python3 -c 'import socket, sys, time; sock = socket.socket(socket.AF_UNIX); sock.bind(sys.argv[1]); time.sleep(10)' "$socket" &
+    socket_pid="$!"
+    for _ in $(seq 1 50); do
+        [[ -S "$socket" ]] && break
+        sleep 0.02
+    done
+
+    set +e
+    HOME="$fake_home" \
+        PATH="$fake_bin:/usr/bin:/bin" \
+        TIDEY_CODEX_APP_SERVER_ENABLE=1 \
+        TIDEY_SOCKET_PATH="$socket" \
+        TIDEY_WORKSPACE_ID="workspace-1" \
+        TIDEY_PANEL_ID="panel-1" \
+        TIDEY_CODEX_APP_SERVER_SOCKET_WAIT_ATTEMPTS=3 \
+        TIDEY_CODEX_APP_SERVER_SOCKET_WAIT_INTERVAL=0.01 \
+        FAKE_CODEX_LOG="$codex_log" \
+        TMPDIR="$tmpdir" \
+        "$CODEX_UNDER_TEST" resume "$resume_id" 2>"$stderr_log"
+    status=$?
+    set -e
+
+    [[ "$status" == "0" ]] || fail "startup exit fallback should return plain codex status"
+    grep -q "app-server" "$codex_log" || fail "app-server was not attempted before fallback"
+    grep -q "plain:.* resume $resume_id" "$codex_log" || fail "plain codex was not execed after app-server startup exit"
+    if grep -q -- "--remote" "$codex_log"; then
+        fail "remote TUI was launched after app-server startup exit"
+    fi
+    [[ -z "$(find "$registry_root" -name "codex-*.json" -print -quit)" ]] || fail "startup exit fallback left registry files"
+    grep -q "falling back to plain codex" "$stderr_log" || fail "startup exit fallback warning was not printed"
+    grep -q "fake app-server startup failed" "$stderr_log" || fail "app-server failure log was not printed"
+
+    kill "$socket_pid" 2>/dev/null || true
+    wait "$socket_pid" 2>/dev/null || true
+
+    rm -rf "$tmpdir"
+}
+
+run_app_server_runtime_startup_exit_falls_back_to_plain_test
+
+run_app_server_runtime_socket_timeout_falls_back_to_plain_test() {
+    local tmpdir
+    local fake_home
+    local fake_bin
+    local registry_root
+    local socket
+    local socket_pid
+    local codex_log
+    local stderr_log
+    local app_server_pid_file
+    local app_server_pid
+    local child_state
+    local status
+
+    tmpdir="$(mktemp -d "/private/tmp/tidey-codex-startup-timeout.XXXXXX")"
+    fake_home="$tmpdir/home"
+    fake_bin="$tmpdir/bin"
+    registry_root="$fake_home/Library/Application Support/Tidey Remote Bridge/agent-sessions/codex"
+    socket="$tmpdir/tidey.sock"
+    codex_log="$tmpdir/codex.log"
+    stderr_log="$tmpdir/stderr.log"
+    app_server_pid_file="$tmpdir/app-server.pid"
+    mkdir -p "$fake_bin" "$registry_root"
+
+    cat > "$fake_bin/codex" <<'FAKE_CODEX'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'args:%s\n' "$*" >> "$FAKE_CODEX_LOG"
+if [[ "${1:-}" == "--help" ]]; then
+    printf '%s\n' "Usage: codex --profile <CONFIG_PROFILE_V2>"
+    exit 0
+fi
+if [[ " $* " == *" app-server "* ]]; then
+    printf '%s\n' "$$" > "$FAKE_APP_SERVER_PID_FILE"
+    echo "state db backfill is running at /tmp/codex; waiting up to 30s before retrying startup initialization" >&2
+    sleep 20
+    exit 0
+fi
+if [[ "$*" == *"--remote"* ]]; then
+    printf 'remote:%s\n' "$*" >> "$FAKE_CODEX_LOG"
+    exit 31
+fi
+printf 'plain:%s\n' "$*" >> "$FAKE_CODEX_LOG"
+exit 0
+FAKE_CODEX
+    chmod +x "$fake_bin/codex"
+
+    python3 -c 'import socket, sys, time; sock = socket.socket(socket.AF_UNIX); sock.bind(sys.argv[1]); time.sleep(10)' "$socket" &
+    socket_pid="$!"
+    for _ in $(seq 1 50); do
+        [[ -S "$socket" ]] && break
+        sleep 0.02
+    done
+
+    set +e
+    HOME="$fake_home" \
+        PATH="$fake_bin:/usr/bin:/bin" \
+        TIDEY_CODEX_APP_SERVER_ENABLE=1 \
+        TIDEY_SOCKET_PATH="$socket" \
+        TIDEY_WORKSPACE_ID="workspace-1" \
+        TIDEY_PANEL_ID="panel-1" \
+        TIDEY_CODEX_APP_SERVER_SOCKET_WAIT_ATTEMPTS=3 \
+        TIDEY_CODEX_APP_SERVER_SOCKET_WAIT_INTERVAL=0.01 \
+        TIDEY_CODEX_APP_SERVER_SOCKET_WAIT_MESSAGE_AFTER_ATTEMPTS=1 \
+        FAKE_CODEX_LOG="$codex_log" \
+        FAKE_APP_SERVER_PID_FILE="$app_server_pid_file" \
+        TMPDIR="$tmpdir" \
+        "$CODEX_UNDER_TEST" 2>"$stderr_log"
+    status=$?
+    set -e
+
+    [[ "$status" == "0" ]] || fail "socket timeout fallback should return plain codex status"
+    grep -q "app-server" "$codex_log" || fail "app-server was not attempted before timeout fallback"
+    grep -q "plain:" "$codex_log" || fail "plain codex was not execed after app-server socket timeout"
+    if grep -q -- "--remote" "$codex_log"; then
+        fail "remote TUI was launched after app-server socket timeout"
+    fi
+    [[ -z "$(find "$registry_root" -name "codex-*.json" -print -quit)" ]] || fail "socket timeout fallback left registry files"
+    grep -q "Waiting for codex app-server socket" "$stderr_log" || fail "startup wait message was not printed"
+    grep -q "state database backfill is running" "$stderr_log" || fail "backfill wait message was not printed"
+    grep -q "falling back to plain codex" "$stderr_log" || fail "socket timeout fallback warning was not printed"
+
+    [[ -f "$app_server_pid_file" ]] || fail "timeout app-server pid was not recorded"
+    app_server_pid="$(cat "$app_server_pid_file")"
+    for _ in $(seq 1 50); do
+        child_state="$(ps -o stat= -p "$app_server_pid" 2>/dev/null | tr -d " " || true)"
+        if [[ -z "$child_state" || "$child_state" == Z* ]]; then
+            break
+        fi
+        sleep 0.02
+    done
+    child_state="$(ps -o stat= -p "$app_server_pid" 2>/dev/null | tr -d " " || true)"
+    if [[ -n "$child_state" && "$child_state" != Z* ]]; then
+        kill "$app_server_pid" 2>/dev/null || true
+        fail "timeout app-server process was not cleaned up: state=$child_state"
+    fi
+
+    kill "$socket_pid" 2>/dev/null || true
+    wait "$socket_pid" 2>/dev/null || true
+
+    rm -rf "$tmpdir"
+}
+
+run_app_server_runtime_socket_timeout_falls_back_to_plain_test
+
 echo "PASS"
