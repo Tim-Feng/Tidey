@@ -139,7 +139,7 @@ final class CodexAppServerApprovalPromptTests: XCTestCase {
         XCTAssertEqual(try request.response(targetIndex: 0).objectValue?["decision"]?.stringValue, "decline")
     }
 
-    func testCommandApprovalLabelsCancelDecisionLikeNativeNoOption() throws {
+    func testCommandApprovalFiltersPolicyAmendmentAvailableDecision() throws {
         let request = try XCTUnwrap(CodexAppServerApprovalRequest(
             method: "item/commandExecution/requestApproval",
             requestID: .string("req-1"),
@@ -166,15 +166,49 @@ final class CodexAppServerApprovalPromptTests: XCTestCase {
 
         XCTAssertEqual(prompt.options.map(\.label), [
             "Yes, proceed (y)",
-            "Yes, and don't ask again for commands that start with `python3 -c` (p)",
             "No, and tell Codex what to do differently (esc)",
         ])
         XCTAssertEqual(prompt.options.map(\.inputSequence), [
             "accept",
-            "acceptWithExecpolicyAmendment",
             "cancel",
         ])
-        XCTAssertEqual(try request.response(targetIndex: 2).objectValue?["decision"]?.stringValue, "cancel")
+        XCTAssertEqual(try request.response(targetIndex: 1).objectValue?["decision"]?.stringValue, "cancel")
+    }
+
+    func testCommandApprovalFiltersNetworkPolicyAmendmentAvailableDecision() throws {
+        let request = try XCTUnwrap(CodexAppServerApprovalRequest(
+            method: "item/commandExecution/requestApproval",
+            requestID: .string("req-1"),
+            params: [
+                "threadId": .string("thread-1"),
+                "turnId": .string("turn-1"),
+                "itemId": .string("item-1"),
+                "startedAtMs": .number(1_786_000_000_000),
+                "availableDecisions": .array([
+                    .string("accept"),
+                    .object([
+                        "applyNetworkPolicyAmendment": .object([
+                            "network_policy_amendment": .object([
+                                "host": .string("example.com"),
+                                "action": .string("allow"),
+                            ]),
+                        ]),
+                    ]),
+                    .string("decline"),
+                ]),
+            ]))
+
+        let prompt = request.makePrompt()
+
+        XCTAssertEqual(prompt.options.map(\.label), [
+            "Yes, proceed (y)",
+            "No, and tell Codex what to do differently (esc)",
+        ])
+        XCTAssertEqual(prompt.options.map(\.inputSequence), [
+            "accept",
+            "decline",
+        ])
+        XCTAssertEqual(try request.response(targetIndex: 1).objectValue?["decision"]?.stringValue, "decline")
     }
 
     func testCommandApprovalFallbackDoesNotInventNetworkPolicyAmendmentOption() throws {
