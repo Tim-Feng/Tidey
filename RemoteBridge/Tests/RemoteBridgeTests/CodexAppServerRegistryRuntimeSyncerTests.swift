@@ -266,6 +266,8 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
                        ["prompt-prompt-first", "prompt-prompt-second"])
         XCTAssertEqual(syncer.pendingApprovalPromptEvents(workspaceID: "workspace-1", sessionID: "second").map(\.eventID),
                        ["prompt-prompt-second"])
+        XCTAssertEqual(syncer.pendingApprovalPromptEvents(workspaceID: "workspace-1", sessionID: "stale-session").map(\.eventID),
+                       ["prompt-prompt-first", "prompt-prompt-second"])
         XCTAssertTrue(syncer.pendingApprovalPromptEvents(workspaceID: "other-workspace", sessionID: nil).isEmpty)
     }
 

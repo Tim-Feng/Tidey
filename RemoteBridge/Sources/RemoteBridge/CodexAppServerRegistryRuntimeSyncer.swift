@@ -132,13 +132,32 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
     }
 
     func pendingApprovalPromptEvents(workspaceID: String, sessionID: String? = nil) -> [AgentEvent] {
-        let sessions = lock.withCodexRuntimeSyncerLock {
-            entriesBySessionID.values.filter { entry in
-                entry.record.workspaceID == workspaceID &&
-                    (sessionID == nil || entry.record.sessionID == sessionID)
-            }.map(\.session)
+        let entries = lock.withCodexRuntimeSyncerLock {
+            let workspaceEntries = entriesBySessionID.values.filter { entry in
+                entry.record.workspaceID == workspaceID
+            }
+            if let sessionID {
+                let matchingSessionEntries = workspaceEntries.filter { entry in
+                    entry.record.sessionID == sessionID
+                }
+                if matchingSessionEntries.isEmpty == false {
+                    return matchingSessionEntries
+                }
+            }
+            return workspaceEntries
         }
-        let events = sessions.flatMap { $0.pendingApprovalPromptEvents() }
+        let matchingEvents = pendingApprovalPromptEvents(from: entries)
+        let events: [AgentEvent]
+        if matchingEvents.isEmpty, sessionID != nil {
+            let workspaceEntries = lock.withCodexRuntimeSyncerLock {
+                entriesBySessionID.values.filter { entry in
+                    entry.record.workspaceID == workspaceID
+                }
+            }
+            events = pendingApprovalPromptEvents(from: workspaceEntries)
+        } else {
+            events = matchingEvents
+        }
         var seen = Set<String>()
         return events.filter { event in
             guard seen.contains(event.eventID) == false else {
@@ -148,9 +167,18 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
             return true
         }.sorted { lhs, rhs in
             if lhs.timestamp == rhs.timestamp {
+                if lhs.seq == rhs.seq {
+                    return lhs.eventID < rhs.eventID
+                }
                 return lhs.seq < rhs.seq
             }
             return lhs.timestamp < rhs.timestamp
+        }
+    }
+
+    private func pendingApprovalPromptEvents(from entries: [RuntimeEntry]) -> [AgentEvent] {
+        entries.flatMap { entry in
+            entry.session.pendingApprovalPromptEvents()
         }
     }
 
