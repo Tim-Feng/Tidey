@@ -160,6 +160,10 @@ final class CodexAppServerRuntimeSession {
         try connection.submitApproval(promptID: promptID, targetIndex: targetIndex)
     }
 
+    func pendingApprovalPromptEvents() -> [AgentEvent] {
+        connection.pendingApprovalPromptEvents()
+    }
+
     func submitMessage(text: String) throws {
         try initialization.wait()
         guard let threadID = try currentThreadIDForSubmit() else {

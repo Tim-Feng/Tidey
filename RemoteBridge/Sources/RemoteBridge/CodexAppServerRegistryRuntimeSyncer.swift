@@ -4,9 +4,14 @@ protocol CodexAppServerApprovalSubmitting: AnyObject {
     func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent
 }
 
+protocol CodexAppServerApprovalPromptProviding: CodexAppServerApprovalSubmitting {
+    func pendingApprovalPromptEvents(workspaceID: String, sessionID: String?) -> [AgentEvent]
+}
+
 protocol CodexAppServerRuntimeSessionControlling: AnyObject {
     func canSubmitMessage() -> Bool
     func ensureThreadSubscription()
+    func pendingApprovalPromptEvents() -> [AgentEvent]
     func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent
     func submitMessage(text: String) throws
     func stop()
@@ -14,7 +19,7 @@ protocol CodexAppServerRuntimeSessionControlling: AnyObject {
 
 extension CodexAppServerRuntimeSession: CodexAppServerRuntimeSessionControlling {}
 
-final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, CodexAppServerApprovalSubmitting, CodexAppServerChatSubmitting {
+final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, CodexAppServerApprovalPromptProviding, CodexAppServerChatSubmitting {
     typealias AttachHandler = (_ record: AgentSessionRegistryRecord,
                                _ nextSequence: @escaping CodexAppServerConnection.SequenceProvider,
                                _ timestampProvider: @escaping CodexAppServerConnection.TimestampProvider,
@@ -124,6 +129,29 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
             throw lastError
         }
         throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
+    }
+
+    func pendingApprovalPromptEvents(workspaceID: String, sessionID: String? = nil) -> [AgentEvent] {
+        let sessions = lock.withCodexRuntimeSyncerLock {
+            entriesBySessionID.values.filter { entry in
+                entry.record.workspaceID == workspaceID &&
+                    (sessionID == nil || entry.record.sessionID == sessionID)
+            }.map(\.session)
+        }
+        let events = sessions.flatMap { $0.pendingApprovalPromptEvents() }
+        var seen = Set<String>()
+        return events.filter { event in
+            guard seen.contains(event.eventID) == false else {
+                return false
+            }
+            seen.insert(event.eventID)
+            return true
+        }.sorted { lhs, rhs in
+            if lhs.timestamp == rhs.timestamp {
+                return lhs.seq < rhs.seq
+            }
+            return lhs.timestamp < rhs.timestamp
+        }
     }
 
     func submitMessage(sessionID: String, text: String) throws {

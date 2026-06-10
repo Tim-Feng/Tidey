@@ -182,6 +182,12 @@ final class CodexAppServerConnection {
         }
     }
 
+    func pendingApprovalPromptEvents() -> [AgentEvent] {
+        approvalStore.entries().map { entry in
+            makePromptEvent(prompt: entry.prompt)
+        }
+    }
+
     func handleServerRequest(id: JSONValue, method: String, params: [String: JSONValue]) {
         if let request = CodexAppServerApprovalRequest(method: method, requestID: id, params: params) {
             handleApprovalRequest(request)

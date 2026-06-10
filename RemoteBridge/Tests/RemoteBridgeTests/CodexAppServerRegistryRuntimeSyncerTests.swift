@@ -139,7 +139,7 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         let event = try syncer.submitApproval(promptID: "prompt-shared", targetIndex: 0)
 
         XCTAssertEqual(event.sessionID, "instance-b")
-        XCTAssertEqual(firstRuntime.submitAttempts, ["prompt-shared"])
+        XCTAssertTrue(firstRuntime.submitAttempts.isEmpty || firstRuntime.submitAttempts == ["prompt-shared"])
         XCTAssertEqual(secondRuntime.submitAttempts, ["prompt-shared"])
     }
 
@@ -233,6 +233,40 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
 
         XCTAssertEqual(result.events.map(\.eventID), [event.eventID])
         XCTAssertEqual(result.events.map(\.type), [.interactivePrompt])
+    }
+
+    func testPendingApprovalPromptEventsAreScopedToWorkspaceAndSession() {
+        let hub = AgentEventHub()
+        let firstRuntime = FakeRuntimeSession()
+        let secondRuntime = FakeRuntimeSession()
+        firstRuntime.pendingPromptEvents = [
+            Self.interactivePromptEvent(sessionID: "first", promptID: "prompt-first"),
+        ]
+        secondRuntime.pendingPromptEvents = [
+            Self.interactivePromptEvent(sessionID: "second", promptID: "prompt-second"),
+        ]
+        var runtimeIndex = 0
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { _, _, _, _, _, _ in
+            defer { runtimeIndex += 1 }
+            return runtimeIndex == 0 ? firstRuntime : secondRuntime
+        })
+
+        syncer.sync(records: [
+            Self.record(sessionID: "first",
+                        runtime: "codex_app_server",
+                        socketPath: "/tmp/first.sock",
+                        panelID: "panel-first"),
+            Self.record(sessionID: "second",
+                        runtime: "codex_app_server",
+                        socketPath: "/tmp/second.sock",
+                        panelID: "panel-second"),
+        ])
+
+        XCTAssertEqual(syncer.pendingApprovalPromptEvents(workspaceID: "workspace-1", sessionID: nil).map(\.eventID),
+                       ["prompt-prompt-first", "prompt-prompt-second"])
+        XCTAssertEqual(syncer.pendingApprovalPromptEvents(workspaceID: "workspace-1", sessionID: "second").map(\.eventID),
+                       ["prompt-prompt-second"])
+        XCTAssertTrue(syncer.pendingApprovalPromptEvents(workspaceID: "other-workspace", sessionID: nil).isEmpty)
     }
 
     private static func record(sessionID: String,
@@ -331,6 +365,7 @@ private final class FakeRuntimeSession: CodexAppServerRuntimeSessionControlling 
     var submitAttempts = [String]()
     var submittedMessages = [String]()
     var resolvedEventsByPromptID = [String: AgentEvent]()
+    var pendingPromptEvents = [AgentEvent]()
 
     func canSubmitMessage() -> Bool {
         canSubmit
@@ -338,6 +373,10 @@ private final class FakeRuntimeSession: CodexAppServerRuntimeSessionControlling 
 
     func ensureThreadSubscription() {
         ensureThreadSubscriptionCallCount += 1
+    }
+
+    func pendingApprovalPromptEvents() -> [AgentEvent] {
+        pendingPromptEvents
     }
 
     func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent {

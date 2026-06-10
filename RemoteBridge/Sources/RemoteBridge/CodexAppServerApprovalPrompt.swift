@@ -279,6 +279,12 @@ final class CodexAppServerApprovalPromptStore: @unchecked Sendable {
         }
     }
 
+    func entries() -> [CodexAppServerApprovalPromptEntry] {
+        lock.withCodexApprovalLock {
+            Array(entriesByPromptID.values)
+        }
+    }
+
     func resolve(promptID: String, targetIndex: Int) throws -> JSONValue {
         let (_, response) = try resolveEntry(promptID: promptID, targetIndex: targetIndex)
         return response

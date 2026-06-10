@@ -16,7 +16,7 @@ final class TideyRemoteBridgeServer {
     private let eventHub: AgentEventHub
     private let workspaceEventHub: WorkspaceEventHub
     private let registryMonitor: AgentSessionRegistryMonitor
-    private let codexApprovalSubmitter: CodexAppServerApprovalSubmitting?
+    private let codexApprovalProvider: CodexAppServerApprovalPromptProviding?
     private let observability: BridgeObservabilityCenter
     private let cloudflaredManager: BridgeCloudflaredManager
     private let uploadGarbageCollector: BridgeUploadGarbageCollector
@@ -34,7 +34,7 @@ final class TideyRemoteBridgeServer {
          eventHub: AgentEventHub,
          workspaceEventHub: WorkspaceEventHub,
          registryMonitor: AgentSessionRegistryMonitor,
-         codexApprovalSubmitter: CodexAppServerApprovalSubmitting? = nil,
+         codexApprovalSubmitter: CodexAppServerApprovalPromptProviding? = nil,
          observability: BridgeObservabilityCenter,
          cloudflaredManager: BridgeCloudflaredManager = BridgeCloudflaredManager(),
          uploadGarbageCollector: BridgeUploadGarbageCollector = BridgeUploadGarbageCollector(uploadDirectory: BridgePaths().uploadsDirectory),
@@ -49,7 +49,7 @@ final class TideyRemoteBridgeServer {
         self.eventHub = eventHub
         self.workspaceEventHub = workspaceEventHub
         self.registryMonitor = registryMonitor
-        self.codexApprovalSubmitter = codexApprovalSubmitter
+        self.codexApprovalProvider = codexApprovalSubmitter
         self.observability = observability
         self.cloudflaredManager = cloudflaredManager
         self.uploadGarbageCollector = uploadGarbageCollector
@@ -78,12 +78,12 @@ final class TideyRemoteBridgeServer {
                 }
                 return channel.eventLoop.makeSucceededFuture([:])
             },
-            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub, registryMonitor, codexApprovalSubmitter, observability, ordinaryTmuxPanelRegistry, port, cloudflaredManager] channel, _ in
+            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub, registryMonitor, codexApprovalProvider, observability, ordinaryTmuxPanelRegistry, port, cloudflaredManager] channel, _ in
                 channel.pipeline.addHandler(WebSocketFrameHandler(socketClient: socketClient,
                                                                   eventHub: eventHub,
                                                                   workspaceEventHub: workspaceEventHub,
                                                                   registryMonitor: registryMonitor,
-                                                                  codexApprovalSubmitter: codexApprovalSubmitter,
+                                                                  codexApprovalSubmitter: codexApprovalProvider,
                                                                   observability: observability,
                                                                   bridgePort: port,
                                                                   cloudflaredManager: cloudflaredManager,
@@ -582,7 +582,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
     private let eventHub: AgentEventHub
     private let workspaceEventHub: WorkspaceEventHub
     private let registryMonitor: AgentSessionRegistryMonitor
-    private let codexApprovalSubmitter: CodexAppServerApprovalSubmitting?
+    private let codexApprovalProvider: CodexAppServerApprovalPromptProviding?
     private let observability: BridgeObservabilityCenter
     private let bridgePort: Int
     private let cloudflaredManager: BridgeCloudflaredManager
@@ -603,7 +603,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
          eventHub: AgentEventHub,
          workspaceEventHub: WorkspaceEventHub,
          registryMonitor: AgentSessionRegistryMonitor,
-         codexApprovalSubmitter: CodexAppServerApprovalSubmitting? = nil,
+         codexApprovalSubmitter: CodexAppServerApprovalPromptProviding? = nil,
          observability: BridgeObservabilityCenter,
          bridgePort: Int,
          cloudflaredManager: BridgeCloudflaredManager,
@@ -612,7 +612,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
         self.eventHub = eventHub
         self.workspaceEventHub = workspaceEventHub
         self.registryMonitor = registryMonitor
-        self.codexApprovalSubmitter = codexApprovalSubmitter
+        self.codexApprovalProvider = codexApprovalSubmitter
         self.observability = observability
         self.bridgePort = bridgePort
         self.cloudflaredManager = cloudflaredManager
@@ -994,13 +994,16 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                                       returnedCount: fetchResult.events.count,
                                       didBackfill: didBackfill,
                                       durationMs: (CFAbsoluteTimeGetCurrent() - startedAt) * 1000)
+            let events = Self.mergedAgentEvents(fetchResult.events,
+                                                pendingCodexApprovalEvents(workspaceID: workspaceID,
+                                                                           sessionID: sessionID))
             return LocalRequestResult(
                 response: BridgeResponse(id: request.id,
                                          ok: true,
                                          result: [
-                                            "events": .array(fetchResult.events.map(Self.jsonValue(for:))),
-                                            "oldest_seq": .number(Double(fetchResult.oldestSeq)),
-                                            "newest_seq": .number(Double(fetchResult.newestSeq)),
+                                            "events": .array(events.map(Self.jsonValue(for:))),
+                                            "oldest_seq": .number(Double(events.first?.seq ?? fetchResult.oldestSeq)),
+                                            "newest_seq": .number(Double(events.last?.seq ?? fetchResult.newestSeq)),
                                             "has_more": .bool(fetchResult.hasMore),
                                          ],
                                          error: nil),
@@ -1045,7 +1048,12 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
             for unsubscribeID in installResult.unsubscribeIDs {
                 eventHub.unsubscribe(unsubscribeID)
             }
-            let effectiveReplayEnvelopes = installResult.accepted ? replayEnvelopes : []
+            let effectiveReplayEnvelopes = installResult.accepted
+                ? replayEnvelopesWithPendingCodexApprovals(replayEnvelopes,
+                                                           workspaceID: workspaceID,
+                                                           sessionID: sessionID,
+                                                           noReplay: noReplay)
+                : []
             return LocalRequestResult(
                 response: BridgeResponse(id: request.id,
                                          ok: true,
@@ -1126,6 +1134,51 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
             workspaceEventHub.unsubscribe(workspaceSubscriptionID)
             self.workspaceSubscriptionID = nil
         }
+    }
+
+    private func pendingCodexApprovalEvents(workspaceID: String?,
+                                            sessionID: String?) -> [AgentEvent] {
+        guard let workspaceID else {
+            return []
+        }
+        return codexApprovalProvider?.pendingApprovalPromptEvents(workspaceID: workspaceID,
+                                                                  sessionID: sessionID) ?? []
+    }
+
+    private func replayEnvelopesWithPendingCodexApprovals(_ replayEnvelopes: [AgentEventEnvelope],
+                                                          workspaceID: String?,
+                                                          sessionID: String?,
+                                                          noReplay: Bool) -> [AgentEventEnvelope] {
+        guard noReplay == false else {
+            return replayEnvelopes
+        }
+        let pendingEvents = pendingCodexApprovalEvents(workspaceID: workspaceID, sessionID: sessionID)
+        let events = Self.mergedAgentEvents(replayEnvelopes.map(\.event), pendingEvents)
+        return events.map { event in
+            if let existing = replayEnvelopes.first(where: { $0.event.eventID == event.eventID }) {
+                return existing
+            }
+            return AgentEventEnvelope(replay: true, event: event)
+        }
+    }
+
+    private static func mergedAgentEvents(_ events: [AgentEvent],
+                                          _ additionalEvents: [AgentEvent]) -> [AgentEvent] {
+        var seen = Set<String>()
+        return (events + additionalEvents)
+            .filter { event in
+                guard seen.contains(event.eventID) == false else {
+                    return false
+                }
+                seen.insert(event.eventID)
+                return true
+            }
+            .sorted { lhs, rhs in
+                if lhs.timestamp == rhs.timestamp {
+                    return lhs.seq < rhs.seq
+                }
+                return lhs.timestamp < rhs.timestamp
+            }
     }
 
     private func augment(response: BridgeResponse, for request: BridgeRequest) -> BridgeResponse {

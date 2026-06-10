@@ -1080,6 +1080,10 @@ private final class RegistryMonitorFakeRuntimeSession: CodexAppServerRuntimeSess
 
     func ensureThreadSubscription() {}
 
+    func pendingApprovalPromptEvents() -> [AgentEvent] {
+        []
+    }
+
     func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent {
         throw BridgeInternalError.notFound("No prompts in registry monitor fake runtime.")
     }
