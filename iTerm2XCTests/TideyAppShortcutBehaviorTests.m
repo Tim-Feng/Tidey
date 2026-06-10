@@ -18,6 +18,8 @@
                                                       panelID:(NSString *)panelID;
 + (NSArray<NSString *> *)tideyInputChunksForInput:(NSString *)input
                                    maxChunkLength:(NSUInteger)maxChunkLength;
++ (NSString *)tideySocketPanelTitleForDisplayTitle:(NSString *)displayTitle
+                              ordinaryTmuxMetadata:(NSDictionary<NSString *, NSString *> *)metadata;
 + (BOOL)tideyShouldAutoMarkReadWorkspaceOnNotificationArrivalForSelectedWorkspaceID:(NSString *)selectedWorkspaceID
                                                              notificationWorkspaceID:(NSString *)workspaceID
                                                                          appIsActive:(BOOL)appIsActive
@@ -309,6 +311,21 @@
 
     XCTAssertEqualObjects([chunks componentsJoinedByString:@""], input);
     XCTAssertTrue([chunks containsObject:@"👨‍👩‍👧‍👦"]);
+}
+
+- (void)testSocketPanelTitleUsesOrdinaryTmuxAgentTarget {
+    XCTAssertEqualObjects([PseudoTerminal tideySocketPanelTitleForDisplayTitle:@"Codex"
+                                                          ordinaryTmuxMetadata:@{ @"target_session": @"tidey-cc" }],
+                          @"Claude");
+    XCTAssertEqualObjects([PseudoTerminal tideySocketPanelTitleForDisplayTitle:@"Claude"
+                                                          ordinaryTmuxMetadata:@{ @"target_session": @"tidey-codex" }],
+                          @"Codex");
+}
+
+- (void)testSocketPanelTitleKeepsGenericOrdinaryTmuxDisplayTitle {
+    XCTAssertEqualObjects([PseudoTerminal tideySocketPanelTitleForDisplayTitle:@"Project Shell"
+                                                          ordinaryTmuxMetadata:@{ @"target_session": @"project-shell" }],
+                          @"Project Shell");
 }
 
 - (void)testQuitConfirmationRequiresSecondCommandQWithinTimeout {

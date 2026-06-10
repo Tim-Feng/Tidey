@@ -369,6 +369,8 @@ static NSString *TideySubmitLogSuffix(NSString *input) {
                                         workspace:(Workspace *)workspace
                                    workspaceIndex:(NSInteger)workspaceIndex
                                        panelIndex:(NSInteger)panelIndex;
++ (NSString *)tideySocketPanelTitleForDisplayTitle:(NSString *)displayTitle
+                              ordinaryTmuxMetadata:(NSDictionary<NSString *, NSString *> *)metadata;
 - (PTYSession *)tideySelectedSessionForPanelIdentifier:(NSString *)panelIdentifier;
 - (NSString *)tideyRecentOutputForSession:(PTYSession *)session;
 - (PTYSession *)tideyCreateDefaultSessionWithTargetWorkspaceIndex:(NSInteger)targetWorkspaceIndex
@@ -1992,12 +1994,31 @@ ITERM_WEAKLY_REFERENCEABLE
     return summary;
 }
 
++ (NSString *)tideySocketPanelTitleForDisplayTitle:(NSString *)displayTitle
+                              ordinaryTmuxMetadata:(NSDictionary<NSString *, NSString *> *)metadata {
+    NSString *targetSession = [metadata[@"target_session"] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSString *lowercaseTarget = targetSession.lowercaseString;
+    if ([lowercaseTarget hasSuffix:@"-codex"] || [lowercaseTarget isEqualToString:@"codex"]) {
+        return @"Codex";
+    }
+    if ([lowercaseTarget hasSuffix:@"-cc"] ||
+        [lowercaseTarget hasSuffix:@"-claude"] ||
+        [lowercaseTarget isEqualToString:@"cc"] ||
+        [lowercaseTarget isEqualToString:@"claude"]) {
+        return @"Claude";
+    }
+
+    NSString *title = [displayTitle stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    return title.length > 0 ? title : @"Untitled";
+}
+
 - (NSDictionary *)tideySocketPanelSummaryForPanel:(PTYTab *)panel
                                         workspace:(Workspace *)workspace
                                    workspaceIndex:(NSInteger)workspaceIndex
                                        panelIndex:(NSInteger)panelIndex {
     PTYSession *session = [[panel.activeSession retain] autorelease];
     NSString *workspaceID = [self tideyWorkspaceIdentifierForWorkspace:workspace] ?: @"";
+    NSDictionary<NSString *, NSString *> *ordinaryTmuxMetadata = session.tideyOrdinaryTmuxAttachMetadata;
     NSString *title = session ? [self tideySidebarDisplayTitleForSession:session] : nil;
     if (title.length == 0) {
         title = panel.titleOverride;
@@ -2005,10 +2026,7 @@ ITERM_WEAKLY_REFERENCEABLE
     if (title.length == 0) {
         title = panel.title;
     }
-    title = [title stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if (title.length == 0) {
-        title = @"Untitled";
-    }
+    title = [[self class] tideySocketPanelTitleForDisplayTitle:title ordinaryTmuxMetadata:ordinaryTmuxMetadata];
     NSString *subtitle = session ? ([self tideySidebarDisplaySubtitleForSession:session panel:panel] ?: @"") : @"";
     NSString *state = panel.isProcessing ? @"running" : @"idle";
     NSString *panelID = [self tideyPanelIdentifierForPanel:panel] ?: @"";
@@ -2031,7 +2049,6 @@ ITERM_WEAKLY_REFERENCEABLE
     if (session.currentLocalWorkingDirectory.length > 0) {
         summary[@"cwd"] = session.currentLocalWorkingDirectory;
     }
-    NSDictionary<NSString *, NSString *> *ordinaryTmuxMetadata = session.tideyOrdinaryTmuxAttachMetadata;
     if (ordinaryTmuxMetadata.count > 0) {
         summary[@"ordinary_tmux"] = ordinaryTmuxMetadata;
         NSLog(@"[TideyOrdinaryTmux] emitted panel summary ordinary tmux metadata panel_id=%@ tty=%@ target=%@",
