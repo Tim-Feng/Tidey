@@ -2525,6 +2525,29 @@ ITERM_WEAKLY_REFERENCEABLE
     return YES;
 }
 
+- (BOOL)tideyRestoreSelectedPanelWithIdentifier:(NSString *)panelIdentifier {
+    Workspace *workspace = nil;
+    NSInteger workspaceIndex = NSNotFound;
+    NSInteger panelIndex = NSNotFound;
+    PTYTab *panel = [self tideyPanelWithIdentifier:panelIdentifier
+                                         workspace:&workspace
+                                    workspaceIndex:&workspaceIndex
+                                        panelIndex:&panelIndex];
+    if (!panel || !workspace || panelIndex == NSNotFound) {
+        return NO;
+    }
+    workspace.selectedPanelIndex = panelIndex;
+    if (workspaceIndex == self.selectedWorkspaceIndex) {
+        NSInteger visibleIndex = [self indexOfTab:panel];
+        if (visibleIndex != NSNotFound) {
+            [_contentView.tabView selectTabViewItemAtIndex:visibleIndex];
+        }
+        [self tideyMarkWorkspaceReadAtIndex:workspaceIndex];
+    }
+    [_contentView reloadTideySidebar];
+    return YES;
+}
+
 - (BOOL)tideyClosePanelWithIdentifier:(NSString *)panelIdentifier {
     PTYTab *panel = [self tideyPanelWithIdentifier:panelIdentifier
                                          workspace:nil

@@ -839,6 +839,34 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
         return;
     }
 
+    if ([action isEqualToString:@"restore_panel_focus"]) {
+        NSString *panelID = TideySocketStringParam(source, @"panel_id");
+        if (panelID.length == 0) {
+            [self sendErrorResponseForRequestID:requestID
+                                           code:@"invalid_params"
+                                        message:@"restore_panel_focus requires panel_id."
+                                   onConnection:connection];
+            return;
+        }
+        PseudoTerminal *term = [self tideyTerminalForPanelIdentifier:panelID];
+        if (![term tideyRestoreSelectedPanelWithIdentifier:panelID]) {
+            [self sendErrorResponseForRequestID:requestID
+                                           code:@"panel_not_found"
+                                        message:@"No panel matched panel_id."
+                                   onConnection:connection];
+            return;
+        }
+        NSDictionary *panelSummary = [term tideySocketPanelSummaryForPanelIdentifier:panelID];
+        NSString *workspaceID = [panelSummary[@"workspace_id"] isKindOfClass:[NSString class]] ? panelSummary[@"workspace_id"] : nil;
+        NSDictionary *workspaceSummary = workspaceID.length > 0 ? [term tideySocketWorkspaceSummaryForWorkspaceIdentifier:workspaceID] : nil;
+        [self sendSuccessResponseForRequestID:requestID
+                                       result:@{ @"selected": @YES,
+                                                 @"panel": panelSummary ?: @{},
+                                                 @"workspace": workspaceSummary ?: @{} }
+                                  onConnection:connection];
+        return;
+    }
+
     if ([action isEqualToString:@"close_panel"]) {
         NSString *panelID = TideySocketStringParam(source, @"panel_id");
         if (panelID.length == 0) {

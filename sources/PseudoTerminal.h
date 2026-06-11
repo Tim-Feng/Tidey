@@ -305,6 +305,7 @@ extern NSString *const PseudoTerminalTideyWorkspaceEventNotification;
 - (BOOL)tideyRenameWorkspaceWithIdentifier:(NSString *)workspaceIdentifier title:(NSString *)title;
 - (BOOL)tideyRenamePanelWithIdentifier:(NSString *)panelIdentifier title:(NSString *)title;
 - (BOOL)tideySelectPanelWithIdentifier:(NSString *)panelIdentifier;
+- (BOOL)tideyRestoreSelectedPanelWithIdentifier:(NSString *)panelIdentifier;
 - (BOOL)tideyClosePanelWithIdentifier:(NSString *)panelIdentifier;
 
 // A unique number for this window assigned by finishInitializationWithSmartLayout.
