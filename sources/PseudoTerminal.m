@@ -344,6 +344,7 @@ static NSString *TideySubmitLogSuffix(NSString *input) {
 - (void)updateSelectedPanelIndexFromVisibleTabSelection;
 - (void)adjustWorkspaceIndexesAfterRemovingWorkspaceAtIndex:(NSInteger)removedIndex;
 - (void)showWorkspaceAtIndex:(NSInteger)index;
+- (void)tideyShowWorkspaceAtIndex:(NSInteger)index refreshSelectionFromVisibleTab:(BOOL)refreshSelectionFromVisibleTab;
 - (BOOL)selectWorkspaceAtIndex:(NSInteger)index recordHistory:(BOOL)recordHistory;
 - (BOOL)selectAdjacentPanelInSelectedWorkspaceMovingForward:(BOOL)forward;
 - (BOOL)hasSelectablePreviousWorkspace;
@@ -2540,7 +2541,21 @@ ITERM_WEAKLY_REFERENCEABLE
     if (workspaceIndex == self.selectedWorkspaceIndex) {
         NSInteger visibleIndex = [self indexOfTab:panel];
         if (visibleIndex != NSNotFound) {
+            BOOL previousSwitchingWorkspace = _tideySwitchingWorkspace;
+            _tideySwitchingWorkspace = YES;
             [_contentView.tabView selectTabViewItemAtIndex:visibleIndex];
+            workspace.selectedPanelIndex = panelIndex;
+            if (!_fullScreen && self.currentTab) {
+                [self.currentTab updateLabelAttributes];
+                [self setWindowTitle];
+            }
+            if (self.currentSession.mainResponder) {
+                [[self window] makeFirstResponder:self.currentSession.mainResponder];
+            }
+            _tideySwitchingWorkspace = previousSwitchingWorkspace;
+        } else {
+            [self tideyShowWorkspaceAtIndex:workspaceIndex refreshSelectionFromVisibleTab:NO];
+            workspace.selectedPanelIndex = panelIndex;
         }
         [self tideyMarkWorkspaceReadAtIndex:workspaceIndex];
     }
@@ -2846,6 +2861,10 @@ ITERM_WEAKLY_REFERENCEABLE
 }
 
 - (void)showWorkspaceAtIndex:(NSInteger)index {
+    [self tideyShowWorkspaceAtIndex:index refreshSelectionFromVisibleTab:YES];
+}
+
+- (void)tideyShowWorkspaceAtIndex:(NSInteger)index refreshSelectionFromVisibleTab:(BOOL)refreshSelectionFromVisibleTab {
     [self ensureTideyWorkspacesInitialized];
     Workspace *workspace = [self workspaceAtIndex:index];
     if (!workspace) {
@@ -2853,10 +2872,13 @@ ITERM_WEAKLY_REFERENCEABLE
     }
 
     Workspace *currentWorkspace = self.selectedWorkspace;
-    [self updateSelectedPanelIndexFromVisibleTabSelection];
+    if (refreshSelectionFromVisibleTab) {
+        [self updateSelectedPanelIndexFromVisibleTabSelection];
+    }
     self.selectedWorkspaceIndex = index;
 
     NSRect preservedFrame = self.window.frame;
+    BOOL previousSwitchingWorkspace = _tideySwitchingWorkspace;
     _tideySwitchingWorkspace = YES;
     _tideyPreservingWindowFrame = YES;
     _preservedTideyWindowFrame = preservedFrame;
@@ -2917,7 +2939,7 @@ ITERM_WEAKLY_REFERENCEABLE
                       fallbackIndex:selectedPanelIndex
                    changedWorkspace:(currentWorkspace != workspace)
             suppressSelectionEffects:NO];
-    _tideySwitchingWorkspace = NO;
+    _tideySwitchingWorkspace = previousSwitchingWorkspace;
 }
 
 - (BOOL)selectWorkspaceAtIndex:(NSInteger)index recordHistory:(BOOL)recordHistory {
