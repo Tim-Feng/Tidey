@@ -73,6 +73,7 @@ plan.md
 # Local build artifacts
 Tidey.dmg
 Tidey-*.dmg
+RemoteBridge/.build/
 
 # Internal tools / references
 nippon_colors.txt
