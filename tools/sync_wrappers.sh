@@ -10,6 +10,8 @@ This copies:
   - tidey
   - claude
   - codex
+  - codex-hook-dispatch
+  - tidey-tmux-pane-identity
 
 The sync includes the Tidey CLI binary because Claude session-start fixes live there,
 not only in the wrapper scripts.
@@ -57,7 +59,7 @@ for path in "$SOURCE_APP" "$TARGET_APP" "$SOURCE_BIN_DIR" "$TARGET_BIN_DIR"; do
   fi
 done
 
-for name in tidey claude codex; do
+for name in tidey claude codex codex-hook-dispatch tidey-tmux-pane-identity; do
   source_file="$SOURCE_BIN_DIR/$name"
   target_file="$TARGET_BIN_DIR/$name"
   if [[ ! -f "$source_file" ]]; then

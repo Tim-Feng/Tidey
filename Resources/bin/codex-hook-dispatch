@@ -16,6 +16,19 @@ fi
 
 tidey_hydrate_tmux_pane_identity
 
+if [[ "${TIDEY_CODEX_HOOKS_ENABLED:-}" != "1" ]]; then
+    {
+        printf '%s pid=%s event=%s skip=missing_tidey_codex_hooks_enabled workspace=%s panel=%s payload=%s\n' \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            "$$" \
+            "$EVENT" \
+            "${TIDEY_WORKSPACE_ID:-}" \
+            "${TIDEY_PANEL_ID:-}" \
+            "${PAYLOAD_JSON:-}"
+    } >> "$LOG_PATH" 2>/dev/null || true
+    exit 0
+fi
+
 {
     printf '%s pid=%s event=%s workspace=%s panel=%s payload=%s\n' \
         "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \

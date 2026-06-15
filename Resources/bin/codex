@@ -788,7 +788,7 @@ run_codex_app_server_runtime() {
         } > "$fallback_log" 2>/dev/null || true
         cleanup_codex_app_server_artifacts
         trap - EXIT HUP INT TERM
-        exec env CODEX_HOME="$real_codex_home" "$real_codex" "$profile_flag" "$profile_name" "$@"
+        exec env TIDEY_CODEX_HOOKS_ENABLED=1 CODEX_HOME="$real_codex_home" "$real_codex" "$profile_flag" "$profile_name" "$@"
     }
 
     trap cleanup_codex_app_server_runtime EXIT HUP INT TERM
@@ -797,7 +797,7 @@ run_codex_app_server_runtime() {
         socket_wait_attempts=1200
     fi
 
-    env CODEX_HOME="$real_codex_home" "$real_codex" app-server \
+    env TIDEY_CODEX_HOOKS_ENABLED=1 CODEX_HOME="$real_codex_home" "$real_codex" app-server \
         -c "sqlite_home=$(toml_inline_string "$sqlite_home")" \
         --listen "unix://$socket_path" >"$app_server_log" 2>&1 &
     app_server_pid="$!"
@@ -823,7 +823,7 @@ run_codex_app_server_runtime() {
     fi
 
     set +e
-    env CODEX_HOME="$real_codex_home" "$real_codex" --remote "unix://$socket_path" "$@" &
+    env TIDEY_CODEX_HOOKS_ENABLED=1 CODEX_HOME="$real_codex_home" "$real_codex" --remote "unix://$socket_path" "$@" &
     remote_tui_pid="$!"
     tidey_hydrate_tmux_pane_identity
     write_registry_file "$registry_file" "$TIDEY_WORKSPACE_ID" "$session_id" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$created_at" "$rollout_path" "codex_app_server" "$socket_path" "$app_server_pid" "$remote_tui_pid" "$thread_id" "$thread_id"
@@ -902,7 +902,7 @@ main() {
         "$HOOK_DIR/tidey" codex-hook session-start || true
     fi
 
-    exec env CODEX_HOME="$real_codex_home" "$real_codex" "$profile_flag" "$profile_name" "$@"
+    exec env TIDEY_CODEX_HOOKS_ENABLED=1 CODEX_HOME="$real_codex_home" "$real_codex" "$profile_flag" "$profile_name" "$@"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
