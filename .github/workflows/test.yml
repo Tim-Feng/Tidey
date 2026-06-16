@@ -42,8 +42,24 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Select Xcode 26
-        run: sudo xcode-select -s /Applications/Xcode_26.2.app/Contents/Developer
+      - name: Select dependency-compatible Xcode
+        run: |
+          required_xcode_version="$(cat last-xcode-version)"
+          current_xcode_version="$(xcodebuild -version)"
+          if [ "$current_xcode_version" != "$required_xcode_version" ]; then
+            required_xcode_short_version="$(awk 'NR == 1 { print $2 }' last-xcode-version)"
+            required_developer_dir="/Applications/Xcode_${required_xcode_short_version}.app/Contents/Developer"
+            if [ ! -d "$required_developer_dir" ]; then
+              echo "::error::Required Xcode not found: $required_developer_dir"
+              echo "Required version:"
+              printf '%s\n' "$required_xcode_version"
+              echo "Current version:"
+              printf '%s\n' "$current_xcode_version"
+              ls -d /Applications/Xcode*.app 2>/dev/null || true
+              exit 1
+            fi
+            sudo xcode-select -s "$required_developer_dir"
+          fi
 
       - name: Show Xcode version
         run: xcodebuild -version
@@ -55,12 +71,25 @@ jobs:
 
       - name: Run tests
         run: |
+          set -o pipefail
+
+          test_count_from_result() {
+            if [ ! -d TestResults.xcresult ]; then
+              echo 0
+              return
+            fi
+
+            xcrun xcresulttool get test-results summary --path TestResults.xcresult 2>/dev/null \
+              | python3 -c 'import json, sys; print(int(json.load(sys.stdin).get("totalTestCount") or 0))' 2>/dev/null \
+              || echo 0
+          }
+
           # Retry up to 3 times, but only for flaky ibtoold/asset catalog crashes
           for attempt in 1 2 3; do
             echo "::group::Attempt $attempt of 3"
             rm -rf TestResults.xcresult build_output.txt
 
-            # Run xcodebuild and capture output
+            # Run xcodebuild and capture output without losing xcodebuild's status to tee.
             set +e
             xcodebuild test \
               -project iTerm2.xcodeproj \
@@ -72,10 +101,16 @@ jobs:
               CODE_SIGNING_ALLOWED=NO 2>&1 | tee build_output.txt
             exit_code=$?
             set -e
+            test_count="$(test_count_from_result)"
+            echo "ModernTests executed $test_count tests on attempt $attempt"
             echo "::endgroup::"
 
             if [ $exit_code -eq 0 ]; then
-              echo "Tests passed on attempt $attempt"
+              if [ "$test_count" -le 0 ]; then
+                echo "::error::ModernTests reported success but executed 0 tests"
+                exit 1
+              fi
+              echo "Tests passed on attempt $attempt ($test_count tests)"
               exit 0
             fi
 
