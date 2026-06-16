@@ -1410,7 +1410,8 @@ ITERM_WEAKLY_REFERENCEABLE
 + (BOOL)tideyShouldManagePendingPanelInsertForShowingSidebar:(BOOL)showingSidebar
                                        pendingWorkspaceIndex:(NSInteger)pendingWorkspaceIndex
                                              createWorkspace:(BOOL)createWorkspace {
-    return showingSidebar && (createWorkspace || pendingWorkspaceIndex != NSNotFound);
+    const BOOL hasPendingWorkspace = (pendingWorkspaceIndex >= 0 && pendingWorkspaceIndex != NSNotFound);
+    return showingSidebar && (createWorkspace || hasPendingWorkspace);
 }
 
 - (Workspace *)selectedWorkspace {

@@ -819,8 +819,12 @@ final class PathTests: XCTestCase {
         // Then
         XCTAssertNotNil(path)
         XCTAssertTrue(path!.contains("Application Support"))
-        // Default should use iTerm2 as the directory name
-        XCTAssertTrue(path!.hasSuffix("/iTerm2") || path!.contains("iTerm2"))
+        let expectedName = iTermUserDefaults.customSuiteName()
+            ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleExecutable") as? String
+        XCTAssertNotNil(expectedName)
+        XCTAssertEqual((path! as NSString).lastPathComponent,
+                       expectedName,
+                       "Application support path should follow the current Tidey bundle name: \(path!)")
     }
 
     func testApplicationSupportDirectoryWithoutCreating_DefaultSuite() {
@@ -830,7 +834,12 @@ final class PathTests: XCTestCase {
         // Then
         XCTAssertNotNil(path)
         XCTAssertTrue(path!.contains("Application Support"))
-        XCTAssertTrue(path!.hasSuffix("/iTerm2") || path!.contains("iTerm2"))
+        let expectedName = iTermUserDefaults.customSuiteName()
+            ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String
+        XCTAssertNotNil(expectedName)
+        XCTAssertEqual((path! as NSString).lastPathComponent,
+                       expectedName,
+                       "Application support path should follow the current Tidey bundle name: \(path!)")
     }
 
     // MARK: - Home Directory Dot-Dir Tests
@@ -1468,6 +1477,7 @@ final class PathTests: XCTestCase {
 
     func testVisibleWorkspaceRebuildAlwaysUsesVisibleTabView() {
         XCTAssertFalse(tideyShouldManagePendingPanelInsert(pendingWorkspaceIndex: -1, createWorkspace: false))
+        XCTAssertFalse(tideyShouldManagePendingPanelInsert(pendingWorkspaceIndex: NSNotFound, createWorkspace: false))
         XCTAssertTrue(tideyShouldInsertPendingPanelIntoVisibleTabs(selectedWorkspaceIndex: 1,
                                                                    targetWorkspaceIndex: 0,
                                                                    createWorkspace: false,

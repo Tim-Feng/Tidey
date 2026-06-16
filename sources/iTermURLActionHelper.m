@@ -35,7 +35,11 @@
 }
 
 - (BOOL)shouldOpenFileURLWithSemanticHistory:(NSURL *)url {
-    return [url.scheme isEqualToString:@"file"] && url.path.length > 0;
+    if (![url.scheme isEqualToString:@"file"]) {
+        return NO;
+    }
+    NSString *path = url.path;
+    return path.length > 0 && ![path isEqualToString:@"/"];
 }
 
 - (instancetype)initWithSemanticHistoryController:(iTermSemanticHistoryController *)semanticHistoryController {
