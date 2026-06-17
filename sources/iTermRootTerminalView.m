@@ -74,6 +74,7 @@ static const CGFloat kTideyMinimumTerminalWidth = 200;
 static const CGFloat kTideyMinimumEditorPanelWidth = 280;
 static const CGFloat kTideyMinimumEditorContentWidth = 160;
 static const CGFloat kTideyMinimumFileTreeWidth = 120;
+static const NSTimeInterval kTideyEditorFileTreeWatcherDebounceSeconds = 0.6;
 static const CGFloat kTideyEditorTabStripHeight = 34;
 static const CGFloat kTideyDragHandleWidth = 4;
 static const CGFloat kTideyChromeToggleButtonWidth = 18;
@@ -391,6 +392,10 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
 - (NSString *)tideyEditorFileTreeWatchRootPath;
 - (void)tideySyncEditorFileTreeWatcher;
 - (void)tideyStopWatchingEditorFileTree;
+- (void)tideyCancelEditorFileTreeStructureCheck;
+- (void)tideyScheduleEditorFileTreeStructureCheck;
+- (BOOL)tideyEditorFileTreeStructureDidChange;
+- (NSDictionary<NSString *, NSArray<NSString *> *> *)tideyEditorFileTreeCurrentStructureSignature;
 - (void)tideyHandleEditorFileTreeRootDidChange;
 - (NSArray<NSString *> *)tideyEditorFileTreeExpandedPaths;
 - (void)tideyRestoreEditorFileTreeExpandedPaths:(NSArray<NSString *> *)expandedPaths;
@@ -1183,6 +1188,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 + (BOOL)tideyNextSplitVisibilityAfterToggleFromVisible:(BOOL)splitVisible;
 + (NSString *)tideyEditorFileTreeRootPathForOverridePath:(NSString *)overridePath
                                            homeDirectory:(NSString *)homeDirectory;
++ (NSArray<NSString *> *)tideyEditorFileTreeStructureEntriesForDirectoryPath:(NSString *)directoryPath;
++ (NSDictionary<NSString *, NSArray<NSString *> *> *)tideyEditorFileTreeStructureSignatureForDirectoryPaths:(NSArray<NSString *> *)directoryPaths;
 @end
 
 @implementation iTermRootTerminalView {
@@ -1217,6 +1224,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSString *_tideyEditorCurrentRootPath;
     SCEvents *_tideyEditorFileTreeWatcher;
     NSString *_tideyEditorFileTreeWatchedRootPath;
+    dispatch_block_t _tideyEditorFileTreeStructureCheckWorkItem;
     NSString *_tideyEditorRootOverridePath;
     TideyRightPanelPane *_primaryPane;
     TideyRightPanelPane *_secondaryPane;
@@ -2303,9 +2311,7 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
     if (pathWatcher != _tideyEditorFileTreeWatcher) {
         return;
     }
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [self tideyHandleEditorFileTreeRootDidChange];
-    });
+    [self tideyScheduleEditorFileTreeStructureCheck];
 }
 
 - (void)setDelegate:(id<iTermRootTerminalViewDelegate>)delegate {
@@ -4261,6 +4267,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
 }
 
 - (void)tideyStopWatchingEditorFileTree {
+    [self tideyCancelEditorFileTreeStructureCheck];
     if (_tideyEditorFileTreeWatcher && _tideyEditorFileTreeWatchedRootPath.length > 0) {
         [_tideyEditorFileTreeWatcher stopWatchingPaths];
         _tideyEditorFileTreeWatcher.delegate = nil;
@@ -4286,6 +4293,99 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     _tideyEditorFileTreeWatcher.delegate = (id<NSObject, SCEventListenerProtocol>)self;
     [_tideyEditorFileTreeWatcher startWatchingPaths:@[ rootPath ]];
     _tideyEditorFileTreeWatchedRootPath = [rootPath copy];
+}
+
+- (void)tideyCancelEditorFileTreeStructureCheck {
+    if (_tideyEditorFileTreeStructureCheckWorkItem) {
+        dispatch_block_cancel(_tideyEditorFileTreeStructureCheckWorkItem);
+        _tideyEditorFileTreeStructureCheckWorkItem = nil;
+    }
+}
+
+- (void)tideyScheduleEditorFileTreeStructureCheck {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self tideyCancelEditorFileTreeStructureCheck];
+        __weak typeof(self) weakSelf = self;
+        dispatch_block_t workItem = dispatch_block_create(0, ^{
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf) {
+                return;
+            }
+            strongSelf->_tideyEditorFileTreeStructureCheckWorkItem = nil;
+            if (![strongSelf tideyEditorFileTreeStructureDidChange]) {
+                return;
+            }
+            [strongSelf tideyHandleEditorFileTreeRootDidChange];
+        });
+        _tideyEditorFileTreeStructureCheckWorkItem = workItem;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                     (int64_t)(kTideyEditorFileTreeWatcherDebounceSeconds * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(),
+                       workItem);
+    });
+}
+
+- (NSArray<NSString *> *)tideyEditorFileTreeStructureEntriesForLoadedNode:(TideyEditorFileNode *)node {
+    if (!node.directory || !node.childrenLoaded) {
+        return @[];
+    }
+    NSMutableArray<NSString *> *entries = [NSMutableArray array];
+    for (TideyEditorFileNode *child in node.children) {
+        NSString *name = child.displayName.length ? child.displayName : child.path.lastPathComponent;
+        if (name.length == 0) {
+            continue;
+        }
+        [entries addObject:[NSString stringWithFormat:@"%@:%@", child.directory ? @"D" : @"F", name]];
+    }
+    [entries sortUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
+    return entries;
+}
+
+- (void)tideyAppendCurrentEditorFileTreeStructureForNode:(TideyEditorFileNode *)node
+                                             toSignature:(NSMutableDictionary<NSString *, NSArray<NSString *> *> *)signature
+                                                  isRoot:(BOOL)isRoot {
+    if (!node.directory) {
+        return;
+    }
+    if (!isRoot && !node.childrenLoaded) {
+        return;
+    }
+
+    NSString *path = [node.path stringByStandardizingPath];
+    if (path.length > 0) {
+        signature[path] = [self tideyEditorFileTreeStructureEntriesForLoadedNode:node];
+    }
+    if (!node.childrenLoaded) {
+        return;
+    }
+    for (TideyEditorFileNode *child in node.children) {
+        if (child.directory && child.childrenLoaded) {
+            [self tideyAppendCurrentEditorFileTreeStructureForNode:child
+                                                       toSignature:signature
+                                                            isRoot:NO];
+        }
+    }
+}
+
+- (NSDictionary<NSString *, NSArray<NSString *> *> *)tideyEditorFileTreeCurrentStructureSignature {
+    if (!_tideyEditorFileTreeRootNode) {
+        return @{};
+    }
+    NSMutableDictionary<NSString *, NSArray<NSString *> *> *signature = [NSMutableDictionary dictionary];
+    [self tideyAppendCurrentEditorFileTreeStructureForNode:_tideyEditorFileTreeRootNode
+                                               toSignature:signature
+                                                    isRoot:YES];
+    return signature;
+}
+
+- (BOOL)tideyEditorFileTreeStructureDidChange {
+    NSDictionary<NSString *, NSArray<NSString *> *> *currentSignature = [self tideyEditorFileTreeCurrentStructureSignature];
+    if (currentSignature.count == 0) {
+        return YES;
+    }
+    NSDictionary<NSString *, NSArray<NSString *> *> *diskSignature =
+        [[self class] tideyEditorFileTreeStructureSignatureForDirectoryPaths:currentSignature.allKeys];
+    return ![currentSignature isEqualToDictionary:diskSignature];
 }
 
 - (NSArray<NSString *> *)tideyEditorFileTreeExpandedPaths {
@@ -7013,10 +7113,16 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     cellView.textField.cell.scrollable = NO;
     cellView.textField.cell.truncatesLastVisibleLine = YES;
     if (@available(macOS 11.0, *)) {
-        NSString *symbolName = node.directory ? @"folder.fill" : @"doc.text";
-        NSImage *image = [NSImage imageWithSystemSymbolName:symbolName accessibilityDescription:nil];
-        image.template = YES;
-        cellView.imageView.image = image;
+        static NSImage *folderImage;
+        static NSImage *fileImage;
+        static dispatch_once_t onceToken;
+        dispatch_once(&onceToken, ^{
+            folderImage = [NSImage imageWithSystemSymbolName:@"folder.fill" accessibilityDescription:nil];
+            folderImage.template = YES;
+            fileImage = [NSImage imageWithSystemSymbolName:@"doc.text" accessibilityDescription:nil];
+            fileImage.template = YES;
+        });
+        cellView.imageView.image = node.directory ? folderImage : fileImage;
         cellView.imageView.contentTintColor = [NSColor colorWithWhite:0.78 alpha:1];
     }
     return cellView;
@@ -8438,6 +8544,50 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
 
 + (BOOL)tideyNextSplitVisibilityAfterToggleFromVisible:(BOOL)splitVisible {
     return !splitVisible;
+}
+
++ (NSArray<NSString *> *)tideyEditorFileTreeStructureEntriesForDirectoryPath:(NSString *)directoryPath {
+    NSString *normalizedPath = [directoryPath stringByStandardizingPath];
+    BOOL isDirectory = NO;
+    if (normalizedPath.length == 0 ||
+        ![[NSFileManager defaultManager] fileExistsAtPath:normalizedPath isDirectory:&isDirectory] ||
+        !isDirectory) {
+        return @[ @"!missing" ];
+    }
+
+    NSArray<NSURL *> *urls = [[NSFileManager defaultManager] contentsOfDirectoryAtURL:[NSURL fileURLWithPath:normalizedPath]
+                                                            includingPropertiesForKeys:@[ NSURLIsDirectoryKey, NSURLNameKey ]
+                                                                               options:(NSDirectoryEnumerationSkipsHiddenFiles | NSDirectoryEnumerationSkipsPackageDescendants)
+                                                                                 error:nil];
+    if (!urls) {
+        return @[ @"!unreadable" ];
+    }
+
+    NSMutableArray<NSString *> *entries = [NSMutableArray array];
+    for (NSURL *url in urls) {
+        NSNumber *childIsDirectory = nil;
+        NSString *name = nil;
+        [url getResourceValue:&childIsDirectory forKey:NSURLIsDirectoryKey error:nil];
+        [url getResourceValue:&name forKey:NSURLNameKey error:nil];
+        if (name.length == 0) {
+            continue;
+        }
+        [entries addObject:[NSString stringWithFormat:@"%@:%@", childIsDirectory.boolValue ? @"D" : @"F", name]];
+    }
+    [entries sortUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
+    return entries;
+}
+
++ (NSDictionary<NSString *, NSArray<NSString *> *> *)tideyEditorFileTreeStructureSignatureForDirectoryPaths:(NSArray<NSString *> *)directoryPaths {
+    NSMutableDictionary<NSString *, NSArray<NSString *> *> *signature = [NSMutableDictionary dictionary];
+    for (NSString *directoryPath in directoryPaths) {
+        NSString *normalizedPath = [directoryPath stringByStandardizingPath];
+        if (normalizedPath.length == 0 || signature[normalizedPath]) {
+            continue;
+        }
+        signature[normalizedPath] = [self tideyEditorFileTreeStructureEntriesForDirectoryPath:normalizedPath];
+    }
+    return signature;
 }
 
 + (NSString *)tideyEditorFileTreeRootPathForOverridePath:(NSString *)overridePath

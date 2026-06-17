@@ -807,6 +807,27 @@ final class PathTests: XCTestCase {
                         homeDirectory as NSString) as String
     }
 
+    private func tideyEditorFileTreeStructureSignature(directoryPaths: [String]) -> [String: [String]] {
+        let selector = NSSelectorFromString("tideyEditorFileTreeStructureSignatureForDirectoryPaths:")
+        guard let rootTerminalViewClass = NSClassFromString("iTermRootTerminalView"),
+              let method = class_getClassMethod(rootTerminalViewClass, selector) else {
+            XCTFail("Missing iTermRootTerminalView file tree structure signature helper")
+            return [:]
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, NSArray) -> NSDictionary
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        let raw = function(rootTerminalViewClass, selector, directoryPaths as NSArray)
+        var result: [String: [String]] = [:]
+        for (key, value) in raw {
+            guard let path = key as? String else {
+                continue
+            }
+            result[path] = value as? [String] ?? []
+        }
+        return result
+    }
+
     private func scrubbedTerminalIdentityEnvironment(_ environment: [String: String]) -> [String: String] {
         let selector = NSSelectorFromString("tideyEnvironmentByScrubbingExternalTerminalIdentityFromEnvironment:")
         guard let method = class_getClassMethod(PTYSession.self, selector) else {
@@ -1702,6 +1723,58 @@ final class PathTests: XCTestCase {
     func testEditorFileTreeRootFallsBackToHomeDirectory() {
         XCTAssertEqual(tideyEditorFileTreeRootPath(overridePath: "", homeDirectory: "/Users/tim"),
                        "/Users/tim")
+    }
+
+    func testEditorFileTreeStructureSignatureIgnoresHiddenAndContentChanges() throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("tidey-file-tree-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: root)
+        }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        let visibleFile = root.appendingPathComponent("visible.txt")
+        try "one".write(to: visibleFile, atomically: true, encoding: .utf8)
+        let hiddenDirectory = root.appendingPathComponent(".git", isDirectory: true)
+        try FileManager.default.createDirectory(at: hiddenDirectory, withIntermediateDirectories: true)
+        try "hidden".write(to: hiddenDirectory.appendingPathComponent("HEAD"), atomically: true, encoding: .utf8)
+
+        let before = tideyEditorFileTreeStructureSignature(directoryPaths: [root.path])
+
+        try "two".write(to: visibleFile, atomically: true, encoding: .utf8)
+        try "churn".write(to: hiddenDirectory.appendingPathComponent("index"), atomically: true, encoding: .utf8)
+        let after = tideyEditorFileTreeStructureSignature(directoryPaths: [root.path])
+
+        XCTAssertEqual(before[root.path], ["F:visible.txt"])
+        XCTAssertEqual(after, before)
+    }
+
+    func testEditorFileTreeStructureSignatureTracksVisibleLoadedDirectoryChildren() throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("tidey-file-tree-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: root)
+        }
+        let loadedDirectory = root.appendingPathComponent("folder", isDirectory: true)
+        try FileManager.default.createDirectory(at: loadedDirectory, withIntermediateDirectories: true)
+        try "base".write(to: root.appendingPathComponent("base.txt"), atomically: true, encoding: .utf8)
+
+        let before = tideyEditorFileTreeStructureSignature(directoryPaths: [root.path, loadedDirectory.path])
+        let createdFile = loadedDirectory.appendingPathComponent("created.txt")
+        try "new".write(to: createdFile, atomically: true, encoding: .utf8)
+        let afterCreate = tideyEditorFileTreeStructureSignature(directoryPaths: [root.path, loadedDirectory.path])
+        let renamedFile = loadedDirectory.appendingPathComponent("renamed.txt")
+        try FileManager.default.moveItem(at: createdFile, to: renamedFile)
+        let afterRename = tideyEditorFileTreeStructureSignature(directoryPaths: [root.path, loadedDirectory.path])
+        try FileManager.default.removeItem(at: renamedFile)
+        let afterDelete = tideyEditorFileTreeStructureSignature(directoryPaths: [root.path, loadedDirectory.path])
+
+        XCTAssertEqual(before[root.path], ["D:folder", "F:base.txt"])
+        XCTAssertEqual(before[loadedDirectory.path], [])
+        XCTAssertEqual(afterCreate[root.path], before[root.path])
+        XCTAssertEqual(afterCreate[loadedDirectory.path], ["F:created.txt"])
+        XCTAssertEqual(afterRename[loadedDirectory.path], ["F:renamed.txt"])
+        XCTAssertEqual(afterDelete, before)
     }
 
     func testPendingPanelInsertIntoBackgroundWorkspaceDoesNotUseVisibleTabView() {
