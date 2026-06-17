@@ -7087,6 +7087,10 @@ static NSString *iTermStringFromRange(NSRange range) {
         return cachedAction;
     }
 
+    return [self mouseHandlerFreshOpenActionForEvent:event];
+}
+
+- (URLAction *)mouseHandlerFreshOpenActionForEvent:(NSEvent *)event {
     const VT100GridCoord coord = [self tideyURLCoordForEvent:event allowRightMarginOverflow:NO];
     iTermTextExtractor *extractor = [iTermTextExtractor textExtractorWithDataSource:self.dataSource];
     NSString *workingDirectory = [self.dataSource workingDirectoryOnLine:coord.y];

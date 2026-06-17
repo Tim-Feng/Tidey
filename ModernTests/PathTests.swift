@@ -508,6 +508,37 @@ final class PathTests: XCTestCase {
         return result
     }
 
+    private func openURLOrExistingFileAction(text: String,
+                                             clickIndex: Int,
+                                             width: Int,
+                                             workingDirectory: String,
+                                             respectHardNewlines: Bool = true) -> [String: Any]? {
+        guard let factoryClass = NSClassFromString("iTermURLActionFactory") as? AnyClass else {
+            XCTFail("Missing iTermURLActionFactory")
+            return nil
+        }
+        let selector = NSSelectorFromString("tideyOpenURLOrExistingFileActionDictionaryAtX:y:extractor:respectHardNewlines:workingDirectory:")
+        guard let method = class_getClassMethod(factoryClass, selector) else {
+            XCTFail("Missing Tidey open URL or existing file action helper")
+            return nil
+        }
+        let dataSource = URLActionTextDataSource(text: text, width: Int32(width))
+        let extractor = iTermTextExtractor(dataSource: dataSource)
+        let visualCoord = visualCoordForLinearIndex(clickIndex, in: text)
+        extractor.restrictToLogicalWindow(including: VT100GridCoord(x: visualCoord.x, y: visualCoord.y))
+
+        typealias Function = @convention(c) (AnyClass, Selector, Int32, Int32, iTermTextExtractor, ObjCBool, NSString) -> NSDictionary?
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        return function(factoryClass,
+                        selector,
+                        visualCoord.x,
+                        visualCoord.y,
+                        extractor,
+                        ObjCBool(respectHardNewlines),
+                        workingDirectory as NSString) as? [String: Any]
+    }
+
     private func visualCoordForLinearIndex(_ clickIndex: Int, in text: String) -> (x: Int32, y: Int32) {
         let nsText = text as NSString
         let safeIndex = max(0, min(clickIndex, max(0, nsText.length - 1)))
@@ -1203,6 +1234,47 @@ final class PathTests: XCTestCase {
         XCTAssertEqual(fileAction?["startX"] as? Int, 2)
         XCTAssertEqual(fileAction?["startY"] as? Int, 0)
         XCTAssertEqual(fileAction?["endY"] as? Int, 1)
+    }
+
+    func testOpenActionRecoversThreeLineReflowedPathBeforeURLFallback() throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("tcr-\(UUID().uuidString.prefix(8))")
+        defer {
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        let directory = root
+            .appendingPathComponent("projects/embryo-074/shotboard/goal-tests/v03/bonsai-floor-plan",
+                                    isDirectory: true)
+        let fileURL = directory.appendingPathComponent("apartment-v3-bonsai-architectural-floor-plan.png")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data().write(to: fileURL)
+
+        let fullPath = fileURL.path as NSString
+        let secondLineStart = fullPath.range(of: "al-tests/v03").location
+        XCTAssertNotEqual(secondLineStart, NSNotFound)
+        let width = secondLineStart
+        let lineA = fullPath.substring(to: secondLineStart)
+        let remaining = fullPath.substring(from: secondLineStart) as NSString
+        let lineB = remaining.substring(to: min(width, remaining.length))
+        let lineC = remaining.substring(from: min(width, remaining.length))
+        XCTAssertFalse(lineC.isEmpty)
+        let text = "\(lineA)\n\(lineB)\n\(lineC)"
+        let middleClick = (text as NSString).range(of: "bonsai-floor-plan").location
+        XCTAssertNotEqual(middleClick, NSNotFound)
+
+        let action = openURLOrExistingFileAction(text: text,
+                                                 clickIndex: middleClick,
+                                                 width: width,
+                                                 workingDirectory: root.path)
+
+        XCTAssertEqual(action?["actionType"] as? Int, TideyURLActionType.openExistingFile.rawValue)
+        XCTAssertEqual(action?["fullPath"] as? String, fileURL.path)
+        XCTAssertEqual(action?["rawFilename"] as? String, fileURL.path)
+        XCTAssertEqual(action?["url"] as? String, fileURL.path)
+        XCTAssertEqual(action?["startX"] as? Int, 0)
+        XCTAssertEqual(action?["startY"] as? Int, 0)
+        XCTAssertEqual(action?["endY"] as? Int, 2)
     }
 
     func testURLLikeCandidateStopsBeforeChineseTrailingPunctuation() {

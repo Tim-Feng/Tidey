@@ -58,6 +58,7 @@ NS_ASSUME_NONNULL_BEGIN
                               webPolicy:(iTermWebURLOpenPolicy)webPolicy;
 - (URLAction * _Nullable)mouseHandlerCachedHoverActionForEvent:(NSEvent *)event;
 - (URLAction * _Nullable)mouseHandlerOpenActionForEvent:(NSEvent *)event;
+- (URLAction * _Nullable)mouseHandlerFreshOpenActionForEvent:(NSEvent *)event;
 - (void)mouseHandlerOpenAction:(URLAction *)action
                    inBackground:(BOOL)inBackground
                           style:(iTermOpenStyle)style

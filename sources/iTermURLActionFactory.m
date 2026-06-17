@@ -79,6 +79,11 @@ static NSMutableArray<iTermURLActionFactory *> *sFactories;
                         respectHardNewlines:(BOOL)respectHardNewlines
                             workingDirectory:(NSString *)workingDirectory
                                   completion:(void (^)(NSDictionary *))completion;
++ (NSDictionary *)tideyOpenURLOrExistingFileActionDictionaryAtX:(int)x
+                                                              y:(int)y
+                                                      extractor:(iTermTextExtractor *)extractor
+                                           respectHardNewlines:(BOOL)respectHardNewlines
+                                               workingDirectory:(NSString *)workingDirectory;
 @end
 
 static NSCharacterSet *iTermCJKURLBoundaryCharacterSet(void) {
@@ -148,7 +153,10 @@ static NSDictionary *iTermURLActionFactoryTideyDictionaryForAction(URLAction *ac
         return nil;
     }
     return @{
+        @"actionType": @(action.actionType),
         @"url": action.string ?: @"",
+        @"rawFilename": action.rawFilename ?: [NSNull null],
+        @"fullPath": action.fullPath ?: [NSNull null],
         @"startX": @(action.visualRange.coordRange.start.x),
         @"startY": @(action.visualRange.coordRange.start.y),
         @"endX": @(action.visualRange.coordRange.end.x),
@@ -345,6 +353,7 @@ typedef struct {
     int line;
     int contentStart;
     int contentEnd;
+    int contentRight;
     int firstTokenX;
     int lastTokenX;
     unichar firstTokenChar;
@@ -413,6 +422,7 @@ static iTermCanonicalClickLineInfo iTermCanonicalClickLineInfoMake(iTermTextExtr
         .line = lineNumber,
         .contentStart = 0,
         .contentEnd = 0,
+        .contentRight = 0,
         .firstTokenX = -1,
         .lastTokenX = -1,
         .firstTokenChar = 0,
@@ -437,6 +447,7 @@ static iTermCanonicalClickLineInfo iTermCanonicalClickLineInfoMake(iTermTextExtr
     int right = logicalWindow.length ? logicalWindow.location + logicalWindow.length : width;
     left = MAX(0, MIN(left, width));
     right = MAX(left, MIN(right, MIN(width, line.length)));
+    info.contentRight = right;
 
     for (int x = left; x < right; x++) {
         NSString *string = iTermCanonicalClickStringForScreenChar(line.line[x]);
@@ -491,7 +502,9 @@ static BOOL iTermCanonicalClickLineNeedsHardJoin(iTermCanonicalClickLineInfo pre
     if (!previous.hasToken || !next.hasToken) {
         return NO;
     }
-    if (next.firstTokenX <= next.contentStart) {
+    const BOOL nextLineIsIndented = next.firstTokenX > next.contentStart;
+    const BOOL previousLineFilledVisibleWidth = previous.contentEnd >= previous.contentRight;
+    if (!nextLineIsIndented && !previousLineFilledVisibleWidth) {
         return NO;
     }
     if (!previous.containsSlash) {
@@ -1138,6 +1151,20 @@ static BOOL iTermCanonicalClickShouldJoin(iTermCanonicalClickLineInfo previous,
     URLAction *action = [self tideyOpenURLActionAtCoord:VT100GridCoordMake(x, y)
                                               extractor:extractor
                                    respectHardNewlines:respectHardNewlines];
+    return iTermURLActionFactoryTideyDictionaryForAction(action);
+}
+
++ (NSDictionary *)tideyOpenURLOrExistingFileActionDictionaryAtX:(int)x
+                                                              y:(int)y
+                                                      extractor:(iTermTextExtractor *)extractor
+                                           respectHardNewlines:(BOOL)respectHardNewlines
+                                               workingDirectory:(NSString *)workingDirectory {
+    iTermSemanticHistoryController *semanticHistoryController = [[iTermSemanticHistoryController alloc] init];
+    URLAction *action = [self tideyOpenURLOrExistingFileActionAtCoord:VT100GridCoordMake(x, y)
+                                                            extractor:extractor
+                                                 respectHardNewlines:respectHardNewlines
+                                                    workingDirectory:workingDirectory
+                                           semanticHistoryController:semanticHistoryController];
     return iTermURLActionFactoryTideyDictionaryForAction(action);
 }
 

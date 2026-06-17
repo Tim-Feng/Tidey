@@ -280,13 +280,14 @@ static BOOL iTermTideyWindowedRangeIsValid(VT100GridWindowedRange range) {
                                     mouseReporting:(BOOL)mouseReporting {
     const BOOL cmdClickEnabled = [iTermPreferences boolForKey:kPreferenceKeyCmdClickOpensURLs];
     const BOOL cmdPressed = (event.it_modifierFlags & NSEventModifierFlagCommand) != 0;
-    if ([self.class tideyShouldProbeActionForCommandClickWithClickCount:event.clickCount
-                                                            mouseDragged:NO
-                                                           modifierFlags:event.it_modifierFlags
-                                                         cmdClickEnabled:cmdClickEnabled
-                                                              cmdPressed:cmdPressed
-                                                          mouseReporting:mouseReporting]) {
-        URLAction *action = [self.mouseDelegate mouseHandlerOpenActionForEvent:event];
+    const BOOL shouldProbe = [self.class tideyShouldProbeActionForCommandClickWithClickCount:event.clickCount
+                                                                                mouseDragged:NO
+                                                                               modifierFlags:event.it_modifierFlags
+                                                                             cmdClickEnabled:cmdClickEnabled
+                                                                                  cmdPressed:cmdPressed
+                                                                              mouseReporting:mouseReporting];
+    if (shouldProbe) {
+        URLAction *action = [self.mouseDelegate mouseHandlerFreshOpenActionForEvent:event];
         if (!action) {
             return NO;
         }
@@ -330,10 +331,9 @@ static BOOL iTermTideyWindowedRangeIsValid(VT100GridWindowedRange range) {
         return NO;
     }
 
-    URLAction *action = [self.mouseDelegate mouseHandlerCachedHoverActionForEvent:event];
-    if (!action && _tideyPendingActionClickWasCommandClick) {
-        action = [self.mouseDelegate mouseHandlerOpenActionForEvent:event];
-    }
+    URLAction *action = _tideyPendingActionClickWasCommandClick ?
+        [self.mouseDelegate mouseHandlerFreshOpenActionForEvent:event] :
+        [self.mouseDelegate mouseHandlerCachedHoverActionForEvent:event];
     return (action &&
             action.actionType == _tideyPendingActionClickAction.actionType &&
             [action.string isEqualToString:_tideyPendingActionClickAction.string] &&
