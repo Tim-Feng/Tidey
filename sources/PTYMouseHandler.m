@@ -111,6 +111,7 @@ static BOOL iTermTideyWindowedRangeIsValid(VT100GridWindowedRange range) {
 
     BOOL _tideySuppressedMouseReportingForActionClick;
     BOOL _tideyPendingActionClick;
+    BOOL _tideyPendingActionClickWasCommandClick;
     VT100GridWindowedRange _tideyPendingActionClickRange;
     URLAction *_tideyPendingActionClickAction;
 }
@@ -196,6 +197,23 @@ static BOOL iTermTideyWindowedRangeIsValid(VT100GridWindowedRange range) {
     return iTermTideyURLClickOpenPolicyNone;
 }
 
++ (BOOL)tideyShouldProbeActionForCommandClickWithClickCount:(NSInteger)clickCount
+                                               mouseDragged:(BOOL)mouseDragged
+                                              modifierFlags:(NSEventModifierFlags)modifierFlags
+                                            cmdClickEnabled:(BOOL)cmdClickEnabled
+                                                 cmdPressed:(BOOL)cmdPressed
+                                             mouseReporting:(BOOL)mouseReporting {
+    if (clickCount != 1 || mouseDragged || !mouseReporting || !cmdClickEnabled || !cmdPressed) {
+        return NO;
+    }
+
+    const NSEventModifierFlags blockedModifiers =
+        (NSEventModifierFlagShift |
+         NSEventModifierFlagOption |
+         NSEventModifierFlagControl);
+    return (modifierFlags & blockedModifiers) == 0;
+}
+
 + (BOOL)tideyShouldSuppressMouseReportingForPlainURLClickWithClickCount:(NSInteger)clickCount
                                                              mouseDragged:(BOOL)mouseDragged
                                                             modifierFlags:(NSEventModifierFlags)modifierFlags
@@ -240,12 +258,52 @@ static BOOL iTermTideyWindowedRangeIsValid(VT100GridWindowedRange range) {
 - (void)tideyClearPendingActionClick {
     _tideySuppressedMouseReportingForActionClick = NO;
     _tideyPendingActionClick = NO;
+    _tideyPendingActionClickWasCommandClick = NO;
     _tideyPendingActionClickRange = iTermTideyInvalidWindowedRange();
     _tideyPendingActionClickAction = nil;
 }
 
+- (BOOL)tideySuppressMouseReportingForAction:(URLAction *)action commandClick:(BOOL)commandClick {
+    if (!action || !iTermTideyWindowedRangeIsValid(action.visualRange)) {
+        return NO;
+    }
+
+    _tideySuppressedMouseReportingForActionClick = YES;
+    _tideyPendingActionClick = YES;
+    _tideyPendingActionClickWasCommandClick = commandClick;
+    _tideyPendingActionClickRange = action.visualRange;
+    _tideyPendingActionClickAction = action;
+    return YES;
+}
+
 - (BOOL)tideyPrepareActionClickSuppressionForEvent:(NSEvent *)event
                                     mouseReporting:(BOOL)mouseReporting {
+    const BOOL cmdClickEnabled = [iTermPreferences boolForKey:kPreferenceKeyCmdClickOpensURLs];
+    const BOOL cmdPressed = (event.it_modifierFlags & NSEventModifierFlagCommand) != 0;
+    if ([self.class tideyShouldProbeActionForCommandClickWithClickCount:event.clickCount
+                                                            mouseDragged:NO
+                                                           modifierFlags:event.it_modifierFlags
+                                                         cmdClickEnabled:cmdClickEnabled
+                                                              cmdPressed:cmdPressed
+                                                          mouseReporting:mouseReporting]) {
+        URLAction *action = [self.mouseDelegate mouseHandlerOpenActionForEvent:event];
+        if (!action) {
+            return NO;
+        }
+        const iTermTideyURLClickOpenPolicy policy =
+            [self.class tideyActionClickOpenPolicyForClickCount:event.clickCount
+                                                   mouseDragged:NO
+                                                  modifierFlags:event.it_modifierFlags
+                                                cmdClickEnabled:cmdClickEnabled
+                                                     cmdPressed:YES
+                                                 mouseReporting:mouseReporting
+                                                     actionType:action.actionType
+                                           hasCachedHoverAction:NO];
+        if (policy != iTermTideyURLClickOpenPolicyNone) {
+            return [self tideySuppressMouseReportingForAction:action commandClick:YES];
+        }
+    }
+
     URLAction *action = [self.mouseDelegate mouseHandlerCachedHoverActionForEvent:event];
     if (!action || !iTermTideyWindowedRangeIsValid(action.visualRange)) {
         return NO;
@@ -255,7 +313,7 @@ static BOOL iTermTideyWindowedRangeIsValid(VT100GridWindowedRange range) {
         [self.class tideyActionClickOpenPolicyForClickCount:event.clickCount
                                                mouseDragged:NO
                                               modifierFlags:event.it_modifierFlags
-                                            cmdClickEnabled:[iTermPreferences boolForKey:kPreferenceKeyCmdClickOpensURLs]
+                                            cmdClickEnabled:cmdClickEnabled
                                                  cmdPressed:NO
                                              mouseReporting:mouseReporting
                                                  actionType:action.actionType
@@ -264,11 +322,7 @@ static BOOL iTermTideyWindowedRangeIsValid(VT100GridWindowedRange range) {
         return NO;
     }
 
-    _tideySuppressedMouseReportingForActionClick = YES;
-    _tideyPendingActionClick = YES;
-    _tideyPendingActionClickRange = action.visualRange;
-    _tideyPendingActionClickAction = action;
-    return YES;
+    return [self tideySuppressMouseReportingForAction:action commandClick:NO];
 }
 
 - (BOOL)tideyPendingActionClickMatchesEvent:(NSEvent *)event {
@@ -277,6 +331,9 @@ static BOOL iTermTideyWindowedRangeIsValid(VT100GridWindowedRange range) {
     }
 
     URLAction *action = [self.mouseDelegate mouseHandlerCachedHoverActionForEvent:event];
+    if (!action && _tideyPendingActionClickWasCommandClick) {
+        action = [self.mouseDelegate mouseHandlerOpenActionForEvent:event];
+    }
     return (action &&
             action.actionType == _tideyPendingActionClickAction.actionType &&
             [action.string isEqualToString:_tideyPendingActionClickAction.string] &&
@@ -659,6 +716,7 @@ static BOOL iTermTideyWindowedRangeIsValid(VT100GridWindowedRange range) {
     const BOOL mouseDragged = (_mouseDragged && _committedToDrag);
     _committedToDrag = NO;
     const BOOL suppressedReportingForActionClick = _tideySuppressedMouseReportingForActionClick;
+    const BOOL pendingActionClickWasCommandClick = _tideyPendingActionClickWasCommandClick;
     const BOOL pendingActionClick = [self tideyPendingActionClickMatchesEvent:event];
     URLAction *pendingActionClickAction = pendingActionClick ? _tideyPendingActionClickAction : nil;
     const iTermTideyURLClickOpenPolicy pendingActionClickPolicy =
@@ -667,7 +725,7 @@ static BOOL iTermTideyWindowedRangeIsValid(VT100GridWindowedRange range) {
                                                mouseDragged:mouseDragged
                                               modifierFlags:event.it_modifierFlags
                                             cmdClickEnabled:[iTermPreferences boolForKey:kPreferenceKeyCmdClickOpensURLs]
-                                                 cmdPressed:NO
+                                                 cmdPressed:pendingActionClickWasCommandClick
                                              mouseReporting:YES
                                                  actionType:pendingActionClickAction.actionType
                                        hasCachedHoverAction:YES] :

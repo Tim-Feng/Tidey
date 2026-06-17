@@ -1086,6 +1086,51 @@ static BOOL iTermCanonicalClickShouldJoin(iTermCanonicalClickLineInfo previous,
     return [factory urlActionForURLHitCandidate:candidate];
 }
 
++ (URLAction *)tideyOpenURLOrExistingFileActionAtCoord:(VT100GridCoord)visualCoord
+                                             extractor:(iTermTextExtractor *)extractor
+                                  respectHardNewlines:(BOOL)respectHardNewlines
+                                     workingDirectory:(NSString *)workingDirectory
+                            semanticHistoryController:(iTermSemanticHistoryController *)semanticHistoryController {
+    if (!extractor.dataSource || visualCoord.y < 0) {
+        return nil;
+    }
+
+    extractor.supportBidi = [iTermPreferences bidiEnabled];
+    VT100GridCoord logicalCoord = [extractor logicalCoordForVisualCoord:visualCoord];
+    if ([extractor characterAt:logicalCoord].code == 0) {
+        return nil;
+    }
+    [extractor restrictToLogicalWindowIncludingCoord:visualCoord];
+
+    iTermURLActionFactory *factory = [[iTermURLActionFactory alloc] init];
+    factory.coord = logicalCoord;
+    factory.respectHardNewlines = respectHardNewlines;
+    factory.workingDirectory = workingDirectory ?: @"";
+    factory.extractor = extractor;
+    factory.semanticHistoryController = semanticHistoryController;
+
+    URLAction *hypertextAction = [factory urlActionForHypertextLink];
+    if (hypertextAction) {
+        return hypertextAction;
+    }
+
+    URLAction *existingFileAction =
+        [factory tideySynchronousExistingFileActionRespectingHardNewlines:respectHardNewlines];
+    if (existingFileAction) {
+        return existingFileAction;
+    }
+
+    existingFileAction =
+        [factory tideySynchronousExistingFileActionRespectingHardNewlines:!respectHardNewlines];
+    if (existingFileAction) {
+        return existingFileAction;
+    }
+
+    return [self tideyOpenURLActionAtCoord:visualCoord
+                                 extractor:extractor
+                      respectHardNewlines:respectHardNewlines];
+}
+
 + (NSDictionary *)tideyOpenURLActionDictionaryAtX:(int)x
                                                 y:(int)y
                                         extractor:(iTermTextExtractor *)extractor
@@ -1253,6 +1298,101 @@ static BOOL iTermCanonicalClickShouldJoin(iTermCanonicalClickLineInfo previous,
         }];
     };
     request(possibleFilePart1, possibleFilePart2, NO, nil, 0, 0, NO);
+}
+
+- (URLAction *)tideySynchronousURLActionForExistingFileWithPrefix:(iTermLocatedString *)locatedPrefix
+                                                           suffix:(iTermLocatedString *)locatedSuffix {
+    NSString *possibleFilePart1 =
+    [locatedPrefix.string substringIncludingOffset:[locatedPrefix.string length] - 1
+                                  fromCharacterSet:[NSCharacterSet filenameCharacterSet]
+                              charsTakenFromPrefix:NULL];
+
+    NSMutableCharacterSet *suffixCharacterSet = [[NSCharacterSet filenameCharacterSet] mutableCopy];
+    [suffixCharacterSet formUnionWithCharacterSet:[NSCharacterSet characterSetWithCharactersInString:@"\","]];
+
+    NSString *possibleFilePart2 =
+    [locatedSuffix.string substringIncludingOffset:0
+                                  fromCharacterSet:suffixCharacterSet
+                              charsTakenFromPrefix:NULL];
+    NSString *rawPrefix = locatedPrefix.string ?: @"";
+    NSString *rawSuffix = locatedSuffix.string ?: @"";
+    BOOL shouldRetryWithRawContext =
+        (([rawPrefix containsString:@" "] || [rawSuffix containsString:@" "]) &&
+         (![rawPrefix isEqualToString:possibleFilePart1] || ![rawSuffix isEqualToString:possibleFilePart2]));
+
+    int prefixChars = 0;
+    int suffixChars = 0;
+    NSString *filename =
+        [self.semanticHistoryController pathOfExistingFileFoundWithPrefix:possibleFilePart1
+                                                                   suffix:possibleFilePart2
+                                                         workingDirectory:self.workingDirectory
+                                                     charsTakenFromPrefix:&prefixChars
+                                                     charsTakenFromSuffix:&suffixChars
+                                                           trimWhitespace:NO];
+    if (shouldRetryWithRawContext) {
+        int rawPrefixChars = 0;
+        int rawSuffixChars = 0;
+        NSString *rawFilename =
+            [self.semanticHistoryController pathOfExistingFileFoundWithPrefix:rawPrefix
+                                                                       suffix:rawSuffix
+                                                             workingDirectory:self.workingDirectory
+                                                         charsTakenFromPrefix:&rawPrefixChars
+                                                         charsTakenFromSuffix:&rawSuffixChars
+                                                               trimWhitespace:NO];
+        if ([iTermURLActionFactory tideyShouldPreferRawExistingFileResult:rawFilename
+                                                           rawPrefixChars:rawPrefixChars
+                                                           rawSuffixChars:rawSuffixChars
+                                                             overFilename:filename
+                                                              prefixChars:prefixChars
+                                                              suffixChars:suffixChars]) {
+            filename = rawFilename;
+            prefixChars = rawPrefixChars;
+            suffixChars = rawSuffixChars;
+        }
+    }
+
+    return [self urlActionForFilename:filename
+                        locatedPrefix:locatedPrefix
+                        locatedSuffix:locatedSuffix
+                          prefixChars:prefixChars
+                          suffixChars:suffixChars];
+}
+
+- (URLAction *)tideySynchronousExistingFileActionRespectingHardNewlines:(BOOL)respectHardNewlines {
+    const int maxChars = [iTermAdvancedSettingsModel maxSemanticHistoryPrefixOrSuffix];
+    URLAction *(^wrappedContextAction)(void) = ^{
+        iTermLocatedString *locatedPrefix =
+            [self.extractor wrappedLocatedStringAt:self.coord
+                                           forward:NO
+                               respectHardNewlines:respectHardNewlines
+                                          maxChars:maxChars
+                                 continuationChars:[NSMutableIndexSet indexSet]
+                               convertNullsToSpace:NO];
+        iTermLocatedString *locatedSuffix =
+            [self.extractor wrappedLocatedStringAt:self.coord
+                                           forward:YES
+                               respectHardNewlines:respectHardNewlines
+                                          maxChars:maxChars
+                                 continuationChars:[NSMutableIndexSet indexSet]
+                               convertNullsToSpace:NO];
+        return [self tideySynchronousURLActionForExistingFileWithPrefix:locatedPrefix
+                                                                 suffix:locatedSuffix];
+    };
+
+    iTermCanonicalClickContext *canonicalContext =
+        [iTermCanonicalClickContext contextAtCoord:self.coord
+                                         extractor:self.extractor
+                                          maxChars:maxChars];
+    if (canonicalContext) {
+        URLAction *action =
+            [self tideySynchronousURLActionForExistingFileWithPrefix:canonicalContext.locatedPrefix
+                                                              suffix:canonicalContext.locatedSuffix];
+        if (action) {
+            return action;
+        }
+    }
+
+    return wrappedContextAction();
 }
 
 - (URLAction *)urlActionForFilename:(NSString *)filename

@@ -190,6 +190,34 @@ final class PathTests: XCTestCase {
         return TideyURLClickOpenPolicy(rawValue: raw) ?? .none
     }
 
+    private func shouldProbeActionForCommandClick(clickCount: Int = 1,
+                                                  mouseDragged: Bool = false,
+                                                  modifierFlags: NSEvent.ModifierFlags = .command,
+                                                  cmdClickEnabled: Bool = true,
+                                                  cmdPressed: Bool = true,
+                                                  mouseReporting: Bool = true) -> Bool {
+        guard let mouseHandlerClass = NSClassFromString("PTYMouseHandler") as? AnyClass else {
+            XCTFail("Missing PTYMouseHandler")
+            return false
+        }
+        let selector = NSSelectorFromString("tideyShouldProbeActionForCommandClickWithClickCount:mouseDragged:modifierFlags:cmdClickEnabled:cmdPressed:mouseReporting:")
+        guard let method = class_getClassMethod(mouseHandlerClass, selector) else {
+            XCTFail("Missing command-click action probe helper")
+            return false
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, Int, ObjCBool, UInt, ObjCBool, ObjCBool, ObjCBool) -> ObjCBool
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        return function(mouseHandlerClass,
+                        selector,
+                        clickCount,
+                        ObjCBool(mouseDragged),
+                        modifierFlags.rawValue,
+                        ObjCBool(cmdClickEnabled),
+                        ObjCBool(cmdPressed),
+                        ObjCBool(mouseReporting)).boolValue
+    }
+
     private func shouldSuppressMouseReportingForPlainURLClick(clickCount: Int = 1,
                                                               mouseDragged: Bool = false,
                                                               modifierFlags: NSEvent.ModifierFlags = [],
@@ -1342,6 +1370,32 @@ final class PathTests: XCTestCase {
         XCTAssertEqual(actionClickOpenPolicy(mouseReporting: true,
                                              actionType: .openExistingFile,
                                              hasCachedHoverAction: true), .semanticHistory)
+    }
+
+    func testCommandClickActionProbeOnlyRunsForSingleCommandClickUnderMouseReporting() {
+        XCTAssertTrue(shouldProbeActionForCommandClick())
+
+        XCTAssertFalse(shouldProbeActionForCommandClick(mouseReporting: false))
+        XCTAssertFalse(shouldProbeActionForCommandClick(cmdPressed: false))
+        XCTAssertFalse(shouldProbeActionForCommandClick(cmdClickEnabled: false))
+        XCTAssertFalse(shouldProbeActionForCommandClick(clickCount: 2))
+        XCTAssertFalse(shouldProbeActionForCommandClick(mouseDragged: true))
+        XCTAssertFalse(shouldProbeActionForCommandClick(modifierFlags: [.command, .shift]))
+        XCTAssertFalse(shouldProbeActionForCommandClick(modifierFlags: [.command, .option]))
+        XCTAssertFalse(shouldProbeActionForCommandClick(modifierFlags: [.command, .control]))
+    }
+
+    func testCommandClickActionPolicyCanOpenFileWithoutHoverCacheUnderMouseReporting() {
+        XCTAssertEqual(actionClickOpenPolicy(modifierFlags: .command,
+                                             cmdPressed: true,
+                                             mouseReporting: true,
+                                             actionType: .openExistingFile,
+                                             hasCachedHoverAction: false), .semanticHistory)
+        XCTAssertEqual(actionClickOpenPolicy(modifierFlags: .command,
+                                             cmdPressed: true,
+                                             mouseReporting: true,
+                                             actionType: .openURL,
+                                             hasCachedHoverAction: false), .inAppBrowser)
     }
 
     func testGenericURLActionClickPolicyRejectsDragSelectionModifiersAndOtherActions() {

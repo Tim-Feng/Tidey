@@ -43,6 +43,12 @@
                                          extractor:(iTermTextExtractor *)extractor
                               respectHardNewlines:(BOOL)respectHardNewlines;
 
++ (URLAction * _Nullable)tideyOpenURLOrExistingFileActionAtCoord:(VT100GridCoord)coord
+                                                       extractor:(iTermTextExtractor *)extractor
+                                            respectHardNewlines:(BOOL)respectHardNewlines
+                                               workingDirectory:(NSString *)workingDirectory
+                                      semanticHistoryController:(iTermSemanticHistoryController *)semanticHistoryController;
+
 + (NSDictionary * _Nullable)tideyOpenURLActionDictionaryAtX:(int)x
                                                           y:(int)y
                                                   extractor:(iTermTextExtractor *)extractor

@@ -7089,9 +7089,12 @@ static NSString *iTermStringFromRange(NSRange range) {
 
     const VT100GridCoord coord = [self tideyURLCoordForEvent:event allowRightMarginOverflow:NO];
     iTermTextExtractor *extractor = [iTermTextExtractor textExtractorWithDataSource:self.dataSource];
-    return [iTermURLActionFactory tideyOpenURLActionAtCoord:coord
-                                                  extractor:extractor
-                                       respectHardNewlines:![_urlActionHelper ignoreHardNewlinesInURLs]];
+    NSString *workingDirectory = [self.dataSource workingDirectoryOnLine:coord.y];
+    return [iTermURLActionFactory tideyOpenURLOrExistingFileActionAtCoord:coord
+                                                                extractor:extractor
+                                                     respectHardNewlines:![_urlActionHelper ignoreHardNewlinesInURLs]
+                                                        workingDirectory:workingDirectory ?: @""
+                                               semanticHistoryController:self.semanticHistoryController];
 }
 
 - (BOOL)isInUnderlinedRangeAtCoord:(VT100GridCoord)coord {
