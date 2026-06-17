@@ -1787,7 +1787,7 @@ final class CodexWrapperRegistryTests: XCTestCase {
 
         try writeExecutable(at: fakeBin.appendingPathComponent("pgrep"), contents: """
         #!/usr/bin/env bash
-        if [[ "${1:-}" == "-P" ]]; then
+        if [[ "${1:-}" == "-P" && "${2:-}" != "${FAKE_CODEX_CHILD_PID:-99999}" ]]; then
             printf '%s\\n' "${FAKE_CODEX_CHILD_PID:-99999}"
         fi
         """)
@@ -1813,6 +1813,15 @@ final class CodexWrapperRegistryTests: XCTestCase {
 
         try writeExecutable(at: fakeBin.appendingPathComponent("codex"), contents: """
         #!/usr/bin/env bash
+        for arg in "$@"; do
+            case "$arg" in
+                -h|--help|-V|--version)
+                    printf 'codex test help\\n  --profile <name>\\n'
+                    exit 0
+                    ;;
+            esac
+        done
+
         if [[ -n "${FAKE_NEXT_ROLLOUT_PATH:-}" ]]; then
             sleep 1
             printf '%s' "$FAKE_NEXT_ROLLOUT_PATH" > "$FAKE_ROLLOUT_STATE_FILE"
@@ -1847,6 +1856,7 @@ final class CodexWrapperRegistryTests: XCTestCase {
         env["TIDEY_SOCKET_PATH"] = environment.socketPath
         env["TIDEY_WORKSPACE_ID"] = "ws-test"
         env["TIDEY_PANEL_ID"] = "panel-test"
+        env["TIDEY_CODEX_APP_SERVER_DISABLE"] = "1"
         env["FAKE_CODEX_CHILD_PID"] = "99999"
         env["FAKE_ROLLOUT_STATE_FILE"] = environment.rolloutStateFile
         if let nextRolloutPath = environment.nextRolloutPath {
