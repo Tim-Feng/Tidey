@@ -439,6 +439,47 @@ final class PathTests: XCTestCase {
                         true) as? [String: Any]
     }
 
+    private func existingFileAction(text: String,
+                                    clickIndex: Int,
+                                    width: Int,
+                                    workingDirectory: String,
+                                    respectHardNewlines: Bool = true) -> [String: Any]? {
+        guard let factoryClass = NSClassFromString("iTermURLActionFactory") as? AnyClass else {
+            XCTFail("Missing iTermURLActionFactory")
+            return nil
+        }
+        let selector = NSSelectorFromString("tideyExistingFileActionDictionaryAtX:y:extractor:respectHardNewlines:workingDirectory:completion:")
+        guard let method = class_getClassMethod(factoryClass, selector) else {
+            XCTFail("Missing Tidey existing file action helper")
+            return nil
+        }
+        let dataSource = URLActionTextDataSource(text: text, width: Int32(width))
+        let extractor = iTermTextExtractor(dataSource: dataSource)
+        let visualCoord = visualCoordForLinearIndex(clickIndex, in: text)
+        extractor.restrictToLogicalWindow(including: VT100GridCoord(x: visualCoord.x, y: visualCoord.y))
+
+        let expectation = expectation(description: "existing file action")
+        var result: [String: Any]?
+        typealias CompletionBlock = @convention(block) (NSDictionary?) -> Void
+        let completion: CompletionBlock = { actionDictionary in
+            result = actionDictionary as? [String: Any]
+            expectation.fulfill()
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, Int32, Int32, iTermTextExtractor, ObjCBool, NSString, CompletionBlock) -> Void
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        function(factoryClass,
+                 selector,
+                 visualCoord.x,
+                 visualCoord.y,
+                 extractor,
+                 ObjCBool(respectHardNewlines),
+                 workingDirectory as NSString,
+                 completion)
+        wait(for: [expectation], timeout: 10)
+        return result
+    }
+
     private func visualCoordForLinearIndex(_ clickIndex: Int, in text: String) -> (x: Int32, y: Int32) {
         let nsText = text as NSString
         let safeIndex = max(0, min(clickIndex, max(0, nsText.length - 1)))
@@ -1051,6 +1092,89 @@ final class PathTests: XCTestCase {
         XCTAssertEqual(located.string,
                        "/Users/timfeng/GitHub/adbrewer/.skills/craft-glossary/glossary.md")
         XCTAssertEqual(located.gridCoords.count, (located.string as NSString).length)
+    }
+
+    func testExistingFileActionRecoversHardWrappedIndentedAbsolutePathAfterNullPadding() throws {
+        let root = URL(fileURLWithPath: "/private/tmp")
+            .appendingPathComponent("tidey-cmdclick-canonical-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        let renderDir = root
+            .appendingPathComponent("projects/embryo-074/shotboard/goal-tests/v03/renders",
+                                    isDirectory: true)
+        let fileURL = renderDir.appendingPathComponent("apartment_top_orthographic_production_blender_r03_annotated.png")
+        try FileManager.default.createDirectory(at: renderDir,
+                                                withIntermediateDirectories: true)
+        try Data().write(to: fileURL)
+
+        let lineA = "  \(renderDir.path)/"
+        let lineB = "  \(fileURL.lastPathComponent)"
+        let text = "\(lineA)\n\(lineB)"
+        let dirClick = (text as NSString).range(of: "renders").location
+        let fileClick = (text as NSString).range(of: fileURL.lastPathComponent).location
+
+        let dirAction = existingFileAction(text: text,
+                                           clickIndex: dirClick,
+                                           width: 132,
+                                           workingDirectory: root.path)
+        let fileAction = existingFileAction(text: text,
+                                            clickIndex: fileClick,
+                                            width: 132,
+                                            workingDirectory: root.path)
+
+        XCTAssertEqual(dirAction?["actionType"] as? Int, TideyURLActionType.openExistingFile.rawValue)
+        XCTAssertEqual(dirAction?["fullPath"] as? String, fileURL.path)
+        XCTAssertEqual(dirAction?["rawFilename"] as? String, fileURL.path)
+        XCTAssertEqual(dirAction?["startX"] as? Int, 2)
+        XCTAssertEqual(dirAction?["startY"] as? Int, 0)
+        XCTAssertEqual(dirAction?["endY"] as? Int, 1)
+
+        XCTAssertEqual(fileAction?["actionType"] as? Int, TideyURLActionType.openExistingFile.rawValue)
+        XCTAssertEqual(fileAction?["fullPath"] as? String, fileURL.path)
+        XCTAssertEqual(fileAction?["rawFilename"] as? String, fileURL.path)
+        XCTAssertEqual(fileAction?["startX"] as? Int, 2)
+        XCTAssertEqual(fileAction?["startY"] as? Int, 0)
+        XCTAssertEqual(fileAction?["endY"] as? Int, 1)
+    }
+
+    func testExistingFileActionRecoversTimAdBrewerCodexHardWrappedPathIfPresent() throws {
+        let filePath = "/Users/timfeng/GitHub/adbrewer/projects/embryo-074/shotboard/goal-tests/v03/renders/apartment_top_orthographic_production_blender_r03_annotated.png"
+        guard FileManager.default.fileExists(atPath: filePath) else {
+            throw XCTSkip("Tim adbrewer fixture is not present")
+        }
+
+        let renderDir = (filePath as NSString).deletingLastPathComponent
+        let fileName = (filePath as NSString).lastPathComponent
+        let lineA = "  \(renderDir)/"
+        let lineB = "  \(fileName)"
+        let text = "\(lineA)\n\(lineB)"
+        let dirClick = (text as NSString).range(of: "renders").location
+        let fileClick = (text as NSString).range(of: fileName).location
+
+        let dirAction = existingFileAction(text: text,
+                                           clickIndex: dirClick,
+                                           width: 132,
+                                           workingDirectory: "/Users/timfeng/GitHub/adbrewer")
+        let fileAction = existingFileAction(text: text,
+                                            clickIndex: fileClick,
+                                            width: 132,
+                                            workingDirectory: "/Users/timfeng/GitHub/adbrewer")
+
+        XCTAssertEqual(dirAction?["actionType"] as? Int, TideyURLActionType.openExistingFile.rawValue)
+        XCTAssertEqual(dirAction?["fullPath"] as? String, filePath)
+        XCTAssertEqual(dirAction?["rawFilename"] as? String, filePath)
+        XCTAssertEqual(dirAction?["startX"] as? Int, 2)
+        XCTAssertEqual(dirAction?["startY"] as? Int, 0)
+        XCTAssertEqual(dirAction?["endY"] as? Int, 1)
+
+        XCTAssertEqual(fileAction?["actionType"] as? Int, TideyURLActionType.openExistingFile.rawValue)
+        XCTAssertEqual(fileAction?["fullPath"] as? String, filePath)
+        XCTAssertEqual(fileAction?["rawFilename"] as? String, filePath)
+        XCTAssertEqual(fileAction?["startX"] as? Int, 2)
+        XCTAssertEqual(fileAction?["startY"] as? Int, 0)
+        XCTAssertEqual(fileAction?["endY"] as? Int, 1)
     }
 
     func testURLLikeCandidateStopsBeforeChineseTrailingPunctuation() {

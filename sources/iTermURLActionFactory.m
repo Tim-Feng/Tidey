@@ -73,6 +73,12 @@ static NSMutableArray<iTermURLActionFactory *> *sFactories;
                                   overFilename:(NSString *)filename
                                    prefixChars:(int)prefixChars
                                    suffixChars:(int)suffixChars;
++ (void)tideyExistingFileActionDictionaryAtX:(int)x
+                                           y:(int)y
+                                   extractor:(iTermTextExtractor *)extractor
+                        respectHardNewlines:(BOOL)respectHardNewlines
+                            workingDirectory:(NSString *)workingDirectory
+                                  completion:(void (^)(NSDictionary *))completion;
 @end
 
 static NSCharacterSet *iTermCJKURLBoundaryCharacterSet(void) {
@@ -335,6 +341,275 @@ static NSDictionary *iTermURLActionFactoryTideyDictionaryForAction(URLAction *ac
 
 @end
 
+typedef struct {
+    int line;
+    int contentStart;
+    int contentEnd;
+    int firstTokenX;
+    int lastTokenX;
+    unichar firstTokenChar;
+    unichar lastTokenChar;
+    BOOL hasContent;
+    BOOL hasToken;
+    BOOL containsSlash;
+    int eol;
+} iTermCanonicalClickLineInfo;
+
+@interface iTermCanonicalClickContext : NSObject
+@property(nonatomic, strong) iTermLocatedString *locatedPrefix;
+@property(nonatomic, strong) iTermLocatedString *locatedSuffix;
++ (instancetype)contextAtCoord:(VT100GridCoord)coord
+                      extractor:(iTermTextExtractor *)extractor
+                       maxChars:(int)maxChars;
+@end
+
+static BOOL iTermCanonicalClickScreenCharIsNull(screen_char_t c) {
+    return !c.complexChar && !c.image && c.code == 0;
+}
+
+static BOOL iTermCanonicalClickScreenCharIsSkipped(screen_char_t c) {
+    return (!c.complexChar &&
+            (ScreenCharIsDWC_RIGHT(c) || ScreenCharIsDWC_SKIP(c)));
+}
+
+static NSString *iTermCanonicalClickStringForScreenChar(screen_char_t c) {
+    if (iTermCanonicalClickScreenCharIsNull(c) ||
+        iTermCanonicalClickScreenCharIsSkipped(c) ||
+        c.image) {
+        return nil;
+    }
+    if (!c.complexChar && c.code == TAB_FILLER) {
+        return nil;
+    }
+    return ScreenCharToStr(&c);
+}
+
+static BOOL iTermCanonicalClickCharacterIsWhitespace(unichar c) {
+    return [[NSCharacterSet whitespaceAndNewlineCharacterSet] characterIsMember:c];
+}
+
+static BOOL iTermCanonicalClickStringIsWhitespace(NSString *string) {
+    if (!string.length) {
+        return NO;
+    }
+    for (NSUInteger i = 0; i < string.length; i++) {
+        if (!iTermCanonicalClickCharacterIsWhitespace([string characterAtIndex:i])) {
+            return NO;
+        }
+    }
+    return YES;
+}
+
+static BOOL iTermCanonicalClickCharacterIsPathToken(unichar c) {
+    if (iTermCanonicalClickCharacterIsWhitespace(c)) {
+        return NO;
+    }
+    return [[NSCharacterSet filenameCharacterSet] characterIsMember:c];
+}
+
+static iTermCanonicalClickLineInfo iTermCanonicalClickLineInfoMake(iTermTextExtractor *extractor,
+                                                                   int lineNumber) {
+    iTermCanonicalClickLineInfo info = {
+        .line = lineNumber,
+        .contentStart = 0,
+        .contentEnd = 0,
+        .firstTokenX = -1,
+        .lastTokenX = -1,
+        .firstTokenChar = 0,
+        .lastTokenChar = 0,
+        .hasContent = NO,
+        .hasToken = NO,
+        .containsSlash = NO,
+        .eol = EOL_HARD
+    };
+
+    id<iTermTextDataSource> dataSource = extractor.dataSource;
+    if (!dataSource || lineNumber < 0 || lineNumber >= [dataSource numberOfLines]) {
+        return info;
+    }
+
+    ScreenCharArray *line = [dataSource screenCharArrayForLine:lineNumber];
+    info.eol = line.eol;
+
+    const int width = [dataSource width];
+    VT100GridRange logicalWindow = extractor.logicalWindow;
+    int left = logicalWindow.length ? logicalWindow.location : 0;
+    int right = logicalWindow.length ? logicalWindow.location + logicalWindow.length : width;
+    left = MAX(0, MIN(left, width));
+    right = MAX(left, MIN(right, MIN(width, line.length)));
+
+    for (int x = left; x < right; x++) {
+        NSString *string = iTermCanonicalClickStringForScreenChar(line.line[x]);
+        if (!string.length) {
+            continue;
+        }
+        if (!info.hasContent) {
+            info.contentStart = x;
+        }
+        info.contentEnd = x + 1;
+        info.hasContent = YES;
+        if ([string rangeOfString:@"/"].location != NSNotFound) {
+            info.containsSlash = YES;
+        }
+    }
+
+    if (!info.hasContent) {
+        info.contentStart = left;
+        info.contentEnd = left;
+        return info;
+    }
+
+    for (int x = info.contentStart; x < info.contentEnd; x++) {
+        NSString *string = iTermCanonicalClickStringForScreenChar(line.line[x]);
+        if (!string.length || iTermCanonicalClickStringIsWhitespace(string)) {
+            continue;
+        }
+        info.firstTokenX = x;
+        info.firstTokenChar = [string characterAtIndex:0];
+        info.hasToken = YES;
+        break;
+    }
+
+    for (int x = info.contentEnd - 1; x >= info.contentStart; x--) {
+        NSString *string = iTermCanonicalClickStringForScreenChar(line.line[x]);
+        if (!string.length || iTermCanonicalClickStringIsWhitespace(string)) {
+            continue;
+        }
+        info.lastTokenX = x;
+        info.lastTokenChar = [string characterAtIndex:string.length - 1];
+        break;
+    }
+
+    return info;
+}
+
+static BOOL iTermCanonicalClickLineNeedsHardJoin(iTermCanonicalClickLineInfo previous,
+                                                 iTermCanonicalClickLineInfo next) {
+    if (previous.eol != EOL_HARD) {
+        return NO;
+    }
+    if (!previous.hasToken || !next.hasToken) {
+        return NO;
+    }
+    if (next.firstTokenX <= next.contentStart) {
+        return NO;
+    }
+    if (!previous.containsSlash) {
+        return NO;
+    }
+    return (iTermCanonicalClickCharacterIsPathToken(previous.lastTokenChar) &&
+            iTermCanonicalClickCharacterIsPathToken(next.firstTokenChar));
+}
+
+static BOOL iTermCanonicalClickShouldJoin(iTermCanonicalClickLineInfo previous,
+                                          iTermCanonicalClickLineInfo next) {
+    if (previous.eol != EOL_HARD) {
+        return previous.hasContent && next.hasContent;
+    }
+    return iTermCanonicalClickLineNeedsHardJoin(previous, next);
+}
+
+@implementation iTermCanonicalClickContext
+
++ (instancetype)contextAtCoord:(VT100GridCoord)coord
+                      extractor:(iTermTextExtractor *)extractor
+                       maxChars:(int)maxChars {
+    id<iTermTextDataSource> dataSource = extractor.dataSource;
+    if (!dataSource ||
+        coord.y < 0 ||
+        coord.y >= [dataSource numberOfLines] ||
+        coord.x < 0 ||
+        coord.x >= [dataSource width]) {
+        return nil;
+    }
+
+    iTermCanonicalClickLineInfo clickedInfo = iTermCanonicalClickLineInfoMake(extractor, coord.y);
+    if (!clickedInfo.hasContent || coord.x < clickedInfo.contentStart || coord.x >= clickedInfo.contentEnd) {
+        return nil;
+    }
+
+    int startLine = coord.y;
+    int endLine = coord.y;
+    int estimatedChars = clickedInfo.contentEnd - clickedInfo.contentStart;
+    BOOL sawHardJoin = NO;
+
+    while (startLine > 0 && estimatedChars < maxChars) {
+        iTermCanonicalClickLineInfo current = iTermCanonicalClickLineInfoMake(extractor, startLine);
+        iTermCanonicalClickLineInfo previous = iTermCanonicalClickLineInfoMake(extractor, startLine - 1);
+        if (!iTermCanonicalClickShouldJoin(previous, current)) {
+            break;
+        }
+        if (iTermCanonicalClickLineNeedsHardJoin(previous, current)) {
+            sawHardJoin = YES;
+        }
+        startLine--;
+        estimatedChars += MAX(0, previous.contentEnd - previous.contentStart);
+    }
+
+    while (endLine + 1 < [dataSource numberOfLines] && estimatedChars < maxChars) {
+        iTermCanonicalClickLineInfo current = iTermCanonicalClickLineInfoMake(extractor, endLine);
+        iTermCanonicalClickLineInfo next = iTermCanonicalClickLineInfoMake(extractor, endLine + 1);
+        if (!iTermCanonicalClickShouldJoin(current, next)) {
+            break;
+        }
+        if (iTermCanonicalClickLineNeedsHardJoin(current, next)) {
+            sawHardJoin = YES;
+        }
+        endLine++;
+        estimatedChars += MAX(0, next.contentEnd - next.contentStart);
+    }
+
+    if (!sawHardJoin) {
+        return nil;
+    }
+
+    iTermLocatedString *prefix = [[iTermLocatedString alloc] init];
+    iTermLocatedString *suffix = [[iTermLocatedString alloc] init];
+    BOOL includedClickCoord = NO;
+
+    for (int y = startLine; y <= endLine; y++) {
+        iTermCanonicalClickLineInfo info = iTermCanonicalClickLineInfoMake(extractor, y);
+        if (!info.hasContent) {
+            continue;
+        }
+
+        int startX = info.contentStart;
+        if (y > startLine) {
+            iTermCanonicalClickLineInfo previous = iTermCanonicalClickLineInfoMake(extractor, y - 1);
+            if (iTermCanonicalClickLineNeedsHardJoin(previous, info)) {
+                startX = info.firstTokenX;
+            }
+        }
+
+        ScreenCharArray *line = [dataSource screenCharArrayForLine:y];
+        for (int x = startX; x < info.contentEnd; x++) {
+            NSString *string = iTermCanonicalClickStringForScreenChar(line.line[x]);
+            if (!string.length) {
+                continue;
+            }
+
+            VT100GridCoord charCoord = VT100GridCoordMake(x, y);
+            if (VT100GridCoordEquals(charCoord, coord)) {
+                includedClickCoord = YES;
+            }
+            iTermLocatedString *target =
+                (VT100GridCoordOrder(charCoord, coord) == NSOrderedAscending) ? prefix : suffix;
+            [target appendString:string at:charCoord];
+        }
+    }
+
+    if (!includedClickCoord || !suffix.length) {
+        return nil;
+    }
+
+    iTermCanonicalClickContext *context = [[self alloc] init];
+    context.locatedPrefix = prefix;
+    context.locatedSuffix = suffix;
+    return context;
+}
+
+@end
+
 @implementation iTermURLActionFactory {
     BOOL _finished;
     id<iTermCancelable> _pathFinderCanceler;
@@ -362,6 +637,45 @@ static NSDictionary *iTermURLActionFactoryTideyDictionaryForAction(URLAction *ac
     const int rawChars = MAX(0, rawPrefixChars) + MAX(0, rawSuffixChars);
     const int initialChars = MAX(0, prefixChars) + MAX(0, suffixChars);
     return rawChars > initialChars;
+}
+
++ (void)tideyExistingFileActionDictionaryAtX:(int)x
+                                           y:(int)y
+                                   extractor:(iTermTextExtractor *)extractor
+                        respectHardNewlines:(BOOL)respectHardNewlines
+                            workingDirectory:(NSString *)workingDirectory
+                                  completion:(void (^)(NSDictionary *))completion {
+    iTermSemanticHistoryController *semanticHistoryController = [[iTermSemanticHistoryController alloc] init];
+    [self urlActionAtCoord:VT100GridCoordMake(x, y)
+       respectHardNewlines:respectHardNewlines
+                 alternate:NO
+          workingDirectory:workingDirectory ?: @""
+                     scope:nil
+                     owner:nil
+                remoteHost:nil
+                 selectors:@{}
+                     rules:@[]
+                 extractor:extractor
+ semanticHistoryController:semanticHistoryController
+               pathFactory:^SCPPath *(NSString *path, int line) {
+        return nil;
+    }
+                completion:^(URLAction *action) {
+        if (!action) {
+            completion(@{ @"action": [NSNull null] });
+            return;
+        }
+        completion(@{
+            @"actionType": @(action.actionType),
+            @"string": action.string ?: @"",
+            @"rawFilename": action.rawFilename ?: [NSNull null],
+            @"fullPath": action.fullPath ?: [NSNull null],
+            @"startX": @(action.visualRange.coordRange.start.x),
+            @"startY": @(action.visualRange.coordRange.start.y),
+            @"endX": @(action.visualRange.coordRange.end.x),
+            @"endY": @(action.visualRange.coordRange.end.y)
+        });
+    }];
 }
 
 + (instancetype)urlActionAtCoord:(VT100GridCoord)coord
@@ -551,40 +865,72 @@ static NSDictionary *iTermURLActionFactoryTideyDictionaryForAction(URLAction *ac
 }
 
 - (void)tryExistingFileRespectingHardNewlines:(BOOL)respectHardNewlines {
-    iTermLocatedString *locatedPrefix =
-        [self.extractor wrappedLocatedStringAt:self.coord
-                                       forward:NO
-                           respectHardNewlines:respectHardNewlines
-                                      maxChars:[iTermAdvancedSettingsModel maxSemanticHistoryPrefixOrSuffix]
-                             continuationChars:[NSMutableIndexSet indexSet]
-                           convertNullsToSpace:NO];
-    if (respectHardNewlines) {
-        self.locatedPrefixRespectingHardNewlines = locatedPrefix;
-    } else {
-        self.locatedPrefixIgnoringHardNewlines = locatedPrefix;
-    }
-
-    iTermLocatedString *locatedSuffix =
-        [self.extractor wrappedLocatedStringAt:self.coord
-                                       forward:YES
-                           respectHardNewlines:respectHardNewlines
-                                      maxChars:[iTermAdvancedSettingsModel maxSemanticHistoryPrefixOrSuffix]
-                             continuationChars:[NSMutableIndexSet indexSet]
-                           convertNullsToSpace:NO];
-    if (respectHardNewlines) {
-        self.locatedSuffixRespectingHardNewlines = locatedSuffix;
-    } else {
-        self.locatedSuffixIgnoringHardNewlines = locatedSuffix;
-    }
-
-    [self urlActionForExistingFileWithPrefix:locatedPrefix
-                                      suffix:locatedSuffix
-                                  completion:^(URLAction *action, BOOL workingDirectoryIsLocal) {
-        self.workingDirectoryIsLocal = workingDirectoryIsLocal;
-        if (action) {
-            [self completeWithAction:action];
+    const int maxChars = [iTermAdvancedSettingsModel maxSemanticHistoryPrefixOrSuffix];
+    __weak __typeof(self) weakSelf = self;
+    void (^tryWrappedContext)(void) = ^{
+        __strong __typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        iTermLocatedString *locatedPrefix =
+            [strongSelf.extractor wrappedLocatedStringAt:strongSelf.coord
+                                                 forward:NO
+                                     respectHardNewlines:respectHardNewlines
+                                                maxChars:maxChars
+                                       continuationChars:[NSMutableIndexSet indexSet]
+                                     convertNullsToSpace:NO];
+        if (respectHardNewlines) {
+            strongSelf.locatedPrefixRespectingHardNewlines = locatedPrefix;
         } else {
-            [self fail];
+            strongSelf.locatedPrefixIgnoringHardNewlines = locatedPrefix;
+        }
+
+        iTermLocatedString *locatedSuffix =
+            [strongSelf.extractor wrappedLocatedStringAt:strongSelf.coord
+                                                 forward:YES
+                                     respectHardNewlines:respectHardNewlines
+                                                maxChars:maxChars
+                                       continuationChars:[NSMutableIndexSet indexSet]
+                                     convertNullsToSpace:NO];
+        if (respectHardNewlines) {
+            strongSelf.locatedSuffixRespectingHardNewlines = locatedSuffix;
+        } else {
+            strongSelf.locatedSuffixIgnoringHardNewlines = locatedSuffix;
+        }
+
+        [strongSelf urlActionForExistingFileWithPrefix:locatedPrefix
+                                                suffix:locatedSuffix
+                                            completion:^(URLAction *action, BOOL workingDirectoryIsLocal) {
+            strongSelf.workingDirectoryIsLocal = workingDirectoryIsLocal;
+            if (action) {
+                [strongSelf completeWithAction:action];
+            } else {
+                [strongSelf fail];
+            }
+        }];
+    };
+
+    iTermCanonicalClickContext *canonicalContext =
+        [iTermCanonicalClickContext contextAtCoord:self.coord
+                                         extractor:self.extractor
+                                          maxChars:maxChars];
+    if (!canonicalContext) {
+        tryWrappedContext();
+        return;
+    }
+
+    [self urlActionForExistingFileWithPrefix:canonicalContext.locatedPrefix
+                                      suffix:canonicalContext.locatedSuffix
+                                  completion:^(URLAction *action, BOOL workingDirectoryIsLocal) {
+        __strong __typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        strongSelf.workingDirectoryIsLocal = workingDirectoryIsLocal;
+        if (action) {
+            [strongSelf completeWithAction:action];
+        } else {
+            tryWrappedContext();
         }
     }];
 }

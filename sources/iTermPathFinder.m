@@ -151,8 +151,8 @@ static const NSInteger iTermPathFinderMaxExtendedSuffixChunks = 25;
                                      questionableSuffixes:questionableSuffixes];
             }
             if (match) {
-                NSString *modifiedPossiblePath = match[@"cleanPath"] ?: match[@"modifiedPath"];
-                NSString *matchedCandidatePath = match[@"modifiedPath"] ?: modifiedPossiblePath;
+                NSString *modifiedPossiblePath = match[@"modifiedPath"];
+                NSString *resolvedPath = match[@"resolvedPath"];
                 NSString *matchedTrimmedPath = match[@"trimmedPath"];
                 NSString *matchedRight = match[@"right"] ?: right;
                 NSInteger nextAfterChunkIndex = match[@"nextAfterChunkIndex"] ? [match[@"nextAfterChunkIndex"] integerValue] : j + 1;
@@ -160,7 +160,14 @@ static const NSInteger iTermPathFinderMaxExtendedSuffixChunks = 25;
                 if (nextAfterChunkIndex < afterChunks.count) {
                     extra = [self columnAndLineNumberFromChunks:[afterChunks subarrayFromIndex:nextAfterChunkIndex]];
                 }
-                NSString *extendedPath = [modifiedPossiblePath stringByAppendingString:extra];
+                NSInteger lengthOfBadSuffix = extra.length ? 0 : matchedTrimmedPath.length - modifiedPossiblePath.length;
+                NSString *pathForResult = modifiedPossiblePath;
+                if (lengthOfBadSuffix > 0 &&
+                    [modifiedPossiblePath hasPrefix:@"~"] &&
+                    resolvedPath.length) {
+                    pathForResult = resolvedPath;
+                }
+                NSString *extendedPath = [pathForResult stringByAppendingString:extra];
                 NSString *rightWithExtra = [matchedRight stringByAppendingString:extra];
 
                 if (_trimWhitespace &&
@@ -172,7 +179,6 @@ static const NSInteger iTermPathFinderMaxExtendedSuffixChunks = 25;
                 } else {
                     _prefixChars = (int)left.length;
                 }
-                NSInteger lengthOfBadSuffix = extra.length ? 0 : matchedTrimmedPath.length - matchedCandidatePath.length;
                 int n;
                 if (_trimWhitespace) {
                     n = (int)([[rightWithExtra stringByTrimmingTrailingCharactersFromCharacterSet:whitespaceCharset] length] - lengthOfBadSuffix);
@@ -262,7 +268,7 @@ static const NSInteger iTermPathFinderMaxExtendedSuffixChunks = 25;
             return nil;
         }
         BOOL exists = NO;
-        NSString *cleanPath = nil;
+        NSString *resolvedPath = nil;
         if (workingDirectoryIsOk || [modifiedPossiblePath hasPrefix:@"/"]) {
             iTermPathCleaner *cleaner = [[iTermPathCleaner alloc] initWithPath:modifiedPossiblePath
                                                                         suffix:nil
@@ -273,13 +279,13 @@ static const NSInteger iTermPathFinderMaxExtendedSuffixChunks = 25;
             cleaner.fileManager = self.fileManager;
             cleaner.tryFallback = ![modifiedPossiblePath hasPrefix:@"/"];
             [cleaner cleanSynchronously];
-            cleanPath = cleaner.cleanPath;
-            exists = (cleanPath != nil);
+            exists = (cleaner.cleanPath != nil);
+            resolvedPath = cleaner.cleanPath;
         }
         if (exists) {
             return @{
                 @"modifiedPath": modifiedPossiblePath,
-                @"cleanPath": cleanPath,
+                @"resolvedPath": resolvedPath,
                 @"trimmedPath": trimmedPath,
             };
         }
