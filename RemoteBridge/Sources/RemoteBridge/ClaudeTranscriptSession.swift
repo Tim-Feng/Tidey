@@ -493,6 +493,26 @@ final class AgentSessionRegistryMonitor {
         }
     }
 
+    func canonicalSessionIDForAgentEvents(_ sessionID: String?) -> String? {
+        guard let sessionID, !sessionID.isEmpty else {
+            return sessionID
+        }
+        return queue.sync {
+            let appServerRecords = activeRecords.values
+                .filter(Self.isCodexAppServerRuntimeRecord)
+                .sorted(by: Self.isRecordPreferred(_:_:))
+            if appServerRecords.contains(where: { $0.sessionID == sessionID }) {
+                return sessionID
+            }
+            if let appServerRecord = appServerRecords.first(where: {
+                Self.codexAppServerRecord($0, matchesResumeSessionID: sessionID)
+            }) {
+                return appServerRecord.sessionID
+            }
+            return sessionID
+        }
+    }
+
     func backfillSession(sessionID: String, beforeSeq: Int, limit: Int) -> Bool {
         let session: AgentTranscriptSession? = queue.sync { sessions[sessionID] }
         return session?.backfill(beforeSeq: beforeSeq, limit: limit) ?? false

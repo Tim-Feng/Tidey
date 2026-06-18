@@ -822,7 +822,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                     workspaceReplayEnvelopes: []
                 )
             }
-            let requestedSessionID = request.params?["session_id"]?.stringValue
+            let requestedSessionID = canonicalAgentEventSessionID(request.params?["session_id"]?.stringValue)
             guard let activeSession = registryMonitor.activeSessionForPanel(workspaceID: workspaceID,
                                                                             panelID: panelID) else {
                 return LocalRequestResult(
@@ -933,7 +933,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                 )
             }
 
-            let sessionID = request.params?["session_id"]?.stringValue
+            let sessionID = canonicalAgentEventSessionID(request.params?["session_id"]?.stringValue)
             let beforeSeq = request.params?["before_seq"]?.intValue
             let afterSeq = request.params?["after_seq"]?.intValue
             let maxBytes = request.params?["max_bytes"]?.intValue
@@ -1014,7 +1014,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
 
         case "subscribe_agent_events":
             let workspaceID = request.params?["workspace_id"]?.stringValue
-            let sessionID = request.params?["session_id"]?.stringValue
+            let sessionID = canonicalAgentEventSessionID(request.params?["session_id"]?.stringValue)
             if let rawSinceSeq = request.params?["since_seq"],
                rawSinceSeq.intValue == nil {
                 return LocalRequestResult(
@@ -1135,6 +1135,10 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
             workspaceEventHub.unsubscribe(workspaceSubscriptionID)
             self.workspaceSubscriptionID = nil
         }
+    }
+
+    private func canonicalAgentEventSessionID(_ sessionID: String?) -> String? {
+        registryMonitor.canonicalSessionIDForAgentEvents(sessionID)
     }
 
     private func pendingCodexApprovalEvents(workspaceID: String?,

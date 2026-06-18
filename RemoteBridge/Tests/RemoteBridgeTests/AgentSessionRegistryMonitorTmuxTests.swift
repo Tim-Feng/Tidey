@@ -583,6 +583,132 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         XCTAssertFalse(fileManager.fileExists(atPath: paths.codexAgentSessionsDirectory.appendingPathComponent("codex-\(restoreSessionID).json").path))
     }
 
+    func testCanonicalAgentEventSessionIDAliasesLegacyThreadToAppServerInstance() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let threadID = "019d70fe-fd27-7a12-a3f7-9c89ae5048b6"
+        let resumeThreadID = "019e21cf-fd27-7a12-a3f7-9c89ae5048b6"
+        let instanceSessionID = "68e6f3aa-7829-4115-ba05-6bb01c090d24"
+        let legacyRecordURL = paths.codexAgentSessionsDirectory.appendingPathComponent("codex-\(threadID).json")
+        try Data("""
+        {
+          "version": 1,
+          "vendor": "codex",
+          "workspace_id": "workspace-current",
+          "session_id": "\(threadID)",
+          "panel_id": "panel-current",
+          "pid": \(getpid()),
+          "cwd": "/",
+          "created_at": "2026-06-18T06:06:20Z",
+          "rollout_path": "/tmp/rollout-\(threadID).jsonl",
+          "tmux_pane_id": "%1",
+          "tmux_socket_path": "/tmp/tmux-501/default"
+        }
+        """.utf8).write(to: legacyRecordURL)
+        try Data("""
+        {
+          "version": 1,
+          "vendor": "codex",
+          "workspace_id": "workspace-current",
+          "session_id": "\(instanceSessionID)",
+          "panel_id": "panel-current",
+          "pid": \(getpid()),
+          "cwd": "/Users/timfeng",
+          "created_at": "2026-06-10T02:39:53Z",
+          "runtime": "codex_app_server",
+          "app_server_socket": "/tmp/tidey-codex-app-server/app.sock",
+          "app_server_pid": \(getpid()),
+          "thread_id": "\(threadID)",
+          "resume_thread_id": "\(resumeThreadID)",
+          "tmux_pane_id": "%1",
+          "tmux_socket_path": "/tmp/tmux-501/default"
+        }
+        """.utf8).write(to: paths.codexAgentSessionsDirectory.appendingPathComponent("codex-\(instanceSessionID).json"))
+
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: fileManager,
+                                                  hub: AgentEventHub(),
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+                                                  parentPIDLookup: { _ in nil })
+        try monitor.start()
+
+        XCTAssertEqual(monitor.canonicalSessionIDForAgentEvents(threadID), instanceSessionID)
+        XCTAssertEqual(monitor.canonicalSessionIDForAgentEvents(resumeThreadID), instanceSessionID)
+        XCTAssertEqual(monitor.canonicalSessionIDForAgentEvents(instanceSessionID), instanceSessionID)
+        XCTAssertEqual(monitor.canonicalSessionIDForAgentEvents("unrelated-session"), "unrelated-session")
+        XCTAssertNil(monitor.canonicalSessionIDForAgentEvents(nil))
+    }
+
+    func testLegacyThreadAliasSubscriptionReceivesAppServerInstanceEvent() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let threadID = "019d70fe-fd27-7a12-a3f7-9c89ae5048b6"
+        let instanceSessionID = "68e6f3aa-7829-4115-ba05-6bb01c090d24"
+        try Data("""
+        {
+          "version": 1,
+          "vendor": "codex",
+          "workspace_id": "workspace-current",
+          "session_id": "\(instanceSessionID)",
+          "panel_id": "panel-current",
+          "pid": \(getpid()),
+          "cwd": "/Users/timfeng",
+          "created_at": "2026-06-10T02:39:53Z",
+          "runtime": "codex_app_server",
+          "app_server_socket": "/tmp/tidey-codex-app-server/app.sock",
+          "app_server_pid": \(getpid()),
+          "thread_id": "\(threadID)",
+          "resume_thread_id": "\(threadID)",
+          "tmux_pane_id": "%1",
+          "tmux_socket_path": "/tmp/tmux-501/default"
+        }
+        """.utf8).write(to: paths.codexAgentSessionsDirectory.appendingPathComponent("codex-\(instanceSessionID).json"))
+
+        let hub = AgentEventHub()
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: fileManager,
+                                                  hub: hub,
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+                                                  parentPIDLookup: { _ in nil })
+        try monitor.start()
+
+        let canonicalSessionID = monitor.canonicalSessionIDForAgentEvents(threadID)
+        var receivedEvents = [AgentEvent]()
+        _ = hub.subscribe(workspaceID: "workspace-current",
+                          sessionID: canonicalSessionID,
+                          sinceSeq: nil) { envelope in
+            receivedEvents.append(envelope.event)
+        }
+        hub.publish(AgentEvent(eventID: "app-server-event",
+                               seq: 42,
+                               vendor: "codex",
+                               workspaceID: "workspace-current",
+                               sessionID: instanceSessionID,
+                               timestamp: "2026-06-18T06:06:21Z",
+                               type: .assistantMessage,
+                               role: "assistant",
+                               text: "live",
+                               name: nil,
+                               input: nil,
+                               output: nil,
+                               toolCallID: nil,
+                               metadata: ["panel_id": "panel-current"]))
+
+        XCTAssertEqual(canonicalSessionID, instanceSessionID)
+        XCTAssertEqual(receivedEvents.map(\.sessionID), [instanceSessionID])
+        XCTAssertEqual(receivedEvents.first?.text, "live")
+    }
+
     func testActiveSessionForPanelFallsBackToTmuxPaneMatchWhenPanelIDsChanged() throws {
         let fileManager = FileManager.default
         let supportDirectory = fileManager.temporaryDirectory
