@@ -601,16 +601,17 @@ final class AgentSessionRegistryMonitor {
         resolvedPanelBindings = resolvedPanelBindings.filter { activeSessionIDs.contains($0.key) }
         lastLoggedPaneIdentityCorrectionKeyBySessionID = lastLoggedPaneIdentityCorrectionKeyBySessionID
             .filter { activeSessionIDs.contains($0.key) }
-        let paneCorrectedRecords = loadedRecords.map { loadedRecord in
+        let paneCorrectedEntries = loadedRecords.map { loadedRecord in
             let correctedRecord = recordWithPaneIdentityIfAvailable(loadedRecord.record)
             persistCanonicalizedRecordIfNeeded(sourceRecord: loadedRecord.record,
                                                correctedRecord: correctedRecord,
                                                url: loadedRecord.url)
-            return correctedRecord
+            return LoadedAgentSessionRegistryRecord(record: correctedRecord, url: loadedRecord.url)
         }
-        let effectiveRecords = paneCorrectedRecords
-            .map(effectiveRecord(for:))
-        let activeRecords = recordsWithObsoleteCodexAppServerPanelRecordsRemoved(effectiveRecords)
+        let effectiveEntries = paneCorrectedEntries
+            .map { LoadedAgentSessionRegistryRecord(record: effectiveRecord(for: $0.record), url: $0.url) }
+        let activeEntries = recordsWithObsoleteCodexAppServerPanelRecordsRemoved(effectiveEntries)
+        let activeRecords = activeEntries.map(\.record)
         let appServerRecords = activeRecords.filter {
             $0.vendor == "codex" && $0.runtime == "codex_app_server"
         }
@@ -629,7 +630,8 @@ final class AgentSessionRegistryMonitor {
         }
     }
 
-    private func recordsWithObsoleteCodexAppServerPanelRecordsRemoved(_ records: [AgentSessionRegistryRecord]) -> [AgentSessionRegistryRecord] {
+    private func recordsWithObsoleteCodexAppServerPanelRecordsRemoved(_ entries: [LoadedAgentSessionRegistryRecord]) -> [LoadedAgentSessionRegistryRecord] {
+        let records = entries.map(\.record)
         var preferredByPanelKey = [String: AgentSessionRegistryRecord]()
         var obsoleteSessionIDs = Set<String>()
         let appServerPaneRestoreKeys = Set(
@@ -664,9 +666,12 @@ final class AgentSessionRegistryMonitor {
         }
 
         guard obsoleteSessionIDs.isEmpty == false else {
-            return records
+            return entries
         }
-        return records.filter { obsoleteSessionIDs.contains($0.sessionID) == false }
+        for entry in entries where obsoleteSessionIDs.contains(entry.record.sessionID) {
+            try? fileManager.removeItem(at: entry.url)
+        }
+        return entries.filter { obsoleteSessionIDs.contains($0.record.sessionID) == false }
     }
 
     private static func codexPaneRestoreKey(for record: AgentSessionRegistryRecord) -> String? {
@@ -785,6 +790,19 @@ final class AgentSessionRegistryMonitor {
             liveCodexProcessRecord = liveCodexSessionMatch(for: fallbackPanel,
                                                            effectiveShellPID: staleCodexRecord.pid,
                                                            requireProcessResumeSession: true)
+        }
+
+        if let liveCodexProcessRecord,
+           Self.isCodexAppServerRuntimeRecord(liveCodexProcessRecord) {
+            applyResolvedBinding(sessionID: liveCodexProcessRecord.sessionID,
+                                 workspaceID: panel.workspaceID,
+                                 panelID: panel.panelID)
+            BridgeLogger.server.info("agent panel matched codex app-server session from live process workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) session_id=\(liveCodexProcessRecord.sessionID, privacy: .public)")
+            return ActiveAgentSessionSnapshot(vendor: liveCodexProcessRecord.vendor,
+                                              workspaceID: panel.workspaceID,
+                                              sessionID: liveCodexProcessRecord.sessionID,
+                                              panelID: panel.panelID,
+                                              restoreSessionID: Self.restoreSessionID(for: liveCodexProcessRecord))
         }
 
         if let liveCodexProcessRecord,
@@ -920,6 +938,11 @@ final class AgentSessionRegistryMonitor {
             BridgeLogger.server.info("agent panel live codex discovery candidate workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) pid=\(candidate.pid, privacy: .public) command=\(candidate.command, privacy: .public)")
             let resolved: (sessionID: String, rolloutPath: String)?
             if let processSessionID = Self.codexResumeSessionID(from: candidate) {
+                if let appServerRecord = codexAppServerRecord(matchingResumeSessionID: processSessionID,
+                                                              for: panel) {
+                    BridgeLogger.server.info("agent panel live codex discovery using app-server record workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) pid=\(candidate.pid, privacy: .public) resume_session_id=\(processSessionID, privacy: .public) app_server_session_id=\(appServerRecord.sessionID, privacy: .public)")
+                    return appServerRecord
+                }
                 if let rolloutPath = codexRolloutBySessionIDLookup(processSessionID) {
                     resolved = (processSessionID, rolloutPath)
                     BridgeLogger.server.info("agent panel live codex discovery using_process_resume workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) pid=\(candidate.pid, privacy: .public) session_id=\(processSessionID, privacy: .public)")
@@ -965,6 +988,45 @@ final class AgentSessionRegistryMonitor {
 
         BridgeLogger.server.info("agent panel live codex discovery no_rollout_match workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) candidate_count=\(codexCandidates.count, privacy: .public)")
         return nil
+    }
+
+    private func codexAppServerRecord(matchingResumeSessionID resumeSessionID: String,
+                                      for panel: AgentPanelProcessSnapshot) -> AgentSessionRegistryRecord? {
+        activeRecords.values
+            .filter { record in
+                Self.isCodexAppServerRuntimeRecord(record) &&
+                    Self.codexAppServerRecord(record, matchesResumeSessionID: resumeSessionID) &&
+                    (Self.record(record, matchesPanel: panel) ||
+                     Self.record(record, matchesTmuxPaneOf: panel))
+            }
+            .sorted(by: Self.isRecordPreferred(_:_:))
+            .first
+    }
+
+    private static func codexAppServerRecord(_ record: AgentSessionRegistryRecord,
+                                             matchesResumeSessionID resumeSessionID: String) -> Bool {
+        [record.threadID, record.resumeThreadID]
+            .compactMap { $0 }
+            .contains(resumeSessionID)
+    }
+
+    private static func record(_ record: AgentSessionRegistryRecord,
+                               matchesPanel panel: AgentPanelProcessSnapshot) -> Bool {
+        record.workspaceID == panel.workspaceID && record.panelID == panel.panelID
+    }
+
+    private static func record(_ record: AgentSessionRegistryRecord,
+                               matchesTmuxPaneOf panel: AgentPanelProcessSnapshot) -> Bool {
+        guard let recordPaneID = record.tmuxPaneID,
+              !recordPaneID.isEmpty,
+              let panelPaneID = panel.tmuxPaneID,
+              !panelPaneID.isEmpty,
+              recordPaneID == panelPaneID,
+              let recordSocketPath = record.tmuxSocketPath,
+              let panelSocketPath = panel.tmuxSocketPath else {
+            return false
+        }
+        return socketPathsMatch(recordSocketPath, panelSocketPath)
     }
 
     private static func isCodexProcess(_ descriptor: AgentProcessDescriptor) -> Bool {
@@ -1085,6 +1147,13 @@ final class AgentSessionRegistryMonitor {
 
     private static func isRecordPreferred(_ lhs: AgentSessionRegistryRecord,
                                           _ rhs: AgentSessionRegistryRecord) -> Bool {
+        if lhs.vendor == "codex" && rhs.vendor == "codex" {
+            let lhsIsAppServer = isCodexAppServerRuntimeRecord(lhs)
+            let rhsIsAppServer = isCodexAppServerRuntimeRecord(rhs)
+            if lhsIsAppServer != rhsIsAppServer {
+                return lhsIsAppServer
+            }
+        }
         if lhs.createdAt == rhs.createdAt {
             return lhs.sessionID < rhs.sessionID
         }

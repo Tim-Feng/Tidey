@@ -424,6 +424,163 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         XCTAssertEqual(snapshots.map(\.sessionID), ["instance-session"])
         XCTAssertEqual(snapshots.first?.restoreSessionID, restoreSessionID)
         XCTAssertEqual(runtimeSyncer.latestRecords.map(\.sessionID), ["instance-session"])
+        XCTAssertFalse(fileManager.fileExists(atPath: legacyRecordURL.path))
+    }
+
+    func testActiveSessionForPanelKeepsAppServerInstanceWhenRemoteResumeProcessMatchesLegacyThread() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let restoreSessionID = "019d70fe-fd27-7a12-a3f7-9c89ae5048b6"
+        let instanceSessionID = "68e6f3aa-7829-4115-ba05-6bb01c090d24"
+        let wrapperPID = Int32(getpid())
+        let legacyRecordURL = paths.codexAgentSessionsDirectory.appendingPathComponent("codex-\(restoreSessionID).json")
+        let appServerRecordURL = paths.codexAgentSessionsDirectory.appendingPathComponent("codex-\(instanceSessionID).json")
+        try Data("""
+        {
+          "version": 1,
+          "vendor": "codex",
+          "workspace_id": "workspace-current",
+          "session_id": "\(restoreSessionID)",
+          "panel_id": "panel-current",
+          "pid": \(wrapperPID),
+          "cwd": "/",
+          "created_at": "2026-06-18T06:06:20Z",
+          "rollout_path": "/tmp/rollout-\(restoreSessionID).jsonl",
+          "tmux_pane_id": "%1",
+          "tmux_socket_path": "/private/tmp/tmux-501/default"
+        }
+        """.utf8).write(to: legacyRecordURL)
+        try Data("""
+        {
+          "version": 1,
+          "vendor": "codex",
+          "workspace_id": "workspace-current",
+          "session_id": "\(instanceSessionID)",
+          "panel_id": "panel-current",
+          "pid": \(wrapperPID),
+          "cwd": "/Users/timfeng",
+          "created_at": "2026-06-10T02:39:53Z",
+          "runtime": "codex_app_server",
+          "app_server_socket": "/tmp/tidey-codex-app-server/app.sock",
+          "app_server_pid": \(getpid()),
+          "remote_tui_pid": 40556,
+          "thread_id": "\(restoreSessionID)",
+          "resume_thread_id": "\(restoreSessionID)",
+          "tmux_pane_id": "%1",
+          "tmux_socket_path": "/private/tmp/tmux-501/default"
+        }
+        """.utf8).write(to: appServerRecordURL)
+
+        let runtimeSyncer = CapturingRuntimeSyncer()
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: fileManager,
+                                                  hub: AgentEventHub(),
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+                                                  parentPIDLookup: { _ in nil },
+                                                  descendantProcessLookup: { rootPID in
+                                                      XCTAssertEqual(rootPID, wrapperPID)
+                                                      return [
+                                                          AgentProcessDescriptor(pid: 40556,
+                                                                                 command: "/Users/timfeng/.nvm/versions/node/v24.13.0/bin/node",
+                                                                                 arguments: "/Users/timfeng/.nvm/versions/node/v24.13.0/lib/node_modules/@openai/codex/bin/codex.js --remote unix:///tmp/tidey-codex-app-server/app.sock resume \(restoreSessionID)"),
+                                                      ]
+                                                  },
+                                                  rolloutPathLookup: { _ in
+                                                      XCTFail("matching app-server resume process should not synthesize a legacy rollout-backed record")
+                                                      return nil
+                                                  },
+                                                  codexRolloutBySessionIDLookup: { _ in
+                                                      XCTFail("matching app-server resume process should not resolve a legacy rollout")
+                                                      return "/tmp/rollout-\(restoreSessionID).jsonl"
+                                                  },
+                                                  runtimeSyncer: runtimeSyncer)
+        try monitor.start()
+
+        let session = monitor.activeSessionForPanel(workspaceID: "workspace-current",
+                                                    panelID: "panel-current",
+                                                    effectiveShellPID: wrapperPID,
+                                                    tmuxPaneID: "%1",
+                                                    tmuxSocketPath: "/tmp/tmux-501/default")
+
+        XCTAssertEqual(session?.vendor, "codex")
+        XCTAssertEqual(session?.sessionID, instanceSessionID)
+        XCTAssertEqual(session?.restoreSessionID, restoreSessionID)
+        XCTAssertEqual(runtimeSyncer.latestRecords.map(\.sessionID), [instanceSessionID])
+        XCTAssertFalse(fileManager.fileExists(atPath: legacyRecordURL.path))
+    }
+
+    func testLiveCodexDiscoveryTreatsRemoteResumeAsExistingAppServerSessionByPane() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let restoreSessionID = "019d70fe-fd27-7a12-a3f7-9c89ae5048b6"
+        let instanceSessionID = "68e6f3aa-7829-4115-ba05-6bb01c090d24"
+        let wrapperPID = Int32(getpid())
+        let appServerRecordURL = paths.codexAgentSessionsDirectory.appendingPathComponent("codex-\(instanceSessionID).json")
+        try Data("""
+        {
+          "version": 1,
+          "vendor": "codex",
+          "workspace_id": "stale-workspace",
+          "session_id": "\(instanceSessionID)",
+          "panel_id": "stale-panel",
+          "pid": \(wrapperPID),
+          "cwd": "/Users/timfeng",
+          "created_at": "2026-06-10T02:39:53Z",
+          "runtime": "codex_app_server",
+          "app_server_socket": "/tmp/tidey-codex-app-server/app.sock",
+          "app_server_pid": \(getpid()),
+          "remote_tui_pid": 40556,
+          "thread_id": "\(restoreSessionID)",
+          "resume_thread_id": "\(restoreSessionID)",
+          "tmux_pane_id": "%1",
+          "tmux_socket_path": "/private/tmp/tmux-501/default"
+        }
+        """.utf8).write(to: appServerRecordURL)
+
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: fileManager,
+                                                  hub: AgentEventHub(),
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+                                                  parentPIDLookup: { _ in nil },
+                                                  descendantProcessLookup: { rootPID in
+                                                      XCTAssertEqual(rootPID, wrapperPID)
+                                                      return [
+                                                          AgentProcessDescriptor(pid: 40556,
+                                                                                 command: "/Users/timfeng/.nvm/versions/node/v24.13.0/bin/node",
+                                                                                 arguments: "/Users/timfeng/.nvm/versions/node/v24.13.0/lib/node_modules/@openai/codex/bin/codex.js --remote unix:///tmp/tidey-codex-app-server/app.sock resume \(restoreSessionID)"),
+                                                      ]
+                                                  },
+                                                  rolloutPathLookup: { _ in
+                                                      XCTFail("matching app-server resume process should not synthesize a legacy rollout-backed record")
+                                                      return nil
+                                                  },
+                                                  codexRolloutBySessionIDLookup: { _ in
+                                                      XCTFail("matching app-server resume process should not resolve a legacy rollout")
+                                                      return "/tmp/rollout-\(restoreSessionID).jsonl"
+                                                  })
+        try monitor.start()
+
+        let session = monitor.activeSessionForPanel(workspaceID: "current-workspace",
+                                                    panelID: "current-panel",
+                                                    effectiveShellPID: wrapperPID,
+                                                    tmuxPaneID: "%1",
+                                                    tmuxSocketPath: "/tmp/tmux-501/default")
+
+        XCTAssertEqual(session?.vendor, "codex")
+        XCTAssertEqual(session?.sessionID, instanceSessionID)
+        XCTAssertEqual(session?.workspaceID, "current-workspace")
+        XCTAssertEqual(session?.panelID, "current-panel")
+        XCTAssertFalse(fileManager.fileExists(atPath: paths.codexAgentSessionsDirectory.appendingPathComponent("codex-\(restoreSessionID).json").path))
     }
 
     func testActiveSessionForPanelFallsBackToTmuxPaneMatchWhenPanelIDsChanged() throws {

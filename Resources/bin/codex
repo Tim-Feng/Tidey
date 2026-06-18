@@ -527,14 +527,45 @@ def socket_alive(path):
         return False
     return stat.S_ISSOCK(mode)
 
+def normalize_socket(path):
+    if not isinstance(path, str):
+        return ""
+    path = path.strip()
+    if path.startswith("/private/tmp/"):
+        return "/tmp/" + path[len("/private/tmp/"):]
+    return path
+
+def restore_id(record):
+    for key in ("resume_thread_id", "thread_id", "session_id"):
+        value = record.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+def pane_restore_key(record):
+    if record.get("vendor") != "codex":
+        return None
+    pane_id = record.get("tmux_pane_id")
+    if not isinstance(pane_id, str) or not pane_id:
+        return None
+    rid = restore_id(record)
+    if not rid:
+        return None
+    return (normalize_socket(record.get("tmux_socket_path")), pane_id, rid)
+
 if not root.exists():
     raise SystemExit(0)
 
+records = []
 for path in root.glob("codex-*.json"):
     try:
         record = json.loads(path.read_text())
     except Exception:
         continue
+    records.append((path, record))
+
+live_app_server_keys = set()
+for path, record in records:
     if record.get("runtime") not in {"codex_app_server", "codex_app_server_starting"}:
         continue
 
@@ -548,6 +579,9 @@ for path in root.glob("codex-*.json"):
         or (remote_tui_pid is not None and not pid_alive(remote_tui_pid))
     )
     if not stale:
+        key = pane_restore_key(record)
+        if key:
+            live_app_server_keys.add(key)
         continue
 
     fields = [
@@ -556,6 +590,13 @@ for path in root.glob("codex-*.json"):
         str(remote_tui_pid or ""),
     ]
     print("\t".join(fields))
+
+for path, record in records:
+    if record.get("runtime") is not None:
+        continue
+    key = pane_restore_key(record)
+    if key and key in live_app_server_keys:
+        print("\t".join([str(path), "", ""]))
 PY
 )"
 
