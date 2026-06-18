@@ -160,9 +160,123 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         let session = monitor.activeSessionForPanel(workspaceID: "workspace-app-server",
                                                     panelID: "panel-app-server")
         XCTAssertEqual(session?.sessionID, "session-app-server")
-        XCTAssertEqual(session?.restoreSessionID, "thread-resume")
+        XCTAssertEqual(session?.restoreSessionID, "thread-current")
         XCTAssertTrue(fileManager.fileExists(atPath: registryURL.path))
         XCTAssertEqual(runtimeSyncer.latestRecords.map(\.sessionID), ["session-app-server"])
+    }
+
+    func testCodexAppServerActiveThreadUpdatesRegistryTranscriptIdentity() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let threadA = "019d70fe-fd27-7a12-a3f7-9c89ae5048b6"
+        let threadB = "019ec8cb-fd27-7a12-a3f7-9c89ae5048b6"
+        let rolloutA = supportDirectory.appendingPathComponent("rollout-a-\(threadA).jsonl")
+        let rolloutB = supportDirectory.appendingPathComponent("rollout-b-\(threadB).jsonl")
+        try "\n".write(to: rolloutA, atomically: true, encoding: .utf8)
+        try "\n".write(to: rolloutB, atomically: true, encoding: .utf8)
+
+        let registryURL = paths.codexAgentSessionsDirectory.appendingPathComponent("codex-instance-session.json")
+        let recordData = Data("""
+        {
+          "version": 1,
+          "vendor": "codex",
+          "workspace_id": "workspace-app-server",
+          "session_id": "instance-session",
+          "panel_id": "panel-app-server",
+          "pid": 999999,
+          "cwd": "/tmp",
+          "created_at": "2026-06-07T00:00:00Z",
+          "runtime": "codex_app_server",
+          "app_server_socket": "/tmp/tidey-codex-app-server/app.sock",
+          "app_server_pid": \(getpid()),
+          "thread_id": "\(threadA)",
+          "resume_thread_id": "\(threadA)",
+          "rollout_path": "\(rolloutA.path)"
+        }
+        """.utf8)
+        try recordData.write(to: registryURL)
+
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: fileManager,
+                                                  hub: AgentEventHub(),
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+                                                  parentPIDLookup: { _ in nil },
+                                                  codexRolloutBySessionIDLookup: { sessionID in
+                                                      sessionID == threadB ? rolloutB.path : rolloutA.path
+                                                  })
+        try monitor.start()
+
+        XCTAssertEqual(monitor.activeSessionForPanel(workspaceID: "workspace-app-server",
+                                                     panelID: "panel-app-server")?.restoreSessionID,
+                       threadA)
+
+        monitor.appServerActiveThreadDidChange(sessionID: "instance-session", threadID: threadB)
+
+        XCTAssertTrue(waitUntil {
+            monitor.activeSessionForPanel(workspaceID: "workspace-app-server",
+                                          panelID: "panel-app-server")?.restoreSessionID == threadB
+        })
+        let updatedData = try Data(contentsOf: registryURL)
+        let updatedRecord = try JSONDecoder().decode(AgentSessionRegistryRecord.self, from: updatedData)
+        XCTAssertEqual(updatedRecord.sessionID, "instance-session")
+        XCTAssertEqual(updatedRecord.threadID, threadB)
+        XCTAssertEqual(updatedRecord.resumeThreadID, threadA)
+        XCTAssertEqual(updatedRecord.transcriptPath, rolloutB.path)
+    }
+
+    func testCodexAppServerActiveThreadNoopsWhenThreadAndTranscriptAlreadyCurrent() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let threadID = "019ec8cb-fd27-7a12-a3f7-9c89ae5048b6"
+        let rolloutURL = supportDirectory.appendingPathComponent("rollout-current-\(threadID).jsonl")
+        try "\n".write(to: rolloutURL, atomically: true, encoding: .utf8)
+        let registryURL = paths.codexAgentSessionsDirectory.appendingPathComponent("codex-instance-session.json")
+        let recordData = Data("""
+        {
+          "version": 1,
+          "vendor": "codex",
+          "workspace_id": "workspace-app-server",
+          "session_id": "instance-session",
+          "panel_id": "panel-app-server",
+          "pid": 999999,
+          "cwd": "/tmp",
+          "created_at": "2026-06-07T00:00:00Z",
+          "runtime": "codex_app_server",
+          "app_server_socket": "/tmp/tidey-codex-app-server/app.sock",
+          "app_server_pid": \(getpid()),
+          "thread_id": "\(threadID)",
+          "resume_thread_id": "launch-thread",
+          "rollout_path": "\(rolloutURL.path)"
+        }
+        """.utf8)
+        try recordData.write(to: registryURL)
+        let originalData = try Data(contentsOf: registryURL)
+
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: fileManager,
+                                                  hub: AgentEventHub(),
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+                                                  parentPIDLookup: { _ in nil },
+                                                  codexRolloutBySessionIDLookup: { _ in rolloutURL.path })
+        try monitor.start()
+
+        monitor.appServerActiveThreadDidChange(sessionID: "instance-session", threadID: threadID)
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+
+        XCTAssertEqual(try Data(contentsOf: registryURL), originalData)
+        XCTAssertEqual(monitor.activeSessionForPanel(workspaceID: "workspace-app-server",
+                                                     panelID: "panel-app-server")?.restoreSessionID,
+                       threadID)
     }
 
     func testScanPicksUpCodexAppServerRecordCreatedAfterStart() throws {
@@ -243,7 +357,7 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         let hub = AgentEventHub()
         var capturedAgentEventHandler: CodexAppServerHeadlessRuntime.AgentEventHandler?
         let runtimeSyncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub,
-                                                               attachHandler: { _, _, _, onAgentEvent, _, _ in
+                                                               attachHandler: { _, _, _, onAgentEvent, _, _, _ in
             capturedAgentEventHandler = onAgentEvent
             return RegistryMonitorFakeRuntimeSession()
         })

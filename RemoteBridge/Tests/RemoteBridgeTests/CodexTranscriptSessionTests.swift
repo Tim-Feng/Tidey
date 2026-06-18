@@ -157,7 +157,62 @@ final class CodexTranscriptSessionTests: XCTestCase {
                                afterSeq: nil)
         let status = try XCTUnwrap(result.events.first { $0.type == .status })
         XCTAssertEqual(status.sessionID, "instance-session")
-        XCTAssertEqual(status.eventID, "status:instance-session:unsupported-version:999.0.0")
+        XCTAssertEqual(status.eventID, "status:instance-session:\(status.seq):unsupported-version:999.0.0")
+    }
+
+    func testAppServerTranscriptIdentityUpdateTailsNewRollout() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let threadA = "019d70fe-fd27-7a12-a3f7-9c89ae5048b6"
+        let threadB = "019ec8cb-fd27-7a12-a3f7-9c89ae5048b6"
+        let transcriptA = directory.appendingPathComponent("rollout-a-\(threadA).jsonl", isDirectory: false)
+        let transcriptB = directory.appendingPathComponent("rollout-b-\(threadB).jsonl", isDirectory: false)
+        try ([
+            makeCodexSessionMetaLine(sessionID: threadA, cliVersion: "0.1.0"),
+            makeCodexMessageLine(role: "assistant", content: "old thread"),
+        ].joined(separator: "\n") + "\n").write(to: transcriptA, atomically: true, encoding: .utf8)
+        try ([
+            makeCodexSessionMetaLine(sessionID: threadB, cliVersion: "0.1.0"),
+            makeCodexMessageLine(role: "assistant", content: "new live thread"),
+        ].joined(separator: "\n") + "\n").write(to: transcriptB, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptA.path,
+                                                                sessionID: "instance-session",
+                                                                threadID: threadA,
+                                                                resumeThreadID: threadA),
+                                             fileManager: .default,
+                                             hub: hub)
+        session.start()
+        defer { session.stop() }
+
+        XCTAssertTrue(waitUntil {
+            let result = hub.fetch(workspaceID: "workspace",
+                                   sessionID: "instance-session",
+                                   limit: 10)
+            return result.events.contains { $0.text == "old thread" }
+        })
+
+        session.update(record: makeRecord(transcriptPath: transcriptB.path,
+                                          sessionID: "instance-session",
+                                          threadID: threadB,
+                                          resumeThreadID: threadA))
+
+        XCTAssertTrue(waitUntil {
+            let result = hub.fetch(workspaceID: "workspace",
+                                   sessionID: "instance-session",
+                                   limit: 10)
+            return result.events.contains { $0.text == "new live thread" }
+        })
+        let result = hub.fetch(workspaceID: "workspace",
+                               sessionID: "instance-session",
+                               limit: 10)
+        let oldEvent = try XCTUnwrap(result.events.first { $0.text == "old thread" })
+        let newEvent = try XCTUnwrap(result.events.first { $0.text == "new live thread" })
+        XCTAssertGreaterThan(newEvent.seq, oldEvent.seq)
     }
 
     private func makeRecord(transcriptPath: String,

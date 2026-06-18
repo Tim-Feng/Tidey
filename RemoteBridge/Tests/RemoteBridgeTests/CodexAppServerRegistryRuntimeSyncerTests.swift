@@ -6,7 +6,7 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         let hub = AgentEventHub()
         let runtime = FakeRuntimeSession()
         var attachedRecords = [AgentSessionRegistryRecord]()
-        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { record, _, _, _, _, _ in
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { record, _, _, _, _, _, _ in
             attachedRecords.append(record)
             return runtime
         })
@@ -23,7 +23,7 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
     func testSyncStopsStaleAndReplacedRuntimes() {
         let hub = AgentEventHub()
         var runtimes = [FakeRuntimeSession]()
-        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { _, _, _, _, _, _ in
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { _, _, _, _, _, _, _ in
             let runtime = FakeRuntimeSession()
             runtimes.append(runtime)
             return runtime
@@ -49,7 +49,7 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         let resolved = Self.event(sessionID: "second", promptID: "prompt-2")
         secondRuntime.resolvedEventsByPromptID["prompt-2"] = resolved
         var runtimeIndex = 0
-        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { _, _, _, _, _, _ in
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { _, _, _, _, _, _, _ in
             defer { runtimeIndex += 1 }
             return runtimeIndex == 0 ? firstRuntime : secondRuntime
         })
@@ -70,7 +70,7 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         let firstRuntime = FakeRuntimeSession()
         let secondRuntime = FakeRuntimeSession()
         var runtimeIndex = 0
-        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { _, _, _, _, _, _ in
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { _, _, _, _, _, _, _ in
             defer { runtimeIndex += 1 }
             return runtimeIndex == 0 ? firstRuntime : secondRuntime
         })
@@ -89,7 +89,7 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
     func testSyncTreatsSameThreadRecordsAsSeparateRuntimeInstances() {
         let hub = AgentEventHub()
         var attachedRecords = [AgentSessionRegistryRecord]()
-        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { record, _, _, _, _, _ in
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { record, _, _, _, _, _, _ in
             attachedRecords.append(record)
             return FakeRuntimeSession()
         })
@@ -118,7 +118,7 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         let resolved = Self.event(sessionID: "instance-b", promptID: "prompt-shared")
         secondRuntime.resolvedEventsByPromptID["prompt-shared"] = resolved
         var runtimeIndex = 0
-        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { _, _, _, _, _, _ in
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { _, _, _, _, _, _, _ in
             defer { runtimeIndex += 1 }
             return runtimeIndex == 0 ? firstRuntime : secondRuntime
         })
@@ -146,7 +146,7 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
     func testSyncEnsuresThreadSubscriptionForReusedRuntime() {
         let hub = AgentEventHub()
         let runtime = FakeRuntimeSession()
-        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { _, _, _, _, _, _ in
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { _, _, _, _, _, _, _ in
             runtime
         })
         let record = Self.record(sessionID: "app", runtime: "codex_app_server", socketPath: "/tmp/app.sock")
@@ -156,6 +156,30 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
 
         XCTAssertEqual(runtime.ensureThreadSubscriptionCallCount, 1)
         XCTAssertFalse(runtime.stopped)
+    }
+
+    func testActiveThreadHandlerReportsOwningRuntimeSession() {
+        let hub = AgentEventHub()
+        var capturedActiveThreadHandler: CodexAppServerHeadlessRuntime.ThreadIDHandler?
+        var reported: [(sessionID: String, threadID: String)] = []
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { _, _, _, _, _, _, onActiveThreadID in
+            capturedActiveThreadHandler = onActiveThreadID
+            return FakeRuntimeSession()
+        })
+        syncer.activeThreadHandler = { sessionID, threadID in
+            reported.append((sessionID, threadID))
+        }
+
+        syncer.sync(records: [
+            Self.record(sessionID: "instance-session",
+                        runtime: "codex_app_server",
+                        socketPath: "/tmp/app.sock",
+                        threadID: "thread-old"),
+        ])
+        capturedActiveThreadHandler?("thread-current")
+
+        XCTAssertEqual(reported.map(\.sessionID), ["instance-session"])
+        XCTAssertEqual(reported.map(\.threadID), ["thread-current"])
     }
 
     func testAttachedRuntimeDoesNotPublishConversationEventsToHub() throws {
@@ -169,7 +193,7 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
                                                             sidebarMessages.append(message)
                                                             sidebarLock.unlock()
                                                         },
-                                                        attachHandler: { _, _, _, onAgentEvent, _, _ in
+                                                        attachHandler: { _, _, _, onAgentEvent, _, _, _ in
             capturedAgentEventHandler = onAgentEvent
             return FakeRuntimeSession()
         })
@@ -241,7 +265,7 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
                                                         sidebarWorkspaceIDResolver: { record in
                                                             record.sessionID == "app" ? "current-workspace" : nil
                                                         },
-                                                        attachHandler: { _, _, _, onAgentEvent, _, _ in
+                                                        attachHandler: { _, _, _, onAgentEvent, _, _, _ in
             capturedAgentEventHandler = onAgentEvent
             return FakeRuntimeSession()
         })
@@ -292,7 +316,7 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
     func testAttachedRuntimeStillPublishesApprovalPromptEventsToHub() throws {
         let hub = AgentEventHub()
         var capturedPromptHandler: CodexAppServerConnection.InteractivePromptHandler?
-        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { _, _, _, _, onInteractivePrompt, _ in
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { _, _, _, _, onInteractivePrompt, _, _ in
             capturedPromptHandler = onInteractivePrompt
             return FakeRuntimeSession()
         })
@@ -346,7 +370,7 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
             Self.interactivePromptEvent(sessionID: "second", promptID: "prompt-second"),
         ]
         var runtimeIndex = 0
-        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { _, _, _, _, _, _ in
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { _, _, _, _, _, _, _ in
             defer { runtimeIndex += 1 }
             return runtimeIndex == 0 ? firstRuntime : secondRuntime
         })

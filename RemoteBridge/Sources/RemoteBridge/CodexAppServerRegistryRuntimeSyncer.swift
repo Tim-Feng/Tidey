@@ -22,12 +22,14 @@ extension CodexAppServerRuntimeSession: CodexAppServerRuntimeSessionControlling 
 final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, CodexAppServerApprovalPromptProviding, CodexAppServerChatSubmitting {
     typealias SidebarMessageSender = (String) throws -> Void
     typealias SidebarWorkspaceIDResolver = (AgentSessionRegistryRecord) -> String?
+    typealias ActiveThreadHandler = (_ sessionID: String, _ threadID: String) -> Void
     typealias AttachHandler = (_ record: AgentSessionRegistryRecord,
                                _ nextSequence: @escaping CodexAppServerConnection.SequenceProvider,
                                _ timestampProvider: @escaping CodexAppServerConnection.TimestampProvider,
                                _ onAgentEvent: @escaping CodexAppServerHeadlessRuntime.AgentEventHandler,
                                _ onInteractivePrompt: @escaping CodexAppServerConnection.InteractivePromptHandler,
-                               _ onInteractivePromptResolved: @escaping CodexAppServerConnection.InteractivePromptResolvedHandler) throws -> CodexAppServerRuntimeSessionControlling
+                               _ onInteractivePromptResolved: @escaping CodexAppServerConnection.InteractivePromptResolvedHandler,
+                               _ onActiveThreadID: @escaping CodexAppServerHeadlessRuntime.ThreadIDHandler) throws -> CodexAppServerRuntimeSessionControlling
 
     private struct RuntimeEntry {
         let record: AgentSessionRegistryRecord
@@ -43,6 +45,7 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
     private let lock = NSLock()
     private var entriesBySessionID = [String: RuntimeEntry]()
     private var lastAssistantTextBySessionID = [String: String]()
+    var activeThreadHandler: ActiveThreadHandler?
 
     init(eventHub: AgentEventHub,
          factory: CodexAppServerRuntimeSessionFactory = CodexAppServerRuntimeSessionFactory(),
@@ -57,7 +60,7 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
         if let attachHandler {
             self.attachHandler = attachHandler
         } else {
-            self.attachHandler = { record, nextSequence, timestampProvider, onAgentEvent, onInteractivePrompt, onInteractivePromptResolved in
+            self.attachHandler = { record, nextSequence, timestampProvider, onAgentEvent, onInteractivePrompt, onInteractivePromptResolved, onActiveThreadID in
                 guard let socketPath = record.appServerSocket,
                       let panelID = record.panelID,
                       !socketPath.isEmpty,
@@ -73,7 +76,8 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
                                           timestampProvider: timestampProvider,
                                           onAgentEvent: onAgentEvent,
                                           onInteractivePrompt: onInteractivePrompt,
-                                          onInteractivePromptResolved: onInteractivePromptResolved)
+                                          onInteractivePromptResolved: onInteractivePromptResolved,
+                                          onActiveThreadID: onActiveThreadID)
             }
         }
     }
@@ -119,7 +123,12 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
         }
 
         let reusedSessions = lock.withCodexRuntimeSyncerLock {
-            reusedRecords.compactMap { entriesBySessionID[$0.sessionID]?.session }
+            for record in reusedRecords {
+                if let entry = entriesBySessionID[record.sessionID] {
+                    entriesBySessionID[record.sessionID] = RuntimeEntry(record: record, session: entry.session)
+                }
+            }
+            return reusedRecords.compactMap { entriesBySessionID[$0.sessionID]?.session }
         }
         for session in reusedSessions {
             session.ensureThreadSubscription()
@@ -230,6 +239,9 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
                                             },
                                             { [eventHub] event in
                                                 eventHub.publish(event)
+                                            },
+                                            { [weak self, sessionID = record.sessionID] threadID in
+                                                self?.activeThreadHandler?(sessionID, threadID)
                                             })
             lock.withCodexRuntimeSyncerLock {
                 entriesBySessionID[record.sessionID] = RuntimeEntry(record: record, session: session)

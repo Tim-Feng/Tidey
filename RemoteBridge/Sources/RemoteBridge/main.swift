@@ -30,6 +30,9 @@ let codexRuntimeSyncer = CodexAppServerRegistryRuntimeSyncer(eventHub: eventHub,
 let registryMonitor = AgentSessionRegistryMonitor(hub: eventHub,
                                                   socketClient: socketClient,
                                                   runtimeSyncer: codexRuntimeSyncer)
+codexRuntimeSyncer.activeThreadHandler = { [weak registryMonitor] sessionID, threadID in
+    registryMonitor?.appServerActiveThreadDidChange(sessionID: sessionID, threadID: threadID)
+}
 let workspaceEventMonitor = TideyWorkspaceEventMonitor(locator: locator, hub: workspaceEventHub)
 let observability = BridgeObservabilityCenter()
 let cloudflaredStatusStore = BridgeCloudflaredStatusStore(fileURL: bridgePaths.cloudflaredStateFileURL)

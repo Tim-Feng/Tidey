@@ -493,6 +493,16 @@ final class AgentSessionRegistryMonitor {
         }
     }
 
+    func appServerActiveThreadDidChange(sessionID: String, threadID: String) {
+        let trimmedThreadID = threadID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedThreadID.isEmpty else {
+            return
+        }
+        queue.async { [weak self] in
+            self?.updateAppServerActiveThread(sessionID: sessionID, threadID: trimmedThreadID)
+        }
+    }
+
     func canonicalSessionIDForAgentEvents(_ sessionID: String?) -> String? {
         guard let sessionID, !sessionID.isEmpty else {
             return sessionID
@@ -641,8 +651,8 @@ final class AgentSessionRegistryMonitor {
             lastLoggedAppServerSessionIDs = appServerSessionIDs
         }
         syncRecords(activeRecords)
-        runtimeSyncer?.sync(records: activeRecords)
         self.activeRecords = Dictionary(uniqueKeysWithValues: activeRecords.map { ($0.sessionID, $0) })
+        runtimeSyncer?.sync(records: activeRecords)
         for record in activeRecords where resolvedPanelBindings[record.sessionID] != nil {
             applyResolvedBinding(sessionID: record.sessionID,
                                  workspaceID: record.workspaceID,
@@ -921,7 +931,7 @@ final class AgentSessionRegistryMonitor {
 
     private static func restoreSessionID(for record: AgentSessionRegistryRecord) -> String {
         if isCodexAppServerRuntimeRecord(record) {
-            return record.resumeThreadID ?? record.threadID ?? record.sessionID
+            return record.threadID ?? record.resumeThreadID ?? record.sessionID
         }
         return record.sessionID
     }
@@ -1127,6 +1137,58 @@ final class AgentSessionRegistryMonitor {
             activeRecords[record.sessionID] = record
         } catch {
             BridgeLogger.server.error("agent panel live codex discovery persist_failed workspace_id=\(record.workspaceID, privacy: .public) panel_id=\(record.panelID ?? "-", privacy: .public) session_id=\(record.sessionID, privacy: .public) error=\(String(describing: error), privacy: .public)")
+        }
+    }
+
+    private func updateAppServerActiveThread(sessionID: String, threadID: String) {
+        guard let record = activeRecords[sessionID],
+              Self.isCodexAppServerRuntimeRecord(record) else {
+            return
+        }
+        let rolloutPath = codexRolloutBySessionIDLookup(threadID)
+        let transcriptAlreadyMatchesThread = record.transcriptPath?.contains(threadID) == true
+        let transcriptPathNeedsUpdate = rolloutPath.map { record.transcriptPath != $0 } ??
+            (record.transcriptPath != nil && !transcriptAlreadyMatchesThread)
+        guard record.threadID != threadID || transcriptPathNeedsUpdate else {
+            return
+        }
+
+        let updated = AgentSessionRegistryRecord(version: record.version,
+                                                 vendor: record.vendor,
+                                                 workspaceID: record.workspaceID,
+                                                 sessionID: record.sessionID,
+                                                 panelID: record.panelID,
+                                                 pid: record.pid,
+                                                 cwd: record.cwd,
+                                                 createdAt: record.createdAt,
+                                                 transcriptPath: rolloutPath,
+                                                 tmuxPaneID: record.tmuxPaneID,
+                                                 tmuxSocketPath: record.tmuxSocketPath,
+                                                 runtime: record.runtime,
+                                                 appServerSocket: record.appServerSocket,
+                                                 appServerPID: record.appServerPID,
+                                                 remoteTUIPID: record.remoteTUIPID,
+                                                 threadID: threadID,
+                                                 resumeThreadID: record.resumeThreadID ?? record.threadID)
+
+        activeRecords[sessionID] = updated
+        sessions[sessionID]?.update(record: updated)
+        persistCodexAppServerActiveThreadRecord(updated)
+        BridgeLogger.server.info("codex app-server active thread updated session_id=\(sessionID, privacy: .public) thread_id=\(threadID, privacy: .public) transcript_path=\(rolloutPath ?? "-", privacy: .private)")
+    }
+
+    private func persistCodexAppServerActiveThreadRecord(_ record: AgentSessionRegistryRecord) {
+        do {
+            try fileManager.createDirectory(at: paths.codexAgentSessionsDirectory,
+                                            withIntermediateDirectories: true)
+            let url = paths.codexAgentSessionsDirectory
+                .appendingPathComponent("codex-\(record.sessionID).json", isDirectory: false)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            let data = try encoder.encode(record)
+            try data.write(to: url, options: [.atomic])
+        } catch {
+            BridgeLogger.server.error("codex app-server active thread persist_failed session_id=\(record.sessionID, privacy: .public) thread_id=\(record.threadID ?? "-", privacy: .public) error=\(String(describing: error), privacy: .public)")
         }
     }
 

@@ -14,6 +14,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     private var resolverTimer: DispatchSourceTimer?
     private var tailer: JSONLFileTailer?
     private var transcriptURL: URL?
+    private var transcriptSequenceBase = 0
     private var maxObservedSeq = transcriptSessionStartedSequence
     private var didPublishStart = false
     private var didPublishEnd = false
@@ -72,12 +73,17 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             let previousRecord = self.record
             let didMigrateWorkspace = previousRecord.workspaceID != record.workspaceID
             let didMigratePanel = previousRecord.panelID != record.panelID
+            let didChangeTranscriptIdentity = Self.transcriptIdentity(for: previousRecord) !=
+                Self.transcriptIdentity(for: record)
             if didMigrateWorkspace || didMigratePanel {
                 self.hub.migrateSession(sessionID: previousRecord.sessionID,
                                         toWorkspaceID: record.workspaceID,
                                         panelID: record.panelID)
             }
             self.record = record
+            if didChangeTranscriptIdentity {
+                self.switchTranscriptIdentity()
+            }
             if didMigrateWorkspace || didMigratePanel {
                 let seq = self.nextSyntheticSequence()
                 self.publishSynthetic(kind: .sessionStarted,
@@ -107,7 +113,10 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             guard let tailer else {
                 return false
             }
-            let beforeOffset = transcriptLineOffset(for: beforeSeq)
+            guard beforeSeq > transcriptSequenceBase else {
+                return false
+            }
+            let beforeOffset = transcriptLineOffset(for: beforeSeq - transcriptSequenceBase)
             guard beforeOffset > 0 else {
                 return false
             }
@@ -197,6 +206,27 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         if resolverTimer == nil {
             startResolver()
         }
+    }
+
+    private func switchTranscriptIdentity() {
+        transcriptSequenceBase = maxObservedSeq
+        transcriptURL = nil
+        tailer?.stop()
+        tailer = nil
+        resolverTimer?.cancel()
+        resolverTimer = nil
+        didSeeInteractiveEvent = false
+        unsupportedVersions.removeAll()
+        resolvedToolCallIDs.removeAll()
+        publishedAssistantTextKeys.removeAll()
+        isBackfillingHistory = false
+        isBootstrappingSidebarState = false
+        bootstrappedShellState = .prompt
+        currentShellState = .prompt
+        lastStartedTurnID = nil
+        lastCompletedTurnID = nil
+        lastAbortedTurnID = nil
+        startResolver()
     }
 
     private func resolveTranscriptURL() -> URL? {
@@ -305,7 +335,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             publishFileBacked(kind: .status,
                               lineOffset: lineOffset,
                               ordinal: 0,
-                              eventID: "status:\(record.sessionID):unsupported-version:\(cliVersion)",
+                              eventID: "status:\(record.sessionID):\(fileBackedSequence(lineOffset: lineOffset, ordinal: 0)):unsupported-version:\(cliVersion)",
                               timestamp: timestamp,
                               role: nil,
                               text: "Unsupported Codex transcript version \(cliVersion)",
@@ -368,7 +398,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             publishFileBacked(kind: .userMessage,
                               lineOffset: lineOffset,
                               ordinal: 0,
-                              eventID: "user:\(record.sessionID):\(transcriptEventSequence(lineOffset: lineOffset, ordinal: 0))",
+                              eventID: "user:\(record.sessionID):\(fileBackedSequence(lineOffset: lineOffset, ordinal: 0))",
                               timestamp: timestamp,
                               role: role,
                               text: text,
@@ -560,7 +590,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             return
         }
         publishedAssistantTextKeys.insert(dedupeKey)
-        let seq = transcriptEventSequence(lineOffset: lineOffset, ordinal: ordinal)
+        let seq = fileBackedSequence(lineOffset: lineOffset, ordinal: ordinal)
         publishFileBacked(kind: kind,
                           lineOffset: lineOffset,
                           ordinal: ordinal,
@@ -672,7 +702,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                    output: String?,
                                    toolCallID: String?,
                                    metadata: [String: String]?) {
-        let seq = transcriptEventSequence(lineOffset: lineOffset, ordinal: ordinal)
+        let seq = fileBackedSequence(lineOffset: lineOffset, ordinal: ordinal)
         maxObservedSeq = max(maxObservedSeq, seq)
         let resolvedMetadata = metadataWithClientRequestID(kind: kind, text: text, metadata: metadata)
         let event = AgentEvent(eventID: eventID,
@@ -771,6 +801,18 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     private func nextSyntheticSequence() -> Int {
         maxObservedSeq += 1
         return maxObservedSeq
+    }
+
+    private func fileBackedSequence(lineOffset: Int, ordinal: Int) -> Int {
+        transcriptSequenceBase + transcriptEventSequence(lineOffset: lineOffset, ordinal: ordinal)
+    }
+
+    private static func transcriptIdentity(for record: AgentSessionRegistryRecord) -> [String] {
+        [
+            record.transcriptPath ?? "",
+            record.threadID ?? "",
+            record.resumeThreadID ?? "",
+        ]
     }
 
     private func baseMetadata(_ metadata: [String: String]?) -> [String: String]? {

@@ -552,10 +552,13 @@ final class CodexAppServerActiveThreadStore: @unchecked Sendable {
     private let lock = NSLock()
     private var threadID: String?
 
-    func setThreadID(_ threadID: String) {
+    @discardableResult
+    func setThreadID(_ threadID: String) -> Bool {
         lock.lock()
+        let changed = self.threadID != threadID
         self.threadID = threadID
         lock.unlock()
+        return changed
     }
 
     func currentThreadID() -> String? {
@@ -707,6 +710,7 @@ final class CodexAppServerRuntimeSessionFactory {
                onAgentEvent: @escaping CodexAppServerHeadlessRuntime.AgentEventHandler,
                onInteractivePrompt: @escaping CodexAppServerConnection.InteractivePromptHandler,
                onInteractivePromptResolved: @escaping CodexAppServerConnection.InteractivePromptResolvedHandler,
+               onActiveThreadID: @escaping CodexAppServerHeadlessRuntime.ThreadIDHandler = { _ in },
                onStderrLine: @escaping @Sendable (String) -> Void = { _ in },
                onExit: @escaping @Sendable (Int32) -> Void = { _ in }) throws -> CodexAppServerRuntimeSession {
         let stdoutRouter = CodexAppServerConnectionLineRouter()
@@ -736,11 +740,16 @@ final class CodexAppServerRuntimeSessionFactory {
         }
         let activeThreadStore = CodexAppServerActiveThreadStore()
         let turnStateStore = CodexAppServerTurnStateStore()
+        let handleThreadID: CodexAppServerHeadlessRuntime.ThreadIDHandler = { threadID in
+            if activeThreadStore.setThreadID(threadID) {
+                onActiveThreadID(threadID)
+            }
+        }
         let runtime = CodexAppServerHeadlessRuntime(context: context,
                                                     nextSequence: nextSequence,
                                                     timestampProvider: timestampProvider,
                                                     onAgentEvent: onAgentEvent,
-                                                    onThreadID: activeThreadStore.setThreadID,
+                                                    onThreadID: handleThreadID,
                                                     onTurnStarted: turnStateStore.markStarted,
                                                     onTurnCompleted: turnStateStore.markCompleted,
                                                     onThreadActive: turnStateStore.markThreadActive,
@@ -803,7 +812,8 @@ final class CodexAppServerRuntimeSessionFactory {
                 timestampProvider: @escaping CodexAppServerConnection.TimestampProvider,
                 onAgentEvent: @escaping CodexAppServerHeadlessRuntime.AgentEventHandler,
                 onInteractivePrompt: @escaping CodexAppServerConnection.InteractivePromptHandler,
-                onInteractivePromptResolved: @escaping CodexAppServerConnection.InteractivePromptResolvedHandler) throws -> CodexAppServerRuntimeSession {
+                onInteractivePromptResolved: @escaping CodexAppServerConnection.InteractivePromptResolvedHandler,
+                onActiveThreadID: @escaping CodexAppServerHeadlessRuntime.ThreadIDHandler = { _ in }) throws -> CodexAppServerRuntimeSession {
         let stdoutRouter = CodexAppServerConnectionLineRouter()
         let process = CodexAppServerExternalProcess(processID: processID)
         let transport = try transportConnector.connect(mode: .unixSocket(path: socketPath),
@@ -817,11 +827,16 @@ final class CodexAppServerRuntimeSessionFactory {
                                                        })
         let activeThreadStore = CodexAppServerActiveThreadStore()
         let turnStateStore = CodexAppServerTurnStateStore()
+        let handleThreadID: CodexAppServerHeadlessRuntime.ThreadIDHandler = { threadID in
+            if activeThreadStore.setThreadID(threadID) {
+                onActiveThreadID(threadID)
+            }
+        }
         let runtime = CodexAppServerHeadlessRuntime(context: context,
                                                     nextSequence: nextSequence,
                                                     timestampProvider: timestampProvider,
                                                     onAgentEvent: onAgentEvent,
-                                                    onThreadID: activeThreadStore.setThreadID,
+                                                    onThreadID: handleThreadID,
                                                     onTurnStarted: turnStateStore.markStarted,
                                                     onTurnCompleted: turnStateStore.markCompleted,
                                                     onThreadActive: turnStateStore.markThreadActive,
