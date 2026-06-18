@@ -12,6 +12,7 @@ protocol CodexAppServerRuntimeSessionControlling: AnyObject {
     func canSubmitMessage() -> Bool
     func ensureThreadSubscription()
     func pendingApprovalPromptEvents() -> [AgentEvent]
+    func refreshActiveThread()
     func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent
     func submitMessage(text: String) throws
     func stop()
@@ -22,6 +23,7 @@ extension CodexAppServerRuntimeSession: CodexAppServerRuntimeSessionControlling 
 final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, CodexAppServerApprovalPromptProviding, CodexAppServerChatSubmitting {
     typealias SidebarMessageSender = (String) throws -> Void
     typealias SidebarWorkspaceIDResolver = (AgentSessionRegistryRecord) -> String?
+    typealias DateProvider = () -> Date
     typealias ActiveThreadHandler = (_ sessionID: String, _ threadID: String) -> Void
     typealias AttachHandler = (_ record: AgentSessionRegistryRecord,
                                _ nextSequence: @escaping CodexAppServerConnection.SequenceProvider,
@@ -41,10 +43,13 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
     private let sidebarWorkspaceIDResolver: SidebarWorkspaceIDResolver
     private let sidebarQueue = DispatchQueue(label: "com.tidey.remote-bridge.codex-app-server-sidebar")
     private let timestampProvider: CodexAppServerConnection.TimestampProvider
+    private let dateProvider: DateProvider
+    private let activeThreadRefreshInterval: TimeInterval
     private let attachHandler: AttachHandler
     private let lock = NSLock()
     private var entriesBySessionID = [String: RuntimeEntry]()
     private var lastAssistantTextBySessionID = [String: String]()
+    private var nextActiveThreadRefreshAtBySessionID = [String: Date]()
     var activeThreadHandler: ActiveThreadHandler?
 
     init(eventHub: AgentEventHub,
@@ -52,11 +57,15 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
          sidebarMessageSender: @escaping SidebarMessageSender = { _ in },
          sidebarWorkspaceIDResolver: @escaping SidebarWorkspaceIDResolver = { _ in nil },
          timestampProvider: @escaping CodexAppServerConnection.TimestampProvider = CodexAppServerRegistryRuntimeSyncer.iso8601Now,
+         dateProvider: @escaping DateProvider = Date.init,
+         activeThreadRefreshInterval: TimeInterval = 2.0,
          attachHandler: AttachHandler? = nil) {
         self.eventHub = eventHub
         self.sidebarMessageSender = sidebarMessageSender
         self.sidebarWorkspaceIDResolver = sidebarWorkspaceIDResolver
         self.timestampProvider = timestampProvider
+        self.dateProvider = dateProvider
+        self.activeThreadRefreshInterval = activeThreadRefreshInterval
         if let attachHandler {
             self.attachHandler = attachHandler
         } else {
@@ -115,6 +124,7 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
         lock.withCodexRuntimeSyncerLock {
             for entry in staleEntries + replacedEntries {
                 lastAssistantTextBySessionID.removeValue(forKey: entry.record.sessionID)
+                nextActiveThreadRefreshAtBySessionID.removeValue(forKey: entry.record.sessionID)
             }
         }
 
@@ -123,15 +133,24 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
         }
 
         let reusedSessions = lock.withCodexRuntimeSyncerLock {
+            let now = dateProvider()
             for record in reusedRecords {
                 if let entry = entriesBySessionID[record.sessionID] {
                     entriesBySessionID[record.sessionID] = RuntimeEntry(record: record, session: entry.session)
                 }
             }
-            return reusedRecords.compactMap { entriesBySessionID[$0.sessionID]?.session }
+            return reusedRecords.compactMap { record -> (session: CodexAppServerRuntimeSessionControlling, shouldRefresh: Bool)? in
+                guard let session = entriesBySessionID[record.sessionID]?.session else {
+                    return nil
+                }
+                return (session, shouldRefreshActiveThreadLocked(sessionID: record.sessionID, now: now))
+            }
         }
-        for session in reusedSessions {
+        for (session, shouldRefresh) in reusedSessions {
             session.ensureThreadSubscription()
+            if shouldRefresh {
+                session.refreshActiveThread()
+            }
         }
     }
 
@@ -245,6 +264,7 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
                                             })
             lock.withCodexRuntimeSyncerLock {
                 entriesBySessionID[record.sessionID] = RuntimeEntry(record: record, session: session)
+                nextActiveThreadRefreshAtBySessionID[record.sessionID] = dateProvider().addingTimeInterval(activeThreadRefreshInterval)
             }
             BridgeLogger.server.info("codex app-server registry runtime attached workspace_id=\(record.workspaceID, privacy: .public) panel_id=\(record.panelID ?? "-", privacy: .public) session_id=\(record.sessionID, privacy: .public)")
         } catch {
@@ -315,6 +335,18 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
                 }
             }
         }
+    }
+
+    private func shouldRefreshActiveThreadLocked(sessionID: String, now: Date) -> Bool {
+        guard activeThreadRefreshInterval >= 0 else {
+            return false
+        }
+        if let nextRefreshAt = nextActiveThreadRefreshAtBySessionID[sessionID],
+           nextRefreshAt > now {
+            return false
+        }
+        nextActiveThreadRefreshAtBySessionID[sessionID] = now.addingTimeInterval(activeThreadRefreshInterval)
+        return true
     }
 
     private static func isAttachableCodexAppServerRecord(_ record: AgentSessionRegistryRecord) -> Bool {

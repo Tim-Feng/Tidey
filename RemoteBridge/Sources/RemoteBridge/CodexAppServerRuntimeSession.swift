@@ -210,6 +210,18 @@ final class CodexAppServerRuntimeSession {
         sendLoadedThreadRequestForSubscription()
     }
 
+    func refreshActiveThread() {
+        let initializationStatus = initialization.diagnosticStatus()
+        guard case .ready = initializationStatus else {
+            return
+        }
+        guard canRefreshActiveThread() else {
+            return
+        }
+        sendLoadedThreadRequestForSubscription(clearSubscriptionOnMissing: false,
+                                               reason: "active_thread_refresh")
+    }
+
     private func currentThreadIDForSubmit() throws -> String? {
         if let threadID = activeThreadStore.currentThreadID() {
             return threadID
@@ -300,6 +312,18 @@ final class CodexAppServerRuntimeSession {
         return true
     }
 
+    private func canRefreshActiveThread() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard stopped == false else {
+            return false
+        }
+        if case .subscribed = attachSubscriptionState {
+            return true
+        }
+        return false
+    }
+
     private func setAttachSubscriptionState(_ state: AttachSubscriptionState, reason: String) {
         lock.lock()
         let previousState = attachSubscriptionState
@@ -317,7 +341,8 @@ final class CodexAppServerRuntimeSession {
         BridgeLogger.server.info("codex app-server subscription state changed session_id=\(self.runtime.contextSessionID, privacy: .public) from=\(previousState.logValue, privacy: .public) to=\(state.logValue, privacy: .public) reason=\(reason, privacy: .public)")
     }
 
-    private func sendLoadedThreadRequestForSubscription() {
+    private func sendLoadedThreadRequestForSubscription(clearSubscriptionOnMissing: Bool = true,
+                                                        reason: String = "loaded_thread_found") {
         do {
             try connection.sendClientRequest(method: "thread/loaded/list") { [weak self] result in
                 guard let self else {
@@ -327,11 +352,13 @@ final class CodexAppServerRuntimeSession {
                 case .success(let value):
                     guard let threadID = codexAppServerLoadedThreadID(from: value) else {
                         BridgeLogger.server.debug("codex app-server subscription no loaded thread shape=\(codexAppServerLoadedThreadShapeDescription(from: value), privacy: .public)")
-                        self.setAttachSubscriptionState(.noLoadedThread, reason: "loaded_thread_missing")
+                        if clearSubscriptionOnMissing {
+                            self.setAttachSubscriptionState(.noLoadedThread, reason: "loaded_thread_missing")
+                        }
                         return
                     }
                     self.activeThreadStore.setThreadID(threadID)
-                    self.sendThreadResumeForSubscription(threadID: threadID)
+                    self.sendThreadResumeForSubscriptionIfNeeded(threadID: threadID, reason: reason)
                 case .failure(let error):
                     BridgeLogger.server.error("codex app-server subscription loaded thread list failed error=\(String(describing: error), privacy: .public)")
                     self.setAttachSubscriptionState(.failed("loaded_thread_list_failed"), reason: "loaded_thread_list_failed")
@@ -341,6 +368,24 @@ final class CodexAppServerRuntimeSession {
             BridgeLogger.server.error("codex app-server subscription loaded thread list request failed error=\(String(describing: error), privacy: .public)")
             setAttachSubscriptionState(.failed("loaded_thread_list_request_failed"), reason: "loaded_thread_list_request_failed")
         }
+    }
+
+    private func sendThreadResumeForSubscriptionIfNeeded(threadID: String, reason: String) {
+        lock.lock()
+        guard stopped == false else {
+            lock.unlock()
+            return
+        }
+        if case .subscribed(let existingThreadID) = attachSubscriptionState,
+           existingThreadID == threadID {
+            lock.unlock()
+            return
+        }
+        let previousState = attachSubscriptionState
+        attachSubscriptionState = .resumePending
+        lock.unlock()
+        logAttachSubscriptionTransition(from: previousState, to: .resumePending, reason: reason)
+        sendThreadResumeForSubscription(threadID: threadID)
     }
 
     private func sendThreadResumeForSubscription(threadID: String) {
@@ -550,7 +595,12 @@ final class CodexAppServerTurnStateStore: @unchecked Sendable {
 
 final class CodexAppServerActiveThreadStore: @unchecked Sendable {
     private let lock = NSLock()
+    private let onChange: (String) -> Void
     private var threadID: String?
+
+    init(onChange: @escaping (String) -> Void = { _ in }) {
+        self.onChange = onChange
+    }
 
     @discardableResult
     func setThreadID(_ threadID: String) -> Bool {
@@ -558,6 +608,9 @@ final class CodexAppServerActiveThreadStore: @unchecked Sendable {
         let changed = self.threadID != threadID
         self.threadID = threadID
         lock.unlock()
+        if changed {
+            onChange(threadID)
+        }
         return changed
     }
 
@@ -738,18 +791,13 @@ final class CodexAppServerRuntimeSessionFactory {
                                                            }
                                                        })
         }
-        let activeThreadStore = CodexAppServerActiveThreadStore()
+        let activeThreadStore = CodexAppServerActiveThreadStore(onChange: onActiveThreadID)
         let turnStateStore = CodexAppServerTurnStateStore()
-        let handleThreadID: CodexAppServerHeadlessRuntime.ThreadIDHandler = { threadID in
-            if activeThreadStore.setThreadID(threadID) {
-                onActiveThreadID(threadID)
-            }
-        }
         let runtime = CodexAppServerHeadlessRuntime(context: context,
                                                     nextSequence: nextSequence,
                                                     timestampProvider: timestampProvider,
                                                     onAgentEvent: onAgentEvent,
-                                                    onThreadID: handleThreadID,
+                                                    onThreadID: { _ = activeThreadStore.setThreadID($0) },
                                                     onTurnStarted: turnStateStore.markStarted,
                                                     onTurnCompleted: turnStateStore.markCompleted,
                                                     onThreadActive: turnStateStore.markThreadActive,
@@ -825,18 +873,13 @@ final class CodexAppServerRuntimeSessionFactory {
                                                                BridgeLogger.server.error("codex app-server panel socket closed error=\(String(describing: error), privacy: .public)")
                                                            }
                                                        })
-        let activeThreadStore = CodexAppServerActiveThreadStore()
+        let activeThreadStore = CodexAppServerActiveThreadStore(onChange: onActiveThreadID)
         let turnStateStore = CodexAppServerTurnStateStore()
-        let handleThreadID: CodexAppServerHeadlessRuntime.ThreadIDHandler = { threadID in
-            if activeThreadStore.setThreadID(threadID) {
-                onActiveThreadID(threadID)
-            }
-        }
         let runtime = CodexAppServerHeadlessRuntime(context: context,
                                                     nextSequence: nextSequence,
                                                     timestampProvider: timestampProvider,
                                                     onAgentEvent: onAgentEvent,
-                                                    onThreadID: handleThreadID,
+                                                    onThreadID: { _ = activeThreadStore.setThreadID($0) },
                                                     onTurnStarted: turnStateStore.markStarted,
                                                     onTurnCompleted: turnStateStore.markCompleted,
                                                     onThreadActive: turnStateStore.markThreadActive,

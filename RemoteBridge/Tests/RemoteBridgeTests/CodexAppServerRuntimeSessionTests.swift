@@ -128,6 +128,7 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         let connector = FakeCodexAppServerTransportConnector()
         let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
                                                           transportConnector: connector)
+        var activeThreadIDs = [String]()
         let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
                                          processID: 9001,
                                          context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
@@ -137,7 +138,8 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
                                          timestampProvider: { "2026-06-07T00:00:00.000Z" },
                                          onAgentEvent: { _ in },
                                          onInteractivePrompt: { _ in },
-                                         onInteractivePromptResolved: { _ in })
+                                         onInteractivePromptResolved: { _ in },
+                                         onActiveThreadID: { activeThreadIDs.append($0) })
 
         let transport = try XCTUnwrap(connector.transport)
         try Self.acknowledgeInitialize(from: transport)
@@ -156,6 +158,7 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         let resumeParams = try XCTUnwrap(resume["params"]?.objectValue)
         XCTAssertEqual(resumeParams["threadId"]?.stringValue, "thread-live")
         XCTAssertEqual(resumeParams["excludeTurns"]?.boolValue, false)
+        XCTAssertEqual(activeThreadIDs, ["thread-live"])
 
         try session.submitMessage(text: "hello from remote")
         let turnStart = try Self.object(from: try XCTUnwrap(transport.sentLines().last))
@@ -163,6 +166,56 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         let turnParams = try XCTUnwrap(turnStart["params"]?.objectValue)
         XCTAssertEqual(turnParams["threadId"]?.stringValue, "thread-live")
         XCTAssertEqual(turnParams["input"]?.arrayValue?.first?.objectValue?["text"]?.stringValue, "hello from remote")
+    }
+
+    func testLoadedThreadRefreshDoesNotReportUnchangedActiveThreadAgain() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        var activeThreadIDs = [String]()
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in },
+                                         onActiveThreadID: { activeThreadIDs.append($0) })
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+        try Self.loadThread("thread-live", on: transport)
+        let resume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
+        let resumeID = try XCTUnwrap(resume["id"])
+        transport.emitLine(try Self.responseText(id: resumeID, result: .object([
+            "thread": .object([
+                "id": .string("thread-live"),
+            ]),
+        ])))
+        XCTAssertEqual(activeThreadIDs, ["thread-live"])
+
+        session.refreshActiveThread()
+
+        XCTAssertTrue(Self.waitForSentLineCount(5, transport: transport))
+        let refreshListLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(4).first))
+        XCTAssertEqual(refreshListLoaded["method"]?.stringValue, "thread/loaded/list")
+        let refreshListLoadedID = try XCTUnwrap(refreshListLoaded["id"])
+        transport.emitLine(try Self.responseText(id: refreshListLoadedID, result: .object([
+            "threads": .array([
+                .object([
+                    "id": .string("thread-live"),
+                    "preview": .string("Mac TUI Codex"),
+                    "updatedAt": .string("2026-06-07T00:00:01.000Z"),
+                ]),
+            ]),
+        ])))
+
+        XCTAssertEqual(activeThreadIDs, ["thread-live"])
+        XCTAssertEqual(transport.sentLines().count, 5)
     }
 
     func testAttachedRuntimeRetriesThreadSubscriptionWhenThreadLoadsLater() throws {
@@ -1098,7 +1151,7 @@ private final class RequestURIBox: @unchecked Sendable {
     }
 }
 
-private final class FakeCodexAppServerTransportConnector: CodexAppServerTransportConnecting {
+final class FakeCodexAppServerTransportConnector: CodexAppServerTransportConnecting {
     private(set) var connectedModes: [CodexAppServerTransportMode] = []
     private(set) var transport: FakeCodexAppServerConnectionTransport?
 
@@ -1113,7 +1166,7 @@ private final class FakeCodexAppServerTransportConnector: CodexAppServerTranspor
     }
 }
 
-private final class FakeCodexAppServerConnectionTransport: CodexAppServerConnectionTransport {
+final class FakeCodexAppServerConnectionTransport: CodexAppServerConnectionTransport {
     private let lock = NSLock()
     private var lines: [String] = []
     private var closed = false
@@ -1150,7 +1203,7 @@ private final class FakeCodexAppServerConnectionTransport: CodexAppServerConnect
     }
 }
 
-private final class FakeCodexAppServerProcessRunner: CodexAppServerProcessRunning {
+final class FakeCodexAppServerProcessRunner: CodexAppServerProcessRunning {
     private(set) var startedConfigurations: [CodexAppServerLaunchConfiguration] = []
     private(set) var process: FakeCodexAppServerManagedProcess?
 
@@ -1167,7 +1220,7 @@ private final class FakeCodexAppServerProcessRunner: CodexAppServerProcessRunnin
     }
 }
 
-private final class FakeCodexAppServerManagedProcess: CodexAppServerManagedProcess {
+final class FakeCodexAppServerManagedProcess: CodexAppServerManagedProcess {
     private let lock = NSLock()
     private var lines: [String] = []
     private let onStdoutLine: @Sendable (String) -> Void

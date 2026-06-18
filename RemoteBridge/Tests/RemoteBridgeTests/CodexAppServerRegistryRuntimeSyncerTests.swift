@@ -158,6 +158,36 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         XCTAssertFalse(runtime.stopped)
     }
 
+    func testSyncRefreshesReusedRuntimeActiveThreadWithThrottle() {
+        let hub = AgentEventHub()
+        let runtime = FakeRuntimeSession()
+        var now = Date(timeIntervalSince1970: 100)
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub,
+                                                        dateProvider: { now },
+                                                        activeThreadRefreshInterval: 2,
+                                                        attachHandler: { _, _, _, _, _, _, _ in
+            runtime
+        })
+        let record = Self.record(sessionID: "app", runtime: "codex_app_server", socketPath: "/tmp/app.sock")
+
+        syncer.sync(records: [record])
+        XCTAssertEqual(runtime.ensureThreadSubscriptionCallCount, 0)
+        XCTAssertEqual(runtime.refreshActiveThreadCallCount, 0)
+
+        syncer.sync(records: [record])
+        XCTAssertEqual(runtime.ensureThreadSubscriptionCallCount, 1)
+        XCTAssertEqual(runtime.refreshActiveThreadCallCount, 0)
+
+        now = now.addingTimeInterval(2.1)
+        syncer.sync(records: [record])
+        XCTAssertEqual(runtime.ensureThreadSubscriptionCallCount, 2)
+        XCTAssertEqual(runtime.refreshActiveThreadCallCount, 1)
+
+        syncer.sync(records: [record])
+        XCTAssertEqual(runtime.ensureThreadSubscriptionCallCount, 3)
+        XCTAssertEqual(runtime.refreshActiveThreadCallCount, 1)
+    }
+
     func testActiveThreadHandlerReportsOwningRuntimeSession() {
         let hub = AgentEventHub()
         var capturedActiveThreadHandler: CodexAppServerHeadlessRuntime.ThreadIDHandler?
@@ -531,6 +561,7 @@ private final class FakeRuntimeSession: CodexAppServerRuntimeSessionControlling 
     var stopped = false
     var canSubmit = true
     var ensureThreadSubscriptionCallCount = 0
+    var refreshActiveThreadCallCount = 0
     var submitAttempts = [String]()
     var submittedMessages = [String]()
     var resolvedEventsByPromptID = [String: AgentEvent]()
@@ -542,6 +573,10 @@ private final class FakeRuntimeSession: CodexAppServerRuntimeSessionControlling 
 
     func ensureThreadSubscription() {
         ensureThreadSubscriptionCallCount += 1
+    }
+
+    func refreshActiveThread() {
+        refreshActiveThreadCallCount += 1
     }
 
     func pendingApprovalPromptEvents() -> [AgentEvent] {

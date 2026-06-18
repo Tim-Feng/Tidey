@@ -229,6 +229,91 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         XCTAssertEqual(updatedRecord.transcriptPath, rolloutB.path)
     }
 
+    func testCodexAppServerAttachLoadedThreadUpdatesRegistryTranscriptIdentity() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let threadA = "019d70fe-fd27-7a12-a3f7-9c89ae5048b6"
+        let threadB = "019ec8cb-fd27-7a12-a3f7-9c89ae5048b6"
+        let rolloutA = supportDirectory.appendingPathComponent("rollout-a-\(threadA).jsonl")
+        let rolloutB = supportDirectory.appendingPathComponent("rollout-b-\(threadB).jsonl")
+        try "\n".write(to: rolloutA, atomically: true, encoding: .utf8)
+        try "\n".write(to: rolloutB, atomically: true, encoding: .utf8)
+
+        let registryURL = paths.codexAgentSessionsDirectory.appendingPathComponent("codex-instance-session.json")
+        let recordData = Data("""
+        {
+          "version": 1,
+          "vendor": "codex",
+          "workspace_id": "workspace-app-server",
+          "session_id": "instance-session",
+          "panel_id": "panel-app-server",
+          "pid": 999999,
+          "cwd": "/tmp",
+          "created_at": "2026-06-07T00:00:00Z",
+          "runtime": "codex_app_server",
+          "app_server_socket": "/tmp/tidey-codex-app-server/app.sock",
+          "app_server_pid": \(getpid()),
+          "thread_id": "\(threadA)",
+          "resume_thread_id": "\(threadA)",
+          "rollout_path": "\(rolloutA.path)"
+        }
+        """.utf8)
+        try recordData.write(to: registryURL)
+
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: FakeCodexAppServerProcessRunner(),
+                                                          transportConnector: connector)
+        let hub = AgentEventHub()
+        let runtimeSyncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, factory: factory)
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: fileManager,
+                                                  hub: hub,
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+                                                  parentPIDLookup: { _ in nil },
+                                                  codexRolloutBySessionIDLookup: { sessionID in
+                                                      sessionID == threadB ? rolloutB.path : rolloutA.path
+                                                  },
+                                                  runtimeSyncer: runtimeSyncer)
+        runtimeSyncer.activeThreadHandler = { [weak monitor] sessionID, threadID in
+            monitor?.appServerActiveThreadDidChange(sessionID: sessionID, threadID: threadID)
+        }
+        try monitor.start()
+
+        let transport = try XCTUnwrap(connector.transport)
+        try acknowledgeCodexAppServerInitialize(from: transport)
+        let listLoaded = try jsonObject(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        XCTAssertEqual(listLoaded["method"]?.stringValue, "thread/loaded/list")
+        let listLoadedID = try XCTUnwrap(listLoaded["id"])
+        transport.emitLine(try jsonResponseText(id: listLoadedID, result: .object([
+            "threads": .array([
+                .object([
+                    "id": .string(threadA),
+                    "preview": .string("Launch thread"),
+                ]),
+                .object([
+                    "id": .string(threadB),
+                    "preview": .string("Current thread"),
+                    "isCurrent": .bool(true),
+                ]),
+            ]),
+        ])))
+
+        XCTAssertTrue(waitUntil {
+            monitor.activeSessionForPanel(workspaceID: "workspace-app-server",
+                                          panelID: "panel-app-server")?.restoreSessionID == threadB
+        })
+        let updatedData = try Data(contentsOf: registryURL)
+        let updatedRecord = try JSONDecoder().decode(AgentSessionRegistryRecord.self, from: updatedData)
+        XCTAssertEqual(updatedRecord.threadID, threadB)
+        XCTAssertEqual(updatedRecord.resumeThreadID, threadA)
+        XCTAssertEqual(updatedRecord.transcriptPath, rolloutB.path)
+    }
+
     func testCodexAppServerActiveThreadNoopsWhenThreadAndTranscriptAlreadyCurrent() throws {
         let fileManager = FileManager.default
         let supportDirectory = fileManager.temporaryDirectory
@@ -1520,6 +1605,44 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         }
         return condition()
     }
+
+    private func acknowledgeCodexAppServerInitialize(from transport: FakeCodexAppServerConnectionTransport,
+                                                     file: StaticString = #filePath,
+                                                     line sourceLine: UInt = #line) throws {
+        let initialize = try jsonObject(from: try XCTUnwrap(transport.sentLines().first,
+                                                            file: file,
+                                                            line: sourceLine),
+                                        file: file,
+                                        line: sourceLine)
+        transport.emitLine(try jsonResponseText(id: try XCTUnwrap(initialize["id"],
+                                                                   file: file,
+                                                                   line: sourceLine),
+                                                result: .object([
+                                                    "serverInfo": .object([
+                                                        "name": .string("codex"),
+                                                        "version": .string("test"),
+                                                    ]),
+                                                    "capabilities": .object([:]),
+                                                ])))
+    }
+
+    private func jsonObject(from line: String,
+                            file: StaticString = #filePath,
+                            line sourceLine: UInt = #line) throws -> [String: JSONValue] {
+        let data = try XCTUnwrap(line.trimmingCharacters(in: .whitespacesAndNewlines).data(using: .utf8),
+                                 file: file,
+                                 line: sourceLine)
+        let value = try JSONDecoder().decode(JSONValue.self, from: data)
+        return try XCTUnwrap(value.objectValue, file: file, line: sourceLine)
+    }
+
+    private func jsonResponseText(id: JSONValue, result: JSONValue) throws -> String {
+        let idData = try JSONEncoder().encode(id)
+        let idText = String(decoding: idData, as: UTF8.self)
+        let resultData = try JSONEncoder().encode(result)
+        let resultText = String(decoding: resultData, as: UTF8.self)
+        return #"{"id":\#(idText),"result":\#(resultText)}"#
+    }
 }
 
 private final class CapturingRuntimeSyncer: AgentSessionRuntimeSyncing {
@@ -1545,6 +1668,8 @@ private final class RegistryMonitorFakeRuntimeSession: CodexAppServerRuntimeSess
     }
 
     func ensureThreadSubscription() {}
+
+    func refreshActiveThread() {}
 
     func pendingApprovalPromptEvents() -> [AgentEvent] {
         []
