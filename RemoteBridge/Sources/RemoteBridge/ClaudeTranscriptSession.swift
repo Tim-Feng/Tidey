@@ -721,34 +721,36 @@ final class AgentSessionRegistryMonitor {
     private func recordWithPaneIdentityIfAvailable(_ record: AgentSessionRegistryRecord) -> AgentSessionRegistryRecord {
         guard let paneID = record.tmuxPaneID,
               !paneID.isEmpty,
-              let socketPath = record.tmuxSocketPath,
-              !socketPath.isEmpty,
-              let identity = tmuxResolver.paneIdentity(forPaneID: paneID, socketPath: socketPath),
-              identity.workspaceID != record.workspaceID || identity.panelID != record.panelID else {
+              let resolved = resolvedPaneIdentity(forRecord: record, paneID: paneID),
+              resolved.identity.workspaceID != record.workspaceID ||
+              resolved.identity.panelID != record.panelID ||
+              resolved.socketPath != record.tmuxSocketPath else {
             return record
         }
 
         let correctionKey = [
             record.workspaceID,
             record.panelID ?? "-",
-            identity.workspaceID,
-            identity.panelID,
+            record.tmuxSocketPath ?? "-",
+            resolved.identity.workspaceID,
+            resolved.identity.panelID,
+            resolved.socketPath ?? "-",
         ].joined(separator: "|")
         if lastLoggedPaneIdentityCorrectionKeyBySessionID[record.sessionID] != correctionKey {
-            BridgeLogger.server.info("agent registry corrected from tmux pane identity session_id=\(record.sessionID, privacy: .public) vendor=\(record.vendor, privacy: .public) pane_id=\(paneID, privacy: .public) old_workspace_id=\(record.workspaceID, privacy: .public) old_panel_id=\(record.panelID ?? "-", privacy: .public) workspace_id=\(identity.workspaceID, privacy: .public) panel_id=\(identity.panelID, privacy: .public)")
+            BridgeLogger.server.info("agent registry corrected from tmux pane identity session_id=\(record.sessionID, privacy: .public) vendor=\(record.vendor, privacy: .public) pane_id=\(paneID, privacy: .public) old_workspace_id=\(record.workspaceID, privacy: .public) old_panel_id=\(record.panelID ?? "-", privacy: .public) workspace_id=\(resolved.identity.workspaceID, privacy: .public) panel_id=\(resolved.identity.panelID, privacy: .public) socket_path=\(resolved.socketPath ?? "-", privacy: .public)")
             lastLoggedPaneIdentityCorrectionKeyBySessionID[record.sessionID] = correctionKey
         }
         return AgentSessionRegistryRecord(version: record.version,
                                           vendor: record.vendor,
-                                          workspaceID: identity.workspaceID,
+                                          workspaceID: resolved.identity.workspaceID,
                                           sessionID: record.sessionID,
-                                          panelID: identity.panelID,
+                                          panelID: resolved.identity.panelID,
                                           pid: record.pid,
                                           cwd: record.cwd,
                                           createdAt: record.createdAt,
                                           transcriptPath: record.transcriptPath,
                                           tmuxPaneID: record.tmuxPaneID,
-                                          tmuxSocketPath: record.tmuxSocketPath,
+                                          tmuxSocketPath: resolved.socketPath,
                                           runtime: record.runtime,
                                           appServerSocket: record.appServerSocket,
                                           appServerPID: record.appServerPID,
@@ -757,11 +759,61 @@ final class AgentSessionRegistryMonitor {
                                           resumeThreadID: record.resumeThreadID)
     }
 
+    private func resolvedPaneIdentity(forRecord record: AgentSessionRegistryRecord,
+                                      paneID: String) -> (identity: TmuxPaneIdentity, socketPath: String?)? {
+        if let panel = livePanelSnapshot(forPaneID: paneID, socketPath: record.tmuxSocketPath) {
+            return (TmuxPaneIdentity(workspaceID: panel.workspaceID, panelID: panel.panelID),
+                    normalizedNonEmptySocketPath(panel.tmuxSocketPath) ?? normalizedNonEmptySocketPath(record.tmuxSocketPath))
+        }
+
+        guard let socketPath = normalizedNonEmptySocketPath(record.tmuxSocketPath),
+              let identity = tmuxResolver.paneIdentity(forPaneID: paneID, socketPath: socketPath) else {
+            return nil
+        }
+        return (identity, socketPath)
+    }
+
+    private func livePanelSnapshot(forPaneID paneID: String,
+                                   socketPath: String?) -> AgentPanelProcessSnapshot? {
+        let normalizedRecordSocket = normalizedNonEmptySocketPath(socketPath)
+        let matches = livePanelsByWorkspace.values
+            .flatMap { $0 }
+            .filter { panel in
+                guard panel.tmuxPaneID == paneID else {
+                    return false
+                }
+                guard let normalizedRecordSocket else {
+                    return true
+                }
+                guard let panelSocket = normalizedNonEmptySocketPath(panel.tmuxSocketPath) else {
+                    return false
+                }
+                return panelSocket == normalizedRecordSocket
+            }
+        guard matches.count == 1 else {
+            return nil
+        }
+        return matches[0]
+    }
+
+    private static func normalizedNonEmptySocketPath(_ socketPath: String?) -> String? {
+        guard let socketPath else {
+            return nil
+        }
+        let normalized = normalizeSocketPath(socketPath)
+        return normalized.isEmpty ? nil : normalized
+    }
+
+    private func normalizedNonEmptySocketPath(_ socketPath: String?) -> String? {
+        Self.normalizedNonEmptySocketPath(socketPath)
+    }
+
     private func persistCanonicalizedRecordIfNeeded(sourceRecord: AgentSessionRegistryRecord,
                                                     correctedRecord: AgentSessionRegistryRecord,
                                                     url: URL) {
         guard sourceRecord.workspaceID != correctedRecord.workspaceID ||
-              sourceRecord.panelID != correctedRecord.panelID else {
+              sourceRecord.panelID != correctedRecord.panelID ||
+              sourceRecord.tmuxSocketPath != correctedRecord.tmuxSocketPath else {
             return
         }
         do {
@@ -858,6 +910,21 @@ final class AgentSessionRegistryMonitor {
                                               sessionID: direct.sessionID,
                                               panelID: panel.panelID,
                                               restoreSessionID: Self.restoreSessionID(for: direct))
+        }
+
+        let paneMatches = activeRecords.values
+            .filter { Self.record($0, matchesTmuxPaneOf: panel) }
+            .sorted(by: Self.isRecordPreferred(_:_:))
+        if let paneMatch = paneMatches.first {
+            applyResolvedBinding(sessionID: paneMatch.sessionID,
+                                 workspaceID: panel.workspaceID,
+                                 panelID: panel.panelID)
+            BridgeLogger.server.info("agent panel matched via live pane identity workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) session_id=\(paneMatch.sessionID, privacy: .public) record_workspace_id=\(paneMatch.workspaceID, privacy: .public) record_panel_id=\(paneMatch.panelID ?? "-", privacy: .public)")
+            return ActiveAgentSessionSnapshot(vendor: paneMatch.vendor,
+                                              workspaceID: panel.workspaceID,
+                                              sessionID: paneMatch.sessionID,
+                                              panelID: panel.panelID,
+                                              restoreSessionID: Self.restoreSessionID(for: paneMatch))
         }
 
         guard let effectiveShellPID = panel.effectiveShellPID, effectiveShellPID > 0 else {
@@ -1051,12 +1118,15 @@ final class AgentSessionRegistryMonitor {
               !recordPaneID.isEmpty,
               let panelPaneID = panel.tmuxPaneID,
               !panelPaneID.isEmpty,
-              recordPaneID == panelPaneID,
-              let recordSocketPath = record.tmuxSocketPath,
-              let panelSocketPath = panel.tmuxSocketPath else {
+              recordPaneID == panelPaneID else {
             return false
         }
-        return socketPathsMatch(recordSocketPath, panelSocketPath)
+        let recordSocketPath = normalizedNonEmptySocketPath(record.tmuxSocketPath)
+        let panelSocketPath = normalizedNonEmptySocketPath(panel.tmuxSocketPath)
+        if let recordSocketPath, let panelSocketPath {
+            return recordSocketPath == panelSocketPath
+        }
+        return recordSocketPath == nil && panelSocketPath != nil
     }
 
     private static func isCodexProcess(_ descriptor: AgentProcessDescriptor) -> Bool {

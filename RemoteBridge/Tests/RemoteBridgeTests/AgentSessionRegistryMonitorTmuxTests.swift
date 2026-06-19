@@ -69,6 +69,159 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         XCTAssertEqual(canonicalizedRecord.panelID, "current-panel")
     }
 
+    func testScanCorrectsStaleRegistryRecordFromLivePaneSnapshotWithoutSocketPath() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let registryURL = paths.claudeAgentSessionsDirectory.appendingPathComponent("claude-session-stale-env.json")
+        let recordData = Data("""
+        {
+          "version": 1,
+          "vendor": "claude",
+          "workspace_id": "stale-workspace",
+          "session_id": "session-stale-env",
+          "panel_id": "stale-panel",
+          "pid": \(getpid()),
+          "cwd": "/tmp",
+          "created_at": "2026-06-19T10:25:00Z",
+          "tmux_pane_id": "%14"
+        }
+        """.utf8)
+        try recordData.write(to: registryURL)
+
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: fileManager,
+                                                  hub: AgentEventHub(),
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in
+                                                      XCTFail("live panel snapshot should resolve missing tmux_socket_path without shelling out to tmux")
+                                                      return ""
+                                                  },
+                                                  parentPIDLookup: { _ in nil })
+        monitor.replaceLivePanels(workspaceID: "current-workspace",
+                                  panels: [
+                                      AgentPanelProcessSnapshot(workspaceID: "current-workspace",
+                                                                panelID: "current-panel",
+                                                                effectiveShellPID: nil,
+                                                                tmuxPaneID: "%14",
+                                                                tmuxSocketPath: "/private/tmp/tmux-501/default"),
+                                  ])
+        try monitor.start()
+
+        let session = monitor.activeSessionForPanel(workspaceID: "current-workspace",
+                                                    panelID: "current-panel",
+                                                    effectiveShellPID: nil,
+                                                    tmuxPaneID: "%14",
+                                                    tmuxSocketPath: "/tmp/tmux-501/default")
+        XCTAssertEqual(session?.sessionID, "session-stale-env")
+        XCTAssertNil(monitor.activeSessionForPanel(workspaceID: "stale-workspace",
+                                                   panelID: "stale-panel"))
+
+        let canonicalizedData = try Data(contentsOf: registryURL)
+        let canonicalizedRecord = try JSONDecoder().decode(AgentSessionRegistryRecord.self, from: canonicalizedData)
+        XCTAssertEqual(canonicalizedRecord.workspaceID, "current-workspace")
+        XCTAssertEqual(canonicalizedRecord.panelID, "current-panel")
+        XCTAssertEqual(canonicalizedRecord.tmuxPaneID, "%14")
+        XCTAssertEqual(canonicalizedRecord.tmuxSocketPath, "/tmp/tmux-501/default")
+    }
+
+    func testScanDoesNotRewriteRegistryRecordWithoutTmuxPaneIdentity() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let registryURL = paths.claudeAgentSessionsDirectory.appendingPathComponent("claude-session-no-pane.json")
+        let recordData = Data("""
+        {
+          "version": 1,
+          "vendor": "claude",
+          "workspace_id": "stale-workspace",
+          "session_id": "session-no-pane",
+          "panel_id": "stale-panel",
+          "pid": \(getpid()),
+          "cwd": "/tmp",
+          "created_at": "2026-06-19T10:25:00Z"
+        }
+        """.utf8)
+        try recordData.write(to: registryURL)
+
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: fileManager,
+                                                  hub: AgentEventHub(),
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in
+                                                      XCTFail("record without tmux_pane_id must not trigger tmux lookup")
+                                                      return ""
+                                                  },
+                                                  parentPIDLookup: { _ in nil })
+        monitor.replaceLivePanels(workspaceID: "current-workspace",
+                                  panels: [
+                                      AgentPanelProcessSnapshot(workspaceID: "current-workspace",
+                                                                panelID: "current-panel",
+                                                                effectiveShellPID: nil,
+                                                                tmuxPaneID: "%14",
+                                                                tmuxSocketPath: "/private/tmp/tmux-501/default"),
+                                  ])
+        try monitor.start()
+
+        let snapshot = monitor.activeSessionSnapshots().first
+        XCTAssertEqual(snapshot?.workspaceID, "stale-workspace")
+        XCTAssertEqual(snapshot?.panelID, "stale-panel")
+
+        let persistedData = try Data(contentsOf: registryURL)
+        let persistedRecord = try JSONDecoder().decode(AgentSessionRegistryRecord.self, from: persistedData)
+        XCTAssertEqual(persistedRecord.workspaceID, "stale-workspace")
+        XCTAssertEqual(persistedRecord.panelID, "stale-panel")
+        XCTAssertNil(persistedRecord.tmuxPaneID)
+        XCTAssertNil(persistedRecord.tmuxSocketPath)
+    }
+
+    func testActiveSessionForPanelUsesCurrentPaneWhenRecordLacksSocketPath() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let registryURL = paths.claudeAgentSessionsDirectory.appendingPathComponent("claude-session-stale-env.json")
+        let recordData = Data("""
+        {
+          "version": 1,
+          "vendor": "claude",
+          "workspace_id": "stale-workspace",
+          "session_id": "session-stale-env",
+          "panel_id": "stale-panel",
+          "pid": \(getpid()),
+          "cwd": "/tmp",
+          "created_at": "2026-06-19T10:25:00Z",
+          "tmux_pane_id": "%14"
+        }
+        """.utf8)
+        try recordData.write(to: registryURL)
+
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: fileManager,
+                                                  hub: AgentEventHub(),
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+                                                  parentPIDLookup: { _ in nil })
+        try monitor.start()
+
+        let session = monitor.activeSessionForPanel(workspaceID: "current-workspace",
+                                                    panelID: "current-panel",
+                                                    effectiveShellPID: nil,
+                                                    tmuxPaneID: "%14",
+                                                    tmuxSocketPath: "/private/tmp/tmux-501/default")
+        XCTAssertEqual(session?.sessionID, "session-stale-env")
+        XCTAssertEqual(session?.workspaceID, "current-workspace")
+        XCTAssertEqual(session?.panelID, "current-panel")
+    }
+
     func testScanBatchesPaneIdentityLookupOncePerSocket() throws {
         let fileManager = FileManager.default
         let supportDirectory = fileManager.temporaryDirectory
