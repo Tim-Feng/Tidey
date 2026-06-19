@@ -273,12 +273,18 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
     }
 
     private func handleSidebarEvent(_ event: AgentEvent, record: AgentSessionRegistryRecord) {
+        sidebarQueue.async { [weak self] in
+            self?.handleSidebarEventOnQueue(event, record: record)
+        }
+    }
+
+    private func handleSidebarEventOnQueue(_ event: AgentEvent, record: AgentSessionRegistryRecord) {
         let payloadKind = event.payload?.objectValue?["kind"]?.stringValue
-        let workspaceID = sidebarWorkspaceID(for: record)
         switch (event.type, payloadKind) {
         case (.thinking, "turn_started"):
-            sendSidebar(messages: CodexSidebarMessages.running(workspaceID: workspaceID),
-                        sessionID: record.sessionID)
+            let workspaceID = sidebarWorkspaceID(for: record)
+            sendSidebarOnQueue(messages: CodexSidebarMessages.running(workspaceID: workspaceID),
+                               sessionID: record.sessionID)
 
         case (.assistantMessage, "assistant_message"):
             guard let text = event.text,
@@ -293,9 +299,10 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
             let body = lock.withCodexRuntimeSyncerLock {
                 lastAssistantTextBySessionID.removeValue(forKey: record.sessionID)
             } ?? "Task completed"
-            sendSidebar(messages: CodexSidebarMessages.completed(workspaceID: workspaceID,
-                                                                 body: body),
-                        sessionID: record.sessionID)
+            let workspaceID = sidebarWorkspaceID(for: record)
+            sendSidebarOnQueue(messages: CodexSidebarMessages.completed(workspaceID: workspaceID,
+                                                                        body: body),
+                               sessionID: record.sessionID)
 
         case (.assistantMessage, "turn_failed"),
              (.assistantMessage, "error"):
@@ -305,9 +312,10 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
             _ = lock.withCodexRuntimeSyncerLock {
                 lastAssistantTextBySessionID.removeValue(forKey: record.sessionID)
             }
-            sendSidebar(messages: CodexSidebarMessages.completed(workspaceID: workspaceID,
-                                                                 body: body),
-                        sessionID: record.sessionID)
+            let workspaceID = sidebarWorkspaceID(for: record)
+            sendSidebarOnQueue(messages: CodexSidebarMessages.completed(workspaceID: workspaceID,
+                                                                        body: body),
+                               sessionID: record.sessionID)
 
         default:
             break
@@ -325,14 +333,12 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
         return resolvedWorkspaceID
     }
 
-    private func sendSidebar(messages: [String], sessionID: String) {
-        sidebarQueue.async { [sidebarMessageSender] in
-            for message in messages {
-                do {
-                    try sidebarMessageSender(message)
-                } catch {
-                    BridgeLogger.server.error("codex app-server sidebar message failed session_id=\(sessionID, privacy: .public) message=\(message, privacy: .public) error=\(String(describing: error), privacy: .public)")
-                }
+    private func sendSidebarOnQueue(messages: [String], sessionID: String) {
+        for message in messages {
+            do {
+                try sidebarMessageSender(message)
+            } catch {
+                BridgeLogger.server.error("codex app-server sidebar message failed session_id=\(sessionID, privacy: .public) message=\(message, privacy: .public) error=\(String(describing: error), privacy: .public)")
             }
         }
     }

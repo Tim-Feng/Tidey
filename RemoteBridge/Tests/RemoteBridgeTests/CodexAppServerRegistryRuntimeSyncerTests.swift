@@ -343,6 +343,49 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         XCTAssertEqual(messages[2], "report_shell_state prompt --workspace_id=current-workspace")
     }
 
+    func testSidebarWorkspaceResolutionDoesNotBlockAgentEventCallback() throws {
+        let hub = AgentEventHub()
+        var capturedAgentEventHandler: CodexAppServerHeadlessRuntime.AgentEventHandler?
+        let resolverEntered = expectation(description: "resolver entered")
+        let releaseResolver = DispatchSemaphore(value: 0)
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub,
+                                                        sidebarMessageSender: { _ in },
+                                                        sidebarWorkspaceIDResolver: { _ in
+                                                            resolverEntered.fulfill()
+                                                            releaseResolver.wait()
+                                                            return "current-workspace"
+                                                        },
+                                                        attachHandler: { _, _, _, onAgentEvent, _, _, _ in
+            capturedAgentEventHandler = onAgentEvent
+            return FakeRuntimeSession()
+        })
+
+        syncer.sync(records: [
+            Self.record(sessionID: "app",
+                        runtime: "codex_app_server",
+                        socketPath: "/tmp/app.sock",
+                        workspaceID: "stale-workspace"),
+        ])
+        let onAgentEvent = try XCTUnwrap(capturedAgentEventHandler)
+        let callbackReturned = expectation(description: "agent event callback returned")
+
+        DispatchQueue.global().async {
+            onAgentEvent(Self.appServerEvent(eventID: "turn-started",
+                                             seq: 1,
+                                             sessionID: "app",
+                                             type: .thinking,
+                                             text: "Codex turn started",
+                                             payloadKind: "turn_started",
+                                             workspaceID: "stale-workspace"))
+            callbackReturned.fulfill()
+        }
+
+        let returnedResult = XCTWaiter.wait(for: [callbackReturned], timeout: 0.2)
+        XCTAssertEqual(returnedResult, .completed)
+        XCTAssertEqual(XCTWaiter.wait(for: [resolverEntered], timeout: 1.0), .completed)
+        releaseResolver.signal()
+    }
+
     func testAttachedRuntimeStillPublishesApprovalPromptEventsToHub() throws {
         let hub = AgentEventHub()
         var capturedPromptHandler: CodexAppServerConnection.InteractivePromptHandler?

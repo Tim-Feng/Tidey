@@ -153,6 +153,7 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         {"id":\(listLoadedIDText),"result":{"threads":[{"id":"thread-live","preview":"Mac TUI Codex","updatedAt":"2026-06-07T00:00:00.000Z"}]}}
         """)
 
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
         let resume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
         XCTAssertEqual(resume["method"]?.stringValue, "thread/resume")
         let resumeParams = try XCTUnwrap(resume["params"]?.objectValue)
@@ -166,6 +167,61 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         let turnParams = try XCTUnwrap(turnStart["params"]?.objectValue)
         XCTAssertEqual(turnParams["threadId"]?.stringValue, "thread-live")
         XCTAssertEqual(turnParams["input"]?.arrayValue?.first?.objectValue?["text"]?.stringValue, "hello from remote")
+    }
+
+    func testLoadedThreadSubscriptionDoesNotBlockInboundLineHandler() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let activeThreadEntered = expectation(description: "active thread handler entered")
+        let releaseActiveThreadHandler = DispatchSemaphore(value: 0)
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in },
+                                         onActiveThreadID: { _ in
+                                             activeThreadEntered.fulfill()
+                                             releaseActiveThreadHandler.wait()
+                                         })
+        _ = session
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+
+        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        XCTAssertEqual(listLoaded["method"]?.stringValue, "thread/loaded/list")
+        let listLoadedID = try XCTUnwrap(listLoaded["id"])
+        let listLoadedResponse = try Self.responseText(id: listLoadedID, result: .object([
+            "threads": .array([
+                .object([
+                    "id": .string("thread-live"),
+                    "preview": .string("Mac TUI Codex"),
+                    "updatedAt": .string("2026-06-07T00:00:00.000Z"),
+                ]),
+            ]),
+        ]))
+        let inboundReturned = expectation(description: "inbound line handler returned")
+
+        DispatchQueue.global().async {
+            transport.emitLine(listLoadedResponse)
+            inboundReturned.fulfill()
+        }
+
+        XCTAssertEqual(XCTWaiter.wait(for: [inboundReturned], timeout: 0.2), .completed)
+        XCTAssertEqual(XCTWaiter.wait(for: [activeThreadEntered], timeout: 1.0), .completed)
+        releaseActiveThreadHandler.signal()
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
+
+        let resume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
+        XCTAssertEqual(resume["method"]?.stringValue, "thread/resume")
+        XCTAssertEqual(resume["params"]?.objectValue?["threadId"]?.stringValue, "thread-live")
     }
 
     func testLoadedThreadRefreshDoesNotReportUnchangedActiveThreadAgain() throws {
@@ -245,9 +301,9 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         ])))
         XCTAssertEqual(transport.sentLines().count, 3)
 
-        session.ensureThreadSubscription()
-
-        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport, poll: {
+            session.ensureThreadSubscription()
+        }))
         let retryListLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
         XCTAssertEqual(retryListLoaded["method"]?.stringValue, "thread/loaded/list")
         let retryListLoadedID = try XCTUnwrap(retryListLoaded["id"])
@@ -396,6 +452,7 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
             ]),
         ])))
 
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
         let resume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
         XCTAssertEqual(resume["method"]?.stringValue, "thread/resume")
         XCTAssertEqual(resume["params"]?.objectValue?["threadId"]?.stringValue, "thread-current")
@@ -1077,16 +1134,19 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
                 ]),
             ]),
         ])))
+        XCTAssertTrue(waitForSentLineCount(4, transport: transport), file: file, line: sourceLine)
     }
 
     private static func waitForSentLineCount(_ count: Int,
                                              transport: FakeCodexAppServerConnectionTransport,
-                                             timeout: TimeInterval = 2.0) -> Bool {
+                                             timeout: TimeInterval = 2.0,
+                                             poll: (() -> Void)? = nil) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if transport.sentLines().count >= count {
                 return true
             }
+            poll?()
             Thread.sleep(forTimeInterval: 0.01)
         }
         return transport.sentLines().count >= count

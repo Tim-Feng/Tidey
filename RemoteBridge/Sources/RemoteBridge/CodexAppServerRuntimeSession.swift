@@ -49,6 +49,7 @@ final class CodexAppServerRuntimeSession {
     private let initialization: CodexAppServerInitializationState
     private let activeThreadStore: CodexAppServerActiveThreadStore
     private let turnStateStore: CodexAppServerTurnStateStore
+    private let callbackQueue: DispatchQueue
     private let lock = NSLock()
     private var stopped = false
     private var attachSubscriptionState = AttachSubscriptionState.noLoadedThread
@@ -89,7 +90,8 @@ final class CodexAppServerRuntimeSession {
          runtime: CodexAppServerHeadlessRuntime,
          initialization: CodexAppServerInitializationState = CodexAppServerInitializationState(),
          activeThreadStore: CodexAppServerActiveThreadStore = CodexAppServerActiveThreadStore(),
-         turnStateStore: CodexAppServerTurnStateStore = CodexAppServerTurnStateStore()) {
+         turnStateStore: CodexAppServerTurnStateStore = CodexAppServerTurnStateStore(),
+         callbackQueue: DispatchQueue = DispatchQueue(label: "com.tidey.remote-bridge.codex-app-server-runtime-session")) {
         self.process = process
         self.transport = transport
         self.connection = connection
@@ -97,6 +99,7 @@ final class CodexAppServerRuntimeSession {
         self.initialization = initialization
         self.activeThreadStore = activeThreadStore
         self.turnStateStore = turnStateStore
+        self.callbackQueue = callbackQueue
     }
 
     var processID: Int32? {
@@ -348,25 +351,35 @@ final class CodexAppServerRuntimeSession {
                 guard let self else {
                     return
                 }
-                switch result {
-                case .success(let value):
-                    guard let threadID = codexAppServerLoadedThreadID(from: value) else {
-                        BridgeLogger.server.debug("codex app-server subscription no loaded thread shape=\(codexAppServerLoadedThreadShapeDescription(from: value), privacy: .public)")
-                        if clearSubscriptionOnMissing {
-                            self.setAttachSubscriptionState(.noLoadedThread, reason: "loaded_thread_missing")
-                        }
-                        return
-                    }
-                    self.activeThreadStore.setThreadID(threadID)
-                    self.sendThreadResumeForSubscriptionIfNeeded(threadID: threadID, reason: reason)
-                case .failure(let error):
-                    BridgeLogger.server.error("codex app-server subscription loaded thread list failed error=\(String(describing: error), privacy: .public)")
-                    self.setAttachSubscriptionState(.failed("loaded_thread_list_failed"), reason: "loaded_thread_list_failed")
+                self.callbackQueue.async {
+                    self.handleLoadedThreadSubscriptionResult(result,
+                                                              clearSubscriptionOnMissing: clearSubscriptionOnMissing,
+                                                              reason: reason)
                 }
             }
         } catch {
             BridgeLogger.server.error("codex app-server subscription loaded thread list request failed error=\(String(describing: error), privacy: .public)")
             setAttachSubscriptionState(.failed("loaded_thread_list_request_failed"), reason: "loaded_thread_list_request_failed")
+        }
+    }
+
+    private func handleLoadedThreadSubscriptionResult(_ result: Result<JSONValue, CodexAppServerConnectionError>,
+                                                      clearSubscriptionOnMissing: Bool,
+                                                      reason: String) {
+        switch result {
+        case .success(let value):
+            guard let threadID = codexAppServerLoadedThreadID(from: value) else {
+                BridgeLogger.server.debug("codex app-server subscription no loaded thread shape=\(codexAppServerLoadedThreadShapeDescription(from: value), privacy: .public)")
+                if clearSubscriptionOnMissing {
+                    setAttachSubscriptionState(.noLoadedThread, reason: "loaded_thread_missing")
+                }
+                return
+            }
+            activeThreadStore.setThreadID(threadID)
+            sendThreadResumeForSubscriptionIfNeeded(threadID: threadID, reason: reason)
+        case .failure(let error):
+            BridgeLogger.server.error("codex app-server subscription loaded thread list failed error=\(String(describing: error), privacy: .public)")
+            setAttachSubscriptionState(.failed("loaded_thread_list_failed"), reason: "loaded_thread_list_failed")
         }
     }
 
