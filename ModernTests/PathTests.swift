@@ -2184,6 +2184,10 @@ final class CodexWrapperRegistryTests: XCTestCase {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/Users/timfeng/GitHub/Tidey/Resources/bin/codex")
         var env = ProcessInfo.processInfo.environment
+        env.removeValue(forKey: "CODEX_HOME")
+        for key in Array(env.keys) where key.hasPrefix("Malloc") {
+            env.removeValue(forKey: key)
+        }
         env["HOME"] = environment.fakeHome.path
         env["PATH"] = "\(environment.fakeBin.path):/usr/bin:/bin"
         env["TIDEY_SOCKET_PATH"] = environment.socketPath

@@ -206,6 +206,44 @@ final class CodexAppServerConnectionTests: XCTestCase {
         XCTAssertEqual(responseIDs.values(), Set((1...requestCount).map(String.init)))
     }
 
+    func testClientResponseDoesNotWaitForConcurrentBlockingSend() throws {
+        let sendEntered = expectation(description: "sendLine entered")
+        let responseHandled = expectation(description: "client response handler called")
+        let receiveReturned = expectation(description: "receiveLine returned while sendLine is still blocked")
+        let requestReturned = expectation(description: "sendClientRequest returned after blocked send releases")
+        let releaseSend = DispatchSemaphore(value: 0)
+
+        let connection = CodexAppServerConnection(sendLine: { _ in
+            sendEntered.fulfill()
+            _ = releaseSend.wait(timeout: .now() + 2.0)
+        })
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try connection.sendClientRequest(method: "thread/loaded/list") { result in
+                    if case .success(let value) = result,
+                       value.objectValue?["ok"]?.boolValue == true {
+                        responseHandled.fulfill()
+                    }
+                }
+            } catch {
+                XCTFail("sendClientRequest failed: \(error)")
+            }
+            requestReturned.fulfill()
+        }
+
+        wait(for: [sendEntered], timeout: 1.0)
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            connection.receiveLine(#"{"id":1,"result":{"ok":true}}"#)
+            receiveReturned.fulfill()
+        }
+
+        wait(for: [receiveReturned, responseHandled], timeout: 0.5)
+        releaseSend.signal()
+        wait(for: [requestReturned], timeout: 1.0)
+    }
+
     private static func object(from line: String,
                                file: StaticString = #filePath,
                                line sourceLine: UInt = #line) throws -> [String: JSONValue] {

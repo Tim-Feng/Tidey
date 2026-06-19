@@ -1305,11 +1305,19 @@ private final class CodexAppServerWebSocketTransport: CodexAppServerConnectionTr
                                    opcode: .text,
                                    maskKey: WebSocketMaskingKey.random(),
                                    data: buffer)
-        let future = channel.writeAndFlush(frame)
         if channel.eventLoop.inEventLoop {
+            let future = channel.writeAndFlush(frame)
+            future.whenFailure { error in
+                BridgeLogger.server.error("codex app-server websocket write failed error=\(String(describing: error), privacy: .public)")
+            }
             return
         }
-        try future.wait()
+        channel.eventLoop.execute { [channel] in
+            let future = channel.writeAndFlush(frame)
+            future.whenFailure { error in
+                BridgeLogger.server.error("codex app-server websocket write failed error=\(String(describing: error), privacy: .public)")
+            }
+        }
     }
 
     func close() {

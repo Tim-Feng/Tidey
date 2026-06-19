@@ -106,14 +106,16 @@ final class CodexAppServerConnection {
         let id = nextRequestID
         nextRequestID += 1
         pendingClientResponses[String(id)] = onResponse
+        stateLock.unlock()
+
         do {
-            try sendLocked(.object([
+            try sendUnlocked(.object([
                 "id": .number(Double(id)),
                 "method": .string(method),
                 "params": .object(params),
             ]))
-            stateLock.unlock()
         } catch {
+            stateLock.lock()
             pendingClientResponses.removeValue(forKey: String(id))
             stateLock.unlock()
             throw error
@@ -258,14 +260,15 @@ final class CodexAppServerConnection {
 
     private func sendIfOpen(_ value: JSONValue) throws {
         stateLock.lock()
-        defer { stateLock.unlock() }
-        guard !closed else {
+        let isClosed = closed
+        stateLock.unlock()
+        guard isClosed == false else {
             throw CodexAppServerConnectionError.closed
         }
-        try sendLocked(value)
+        try sendUnlocked(value)
     }
 
-    private func sendLocked(_ value: JSONValue) throws {
+    private func sendUnlocked(_ value: JSONValue) throws {
         let data = try JSONEncoder().encode(value)
         guard let line = String(data: data, encoding: .utf8) else {
             throw CodexAppServerConnectionError.invalidJSONLine("<encoding failed>")
