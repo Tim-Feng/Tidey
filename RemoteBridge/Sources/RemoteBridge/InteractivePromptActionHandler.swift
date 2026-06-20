@@ -204,6 +204,13 @@ struct InteractivePromptActionHandler {
 
     private func activePromptForSubmit(context: PromptContext,
                                        requestedPromptID: String) throws -> InteractivePrompt {
+        if let prompt = eventHub.activeInteractivePrompt(workspaceID: context.workspaceID,
+                                                         sessionID: context.sessionID,
+                                                         promptID: requestedPromptID),
+           prompt.source == "claude_ask_user_question" {
+            return prompt
+        }
+
         let captured = try adapter.captureANSIOutput(route: context.route, maxLines: captureLineLimit)
         let detection = detector.detect(ansiOutput: captured.output,
                                         workspaceID: context.workspaceID,

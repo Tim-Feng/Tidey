@@ -249,6 +249,66 @@ final class InteractivePromptActionHandlerTests: XCTestCase {
         XCTAssertEqual(response.result?["status"]?.stringValue, "resolved")
     }
 
+    func testSubmitClaudeAskUserQuestionUsesActiveTranscriptPrompt() throws {
+        let route = ordinaryRoute()
+        let eventHub = AgentEventHub()
+        let router = StubPromptInputRouter(routedPanelIDs: [route.panelID])
+        eventHub.publish(Self.claudeAskUserQuestionEvent(route: route, promptID: "toolu_question_1"))
+        let handler = makeHandler(route: route,
+                                  adapter: StubPromptAdapter(outputs: ["regular terminal output"]),
+                                  eventHub: eventHub,
+                                  router: router)
+
+        let response = try XCTUnwrap(handler.handle(BridgeRequest(id: "request-1",
+                                                                  action: "submit_interactive_prompt",
+                                                                  params: [
+                                                                    "workspace_id": .string(route.workspaceID),
+                                                                    "panel_id": .string(route.panelID),
+                                                                    "prompt_id": .string("toolu_question_1"),
+                                                                    "target_index": .number(1),
+                                                                  ])))
+
+        XCTAssertTrue(response.ok)
+        XCTAssertEqual(router.sentInputs.map(\.panelID), [route.panelID])
+        XCTAssertEqual(router.sentInputs.map(\.input), ["\u{1b}[B\r"])
+        XCTAssertEqual(response.result?["status"]?.stringValue, "resolved")
+        let resolvedEvent = try XCTUnwrap(response.result?["resolved_event"]?.objectValue)
+        XCTAssertEqual(resolvedEvent["type"]?.stringValue, "interactive_prompt_resolved")
+        XCTAssertEqual(resolvedEvent["metadata"]?.objectValue?["prompt_id"]?.stringValue, "toolu_question_1")
+        XCTAssertNil(eventHub.activeInteractivePrompt(workspaceID: route.workspaceID,
+                                                      sessionID: route.sessionID,
+                                                      promptID: "toolu_question_1"))
+    }
+
+    func testSubmitClaudeAskUserQuestionRejectsResolvedTranscriptPrompt() throws {
+        let route = ordinaryRoute()
+        let eventHub = AgentEventHub()
+        let router = StubPromptInputRouter(routedPanelIDs: [route.panelID])
+        eventHub.publish(Self.claudeAskUserQuestionEvent(route: route, promptID: "toolu_question_1"))
+        eventHub.publish(Self.claudeAskUserQuestionResolvedEvent(route: route, promptID: "toolu_question_1"))
+        let handler = makeHandler(route: route,
+                                  adapter: StubPromptAdapter(outputs: ["regular terminal output"]),
+                                  eventHub: eventHub,
+                                  router: router)
+
+        XCTAssertThrowsError(
+            try handler.handle(BridgeRequest(id: "request-1",
+                                             action: "submit_interactive_prompt",
+                                             params: [
+                                                "workspace_id": .string(route.workspaceID),
+                                                "panel_id": .string(route.panelID),
+                                                "prompt_id": .string("toolu_question_1"),
+                                                "target_index": .number(1),
+                                             ]))
+        ) { error in
+            guard case BridgeInternalError.conflict(let message) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertTrue(message.contains("no longer active"))
+        }
+        XCTAssertTrue(router.sentInputs.isEmpty)
+    }
+
     private func makeHandler(route: OrdinaryTmuxPanelRoute?,
                              adapter: StubPromptAdapter,
                              eventHub: AgentEventHub = AgentEventHub(),
@@ -324,6 +384,74 @@ final class InteractivePromptActionHandlerTests: XCTestCase {
 
            ❯ 1. Yes, run it
         """
+    }
+
+    private static func claudeAskUserQuestionEvent(route: OrdinaryTmuxPanelRoute,
+                                                   promptID: String) -> AgentEvent {
+        let prompt = InteractivePrompt(promptID: promptID,
+                                       vendor: "claude",
+                                       source: "claude_ask_user_question",
+                                       title: "Choose a path",
+                                       body: "Which path should Claude use?",
+                                       options: [
+                                        InteractivePromptOption(index: 0,
+                                                                label: "Use current file",
+                                                                description: "Open the current file.",
+                                                                inputSequence: "\r"),
+                                        InteractivePromptOption(index: 1,
+                                                                label: "Cancel",
+                                                                description: "Do not change files.",
+                                                                inputSequence: "\u{1b}[B\r"),
+                                       ],
+                                       selectedIndex: 0,
+                                       submitChannel: InteractivePromptSubmitChannel.terminalInput)
+        return AgentEvent(eventID: "ask-user-question:\(promptID)",
+                          seq: 10,
+                          vendor: "claude",
+                          workspaceID: route.workspaceID,
+                          sessionID: route.sessionID,
+                          timestamp: "2026-06-20T00:00:00.000Z",
+                          type: .interactivePrompt,
+                          role: "assistant",
+                          text: prompt.title,
+                          name: "AskUserQuestion",
+                          input: nil,
+                          output: nil,
+                          toolCallID: promptID,
+                          metadata: [
+                            "panel_id": route.panelID,
+                            "prompt_id": promptID,
+                            "source": "claude_ask_user_question",
+                            "submit_channel": InteractivePromptSubmitChannel.terminalInput,
+                          ],
+                          payload: prompt.jsonValue)
+    }
+
+    private static func claudeAskUserQuestionResolvedEvent(route: OrdinaryTmuxPanelRoute,
+                                                           promptID: String) -> AgentEvent {
+        AgentEvent(eventID: "ask-user-question-resolved:\(promptID)",
+                   seq: 11,
+                   vendor: "claude",
+                   workspaceID: route.workspaceID,
+                   sessionID: route.sessionID,
+                   timestamp: "2026-06-20T00:00:01.000Z",
+                   type: .interactivePromptResolved,
+                   role: "tool",
+                   text: nil,
+                   name: "AskUserQuestion",
+                   input: nil,
+                   output: nil,
+                   toolCallID: promptID,
+                   metadata: [
+                    "panel_id": route.panelID,
+                    "prompt_id": promptID,
+                    "source": "claude_ask_user_question",
+                    "reason": "tool_result",
+                   ],
+                   payload: .object([
+                    "prompt_id": .string(promptID),
+                    "reason": .string("tool_result"),
+                   ]))
     }
 }
 

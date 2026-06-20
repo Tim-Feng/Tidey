@@ -46,11 +46,11 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
     private let dateProvider: DateProvider
     private let activeThreadRefreshInterval: TimeInterval
     private let attachHandler: AttachHandler
+    private let promptNotificationDeduper = AgentInteractivePromptNotificationDeduper()
     private let lock = NSLock()
     private var entriesBySessionID = [String: RuntimeEntry]()
     private var lastAssistantTextBySessionID = [String: String]()
     private var nextActiveThreadRefreshAtBySessionID = [String: Date]()
-    private var notifiedPromptIDsBySessionID = [String: Set<String>]()
     var activeThreadHandler: ActiveThreadHandler?
 
     init(eventHub: AgentEventHub,
@@ -126,7 +126,7 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
             for entry in staleEntries + replacedEntries {
                 lastAssistantTextBySessionID.removeValue(forKey: entry.record.sessionID)
                 nextActiveThreadRefreshAtBySessionID.removeValue(forKey: entry.record.sessionID)
-                notifiedPromptIDsBySessionID.removeValue(forKey: entry.record.sessionID)
+                promptNotificationDeduper.remove(sessionID: entry.record.sessionID)
             }
         }
 
@@ -343,27 +343,11 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
     }
 
     private func shouldNotifyPrompt(_ event: AgentEvent, sessionID: String) -> Bool {
-        guard let promptID = AgentInteractivePromptSidebarMessages.promptID(from: event) else {
-            return true
-        }
-        return lock.withCodexRuntimeSyncerLock {
-            var notifiedPromptIDs = notifiedPromptIDsBySessionID[sessionID] ?? []
-            guard notifiedPromptIDs.contains(promptID) == false else {
-                return false
-            }
-            notifiedPromptIDs.insert(promptID)
-            notifiedPromptIDsBySessionID[sessionID] = notifiedPromptIDs
-            return true
-        }
+        promptNotificationDeduper.shouldNotify(event, sessionID: sessionID)
     }
 
     private func markPromptResolved(_ event: AgentEvent, sessionID: String) {
-        guard let promptID = AgentInteractivePromptSidebarMessages.promptID(from: event) else {
-            return
-        }
-        _ = lock.withCodexRuntimeSyncerLock {
-            notifiedPromptIDsBySessionID[sessionID]?.remove(promptID)
-        }
+        promptNotificationDeduper.markResolved(event, sessionID: sessionID)
     }
 
     private func sidebarWorkspaceID(for record: AgentSessionRegistryRecord) -> String {

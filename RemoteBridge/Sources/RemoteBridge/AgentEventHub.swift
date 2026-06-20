@@ -201,6 +201,34 @@ final class AgentEventHub {
         }
     }
 
+    func activeInteractivePrompt(workspaceID: String,
+                                 sessionID: String,
+                                 promptID: String) -> InteractivePrompt? {
+        queue.sync {
+            guard let state = sessions[sessionID] else {
+                return nil
+            }
+            var activePrompt: InteractivePrompt?
+            for event in state.bufferedEvents
+                .compactMap({ effectiveEvent($0) })
+                .filter({ $0.workspaceID == workspaceID && $0.sessionID == sessionID })
+                .sorted(by: { $0.seq < $1.seq }) {
+                guard AgentInteractivePromptSidebarMessages.promptID(from: event) == promptID else {
+                    continue
+                }
+                switch event.type {
+                case .interactivePrompt:
+                    activePrompt = InteractivePrompt(jsonValue: event.payload)
+                case .interactivePromptResolved:
+                    activePrompt = nil
+                default:
+                    break
+                }
+            }
+            return activePrompt
+        }
+    }
+
     @discardableResult
     func migrateSession(sessionID: String,
                         toWorkspaceID workspaceID: String,

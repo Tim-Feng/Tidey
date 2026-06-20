@@ -108,3 +108,38 @@ enum AgentInteractivePromptSidebarMessages {
         return result
     }
 }
+
+final class AgentInteractivePromptNotificationDeduper: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "com.tidey.remote-bridge.interactive-prompt-notification-deduper")
+    private var notifiedPromptIDsBySessionID = [String: Set<String>]()
+
+    func shouldNotify(_ event: AgentEvent, sessionID: String) -> Bool {
+        guard let promptID = AgentInteractivePromptSidebarMessages.promptID(from: event) else {
+            return true
+        }
+        return queue.sync {
+            var notifiedPromptIDs = notifiedPromptIDsBySessionID[sessionID] ?? []
+            guard !notifiedPromptIDs.contains(promptID) else {
+                return false
+            }
+            notifiedPromptIDs.insert(promptID)
+            notifiedPromptIDsBySessionID[sessionID] = notifiedPromptIDs
+            return true
+        }
+    }
+
+    func markResolved(_ event: AgentEvent, sessionID: String) {
+        guard let promptID = AgentInteractivePromptSidebarMessages.promptID(from: event) else {
+            return
+        }
+        _ = queue.sync {
+            notifiedPromptIDsBySessionID[sessionID]?.remove(promptID)
+        }
+    }
+
+    func remove(sessionID: String) {
+        _ = queue.sync {
+            notifiedPromptIDsBySessionID.removeValue(forKey: sessionID)
+        }
+    }
+}

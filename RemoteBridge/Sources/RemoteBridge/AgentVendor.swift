@@ -58,6 +58,7 @@ private struct ClaudeAgentVendor: AgentVendor {
         ClaudeTranscriptSession(record: record,
                                 fileManager: fileManager,
                                 hub: hub,
+                                socketClient: socketClient,
                                 chatSubmitEchoRegistry: chatSubmitEchoRegistry)
     }
 }

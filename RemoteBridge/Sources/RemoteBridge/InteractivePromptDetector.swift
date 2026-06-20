@@ -4,14 +4,30 @@ import Foundation
 struct InteractivePromptOption: Equatable, Sendable {
     let index: Int
     let label: String
+    let description: String?
     let inputSequence: String
 
+    init(index: Int,
+         label: String,
+         description: String? = nil,
+         inputSequence: String) {
+        self.index = index
+        self.label = label
+        self.description = description
+        self.inputSequence = inputSequence
+    }
+
     var jsonValue: JSONValue {
-        .object([
+        var object: [String: JSONValue] = [
             "index": .number(Double(index)),
             "label": .string(label),
             "input_sequence": .string(inputSequence),
-        ])
+        ]
+        if let description,
+           !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            object["description"] = .string(description)
+        }
+        return .object(object)
     }
 }
 
@@ -76,6 +92,43 @@ struct InteractivePrompt: Equatable, Sendable {
             object["submit_channel"] = .string(submitChannel)
         }
         return .object(object)
+    }
+
+    init?(jsonValue: JSONValue?) {
+        guard let object = jsonValue?.objectValue,
+              let promptID = object["prompt_id"]?.stringValue,
+              let vendor = object["vendor"]?.stringValue,
+              let source = object["source"]?.stringValue,
+              let title = object["title"]?.stringValue,
+              let body = object["body"]?.stringValue,
+              let optionsJSON = object["options"]?.arrayValue,
+              let selectedIndex = object["selected_index"]?.intValue else {
+            return nil
+        }
+
+        let options = optionsJSON.compactMap { optionJSON -> InteractivePromptOption? in
+            guard let option = optionJSON.objectValue,
+                  let index = option["index"]?.intValue,
+                  let label = option["label"]?.stringValue,
+                  let inputSequence = option["input_sequence"]?.stringValue else {
+                return nil
+            }
+            return InteractivePromptOption(index: index,
+                                           label: label,
+                                           description: option["description"]?.stringValue,
+                                           inputSequence: inputSequence)
+        }
+        guard options.count == optionsJSON.count else {
+            return nil
+        }
+        self.init(promptID: promptID,
+                  vendor: vendor,
+                  source: source,
+                  title: title,
+                  body: body,
+                  options: options,
+                  selectedIndex: selectedIndex,
+                  submitChannel: object["submit_channel"]?.stringValue)
     }
 }
 

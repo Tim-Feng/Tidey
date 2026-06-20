@@ -273,6 +273,110 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         XCTAssertTrue(registry.snapshot().isEmpty)
     }
 
+    func testClaudeAskUserQuestionPublishesInteractivePromptAndResolvedEvent() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        try Data().write(to: transcriptURL)
+
+        let hub = AgentEventHub()
+        let commandSender = StubClaudeCommandSender()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub,
+                                              socketClient: commandSender)
+        session.start()
+        defer { session.stop() }
+
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10)
+                .events.contains { $0.type == .sessionStarted }
+        })
+
+        let handle = try FileHandle(forWritingTo: transcriptURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(makeClaudeAskUserQuestionAssistantLine(uuid: "a1",
+                                                                                 toolCallID: "toolu_question_1")
+            .appending("\n")
+            .utf8))
+
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20)
+                .events.contains { $0.type == .interactivePrompt }
+        })
+
+        let promptResult = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20)
+        let promptEvent = try XCTUnwrap(promptResult.events.first { $0.type == .interactivePrompt })
+        XCTAssertEqual(promptEvent.vendor, "claude")
+        XCTAssertEqual(promptEvent.metadata?["prompt_id"], "toolu_question_1")
+        XCTAssertEqual(promptEvent.metadata?["source"], "claude_ask_user_question")
+        XCTAssertEqual(promptEvent.metadata?["submit_channel"], "terminal_input")
+        XCTAssertEqual(promptEvent.payload?.objectValue?["prompt_id"]?.stringValue, "toolu_question_1")
+        XCTAssertEqual(promptEvent.payload?.objectValue?["title"]?.stringValue, "Choose a path")
+        XCTAssertEqual(promptEvent.payload?.objectValue?["body"]?.stringValue, "Which path should Claude use?")
+        let options = try XCTUnwrap(promptEvent.payload?.objectValue?["options"]?.arrayValue)
+        XCTAssertEqual(options.count, 2)
+        XCTAssertEqual(options[0].objectValue?["label"]?.stringValue, "Use current file")
+        XCTAssertEqual(options[0].objectValue?["description"]?.stringValue, "Open the current file.")
+        XCTAssertEqual(options[1].objectValue?["input_sequence"]?.stringValue, "\u{1b}[B\r")
+        XCTAssertEqual(commandSender.commands.count, 2)
+        XCTAssertTrue(commandSender.commands[0].contains(#""action":"notification.create""#))
+        XCTAssertEqual(commandSender.commands[1], "report_shell_state prompt --workspace_id=workspace")
+
+        try handle.write(contentsOf: Data(makeClaudeToolResultLine(uuid: "u1",
+                                                                   toolCallID: "toolu_question_1",
+                                                                   content: "Use current file")
+            .appending("\n")
+            .utf8))
+        try handle.close()
+
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 30)
+                .events.contains { $0.type == .interactivePromptResolved }
+        })
+
+        let resolvedResult = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 30)
+        let resolvedEvent = try XCTUnwrap(resolvedResult.events.first { $0.type == .interactivePromptResolved })
+        XCTAssertEqual(resolvedEvent.metadata?["prompt_id"], "toolu_question_1")
+        XCTAssertEqual(resolvedEvent.metadata?["reason"], "tool_result")
+        XCTAssertNil(hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                 sessionID: "session",
+                                                 promptID: "toolu_question_1"))
+        XCTAssertEqual(commandSender.commands.last, "report_shell_state running --workspace_id=workspace")
+    }
+
+    func testClaudeAskUserQuestionMultiSelectIsLeftForFutureSupport() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        try makeClaudeAskUserQuestionAssistantLine(uuid: "a1",
+                                                   toolCallID: "toolu_question_1",
+                                                   multiSelect: true)
+            .appending("\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10)
+                .events.contains { $0.type == .toolCall }
+        })
+
+        let result = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10)
+        XCTAssertFalse(result.events.contains { $0.type == .interactivePrompt })
+    }
+
     private func makeRecord(transcriptPath: String) -> AgentSessionRegistryRecord {
         AgentSessionRegistryRecord(version: 1,
                                    vendor: "claude",
@@ -295,6 +399,73 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
             "message": [
                 "role": "user",
                 "content": content,
+            ],
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        return String(data: data, encoding: .utf8)!
+    }
+
+    private func makeClaudeAskUserQuestionAssistantLine(uuid: String,
+                                                        toolCallID: String,
+                                                        multiSelect: Bool = false) -> String {
+        let object: [String: Any] = [
+            "type": "assistant",
+            "uuid": uuid,
+            "sessionId": "session",
+            "version": "2.0.0",
+            "timestamp": "2026-04-30T00:00:00Z",
+            "message": [
+                "role": "assistant",
+                "content": [
+                    [
+                        "type": "tool_use",
+                        "id": toolCallID,
+                        "name": "AskUserQuestion",
+                        "input": [
+                            "questions": [
+                                [
+                                    "question": "Which path should Claude use?",
+                                    "header": "Choose a path",
+                                    "multiSelect": multiSelect,
+                                    "options": [
+                                        [
+                                            "label": "Use current file",
+                                            "description": "Open the current file.",
+                                        ],
+                                        [
+                                            "label": "Cancel",
+                                            "description": "Do not change files.",
+                                        ],
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        return String(data: data, encoding: .utf8)!
+    }
+
+    private func makeClaudeToolResultLine(uuid: String,
+                                          toolCallID: String,
+                                          content: String) -> String {
+        let object: [String: Any] = [
+            "type": "user",
+            "uuid": uuid,
+            "sessionId": "session",
+            "version": "2.0.0",
+            "timestamp": "2026-04-30T00:00:02Z",
+            "message": [
+                "role": "user",
+                "content": [
+                    [
+                        "type": "tool_result",
+                        "tool_use_id": toolCallID,
+                        "content": content,
+                    ],
+                ],
             ],
         ]
         let data = try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
@@ -327,5 +498,13 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
             RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
         }
         return condition()
+    }
+}
+
+private final class StubClaudeCommandSender: TideyCommandSending {
+    private(set) var commands = [String]()
+
+    func send(command: String) throws {
+        commands.append(command)
     }
 }

@@ -1,5 +1,9 @@
 import Foundation
 
+protocol TideyCommandSending: AnyObject {
+    func send(command: String) throws
+}
+
 final class TideySocketClient {
     private let locator: TideySocketLocator
 
@@ -117,3 +121,5 @@ final class TideySocketClient {
         POSIXError(POSIXErrorCode(rawValue: errno) ?? defaultCode)
     }
 }
+
+extension TideySocketClient: TideyCommandSending {}

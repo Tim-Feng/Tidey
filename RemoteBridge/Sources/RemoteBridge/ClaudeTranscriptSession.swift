@@ -1615,7 +1615,9 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private let queue: DispatchQueue
     private let fileManager: FileManager
     private let hub: AgentEventHub
+    private let socketClient: TideyCommandSending?
     private let chatSubmitEchoRegistry: ChatSubmitEchoRegistry
+    private let promptNotificationDeduper = AgentInteractivePromptNotificationDeduper()
 
     private var record: AgentSessionRegistryRecord
     private var resolverTimer: DispatchSourceTimer?
@@ -1627,6 +1629,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private var unsupportedVersions = Set<String>()
     private var isBackfillingHistory = false
     private var pendingLocalCommand: ClaudeLocalCommand?
+    private var activeAskUserQuestionPromptIDByToolCallID = [String: String]()
 
     private struct ClaudeLocalCommand {
         let name: String
@@ -1652,10 +1655,12 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     init(record: AgentSessionRegistryRecord,
          fileManager: FileManager = .default,
          hub: AgentEventHub,
+         socketClient: TideyCommandSending? = nil,
          chatSubmitEchoRegistry: ChatSubmitEchoRegistry? = nil) {
         self.record = record
         self.fileManager = fileManager
         self.hub = hub
+        self.socketClient = socketClient
         self.chatSubmitEchoRegistry = chatSubmitEchoRegistry ?? ChatSubmitEchoRegistry()
         self.queue = DispatchQueue(label: "com.tidey.remote-bridge.claude-session.\(record.sessionID)")
     }
@@ -1942,11 +1947,93 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                   toolCallID: toolCallID,
                                   metadata: nil)
                 ordinal += 1
+                if name == "AskUserQuestion",
+                   let prompt = Self.askUserQuestionPrompt(from: block, uuid: uuid, index: index) {
+                    if let toolCallID {
+                        activeAskUserQuestionPromptIDByToolCallID[toolCallID] = prompt.promptID
+                    }
+                    publishFileBacked(kind: .interactivePrompt,
+                                      lineOffset: lineOffset,
+                                      ordinal: ordinal,
+                                      eventID: "\(uuid):ask-user-question:\(prompt.promptID)",
+                                      timestamp: timestamp,
+                                      role: "assistant",
+                                      text: prompt.title,
+                                      name: "AskUserQuestion",
+                                      input: input,
+                                      output: nil,
+                                      toolCallID: toolCallID,
+                                      metadata: [
+                                        "source": prompt.source,
+                                        "prompt_id": prompt.promptID,
+                                        "submit_channel": InteractivePromptSubmitChannel.terminalInput,
+                                        "multi_select": "false",
+                                      ],
+                                      payload: prompt.jsonValue)
+                    ordinal += 1
+                }
 
             default:
                 continue
             }
         }
+    }
+
+    private static func askUserQuestionPrompt(from block: [String: Any],
+                                              uuid: String,
+                                              index: Int) -> InteractivePrompt? {
+        guard let input = block["input"] as? [String: Any],
+              let questions = input["questions"] as? [[String: Any]],
+              let question = questions.first else {
+            return nil
+        }
+
+        // TODO: support Claude AskUserQuestion multiSelect prompts once Remote can submit multiple choices safely.
+        if (question["multiSelect"] as? Bool) == true {
+            return nil
+        }
+
+        guard let optionsInput = question["options"] as? [[String: Any]],
+              !optionsInput.isEmpty else {
+            return nil
+        }
+
+        let selectedIndex = 0
+        let options = optionsInput.enumerated().compactMap { optionIndex, option -> InteractivePromptOption? in
+            guard let label = compactOptionalString(option["label"]) else {
+                return nil
+            }
+            let inputSequence = inputSequence(selectedIndex: selectedIndex, targetIndex: optionIndex)
+            return InteractivePromptOption(index: optionIndex,
+                                           label: label,
+                                           description: compactOptionalString(option["description"]),
+                                           inputSequence: inputSequence)
+        }
+        guard options.count == optionsInput.count else {
+            return nil
+        }
+
+        let body = compactOptionalString(question["question"]) ?? "Claude Code needs input."
+        let title = compactOptionalString(question["header"]) ?? body
+        let toolCallID = compactOptionalString(block["id"])
+        let promptID = toolCallID ?? "claude-ask-user-question:\(uuid):\(index)"
+        return InteractivePrompt(promptID: promptID,
+                                 vendor: "claude",
+                                 source: "claude_ask_user_question",
+                                 title: title,
+                                 body: body,
+                                 options: options,
+                                 selectedIndex: selectedIndex,
+                                 submitChannel: InteractivePromptSubmitChannel.terminalInput)
+    }
+
+    private static func inputSequence(selectedIndex: Int, targetIndex: Int) -> String {
+        let delta = targetIndex - selectedIndex
+        if delta == 0 {
+            return "\r"
+        }
+        let step = delta > 0 ? "\u{1b}[B" : "\u{1b}[A"
+        return String(repeating: step, count: abs(delta)) + "\r"
     }
 
     private func consumeUser(object: [String: Any], timestamp: String, lineOffset: Int) {
@@ -2004,6 +2091,30 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                   toolCallID: toolCallID,
                                   metadata: metadata)
                 ordinal += 1
+                if let toolCallID,
+                   let promptID = activeAskUserQuestionPromptIDByToolCallID.removeValue(forKey: toolCallID) {
+                    publishFileBacked(kind: .interactivePromptResolved,
+                                      lineOffset: lineOffset,
+                                      ordinal: ordinal,
+                                      eventID: "\(uuid):ask-user-question-resolved:\(promptID)",
+                                      timestamp: timestamp,
+                                      role: "tool",
+                                      text: nil,
+                                      name: "AskUserQuestion",
+                                      input: nil,
+                                      output: output,
+                                      toolCallID: toolCallID,
+                                      metadata: [
+                                        "source": "claude_ask_user_question",
+                                        "prompt_id": promptID,
+                                        "reason": "tool_result",
+                                      ],
+                                      payload: .object([
+                                        "prompt_id": .string(promptID),
+                                        "reason": .string("tool_result"),
+                                      ]))
+                    ordinal += 1
+                }
             } else if blockType == "text" {
                 let text = Self.compactString(block["text"])
                 guard shouldPublishUserMessage(text) else { continue }
@@ -2327,7 +2438,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                    input: String?,
                                    output: String?,
                                    toolCallID: String?,
-                                   metadata: [String: String]?) {
+                                   metadata: [String: String]?,
+                                   payload: JSONValue? = nil) {
         let seq = transcriptEventSequence(lineOffset: lineOffset, ordinal: ordinal)
         maxObservedSeq = max(maxObservedSeq, seq)
         let resolvedMetadata = metadataWithClientRequestID(kind: kind, text: text, metadata: metadata)
@@ -2344,8 +2456,10 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                input: input,
                                output: output,
                                toolCallID: toolCallID,
-                               metadata: baseMetadata(resolvedMetadata))
+                               metadata: baseMetadata(resolvedMetadata),
+                               payload: payload)
         hub.publish(event, deliverToSubscribers: !isBackfillingHistory)
+        publishInteractivePromptSidebarIfNeeded(event)
     }
 
     private func publishSynthetic(kind: AgentEventKind,
@@ -2375,6 +2489,38 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                toolCallID: toolCallID,
                                metadata: metadata)
         hub.publish(event, deliverToSubscribers: !isBackfillingHistory)
+        publishInteractivePromptSidebarIfNeeded(event)
+    }
+
+    private func publishInteractivePromptSidebarIfNeeded(_ event: AgentEvent) {
+        guard !isBackfillingHistory,
+              event.type == .interactivePrompt || event.type == .interactivePromptResolved else {
+            return
+        }
+        switch event.type {
+        case .interactivePrompt:
+            guard promptNotificationDeduper.shouldNotify(event, sessionID: record.sessionID) else {
+                return
+            }
+        case .interactivePromptResolved:
+            promptNotificationDeduper.markResolved(event, sessionID: record.sessionID)
+        default:
+            return
+        }
+
+        let messages = AgentInteractivePromptSidebarMessages.messages(for: event,
+                                                                      workspaceID: event.workspaceID)
+        guard let socketClient,
+              !messages.isEmpty else {
+            return
+        }
+        for message in messages {
+            do {
+                try socketClient.send(command: message)
+            } catch {
+                BridgeLogger.server.error("claude interactive prompt sidebar message failed session_id=\(self.record.sessionID, privacy: .public) message=\(message, privacy: .public) error=\(String(describing: error), privacy: .public)")
+            }
+        }
     }
 
     private func nextSyntheticSequence() -> Int {
@@ -2412,6 +2558,11 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             return ""
         }
         return string.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func compactOptionalString(_ value: Any?) -> String? {
+        let string = compactString(value)
+        return string.isEmpty ? nil : string
     }
 
     private static func stringifyToolResultContent(_ value: Any?) -> String? {
