@@ -432,6 +432,137 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         XCTAssertEqual(result.events.map(\.type), [.interactivePrompt])
     }
 
+    func testAttachedRuntimeSendsSidebarNotificationForApprovalPromptAndDedupesReplay() throws {
+        let hub = AgentEventHub()
+        var capturedPromptHandler: CodexAppServerConnection.InteractivePromptHandler?
+        let sidebarLock = NSLock()
+        var sidebarMessages = [String]()
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub,
+                                                        sidebarMessageSender: { message in
+                                                            sidebarLock.lock()
+                                                            sidebarMessages.append(message)
+                                                            sidebarLock.unlock()
+                                                        },
+                                                        attachHandler: { _, _, _, _, onInteractivePrompt, _, _ in
+            capturedPromptHandler = onInteractivePrompt
+            return FakeRuntimeSession()
+        })
+
+        syncer.sync(records: [
+            Self.record(sessionID: "app", runtime: "codex_app_server", socketPath: "/tmp/app.sock"),
+        ])
+        let onInteractivePrompt = try XCTUnwrap(capturedPromptHandler)
+        let request = try XCTUnwrap(CodexAppServerApprovalRequest(
+            method: "item/commandExecution/requestApproval",
+            requestID: .string("approval-1"),
+            params: [
+                "threadId": .string("thread-1"),
+                "turnId": .string("turn-1"),
+                "itemId": .string("item-1"),
+                "command": .string("python3 -c 'print(1)'"),
+                "cwd": .string("/tmp"),
+            ]))
+        let prompt = InteractivePrompt(promptID: "prompt-approval",
+                                       vendor: "codex",
+                                       source: "codex_command_approval",
+                                       title: "Approve Codex command?",
+                                       body: "Command: python3 -c 'print(1)'",
+                                       options: [
+                                        InteractivePromptOption(index: 0, label: "Yes, proceed", inputSequence: "\r"),
+                                        InteractivePromptOption(index: 1, label: "No", inputSequence: "\u{1b}[B\r"),
+                                       ],
+                                       selectedIndex: 0,
+                                       submitChannel: InteractivePromptSubmitChannel.codexAppServer)
+        let event = Self.interactivePromptEvent(sessionID: "app", promptID: prompt.promptID)
+        let envelope = CodexAppServerInteractivePromptEnvelope(request: request,
+                                                              prompt: prompt,
+                                                              event: event)
+
+        onInteractivePrompt(envelope)
+        onInteractivePrompt(envelope)
+
+        XCTAssertTrue(Self.waitUntil {
+            sidebarLock.lock()
+            defer { sidebarLock.unlock() }
+            return sidebarMessages.count == 2
+        })
+        sidebarLock.lock()
+        let messages = sidebarMessages
+        sidebarLock.unlock()
+        XCTAssertTrue(messages[0].contains(#""action":"notification.create""#))
+        XCTAssertTrue(messages[0].contains(#""title":"Codex""#))
+        XCTAssertTrue(messages[0].contains(#""body":"Approve Codex command?""#))
+        XCTAssertEqual(messages[1], "report_shell_state prompt --workspace_id=workspace-1")
+    }
+
+    func testApprovalPromptResolvedClearsSidebarPromptStateAndAllowsFutureNotification() throws {
+        let hub = AgentEventHub()
+        var capturedPromptHandler: CodexAppServerConnection.InteractivePromptHandler?
+        var capturedResolvedHandler: CodexAppServerConnection.InteractivePromptResolvedHandler?
+        let sidebarLock = NSLock()
+        var sidebarMessages = [String]()
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub,
+                                                        sidebarMessageSender: { message in
+                                                            sidebarLock.lock()
+                                                            sidebarMessages.append(message)
+                                                            sidebarLock.unlock()
+                                                        },
+                                                        attachHandler: { _, _, _, _, onInteractivePrompt, onInteractivePromptResolved, _ in
+            capturedPromptHandler = onInteractivePrompt
+            capturedResolvedHandler = onInteractivePromptResolved
+            return FakeRuntimeSession()
+        })
+
+        syncer.sync(records: [
+            Self.record(sessionID: "app", runtime: "codex_app_server", socketPath: "/tmp/app.sock"),
+        ])
+        let onInteractivePrompt = try XCTUnwrap(capturedPromptHandler)
+        let onInteractivePromptResolved = try XCTUnwrap(capturedResolvedHandler)
+        let request = try XCTUnwrap(CodexAppServerApprovalRequest(
+            method: "item/commandExecution/requestApproval",
+            requestID: .string("approval-1"),
+            params: [
+                "threadId": .string("thread-1"),
+                "turnId": .string("turn-1"),
+                "itemId": .string("item-1"),
+                "command": .string("python3 -c 'print(1)'"),
+                "cwd": .string("/tmp"),
+            ]))
+        let prompt = InteractivePrompt(promptID: "prompt-approval",
+                                       vendor: "codex",
+                                       source: "codex_command_approval",
+                                       title: "Approve Codex command?",
+                                       body: "Command: python3 -c 'print(1)'",
+                                       options: [
+                                        InteractivePromptOption(index: 0, label: "Yes, proceed", inputSequence: "\r"),
+                                       ],
+                                       selectedIndex: 0,
+                                       submitChannel: InteractivePromptSubmitChannel.codexAppServer)
+        let event = Self.interactivePromptEvent(sessionID: "app", promptID: prompt.promptID)
+        let envelope = CodexAppServerInteractivePromptEnvelope(request: request,
+                                                              prompt: prompt,
+                                                              event: event)
+        let resolvedEvent = Self.event(sessionID: "app", promptID: prompt.promptID)
+
+        onInteractivePrompt(envelope)
+        onInteractivePromptResolved(resolvedEvent)
+        onInteractivePrompt(envelope)
+
+        XCTAssertTrue(Self.waitUntil {
+            sidebarLock.lock()
+            defer { sidebarLock.unlock() }
+            return sidebarMessages.count == 5
+        })
+        sidebarLock.lock()
+        let messages = sidebarMessages
+        sidebarLock.unlock()
+        XCTAssertTrue(messages[0].contains(#""action":"notification.create""#))
+        XCTAssertEqual(messages[1], "report_shell_state prompt --workspace_id=workspace-1")
+        XCTAssertEqual(messages[2], "report_shell_state running --workspace_id=workspace-1")
+        XCTAssertTrue(messages[3].contains(#""action":"notification.create""#))
+        XCTAssertEqual(messages[4], "report_shell_state prompt --workspace_id=workspace-1")
+    }
+
     func testPendingApprovalPromptEventsAreScopedToWorkspaceAndSession() {
         let hub = AgentEventHub()
         let firstRuntime = FakeRuntimeSession()

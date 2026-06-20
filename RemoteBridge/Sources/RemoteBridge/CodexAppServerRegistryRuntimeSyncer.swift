@@ -50,6 +50,7 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
     private var entriesBySessionID = [String: RuntimeEntry]()
     private var lastAssistantTextBySessionID = [String: String]()
     private var nextActiveThreadRefreshAtBySessionID = [String: Date]()
+    private var notifiedPromptIDsBySessionID = [String: Set<String>]()
     var activeThreadHandler: ActiveThreadHandler?
 
     init(eventHub: AgentEventHub,
@@ -125,6 +126,7 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
             for entry in staleEntries + replacedEntries {
                 lastAssistantTextBySessionID.removeValue(forKey: entry.record.sessionID)
                 nextActiveThreadRefreshAtBySessionID.removeValue(forKey: entry.record.sessionID)
+                notifiedPromptIDsBySessionID.removeValue(forKey: entry.record.sessionID)
             }
         }
 
@@ -252,12 +254,14 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
                                             { [weak self] event in
                                                 self?.handleSidebarEvent(event, record: record)
                                             },
-                                            { [eventHub] envelope in
+                                            { [weak self, eventHub] envelope in
                                                 eventHub.publish(envelope.event)
+                                                self?.handleSidebarEvent(envelope.event, record: record)
                                                 BridgeLogger.server.info("codex app-server approval prompt published workspace_id=\(envelope.event.workspaceID, privacy: .public) panel_id=\(envelope.event.metadata?["panel_id"] ?? "-", privacy: .public) session_id=\(envelope.event.sessionID, privacy: .public) prompt_id=\(envelope.prompt.promptID, privacy: .public)")
                                             },
-                                            { [eventHub] event in
+                                            { [weak self, eventHub] event in
                                                 eventHub.publish(event)
+                                                self?.handleSidebarEvent(event, record: record)
                                             },
                                             { [weak self, sessionID = record.sessionID] threadID in
                                                 self?.activeThreadHandler?(sessionID, threadID)
@@ -317,8 +321,48 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
                                                                         body: body),
                                sessionID: record.sessionID)
 
+        case (.interactivePrompt, _):
+            guard shouldNotifyPrompt(event, sessionID: record.sessionID) else {
+                return
+            }
+            let workspaceID = sidebarWorkspaceID(for: record)
+            sendSidebarOnQueue(messages: AgentInteractivePromptSidebarMessages.messages(for: event,
+                                                                                       workspaceID: workspaceID),
+                               sessionID: record.sessionID)
+
+        case (.interactivePromptResolved, _):
+            markPromptResolved(event, sessionID: record.sessionID)
+            let workspaceID = sidebarWorkspaceID(for: record)
+            sendSidebarOnQueue(messages: AgentInteractivePromptSidebarMessages.messages(for: event,
+                                                                                       workspaceID: workspaceID),
+                               sessionID: record.sessionID)
+
         default:
             break
+        }
+    }
+
+    private func shouldNotifyPrompt(_ event: AgentEvent, sessionID: String) -> Bool {
+        guard let promptID = AgentInteractivePromptSidebarMessages.promptID(from: event) else {
+            return true
+        }
+        return lock.withCodexRuntimeSyncerLock {
+            var notifiedPromptIDs = notifiedPromptIDsBySessionID[sessionID] ?? []
+            guard notifiedPromptIDs.contains(promptID) == false else {
+                return false
+            }
+            notifiedPromptIDs.insert(promptID)
+            notifiedPromptIDsBySessionID[sessionID] = notifiedPromptIDs
+            return true
+        }
+    }
+
+    private func markPromptResolved(_ event: AgentEvent, sessionID: String) {
+        guard let promptID = AgentInteractivePromptSidebarMessages.promptID(from: event) else {
+            return
+        }
+        _ = lock.withCodexRuntimeSyncerLock {
+            notifiedPromptIDsBySessionID[sessionID]?.remove(promptID)
         }
     }
 
