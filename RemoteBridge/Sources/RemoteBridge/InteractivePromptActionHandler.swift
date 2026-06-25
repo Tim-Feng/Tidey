@@ -179,10 +179,16 @@ struct InteractivePromptActionHandler {
             throw BridgeInternalError.invalidRequest("submit_interactive_prompt requires target_index for Codex approval prompts")
         }
         let resolvedEvent = try codexApprovalSubmitter.submitApproval(promptID: promptID,
-                                                                      targetIndex: targetIndex)
+                                                                      targetIndex: targetIndex,
+                                                                      workspaceID: context.workspaceID,
+                                                                      panelID: context.panelID,
+                                                                      sessionID: context.sessionID)
+        let status = resolvedEvent.metadata?["reason"] == "already_resolved"
+            ? "already_resolved"
+            : "resolved"
         var result: [String: JSONValue] = [
             "submitted": .bool(true),
-            "status": .string("resolved"),
+            "status": .string(status),
             "prompt": .null,
             "resolved_event": Self.jsonValue(for: resolvedEvent),
         ]

@@ -2,6 +2,21 @@ import Foundation
 
 protocol CodexAppServerApprovalSubmitting: AnyObject {
     func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent
+    func submitApproval(promptID: String,
+                        targetIndex: Int,
+                        workspaceID: String,
+                        panelID: String,
+                        sessionID: String?) throws -> AgentEvent
+}
+
+extension CodexAppServerApprovalSubmitting {
+    func submitApproval(promptID: String,
+                        targetIndex: Int,
+                        workspaceID: String,
+                        panelID: String,
+                        sessionID: String?) throws -> AgentEvent {
+        try submitApproval(promptID: promptID, targetIndex: targetIndex)
+    }
 }
 
 protocol CodexAppServerApprovalPromptProviding: CodexAppServerApprovalSubmitting {
@@ -157,8 +172,42 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
     }
 
     func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent {
+        try submitApproval(promptID: promptID,
+                           targetIndex: targetIndex,
+                           workspaceID: nil,
+                           panelID: nil,
+                           sessionID: nil)
+    }
+
+    func submitApproval(promptID: String,
+                        targetIndex: Int,
+                        workspaceID: String,
+                        panelID: String,
+                        sessionID: String?) throws -> AgentEvent {
+        try submitApproval(promptID: promptID,
+                           targetIndex: targetIndex,
+                           workspaceID: Optional(workspaceID),
+                           panelID: Optional(panelID),
+                           sessionID: sessionID)
+    }
+
+    private func submitApproval(promptID: String,
+                                targetIndex: Int,
+                                workspaceID: String?,
+                                panelID: String?,
+                                sessionID: String?) throws -> AgentEvent {
         let sessions = lock.withCodexRuntimeSyncerLock {
-            Array(entriesBySessionID.values.map(\.session))
+            let entries: [RuntimeEntry]
+            if let sessionID {
+                if let matchingEntry = entriesBySessionID[sessionID] {
+                    entries = [matchingEntry]
+                } else {
+                    entries = []
+                }
+            } else {
+                entries = Array(entriesBySessionID.values)
+            }
+            return entries.map(\.session)
         }
         var lastError: Error?
         for session in sessions {
@@ -173,6 +222,19 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
         if let lastError {
             throw lastError
         }
+        if let workspaceID,
+           let panelID,
+           let sessionID {
+            if let resolvedEvent = eventHub.latestInteractivePromptResolvedEvent(workspaceID: workspaceID,
+                                                                                sessionID: sessionID,
+                                                                                promptID: promptID) {
+                return resolvedEvent
+            }
+            return alreadyResolvedApprovalEvent(promptID: promptID,
+                                                workspaceID: workspaceID,
+                                                panelID: panelID,
+                                                sessionID: sessionID)
+        }
         throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
     }
 
@@ -182,27 +244,13 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
                 entry.record.workspaceID == workspaceID
             }
             if let sessionID {
-                let matchingSessionEntries = workspaceEntries.filter { entry in
+                return workspaceEntries.filter { entry in
                     entry.record.sessionID == sessionID
-                }
-                if matchingSessionEntries.isEmpty == false {
-                    return matchingSessionEntries
                 }
             }
             return workspaceEntries
         }
-        let matchingEvents = pendingApprovalPromptEvents(from: entries)
-        let events: [AgentEvent]
-        if matchingEvents.isEmpty, sessionID != nil {
-            let workspaceEntries = lock.withCodexRuntimeSyncerLock {
-                entriesBySessionID.values.filter { entry in
-                    entry.record.workspaceID == workspaceID
-                }
-            }
-            events = pendingApprovalPromptEvents(from: workspaceEntries)
-        } else {
-            events = matchingEvents
-        }
+        let events = pendingApprovalPromptEvents(from: entries)
         var seen = Set<String>()
         return events.filter { event in
             guard seen.contains(event.eventID) == false else {
@@ -225,6 +273,32 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
         entries.flatMap { entry in
             entry.session.pendingApprovalPromptEvents()
         }
+    }
+
+    private func alreadyResolvedApprovalEvent(promptID: String,
+                                              workspaceID: String,
+                                              panelID: String,
+                                              sessionID: String) -> AgentEvent {
+        AgentEvent(eventID: "codex-app-server-prompt-resolved:\(promptID):already_resolved",
+                   seq: eventHub.nextSyntheticSeq(sessionID: sessionID),
+                   vendor: "codex",
+                   workspaceID: workspaceID,
+                   sessionID: sessionID,
+                   timestamp: timestampProvider(),
+                   type: .interactivePromptResolved,
+                   role: nil,
+                   text: nil,
+                   name: nil,
+                   input: nil,
+                   output: nil,
+                   toolCallID: nil,
+                   metadata: [
+                    "panel_id": panelID,
+                    "source": "codex_app_server",
+                    "prompt_id": promptID,
+                    "reason": "already_resolved",
+                    "submit_channel": InteractivePromptSubmitChannel.codexAppServer,
+                   ])
     }
 
     func submitMessage(sessionID: String, text: String) throws {

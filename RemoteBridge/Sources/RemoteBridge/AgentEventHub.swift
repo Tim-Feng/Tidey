@@ -229,6 +229,31 @@ final class AgentEventHub {
         }
     }
 
+    func latestInteractivePromptResolvedEvent(workspaceID: String,
+                                              sessionID: String,
+                                              promptID: String) -> AgentEvent? {
+        queue.sync {
+            guard let state = sessions[sessionID] else {
+                return nil
+            }
+            return state.bufferedEvents
+                .compactMap { effectiveEvent($0) }
+                .filter { event in
+                    event.workspaceID == workspaceID &&
+                        event.sessionID == sessionID &&
+                        event.type == .interactivePromptResolved &&
+                        AgentInteractivePromptSidebarMessages.promptID(from: event) == promptID
+                }
+                .sorted { lhs, rhs in
+                    if lhs.seq == rhs.seq {
+                        return lhs.timestamp < rhs.timestamp
+                    }
+                    return lhs.seq < rhs.seq
+                }
+                .last
+        }
+    }
+
     @discardableResult
     func migrateSession(sessionID: String,
                         toWorkspaceID workspaceID: String,

@@ -65,6 +65,86 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         XCTAssertEqual(secondRuntime.submitAttempts, ["prompt-2"])
     }
 
+    func testContextualSubmitReturnsAlreadyResolvedWhenMatchingSessionNoLongerHasPrompt() throws {
+        let hub = AgentEventHub()
+        let firstRuntime = FakeRuntimeSession()
+        let secondRuntime = FakeRuntimeSession()
+        secondRuntime.resolvedEventsByPromptID["prompt-other"] = Self.event(sessionID: "second", promptID: "prompt-other")
+        var runtimeIndex = 0
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub,
+                                                        timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                                        attachHandler: { _, _, _, _, _, _, _ in
+            defer { runtimeIndex += 1 }
+            return runtimeIndex == 0 ? firstRuntime : secondRuntime
+        })
+
+        syncer.sync(records: [
+            Self.record(sessionID: "first", runtime: "codex_app_server", socketPath: "/tmp/first.sock"),
+            Self.record(sessionID: "second", runtime: "codex_app_server", socketPath: "/tmp/second.sock"),
+        ])
+
+        let event = try syncer.submitApproval(promptID: "prompt-other",
+                                              targetIndex: 0,
+                                              workspaceID: "workspace-1",
+                                              panelID: "panel-first",
+                                              sessionID: "first")
+
+        XCTAssertEqual(event.type, .interactivePromptResolved)
+        XCTAssertEqual(event.sessionID, "first")
+        XCTAssertEqual(event.metadata?["prompt_id"], "prompt-other")
+        XCTAssertEqual(event.metadata?["reason"], "already_resolved")
+        XCTAssertEqual(firstRuntime.submitAttempts, ["prompt-other"])
+        XCTAssertTrue(secondRuntime.submitAttempts.isEmpty)
+    }
+
+    func testContextualSubmitDoesNotScanOtherRuntimesWhenSessionIsUnknown() throws {
+        let hub = AgentEventHub()
+        let runtime = FakeRuntimeSession()
+        runtime.resolvedEventsByPromptID["prompt-other"] = Self.event(sessionID: "second", promptID: "prompt-other")
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub,
+                                                        timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                                        attachHandler: { _, _, _, _, _, _, _ in
+            runtime
+        })
+
+        syncer.sync(records: [
+            Self.record(sessionID: "second", runtime: "codex_app_server", socketPath: "/tmp/second.sock"),
+        ])
+
+        let event = try syncer.submitApproval(promptID: "prompt-other",
+                                              targetIndex: 0,
+                                              workspaceID: "workspace-1",
+                                              panelID: "panel-missing",
+                                              sessionID: "missing")
+
+        XCTAssertEqual(event.sessionID, "missing")
+        XCTAssertEqual(event.metadata?["reason"], "already_resolved")
+        XCTAssertTrue(runtime.submitAttempts.isEmpty)
+    }
+
+    func testContextualSubmitReusesExistingResolvedEventWhenPromptWasAlreadyResolved() throws {
+        let hub = AgentEventHub()
+        let runtime = FakeRuntimeSession()
+        let resolved = Self.event(sessionID: "first", promptID: "prompt-done")
+        hub.publish(resolved)
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { _, _, _, _, _, _, _ in
+            runtime
+        })
+
+        syncer.sync(records: [
+            Self.record(sessionID: "first", runtime: "codex_app_server", socketPath: "/tmp/first.sock"),
+        ])
+
+        let event = try syncer.submitApproval(promptID: "prompt-done",
+                                              targetIndex: 0,
+                                              workspaceID: "workspace-1",
+                                              panelID: "panel-first",
+                                              sessionID: "first")
+
+        XCTAssertEqual(event.eventID, resolved.eventID)
+        XCTAssertEqual(runtime.submitAttempts, ["prompt-done"])
+    }
+
     func testSubmitMessageRoutesToMatchingRuntimeSession() throws {
         let hub = AgentEventHub()
         let firstRuntime = FakeRuntimeSession()
@@ -594,8 +674,7 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
                        ["prompt-prompt-first", "prompt-prompt-second"])
         XCTAssertEqual(syncer.pendingApprovalPromptEvents(workspaceID: "workspace-1", sessionID: "second").map(\.eventID),
                        ["prompt-prompt-second"])
-        XCTAssertEqual(syncer.pendingApprovalPromptEvents(workspaceID: "workspace-1", sessionID: "stale-session").map(\.eventID),
-                       ["prompt-prompt-first", "prompt-prompt-second"])
+        XCTAssertTrue(syncer.pendingApprovalPromptEvents(workspaceID: "workspace-1", sessionID: "stale-session").isEmpty)
         XCTAssertTrue(syncer.pendingApprovalPromptEvents(workspaceID: "other-workspace", sessionID: nil).isEmpty)
     }
 

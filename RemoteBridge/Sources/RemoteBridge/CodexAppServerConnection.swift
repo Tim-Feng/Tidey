@@ -54,6 +54,11 @@ struct CodexAppServerInteractivePromptEnvelope: Sendable {
     let event: AgentEvent
 }
 
+private struct CodexAppServerResolvedApproval: Sendable {
+    let prompt: InteractivePrompt
+    let response: JSONValue
+}
+
 final class CodexAppServerConnection {
     typealias SendLine = @Sendable (String) throws -> Void
     typealias ClientResponseHandler = (Result<JSONValue, CodexAppServerConnectionError>) -> Void
@@ -75,6 +80,8 @@ final class CodexAppServerConnection {
     private let timestampProvider: TimestampProvider
     private let onInteractivePrompt: InteractivePromptHandler
     private let onInteractivePromptResolved: InteractivePromptResolvedHandler
+    private let resolvedApprovalLock = NSLock()
+    private var resolvedApprovalsByPromptID: [String: CodexAppServerResolvedApproval] = [:]
 
     init(sendLine: @escaping SendLine,
          onNotification: @escaping NotificationHandler = { _ in },
@@ -208,8 +215,20 @@ final class CodexAppServerConnection {
 
     @discardableResult
     func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent {
-        let (entry, response) = try approvalStore.resolveEntry(promptID: promptID,
+        let entry: CodexAppServerApprovalPromptEntry
+        let response: JSONValue
+        do {
+            (entry, response) = try approvalStore.resolveEntry(promptID: promptID,
                                                                targetIndex: targetIndex)
+        } catch BridgeInternalError.notFound {
+            if let resolvedApproval = resolvedApproval(promptID: promptID) {
+                let event = makeResolvedEvent(prompt: resolvedApproval.prompt, reason: "already_resolved")
+                onInteractivePromptResolved(event)
+                return event
+            }
+            throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
+        }
+        rememberResolvedApproval(prompt: entry.prompt, response: response)
         let event = makeResolvedEvent(prompt: entry.prompt, reason: "submit")
         onInteractivePromptResolved(event)
         sendResult(id: entry.request.requestIDValue, result: response)
@@ -293,6 +312,13 @@ final class CodexAppServerConnection {
     }
 
     private func handleApprovalRequest(_ request: CodexAppServerApprovalRequest) {
+        let incomingPrompt = request.makePrompt()
+        if let resolvedApproval = resolvedApproval(promptID: incomingPrompt.promptID) {
+            let event = makeResolvedEvent(prompt: resolvedApproval.prompt, reason: "already_resolved")
+            onInteractivePromptResolved(event)
+            sendResult(id: request.requestIDValue, result: resolvedApproval.response)
+            return
+        }
         guard approvalContext != nil else {
             sendError(id: request.requestIDValue,
                       code: -32000,
@@ -370,5 +396,26 @@ final class CodexAppServerConnection {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.string(from: Date())
+    }
+
+    private func rememberResolvedApproval(prompt: InteractivePrompt, response: JSONValue) {
+        resolvedApprovalLock.withCodexResolvedApprovalLock {
+            resolvedApprovalsByPromptID[prompt.promptID] = CodexAppServerResolvedApproval(prompt: prompt,
+                                                                                          response: response)
+        }
+    }
+
+    private func resolvedApproval(promptID: String) -> CodexAppServerResolvedApproval? {
+        resolvedApprovalLock.withCodexResolvedApprovalLock {
+            resolvedApprovalsByPromptID[promptID]
+        }
+    }
+}
+
+private extension NSLock {
+    func withCodexResolvedApprovalLock<T>(_ body: () throws -> T) rethrows -> T {
+        lock()
+        defer { unlock() }
+        return try body()
     }
 }

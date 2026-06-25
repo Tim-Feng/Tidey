@@ -95,6 +95,46 @@ final class CodexAppServerConnectionTests: XCTestCase {
         XCTAssertEqual(response["result"]?.objectValue?["decision"]?.stringValue, "decline")
     }
 
+    func testSubmittingResolvedApprovalAgainReturnsAlreadyResolvedWithoutBridgeError() throws {
+        let outbound = LineSink()
+        var resolvedEvents = [AgentEvent]()
+        var promptEnvelope: CodexAppServerInteractivePromptEnvelope?
+        let connection = CodexAppServerConnection(
+            sendLine: { outbound.append($0) },
+            approvalContext: CodexAppServerApprovalContext(workspaceID: "workspace-1",
+                                                           panelID: "panel-1",
+                                                           sessionID: "session-1"),
+            timestampProvider: { "2026-06-05T12:00:00.000Z" },
+            onInteractivePrompt: { promptEnvelope = $0 },
+            onInteractivePromptResolved: { resolvedEvents.append($0) })
+
+        let approvalLine = """
+        {"id":"approval-1","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","startedAtMs":1786000000000,"reason":"Needs network.","command":"python3 -c 'print(1)'","cwd":"/Users/timfeng/GitHub/Tidey","proposedExecpolicyAmendment":["python3","-c"]}}
+        """
+        connection.receiveLine(approvalLine)
+        let envelope = try XCTUnwrap(promptEnvelope)
+
+        let firstResolved = try connection.submitApproval(promptID: envelope.prompt.promptID,
+                                                          targetIndex: 0)
+        let secondResolved = try connection.submitApproval(promptID: envelope.prompt.promptID,
+                                                           targetIndex: 0)
+
+        XCTAssertEqual(firstResolved.metadata?["reason"], "submit")
+        XCTAssertEqual(secondResolved.metadata?["reason"], "already_resolved")
+        XCTAssertEqual(resolvedEvents.map { $0.metadata?["reason"] }, ["submit", "already_resolved"])
+        XCTAssertEqual(outbound.lines().count, 1)
+
+        promptEnvelope = nil
+        connection.receiveLine(approvalLine)
+
+        XCTAssertNil(promptEnvelope)
+        XCTAssertEqual(resolvedEvents.last?.metadata?["reason"], "already_resolved")
+        XCTAssertEqual(outbound.lines().count, 2)
+        let replayResponse = try Self.object(from: outbound.lines()[1])
+        XCTAssertEqual(replayResponse["id"]?.stringValue, "approval-1")
+        XCTAssertEqual(replayResponse["result"]?.objectValue?["decision"]?.stringValue, "accept")
+    }
+
     func testFileChangeApprovalRequestPublishesPromptAndSubmitSendsDecisionReply() throws {
         let outbound = LineSink()
         var promptEnvelope: CodexAppServerInteractivePromptEnvelope?

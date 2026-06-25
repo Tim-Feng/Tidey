@@ -200,8 +200,53 @@ final class InteractivePromptActionHandlerTests: XCTestCase {
         XCTAssertTrue(response.ok)
         XCTAssertEqual(submitter.submissions.map(\.promptID), ["prompt-1"])
         XCTAssertEqual(submitter.submissions.map(\.targetIndex), [1])
+        XCTAssertEqual(submitter.submissions.map(\.workspaceID), [route.workspaceID])
+        XCTAssertEqual(submitter.submissions.map(\.panelID), [route.panelID])
+        XCTAssertEqual(submitter.submissions.map(\.sessionID), [route.sessionID])
         XCTAssertEqual(response.result?["status"]?.stringValue, "resolved")
         XCTAssertEqual(response.result?["resolved_event"]?.objectValue?["type"]?.stringValue, "interactive_prompt_resolved")
+    }
+
+    func testSubmitCodexApprovalReturnsAlreadyResolvedStatus() throws {
+        let route = ordinaryRoute()
+        let submitter = StubCodexApprovalSubmitter()
+        submitter.resolvedEvent = AgentEvent(eventID: "resolved-prompt-1",
+                                             seq: 10,
+                                             vendor: "codex",
+                                             workspaceID: route.workspaceID,
+                                             sessionID: route.sessionID,
+                                             timestamp: "2026-06-07T00:00:00.000Z",
+                                             type: .interactivePromptResolved,
+                                             role: nil,
+                                             text: nil,
+                                             name: nil,
+                                             input: nil,
+                                             output: nil,
+                                             toolCallID: nil,
+                                             metadata: [
+                                                "panel_id": route.panelID,
+                                                "prompt_id": "prompt-1",
+                                                "source": "codex_command_approval",
+                                                "reason": "already_resolved",
+                                             ])
+        let handler = makeHandler(route: route,
+                                  adapter: StubPromptAdapter(outputs: []),
+                                  activeVendor: "codex",
+                                  codexApprovalSubmitter: submitter)
+
+        let response = try XCTUnwrap(handler.handle(BridgeRequest(id: "request-1",
+                                                                  action: "submit_interactive_prompt",
+                                                                  params: [
+                                                                    "workspace_id": .string(route.workspaceID),
+                                                                    "panel_id": .string(route.panelID),
+                                                                    "prompt_id": .string("prompt-1"),
+                                                                    "target_index": .number(1),
+                                                                  ])))
+
+        XCTAssertTrue(response.ok)
+        XCTAssertEqual(response.result?["status"]?.stringValue, "already_resolved")
+        XCTAssertEqual(response.result?["resolved_event"]?.objectValue?["metadata"]?.objectValue?["reason"]?.stringValue,
+                       "already_resolved")
     }
 
     func testSubmitCodexApprovalDoesNotRequireOrdinaryTmuxRoute() throws {
@@ -540,10 +585,26 @@ private final class StubPromptInputRouter: OrdinaryTmuxInputRouting, @unchecked 
 
 private final class StubCodexApprovalSubmitter: CodexAppServerApprovalSubmitting {
     var resolvedEvent: AgentEvent?
-    private(set) var submissions = [(promptID: String, targetIndex: Int)]()
+    private(set) var submissions = [(promptID: String, targetIndex: Int, workspaceID: String?, panelID: String?, sessionID: String?)]()
 
     func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent {
-        submissions.append((promptID: promptID, targetIndex: targetIndex))
+        submissions.append((promptID: promptID, targetIndex: targetIndex, workspaceID: nil, panelID: nil, sessionID: nil))
+        guard let resolvedEvent else {
+            throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
+        }
+        return resolvedEvent
+    }
+
+    func submitApproval(promptID: String,
+                        targetIndex: Int,
+                        workspaceID: String,
+                        panelID: String,
+                        sessionID: String?) throws -> AgentEvent {
+        submissions.append((promptID: promptID,
+                            targetIndex: targetIndex,
+                            workspaceID: workspaceID,
+                            panelID: panelID,
+                            sessionID: sessionID))
         guard let resolvedEvent else {
             throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
         }

@@ -995,9 +995,11 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                                       returnedCount: fetchResult.events.count,
                                       didBackfill: didBackfill,
                                       durationMs: (CFAbsoluteTimeGetCurrent() - startedAt) * 1000)
-            let events = Self.mergedAgentEvents(fetchResult.events,
-                                                pendingCodexApprovalEvents(workspaceID: workspaceID,
-                                                                           sessionID: sessionID))
+            let pendingEvents = AgentInteractivePromptEventReducer.pendingEvents(
+                pendingCodexApprovalEvents(workspaceID: workspaceID, sessionID: sessionID),
+                excludingResolvedIn: fetchResult.events)
+            let events = AgentInteractivePromptEventReducer.mergedEvents(fetchResult.events,
+                                                                         pendingEvents)
             return LocalRequestResult(
                 response: BridgeResponse(id: request.id,
                                          ok: true,
@@ -1158,32 +1160,16 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
             return replayEnvelopes
         }
         let pendingEvents = pendingCodexApprovalEvents(workspaceID: workspaceID, sessionID: sessionID)
-        let events = Self.mergedAgentEvents(replayEnvelopes.map(\.event), pendingEvents)
+        let replayEvents = replayEnvelopes.map(\.event)
+        let activePendingEvents = AgentInteractivePromptEventReducer.pendingEvents(pendingEvents,
+                                                                                  excludingResolvedIn: replayEvents)
+        let events = AgentInteractivePromptEventReducer.mergedEvents(replayEvents, activePendingEvents)
         return events.map { event in
             if let existing = replayEnvelopes.first(where: { $0.event.eventID == event.eventID }) {
                 return existing
             }
             return AgentEventEnvelope(replay: true, event: event)
         }
-    }
-
-    private static func mergedAgentEvents(_ events: [AgentEvent],
-                                          _ additionalEvents: [AgentEvent]) -> [AgentEvent] {
-        var seen = Set<String>()
-        return (events + additionalEvents)
-            .filter { event in
-                guard seen.contains(event.eventID) == false else {
-                    return false
-                }
-                seen.insert(event.eventID)
-                return true
-            }
-            .sorted { lhs, rhs in
-                if lhs.timestamp == rhs.timestamp {
-                    return lhs.seq < rhs.seq
-                }
-                return lhs.timestamp < rhs.timestamp
-            }
     }
 
     private func augment(response: BridgeResponse, for request: BridgeRequest) -> BridgeResponse {
