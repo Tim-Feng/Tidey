@@ -12,6 +12,8 @@
                               workspaceSummaries:(NSArray<NSDictionary *> *)workspaceSummaries
                                 sendInputHandler:(BOOL (^)(NSString *workspaceID, NSString *input))sendInputHandler
                             recentOutputProvider:(NSString * _Nullable (^)(NSString *workspaceID))recentOutputProvider;
++ (NSArray<NSDictionary *> *)tideyWorkspaceSummaries:(NSArray<NSDictionary *> *)workspaceSummaries
+                 filteredToWindowForListWorkspacesSource:(NSDictionary *)source;
 - (void)acceptFileDescriptor:(int)fd;
 - (void)cleanupStaleSockets:(NSString *)directory;
 - (NSUInteger)tideyTestingConnectionCount;
@@ -43,6 +45,61 @@
     NSDictionary *response = [TideySocketServer tideyResponseForRequestMessage:@{
         @"id": @"req-2",
         @"action": @"list_workspaces",
+    }
+                                                                  workspaceSummaries:workspaces
+                                                                    sendInputHandler:nil
+                                                                recentOutputProvider:nil];
+    XCTAssertEqualObjects(response[@"ok"], @YES);
+    XCTAssertEqualObjects(response[@"result"][@"workspaces"], workspaces);
+}
+
+- (void)testListWorkspacesCanScopeToSourceWorkspaceWindow {
+    NSArray *workspaces = @[
+        @{ @"workspace_id": @"ws-other", @"title": @"Other Window", @"window_guid": @"window-1" },
+        @{ @"workspace_id": @"ws-source", @"title": @"Current", @"window_guid": @"window-2" },
+        @{ @"workspace_id": @"ws-sibling", @"title": @"Sibling", @"window_guid": @"window-2" },
+    ];
+    NSDictionary *response = [TideySocketServer tideyResponseForRequestMessage:@{
+        @"id": @"req-scoped",
+        @"action": @"list_workspaces",
+        @"params": @{ @"source_workspace_id": @"ws-source" },
+    }
+                                                                  workspaceSummaries:workspaces
+                                                                    sendInputHandler:nil
+                                                                recentOutputProvider:nil];
+    XCTAssertEqualObjects(response[@"ok"], @YES);
+    XCTAssertEqualObjects(response[@"result"][@"workspaces"], (@[
+        workspaces[1],
+        workspaces[2],
+    ]));
+}
+
+- (void)testListWorkspacesCanScopeToExplicitWindowGUID {
+    NSArray *workspaces = @[
+        @{ @"workspace_id": @"ws-other", @"title": @"Other Window", @"window_guid": @"window-1" },
+        @{ @"workspace_id": @"ws-current", @"title": @"Current", @"window_guid": @"window-2" },
+    ];
+    NSDictionary *response = [TideySocketServer tideyResponseForRequestMessage:@{
+        @"id": @"req-window",
+        @"action": @"list_workspaces",
+        @"params": @{ @"source_window_guid": @"window-2" },
+    }
+                                                                  workspaceSummaries:workspaces
+                                                                    sendInputHandler:nil
+                                                                recentOutputProvider:nil];
+    XCTAssertEqualObjects(response[@"ok"], @YES);
+    XCTAssertEqualObjects(response[@"result"][@"workspaces"], (@[ workspaces[1] ]));
+}
+
+- (void)testListWorkspacesIgnoresBareWorkspaceIDForCompatibility {
+    NSArray *workspaces = @[
+        @{ @"workspace_id": @"ws-other", @"title": @"Other Window", @"window_guid": @"window-1" },
+        @{ @"workspace_id": @"ws-current", @"title": @"Current", @"window_guid": @"window-2" },
+    ];
+    NSDictionary *response = [TideySocketServer tideyResponseForRequestMessage:@{
+        @"id": @"req-bare-workspace",
+        @"action": @"list_workspaces",
+        @"params": @{ @"workspace_id": @"ws-current" },
     }
                                                                   workspaceSummaries:workspaces
                                                                     sendInputHandler:nil

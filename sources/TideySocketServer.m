@@ -338,6 +338,27 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
     return [[iTermController sharedInstance] terminalWithGuid:windowGUID];
 }
 
+- (PseudoTerminal *)tideyTerminalForWorkspaceListSource:(NSDictionary *)source sourceWasSpecified:(BOOL *)sourceWasSpecified {
+    NSString *windowGUID = TideySocketStringParam(source, @"source_window_guid");
+    NSString *panelID = TideySocketStringParam(source, @"source_panel_id");
+    NSString *workspaceID = TideySocketStringParam(source, @"source_workspace_id");
+
+    const BOOL hasSource = windowGUID.length > 0 || panelID.length > 0 || workspaceID.length > 0;
+    if (sourceWasSpecified) {
+        *sourceWasSpecified = hasSource;
+    }
+    if (!hasSource) {
+        return nil;
+    }
+    if (windowGUID.length > 0) {
+        return [self tideyTerminalForWindowGUID:windowGUID];
+    }
+    if (panelID.length > 0) {
+        return [self tideyTerminalForPanelIdentifier:panelID];
+    }
+    return [self tideyTerminalForWorkspaceIdentifier:workspaceID];
+}
+
 - (void)setWorkspaceEventSubscriptionForConnection:(TideySocketConnection *)connection
                                        workspaceID:(NSString *)workspaceID {
     if (!connection) {
@@ -478,7 +499,7 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
     }
 
     if ([action isEqualToString:@"list_workspaces"]) {
-        [self handleListWorkspacesRequestWithID:requestID onConnection:connection];
+        [self handleListWorkspacesRequestWithID:requestID source:source onConnection:connection];
         return;
     }
 
@@ -907,10 +928,24 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
 }
 
 - (void)handleListWorkspacesRequestWithID:(NSString *)requestID
+                                   source:(NSDictionary *)source
                              onConnection:(TideySocketConnection *)connection {
     NSMutableArray<NSDictionary *> *workspaces = [NSMutableArray array];
-    for (PseudoTerminal *term in [[iTermController sharedInstance] terminals]) {
-        [workspaces addObjectsFromArray:[term tideySocketWorkspaceSummaries]];
+    BOOL sourceWasSpecified = NO;
+    PseudoTerminal *sourceTerm = [self tideyTerminalForWorkspaceListSource:source sourceWasSpecified:&sourceWasSpecified];
+    if (sourceWasSpecified) {
+        if (!sourceTerm) {
+            [self sendErrorResponseForRequestID:requestID
+                                           code:@"source_not_found"
+                                        message:@"No Tidey window matched the list_workspaces source."
+                                   onConnection:connection];
+            return;
+        }
+        [workspaces addObjectsFromArray:[sourceTerm tideySocketWorkspaceSummaries]];
+    } else {
+        for (PseudoTerminal *term in [[iTermController sharedInstance] terminals]) {
+            [workspaces addObjectsFromArray:[term tideySocketWorkspaceSummaries]];
+        }
     }
     [self sendSuccessResponseForRequestID:requestID
                                    result:@{ @"workspaces": workspaces }
@@ -1085,6 +1120,35 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
     return response;
 }
 
++ (NSArray<NSDictionary *> *)tideyWorkspaceSummaries:(NSArray<NSDictionary *> *)workspaceSummaries
+                 filteredToWindowForListWorkspacesSource:(NSDictionary *)source {
+    NSString *windowGUID = TideySocketStringParam(source, @"source_window_guid");
+    NSString *workspaceID = TideySocketStringParam(source, @"source_workspace_id");
+    if (windowGUID.length == 0 && workspaceID.length > 0) {
+        for (NSDictionary *summary in workspaceSummaries ?: @[]) {
+            NSString *summaryWorkspaceID = [summary[@"workspace_id"] isKindOfClass:[NSString class]] ? summary[@"workspace_id"] : nil;
+            if (![summaryWorkspaceID isEqualToString:workspaceID]) {
+                continue;
+            }
+            NSString *summaryWindowGUID = [summary[@"window_guid"] isKindOfClass:[NSString class]] ? summary[@"window_guid"] : nil;
+            windowGUID = summaryWindowGUID ?: @"";
+            break;
+        }
+    }
+    if (windowGUID.length == 0) {
+        return workspaceSummaries ?: @[];
+    }
+
+    NSMutableArray<NSDictionary *> *filtered = [NSMutableArray array];
+    for (NSDictionary *summary in workspaceSummaries ?: @[]) {
+        NSString *summaryWindowGUID = [summary[@"window_guid"] isKindOfClass:[NSString class]] ? summary[@"window_guid"] : nil;
+        if ([summaryWindowGUID isEqualToString:windowGUID]) {
+            [filtered addObject:summary];
+        }
+    }
+    return filtered;
+}
+
 + (NSDictionary *)tideyResponseForRequestMessage:(NSDictionary *)message
                                workspaceSummaries:(NSArray<NSDictionary *> *)workspaceSummaries
                                  sendInputHandler:(TideySocketSendInputHandler)sendInputHandler
@@ -1101,8 +1165,12 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
         return [self tideySuccessResponseForRequestID:requestID result:@{ @"pong": @YES }];
     }
     if ([action isEqualToString:@"list_workspaces"]) {
+        NSDictionary *params = [message[@"params"] isKindOfClass:[NSDictionary class]] ? message[@"params"] : nil;
+        NSDictionary *source = params ?: message;
+        NSArray<NSDictionary *> *scopedWorkspaceSummaries =
+            [self tideyWorkspaceSummaries:workspaceSummaries filteredToWindowForListWorkspacesSource:source];
         return [self tideySuccessResponseForRequestID:requestID
-                                               result:@{ @"workspaces": workspaceSummaries ?: @[] }];
+                                               result:@{ @"workspaces": scopedWorkspaceSummaries ?: @[] }];
     }
 
     NSDictionary *params = [message[@"params"] isKindOfClass:[NSDictionary class]] ? message[@"params"] : nil;
