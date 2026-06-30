@@ -37,7 +37,6 @@ extension CodexAppServerRuntimeSession: CodexAppServerRuntimeSessionControlling 
 
 final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, CodexAppServerApprovalPromptProviding, CodexAppServerChatSubmitting {
     typealias SidebarMessageSender = (String) throws -> Void
-    typealias SidebarWorkspaceIDResolver = (AgentSessionRegistryRecord) -> String?
     typealias DateProvider = () -> Date
     typealias ActiveThreadHandler = (_ sessionID: String, _ threadID: String) -> Void
     typealias AttachHandler = (_ record: AgentSessionRegistryRecord,
@@ -55,7 +54,6 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
 
     private let eventHub: AgentEventHub
     private let sidebarMessageSender: SidebarMessageSender
-    private let sidebarWorkspaceIDResolver: SidebarWorkspaceIDResolver
     private let sidebarQueue = DispatchQueue(label: "com.tidey.remote-bridge.codex-app-server-sidebar")
     private let timestampProvider: CodexAppServerConnection.TimestampProvider
     private let dateProvider: DateProvider
@@ -71,14 +69,12 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
     init(eventHub: AgentEventHub,
          factory: CodexAppServerRuntimeSessionFactory = CodexAppServerRuntimeSessionFactory(),
          sidebarMessageSender: @escaping SidebarMessageSender = { _ in },
-         sidebarWorkspaceIDResolver: @escaping SidebarWorkspaceIDResolver = { _ in nil },
          timestampProvider: @escaping CodexAppServerConnection.TimestampProvider = CodexAppServerRegistryRuntimeSyncer.iso8601Now,
          dateProvider: @escaping DateProvider = Date.init,
          activeThreadRefreshInterval: TimeInterval = 2.0,
          attachHandler: AttachHandler? = nil) {
         self.eventHub = eventHub
         self.sidebarMessageSender = sidebarMessageSender
-        self.sidebarWorkspaceIDResolver = sidebarWorkspaceIDResolver
         self.timestampProvider = timestampProvider
         self.dateProvider = dateProvider
         self.activeThreadRefreshInterval = activeThreadRefreshInterval
@@ -360,8 +356,7 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
         let payloadKind = event.payload?.objectValue?["kind"]?.stringValue
         switch (event.type, payloadKind) {
         case (.thinking, "turn_started"):
-            let workspaceID = sidebarWorkspaceID(for: record)
-            sendSidebarOnQueue(messages: CodexSidebarMessages.running(workspaceID: workspaceID),
+            sendSidebarOnQueue(messages: CodexSidebarMessages.running(workspaceID: record.workspaceID),
                                sessionID: record.sessionID)
 
         case (.assistantMessage, "assistant_message"):
@@ -377,8 +372,7 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
             let body = lock.withCodexRuntimeSyncerLock {
                 lastAssistantTextBySessionID.removeValue(forKey: record.sessionID)
             } ?? "Task completed"
-            let workspaceID = sidebarWorkspaceID(for: record)
-            sendSidebarOnQueue(messages: CodexSidebarMessages.completed(workspaceID: workspaceID,
+            sendSidebarOnQueue(messages: CodexSidebarMessages.completed(workspaceID: record.workspaceID,
                                                                         body: body),
                                sessionID: record.sessionID)
 
@@ -390,8 +384,7 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
             _ = lock.withCodexRuntimeSyncerLock {
                 lastAssistantTextBySessionID.removeValue(forKey: record.sessionID)
             }
-            let workspaceID = sidebarWorkspaceID(for: record)
-            sendSidebarOnQueue(messages: CodexSidebarMessages.completed(workspaceID: workspaceID,
+            sendSidebarOnQueue(messages: CodexSidebarMessages.completed(workspaceID: record.workspaceID,
                                                                         body: body),
                                sessionID: record.sessionID)
 
@@ -399,16 +392,14 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
             guard shouldNotifyPrompt(event, sessionID: record.sessionID) else {
                 return
             }
-            let workspaceID = sidebarWorkspaceID(for: record)
             sendSidebarOnQueue(messages: AgentInteractivePromptSidebarMessages.messages(for: event,
-                                                                                       workspaceID: workspaceID),
+                                                                                       workspaceID: record.workspaceID),
                                sessionID: record.sessionID)
 
         case (.interactivePromptResolved, _):
             markPromptResolved(event, sessionID: record.sessionID)
-            let workspaceID = sidebarWorkspaceID(for: record)
             sendSidebarOnQueue(messages: AgentInteractivePromptSidebarMessages.messages(for: event,
-                                                                                       workspaceID: workspaceID),
+                                                                                       workspaceID: record.workspaceID),
                                sessionID: record.sessionID)
 
         default:
@@ -422,17 +413,6 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
 
     private func markPromptResolved(_ event: AgentEvent, sessionID: String) {
         promptNotificationDeduper.markResolved(event, sessionID: sessionID)
-    }
-
-    private func sidebarWorkspaceID(for record: AgentSessionRegistryRecord) -> String {
-        guard let resolvedWorkspaceID = sidebarWorkspaceIDResolver(record),
-              resolvedWorkspaceID.isEmpty == false else {
-            return record.workspaceID
-        }
-        if resolvedWorkspaceID != record.workspaceID {
-            BridgeLogger.server.info("codex app-server sidebar workspace resolved session_id=\(record.sessionID, privacy: .public) old_workspace_id=\(record.workspaceID, privacy: .public) workspace_id=\(resolvedWorkspaceID, privacy: .public)")
-        }
-        return resolvedWorkspaceID
     }
 
     private func sendSidebarOnQueue(messages: [String], sessionID: String) {

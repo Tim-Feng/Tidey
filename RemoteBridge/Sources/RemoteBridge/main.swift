@@ -19,16 +19,16 @@ let locator = TideySocketLocator()
 let socketClient = TideySocketClient(locator: locator)
 let eventHub = AgentEventHub()
 let workspaceEventHub = WorkspaceEventHub()
-let ordinaryTmuxWorkspaceResolver = TideyOrdinaryTmuxWorkspaceResolver(socketClient: socketClient)
+let ordinaryTmuxCarrierResolver = TideyOrdinaryTmuxCarrierResolver(socketClient: socketClient)
 let codexRuntimeSyncer = CodexAppServerRegistryRuntimeSyncer(eventHub: eventHub,
                                                              sidebarMessageSender: { command in
                                                                  try socketClient.send(command: command)
-                                                             },
-                                                             sidebarWorkspaceIDResolver: { record in
-                                                                 ordinaryTmuxWorkspaceResolver.workspaceID(for: record)
                                                              })
 let registryMonitor = AgentSessionRegistryMonitor(hub: eventHub,
                                                   socketClient: socketClient,
+                                                  ordinaryTmuxCarrierIdentityResolver: { record in
+                                                      ordinaryTmuxCarrierResolver.carrierIdentity(for: record)
+                                                  },
                                                   runtimeSyncer: codexRuntimeSyncer)
 codexRuntimeSyncer.activeThreadHandler = { [weak registryMonitor] sessionID, threadID in
     registryMonitor?.appServerActiveThreadDidChange(sessionID: sessionID, threadID: threadID)

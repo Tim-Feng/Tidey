@@ -198,6 +198,7 @@ final class AgentSessionRegistryMonitor {
     typealias DescendantProcessLookup = @Sendable (Int32) -> [AgentProcessDescriptor]
     typealias RolloutPathLookup = @Sendable (Int32) -> String?
     typealias CodexRolloutBySessionIDLookup = @Sendable (String) -> String?
+    typealias OrdinaryTmuxCarrierIdentityResolver = (AgentSessionRegistryRecord) -> TideyOrdinaryTmuxCarrierIdentity?
     private static let liveParentPIDLookup: ParentPIDLookup = { pid in
         guard pid > 0 else {
             return nil
@@ -391,6 +392,7 @@ final class AgentSessionRegistryMonitor {
     private let descendantProcessLookup: DescendantProcessLookup
     private let rolloutPathLookup: RolloutPathLookup
     private let codexRolloutBySessionIDLookup: CodexRolloutBySessionIDLookup
+    private let ordinaryTmuxCarrierIdentityResolver: OrdinaryTmuxCarrierIdentityResolver?
     private let runtimeSyncer: AgentSessionRuntimeSyncing?
     private let queue = DispatchQueue(label: "com.tidey.remote-bridge.agent-registry")
     private var timer: DispatchSourceTimer?
@@ -414,6 +416,7 @@ final class AgentSessionRegistryMonitor {
          descendantProcessLookup: @escaping DescendantProcessLookup = AgentSessionRegistryMonitor.liveDescendantProcessLookup,
          rolloutPathLookup: @escaping RolloutPathLookup = AgentSessionRegistryMonitor.liveRolloutPathLookup,
          codexRolloutBySessionIDLookup: @escaping CodexRolloutBySessionIDLookup = AgentSessionRegistryMonitor.liveCodexRolloutBySessionIDLookup,
+         ordinaryTmuxCarrierIdentityResolver: OrdinaryTmuxCarrierIdentityResolver? = nil,
          runtimeSyncer: AgentSessionRuntimeSyncing? = nil) {
         self.paths = paths
         self.fileManager = fileManager
@@ -425,6 +428,7 @@ final class AgentSessionRegistryMonitor {
         self.descendantProcessLookup = descendantProcessLookup
         self.rolloutPathLookup = rolloutPathLookup
         self.codexRolloutBySessionIDLookup = codexRolloutBySessionIDLookup
+        self.ordinaryTmuxCarrierIdentityResolver = ordinaryTmuxCarrierIdentityResolver
         self.runtimeSyncer = runtimeSyncer
     }
 
@@ -768,7 +772,12 @@ final class AgentSessionRegistryMonitor {
 
         guard let socketPath = normalizedNonEmptySocketPath(record.tmuxSocketPath),
               let identity = tmuxResolver.paneIdentity(forPaneID: paneID, socketPath: socketPath) else {
-            return nil
+            guard let carrierIdentity = ordinaryTmuxCarrierIdentityResolver?(record) else {
+                return nil
+            }
+            return (TmuxPaneIdentity(workspaceID: carrierIdentity.workspaceID,
+                                     panelID: carrierIdentity.panelID),
+                    normalizedNonEmptySocketPath(carrierIdentity.socketPath))
         }
         return (identity, socketPath)
     }
