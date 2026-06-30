@@ -683,6 +683,30 @@ final class PathTests: XCTestCase {
                         ObjCBool(createWorkspace)).boolValue
     }
 
+    private func tideyTargetWorkspaceIndexForInsertedPanel(showingSidebar: Bool = true,
+                                                           selectedWorkspaceIndex: Int,
+                                                           pendingWorkspaceIndex: Int,
+                                                           createWorkspace: Bool = false,
+                                                           rebuildingVisibleWorkspace: Bool = false,
+                                                           inferredWorkspaceIndex: Int = NSNotFound) -> Int {
+        let selector = NSSelectorFromString("tideyTargetWorkspaceIndexForInsertedPanelShowingSidebar:selectedWorkspaceIndex:pendingWorkspaceIndex:createWorkspace:rebuildingVisibleWorkspace:inferredWorkspaceIndex:")
+        guard let method = class_getClassMethod(PseudoTerminal.self, selector) else {
+            XCTFail("Missing PseudoTerminal effective target workspace helper")
+            return NSNotFound
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, ObjCBool, Int, Int, ObjCBool, ObjCBool, Int) -> Int
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        return function(PseudoTerminal.self,
+                        selector,
+                        ObjCBool(showingSidebar),
+                        selectedWorkspaceIndex,
+                        pendingWorkspaceIndex,
+                        ObjCBool(createWorkspace),
+                        ObjCBool(rebuildingVisibleWorkspace),
+                        inferredWorkspaceIndex)
+    }
+
     private func tideyShouldUpdateSelectedPanelFromVisibleSelection(showingSidebar: Bool = true,
                                                                     switchingWorkspace: Bool = false,
                                                                     rebuildingVisibleWorkspace: Bool = false,
@@ -1798,8 +1822,39 @@ final class PathTests: XCTestCase {
                                                                     createWorkspace: true))
     }
 
+    func testImplicitPanelInsertInSidebarTargetsSelectedWorkspace() {
+        let target = tideyTargetWorkspaceIndexForInsertedPanel(selectedWorkspaceIndex: 1,
+                                                               pendingWorkspaceIndex: -1)
+
+        XCTAssertEqual(target, 1)
+        XCTAssertTrue(tideyShouldManagePendingPanelInsert(pendingWorkspaceIndex: target,
+                                                          createWorkspace: false))
+        XCTAssertTrue(tideyShouldInsertPendingPanelIntoVisibleTabs(selectedWorkspaceIndex: 1,
+                                                                   targetWorkspaceIndex: target,
+                                                                   createWorkspace: false))
+    }
+
+    func testImplicitTmuxPanelInsertKeepsInferredWorkspace() {
+        let target = tideyTargetWorkspaceIndexForInsertedPanel(selectedWorkspaceIndex: 1,
+                                                               pendingWorkspaceIndex: -1,
+                                                               inferredWorkspaceIndex: 0)
+
+        XCTAssertEqual(target, 0)
+        XCTAssertTrue(tideyShouldManagePendingPanelInsert(pendingWorkspaceIndex: target,
+                                                          createWorkspace: false))
+        XCTAssertFalse(tideyShouldInsertPendingPanelIntoVisibleTabs(selectedWorkspaceIndex: 1,
+                                                                    targetWorkspaceIndex: target,
+                                                                    createWorkspace: false))
+    }
+
     func testVisibleWorkspaceRebuildAlwaysUsesVisibleTabView() {
-        XCTAssertFalse(tideyShouldManagePendingPanelInsert(pendingWorkspaceIndex: -1, createWorkspace: false))
+        let target = tideyTargetWorkspaceIndexForInsertedPanel(selectedWorkspaceIndex: 1,
+                                                               pendingWorkspaceIndex: -1,
+                                                               rebuildingVisibleWorkspace: true,
+                                                               inferredWorkspaceIndex: 0)
+
+        XCTAssertEqual(target, -1)
+        XCTAssertFalse(tideyShouldManagePendingPanelInsert(pendingWorkspaceIndex: target, createWorkspace: false))
         XCTAssertFalse(tideyShouldManagePendingPanelInsert(pendingWorkspaceIndex: NSNotFound, createWorkspace: false))
         XCTAssertTrue(tideyShouldInsertPendingPanelIntoVisibleTabs(selectedWorkspaceIndex: 1,
                                                                    targetWorkspaceIndex: 0,

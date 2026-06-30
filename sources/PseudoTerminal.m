@@ -1414,6 +1414,25 @@ ITERM_WEAKLY_REFERENCEABLE
     return showingSidebar && (createWorkspace || hasPendingWorkspace);
 }
 
++ (NSInteger)tideyTargetWorkspaceIndexForInsertedPanelShowingSidebar:(BOOL)showingSidebar
+                                              selectedWorkspaceIndex:(NSInteger)selectedWorkspaceIndex
+                                               pendingWorkspaceIndex:(NSInteger)pendingWorkspaceIndex
+                                                     createWorkspace:(BOOL)createWorkspace
+                                          rebuildingVisibleWorkspace:(BOOL)rebuildingVisibleWorkspace
+                                              inferredWorkspaceIndex:(NSInteger)inferredWorkspaceIndex {
+    const BOOL hasPendingWorkspace = (pendingWorkspaceIndex >= 0 && pendingWorkspaceIndex != NSNotFound);
+    if (!showingSidebar || createWorkspace || hasPendingWorkspace || rebuildingVisibleWorkspace) {
+        return pendingWorkspaceIndex;
+    }
+    if (inferredWorkspaceIndex >= 0 && inferredWorkspaceIndex != NSNotFound) {
+        return inferredWorkspaceIndex;
+    }
+    if (selectedWorkspaceIndex >= 0 && selectedWorkspaceIndex != NSNotFound) {
+        return selectedWorkspaceIndex;
+    }
+    return pendingWorkspaceIndex;
+}
+
 - (Workspace *)selectedWorkspace {
     return [self workspaceAtIndex:self.selectedWorkspaceIndex];
 }
@@ -14274,16 +14293,20 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
     if ([_contentView.tabView indexOfTabViewItemWithIdentifier:aTab] == NSNotFound) {
         NSInteger targetWorkspaceIndex = _pendingWorkspaceIndexForInsertedPanel;
         const BOOL createWorkspace = _pendingInsertedPanelCreatesWorkspace;
+        NSInteger inferredWorkspaceIndex = NSNotFound;
         if (self.isShowingTideySidebar &&
             targetWorkspaceIndex < 0 &&
             !createWorkspace &&
             aTab.isTmuxTab) {
-            NSInteger tmuxWorkspaceIndex = [self tideyWorkspaceIndexForTmuxController:aTab.tmuxController
-                                                                       excludingPanel:aTab];
-            if (tmuxWorkspaceIndex != NSNotFound) {
-                targetWorkspaceIndex = tmuxWorkspaceIndex;
-            }
+            inferredWorkspaceIndex = [self tideyWorkspaceIndexForTmuxController:aTab.tmuxController
+                                                                 excludingPanel:aTab];
         }
+        targetWorkspaceIndex = [[self class] tideyTargetWorkspaceIndexForInsertedPanelShowingSidebar:self.isShowingTideySidebar
+                                                                               selectedWorkspaceIndex:self.selectedWorkspaceIndex
+                                                                                pendingWorkspaceIndex:targetWorkspaceIndex
+                                                                                      createWorkspace:createWorkspace
+                                                                           rebuildingVisibleWorkspace:_tideyRebuildingVisibleWorkspaceTabs
+                                                                               inferredWorkspaceIndex:inferredWorkspaceIndex];
         const BOOL shouldManageTideyWorkspaceInsert = [[self class] tideyShouldManagePendingPanelInsertForShowingSidebar:self.isShowingTideySidebar
                                                                                                   pendingWorkspaceIndex:targetWorkspaceIndex
                                                                                                         createWorkspace:createWorkspace];
