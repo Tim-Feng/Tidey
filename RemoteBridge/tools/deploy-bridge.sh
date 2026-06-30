@@ -40,7 +40,7 @@ EOF
 write_deploy_metadata() {
   local repo_head
   repo_head="$(git -C "$TIDEY_REPO_DIR" rev-parse --short=9 HEAD 2>/dev/null || true)"
-  python3 - "$DEPLOY_METADATA_PATH" "$TIDEY_REPO_DIR" "$repo_head" "$TARGET_BINARY" <<'PY'
+  if python3 - "$DEPLOY_METADATA_PATH" "$TIDEY_REPO_DIR" "$repo_head" "$TARGET_BINARY" <<'PY'
 import datetime as dt
 import hashlib
 import json
@@ -74,7 +74,11 @@ with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=os.path.dirname(meta
     temp_name = handle.name
 os.replace(temp_name, metadata_path)
 PY
-  echo "Deploy metadata: $DEPLOY_METADATA_PATH"
+  then
+    echo "Deploy metadata: $DEPLOY_METADATA_PATH"
+  else
+    return 1
+  fi
 }
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
@@ -110,7 +114,7 @@ for _ in {1..20}; do
   http_code="$(curl -sS -o /dev/null -w '%{http_code}' "$HEALTH_URL" || true)"
   if [[ "$http_code" == "200" || "$http_code" == "401" ]]; then
     echo "Bridge healthy: $HEALTH_URL (http $http_code)"
-    write_deploy_metadata
+    write_deploy_metadata || echo "warning: failed to write deploy metadata" >&2
     exit 0
   fi
   sleep 0.5

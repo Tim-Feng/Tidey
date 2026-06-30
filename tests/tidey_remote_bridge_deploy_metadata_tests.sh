@@ -73,3 +73,19 @@ assert payload["bridge_binary_sha256"] == expected_sha
 assert payload["bridge_binary_size"] == binary_path.stat().st_size
 assert "deployed_at" in payload
 PY
+
+METADATA_FAILURE_INSTALL_DIR="$ROOT/install-metadata-failure"
+mkdir -p "$METADATA_FAILURE_INSTALL_DIR"
+set +e
+PATH="$BIN_DIR:$PATH" \
+INSTALL_DIR="$METADATA_FAILURE_INSTALL_DIR" \
+PLIST_PATH="$ROOT/bridge-metadata-failure.plist" \
+SUPERVISOR_PLIST_PATH="$ROOT/cloudflared-metadata-failure.plist" \
+DEPLOY_METADATA_PATH="$METADATA_FAILURE_INSTALL_DIR" \
+HOME="$ROOT/home" \
+bash "$SCRIPT_UNDER_TEST" >"$ROOT/metadata-failure.out" 2>"$ROOT/metadata-failure.err"
+STATUS=$?
+set -e
+
+test "$STATUS" -eq 0
+grep -q "warning: failed to write deploy metadata" "$ROOT/metadata-failure.err"
