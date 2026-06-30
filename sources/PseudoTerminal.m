@@ -359,6 +359,7 @@ static NSString *TideySubmitLogSuffix(NSString *input) {
 - (NSString *)tideyPanelIdentifierForPanel:(PTYTab *)panel;
 - (void)tideySyncTmuxPaneIdentityOptionsForPanel:(PTYTab *)panel workspace:(Workspace *)workspace;
 - (void)tideyTabDidBecomeTmuxBacked:(PTYTab *)panel;
+- (void)tideyTabDidUpdateOrdinaryTmuxAttachMetadata:(PTYTab *)panel;
 - (NSInteger)tideyWorkspaceIndexForTmuxController:(TmuxController *)tmuxController excludingPanel:(PTYTab *)excludedPanel;
 - (Workspace *)tideyWorkspaceWithIdentifier:(NSString *)workspaceIdentifier index:(NSInteger *)index;
 - (PTYTab *)tideyPanelWithIdentifier:(NSString *)panelIdentifier
@@ -1414,6 +1415,19 @@ ITERM_WEAKLY_REFERENCEABLE
     return showingSidebar && (createWorkspace || hasPendingWorkspace);
 }
 
++ (NSInteger)tideyTargetWorkspaceIndexForOrdinaryTmuxAttachPanelShowingSidebar:(BOOL)showingSidebar
+                                                        selectedWorkspaceIndex:(NSInteger)selectedWorkspaceIndex
+                                                          panelIsVisibleInTabs:(BOOL)panelIsVisibleInTabs
+                                                     rebuildingVisibleWorkspace:(BOOL)rebuildingVisibleWorkspace {
+    if (!showingSidebar || !panelIsVisibleInTabs || rebuildingVisibleWorkspace) {
+        return NSNotFound;
+    }
+    if (selectedWorkspaceIndex >= 0 && selectedWorkspaceIndex != NSNotFound) {
+        return selectedWorkspaceIndex;
+    }
+    return NSNotFound;
+}
+
 + (NSInteger)tideyTargetWorkspaceIndexForInsertedPanelShowingSidebar:(BOOL)showingSidebar
                                               selectedWorkspaceIndex:(NSInteger)selectedWorkspaceIndex
                                                pendingWorkspaceIndex:(NSInteger)pendingWorkspaceIndex
@@ -1665,6 +1679,52 @@ ITERM_WEAKLY_REFERENCEABLE
           [self tideyPanelIdentifierForPanel:panel] ?: @"-",
           panel.tmuxWindow);
     [self tideyRequestTmuxWindowBackfillForWorkspace:workspace workspaceIndex:workspaceIndex];
+}
+
+- (void)tideyTabDidUpdateOrdinaryTmuxAttachMetadata:(PTYTab *)panel {
+    if (!panel) {
+        return;
+    }
+    [self ensureTideyWorkspacesInitialized];
+    NSInteger workspaceIndex = [self indexOfWorkspaceContainingPanel:panel];
+    if (workspaceIndex == NSNotFound) {
+        const BOOL panelIsVisible = [self indexOfTab:panel] != NSNotFound;
+        NSInteger targetWorkspaceIndex = [[self class] tideyTargetWorkspaceIndexForOrdinaryTmuxAttachPanelShowingSidebar:self.isShowingTideySidebar
+                                                                                                   selectedWorkspaceIndex:self.selectedWorkspaceIndex
+                                                                                                     panelIsVisibleInTabs:panelIsVisible
+                                                                                                rebuildingVisibleWorkspace:_tideyRebuildingVisibleWorkspaceTabs];
+        NSLog(@"[TideyOrdinaryTmux] metadata_update workspace_missing panel=%p visible=%@ selected=%ld target=%ld",
+              panel,
+              panelIsVisible ? @"YES" : @"NO",
+              (long)self.selectedWorkspaceIndex,
+              (long)targetWorkspaceIndex);
+        if (targetWorkspaceIndex == NSNotFound ||
+            targetWorkspaceIndex < 0 ||
+            targetWorkspaceIndex >= self.workspaces.count) {
+            return;
+        }
+        Workspace *workspace = [self workspaceAtIndex:targetWorkspaceIndex];
+        [self tideyMaterializeExistingTmuxPanel:panel
+                                      workspace:workspace
+                                  workspaceIndex:targetWorkspaceIndex];
+        workspace.selectedPanelIndex = [workspace.panels indexOfObjectIdenticalTo:panel];
+        return;
+    }
+
+    Workspace *workspace = [self workspaceAtIndex:workspaceIndex];
+    NSInteger panelIndex = [workspace.panels indexOfObjectIdenticalTo:panel];
+    NSLog(@"[TideyOrdinaryTmux] metadata_update panel_updated workspace=%@ panel=%@",
+          [self tideyWorkspaceIdentifierForWorkspace:workspace] ?: @"-",
+          [self tideyPanelIdentifierForPanel:panel] ?: @"-");
+    [_contentView reloadTideySidebar];
+    [self tideyPostWorkspaceEventForKind:@"panel_updated"
+                             workspaceID:[self tideyWorkspaceIdentifierForWorkspace:workspace]
+                                 panelID:[self tideyPanelIdentifierForPanel:panel]
+                               workspace:[self tideySocketWorkspaceSummaryForWorkspace:workspace index:workspaceIndex]
+                                   panel:panelIndex != NSNotFound ? [self tideySocketPanelSummaryForPanel:panel
+                                                                                                 workspace:workspace
+                                                                                            workspaceIndex:workspaceIndex
+                                                                                                panelIndex:panelIndex] : nil];
 }
 
 - (void)tideySetTmuxPaneIdentityOptionsForSession:(PTYSession *)session

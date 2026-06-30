@@ -297,6 +297,7 @@ typedef enum {
 - (iTermVariableScope *)sessionTabScope;
 - (void)sessionDidReportSelectedTmuxPane:(PTYSession *)session;
 - (void)sessionDidUpdatePaneTitle:(PTYSession *)session;
+- (void)sessionDidUpdateOrdinaryTmuxAttachMetadata:(PTYSession *)session;
 - (void)sessionDidSetWindowTitle:(NSString *)title;
 - (void)sessionJobDidChange:(PTYSession *)session;
 - (void)sessionEditActions;

@@ -707,6 +707,26 @@ final class PathTests: XCTestCase {
                         inferredWorkspaceIndex)
     }
 
+    private func tideyTargetWorkspaceIndexForOrdinaryTmuxAttachPanel(showingSidebar: Bool = true,
+                                                                     selectedWorkspaceIndex: Int,
+                                                                     panelIsVisibleInTabs: Bool = true,
+                                                                     rebuildingVisibleWorkspace: Bool = false) -> Int {
+        let selector = NSSelectorFromString("tideyTargetWorkspaceIndexForOrdinaryTmuxAttachPanelShowingSidebar:selectedWorkspaceIndex:panelIsVisibleInTabs:rebuildingVisibleWorkspace:")
+        guard let method = class_getClassMethod(PseudoTerminal.self, selector) else {
+            XCTFail("Missing PseudoTerminal ordinary tmux attach workspace helper")
+            return NSNotFound
+        }
+        typealias Function = @convention(c) (AnyClass, Selector, ObjCBool, Int, ObjCBool, ObjCBool) -> Int
+        let implementation = method_getImplementation(method)
+        let function = unsafeBitCast(implementation, to: Function.self)
+        return function(PseudoTerminal.self,
+                        selector,
+                        ObjCBool(showingSidebar),
+                        selectedWorkspaceIndex,
+                        ObjCBool(panelIsVisibleInTabs),
+                        ObjCBool(rebuildingVisibleWorkspace))
+    }
+
     private func tideyShouldUpdateSelectedPanelFromVisibleSelection(showingSidebar: Bool = true,
                                                                     switchingWorkspace: Bool = false,
                                                                     rebuildingVisibleWorkspace: Bool = false,
@@ -1860,6 +1880,22 @@ final class PathTests: XCTestCase {
                                                                    targetWorkspaceIndex: 0,
                                                                    createWorkspace: false,
                                                                    rebuildingVisibleWorkspace: true))
+    }
+
+    func testOrdinaryTmuxAttachMaterializesVisiblePanelIntoSelectedWorkspace() {
+        XCTAssertEqual(tideyTargetWorkspaceIndexForOrdinaryTmuxAttachPanel(selectedWorkspaceIndex: 4), 4)
+    }
+
+    func testOrdinaryTmuxAttachDoesNotMaterializeHiddenOrRebuildingPanel() {
+        XCTAssertEqual(tideyTargetWorkspaceIndexForOrdinaryTmuxAttachPanel(selectedWorkspaceIndex: 4,
+                                                                           panelIsVisibleInTabs: false),
+                       NSNotFound)
+        XCTAssertEqual(tideyTargetWorkspaceIndexForOrdinaryTmuxAttachPanel(selectedWorkspaceIndex: 4,
+                                                                           rebuildingVisibleWorkspace: true),
+                       NSNotFound)
+        XCTAssertEqual(tideyTargetWorkspaceIndexForOrdinaryTmuxAttachPanel(showingSidebar: false,
+                                                                           selectedWorkspaceIndex: 4),
+                       NSNotFound)
     }
 
     func testTerminalEnvironmentScrubRemovesOnlyBundleIdentifier() {

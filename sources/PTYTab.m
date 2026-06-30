@@ -7115,6 +7115,18 @@ typedef struct {
     [_tmuxTitleMonitor updateOnce];
 }
 
+- (void)sessionDidUpdateOrdinaryTmuxAttachMetadata:(PTYSession *)session {
+    const BOOL parentResponds = [realParentWindow_ respondsToSelector:@selector(tideyTabDidUpdateOrdinaryTmuxAttachMetadata:)];
+    NSLog(@"[TideyOrdinaryTmux] tab_metadata_update tab=%p session=%p real_parent=%@ parent_responds=%@",
+          self,
+          session,
+          realParentWindow_,
+          parentResponds ? @"YES" : @"NO");
+    if (parentResponds) {
+        [(id)realParentWindow_ tideyTabDidUpdateOrdinaryTmuxAttachMetadata:self];
+    }
+}
+
 - (void)tideySessionDidSetTmuxController:(PTYSession *)session {
     if (!session.isTmuxClient || !session.tmuxController) {
         NSLog(@"[TideyTmuxPanels] tab_session_controller_hook skip tab=%p session=%p is_tmux_client=%@ tmux_controller=%p real_parent=%@",

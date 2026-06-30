@@ -6216,6 +6216,9 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
     } else {
         NSLog(@"[TideyOrdinaryTmux] cleared ordinary tmux attach session=%p", self);
     }
+    if ([_delegate respondsToSelector:@selector(sessionDidUpdateOrdinaryTmuxAttachMetadata:)]) {
+        [_delegate sessionDidUpdateOrdinaryTmuxAttachMetadata:self];
+    }
 }
 
 - (void)setBackgroundImageMode:(iTermBackgroundImageMode)mode {

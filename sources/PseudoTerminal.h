@@ -233,6 +233,7 @@ extern NSString *const PseudoTerminalTideyWorkspaceEventNotification;
 - (BOOL)isShowingTideySidebar;
 - (BOOL)tideyShouldMaterializeAllTmuxWindowsInAttachingWindow;
 - (void)tideyTabDidBecomeTmuxBacked:(PTYTab *)panel;
+- (void)tideyTabDidUpdateOrdinaryTmuxAttachMetadata:(PTYTab *)panel;
 + (BOOL)tideyShouldSuppressSystemNotificationForSelectedWorkspaceID:(nullable NSString *)selectedWorkspaceID
                                             notificationWorkspaceID:(nullable NSString *)workspaceID
                                                         appIsActive:(BOOL)appIsActive
