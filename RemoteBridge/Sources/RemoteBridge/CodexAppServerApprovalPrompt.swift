@@ -170,7 +170,6 @@ struct CodexAppServerApprovalRequest: Sendable {
     private var approvalOptions: [CodexAppServerApprovalOption] {
         if !availableDecisions.isEmpty {
             return availableDecisions
-                .filter { Self.shouldDisplayAvailableDecision($0, method: method) }
                 .map { Self.option(for: $0, method: method) }
         }
         switch method {
@@ -204,32 +203,6 @@ struct CodexAppServerApprovalRequest: Sendable {
         return CodexAppServerApprovalOption(decision: decision,
                                             label: label(for: decision, method: method),
                                             inputSequence: inputSequence)
-    }
-
-    private static func shouldDisplayAvailableDecision(_ decision: JSONValue,
-                                                       method: CodexAppServerApprovalMethod) -> Bool {
-        switch method {
-        case .commandExecution:
-            return !isPolicyAmendmentDecision(decision)
-        case .fileChange:
-            return true
-        }
-    }
-
-    private static func isPolicyAmendmentDecision(_ decision: JSONValue) -> Bool {
-        if let value = decision.stringValue {
-            return [
-                "acceptWithExecpolicyAmendment",
-                "approved_execpolicy_amendment",
-                "applyNetworkPolicyAmendment",
-                "network_policy_amendment",
-            ].contains(value)
-        }
-        guard let object = decision.objectValue else {
-            return false
-        }
-        return object["acceptWithExecpolicyAmendment"] != nil ||
-            object["applyNetworkPolicyAmendment"] != nil
     }
 
     private static func decisionIdentifier(_ decision: JSONValue) -> String {

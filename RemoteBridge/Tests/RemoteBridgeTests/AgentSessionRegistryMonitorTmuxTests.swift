@@ -246,6 +246,202 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         XCTAssertEqual(syncedRecord.runtime, "codex_app_server")
     }
 
+    func testScanPrefersOrdinaryTmuxCarrierWhenPaneOptionsPointToMissingWorkspace() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let registryURL = paths.codexAgentSessionsDirectory.appendingPathComponent("codex-app-server-stale-pane-options.json")
+        let recordData = Data("""
+        {
+          "version": 1,
+          "vendor": "codex",
+          "workspace_id": "stale-workspace",
+          "session_id": "app-server-session",
+          "panel_id": "stale-panel",
+          "pid": \(getpid()),
+          "cwd": "/tmp",
+          "created_at": "2026-07-06T15:10:00Z",
+          "tmux_pane_id": "%13",
+          "tmux_socket_path": "/private/tmp/tmux-501/default",
+          "runtime": "codex_app_server",
+          "app_server_socket": "/tmp/app.sock",
+          "app_server_pid": \(getpid()),
+          "thread_id": "019ec8cb-6128-7892-8441-8c22d854286c",
+          "resume_thread_id": "019ec8cb-6128-7892-8441-8c22d854286c"
+        }
+        """.utf8)
+        try recordData.write(to: registryURL)
+
+        let tmuxResolver = TmuxStateResolver(ttl: 60) { socketPath, arguments in
+            XCTAssertEqual(socketPath, "/tmp/tmux-501/default")
+            if arguments == ["list-panes", "-a", "-F", "#{pane_id}|#{@tidey_workspace_id}|#{@tidey_panel_id}"] {
+                return "%13|stale-workspace|stale-panel\n"
+            }
+            if arguments == ["list-panes", "-a", "-F", "#{pane_id}|#{session_name}"] {
+                return "%13|genesis-codex\n"
+            }
+            if arguments == ["list-clients", "-F", "#{client_pid}|#{session_name}"] {
+                return "123|genesis-codex\n"
+            }
+            XCTFail("Unexpected tmux arguments: \(arguments)")
+            return ""
+        }
+        let ordinaryTmuxResolver = TideyOrdinaryTmuxCarrierResolver(requestSender: { request in
+            if request.action == "list_workspaces" {
+                return BridgeResponse(id: request.id,
+                                      ok: true,
+                                      result: [
+                                        "workspaces": .array([
+                                            .object([
+                                                "workspace_id": .string("genesis-workspace"),
+                                                "title": .string("Genesis"),
+                                                "selected_panel_id": .string("genesis-carrier-panel"),
+                                                "ordinary_tmux": .object([
+                                                    "target_session": .string("genesis-codex"),
+                                                ]),
+                                            ]),
+                                        ]),
+                                      ],
+                                      error: nil)
+            }
+            if request.action == "list_panels" {
+                XCTAssertEqual(request.params?["workspace_id"]?.stringValue, "genesis-workspace")
+                return BridgeResponse(id: request.id,
+                                      ok: true,
+                                      result: [
+                                        "workspace_id": .string("genesis-workspace"),
+                                        "panels": .array([
+                                            .object([
+                                                "panel_id": .string("genesis-carrier-panel"),
+                                                "workspace_id": .string("genesis-workspace"),
+                                                "ordinary_tmux": .object([
+                                                    "target_session": .string("genesis-codex"),
+                                                ]),
+                                            ]),
+                                        ]),
+                                      ],
+                                      error: nil)
+            }
+            XCTFail("Unexpected Tidey socket action: \(request.action)")
+            return BridgeResponse(id: request.id, ok: false, result: nil, error: nil)
+        }, tmuxResolver: tmuxResolver)
+        let runtimeSyncer = CapturingRuntimeSyncer()
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: fileManager,
+                                                  hub: AgentEventHub(),
+                                                  tmuxResolver: tmuxResolver,
+                                                  parentPIDLookup: { _ in nil },
+                                                  ordinaryTmuxCarrierIdentityResolver: { record in
+                                                      ordinaryTmuxResolver.carrierIdentity(for: record)
+                                                  },
+                                                  runtimeSyncer: runtimeSyncer)
+        try monitor.start()
+
+        XCTAssertNil(monitor.activeSessionForWorkspace(workspaceID: "stale-workspace"))
+        XCTAssertEqual(monitor.activeSessionForWorkspace(workspaceID: "genesis-workspace")?.sessionID,
+                       "app-server-session")
+
+        let canonicalizedData = try Data(contentsOf: registryURL)
+        let canonicalizedRecord = try JSONDecoder().decode(AgentSessionRegistryRecord.self, from: canonicalizedData)
+        XCTAssertEqual(canonicalizedRecord.workspaceID, "genesis-workspace")
+        XCTAssertEqual(canonicalizedRecord.panelID, "genesis-carrier-panel")
+        XCTAssertEqual(canonicalizedRecord.tmuxSocketPath, "/tmp/tmux-501/default")
+
+        let syncedRecord = try XCTUnwrap(runtimeSyncer.latestRecords.first)
+        XCTAssertEqual(syncedRecord.workspaceID, "genesis-workspace")
+        XCTAssertEqual(syncedRecord.panelID, "genesis-carrier-panel")
+        XCTAssertEqual(syncedRecord.runtime, "codex_app_server")
+    }
+
+    func testScanFillsMissingAppServerPanelIDFromTmuxClientProcessAncestry() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let registryURL = paths.codexAgentSessionsDirectory.appendingPathComponent("codex-app-server-missing-panel.json")
+        let recordData = Data("""
+        {
+          "version": 1,
+          "vendor": "codex",
+          "workspace_id": "adbrewer-workspace",
+          "session_id": "app-server-session",
+          "panel_id": "",
+          "pid": \(getpid()),
+          "cwd": "/tmp",
+          "created_at": "2026-07-06T15:20:00Z",
+          "tmux_pane_id": "%29",
+          "tmux_socket_path": "/private/tmp/tmux-501/default",
+          "runtime": "codex_app_server",
+          "app_server_socket": "/tmp/app.sock",
+          "app_server_pid": \(getpid()),
+          "thread_id": "019f37e6-2f79-7d90-93be-6c066a30a366",
+          "resume_thread_id": "019f37e6-2f79-7d90-93be-6c066a30a366"
+        }
+        """.utf8)
+        try recordData.write(to: registryURL)
+
+        let tmuxResolver = TmuxStateResolver(ttl: 60) { socketPath, arguments in
+            XCTAssertEqual(socketPath, "/tmp/tmux-501/default")
+            if arguments == ["list-panes", "-a", "-F", "#{pane_id}|#{@tidey_workspace_id}|#{@tidey_panel_id}"] {
+                return "%29||\n"
+            }
+            if arguments == ["list-panes", "-a", "-F", "#{pane_id}|#{session_name}"] {
+                return "%29|adbrewer-codex\n"
+            }
+            if arguments == ["list-clients", "-F", "#{client_pid}|#{session_name}"] {
+                return "200|adbrewer-codex\n"
+            }
+            XCTFail("Unexpected tmux arguments: \(arguments)")
+            return ""
+        }
+        let runtimeSyncer = CapturingRuntimeSyncer()
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: fileManager,
+                                                  hub: AgentEventHub(),
+                                                  tmuxResolver: tmuxResolver,
+                                                  parentPIDLookup: { pid in
+                                                      pid == 200 ? 100 : nil
+                                                  },
+                                                  runtimeSyncer: runtimeSyncer)
+        monitor.replaceLivePanels(workspaceID: "adbrewer-workspace",
+                                  panels: [
+                                      AgentPanelProcessSnapshot(workspaceID: "adbrewer-workspace",
+                                                                panelID: "adbrewer-codex-panel",
+                                                                effectiveShellPID: 100,
+                                                                tmuxPaneID: nil,
+                                                                tmuxSocketPath: nil,
+                                                                cwd: "/Users/timfeng"),
+                                      AgentPanelProcessSnapshot(workspaceID: "adbrewer-workspace",
+                                                                panelID: "other-panel",
+                                                                effectiveShellPID: 300,
+                                                                tmuxPaneID: nil,
+                                                                tmuxSocketPath: nil,
+                                                                cwd: "/Users/timfeng"),
+                                  ])
+        try monitor.start()
+
+        XCTAssertEqual(monitor.activeSessionForWorkspace(workspaceID: "adbrewer-workspace")?.panelID,
+                       "adbrewer-codex-panel")
+
+        let canonicalizedData = try Data(contentsOf: registryURL)
+        let canonicalizedRecord = try JSONDecoder().decode(AgentSessionRegistryRecord.self, from: canonicalizedData)
+        XCTAssertEqual(canonicalizedRecord.workspaceID, "adbrewer-workspace")
+        XCTAssertEqual(canonicalizedRecord.panelID, "adbrewer-codex-panel")
+        XCTAssertEqual(canonicalizedRecord.tmuxSocketPath, "/tmp/tmux-501/default")
+
+        let syncedRecord = try XCTUnwrap(runtimeSyncer.latestRecords.first)
+        XCTAssertEqual(syncedRecord.workspaceID, "adbrewer-workspace")
+        XCTAssertEqual(syncedRecord.panelID, "adbrewer-codex-panel")
+        XCTAssertEqual(syncedRecord.runtime, "codex_app_server")
+    }
+
     func testScanDoesNotUseSelectedPanelAsOrdinaryTmuxCarrierFallback() throws {
         let fileManager = FileManager.default
         let supportDirectory = fileManager.temporaryDirectory

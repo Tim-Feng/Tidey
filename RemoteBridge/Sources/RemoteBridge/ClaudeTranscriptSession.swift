@@ -770,16 +770,83 @@ final class AgentSessionRegistryMonitor {
                     normalizedNonEmptySocketPath(panel.tmuxSocketPath) ?? normalizedNonEmptySocketPath(record.tmuxSocketPath))
         }
 
-        guard let socketPath = normalizedNonEmptySocketPath(record.tmuxSocketPath),
-              let identity = tmuxResolver.paneIdentity(forPaneID: paneID, socketPath: socketPath) else {
-            guard let carrierIdentity = ordinaryTmuxCarrierIdentityResolver?(record) else {
-                return nil
+        guard let socketPath = normalizedNonEmptySocketPath(record.tmuxSocketPath) else {
+            return resolvedCarrierPaneIdentity(for: record)
+        }
+
+        if recordNeedsLivePaneRecovery(record),
+           let panel = livePanelSnapshotForTmuxClient(paneID: paneID, socketPath: socketPath) {
+            return (TmuxPaneIdentity(workspaceID: panel.workspaceID, panelID: panel.panelID), socketPath)
+        }
+
+        guard let identity = tmuxResolver.paneIdentity(forPaneID: paneID, socketPath: socketPath) else {
+            return resolvedCarrierPaneIdentity(for: record)
+        }
+
+        if paneIdentityMatchesKnownLivePanel(identity) == false {
+            if let carrierIdentity = resolvedCarrierPaneIdentity(for: record) {
+                return carrierIdentity
             }
-            return (TmuxPaneIdentity(workspaceID: carrierIdentity.workspaceID,
-                                     panelID: carrierIdentity.panelID),
-                    normalizedNonEmptySocketPath(carrierIdentity.socketPath))
+            if let panel = livePanelSnapshotForTmuxClient(paneID: paneID, socketPath: socketPath) {
+                return (TmuxPaneIdentity(workspaceID: panel.workspaceID, panelID: panel.panelID), socketPath)
+            }
         }
         return (identity, socketPath)
+    }
+
+    private func recordNeedsLivePaneRecovery(_ record: AgentSessionRegistryRecord) -> Bool {
+        guard let panelID = record.panelID,
+              !panelID.isEmpty else {
+            return true
+        }
+        return paneIdentityMatchesKnownLivePanel(TmuxPaneIdentity(workspaceID: record.workspaceID,
+                                                                  panelID: panelID)) == false
+    }
+
+    private func livePanelSnapshotForTmuxClient(paneID: String, socketPath: String) -> AgentPanelProcessSnapshot? {
+        let candidatePanels = livePanelsByWorkspace.values
+            .flatMap { $0 }
+            .filter { panel in
+                guard let effectiveShellPID = panel.effectiveShellPID else {
+                    return false
+                }
+                return effectiveShellPID > 0
+            }
+        guard candidatePanels.isEmpty == false else {
+            return nil
+        }
+        guard let clientPIDs = tmuxResolver.clientPIDs(forPaneID: paneID, socketPath: socketPath),
+              clientPIDs.isEmpty == false else {
+            return nil
+        }
+        let matches = candidatePanels.filter { panel in
+            guard let effectiveShellPID = panel.effectiveShellPID else {
+                return false
+            }
+            return clientPIDs.contains { clientPID in
+                processIsDescendantOrSelf(of: effectiveShellPID, candidate: clientPID)
+            }
+        }
+        guard matches.count == 1 else {
+            return nil
+        }
+        return matches[0]
+    }
+
+    private func resolvedCarrierPaneIdentity(for record: AgentSessionRegistryRecord) -> (identity: TmuxPaneIdentity, socketPath: String?)? {
+        guard let carrierIdentity = ordinaryTmuxCarrierIdentityResolver?(record) else {
+            return nil
+        }
+        return (TmuxPaneIdentity(workspaceID: carrierIdentity.workspaceID,
+                                 panelID: carrierIdentity.panelID),
+                normalizedNonEmptySocketPath(carrierIdentity.socketPath))
+    }
+
+    private func paneIdentityMatchesKnownLivePanel(_ identity: TmuxPaneIdentity) -> Bool {
+        guard let panels = livePanelsByWorkspace[identity.workspaceID] else {
+            return false
+        }
+        return panels.contains { $0.panelID == identity.panelID }
     }
 
     private func livePanelSnapshot(forPaneID paneID: String,
