@@ -402,6 +402,7 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
             return ""
         }
         let runtimeSyncer = CapturingRuntimeSyncer()
+        var requestedActions = [String]()
         let monitor = AgentSessionRegistryMonitor(paths: paths,
                                                   fileManager: fileManager,
                                                   hub: AgentEventHub(),
@@ -409,24 +410,55 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
                                                   parentPIDLookup: { pid in
                                                       pid == 200 ? 100 : nil
                                                   },
+                                                  livePanelSnapshotRequestSender: { request in
+                                                      requestedActions.append(request.action)
+                                                      if request.action == "list_workspaces" {
+                                                          return BridgeResponse(id: request.id,
+                                                                                ok: true,
+                                                                                result: [
+                                                                                    "workspaces": .array([
+                                                                                        .object([
+                                                                                            "workspace_id": .string("adbrewer-workspace"),
+                                                                                            "title": .string("釀酒人"),
+                                                                                        ]),
+                                                                                    ]),
+                                                                                ],
+                                                                                error: nil)
+                                                      }
+                                                      if request.action == "list_panels" {
+                                                          XCTAssertEqual(request.params?["workspace_id"]?.stringValue,
+                                                                         "adbrewer-workspace")
+                                                          return BridgeResponse(id: request.id,
+                                                                                ok: true,
+                                                                                result: [
+                                                                                    "workspace_id": .string("adbrewer-workspace"),
+                                                                                    "panels": .array([
+                                                                                        .object([
+                                                                                            "workspace_id": .string("adbrewer-workspace"),
+                                                                                            "panel_id": .string("adbrewer-codex-panel"),
+                                                                                            "effective_shell_pid": .number(100),
+                                                                                            "title": .string("Codex"),
+                                                                                        ]),
+                                                                                        .object([
+                                                                                            "workspace_id": .string("adbrewer-workspace"),
+                                                                                            "panel_id": .string("other-panel"),
+                                                                                            "effective_shell_pid": .number(300),
+                                                                                            "title": .string("Codex"),
+                                                                                        ]),
+                                                                                    ]),
+                                                                                ],
+                                                                                error: nil)
+                                                      }
+                                                      XCTFail("Unexpected Tidey socket action: \(request.action)")
+                                                      return BridgeResponse(id: request.id,
+                                                                            ok: false,
+                                                                            result: nil,
+                                                                            error: nil)
+                                                  },
                                                   runtimeSyncer: runtimeSyncer)
-        monitor.replaceLivePanels(workspaceID: "adbrewer-workspace",
-                                  panels: [
-                                      AgentPanelProcessSnapshot(workspaceID: "adbrewer-workspace",
-                                                                panelID: "adbrewer-codex-panel",
-                                                                effectiveShellPID: 100,
-                                                                tmuxPaneID: nil,
-                                                                tmuxSocketPath: nil,
-                                                                cwd: "/Users/timfeng"),
-                                      AgentPanelProcessSnapshot(workspaceID: "adbrewer-workspace",
-                                                                panelID: "other-panel",
-                                                                effectiveShellPID: 300,
-                                                                tmuxPaneID: nil,
-                                                                tmuxSocketPath: nil,
-                                                                cwd: "/Users/timfeng"),
-                                  ])
         try monitor.start()
 
+        XCTAssertEqual(requestedActions, ["list_workspaces", "list_panels"])
         XCTAssertEqual(monitor.activeSessionForWorkspace(workspaceID: "adbrewer-workspace")?.panelID,
                        "adbrewer-codex-panel")
 
