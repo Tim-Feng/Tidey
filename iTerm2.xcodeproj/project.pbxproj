@@ -16354,6 +16354,7 @@
 				A6725AD923D64A57001CA48A /* CopyFiles */,
 				A67A515026CCD54000281693 /* CopyFiles */,
 				T1DEY00005CLI0BUILDPHASE /* Build Tidey CLI */,
+				T1DEY00006BRIDGEBUILDPHASE /* Bundle Remote Bridge */,
 				T1DEY00004BIN0COPYPHASE0 /* CopyFiles */,
 				A65DF4AC2849F2E700AA29AB /* CopyFiles */,
 				A69FF3DC2E14A06D00AFF7A8 /* Make symlink to iTerm */,
@@ -18882,6 +18883,33 @@
 			shellPath = /bin/sh;
 			shellScript = "set -e\nTIDEY_CLI_HELPER=\"${SRCROOT}/sources/TideyCLICommandFormatter.swift\"\nTIDEY_CLI_MAIN=\"${SRCROOT}/sources/TideyCLI/main.swift\"\nTIDEY_CLI_DST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/bin/tidey\"\nmkdir -p \"$(dirname \"$TIDEY_CLI_DST\")\"\nswiftc -O -target ${NATIVE_ARCH_ACTUAL}-apple-macos${MACOSX_DEPLOYMENT_TARGET} -o \"$TIDEY_CLI_DST\" \"$TIDEY_CLI_HELPER\" \"$TIDEY_CLI_MAIN\" -framework Foundation\n";
 		};
+		T1DEY00006BRIDGEBUILDPHASE /* Bundle Remote Bridge */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/RemoteBridge",
+				"$(SRCROOT)/.git",
+				"$(SRCROOT)/tools/bundle_remote_bridge.sh",
+			);
+			name = "Bundle Remote Bridge";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/RemoteBridge/tidey-remote-bridge",
+				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/RemoteBridge/com.tidey.remote-bridge.plist.template",
+				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/RemoteBridge/com.tidey.remote-bridge.cloudflared.plist.template",
+				"$(DERIVED_FILE_DIR)/RemoteBridgeSwiftPM",
+				"$(DERIVED_FILE_DIR)/RemoteBridgeSwiftPMCache",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\nexport TIDEY_REMOTE_BRIDGE_SCRATCH_PATH=\"${DERIVED_FILE_DIR}/RemoteBridgeSwiftPM\"\nexport TIDEY_REMOTE_BRIDGE_CACHE_PATH=\"${DERIVED_FILE_DIR}/RemoteBridgeSwiftPMCache\"\n\"${SRCROOT}/tools/bundle_remote_bridge.sh\" \"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/RemoteBridge\"\n";
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -20933,7 +20961,7 @@
 				DEAD_CODE_STRIPPING = YES;
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = 4T64VW5B7M;
 				ENABLE_HARDENED_RUNTIME = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)",
@@ -22218,7 +22246,7 @@
 				DEAD_CODE_STRIPPING = YES;
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = 4T64VW5B7M;
 				ENABLE_HARDENED_RUNTIME = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)",
@@ -24928,7 +24956,7 @@
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = 4T64VW5B7M;
 				ENABLE_HARDENED_RUNTIME = NO;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)",
@@ -25026,7 +25054,7 @@
 				DEAD_CODE_STRIPPING = YES;
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = 4T64VW5B7M;
 				ENABLE_HARDENED_RUNTIME = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)",

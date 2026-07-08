@@ -170,6 +170,107 @@ final class TideyRemoteBridgeInstallerTests: XCTestCase {
         XCTAssertTrue(runner.calls.contains { $0.arguments == ["kickstart", "-k", "gui/\(getuid())/com.tidey.remote-bridge"] })
     }
 
+    func testPerformInstallSkipsLaunchdReloadWhenInstalledBridgeIsAlreadyRunningAndReady() throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanup() }
+        try installBundledBridgeFixture(fixture)
+        try writePairToken("existing-token", to: fixture.paths.pairTokenFileURL)
+        let runner = FakeCommandRunner { _, arguments in
+            if arguments == ["print", "gui/\(getuid())/com.tidey.remote-bridge"] {
+                return TideyRemoteBridgeCommandResult(exitCode: 0, output: "")
+            }
+            return TideyRemoteBridgeCommandResult(exitCode: 0, output: "")
+        }
+        let httpClient = FakeHTTPClient(statusCode: 200)
+        let installer = makeInstaller(fixture: fixture, runner: runner, httpClient: httpClient)
+
+        let result = installer.performInstallForTesting(force: false)
+
+        XCTAssertEqual(result.state, "running")
+        XCTAssertTrue(result.bridgeReady)
+        XCTAssertEqual(httpClient.lastAuthorizationHeader, "Bearer existing-token")
+        XCTAssertFalse(runner.calls.contains { $0.arguments.first == "bootout" })
+        XCTAssertFalse(runner.calls.contains { $0.arguments.first == "bootstrap" })
+        XCTAssertFalse(runner.calls.contains { $0.arguments.first == "kickstart" })
+    }
+
+    func testPerformInstallUsesAlreadyReadyBridgeWhenBundledResourcesAreMissing() throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanup() }
+        try writePairToken("existing-token", to: fixture.paths.pairTokenFileURL)
+        let httpClient = FakeHTTPClient(statusCode: 200)
+        let runner = FakeCommandRunner { _, _ in
+            XCTFail("Healthy existing bridge should not require launchctl when bundled resources are unavailable")
+            return TideyRemoteBridgeCommandResult(exitCode: 1, output: "")
+        }
+        let installer = TideyRemoteBridgeInstaller(
+            fileManager: .default,
+            commandRunner: runner,
+            resourcesProvider: { throw TideyRemoteBridgeInstallerError.missingBundledResources },
+            pathsProvider: { fixture.paths },
+            readinessChecker: TideyRemoteBridgeStatusReadinessChecker(httpClient: httpClient),
+            sleep: { _ in },
+            launchAgentTeardownTimeout: 0,
+            launchAgentPollInterval: 0
+        )
+
+        let result = installer.performInstallForTesting(force: false)
+
+        XCTAssertEqual(result.state, "running")
+        XCTAssertTrue(result.bridgeReady)
+        XCTAssertEqual(httpClient.lastAuthorizationHeader, "Bearer existing-token")
+        XCTAssertTrue(runner.calls.isEmpty)
+    }
+
+    func testPerformInstallWaitsForBootoutAndRetriesBootstrapEIO() throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanup() }
+        var bridgeBootedOut = false
+        var bridgePrintsAfterBootout = 0
+        var bridgeBootstrapAttempts = 0
+        let bridgeService = "gui/\(getuid())/com.tidey.remote-bridge"
+        let cloudflaredService = "gui/\(getuid())/com.tidey.remote-bridge.cloudflared"
+        let runner = FakeCommandRunner { _, arguments in
+            switch arguments {
+            case ["print", bridgeService]:
+                if bridgeBootedOut {
+                    bridgePrintsAfterBootout += 1
+                    return TideyRemoteBridgeCommandResult(exitCode: bridgePrintsAfterBootout < 2 ? 0 : 113, output: "")
+                }
+                return TideyRemoteBridgeCommandResult(exitCode: 0, output: "")
+            case ["bootout", bridgeService]:
+                bridgeBootedOut = true
+                return TideyRemoteBridgeCommandResult(exitCode: 0, output: "")
+            case ["bootstrap", "gui/\(getuid())", fixture.paths.bridgePlistURL.path]:
+                bridgeBootstrapAttempts += 1
+                if bridgeBootstrapAttempts == 1 {
+                    return TideyRemoteBridgeCommandResult(exitCode: 5, output: "Bootstrap failed: 5: Input/output error")
+                }
+                return TideyRemoteBridgeCommandResult(exitCode: 0, output: "")
+            case ["kickstart", "-k", bridgeService]:
+                try self.writePairToken("generated-token", to: fixture.paths.pairTokenFileURL)
+                return TideyRemoteBridgeCommandResult(exitCode: 0, output: "")
+            case ["print", cloudflaredService]:
+                return TideyRemoteBridgeCommandResult(exitCode: 113, output: "")
+            default:
+                return TideyRemoteBridgeCommandResult(exitCode: 0, output: "")
+            }
+        }
+        let installer = makeInstaller(fixture: fixture, runner: runner, httpClient: FakeHTTPClient(statusCode: 200))
+
+        let result = installer.performInstallForTesting(force: true)
+
+        XCTAssertEqual(result.state, "running")
+        XCTAssertEqual(bridgeBootstrapAttempts, 2)
+        let bootoutIndex = runner.calls.firstIndex { $0.arguments == ["bootout", bridgeService] }
+        let firstBootstrapIndex = runner.calls.firstIndex { $0.arguments == ["bootstrap", "gui/\(getuid())", fixture.paths.bridgePlistURL.path] }
+        XCTAssertNotNil(bootoutIndex)
+        XCTAssertNotNil(firstBootstrapIndex)
+        if let bootoutIndex, let firstBootstrapIndex {
+            XCTAssertLessThan(bootoutIndex, firstBootstrapIndex)
+        }
+    }
+
     func testPerformInstallSurfacesHTTP401PortConflictInsteadOfFalseReady() throws {
         let fixture = try makeFixture()
         defer { fixture.cleanup() }
@@ -296,7 +397,9 @@ final class TideyRemoteBridgeInstallerTests: XCTestCase {
             resourcesProvider: { fixture.resources },
             pathsProvider: { fixture.paths },
             readinessChecker: TideyRemoteBridgeStatusReadinessChecker(httpClient: httpClient),
-            sleep: { _ in }
+            sleep: { _ in },
+            launchAgentTeardownTimeout: 0,
+            launchAgentPollInterval: 0
         )
     }
 
@@ -320,6 +423,14 @@ final class TideyRemoteBridgeInstallerTests: XCTestCase {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let json = #"{"token":"\#(token)","createdAt":"2026-05-13T00:00:00Z"}"#
         try json.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    private func installBundledBridgeFixture(_ fixture: Fixture) throws {
+        try FileManager.default.createDirectory(at: fixture.paths.applicationSupportDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: fixture.paths.launchAgentsDirectory, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: fixture.resources.bridgeBinaryURL, to: fixture.paths.bridgeBinaryURL)
+        try launchAgentTemplate().write(to: fixture.paths.bridgePlistURL, atomically: true, encoding: .utf8)
+        try launchAgentTemplate().write(to: fixture.paths.cloudflaredPlistURL, atomically: true, encoding: .utf8)
     }
 }
 

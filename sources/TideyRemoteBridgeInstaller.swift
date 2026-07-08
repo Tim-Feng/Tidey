@@ -368,6 +368,8 @@ public final class TideyRemoteBridgeInstaller: NSObject {
     private let pathsProvider: () -> TideyRemoteBridgeInstallPaths
     private let readinessChecker: TideyRemoteBridgeReadinessChecking
     private let sleep: (TimeInterval) -> Void
+    private let launchAgentTeardownTimeout: TimeInterval
+    private let launchAgentPollInterval: TimeInterval
 
     override convenience init() {
         self.init(fileManager: .default,
@@ -375,7 +377,9 @@ public final class TideyRemoteBridgeInstaller: NSObject {
                   resourcesProvider: TideyRemoteBridgeBundledResources.inMainBundle,
                   pathsProvider: { TideyRemoteBridgeInstallPaths.currentUser() },
                   readinessChecker: TideyRemoteBridgeStatusReadinessChecker(),
-                  sleep: Thread.sleep(forTimeInterval:))
+                  sleep: Thread.sleep(forTimeInterval:),
+                  launchAgentTeardownTimeout: 5,
+                  launchAgentPollInterval: 0.1)
     }
 
     init(fileManager: FileManager,
@@ -383,13 +387,17 @@ public final class TideyRemoteBridgeInstaller: NSObject {
          resourcesProvider: @escaping () throws -> TideyRemoteBridgeBundledResources = TideyRemoteBridgeBundledResources.inMainBundle,
          pathsProvider: @escaping () -> TideyRemoteBridgeInstallPaths = { TideyRemoteBridgeInstallPaths.currentUser() },
          readinessChecker: TideyRemoteBridgeReadinessChecking = TideyRemoteBridgeStatusReadinessChecker(),
-         sleep: @escaping (TimeInterval) -> Void = Thread.sleep(forTimeInterval:)) {
+         sleep: @escaping (TimeInterval) -> Void = Thread.sleep(forTimeInterval:),
+         launchAgentTeardownTimeout: TimeInterval = 5,
+         launchAgentPollInterval: TimeInterval = 0.1) {
         self.fileManager = fileManager
         self.commandRunner = commandRunner
         self.resourcesProvider = resourcesProvider
         self.pathsProvider = pathsProvider
         self.readinessChecker = readinessChecker
         self.sleep = sleep
+        self.launchAgentTeardownTimeout = launchAgentTeardownTimeout
+        self.launchAgentPollInterval = launchAgentPollInterval
         super.init()
     }
 
@@ -426,20 +434,35 @@ public final class TideyRemoteBridgeInstaller: NSObject {
 
     private func performInstall(force: Bool) -> TideyRemoteBridgeInstallResult {
         do {
-            let resources = try resourcesProvider()
             let paths = pathsProvider()
-            try validateBundledResources(resources)
-            try installIfNeeded(resources: resources, paths: paths, force: force)
+            let resources: TideyRemoteBridgeBundledResources
+            do {
+                resources = try resourcesProvider()
+                try validateBundledResources(resources)
+            } catch {
+                if !force, readinessChecker.check(paths: paths).isReady {
+                    return runningResult()
+                }
+                throw error
+            }
+
+            let classification = try classifyInstall(resources: resources, paths: paths)
+            if !force, classification == .running {
+                do {
+                    try pollBridgeReady(paths: paths)
+                    return runningResult()
+                } catch {
+                    NSLog("installer running bridge failed readiness check, reloading: %@", error.localizedDescription)
+                }
+            }
+
+            if force || classification.needsInstall {
+                try installIfNeeded(resources: resources, paths: paths, force: force)
+            }
             try reloadLaunchAgents(paths: paths)
             try pollBridgeReady(paths: paths)
 
-            let cloudflaredAvailable = TideyRemoteBridgeCloudflaredResolver.executableURL(fileManager: fileManager) != nil
-            let detail = cloudflaredAvailable ? nil : cloudflaredAvailabilityMessage()
-            return TideyRemoteBridgeInstallResult(state: "running",
-                                                  userMessage: "Tidey Remote Bridge is running.",
-                                                  detailMessage: detail,
-                                                  bridgeReady: true,
-                                                  cloudflaredAvailable: cloudflaredAvailable)
+            return runningResult()
         } catch {
             return TideyRemoteBridgeInstallResult(state: "failed",
                                                   userMessage: "Tidey Remote Bridge setup failed.",
@@ -447,6 +470,16 @@ public final class TideyRemoteBridgeInstaller: NSObject {
                                                   bridgeReady: false,
                                                   cloudflaredAvailable: TideyRemoteBridgeCloudflaredResolver.executableURL(fileManager: fileManager) != nil)
         }
+    }
+
+    private func runningResult() -> TideyRemoteBridgeInstallResult {
+        let cloudflaredAvailable = TideyRemoteBridgeCloudflaredResolver.executableURL(fileManager: fileManager) != nil
+        let detail = cloudflaredAvailable ? nil : cloudflaredAvailabilityMessage()
+        return TideyRemoteBridgeInstallResult(state: "running",
+                                              userMessage: "Tidey Remote Bridge is running.",
+                                              detailMessage: detail,
+                                              bridgeReady: true,
+                                              cloudflaredAvailable: cloudflaredAvailable)
     }
 
     private func validateBundledResources(_ resources: TideyRemoteBridgeBundledResources) throws {
@@ -459,6 +492,27 @@ public final class TideyRemoteBridgeInstaller: NSObject {
         guard fileManager.fileExists(atPath: resources.cloudflaredPlistTemplateURL.path) else {
             throw TideyRemoteBridgeInstallerError.missingBundledTemplate(resources.cloudflaredPlistTemplateURL.path)
         }
+    }
+
+    private func classifyInstall(resources: TideyRemoteBridgeBundledResources,
+                                 paths: TideyRemoteBridgeInstallPaths) throws -> TideyRemoteBridgeInstallClassification {
+        let installedBinaryExists = fileManager.fileExists(atPath: paths.bridgeBinaryURL.path)
+        let binaryDiffers = try TideyRemoteBridgeFileComparator.filesDiffer(resources.bridgeBinaryURL,
+                                                                            paths.bridgeBinaryURL,
+                                                                            fileManager: fileManager)
+        let bridgePlistExists = fileManager.fileExists(atPath: paths.bridgePlistURL.path)
+        let cloudflaredPlistExists = fileManager.fileExists(atPath: paths.cloudflaredPlistURL.path)
+        let launchAgentLoaded = launchAgentIsLoaded(label: "com.tidey.remote-bridge", uid: getuid())
+        return TideyRemoteBridgeInstallInspector.classify(installedBinaryExists: installedBinaryExists,
+                                                          binaryDiffers: binaryDiffers,
+                                                          bridgePlistExists: bridgePlistExists,
+                                                          cloudflaredPlistExists: cloudflaredPlistExists,
+                                                          launchAgentLoaded: launchAgentLoaded)
+    }
+
+    private func launchAgentIsLoaded(label: String, uid: uid_t) -> Bool {
+        let service = "gui/\(uid)/\(label)"
+        return (try? commandRunner.run("/bin/launchctl", arguments: ["print", service]))?.exitCode == 0
     }
 
     private func installIfNeeded(resources: TideyRemoteBridgeBundledResources,
@@ -514,19 +568,48 @@ public final class TideyRemoteBridgeInstaller: NSObject {
         let service = "\(domain)/\(label)"
         if (try? commandRunner.run("/bin/launchctl", arguments: ["print", service]))?.exitCode == 0 {
             _ = try? commandRunner.run("/bin/launchctl", arguments: ["bootout", service])
+            _ = waitForLaunchAgentToUnload(service: service)
         }
 
-        let bootstrap = try commandRunner.run("/bin/launchctl", arguments: ["bootstrap", domain, plistURL.path])
-        guard bootstrap.exitCode == 0 else {
-            throw TideyRemoteBridgeInstallerError.launchctlFailed(arguments: ["bootstrap", domain, plistURL.path],
-                                                                  output: bootstrap.output)
-        }
+        try bootstrapLaunchAgent(domain: domain, service: service, plistURL: plistURL)
 
         let kickstart = try commandRunner.run("/bin/launchctl", arguments: ["kickstart", "-k", service])
         guard kickstart.exitCode == 0 else {
             throw TideyRemoteBridgeInstallerError.launchctlFailed(arguments: ["kickstart", "-k", service],
                                                                   output: kickstart.output)
         }
+    }
+
+    private func waitForLaunchAgentToUnload(service: String) -> Bool {
+        let deadline = Date().addingTimeInterval(launchAgentTeardownTimeout)
+        repeat {
+            let result = try? commandRunner.run("/bin/launchctl", arguments: ["print", service])
+            if result?.exitCode != 0 {
+                return true
+            }
+            sleep(launchAgentPollInterval)
+        } while Date() < deadline
+        return false
+    }
+
+    private func bootstrapLaunchAgent(domain: String, service: String, plistURL: URL) throws {
+        var lastBootstrap: TideyRemoteBridgeCommandResult?
+        for attempt in 0..<5 {
+            let bootstrap = try commandRunner.run("/bin/launchctl", arguments: ["bootstrap", domain, plistURL.path])
+            if bootstrap.exitCode == 0 {
+                return
+            }
+            lastBootstrap = bootstrap
+            if !bootstrap.output.contains("Input/output error") && bootstrap.exitCode != 5 {
+                break
+            }
+            if attempt < 4 {
+                _ = waitForLaunchAgentToUnload(service: service)
+                sleep(launchAgentPollInterval)
+            }
+        }
+        throw TideyRemoteBridgeInstallerError.launchctlFailed(arguments: ["bootstrap", domain, plistURL.path],
+                                                              output: lastBootstrap?.output ?? "")
     }
 
     private func pollBridgeReady(paths: TideyRemoteBridgeInstallPaths,
