@@ -15,6 +15,8 @@ DEPLOY_METADATA_PATH="${DEPLOY_METADATA_PATH:-$INSTALL_DIR/deploy-metadata.json}
 PLIST_PATH="${PLIST_PATH:-$HOME/Library/LaunchAgents/$LABEL.plist}"
 SUPERVISOR_PLIST_PATH="${SUPERVISOR_PLIST_PATH:-$HOME/Library/LaunchAgents/$SUPERVISOR_LABEL.plist}"
 HEALTH_URL="${HEALTH_URL:-http://$HOST:$PORT/admin/status}"
+HEALTH_CHECK_ATTEMPTS="${HEALTH_CHECK_ATTEMPTS:-120}"
+HEALTH_CHECK_INTERVAL_SECONDS="${HEALTH_CHECK_INTERVAL_SECONDS:-0.5}"
 LAUNCHCTL_DOMAIN="gui/$(id -u)"
 SERVICE_TARGET="$LAUNCHCTL_DOMAIN/$LABEL"
 SUPERVISOR_TARGET="$LAUNCHCTL_DOMAIN/$SUPERVISOR_LABEL"
@@ -31,6 +33,8 @@ Environment overrides:
   HOST         admin endpoint host (default: 127.0.0.1)
   PORT         admin endpoint port (default: 4817)
   HEALTH_URL   full admin health URL (default: http://127.0.0.1:4817/admin/status)
+  HEALTH_CHECK_ATTEMPTS health check attempts after restart (default: 120)
+  HEALTH_CHECK_INTERVAL_SECONDS seconds between health attempts (default: 0.5)
   PLIST_PATH   launchd plist path (default: ~/Library/LaunchAgents/\$LABEL.plist)
   SUPERVISOR_LABEL supervisor launchd label (default: \$LABEL.cloudflared)
   DEPLOY_METADATA_PATH deploy metadata JSON path (default: ~/Library/Application Support/Tidey Remote Bridge/deploy-metadata.json)
@@ -110,14 +114,16 @@ else
 fi
 
 echo "Waiting for admin endpoint..."
-for _ in {1..20}; do
+for ((attempt = 1; attempt <= HEALTH_CHECK_ATTEMPTS; attempt++)); do
   http_code="$(curl -sS -o /dev/null -w '%{http_code}' "$HEALTH_URL" || true)"
   if [[ "$http_code" == "200" || "$http_code" == "401" ]]; then
     echo "Bridge healthy: $HEALTH_URL (http $http_code)"
     write_deploy_metadata || echo "warning: failed to write deploy metadata" >&2
     exit 0
   fi
-  sleep 0.5
+  if [[ "$attempt" -lt "$HEALTH_CHECK_ATTEMPTS" ]]; then
+    sleep "$HEALTH_CHECK_INTERVAL_SECONDS"
+  fi
 done
 
 echo "Health check failed: $HEALTH_URL" >&2
