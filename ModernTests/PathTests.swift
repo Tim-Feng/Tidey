@@ -555,6 +555,33 @@ final class PathTests: XCTestCase {
         return (Int32(x), Int32(y))
     }
 
+    private func hardWrappedText(_ text: String, contentWidth: Int) -> String {
+        precondition(contentWidth > 0)
+        let source = text as NSString
+        var rows: [String] = []
+        var location = 0
+        while location < source.length {
+            let length = min(contentWidth, source.length - location)
+            rows.append(source.substring(with: NSRange(location: location, length: length)))
+            location += length
+        }
+        return rows.joined(separator: "\n")
+    }
+
+    private func hardWrappedClickIndices(logicalRange: NSRange,
+                                         contentWidth: Int,
+                                         renderedOffset: Int = 0) -> [Int] {
+        precondition(logicalRange.length > 0)
+        let firstRow = logicalRange.location / contentWidth
+        let lastRow = (NSMaxRange(logicalRange) - 1) / contentWidth
+        return (firstRow...lastRow).map { row in
+            let segmentStart = max(logicalRange.location, row * contentWidth)
+            let segmentEnd = min(NSMaxRange(logicalRange), (row + 1) * contentWidth)
+            let logicalIndex = min(segmentEnd - 1, segmentStart + 1)
+            return renderedOffset + logicalIndex + logicalIndex / contentWidth
+        }
+    }
+
     private func gridCoordinates(for string: String, width: Int) -> (columns: [Int], rows: [Int]) {
         var columns: [Int] = []
         var rows: [Int] = []
@@ -1340,6 +1367,72 @@ final class PathTests: XCTestCase {
         XCTAssertEqual(action?["startX"] as? Int, 0)
         XCTAssertEqual(action?["startY"] as? Int, 0)
         XCTAssertEqual(action?["endY"] as? Int, 2)
+    }
+
+    func testOpenActionRecoversTwoTUIHardWrappedPathsInsideNarrowContentArea() throws {
+        let root = URL(fileURLWithPath: "/private/tmp")
+            .appendingPathComponent("tidey-tui-hard-wrap-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        let directory = root.appendingPathComponent(
+            "Users/timfeng/GitHub/adbrewer/projects/embryo-074/shotboard/goal-tests/v05/renders/shot-control-craft-v0",
+            isDirectory: true)
+        let firstFile = directory.appendingPathComponent("storyboard-template-page-01.png")
+        let secondFile = directory.appendingPathComponent("storyboard-template-page-02.png")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data().write(to: firstFile)
+        try Data().write(to: secondFile)
+
+        for contentWidth in [48, 65, 74, 91, 118] {
+            // Full-screen TUIs perform word wrapping themselves. When the space between two paths
+            // falls on the visual boundary, neither the trailing nor leading row retains it.
+            let firstLogicalParagraph = "你有確實的參考 \(firstFile.path)"
+            let secondLogicalParagraph = "\(secondFile.path)  這兩張圖嗎？"
+            let firstVisualParagraph = hardWrappedText(firstLogicalParagraph,
+                                                       contentWidth: contentWidth)
+            let secondVisualParagraph = hardWrappedText(secondLogicalParagraph,
+                                                        contentWidth: contentWidth)
+            let renderedText = "\(firstVisualParagraph)\n\(secondVisualParagraph)"
+
+            let firstPathRange = (firstLogicalParagraph as NSString).range(of: firstFile.path)
+            let secondPathRange = (secondLogicalParagraph as NSString).range(of: secondFile.path)
+            let firstClicks = hardWrappedClickIndices(logicalRange: firstPathRange,
+                                                      contentWidth: contentWidth)
+            let secondClicks = hardWrappedClickIndices(
+                logicalRange: secondPathRange,
+                contentWidth: contentWidth,
+                renderedOffset: (firstVisualParagraph as NSString).length + 1)
+
+            for click in firstClicks {
+                let action = openURLOrExistingFileAction(text: renderedText,
+                                                         clickIndex: click,
+                                                         width: 132,
+                                                         workingDirectory: root.path)
+                XCTAssertEqual(action?["actionType"] as? Int,
+                               TideyURLActionType.openExistingFile.rawValue,
+                               "content width \(contentWidth), click \(click)")
+                XCTAssertEqual(action?["fullPath"] as? String, firstFile.path)
+                XCTAssertEqual(action?["rawFilename"] as? String, firstFile.path)
+                XCTAssertGreaterThan(action?["endY"] as? Int ?? 0,
+                                     action?["startY"] as? Int ?? 0)
+            }
+
+            for click in secondClicks {
+                let action = openURLOrExistingFileAction(text: renderedText,
+                                                         clickIndex: click,
+                                                         width: 132,
+                                                         workingDirectory: root.path)
+                XCTAssertEqual(action?["actionType"] as? Int,
+                               TideyURLActionType.openExistingFile.rawValue,
+                               "content width \(contentWidth), click \(click)")
+                XCTAssertEqual(action?["fullPath"] as? String, secondFile.path)
+                XCTAssertEqual(action?["rawFilename"] as? String, secondFile.path)
+                XCTAssertGreaterThan(action?["endY"] as? Int ?? 0,
+                                     action?["startY"] as? Int ?? 0)
+            }
+        }
     }
 
     func testURLLikeCandidateStopsBeforeChineseTrailingPunctuation() {

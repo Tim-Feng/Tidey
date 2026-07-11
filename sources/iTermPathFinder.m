@@ -30,6 +30,13 @@ static dispatch_queue_t iTermPathFinderQueue(void) {
 static const NSInteger iTermPathFinderInitialSuffixChunkLimit = 25;
 static const NSInteger iTermPathFinderMaxExtendedSuffixChunks = 25;
 
+NSString * const iTermPathFinderOptionalHardWrapSeparator = @"\uFDD0";
+
+static NSString *iTermPathFinderPathByRemovingOptionalHardWrapSeparators(NSString *path) {
+    return [path stringByReplacingOccurrencesOfString:iTermPathFinderOptionalHardWrapSeparator
+                                            withString:@""];
+}
+
 @implementation iTermPathFinder {
     NSString *_beforeStringIn;
     NSString *_afterStringIn;
@@ -87,6 +94,13 @@ static const NSInteger iTermPathFinderMaxExtendedSuffixChunks = 25;
     int iterationsBeforeQuitting = 100;  // Bail after 100 iterations if nothing is still found.
     NSMutableSet *paths = [NSMutableSet set];
     NSCharacterSet *whitespaceCharset = [NSCharacterSet whitespaceAndNewlineCharacterSet];
+    const BOOL preferLongestOptionalHardWrapMatch =
+        ([_beforeStringIn containsString:iTermPathFinderOptionalHardWrapSeparator] ||
+         [_afterStringIn containsString:iTermPathFinderOptionalHardWrapSeparator]);
+    NSString *bestPath = nil;
+    int bestPrefixChars = 0;
+    int bestSuffixChars = 0;
+    int bestConsumedChars = -1;
     for (NSInteger i = [beforeChunks count]; i >= 0; i--) {
         if (self.canceled) {
             _path = nil;
@@ -113,7 +127,7 @@ static const NSInteger iTermPathFinderMaxExtendedSuffixChunks = 25;
             [right appendString:rightChunk];
 
             NSString *possiblePath = [left stringByAppendingString:right];
-            NSString *trimmedPath = possiblePath;
+            NSString *trimmedPath = iTermPathFinderPathByRemovingOptionalHardWrapSeparators(possiblePath);
             if (_trimWhitespace) {
                 trimmedPath = [trimmedPath stringByTrimmingCharactersInSet:whitespaceCharset];
             }
@@ -148,7 +162,8 @@ static const NSInteger iTermPathFinderMaxExtendedSuffixChunks = 25;
                                     workingDirectoryIsOk:workingDirectoryIsOk
                                              seenPaths:paths
                                         whitespaceCharset:whitespaceCharset
-                                     questionableSuffixes:questionableSuffixes];
+                                     questionableSuffixes:questionableSuffixes
+                              preferLongestMatch:preferLongestOptionalHardWrapMatch];
             }
             if (match) {
                 NSString *modifiedPossiblePath = match[@"modifiedPath"];
@@ -170,14 +185,16 @@ static const NSInteger iTermPathFinderMaxExtendedSuffixChunks = 25;
                 NSString *extendedPath = [pathForResult stringByAppendingString:extra];
                 NSString *rightWithExtra = [matchedRight stringByAppendingString:extra];
 
+                int candidatePrefixChars;
                 if (_trimWhitespace &&
                     [[rightWithExtra stringByTrimmingTrailingCharactersFromCharacterSet:whitespaceCharset] length] == 0) {
                     // trimmedPath is trim(left + right). If trim(right) is empty
                     // then we don't want to count trailing whitespace from left in the chars
                     // taken from prefix.
-                    _prefixChars = (int)[[left stringByTrimmingTrailingCharactersFromCharacterSet:whitespaceCharset] length];
+                    candidatePrefixChars =
+                        (int)[[left stringByTrimmingTrailingCharactersFromCharacterSet:whitespaceCharset] length];
                 } else {
-                    _prefixChars = (int)left.length;
+                    candidatePrefixChars = (int)left.length;
                 }
                 int n;
                 if (_trimWhitespace) {
@@ -185,18 +202,39 @@ static const NSInteger iTermPathFinderMaxExtendedSuffixChunks = 25;
                 } else {
                     n = (int)(rightWithExtra.length - lengthOfBadSuffix);
                 }
-                _suffixChars = MAX(0, n);
-                DLog(@"Using path %@", extendedPath);
-                _path = [extendedPath copy];
-                return;
+                const int candidateSuffixChars = MAX(0, n);
+                const int consumedChars = candidatePrefixChars + candidateSuffixChars;
+                if (!preferLongestOptionalHardWrapMatch) {
+                    _prefixChars = candidatePrefixChars;
+                    _suffixChars = candidateSuffixChars;
+                    DLog(@"Using path %@", extendedPath);
+                    _path = [extendedPath copy];
+                    return;
+                }
+                if (consumedChars > bestConsumedChars ||
+                    (consumedChars == bestConsumedChars && extendedPath.length > bestPath.length)) {
+                    bestPath = [extendedPath copy];
+                    bestPrefixChars = candidatePrefixChars;
+                    bestSuffixChars = candidateSuffixChars;
+                    bestConsumedChars = consumedChars;
+                }
             }
             if (--iterationsBeforeQuitting == 0) {
-                _path = nil;
-                return;
+                break;
             }
         }
+        if (iterationsBeforeQuitting == 0) {
+            break;
+        }
     }
-    _path = nil;
+    if (bestPath) {
+        _path = bestPath;
+        _prefixChars = bestPrefixChars;
+        _suffixChars = bestSuffixChars;
+        DLog(@"Using longest optional-hard-wrap path %@", bestPath);
+    } else {
+        _path = nil;
+    }
     return;
 }
 
@@ -224,7 +262,7 @@ static const NSInteger iTermPathFinderMaxExtendedSuffixChunks = 25;
 - (NSArray<NSString *> *)splitString:(NSString *)string {
     NSMutableArray<NSString *> *parts = [NSMutableArray array];
     __block NSRange lastRange = NSMakeRange(0, 0);
-    [string enumerateStringsMatchedByRegex:@"([^\t ():\",（）「」『』【】〈〉《》，。、；：！？…—～]*)([\t ():\",（）「」『』【】〈〉《》，。、；：！？…—～])"
+    [string enumerateStringsMatchedByRegex:@"([^\uFDD0\t ():\",（）「」『』【】〈〉《》，。、；：！？…—～]*)([\uFDD0\t ():\",（）「」『』【】〈〉《》，。、；：！？…—～])"
                                    options:0
                                    inRange:NSMakeRange(0, string.length)
                                      error:nil
@@ -300,10 +338,13 @@ static const NSInteger iTermPathFinderMaxExtendedSuffixChunks = 25;
                                                  workingDirectoryIsOk:(BOOL)workingDirectoryIsOk
                                                             seenPaths:(NSMutableSet<NSString *> *)paths
                                                       whitespaceCharset:(NSCharacterSet *)whitespaceCharset
-                                                   questionableSuffixes:(NSArray<NSString *> *)questionableSuffixes {
+                                                   questionableSuffixes:(NSArray<NSString *> *)questionableSuffixes
+                                            preferLongestMatch:(BOOL)preferLongestMatch {
     NSMutableString *extendedRight = [right mutableCopy];
     NSInteger nextAfterChunkIndex = startIndex;
     NSInteger chunksAdded = 0;
+    NSDictionary *bestResult = nil;
+    NSUInteger bestPathLength = 0;
     while (nextAfterChunkIndex < afterChunks.count && chunksAdded < iTermPathFinderMaxExtendedSuffixChunks) {
         if (self.canceled) {
             return nil;
@@ -312,7 +353,9 @@ static const NSInteger iTermPathFinderMaxExtendedSuffixChunks = 25;
         nextAfterChunkIndex++;
         chunksAdded++;
 
-        NSString *trimmedPath = [left stringByAppendingString:extendedRight];
+        NSString *trimmedPath =
+            iTermPathFinderPathByRemovingOptionalHardWrapSeparators(
+                [left stringByAppendingString:extendedRight]);
         if (_trimWhitespace) {
             trimmedPath = [trimmedPath stringByTrimmingCharactersInSet:whitespaceCharset];
         }
@@ -331,10 +374,17 @@ static const NSInteger iTermPathFinderMaxExtendedSuffixChunks = 25;
             NSMutableDictionary *result = [match mutableCopy];
             result[@"right"] = [extendedRight copy];
             result[@"nextAfterChunkIndex"] = @(nextAfterChunkIndex);
-            return result;
+            if (!preferLongestMatch) {
+                return result;
+            }
+            const NSUInteger pathLength = [match[@"modifiedPath"] length];
+            if (!bestResult || pathLength > bestPathLength) {
+                bestResult = result;
+                bestPathLength = pathLength;
+            }
         }
     }
-    return nil;
+    return bestResult;
 }
 
 #pragma mark - Line Numbers

@@ -9,6 +9,10 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+// Internal separator used by terminal click handling. It may either separate adjacent tokens or
+// disappear when a TUI has hard-wrapped one path across visual rows.
+FOUNDATION_EXPORT NSString * const iTermPathFinderOptionalHardWrapSeparator;
+
 // Given two strings "before" and "after" try to find a filename by searching outward from their
 // concatenation.
 //

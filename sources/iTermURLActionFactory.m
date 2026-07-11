@@ -502,14 +502,10 @@ static BOOL iTermCanonicalClickLineNeedsHardJoin(iTermCanonicalClickLineInfo pre
     if (!previous.hasToken || !next.hasToken) {
         return NO;
     }
-    const BOOL nextLineIsIndented = next.firstTokenX > next.contentStart;
-    const BOOL previousLineFilledVisibleWidth = previous.contentEnd >= previous.contentRight;
-    if (!nextLineIsIndented && !previousLineFilledVisibleWidth) {
-        return NO;
-    }
-    if (!previous.containsSlash) {
-        return NO;
-    }
+    // Full-screen TUIs lay out text inside their own content area and paint each visual row with
+    // cursor addressing. Those rows have EOL_HARD and may end well before the PTY's right edge.
+    // Treat a filename-character boundary as a possible continuation here. The reconstructed
+    // string is only accepted later if iTermPathFinder verifies that it names an existing file.
     return (iTermCanonicalClickCharacterIsPathToken(previous.lastTokenChar) &&
             iTermCanonicalClickCharacterIsPathToken(next.firstTokenChar));
 }
@@ -587,11 +583,19 @@ static BOOL iTermCanonicalClickShouldJoin(iTermCanonicalClickLineInfo previous,
         }
 
         int startX = info.contentStart;
+        BOOL hardJoinedFromPrevious = NO;
         if (y > startLine) {
             iTermCanonicalClickLineInfo previous = iTermCanonicalClickLineInfoMake(extractor, y - 1);
             if (iTermCanonicalClickLineNeedsHardJoin(previous, info)) {
                 startX = info.firstTokenX;
+                hardJoinedFromPrevious = YES;
             }
+        }
+
+        if (hardJoinedFromPrevious) {
+            VT100GridCoord markerCoord = VT100GridCoordMake(startX, y);
+            iTermLocatedString *target = (y <= coord.y) ? prefix : suffix;
+            [target appendString:iTermPathFinderOptionalHardWrapSeparator at:markerCoord];
         }
 
         ScreenCharArray *line = [dataSource screenCharArrayForLine:y];
@@ -1242,15 +1246,18 @@ static BOOL iTermCanonicalClickShouldJoin(iTermCanonicalClickLineInfo previous,
 - (void)urlActionForExistingFileWithPrefix:(iTermLocatedString *)locatedPrefix
                                   suffix:(iTermLocatedString *)locatedSuffix
                                 completion:(void (^)(URLAction *, BOOL workingDirectoryIsLocal))completion {
+    NSMutableCharacterSet *prefixCharacterSet = [[NSCharacterSet filenameCharacterSet] mutableCopy];
+    [prefixCharacterSet addCharactersInString:iTermPathFinderOptionalHardWrapSeparator];
     NSString *possibleFilePart1 =
     [locatedPrefix.string substringIncludingOffset:[locatedPrefix.string length] - 1
-                                  fromCharacterSet:[NSCharacterSet filenameCharacterSet]
+                                  fromCharacterSet:prefixCharacterSet
                               charsTakenFromPrefix:NULL];
 
     // Allow quotes and commas in the suffix to pick up Python line numbers like:
     //   File "/path/to/file.py", line 12, in <module>
     NSMutableCharacterSet *suffixCharacterSet = [[NSCharacterSet filenameCharacterSet] mutableCopy];
     [suffixCharacterSet formUnionWithCharacterSet:[NSCharacterSet characterSetWithCharactersInString:@"\","]];
+    [suffixCharacterSet addCharactersInString:iTermPathFinderOptionalHardWrapSeparator];
 
     NSString *possibleFilePart2 =
     [locatedSuffix.string substringIncludingOffset:0
@@ -1329,13 +1336,16 @@ static BOOL iTermCanonicalClickShouldJoin(iTermCanonicalClickLineInfo previous,
 
 - (URLAction *)tideySynchronousURLActionForExistingFileWithPrefix:(iTermLocatedString *)locatedPrefix
                                                            suffix:(iTermLocatedString *)locatedSuffix {
+    NSMutableCharacterSet *prefixCharacterSet = [[NSCharacterSet filenameCharacterSet] mutableCopy];
+    [prefixCharacterSet addCharactersInString:iTermPathFinderOptionalHardWrapSeparator];
     NSString *possibleFilePart1 =
     [locatedPrefix.string substringIncludingOffset:[locatedPrefix.string length] - 1
-                                  fromCharacterSet:[NSCharacterSet filenameCharacterSet]
+                                  fromCharacterSet:prefixCharacterSet
                               charsTakenFromPrefix:NULL];
 
     NSMutableCharacterSet *suffixCharacterSet = [[NSCharacterSet filenameCharacterSet] mutableCopy];
     [suffixCharacterSet formUnionWithCharacterSet:[NSCharacterSet characterSetWithCharactersInString:@"\","]];
+    [suffixCharacterSet addCharactersInString:iTermPathFinderOptionalHardWrapSeparator];
 
     NSString *possibleFilePart2 =
     [locatedSuffix.string substringIncludingOffset:0
