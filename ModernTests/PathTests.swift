@@ -574,11 +574,16 @@ final class PathTests: XCTestCase {
         precondition(logicalRange.length > 0)
         let firstRow = logicalRange.location / contentWidth
         let lastRow = (NSMaxRange(logicalRange) - 1) / contentWidth
-        return (firstRow...lastRow).map { row in
+        return (firstRow...lastRow).flatMap { row -> [Int] in
             let segmentStart = max(logicalRange.location, row * contentWidth)
             let segmentEnd = min(NSMaxRange(logicalRange), (row + 1) * contentWidth)
-            let logicalIndex = min(segmentEnd - 1, segmentStart + 1)
-            return renderedOffset + logicalIndex + logicalIndex / contentWidth
+            let firstIndex = renderedOffset + segmentStart + segmentStart / contentWidth
+            guard segmentEnd - segmentStart > 1 else {
+                return [firstIndex]
+            }
+            let interiorIndex = segmentStart + 1
+            return [firstIndex,
+                    renderedOffset + interiorIndex + interiorIndex / contentWidth]
         }
     }
 
@@ -1433,6 +1438,74 @@ final class PathTests: XCTestCase {
                                      action?["startY"] as? Int ?? 0)
             }
         }
+    }
+
+    func testOpenActionPrefersCompleteHardWrappedFileOverExistingParentDirectory() throws {
+        let root = URL(fileURLWithPath: "/private/tmp")
+            .appendingPathComponent("tidey-tui-parent-wrap-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        let directory = root.appendingPathComponent("projects/embryo-074/renders", isDirectory: true)
+        let file = directory.appendingPathComponent("storyboard-template-page-01.png")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data().write(to: file)
+
+        let logicalText = "參考 \(file.path)"
+        let pathRange = (logicalText as NSString).range(of: file.path)
+        let contentWidth = pathRange.location + (directory.path as NSString).length
+        let renderedText = hardWrappedText(logicalText, contentWidth: contentWidth)
+        let click = pathRange.location + (directory.path as NSString).length - 2
+
+        let action = openURLOrExistingFileAction(text: renderedText,
+                                                 clickIndex: click,
+                                                 width: contentWidth + 16,
+                                                 workingDirectory: root.path)
+
+        XCTAssertEqual(action?["actionType"] as? Int,
+                       TideyURLActionType.openExistingFile.rawValue)
+        XCTAssertEqual(action?["fullPath"] as? String, file.path)
+        XCTAssertEqual(action?["rawFilename"] as? String, file.path)
+        XCTAssertEqual(action?["startY"] as? Int, 0)
+        XCTAssertEqual(action?["endY"] as? Int, 1)
+    }
+
+    func testOpenActionKeepsIndependentHardRowsAsSeparateExistingFiles() throws {
+        let root = URL(fileURLWithPath: "/private/tmp")
+            .appendingPathComponent("tidey-tui-independent-paths-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let firstFile = root.appendingPathComponent("first-storyboard.png")
+        let secondFile = root.appendingPathComponent("second-storyboard.png")
+        try Data().write(to: firstFile)
+        try Data().write(to: secondFile)
+
+        let renderedText = "\(firstFile.path)\n\(secondFile.path)"
+        let text = renderedText as NSString
+        let firstClick = text.range(of: "first-storyboard").location
+        let secondClick = text.range(of: "second-storyboard").location
+
+        let firstAction = openURLOrExistingFileAction(text: renderedText,
+                                                      clickIndex: firstClick,
+                                                      width: 132,
+                                                      workingDirectory: root.path)
+        let secondAction = openURLOrExistingFileAction(text: renderedText,
+                                                       clickIndex: secondClick,
+                                                       width: 132,
+                                                       workingDirectory: root.path)
+
+        XCTAssertEqual(firstAction?["fullPath"] as? String, firstFile.path)
+        XCTAssertEqual(firstAction?["rawFilename"] as? String, firstFile.path)
+        XCTAssertEqual(firstAction?["startY"] as? Int, 0)
+        XCTAssertEqual(firstAction?["endY"] as? Int, 0)
+        XCTAssertEqual(secondAction?["fullPath"] as? String, secondFile.path)
+        XCTAssertEqual(secondAction?["rawFilename"] as? String, secondFile.path)
+        XCTAssertEqual(secondAction?["startY"] as? Int, 1)
+        XCTAssertEqual(secondAction?["endY"] as? Int, 1)
     }
 
     func testURLLikeCandidateStopsBeforeChineseTrailingPunctuation() {
