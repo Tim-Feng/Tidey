@@ -82,6 +82,8 @@ static const CGFloat kTideyChromeToggleButtonHeight = 34;
 static const CGFloat kTideySidebarBadgeSize = 6;
 static const CGFloat kTideySidebarBadgeLeadingInset = 1;
 static const CGFloat kTideySidebarCloseButtonTopInset = 10;
+static const CGFloat kTideySidebarCloseButtonTrailingInset = 4;
+static const CGFloat kTideySidebarCloseButtonSize = 16;
 static const CGFloat kTideyPanelShortcutHintWidth = 28;
 static const CGFloat kTideyPanelShortcutHintHeight = 18;
 static const CGFloat kTideyPanelShortcutHintTrailingInset = 8;
@@ -120,10 +122,6 @@ static NSView *TideyFindCloseView(NSView *container) {
         }
     }
     return nil;
-}
-
-static CGFloat TideySidebarCloseButtonYForCellHeight(CGFloat cellHeight) {
-    return MAX(0, cellHeight - kTideySidebarCloseButtonTopInset - 16.0);
 }
 
 static NSView *TideyFindSubviewWithIdentifier(NSView *container, NSUserInterfaceItemIdentifier identifier) {
@@ -7540,9 +7538,9 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     [hintView addSubview:hintLabel];
     [cellView addSubview:hintView];
 
-    NSView *closeView = [[NSView alloc] initWithFrame:NSMakeRect(176, 32, 16, 16)];
+    NSView *closeView = [[NSView alloc] initWithFrame:NSZeroRect];
     closeView.identifier = kTideySidebarCloseViewIdentifier;
-    closeView.autoresizingMask = NSViewMinXMargin;
+    closeView.translatesAutoresizingMaskIntoConstraints = NO;
     closeView.hidden = YES;
     closeView.alphaValue = 0.0;
     NSTextField *closeSymbol = [NSTextField labelWithString:@"✕"];
@@ -7552,6 +7550,14 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     closeSymbol.alignment = NSTextAlignmentCenter;
     [closeView addSubview:closeSymbol];
     [cellView addSubview:closeView];
+    [NSLayoutConstraint activateConstraints:@[
+        [closeView.topAnchor constraintEqualToAnchor:cellView.topAnchor
+                                             constant:kTideySidebarCloseButtonTopInset],
+        [closeView.trailingAnchor constraintEqualToAnchor:cellView.trailingAnchor
+                                                  constant:-kTideySidebarCloseButtonTrailingInset],
+        [closeView.widthAnchor constraintEqualToConstant:kTideySidebarCloseButtonSize],
+        [closeView.heightAnchor constraintEqualToConstant:kTideySidebarCloseButtonSize],
+    ]];
 
     return cellView;
 }
@@ -7615,10 +7621,6 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         pinView.frame = NSMakeRect(MAX(0, width - 42), 51 + sOff, 12, 12);
 
         NSView *closeView = TideyFindCloseView(cellView);
-        closeView.frame = NSMakeRect(MAX(0, width - 20),
-                                     TideySidebarCloseButtonYForCellHeight(NSHeight(cellView.bounds)),
-                                     16,
-                                     16);
         BOOL showClose = ([_tideySidebarTableView isKindOfClass:[TideySidebarTableView class]] &&
                           [(TideySidebarTableView *)_tideySidebarTableView tideyShouldShowCloseButtonForRow:row]);
         closeView.hidden = !showClose;
@@ -7673,10 +7675,6 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
                                      kTideySidebarBadgeSize);
 
         NSView *closeView = TideyFindCloseView(cellView);
-        closeView.frame = NSMakeRect(MAX(0, width - 20),
-                                     TideySidebarCloseButtonYForCellHeight(NSHeight(cellView.bounds)),
-                                     16,
-                                     16);
         BOOL showClose = ([_tideySidebarTableView isKindOfClass:[TideySidebarTableView class]] &&
                           [(TideySidebarTableView *)_tideySidebarTableView tideyShouldShowCloseButtonForRow:row]);
         closeView.hidden = !showClose;
