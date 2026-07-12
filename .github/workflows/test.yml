@@ -84,7 +84,7 @@ jobs:
               || echo 0
           }
 
-          # Retry up to 3 times, but only for flaky ibtoold/asset catalog crashes
+          # Retry up to 3 times, but only for known Xcode infrastructure failures.
           for attempt in 1 2 3; do
             echo "::group::Attempt $attempt of 3"
             rm -rf TestResults.xcresult build_output.txt
@@ -114,22 +114,23 @@ jobs:
               exit 0
             fi
 
-            # Check if this is a flaky ibtoold/asset catalog crash
-            if grep -q "CompileAssetCatalogVariant failed\|IBPlatformToolFailureException\|The tool closed the connection" build_output.txt; then
-              echo "::warning::Attempt $attempt failed due to flaky ibtoold crash (known Xcode 26.2 issue)"
+            # Xcode may fail before tests start because ibtoold crashes or the test host times out.
+            if grep -q "CompileAssetCatalogVariant failed\|IBPlatformToolFailureException\|The tool closed the connection\|The test runner timed out while preparing to run tests" build_output.txt; then
+              echo "::warning::Attempt $attempt failed due to a known Xcode infrastructure failure"
               if [ $attempt -lt 3 ]; then
                 echo "Retrying..."
                 killall ibtoold 2>/dev/null || true
                 killall AssetCatalogSimulatorAgent 2>/dev/null || true
+                killall "Tidey Dev" 2>/dev/null || true
                 sleep 5
                 continue
               else
-                echo "::error::All 3 attempts failed due to flaky ibtoold crashes"
+                echo "::error::All 3 attempts failed due to Xcode infrastructure failures"
                 exit 1
               fi
             else
               # Real test failure - don't retry
-              echo "::error::Tests failed (not a flaky ibtoold issue)"
+              echo "::error::Tests failed (not a recognized Xcode infrastructure issue)"
               exit 1
             fi
           done
