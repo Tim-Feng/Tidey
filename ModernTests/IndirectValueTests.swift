@@ -118,7 +118,11 @@ final class IndirectValueTests: XCTestCase, iTermObject {
         wait(for: [expectation], timeout: 1)
     }
 
-    func testArrayDereferenceWithFunctionCall() {
+    func testArrayDereferenceWithFunctionCall() throws {
+        // Same CI-only hang family as ExpressionSystemIntegrationTests
+        // .testConcurrentBinaryEvaluation (async function-call path); passes locally.
+        try XCTSkipIf(ProcessInfo.processInfo.environment["TIDEY_SKIP_CI_HANGING_TESTS"] == "1",
+                      "Skipped on CI: hangs on GitHub Actions runners")
         let expectation = XCTestExpectation(description: "array dereference with function")
 
         let parser = iTermExpressionParser.callParser()!

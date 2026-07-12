@@ -365,9 +365,17 @@
 }
 
 - (void)testToggleFullScreenMenuDoesNotOwnControlCommandF {
-    NSString *path = @"/Users/timfeng/GitHub/Tidey/Interfaces/MainMenu.xib";
+    // Repo root derived from this source file so the test works on any checkout
+    // location (CI runners check out under /Users/runner/work/...).
+    NSString *repoRoot = [[[NSString stringWithUTF8String:__FILE__]
+                           stringByDeletingLastPathComponent]
+                          stringByDeletingLastPathComponent];
+    NSString *path = [repoRoot stringByAppendingPathComponent:@"Interfaces/MainMenu.xib"];
     NSString *xib = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
     XCTAssertNotNil(xib);
+    if (xib == nil) {
+        return;
+    }
 
     NSRegularExpression *regex =
         [NSRegularExpression regularExpressionWithPattern:@"<menuItem title=\"Toggle Full Screen\" keyEquivalent=\"\" identifier=\"Toggle Full Screen\"[\\s\\S]*?<modifierMask key=\"keyEquivalentModifierMask\"/>"

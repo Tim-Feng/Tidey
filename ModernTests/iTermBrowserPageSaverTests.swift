@@ -16,6 +16,10 @@ class iTermBrowserPageSaverTests: XCTestCase {
 
     override func setUpWithError() throws {
         try super.setUpWithError()
+        // WKWebView page loads never complete on GitHub Actions runners; every test
+        // in this class hit the execution time allowance there (run 29208999788).
+        try XCTSkipIf(ProcessInfo.processInfo.environment["TIDEY_SKIP_CI_HANGING_TESTS"] == "1",
+                      "Skipped on CI: hangs on GitHub Actions runners")
         testHelper = try iTermBrowserPageSaverTestHelper()
     }
     

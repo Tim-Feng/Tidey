@@ -11,6 +11,14 @@
 @interface TideyReleaseConfigTests : XCTestCase
 @end
 
+// Repo root derived from this source file so the tests work on any checkout
+// location (CI runners check out under /Users/runner/work/...).
+static NSString *TideyRepoRootPath(void) {
+    return [[[NSString stringWithUTF8String:__FILE__]
+             stringByDeletingLastPathComponent]  // iTerm2XCTests/
+            stringByDeletingLastPathComponent];  // repo root
+}
+
 @implementation TideyReleaseConfigTests
 
 - (void)testSparkleFeedURLUsesTestingFeedAndShard {
@@ -36,7 +44,7 @@
 }
 
 - (void)testDevelopmentAndDeploymentConfigsUseDifferentBundleIdentifiers {
-    NSString *pbxprojPath = @"/Users/timfeng/GitHub/Tidey/iTerm2.xcodeproj/project.pbxproj";
+    NSString *pbxprojPath = [TideyRepoRootPath() stringByAppendingPathComponent:@"iTerm2.xcodeproj/project.pbxproj"];
     NSString *contents = [NSString stringWithContentsOfFile:pbxprojPath encoding:NSUTF8StringEncoding error:nil];
     XCTAssertNotNil(contents);
     XCTAssertTrue([contents containsString:@"PRODUCT_BUNDLE_IDENTIFIER = com.tidey.app.dev;"]);
@@ -46,8 +54,10 @@
 }
 
 - (void)testDevelopmentAndReleasePlistsContainSparkleKeys {
-    NSDictionary *devPlist = [NSDictionary dictionaryWithContentsOfFile:@"/Users/timfeng/GitHub/Tidey/plists/dev-iTerm2.plist"];
-    NSDictionary *releasePlist = [NSDictionary dictionaryWithContentsOfFile:@"/Users/timfeng/GitHub/Tidey/plists/release-iTerm2.plist"];
+    NSDictionary *devPlist = [NSDictionary dictionaryWithContentsOfFile:
+                              [TideyRepoRootPath() stringByAppendingPathComponent:@"plists/dev-iTerm2.plist"]];
+    NSDictionary *releasePlist = [NSDictionary dictionaryWithContentsOfFile:
+                                  [TideyRepoRootPath() stringByAppendingPathComponent:@"plists/release-iTerm2.plist"]];
     XCTAssertNotNil(devPlist);
     XCTAssertNotNil(releasePlist);
     for (NSDictionary *plist in @[ devPlist, releasePlist ]) {
