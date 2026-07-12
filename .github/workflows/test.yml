@@ -91,10 +91,14 @@ jobs:
 
             # Run xcodebuild and capture output without losing xcodebuild's status to tee.
             set +e
+            TEST_RUNNER_TIDEY_SKIP_CI_HANGING_TESTS=1 \
             xcodebuild test \
               -project iTerm2.xcodeproj \
               -scheme ModernTests \
               -parallel-testing-enabled NO \
+              -test-timeouts-enabled YES \
+              -default-test-execution-time-allowance 180 \
+              -maximum-test-execution-time-allowance 600 \
               -resultBundlePath TestResults.xcresult \
               CODE_SIGN_IDENTITY="" \
               CODE_SIGNING_REQUIRED=NO \

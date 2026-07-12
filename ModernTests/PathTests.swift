@@ -2439,7 +2439,10 @@ final class CodexWrapperRegistryTests: XCTestCase {
 
     private func launchCodexWrapper(environment: CodexWrapperTestEnvironment) throws -> Process {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/Users/timfeng/GitHub/Tidey/Resources/bin/codex")
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // ModernTests/
+            .deletingLastPathComponent()  // repo root
+        process.executableURL = repoRoot.appendingPathComponent("Resources/bin/codex")
         var env = ProcessInfo.processInfo.environment
         env.removeValue(forKey: "CODEX_HOME")
         for key in Array(env.keys) where key.hasPrefix("Malloc") {
