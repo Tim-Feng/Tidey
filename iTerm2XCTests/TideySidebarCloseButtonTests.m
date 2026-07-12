@@ -311,4 +311,13 @@ static TideySidebarCloseButtonTestRootView *TideyNewSidebarRootView(void) {
     XCTAssertEqualWithAccuracy(NSWidth(cellView.bounds) - NSMaxX(closeView.frame), 4.0, 0.001);
 }
 
+- (void)testCloseButtonUsesManualTerminalCellLayout {
+    TideySidebarCloseButtonTestRootView *view = TideyNewSidebarRootView();
+    NSTableCellView *cellView = [view newTideySidebarCellView];
+    NSView *closeView = TideySidebarCloseView(cellView);
+
+    XCTAssertNotNil(closeView);
+    XCTAssertTrue(closeView.translatesAutoresizingMaskIntoConstraints);
+}
+
 @end

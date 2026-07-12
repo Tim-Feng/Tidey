@@ -754,6 +754,27 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 @implementation TideySidebarCellView
 
+- (void)layout {
+    [super layout];
+
+    NSView *closeView = TideyFindCloseView(self);
+    if (!closeView) {
+        return;
+    }
+    const CGFloat closeX = MAX(0,
+                               NSWidth(self.bounds) -
+                                   kTideySidebarCloseButtonTrailingInset -
+                                   kTideySidebarCloseButtonSize);
+    const CGFloat closeY = MAX(0,
+                               NSHeight(self.bounds) -
+                                   kTideySidebarCloseButtonTopInset -
+                                   kTideySidebarCloseButtonSize);
+    closeView.frame = NSMakeRect(closeX,
+                                 closeY,
+                                 kTideySidebarCloseButtonSize,
+                                 kTideySidebarCloseButtonSize);
+}
+
 @end
 
 @interface TideyEditorTabItemView : NSView {
@@ -7540,7 +7561,6 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
 
     NSView *closeView = [[NSView alloc] initWithFrame:NSZeroRect];
     closeView.identifier = kTideySidebarCloseViewIdentifier;
-    closeView.translatesAutoresizingMaskIntoConstraints = NO;
     closeView.hidden = YES;
     closeView.alphaValue = 0.0;
     NSTextField *closeSymbol = [NSTextField labelWithString:@"✕"];
@@ -7550,14 +7570,6 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     closeSymbol.alignment = NSTextAlignmentCenter;
     [closeView addSubview:closeSymbol];
     [cellView addSubview:closeView];
-    [NSLayoutConstraint activateConstraints:@[
-        [closeView.topAnchor constraintEqualToAnchor:cellView.topAnchor
-                                             constant:kTideySidebarCloseButtonTopInset],
-        [closeView.trailingAnchor constraintEqualToAnchor:cellView.trailingAnchor
-                                                  constant:-kTideySidebarCloseButtonTrailingInset],
-        [closeView.widthAnchor constraintEqualToConstant:kTideySidebarCloseButtonSize],
-        [closeView.heightAnchor constraintEqualToConstant:kTideySidebarCloseButtonSize],
-    ]];
 
     return cellView;
 }

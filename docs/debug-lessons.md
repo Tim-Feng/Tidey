@@ -55,6 +55,9 @@
 
 ## UI / Layout
 
+- terminal window 的 table cell 要沿用 frame-based layout
+  - `NSTableView` 可能先向 delegate 取 zero-size cell，再套用 60／82pt 的實際 row frame；只在 configure 階段算一次 subview frame，cell reuse 或高度切換後會留在舊位置
+  - 在 cell subclass 的 `-layout` 依最新 bounds 重算位置；不要為了固定右上角，把 `NSLayoutConstraint` 引進 terminal window
 - 不要直接切 `layoutSubviewsWithVisibleTabBarForWindow:` / `layoutSubviewsWithHiddenTabBarForWindow:`
   - 這會連 tab bar、status bar、division view 一起動
 - `PSMTabBarControl` 會在 layout 後重設 overflow button
