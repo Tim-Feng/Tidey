@@ -192,6 +192,7 @@ echo "DMG size: $DMG_SIZE bytes"
 # --- Resolve version (used by audit rename + appcast update) ---
 VERSION=$(plutil -extract CFBundleShortVersionString raw "$APP_PATH/Contents/Info.plist")
 BUILD=$(plutil -extract CFBundleVersion raw "$APP_PATH/Contents/Info.plist")
+MINIMUM_SYSTEM_VERSION=$(plutil -extract LSMinimumSystemVersion raw "$APP_PATH/Contents/Info.plist")
 
 # --- Rename DMG for audit mode ---
 # Audit DMG must never collide with the production filename; otherwise a stray
@@ -252,7 +253,7 @@ ET.SubElement(item, 'title').text = 'Tidey $VERSION'
 ET.SubElement(item, 'pubDate').text = '$PUB_DATE'
 ET.SubElement(item, '{http://www.andymatuschak.net/xml-namespaces/sparkle}version').text = '$BUILD'
 ET.SubElement(item, '{http://www.andymatuschak.net/xml-namespaces/sparkle}shortVersionString').text = '$VERSION'
-ET.SubElement(item, '{http://www.andymatuschak.net/xml-namespaces/sparkle}minimumSystemVersion').text = '12.0'
+ET.SubElement(item, '{http://www.andymatuschak.net/xml-namespaces/sparkle}minimumSystemVersion').text = '$MINIMUM_SYSTEM_VERSION'
 enc = ET.SubElement(item, 'enclosure')
 enc.set('url', '$DMG_URL')
 enc.set('type', 'application/octet-stream')
@@ -265,6 +266,7 @@ tree.write('$APPCAST', xml_declaration=True, encoding='utf-8')
 fi
 
 echo "Version: $VERSION (build $BUILD)"
+echo "Minimum system version: $MINIMUM_SYSTEM_VERSION"
 
 # --- Verify ---
 step "Final Check"

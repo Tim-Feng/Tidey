@@ -352,6 +352,8 @@
   - 直接改 plist 的版號無效，下次 build 就被蓋掉
   - Development config 會加 `-dev` suffix，Deployment 加日期 suffix（除非 version.txt 不含 `%(extra)s` placeholder）
   - 要改版號就改 `version.txt`，不要改 plist，也不要只看 Xcode General tab 的 Version / Build 顯示值（那些是 build 後才被覆寫的結果）
+- appcast 的最低 macOS 版本要讀正式 build 的 `LSMinimumSystemVersion`
+  - project deployment target 改過後，release script 裡的 hardcode 很容易留在舊版本，造成 Sparkle 允許不相容的系統下載更新
 
 ## Branding / Defaults
 
