@@ -283,7 +283,9 @@ class iTermBrowserPageSaverTests: XCTestCase {
             print("✅ Network failure handling test passed - correctly handled server failure")
         }
 
-        // Restart server for cleanup
-        testHelper.startServer()
+        // Restart server and prove it is reachable again; a silent restart
+        // failure would let this test pass while poisoning later tests.
+        try testHelper.startServer()
+        try await testHelper.loadTestPage()
     }
 }

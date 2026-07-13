@@ -29,7 +29,7 @@ class iTermBrowserPageSaverTestHelper {
         serverPort = try iTermTestHTTPServer.findAvailablePort()
         
         setupTestResources()
-        setupHTTPServer()
+        try setupHTTPServer()
         setupWebView()
     }
     
@@ -143,9 +143,9 @@ class iTermBrowserPageSaverTestHelper {
     
     // MARK: - HTTP Server Setup
     
-    private func setupHTTPServer() {
+    private func setupHTTPServer() throws {
         httpServer = iTermTestHTTPServer(port: serverPort, documentRoot: tempDirectory)
-        httpServer.start()
+        try httpServer.start()
     }
     
     // MARK: - WebView Setup
@@ -519,9 +519,9 @@ class iTermBrowserPageSaverTestHelper {
         httpServer?.stop()
     }
     
-    func startServer() {
+    func startServer() throws {
         httpServer = iTermTestHTTPServer(port: serverPort, documentRoot: tempDirectory)
-        httpServer.start()
+        try httpServer.start()
     }
     
     // MARK: - Complex Test Scenarios
@@ -724,13 +724,27 @@ private class iTermTestHTTPServer {
         self.documentRoot = documentRoot
     }
     
-    func start() {
+    struct NotReadyError: Error, CustomStringConvertible {
+        let port: Int
+        let processStatus: String
+        let lastErrno: Int32
+        let stderrOutput: String
+
+        var description: String {
+            "test HTTP server on port \(port) never accepted connections " +
+            "(python3 \(processStatus), last errno \(lastErrno)): \(stderrOutput)"
+        }
+    }
+
+    func start() throws {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
         task.arguments = ["-m", "http.server", "--bind", "127.0.0.1", String(port)]
         task.currentDirectoryURL = documentRoot
+        let stderrPipe = Pipe()
+        task.standardError = stderrPipe
 
-        try! task.run()
+        try task.run()
         server = task
 
         // Wait until the server actually accepts connections. A fixed sleep is
@@ -738,6 +752,7 @@ private class iTermTestHTTPServer {
         // several seconds and the first WKWebView load then fails with
         // NSURLErrorDomain -1004 (audit runs 29255672988 / 29255692461).
         let deadline = Date().addingTimeInterval(15)
+        var lastErrno: Int32 = 0
         while Date() < deadline {
             let fd = socket(AF_INET, SOCK_STREAM, 0)
             var addr = sockaddr_in()
@@ -749,12 +764,25 @@ private class iTermTestHTTPServer {
                     connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
                 }
             }
+            if connected != 0 {
+                lastErrno = errno
+            }
             close(fd)
             if connected == 0 {
                 return
             }
+            if !task.isRunning {
+                break
+            }
             Thread.sleep(forTimeInterval: 0.1)
         }
+        let status = task.isRunning ? "still running" : "exited(\(task.terminationStatus))"
+        let stderrData = stderrPipe.fileHandleForReading.availableData
+        let stderrText = String(data: stderrData, encoding: .utf8) ?? ""
+        throw NotReadyError(port: port,
+                            processStatus: status,
+                            lastErrno: lastErrno,
+                            stderrOutput: stderrText.trimmingCharacters(in: .whitespacesAndNewlines))
     }
     
     func stop() {
