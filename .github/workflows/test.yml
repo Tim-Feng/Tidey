@@ -201,7 +201,7 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO 2>&1 | tail -20
 
-      - name: Audit formerly gated non-browser tests
+      - name: Audit formerly gated browser tests
         timeout-minutes: 25
         run: |
           set -o pipefail
@@ -240,27 +240,15 @@ jobs:
             fi
           }
 
-          for round in 1 2 3 4 5; do
-            xcresult="ExpressionAudit-round-${round}.xcresult"
-            run_audit "$xcresult" \
-              -only-testing:ModernTests/ExpressionSystemIntegrationTests/testConcurrentBinaryEvaluation \
-              -only-testing:ModernTests/IndirectValueTests/testArrayDereferenceWithFunctionCall \
-              -only-testing:ModernTests/SubexpressionTests/testBinaryAsyncWithFunctionCalls
-            check_result "$xcresult" 3
-          done
-
-          run_audit "NonBrowserAudit.xcresult" \
-            -only-testing:ModernTests/PathTests/testExistingFileActionRecoversHardWrappedIndentedAbsolutePathAfterNullPadding \
-            -only-testing:ModernTests/CodexWrapperRegistryTests
-          check_result "NonBrowserAudit.xcresult" 3
+          run_audit "BrowserPageSaverGateAudit.xcresult" \
+            -only-testing:ModernTests/iTermBrowserPageSaverTests
+          check_result "BrowserPageSaverGateAudit.xcresult" 15
 
       - name: Upload audit results
         uses: actions/upload-artifact@v7
         if: always()
         with:
           name: debt-audit-${{ github.run_id }}-attempt-${{ github.run_attempt }}
-          path: |
-            ExpressionAudit-round-*.xcresult
-            NonBrowserAudit.xcresult
+          path: BrowserPageSaverGateAudit.xcresult
           if-no-files-found: warn
           retention-days: 7
