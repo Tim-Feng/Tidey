@@ -274,10 +274,6 @@ final class SubexpressionTests: XCTestCase, iTermObject {
     }
 
     func testBinaryAsyncWithFunctionCalls() throws {
-        // Same CI-only hang family as ExpressionSystemIntegrationTests
-        // .testConcurrentBinaryEvaluation (async function-call path); passes locally.
-        try XCTSkipIf(ProcessInfo.processInfo.environment["TIDEY_SKIP_CI_HANGING_TESTS"] == "1",
-                      "Skipped on CI: hangs on GitHub Actions runners")
         let expectation = XCTestExpectation(description: "binary with function calls")
 
         let parser = iTermExpressionParser.callParser()!
