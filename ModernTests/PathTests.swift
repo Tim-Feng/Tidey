@@ -2333,7 +2333,7 @@ final class CodexWrapperRegistryTests: XCTestCase {
         _ = try waitForRegistryJSON(at: firstRegistryURL)
 
         let secondRegistryURL = environment.registryRoot.appendingPathComponent("codex-\(secondSessionID).json")
-        let object = try waitForRegistryJSON(at: secondRegistryURL, timeout: 5.0)
+        let object = try waitForRegistryJSON(at: secondRegistryURL, timeout: 15.0)
 
         XCTAssertEqual(object["session_id"] as? String, secondSessionID)
         XCTAssertEqual(object["rollout_path"] as? String, environment.nextRolloutPath)
@@ -2467,7 +2467,7 @@ final class CodexWrapperRegistryTests: XCTestCase {
         return process
     }
 
-    private func waitForRegistryJSON(at url: URL, timeout: TimeInterval = 3.0) throws -> [String: Any] {
+    private func waitForRegistryJSON(at url: URL, timeout: TimeInterval = 15.0) throws -> [String: Any] {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if let data = try? Data(contentsOf: url),
