@@ -103,7 +103,6 @@ jobs:
 
             # Run xcodebuild and capture output without losing xcodebuild's status to tee.
             set +e
-            TEST_RUNNER_TIDEY_SKIP_CI_HANGING_TESTS=1 \
             xcodebuild test \
               -project iTerm2.xcodeproj \
               -scheme ModernTests \

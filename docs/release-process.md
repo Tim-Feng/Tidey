@@ -2,7 +2,7 @@
 
 從 commit 到使用者裝上新版的完整流程。照這份走一次就能 ship。
 
-最近一次實跑：v0.2.5（2026-04-18）。
+最近一次實跑：v0.5.2（2026-07-13）。
 
 ## 必要前置（每台開發機一次）
 
@@ -42,108 +42,94 @@ Apple 偶爾推新版法務同意書。`notarytool history` 若回 `403 required
 
 ## 釋出前檢查
 
-- 工作樹乾淨（`git status`）：只允許 `RemoteBridge/.build/` 等既有未追蹤項目
-- HEAD 在 master
-- 所有要納入 release 的 commit 都已 push 到 origin 或本地 master
-- 跑一次 `tools/build.sh` 確保 Deployment 前能編過（可選，release.sh 會自己清一次重建）
+- 工作樹乾淨（`git status`）：只允許既有無關的未追蹤項目
+- HEAD 在 master，所有要納入 release 的 commit 已 push
+- 沒有未收斂的 CI 紅燈
 
-## 步驟
+## 步驟（候選 commit 流程）
 
-### 1. Bump version
+核心原則：**tag、DMG、CI 證據必須指向同一個 candidate SHA**。任何 shipping source、build 設定、版本 metadata 或 bundled binary 在 candidate 定案後有變動，舊 artifact 一律作廢，回到步驟 1。
 
-```
-echo -n "0.2.5" > version.txt
-```
-
-版本格式：`MAJOR.MINOR.PATCH`。判斷：
-
-- PATCH（0.2.X）：bug fix / 內部基建 / 使用者外顯變化小
-- MINOR（0.X.0）：明確新面向產品能力（新 UI、新模式、新整合）
-
-工程量不是判準，使用者外顯才是。
-
-`plists/iTerm2.plist` 的 `CFBundleShortVersionString` / `CFBundleGetInfoString` / `CFBundleVersion` 會由 Xcode build 期間的 `tools/updateVersion.py` 從 `version.txt` 讀取並寫入，**不用手動改**。
-
-### 2. 跑 release.sh
+### 1. 建立 release candidate metadata commit
 
 ```
-cd ~/GitHub/Tidey
-tools/release.sh
+echo -n "0.5.X" > version.txt
+tools/build.sh   # 讓 build phase 把版本寫進 plists/iTerm2.plist
 ```
 
-時間：5-15 分鐘（含 notarize 等待）。會依序做：
-
-1. Preflight（驗 cert + notary profile）
-2. `xcodebuild clean` + `tools/build.sh Deployment`
-3. Inside-out codesign（所有 Mach-O / bundle / framework）
-4. 打 DMG（含 `/Applications` symlink）
-5. `notarytool submit --wait`
-6. `stapler staple`
-7. `sign_sparkle_update.py`（EdDSA）
-8. 更新 `docs/appcast.xml`
-9. `spctl --assess` 最終驗證
-
-成功會印 `Done. DMG ready at: /Users/timfeng/GitHub/Tidey/Tidey.dmg`。
-
-### 3. 更新 README
-
-改 `README.md` 的 `## Latest in X.Y.Z` 區塊：
-
-- 列 2-3 條最 user-visible 的亮點
-- 英文、**粗體 title** + em-dash + 描述
-
-改 Install 區塊的 `[Tidey.dmg](...v0.2.X/...)` URL 指向新版。
-
-`docs/index.html` 不用動（下載連結用 `releases/latest/download`，自動跟上）。
-
-### 4. Commit
+更新 `README.md` 的 `## Latest in X.Y.Z` 區塊與 Install 下載 URL。
 
 ```
-git add version.txt plists/iTerm2.plist docs/appcast.xml README.md
-git commit -m "[STRUCTURAL] Update appcast, README, and plist for v0.2.X"
+git add version.txt plists/iTerm2.plist README.md
+git commit -m "[STRUCTURAL] Update release metadata for vX.Y.Z"
 ```
 
-commit 會同時包含：
+**不含 `docs/appcast.xml`**——appcast 必須等 asset 公開後才能發布（步驟 8）。
 
-- `version.txt`（手動 bump）
-- `plists/iTerm2.plist`（build 自動寫入）
-- `docs/appcast.xml`（release.sh 寫入）
-- `README.md`（手動更新）
+版本判準：PATCH = bug fix / 內部基建；MINOR = 明確新面向產品能力。工程量不是判準，使用者外顯才是。
 
-### 5. GitHub release
+### 2. 準備 release notes（repo 外）
 
-```
-gh release create v0.2.X Tidey.dmg \
-  --title "Tidey 0.2.X" \
-  --notes "$(cat <<'EOF'
-## What's New
-- **Feature name** — user-facing description
+寫到 `/private/tmp/Tidey-vX.Y.Z-release-notes.md`，三段：What's New / Fixes / Internal，英文、**粗體 title** + em-dash。不放進 candidate commit。
 
-## Fixes
-- **Fix name** — what got fixed
-
-## Internal
-- **Refactor / infra summary** — implementation-level summary
-EOF
-)"
-```
-
-Release note 英文、三段分類：
-
-- **What's New** — 使用者外顯的新功能
-- **Fixes** — 修好的 bug
-- **Internal** — 內部重構 / 基建（想讓讀的人知道就放，不然可以省）
-
-分類依使用者可感知結果、不依工程量。
-
-### 6. Push
+### 3. push candidate、等同一 SHA 的 CI 全綠
 
 ```
 git push origin master
+gh run watch <run-id> --exit-status
 ```
 
-觸發 GitHub Pages 部署 `docs/appcast.xml`。Sparkle auto-update 從此 URL 拉：
-[https://tim-feng.github.io/Tidey/appcast.xml](https://tim-feng.github.io/Tidey/appcast.xml)
+CI 綠燈必須落在 candidate SHA 本身。
+
+### 4. 從乾淨 candidate tree 跑 release.sh
+
+```
+tools/release.sh
+```
+
+build 前工作樹必須乾淨（無關項除外）；build 後只允許出現 `Tidey.dmg` 與 `docs/appcast.xml` 的變動。腳本依序：preflight → clean build → inside-out codesign → DMG → notarize → staple → Sparkle sign → 更新 appcast → spctl。
+
+### 5. 驗證 artifact
+
+- 輸出行 `Version: X.Y.Z (build X.Y.Z)`、`Minimum system version:` 符合預期
+- `shasum -a 256 Tidey.dmg` 記下
+- `lipo -archs`、staple、spctl 由腳本輸出確認
+
+### 6. tag 指向 candidate SHA
+
+```
+git rev-parse HEAD    # 必須仍是 candidate SHA
+git tag vX.Y.Z && git push origin vX.Y.Z
+```
+
+### 7. Draft release → 上傳 → 驗證 → publish
+
+```
+gh release create vX.Y.Z --draft --verify-tag \
+  --title "Tidey X.Y.Z" --notes-file /private/tmp/Tidey-vX.Y.Z-release-notes.md
+gh release upload vX.Y.Z Tidey.dmg
+# 從 draft asset 重新下載，SHA256 必須與步驟 5 一致
+gh release edit vX.Y.Z --draft=false
+```
+
+### 8. asset 公開後，才單獨 commit / push appcast
+
+```
+git add docs/appcast.xml
+git commit -m "Update appcast for vX.Y.Z"
+git push origin master
+```
+
+push 觸發 GitHub Pages 部署。**順序不可倒**：appcast 先公開而 asset 不存在，Sparkle 用戶會拉到 404。
+
+### 9. 後驗
+
+- `curl -s https://tim-feng.github.io/Tidey/appcast.xml | grep "Tidey X.Y.Z"`（Pages 部署 1-2 分鐘）
+- 公開 URL 重新下載 DMG，SHA256 與本機一致
+
+### Release checklist 記錄
+
+每次 release 記下：candidate SHA、tag SHA（同一個）、CI run/job ID、DMG size 與 SHA256、architecture、minimum system version、Sparkle EdDSA signature、notary submission ID 與 status、公開 asset SHA 驗證結果。
 
 ## 驗證
 
@@ -189,6 +175,7 @@ Remote pairing 是 release blocker。每次 release 前用乾淨 macOS 使用者
 
 ## 歷史參考
 
+- v0.5.2（2026-07-13）：candidate/tag `ae6510b88`、DMG SHA256 `e4424d09…fec70d6e`、notary `2145bd34-c158-47c5-9321-896ceb205175`（首次因 unit-test guard 進 shipping code 而整包重建的案例）
 - v0.2.5（2026-04-18）：commit `1b6cfe44f`、68 commits since v0.2.4
 - v0.2.4（2026-04-09）：commit `5a413f1ab`
 - 前幾版 release note 格式在 `gh -R Tim-Feng/Tidey release view v0.2.X`

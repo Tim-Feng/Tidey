@@ -1251,10 +1251,6 @@ final class PathTests: XCTestCase {
     }
 
     func testExistingFileActionRecoversHardWrappedIndentedAbsolutePathAfterNullPadding() throws {
-        // Hangs on GitHub Actions runners (hit the execution time allowance in
-        // run 29208999788); passes locally.
-        try XCTSkipIf(ProcessInfo.processInfo.environment["TIDEY_SKIP_CI_HANGING_TESTS"] == "1",
-                      "Skipped on CI: hangs on GitHub Actions runners")
         let root = URL(fileURLWithPath: "/private/tmp")
             .appendingPathComponent("tidey-cmdclick-canonical-\(UUID().uuidString)")
         defer {
@@ -2309,14 +2305,6 @@ final class ClaudeHookRegistryTests: XCTestCase {
 }
 
 final class CodexWrapperRegistryTests: XCTestCase {
-    override func setUpWithError() throws {
-        try super.setUpWithError()
-        // The launched codex shim never reaches the registry write on GitHub Actions
-        // runners; both tests hit the execution time allowance there (run 29208999788).
-        try XCTSkipIf(ProcessInfo.processInfo.environment["TIDEY_SKIP_CI_HANGING_TESTS"] == "1",
-                      "Skipped on CI: hangs on GitHub Actions runners")
-    }
-
     func testCodexWrapperWritesRegistryUsingLauncherChildRollout() throws {
         let sessionID = "22222222-2222-2222-2222-222222222222"
         let environment = try makeCodexWrapperTestEnvironment(initialSessionID: sessionID)
@@ -2345,7 +2333,7 @@ final class CodexWrapperRegistryTests: XCTestCase {
         _ = try waitForRegistryJSON(at: firstRegistryURL)
 
         let secondRegistryURL = environment.registryRoot.appendingPathComponent("codex-\(secondSessionID).json")
-        let object = try waitForRegistryJSON(at: secondRegistryURL, timeout: 5.0)
+        let object = try waitForRegistryJSON(at: secondRegistryURL, timeout: 15.0)
 
         XCTAssertEqual(object["session_id"] as? String, secondSessionID)
         XCTAssertEqual(object["rollout_path"] as? String, environment.nextRolloutPath)
@@ -2479,7 +2467,7 @@ final class CodexWrapperRegistryTests: XCTestCase {
         return process
     }
 
-    private func waitForRegistryJSON(at url: URL, timeout: TimeInterval = 3.0) throws -> [String: Any] {
+    private func waitForRegistryJSON(at url: URL, timeout: TimeInterval = 15.0) throws -> [String: Any] {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if let data = try? Data(contentsOf: url),
