@@ -345,6 +345,31 @@
   - `layoutTideyEditorContents` 只該管 panel 內部子 view
   - pane container 如果直接等於 `_tideyEditorPanelView`，一設 frame 就會把整個 panel 位置打亂
 
+### CI hosted tests（2026-07 CI 假綠事故串：5897a021a、40a31f2cc、ae6510b88；runs 29197275492、29211477438、29212683099）
+
+- Pipeline 必須保留 producer 的 exit status
+  - `xcodebuild ... | tee` 沒有 `set -o pipefail` 時，`** TEST FAILED **` 照樣印 `Tests passed`——CI 假綠了數月
+  - 綠燈本身不代表測試跑過：同時驗 xcresult 的 total test count > 0（5897a021a）
+- `.xctestplan` 是執行環境的一部分
+  - test plan 的 environment entries 會覆蓋 shell env，外部 unset 蓋不掉
+  - Malloc diagnostics（StackLogging/GuardEdges/PreScribble）留在預設 plan 會讓 test host 啟動在 CI 超時（40a31f2cc）；這類 config diff 要當程式碼審查
+- Hosted unit test 的 app launch path 不可排程 modal、TCC prompt、installer 或 first-run UI
+  - shell integration 安裝 modal 在啟動 1 秒後跳出，CI 上沒人按 → 誰 pump run loop 誰卡死、受害 test 每輪不同（「hang 會流動」）
+  - guard 要放在「排程之前」，用既有 `isRunningUnitTests`（ae6510b88）
+- Hang 先讀 xcresult diagnostics / spindump，再動手
+  - 主執行緒 stack 一發定位（spindump 拍到 `runModalForWindow:`）；重跑與錯誤字串分類都給不出這個
+  - 先開 `-test-timeouts-enabled` + execution time allowance，hang 幾分鐘內變 failure 並留 spindump，而不是吃滿 6 小時 job 上限
+- Retry 必須先有非確定性證據
+  - 相同 phase / 相同 signature 的 timeout 是 deterministic bug，直接失敗；`The test runner timed out while preparing to run tests` 不可進 retry allowlist
+  - retry 條件要求「0 個 test 已執行 + 已知 asset compiler/ibtoold fingerprint」雙成立
+- Release artifact 必須來自 tag 所指的同一 source tree
+  - shipping code、版本或 build 設定在公證後有變動 → 重新 build、簽章、公證（v0.5.2 因 unit-test guard 進 shipping code 而整包重建）
+  - 發布記錄 candidate SHA、DMG SHA256、notary submission ID
+- Fresh runner 是環境契約
+  - 測試只用 temp directory / repo root discovery（`#filePath` / `__FILE__`），不可寫死 home path
+  - 外部工具缺席要有明確語意（無 tmux → cleanup command 為空是合法結果）
+  - 就緒等待用 poll（連 port、等檔案出現），不可用固定 sleep——冷 runner 的 python3 首啟、wrapper monitor 都比本機慢數倍
+
 ## Versioning
 
 - `version.txt` 是版號的唯一 source of truth，不是 `plists/iTerm2.plist`
