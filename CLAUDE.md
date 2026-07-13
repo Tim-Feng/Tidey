@@ -42,3 +42,17 @@ Tidey 不套用 `~/GitHub/CLAUDE.md` 預設的 TDD。繼承的 iTerm2 codebase �
 - 本地無 pre-commit test gate，`.git/hooks/pre-commit` 僅提示檢查 `docs/debug-lessons.md`
 
 **原則**：修不綁測試類型的 bug 時，commit message 要寫清楚症狀關鍵字（方便 `git log | grep` 回查），並考慮是否要補一條進 `docs/debug-lessons.md`。
+
+**CI skip gate 規範**（在 CI 上 skip 測試時必須遵守）：
+- 每個 skip 使用單一 failure family 專用的環境變數；禁止共用 catch-all（如已退役的 `TIDEY_SKIP_CI_HANGING_TESTS`）。
+- 範圍限定單一 test method，或共享同一 setup / failure fingerprint 的 test class。
+- `XCTSkipIf` 前放固定欄位註解：
+  ```
+  CI-SKIP
+  reason: 可觀察的症狀與 failure fingerprint
+  artifact: run/job/xcresult artifact URL 或 ID
+  remove_when: 可驗證的移除條件
+  ```
+- skip reason string 要包含 failure family 名稱，讓 xcresult 可搜尋。
+- 新增或重新加入 skip gate 會削弱 master CI，必須先取得 Tim 明確同意。
+- retry 不能代替 skip debt 紀錄；skip 也不能關閉 per-test timeout 或 artifact upload。
