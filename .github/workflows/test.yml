@@ -5,6 +5,7 @@ on:
     branches: [master, ci-test]
   pull_request:
     branches: [master]
+  workflow_dispatch:
 
 jobs:
   python-api-tests:
@@ -35,6 +36,9 @@ jobs:
 
   xcode-tests:
     runs-on: macos-15
+    # Must exceed all prior steps plus the Run tests step timeout by enough
+    # margin (>=10 minutes) for xcresult finalize and artifact upload.
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -70,24 +74,32 @@ jobs:
           killall AssetCatalogSimulatorAgent 2>/dev/null || true
 
       - name: Run tests
+        timeout-minutes: 30
         run: |
           set -o pipefail
 
           test_count_from_result() {
-            if [ ! -d TestResults.xcresult ]; then
+            local xcresult_path=$1
+            if [ ! -d "$xcresult_path" ]; then
               echo 0
               return
             fi
 
-            xcrun xcresulttool get test-results summary --path TestResults.xcresult 2>/dev/null \
+            xcrun xcresulttool get test-results summary --path "$xcresult_path" 2>/dev/null \
               | python3 -c 'import json, sys; print(int(json.load(sys.stdin).get("totalTestCount") or 0))' 2>/dev/null \
               || echo 0
           }
 
-          # Retry up to 3 times, but only for known Xcode infrastructure failures.
-          for attempt in 1 2 3; do
-            echo "::group::Attempt $attempt of 3"
-            rm -rf TestResults.xcresult build_output.txt
+          # Retry is reserved for proven-nondeterministic build infrastructure
+          # failures (asset compiler / ibtoold crashes) that occur before any
+          # test runs. Test host preparation timeouts, per-test timeouts,
+          # assertion failures, and crashes fail immediately: same-phase
+          # same-signature timeouts are deterministic bugs (see
+          # docs/debug-lessons.md), and retrying them only hides regressions.
+          for attempt in 1 2; do
+            echo "::group::Attempt $attempt of 2"
+            xcresult="TestResults-attempt-${attempt}.xcresult"
+            build_log="build-output-attempt-${attempt}.txt"
 
             # Run xcodebuild and capture output without losing xcodebuild's status to tee.
             set +e
@@ -99,13 +111,13 @@ jobs:
               -test-timeouts-enabled YES \
               -default-test-execution-time-allowance 180 \
               -maximum-test-execution-time-allowance 600 \
-              -resultBundlePath TestResults.xcresult \
+              -resultBundlePath "$xcresult" \
               CODE_SIGN_IDENTITY="" \
               CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGNING_ALLOWED=NO 2>&1 | tee build_output.txt
+              CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$build_log"
             exit_code=$?
             set -e
-            test_count="$(test_count_from_result)"
+            test_count="$(test_count_from_result "$xcresult")"
             echo "ModernTests executed $test_count tests on attempt $attempt"
             echo "::endgroup::"
 
@@ -118,10 +130,13 @@ jobs:
               exit 0
             fi
 
-            # Xcode may fail before tests start because ibtoold crashes or the test host times out.
-            if grep -q "CompileAssetCatalogVariant failed\|IBPlatformToolFailureException\|The tool closed the connection\|The test runner timed out while preparing to run tests" build_output.txt; then
-              echo "::warning::Attempt $attempt failed due to a known Xcode infrastructure failure"
-              if [ $attempt -lt 3 ]; then
+            # Retry only when the failure is a known asset compiler / ibtoold
+            # crash AND no test ever ran. Anything after the first executed
+            # test method is a real failure with diagnostics worth keeping.
+            if [ "$test_count" -eq 0 ] &&
+               grep -q "CompileAssetCatalogVariant failed\|IBPlatformToolFailureException\|The tool closed the connection" "$build_log"; then
+              echo "::warning::Attempt $attempt failed due to a known asset compiler/ibtoold failure before any test ran"
+              if [ $attempt -lt 2 ]; then
                 echo "Retrying..."
                 killall ibtoold 2>/dev/null || true
                 killall AssetCatalogSimulatorAgent 2>/dev/null || true
@@ -129,12 +144,11 @@ jobs:
                 sleep 5
                 continue
               else
-                echo "::error::All 3 attempts failed due to Xcode infrastructure failures"
+                echo "::error::Both attempts failed due to asset compiler/ibtoold failures"
                 exit 1
               fi
             else
-              # Real test failure - don't retry
-              echo "::error::Tests failed (not a recognized Xcode infrastructure issue)"
+              echo "::error::Tests failed (diagnostics preserved in $xcresult and $build_log)"
               exit 1
             fi
           done
@@ -143,6 +157,9 @@ jobs:
         uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: test-results
-          path: TestResults.xcresult
+          name: test-results-${{ github.run_id }}-${{ github.job }}-attempt-${{ github.run_attempt }}
+          path: |
+            TestResults-attempt-*.xcresult
+            build-output-attempt-*.txt
+          if-no-files-found: warn
           retention-days: 7
