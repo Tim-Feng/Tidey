@@ -272,6 +272,8 @@ echo "Minimum system version: $MINIMUM_SYSTEM_VERSION"
 step "Final Check"
 
 spctl --assess -t open --context context:primary-signature -v "$DMG_PATH" 2>&1
+echo "App architectures:    $(lipo -archs "$APP_PATH/Contents/MacOS/Tidey")"
+echo "Bridge architectures: $(lipo -archs "$APP_PATH/Contents/Resources/RemoteBridge/tidey-remote-bridge")"
 echo ""
 echo "Done. DMG ready at: $DMG_PATH"
 echo ""
@@ -280,8 +282,11 @@ if [[ "$IS_AUDIT" == "1" ]]; then
     echo "Do NOT run 'gh release upload v$VERSION \"$DMG_PATH\"' — that would"
     echo "publish an audit-only DMG without matching production appcast metadata."
 else
-    echo "Next steps:"
-    echo "  1. gh release upload v$VERSION \"$DMG_PATH\" --clobber"
-    echo "  2. git add docs/appcast.xml && git commit -m 'Update appcast for v$VERSION'"
-    echo "  3. git push origin master  # deploys appcast via GitHub Pages"
+    echo "Next steps (candidate flow — docs/release-process.md):"
+    echo "  1. git rev-parse HEAD                # must still be the candidate SHA"
+    echo "  2. git tag v$VERSION && git push origin v$VERSION"
+    echo "  3. gh release create v$VERSION --draft --verify-tag --title \"Tidey $VERSION\" --notes-file <notes>"
+    echo "  4. gh release upload v$VERSION \"$DMG_PATH\""
+    echo "  5. re-download the draft asset, verify SHA256 matches, then: gh release edit v$VERSION --draft=false"
+    echo "  6. only after the asset is public: git add docs/appcast.xml && git commit -m 'Update appcast for v$VERSION' && git push"
 fi
