@@ -733,8 +733,28 @@ private class iTermTestHTTPServer {
         try! task.run()
         server = task
 
-        // Give the server a moment to start (longer for CI environments)
-        Thread.sleep(forTimeInterval: 1.0)
+        // Wait until the server actually accepts connections. A fixed sleep is
+        // not enough on cold CI runners, where python3's first launch can take
+        // several seconds and the first WKWebView load then fails with
+        // NSURLErrorDomain -1004 (audit runs 29255672988 / 29255692461).
+        let deadline = Date().addingTimeInterval(15)
+        while Date() < deadline {
+            let fd = socket(AF_INET, SOCK_STREAM, 0)
+            var addr = sockaddr_in()
+            addr.sin_family = sa_family_t(AF_INET)
+            addr.sin_port = UInt16(port).bigEndian
+            addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+            let connected = withUnsafePointer(to: &addr) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+                }
+            }
+            close(fd)
+            if connected == 0 {
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
     }
     
     func stop() {
