@@ -236,9 +236,25 @@ final class OrdinaryTmuxRouteResolver: OrdinaryTmuxRouteResolving, @unchecked Se
     }
 }
 
+// EXPLICIT input semantics — the caller (BridgeInputActionHandler) knows
+// whether a payload is a chat MESSAGE or raw terminal keys; the transport
+// must never guess from the characters.
+enum OrdinaryTmuxInputMode: Sendable, Equatable {
+    // The whole payload is ONE verbatim chat text: load + bracketed paste
+    // (-p -r), never split — the vendor plan submits with a separate Enter
+    // step. Tabs, CRLF, interior CR, ANSI or trailing newlines all stay
+    // literal.
+    case literalChatText
+    // Legacy raw semantics for terminal_input / prompt controls / the chat
+    // Enter step: a trailing CR/LF becomes send-keys Enter, and the paste
+    // is raw so Esc/Tab/arrows/Ctrl-C still act as keys.
+    case rawTerminalInput
+}
+
 protocol OrdinaryTmuxInputRouting: Sendable {
     func sendInput(_ input: String,
                    toPanelID panelID: String,
+                   mode: OrdinaryTmuxInputMode,
                    allowAmbiguousPasteTimeout: Bool) throws -> Bool
 }
 
@@ -246,7 +262,26 @@ extension OrdinaryTmuxInputRouting {
     func sendInput(_ input: String, toPanelID panelID: String) throws -> Bool {
         try sendInput(input,
                       toPanelID: panelID,
+                      mode: .rawTerminalInput,
                       allowAmbiguousPasteTimeout: false)
+    }
+
+    func sendInput(_ input: String,
+                   toPanelID panelID: String,
+                   mode: OrdinaryTmuxInputMode) throws -> Bool {
+        try sendInput(input,
+                      toPanelID: panelID,
+                      mode: mode,
+                      allowAmbiguousPasteTimeout: false)
+    }
+
+    func sendInput(_ input: String,
+                   toPanelID panelID: String,
+                   allowAmbiguousPasteTimeout: Bool) throws -> Bool {
+        try sendInput(input,
+                      toPanelID: panelID,
+                      mode: .rawTerminalInput,
+                      allowAmbiguousPasteTimeout: allowAmbiguousPasteTimeout)
     }
 }
 
@@ -269,6 +304,7 @@ final class OrdinaryTmuxInputRouter: OrdinaryTmuxInputRouting {
 
     func sendInput(_ input: String,
                    toPanelID panelID: String,
+                   mode: OrdinaryTmuxInputMode = .rawTerminalInput,
                    allowAmbiguousPasteTimeout: Bool = false) throws -> Bool {
         guard let route = try routeResolver.route(forPanelID: panelID, workspaceID: nil) else {
             return false
@@ -277,6 +313,7 @@ final class OrdinaryTmuxInputRouter: OrdinaryTmuxInputRouting {
         let fallbackEnterPaneID = lastPastePaneStore.paneID(for: routeKey)
         let delivery = try adapter.sendInput(input,
                                              route: route,
+                                             mode: mode,
                                              fallbackEnterPaneID: fallbackEnterPaneID,
                                              allowAmbiguousPasteTimeout: allowAmbiguousPasteTimeout)
         lastPastePaneStore.record(delivery: delivery, routeKey: routeKey)

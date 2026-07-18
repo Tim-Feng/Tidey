@@ -85,6 +85,7 @@ struct BridgeInputActionHandler {
                                                  requestID: request.id,
                                                  action: "terminal_input",
                                                  stepIndex: nil,
+                                                 mode: .rawTerminalInput,
                                                  allowAmbiguousPasteTimeout: false) == .routed {
             BridgeLogger.input.info("route action=terminal_input request_id=\(request.id, privacy: .public) panel_id=\(routedPanelID, privacy: .public) transport=ordinary_tmux")
             return BridgeResponse(id: request.id,
@@ -208,11 +209,16 @@ struct BridgeInputActionHandler {
             if forceMacSocketForRemainingSteps {
                 routeDecision = .macSocketFallback
             } else {
+                // The step ROLE (declared by the vendor plan) decides the
+                // semantics: the message step is literal chat text even when
+                // its payload happens to be an enter-only sequence; only the
+                // submit step keeps raw key semantics.
                 routeDecision = try routeOrdinaryTmuxInputIfAvailable(step.input,
                                                                       panelID: panelID,
                                                                       requestID: request.id,
                                                                       action: "chat_submit",
                                                                       stepIndex: index,
+                                                                      mode: step.role == .submitEnter ? .rawTerminalInput : .literalChatText,
                                                                       allowAmbiguousPasteTimeout: true)
             }
             if routeDecision == .routed {
@@ -223,7 +229,7 @@ struct BridgeInputActionHandler {
                     forceMacSocketForRemainingSteps = true
                 }
                 let stepRequest: BridgeRequest
-                if Self.isEnterOnly(step.input) {
+                if step.role == .submitEnter {
                     stepRequest = BridgeRequest(id: UUID().uuidString,
                                                 action: "send_key",
                                                 params: [
@@ -288,14 +294,10 @@ struct BridgeInputActionHandler {
 
     private static func effectiveDelay(for step: ChatSubmitStep, previousStepUsedOrdinaryTmux: Bool) -> UInt64 {
         guard previousStepUsedOrdinaryTmux,
-              isEnterOnly(step.input) else {
+              step.role == .submitEnter else {
             return step.delayNanoseconds
         }
         return ordinaryTmuxChatSubmitEnterDelayNanoseconds
-    }
-
-    private static func isEnterOnly(_ input: String) -> Bool {
-        input == "\r" || input == "\n" || input == "\r\n"
     }
 
     private func routeOrdinaryTmuxInputIfAvailable(_ input: String,
@@ -303,6 +305,7 @@ struct BridgeInputActionHandler {
                                                    requestID: String,
                                                    action: String,
                                                    stepIndex: Int?,
+                                                   mode: OrdinaryTmuxInputMode,
                                                    allowAmbiguousPasteTimeout: Bool) throws -> OrdinaryTmuxRouteDecision {
         guard let ordinaryTmuxInputRouter else {
             return .unavailable
@@ -310,6 +313,7 @@ struct BridgeInputActionHandler {
         do {
             return try ordinaryTmuxInputRouter.sendInput(input,
                                                         toPanelID: panelID,
+                                                        mode: mode,
                                                         allowAmbiguousPasteTimeout: allowAmbiguousPasteTimeout) ? .routed : .unavailable
         } catch {
             guard Self.shouldFallbackToMacSocket(panelID: panelID, error: error) else {

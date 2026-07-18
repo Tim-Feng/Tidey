@@ -2,8 +2,17 @@ import Foundation
 
 let chatSubmitEnterDelayNanoseconds: UInt64 = 130_000_000
 
+// EXPLICIT step semantics: the vendor plan declares what each step IS —
+// downstream transports must never guess message-vs-Enter from the payload
+// characters (a message that happens to be "\r" is still a message).
+enum ChatSubmitStepRole: Equatable, Sendable {
+    case messageText
+    case submitEnter
+}
+
 struct ChatSubmitStep: Equatable {
     let input: String
+    let role: ChatSubmitStepRole
     let delayNanoseconds: UInt64
 }
 
@@ -41,8 +50,8 @@ private struct ClaudeAgentVendor: AgentVendor {
 
     func submitMessagePlan(text: String) -> [ChatSubmitStep] {
         [
-            ChatSubmitStep(input: text, delayNanoseconds: 0),
-            ChatSubmitStep(input: "\r", delayNanoseconds: chatSubmitEnterDelayNanoseconds),
+            ChatSubmitStep(input: text, role: .messageText, delayNanoseconds: 0),
+            ChatSubmitStep(input: "\r", role: .submitEnter, delayNanoseconds: chatSubmitEnterDelayNanoseconds),
         ]
     }
 
@@ -69,8 +78,8 @@ private struct CodexAgentVendor: AgentVendor {
 
     func submitMessagePlan(text: String) -> [ChatSubmitStep] {
         [
-            ChatSubmitStep(input: text, delayNanoseconds: 0),
-            ChatSubmitStep(input: "\r", delayNanoseconds: chatSubmitEnterDelayNanoseconds),
+            ChatSubmitStep(input: text, role: .messageText, delayNanoseconds: 0),
+            ChatSubmitStep(input: "\r", role: .submitEnter, delayNanoseconds: chatSubmitEnterDelayNanoseconds),
         ]
     }
 

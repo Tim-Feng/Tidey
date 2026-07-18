@@ -21,6 +21,11 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
             self.responses = scriptedResponses
         }
 
+        // Opt-in strictness: commands listed here MUST have a scripted
+        // response — a key miss throws instead of silently succeeding, so
+        // an argv drift can never produce a false green.
+        var failOnUnscripted: Set<String> = []
+
         func run(socket: OrdinaryTmuxSocketSelector, arguments: [String], stdin: String?) throws -> String {
             lock.lock()
             defer { lock.unlock() }
@@ -28,6 +33,11 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
             let key = Self.key(socket: socket, arguments: arguments, stdin: stdin)
             guard var results = responses[key],
                   results.isEmpty == false else {
+                if let command = arguments.first, failOnUnscripted.contains(command) {
+                    throw NSError(domain: "RunnerState",
+                                  code: 999,
+                                  userInfo: [NSLocalizedDescriptionKey: "unscripted strict command: \(key)"])
+                }
                 return ""
             }
             let result = results.removeFirst()
@@ -67,7 +77,8 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
         }
         let router = OrdinaryTmuxInputRouter(registry: registry, adapter: adapter)
 
-        XCTAssertTrue(try router.sendInput("hello\r", toPanelID: route.panelID))
+        XCTAssertTrue(try router.sendInput("hello", toPanelID: route.panelID, mode: .literalChatText))
+        XCTAssertTrue(try router.sendInput("\r", toPanelID: route.panelID))
 
         XCTAssertEqual(state.calls.count, 6)
         XCTAssertEqual(state.calls[0], .init(socket: route.socket,
@@ -82,7 +93,7 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
         XCTAssertEqual(state.calls[3].arguments, ["load-buffer", "-b", "ignored", "-"])
         XCTAssertEqual(state.calls[3].stdin, "hello")
         XCTAssertEqual(state.calls[4], .init(socket: route.socket,
-                                             arguments: ["paste-buffer", "-d", "-b", state.calls[4].arguments[3], "-t", "%21"],
+                                             arguments: ["paste-buffer", "-d", "-p", "-r", "-b", state.calls[4].arguments[5], "-t", "%21"],
                                              stdin: nil))
         XCTAssertEqual(state.calls[5], .init(socket: route.socket,
                                              arguments: ["send-keys", "-t", "%21", "Enter"],
@@ -225,7 +236,7 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
                 .success(""),
             ],
             RunnerState.key(socket: route.socket,
-                            arguments: ["paste-buffer", "-d", "-b", "ignored", "-t", "%21"]): [
+                            arguments: ["paste-buffer", "-d", "-p", "-r", "-b", "ignored", "-t", "%21"]): [
                 .failure(tmuxTimeoutError()),
             ],
             RunnerState.key(socket: route.socket,
@@ -236,7 +247,7 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
         let router = OrdinaryTmuxInputRouter(registry: registry,
                                              adapter: adapter(state: state))
 
-        XCTAssertTrue(try router.sendInput("hello from remote", toPanelID: route.panelID))
+        XCTAssertTrue(try router.sendInput("hello from remote", toPanelID: route.panelID, mode: .literalChatText))
         XCTAssertTrue(try router.sendInput("\r", toPanelID: route.panelID))
 
         XCTAssertTrue(state.calls.contains {
@@ -262,7 +273,7 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
                 .success(""),
             ],
             RunnerState.key(socket: route.socket,
-                            arguments: ["paste-buffer", "-d", "-b", "ignored", "-t", "%21"]): [
+                            arguments: ["paste-buffer", "-d", "-p", "-r", "-b", "ignored", "-t", "%21"]): [
                 .failure(tmuxTimeoutError()),
             ],
             RunnerState.key(socket: route.socket,
@@ -273,9 +284,15 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
         let router = OrdinaryTmuxInputRouter(registry: registry,
                                              adapter: adapter(state: state))
 
-        XCTAssertTrue(try router.sendInput(input, toPanelID: route.panelID))
+        XCTAssertTrue(try router.sendInput(input, toPanelID: route.panelID, mode: .literalChatText))
         XCTAssertTrue(try router.sendInput("\r", toPanelID: route.panelID))
         XCTAssertEqual(state.calls.last?.arguments, ["send-keys", "-t", "%21", "Enter"])
+        XCTAssertEqual(state.calls.filter { $0.arguments.first == "paste-buffer" }.map(\.arguments),
+                       [["paste-buffer", "-d", "-p", "-r", "-b", "ignored", "-t", "%21"]],
+                       "the CRLF message went through the REAL bracketed paste argv")
+        XCTAssertEqual(state.calls.filter { $0.arguments.first == "capture-pane" }.map(\.arguments),
+                       [capturePaneArguments(paneID: "%21")],
+                       "the timeout verification actually captured the pane")
     }
 
     func testPasteBufferTimeoutWithoutPaneEchoThrowsAndDoesNotRecordEnterFallback() throws {
@@ -292,7 +309,7 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
                 .success(""),
             ],
             RunnerState.key(socket: route.socket,
-                            arguments: ["paste-buffer", "-d", "-b", "ignored", "-t", "%21"]): [
+                            arguments: ["paste-buffer", "-d", "-p", "-r", "-b", "ignored", "-t", "%21"]): [
                 .failure(tmuxTimeoutError()),
             ],
             RunnerState.key(socket: route.socket,
@@ -303,7 +320,7 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
         let router = OrdinaryTmuxInputRouter(registry: registry,
                                              adapter: adapter(state: state))
 
-        XCTAssertThrowsError(try router.sendInput("hello from remote", toPanelID: route.panelID)) { error in
+        XCTAssertThrowsError(try router.sendInput("hello from remote", toPanelID: route.panelID, mode: .literalChatText)) { error in
             XCTAssertEqual((error as NSError).domain, "OrdinaryTmuxCLIAdapter")
             XCTAssertEqual((error as NSError).code, 124)
         }
@@ -323,7 +340,7 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
                 .success(""),
             ],
             RunnerState.key(socket: route.socket,
-                            arguments: ["paste-buffer", "-d", "-b", "ignored", "-t", "%21"]): [
+                            arguments: ["paste-buffer", "-d", "-p", "-r", "-b", "ignored", "-t", "%21"]): [
                 .failure(tmuxTimeoutError()),
             ],
             RunnerState.key(socket: route.socket,
@@ -334,12 +351,20 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
 
         let delivery = try adapter(state: state).sendInput("hello from remote",
                                                            route: route,
+                                                           mode: .literalChatText,
                                                            allowAmbiguousPasteTimeout: true)
 
         XCTAssertEqual(delivery.paneID, "%21")
         XCTAssertTrue(delivery.pastedText)
         XCTAssertFalse(delivery.sentEnter)
         XCTAssertFalse(state.calls.contains { $0.arguments.first == "send-keys" })
+        // Evidence, not defaults: the REAL bracketed paste argv was issued
+        // and the echo verification actually queried the pane.
+        XCTAssertEqual(state.calls.filter { $0.arguments.first == "paste-buffer" }.map(\.arguments),
+                       [["paste-buffer", "-d", "-p", "-r", "-b", "ignored", "-t", "%21"]])
+        XCTAssertEqual(state.calls.filter { $0.arguments.first == "capture-pane" }.map(\.arguments),
+                       [capturePaneArguments(paneID: "%21")],
+                       "the ambiguous acceptance is grounded in a REAL capture-pane call")
     }
 
     func testPasteBufferTimeoutWithCaptureTimeoutThrows() throws {
@@ -356,7 +381,7 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
                 .success(""),
             ],
             RunnerState.key(socket: route.socket,
-                            arguments: ["paste-buffer", "-d", "-b", "ignored", "-t", "%21"]): [
+                            arguments: ["paste-buffer", "-d", "-p", "-r", "-b", "ignored", "-t", "%21"]): [
                 .failure(tmuxTimeoutError()),
             ],
             RunnerState.key(socket: route.socket,
@@ -367,7 +392,7 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
         let router = OrdinaryTmuxInputRouter(registry: registry,
                                              adapter: adapter(state: state))
 
-        XCTAssertThrowsError(try router.sendInput("hello from remote", toPanelID: route.panelID)) { error in
+        XCTAssertThrowsError(try router.sendInput("hello from remote", toPanelID: route.panelID, mode: .literalChatText)) { error in
             XCTAssertEqual((error as NSError).domain, "OrdinaryTmuxCLIAdapter")
             XCTAssertEqual((error as NSError).code, 124)
         }
@@ -388,7 +413,7 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
                 .success(""),
             ],
             RunnerState.key(socket: route.socket,
-                            arguments: ["paste-buffer", "-d", "-b", "ignored", "-t", "%21"]): [
+                            arguments: ["paste-buffer", "-d", "-p", "-r", "-b", "ignored", "-t", "%21"]): [
                 .failure(NSError(domain: "OrdinaryTmuxCLIAdapter",
                                   code: 1,
                                   userInfo: [NSLocalizedDescriptionKey: "can't find pane: %21"])),
@@ -397,7 +422,7 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
         let router = OrdinaryTmuxInputRouter(registry: registry,
                                              adapter: adapter(state: state))
 
-        XCTAssertThrowsError(try router.sendInput("hello from remote", toPanelID: route.panelID)) { error in
+        XCTAssertThrowsError(try router.sendInput("hello from remote", toPanelID: route.panelID, mode: .literalChatText)) { error in
             XCTAssertEqual((error as NSError).domain, "OrdinaryTmuxCLIAdapter")
             XCTAssertEqual((error as NSError).code, 1)
         }
@@ -418,14 +443,14 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
                 .success(""),
             ],
             RunnerState.key(socket: route.socket,
-                            arguments: ["paste-buffer", "-d", "-b", "ignored", "-t", "%21"]): [
+                            arguments: ["paste-buffer", "-d", "-p", "-r", "-b", "ignored", "-t", "%21"]): [
                 .success(""),
             ],
         ])
         let router = OrdinaryTmuxInputRouter(registry: registry,
                                              adapter: adapter(state: state))
 
-        XCTAssertTrue(try router.sendInput("hello from remote", toPanelID: route.panelID))
+        XCTAssertTrue(try router.sendInput("hello from remote", toPanelID: route.panelID, mode: .literalChatText))
         XCTAssertFalse(state.calls.contains { $0.arguments.first == "capture-pane" })
     }
 
@@ -630,6 +655,219 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
         ])
     }
 
+    // R26: a message CONTAINING BLANK LINES must be ONE literal bracketed
+    // paste (LF preserved — tmux without -r rewrites every LF in the buffer
+    // to CR, and the TUI treats interior CRs as Enter, splitting the
+    // message into several submits) followed by EXACTLY ONE Enter.
+    func testBlankLineMessageIsSingleBracketedPasteWithSingleEnter() throws {
+        let (router, state, route) = makeRouterForPaste(text: "LIVE-6\n\nLIVE-7")
+
+        XCTAssertTrue(try router.sendInput("LIVE-6\n\nLIVE-7", toPanelID: route.panelID, mode: .literalChatText))
+        XCTAssertTrue(try router.sendInput("\r", toPanelID: route.panelID))
+
+        let loadCalls = state.calls.filter { $0.arguments.first == "load-buffer" }
+        XCTAssertEqual(loadCalls.count, 1, "one load-buffer for the whole message")
+        XCTAssertEqual(loadCalls[0].stdin, "LIVE-6\n\nLIVE-7", "the text reaches tmux verbatim")
+        assertSingleBracketedPaste(state: state)
+        let enterCalls = state.calls.filter { $0.arguments.first == "send-keys" }
+        XCTAssertEqual(enterCalls.map(\.arguments), [["send-keys", "-t", "%21", "Enter"]],
+                       "exactly ONE submit Enter")
+        // ORDER is part of the contract: load -> paste -> Enter.
+        let sequence = state.calls.map(\.arguments.first).compactMap { $0 }.filter {
+            ["load-buffer", "paste-buffer", "send-keys"].contains($0)
+        }
+        XCTAssertEqual(sequence, ["load-buffer", "paste-buffer", "send-keys"],
+                       "the paste lands before the submit Enter")
+    }
+
+    // R26: several blank-line-separated segments stay verbatim in one paste.
+    func testMultipleBlankSegmentsPreservedVerbatimInOnePaste() throws {
+        let text = "第一段\n\n第二段\n\n第三段"
+        let (router, state, route) = makeRouterForPaste(text: text)
+
+        XCTAssertTrue(try router.sendInput(text, toPanelID: route.panelID, mode: .literalChatText))
+        XCTAssertTrue(try router.sendInput("\r", toPanelID: route.panelID))
+
+        let loadCalls = state.calls.filter { $0.arguments.first == "load-buffer" }
+        XCTAssertEqual(loadCalls.count, 1)
+        XCTAssertEqual(loadCalls[0].stdin, text)
+        assertSingleBracketedPaste(state: state)
+        XCTAssertEqual(state.calls.filter { $0.arguments.first == "send-keys" }.count, 1)
+    }
+
+    // R26: attachment path + blank line + unicode caption stays verbatim.
+    func testAttachmentPathWithBlankLinePreservedVerbatim() throws {
+        let text = "@/tmp/a.jpg\n\n說明文字"
+        let (router, state, route) = makeRouterForPaste(text: text)
+
+        XCTAssertTrue(try router.sendInput(text, toPanelID: route.panelID, mode: .literalChatText))
+        XCTAssertTrue(try router.sendInput("\r", toPanelID: route.panelID))
+
+        let loadCalls = state.calls.filter { $0.arguments.first == "load-buffer" }
+        XCTAssertEqual(loadCalls.count, 1)
+        XCTAssertEqual(loadCalls[0].stdin, text)
+        assertSingleBracketedPaste(state: state)
+        XCTAssertEqual(state.calls.filter { $0.arguments.first == "send-keys" }.count, 1)
+    }
+
+    // R26 regression guard: a plain single-line submit is still one paste
+    // (now bracketed) + one Enter.
+    func testPlainSingleLineSubmitStillSinglePasteAndEnter() throws {
+        let (router, state, route) = makeRouterForPaste(text: "hello")
+
+        XCTAssertTrue(try router.sendInput("hello", toPanelID: route.panelID, mode: .literalChatText))
+        XCTAssertTrue(try router.sendInput("\r", toPanelID: route.panelID))
+
+        let loadCalls = state.calls.filter { $0.arguments.first == "load-buffer" }
+        XCTAssertEqual(loadCalls.count, 1)
+        XCTAssertEqual(loadCalls[0].stdin, "hello")
+        assertSingleBracketedPaste(state: state)
+        XCTAssertEqual(state.calls.filter { $0.arguments.first == "send-keys" }.count, 1)
+    }
+
+    // R26 edge: multi-line code containing a TAB is still ONE literal
+    // bracketed paste — the mode (not the characters) decides.
+    func testTabbedMultilineCodeIsSingleLiteralPaste() throws {
+        let text = "A\tB\n\nC"
+        let (router, state, route) = makeRouterForPaste(text: text)
+
+        XCTAssertTrue(try router.sendInput(text, toPanelID: route.panelID, mode: .literalChatText))
+        XCTAssertTrue(try router.sendInput("\r", toPanelID: route.panelID))
+
+        let loadCalls = state.calls.filter { $0.arguments.first == "load-buffer" }
+        XCTAssertEqual(loadCalls.count, 1)
+        XCTAssertEqual(loadCalls[0].stdin, text, "the tab and the blank line stay verbatim")
+        assertSingleBracketedPaste(state: state)
+        XCTAssertEqual(state.calls.filter { $0.arguments.first == "send-keys" }.count, 1)
+    }
+
+    // R26 edge: CRLF blank lines from an attachment caption stay VERBATIM —
+    // literal mode never splits, and the paste argv is asserted directly
+    // from the recorded calls (no scripted-key default can fake it).
+    func testCRLFAttachmentCaptionIsSingleLiteralPaste() throws {
+        let text = "@/tmp/a.jpg\r\n\r\n說明"
+        let (router, state, route) = makeRouterForPaste(text: text)
+
+        XCTAssertTrue(try router.sendInput(text, toPanelID: route.panelID, mode: .literalChatText))
+        XCTAssertTrue(try router.sendInput("\r", toPanelID: route.panelID))
+
+        let loadCalls = state.calls.filter { $0.arguments.first == "load-buffer" }
+        XCTAssertEqual(loadCalls.count, 1, "literal mode never splits on the trailing CRLF")
+        XCTAssertEqual(loadCalls[0].stdin, text, "the CRLF blank line reaches tmux verbatim")
+        assertSingleBracketedPaste(state: state)
+        let enterCalls = state.calls.filter { $0.arguments.first == "send-keys" }
+        XCTAssertEqual(enterCalls.map(\.arguments), [["send-keys", "-t", "%21", "Enter"]])
+    }
+
+    // R26 final: literal chat text with a TRAILING NEWLINE or embedded ANSI
+    // stays verbatim — exact stdin, exact bracketed argv, and still exactly
+    // the vendor's ONE submit Enter. The runner is STRICT: any argv drift
+    // throws instead of defaulting to success.
+    func testLiteralTrailingNewlineAndANSIPayloadStayVerbatim() throws {
+        for text in ["hello world\n", "prefix \u{1b}[31mred\u{1b}[0m\n\nsuffix"] {
+            let registry = OrdinaryTmuxPanelRegistry()
+            let route = ordinaryRoute()
+            registry.replaceRoutes(workspaceID: "workspace-1", routes: [route])
+            let state = RunnerState(responses: [
+                RunnerState.key(socket: route.socket, arguments: listPanesArguments(windowID: route.windowID)):
+                    "%21\t1\t1021\t/Users/timfeng/GitHub/mother_nature\tclaude\n",
+                RunnerState.key(socket: route.socket,
+                                arguments: ["load-buffer", "-b", "ignored", "-"],
+                                stdin: text):
+                    "",
+                RunnerState.key(socket: route.socket,
+                                arguments: ["paste-buffer", "-d", "-p", "-r", "-b", "ignored", "-t", "%21"]):
+                    "",
+                RunnerState.key(socket: route.socket,
+                                arguments: ["send-keys", "-t", "%21", "Enter"]):
+                    "",
+            ])
+            state.failOnUnscripted = ["load-buffer", "paste-buffer", "send-keys"]
+            let router = OrdinaryTmuxInputRouter(registry: registry, adapter: adapter(state: state))
+
+            XCTAssertTrue(try router.sendInput(text, toPanelID: route.panelID, mode: .literalChatText))
+            XCTAssertTrue(try router.sendInput("\r", toPanelID: route.panelID))
+
+            let loadCalls = state.calls.filter { $0.arguments.first == "load-buffer" }
+            XCTAssertEqual(loadCalls.map(\.stdin), [text],
+                           "trailing newline / ANSI payload reaches tmux verbatim, unsplit")
+            XCTAssertEqual(state.calls.filter { $0.arguments.first == "paste-buffer" }.map(\.arguments),
+                           [["paste-buffer", "-d", "-p", "-r", "-b", "ignored", "-t", "%21"]])
+            XCTAssertEqual(state.calls.filter { $0.arguments.first == "send-keys" }.map(\.arguments),
+                           [["send-keys", "-t", "%21", "Enter"]],
+                           "still exactly the vendor's ONE submit Enter")
+            let sequence = state.calls.map(\.arguments.first).compactMap { $0 }.filter {
+                ["load-buffer", "paste-buffer", "send-keys"].contains($0)
+            }
+            XCTAssertEqual(sequence, ["load-buffer", "paste-buffer", "send-keys"])
+        }
+    }
+
+    // R26 regression guard: raw terminal_input control payloads (Esc, Tab,
+    // Up/Down/Left/Right, Ctrl-C) must KEEP the legacy raw paste — bracketed
+    // paste would turn them into literal text instead of keys.
+    func testRawControlInputKeepsLegacyRawPaste() throws {
+        for control in ["\u{1b}", "\t", "\u{1b}[A", "\u{1b}[B", "\u{1b}[D", "\u{1b}[C", "\u{03}"] {
+            let registry = OrdinaryTmuxPanelRegistry()
+            let route = ordinaryRoute()
+            registry.replaceRoutes(workspaceID: "workspace-1", routes: [route])
+            let state = RunnerState(responses: [
+                RunnerState.key(socket: route.socket, arguments: listPanesArguments(windowID: route.windowID)):
+                    "%21\t1\t1021\t/Users/timfeng/GitHub/mother_nature\tclaude\n",
+                RunnerState.key(socket: route.socket,
+                                arguments: ["load-buffer", "-b", "ignored", "-"],
+                                stdin: control):
+                    "",
+                RunnerState.key(socket: route.socket,
+                                arguments: ["paste-buffer", "-d", "-b", "ignored", "-t", "%21"]):
+                    "",
+            ])
+            // STRICT: an unexpected bracketed argv or a stray Enter throws.
+            state.failOnUnscripted = ["load-buffer", "paste-buffer", "send-keys"]
+            let router = OrdinaryTmuxInputRouter(registry: registry, adapter: adapter(state: state))
+
+            XCTAssertTrue(try router.sendInput(control, toPanelID: route.panelID))
+
+            let loadCalls = state.calls.filter { $0.arguments.first == "load-buffer" }
+            XCTAssertEqual(loadCalls.map(\.stdin), [control],
+                           "the control payload reaches tmux exactly as sent")
+            XCTAssertEqual(state.calls.filter { $0.arguments.first == "paste-buffer" }.map(\.arguments),
+                           [["paste-buffer", "-d", "-b", "ignored", "-t", "%21"]],
+                           "control payloads keep the FULL raw paste argv — no -p/-r")
+            XCTAssertEqual(state.calls.filter { $0.arguments.first == "send-keys" }.count, 0)
+            let sequence = state.calls.map(\.arguments.first).compactMap { $0 }.filter {
+                ["load-buffer", "paste-buffer"].contains($0)
+            }
+            XCTAssertEqual(sequence, ["load-buffer", "paste-buffer"])
+        }
+    }
+
+    private func makeRouterForPaste(text: String) -> (OrdinaryTmuxInputRouter, RunnerState, OrdinaryTmuxPanelRoute) {
+        let registry = OrdinaryTmuxPanelRegistry()
+        let route = ordinaryRoute()
+        registry.replaceRoutes(workspaceID: "workspace-1", routes: [route])
+        let state = RunnerState(responses: [
+            RunnerState.key(socket: route.socket, arguments: listPanesArguments(windowID: route.windowID)):
+                "%21\t1\t1021\t/Users/timfeng/GitHub/mother_nature\tclaude\n",
+            RunnerState.key(socket: route.socket,
+                            arguments: ["load-buffer", "-b", "ignored", "-"],
+                            stdin: text):
+                "",
+        ])
+        return (OrdinaryTmuxInputRouter(registry: registry, adapter: adapter(state: state)), state, route)
+    }
+
+    private func assertSingleBracketedPaste(state: RunnerState,
+                                            file: StaticString = #filePath,
+                                            line: UInt = #line) {
+        let pasteCalls = state.calls.filter { $0.arguments.first == "paste-buffer" }
+        XCTAssertEqual(pasteCalls.count, 1, "exactly one paste-buffer", file: file, line: line)
+        guard let paste = pasteCalls.first else { return }
+        XCTAssertEqual(paste.arguments, ["paste-buffer", "-d", "-p", "-r", "-b", "ignored", "-t", "%21"],
+                       "the paste must be bracketed (-p) and keep LFs verbatim (-r)",
+                       file: file, line: line)
+    }
+
     private func ordinaryRoute() -> OrdinaryTmuxPanelRoute {
         OrdinaryTmuxPanelRoute(
             workspaceID: "workspace-1",
@@ -668,9 +906,14 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
                                      stdin: stdin)
             }
             if arguments.first == "paste-buffer" {
-                return try state.run(socket: socket,
-                                     arguments: ["paste-buffer", "-d", "-b", "ignored", "-t", arguments.last ?? ""],
-                                     stdin: stdin)
+                // Preserve the REAL argv (flags included) — only the random
+                // buffer name is normalized, so a missing/extra flag can
+                // never be masked by the fake.
+                var normalized = arguments
+                if let bIndex = normalized.firstIndex(of: "-b"), bIndex + 1 < normalized.count {
+                    normalized[bIndex + 1] = "ignored"
+                }
+                return try state.run(socket: socket, arguments: normalized, stdin: stdin)
             }
             return try state.run(socket: socket, arguments: arguments, stdin: stdin)
         }

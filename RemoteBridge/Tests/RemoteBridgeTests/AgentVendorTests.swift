@@ -8,8 +8,8 @@ final class AgentVendorTests: XCTestCase {
         XCTAssertEqual(vendor.id, "claude")
         XCTAssertEqual(vendor.registryDirectoryName, "claude")
         XCTAssertEqual(vendor.submitMessagePlan(text: "hello"), [
-            ChatSubmitStep(input: "hello", delayNanoseconds: 0),
-            ChatSubmitStep(input: "\r", delayNanoseconds: chatSubmitEnterDelayNanoseconds),
+            ChatSubmitStep(input: "hello", role: .messageText, delayNanoseconds: 0),
+            ChatSubmitStep(input: "\r", role: .submitEnter, delayNanoseconds: chatSubmitEnterDelayNanoseconds),
         ])
         XCTAssertNil(vendor.cancelRequestPlan())
     }
@@ -20,8 +20,8 @@ final class AgentVendorTests: XCTestCase {
         XCTAssertEqual(vendor.id, "codex")
         XCTAssertEqual(vendor.registryDirectoryName, "codex")
         XCTAssertEqual(vendor.submitMessagePlan(text: "hello"), [
-            ChatSubmitStep(input: "hello", delayNanoseconds: 0),
-            ChatSubmitStep(input: "\r", delayNanoseconds: chatSubmitEnterDelayNanoseconds),
+            ChatSubmitStep(input: "hello", role: .messageText, delayNanoseconds: 0),
+            ChatSubmitStep(input: "\r", role: .submitEnter, delayNanoseconds: chatSubmitEnterDelayNanoseconds),
         ])
         XCTAssertNil(vendor.cancelRequestPlan())
     }

@@ -574,6 +574,7 @@ private final class StubPromptInputRouter: OrdinaryTmuxInputRouting, @unchecked 
 
     func sendInput(_ input: String,
                    toPanelID panelID: String,
+                   mode: OrdinaryTmuxInputMode,
                    allowAmbiguousPasteTimeout: Bool) throws -> Bool {
         guard routedPanelIDs.contains(panelID) else {
             return false

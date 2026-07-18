@@ -40,6 +40,8 @@ final class BridgeInputActionHandlerTests: XCTestCase {
         XCTAssertTrue(sender.sentRequests.isEmpty)
         XCTAssertEqual(router.sentInputs.map(\.panelID), ["ordinary-panel"])
         XCTAssertEqual(router.sentInputs.map(\.input), ["ls\r"])
+        XCTAssertEqual(router.sentInputs.map(\.mode), [.rawTerminalInput],
+                       "terminal_input keeps raw key semantics")
     }
 
     func testTerminalInputFallsBackToMacSocketWhenCarrierOrdinaryTmuxTimesOut() throws {
@@ -289,10 +291,75 @@ final class BridgeInputActionHandlerTests: XCTestCase {
         XCTAssertTrue(sender.sentRequests.isEmpty)
         XCTAssertEqual(router.sentInputs.map(\.panelID), ["ordinary-panel", "ordinary-panel"])
         XCTAssertEqual(router.sentInputs.map(\.input), ["hello", "\r"])
+        XCTAssertEqual(router.sentInputs.map(\.mode), [.literalChatText, .rawTerminalInput],
+                       "the MESSAGE step is literal chat text; only the Enter step keeps raw key semantics")
         XCTAssertEqual(router.sentInputs.map(\.allowAmbiguousPasteTimeout), [true, true])
         XCTAssertEqual(delayRecorder.recordedDelays, [
             ordinaryTmuxChatSubmitEnterDelayNanoseconds,
         ])
+    }
+
+    // R26 edge: a blank-line message stays ONE literal chat-text step end to
+    // end — the mode is not dropped between the handler and the router.
+    func testChatSubmitBlankLineMessagePreservesLiteralModeThroughRouter() throws {
+        let sender = MockTideyRequestSender()
+        let resolver = MockSessionResolver(session: ActiveAgentSessionSnapshot(vendor: "claude",
+                                                                              workspaceID: "workspace-1",
+                                                                              sessionID: "session-1",
+                                                                              panelID: "ordinary-panel"))
+        let router = MockOrdinaryTmuxInputRouter(routedPanelIDs: ["ordinary-panel"])
+        let delayRecorder = DelayRecorder()
+        let handler = BridgeInputActionHandler(socketSender: sender,
+                                               sessionResolver: resolver,
+                                               ordinaryTmuxInputRouter: router,
+                                               sleep: { delayRecorder.record($0) })
+
+        let response = try handler.handle(BridgeRequest(id: "request-1",
+                                                        action: "chat_submit",
+                                                        params: [
+                                                            "workspace_id": .string("workspace-1"),
+                                                            "panel_id": .string("ordinary-panel"),
+                                                            "message": .string("LIVE-6\n\nLIVE-7"),
+                                                            "session_id": .string("session-1"),
+                                                            "vendor": .string("claude"),
+                                                        ]))
+
+        XCTAssertEqual(response?.ok, true)
+        XCTAssertEqual(router.sentInputs.map(\.input), ["LIVE-6\n\nLIVE-7", "\r"],
+                       "the blank-line message stays one verbatim step")
+        XCTAssertEqual(router.sentInputs.map(\.mode), [.literalChatText, .rawTerminalInput])
+    }
+
+    // R26 final: a message whose PAYLOAD is an enter-only sequence is still
+    // the MESSAGE step — role, not content, decides. The first step stays
+    // literal chat text; only the submit step is raw.
+    func testChatSubmitEnterOnlyMessagePayloadStaysLiteralMessageStep() throws {
+        let sender = MockTideyRequestSender()
+        let resolver = MockSessionResolver(session: ActiveAgentSessionSnapshot(vendor: "codex",
+                                                                              workspaceID: "workspace-1",
+                                                                              sessionID: "session-1",
+                                                                              panelID: "ordinary-panel"))
+        let router = MockOrdinaryTmuxInputRouter(routedPanelIDs: ["ordinary-panel"])
+        let delayRecorder = DelayRecorder()
+        let handler = BridgeInputActionHandler(socketSender: sender,
+                                               sessionResolver: resolver,
+                                               ordinaryTmuxInputRouter: router,
+                                               sleep: { delayRecorder.record($0) })
+
+        let response = try handler.handle(BridgeRequest(id: "request-1",
+                                                        action: "chat_submit",
+                                                        params: [
+                                                            "workspace_id": .string("workspace-1"),
+                                                            "panel_id": .string("ordinary-panel"),
+                                                            "message": .string("\r"),
+                                                            "session_id": .string("session-1"),
+                                                            "vendor": .string("codex"),
+                                                        ]))
+
+        XCTAssertEqual(response?.ok, true)
+        XCTAssertEqual(router.sentInputs.map(\.input), ["\r", "\r"])
+        XCTAssertEqual(router.sentInputs.map(\.mode), [.literalChatText, .rawTerminalInput],
+                       "the enter-only PAYLOAD is still the literal message step; only the submit step is raw")
     }
 
     func testChatSubmitRoutesClaudeOrdinaryTmuxEnterAfterPasteWithSettleDelay() throws {
@@ -497,7 +564,7 @@ private final class MockCodexAppServerChatSubmitter: CodexAppServerChatSubmittin
 private final class MockOrdinaryTmuxInputRouter: OrdinaryTmuxInputRouting, @unchecked Sendable {
     private let routedPanelIDs: Set<String>
     private let errorsByPanelID: [String: Error]
-    private(set) var sentInputs = [(panelID: String, input: String, allowAmbiguousPasteTimeout: Bool)]()
+    private(set) var sentInputs = [(panelID: String, input: String, mode: OrdinaryTmuxInputMode, allowAmbiguousPasteTimeout: Bool)]()
 
     init(routedPanelIDs: Set<String>, errorsByPanelID: [String: Error] = [:]) {
         self.routedPanelIDs = routedPanelIDs
@@ -506,11 +573,12 @@ private final class MockOrdinaryTmuxInputRouter: OrdinaryTmuxInputRouting, @unch
 
     func sendInput(_ input: String,
                    toPanelID panelID: String,
+                   mode: OrdinaryTmuxInputMode,
                    allowAmbiguousPasteTimeout: Bool) throws -> Bool {
         guard routedPanelIDs.contains(panelID) else {
             return false
         }
-        sentInputs.append((panelID, input, allowAmbiguousPasteTimeout))
+        sentInputs.append((panelID, input, mode, allowAmbiguousPasteTimeout))
         if let error = errorsByPanelID[panelID] {
             throw error
         }

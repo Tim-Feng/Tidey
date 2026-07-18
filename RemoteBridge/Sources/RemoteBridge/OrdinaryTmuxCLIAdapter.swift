@@ -332,10 +332,21 @@ final class OrdinaryTmuxCLIAdapter {
 
     func sendInput(_ input: String,
                    route: OrdinaryTmuxPanelRoute,
+                   mode: OrdinaryTmuxInputMode = .rawTerminalInput,
                    fallbackEnterPaneID: String? = nil,
                    allowAmbiguousPasteTimeout: Bool = false) throws -> OrdinaryTmuxInputDelivery {
         let socket = route.socket
-        let splitInput = Self.splitInputForPasteAndEnter(input)
+        // literalChatText is NEVER split: the whole message (tabs, CRLF,
+        // interior CR, trailing newlines included) is one verbatim paste —
+        // the vendor plan sends its own Enter step. Only rawTerminalInput
+        // may turn a trailing CR/LF into send-keys Enter.
+        let splitInput: (pasteText: String, sendEnter: Bool)
+        switch mode {
+        case .literalChatText:
+            splitInput = (input, false)
+        case .rawTerminalInput:
+            splitInput = Self.splitInputForPasteAndEnter(input)
+        }
         if splitInput.pasteText.isEmpty,
            splitInput.sendEnter,
            let fallbackEnterPaneID {
@@ -381,9 +392,21 @@ final class OrdinaryTmuxCLIAdapter {
                                 socket: socket,
                                 route: route,
                                 paneID: pane.id)
+            // LF must survive VERBATIM: without -r tmux rewrites every LF in
+            // the buffer to CR before pasting, and the Claude/Codex TUI
+            // treats interior CRs as Enter — a blank-line message becomes
+            // several separate submits (R26, LIVE-6/LIVE-7). -p wraps the
+            // paste in bracket codes when the application requested
+            // bracketed paste, so the whole text lands as ONE literal
+            // paste. Raw terminal input (Esc/Tab/arrows/Ctrl-C) keeps the
+            // legacy raw paste so keys still act as keys — the MODE decides,
+            // never a guess from the characters.
+            let pasteArguments = mode == .literalChatText
+                ? ["paste-buffer", "-d", "-p", "-r", "-b", bufferName, "-t", pane.id]
+                : ["paste-buffer", "-d", "-b", bufferName, "-t", pane.id]
             do {
                 _ = try commandRunner(socket,
-                                      ["paste-buffer", "-d", "-b", bufferName, "-t", pane.id],
+                                      pasteArguments,
                                       nil)
             } catch {
                 guard Self.isTmuxCommandTimeout(error) else {
