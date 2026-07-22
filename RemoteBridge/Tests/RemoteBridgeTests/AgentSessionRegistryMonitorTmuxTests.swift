@@ -19,6 +19,27 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         }
     }
 
+    private final class TestClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var date: Date
+
+        init(_ date: Date) {
+            self.date = date
+        }
+
+        func now() -> Date {
+            lock.lock()
+            defer { lock.unlock() }
+            return date
+        }
+
+        func advance(_ interval: TimeInterval) {
+            lock.lock()
+            date = date.addingTimeInterval(interval)
+            lock.unlock()
+        }
+    }
+
     func testScanCorrectsStaleRegistryRecordFromTmuxPaneIdentity() throws {
         let fileManager = FileManager.default
         let supportDirectory = fileManager.temporaryDirectory
@@ -249,6 +270,430 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         XCTAssertNil(monitor.activeSessionForPanel(workspaceID: "stale-workspace",
                                                    panelID: "stale-panel"))
 
+        XCTAssertEqual(try Data(contentsOf: registryURL), recordData)
+    }
+
+    func testScanReconcilesClaudeWithoutPaneIDFromUniqueLivePanelProcessAncestry() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let registryURL = paths.claudeAgentSessionsDirectory
+            .appendingPathComponent("claude-session-without-pane-id.json")
+        let recordData = Data("""
+        {
+          "version": 1,
+          "vendor": "claude",
+          "workspace_id": "stale-workspace",
+          "session_id": "session-without-pane-id",
+          "panel_id": "stale-panel",
+          "pid": \(getpid()),
+          "cwd": "/tmp",
+          "created_at": "2026-07-22T07:40:00Z"
+        }
+        """.utf8)
+        try recordData.write(to: registryURL)
+
+        let effectiveShellPID: Int32 = 12_345
+        var requestedActions = [String]()
+        let runtimeSyncer = CapturingRuntimeSyncer()
+        let monitor = AgentSessionRegistryMonitor(
+            paths: paths,
+            fileManager: fileManager,
+            hub: AgentEventHub(),
+            tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in
+                XCTFail("Claude registry without tmux_pane_id must reconcile from process ancestry")
+                return ""
+            },
+            parentPIDLookup: { pid in
+                pid == getpid() ? effectiveShellPID : nil
+            },
+            livePanelSnapshotRequestSender: { request in
+                requestedActions.append(request.action)
+                if request.action == "list_workspaces" {
+                    return BridgeResponse(id: request.id,
+                                          ok: true,
+                                          result: [
+                                            "workspaces": .array([
+                                                .object([
+                                                    "workspace_id": .string("current-workspace"),
+                                                ]),
+                                            ]),
+                                          ],
+                                          error: nil)
+                }
+                if request.action == "list_panels" {
+                    XCTAssertEqual(request.params?["workspace_id"]?.stringValue,
+                                   "current-workspace")
+                    return BridgeResponse(id: request.id,
+                                          ok: true,
+                                          result: [
+                                            "workspace_id": .string("current-workspace"),
+                                            "panels": .array([
+                                                .object([
+                                                    "workspace_id": .string("current-workspace"),
+                                                    "panel_id": .string("current-panel"),
+                                                    "effective_shell_pid": .number(Double(effectiveShellPID)),
+                                                ]),
+                                            ]),
+                                          ],
+                                          error: nil)
+                }
+                XCTFail("Unexpected Tidey socket action: \(request.action)")
+                return BridgeResponse(id: request.id, ok: false, result: nil, error: nil)
+            },
+            runtimeSyncer: runtimeSyncer)
+        try monitor.start()
+
+        XCTAssertEqual(requestedActions, ["list_workspaces", "list_panels"])
+        let snapshot = try XCTUnwrap(monitor.activeSessionSnapshots().first)
+        XCTAssertEqual(snapshot.workspaceID, "current-workspace")
+        XCTAssertEqual(snapshot.panelID, "current-panel")
+        let syncedRecord = try XCTUnwrap(runtimeSyncer.latestRecords.first)
+        XCTAssertEqual(syncedRecord.workspaceID, "current-workspace")
+        XCTAssertEqual(syncedRecord.panelID, "current-panel")
+        XCTAssertEqual(try Data(contentsOf: registryURL), recordData)
+    }
+
+    func testScanRefreshesPanellessClaudeProcessAncestryAfterCachedPanelMoves() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let registryURL = paths.claudeAgentSessionsDirectory
+            .appendingPathComponent("claude-session-moving-without-pane-id.json")
+        let recordData = Data("""
+        {
+          "version": 1,
+          "vendor": "claude",
+          "workspace_id": "stale-workspace",
+          "session_id": "session-moving-without-pane-id",
+          "panel_id": "stale-panel",
+          "pid": \(getpid()),
+          "cwd": "/tmp",
+          "created_at": "2026-07-22T08:30:00Z"
+        }
+        """.utf8)
+        try recordData.write(to: registryURL)
+
+        let effectiveShellPID: Int32 = 32_100
+        let clock = TestClock(Date(timeIntervalSince1970: 100))
+        var panelLocation = (workspaceID: "first-workspace", panelID: "first-panel")
+        var requestedActions = [String]()
+        let runtimeSyncer = CapturingRuntimeSyncer()
+        let monitor = AgentSessionRegistryMonitor(
+            paths: paths,
+            fileManager: fileManager,
+            hub: AgentEventHub(),
+            tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+            parentPIDLookup: { pid in
+                pid == getpid() ? effectiveShellPID : nil
+            },
+            livePanelSnapshotRequestSender: { request in
+                requestedActions.append(request.action)
+                if request.action == "list_workspaces" {
+                    return BridgeResponse(id: request.id,
+                                          ok: true,
+                                          result: [
+                                            "workspaces": .array([
+                                                .object([
+                                                    "workspace_id": .string(panelLocation.workspaceID),
+                                                ]),
+                                            ]),
+                                          ],
+                                          error: nil)
+                }
+                if request.action == "list_panels" {
+                    XCTAssertEqual(request.params?["workspace_id"]?.stringValue,
+                                   panelLocation.workspaceID)
+                    return BridgeResponse(id: request.id,
+                                          ok: true,
+                                          result: [
+                                            "workspace_id": .string(panelLocation.workspaceID),
+                                            "panels": .array([
+                                                .object([
+                                                    "workspace_id": .string(panelLocation.workspaceID),
+                                                    "panel_id": .string(panelLocation.panelID),
+                                                    "effective_shell_pid": .number(Double(effectiveShellPID)),
+                                                ]),
+                                            ]),
+                                          ],
+                                          error: nil)
+                }
+                XCTFail("Unexpected Tidey socket action: \(request.action)")
+                return BridgeResponse(id: request.id, ok: false, result: nil, error: nil)
+            },
+            livePanelSnapshotRefreshInterval: 5,
+            now: { clock.now() },
+            runtimeSyncer: runtimeSyncer)
+        try monitor.start()
+
+        XCTAssertEqual(requestedActions, ["list_workspaces", "list_panels"])
+        XCTAssertEqual(monitor.activeSessionSnapshots().first?.workspaceID, "first-workspace")
+        XCTAssertEqual(monitor.activeSessionSnapshots().first?.panelID, "first-panel")
+        XCTAssertEqual(runtimeSyncer.latestRecords.first?.workspaceID, "first-workspace")
+        XCTAssertEqual(runtimeSyncer.latestRecords.first?.panelID, "first-panel")
+
+        panelLocation = (workspaceID: "second-workspace", panelID: "second-panel")
+        clock.advance(4)
+        monitor.scanRegistryForTesting()
+
+        XCTAssertEqual(requestedActions, ["list_workspaces", "list_panels"],
+                       "the existing five-second refresh throttle must still apply")
+        XCTAssertEqual(monitor.activeSessionSnapshots().first?.workspaceID, "first-workspace")
+        XCTAssertEqual(monitor.activeSessionSnapshots().first?.panelID, "first-panel")
+
+        clock.advance(2)
+        monitor.scanRegistryForTesting()
+
+        XCTAssertEqual(requestedActions,
+                       ["list_workspaces", "list_panels", "list_workspaces", "list_panels"])
+        XCTAssertEqual(monitor.activeSessionSnapshots().first?.workspaceID, "second-workspace")
+        XCTAssertEqual(monitor.activeSessionSnapshots().first?.panelID, "second-panel")
+        XCTAssertEqual(runtimeSyncer.latestRecords.first?.workspaceID, "second-workspace")
+        XCTAssertEqual(runtimeSyncer.latestRecords.first?.panelID, "second-panel")
+        XCTAssertEqual(try Data(contentsOf: registryURL), recordData)
+    }
+
+    func testScanProjectsOrdinaryTmuxCarrierBeforeReconcilingClaudeWithoutPaneID() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let registryURL = paths.claudeAgentSessionsDirectory
+            .appendingPathComponent("claude-video-process-without-pane-id.json")
+        let recordData = Data("""
+        {
+          "version": 1,
+          "vendor": "claude",
+          "workspace_id": "stale-workspace",
+          "session_id": "video-process-claude-session",
+          "panel_id": "stale-panel",
+          "pid": \(getpid()),
+          "cwd": "/tmp",
+          "created_at": "2026-07-22T08:00:00Z"
+        }
+        """.utf8)
+        try recordData.write(to: registryURL)
+
+        let outerCarrierShellPID: Int32 = 41_808
+        let innerTmuxPaneShellPID: Int32 = 1_764
+        let projector = OrdinaryTmuxPanelProjector(
+            adapter: RegistryMonitorOrdinaryTmuxProjectionStub(
+                expectedTargetSession: "video-process-cc",
+                projectedPanels: [
+                    OrdinaryTmuxProjectedPanel(
+                        panelID: "ordinary-tmux:default:$1:@1",
+                        socketPath: "/tmp/tmux-501/default",
+                        sessionID: "$1",
+                        sessionName: "video-process-cc",
+                        windowID: "@1",
+                        windowIndex: 0,
+                        windowName: "video-process-cc",
+                        isCurrentWindow: true,
+                        activePaneID: "%30",
+                        activePanePID: innerTmuxPaneShellPID,
+                        cwd: "/Users/timfeng",
+                        currentCommand: "claude",
+                        title: "video-process-cc",
+                        subtitle: "/Users/timfeng"
+                    ),
+                ]
+            )
+        )
+        var requestedActions = [String]()
+        let runtimeSyncer = CapturingRuntimeSyncer()
+        let monitor = AgentSessionRegistryMonitor(
+            paths: paths,
+            fileManager: fileManager,
+            hub: AgentEventHub(),
+            tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in
+                XCTFail("Projected ordinary tmux ancestry should not use registry pane lookup")
+                return ""
+            },
+            parentPIDLookup: { pid in
+                pid == getpid() ? innerTmuxPaneShellPID : nil
+            },
+            livePanelSnapshotRequestSender: { request in
+                requestedActions.append(request.action)
+                if request.action == "list_workspaces" {
+                    return BridgeResponse(id: request.id,
+                                          ok: true,
+                                          result: [
+                                            "workspaces": .array([
+                                                .object([
+                                                    "workspace_id": .string("video-workspace"),
+                                                ]),
+                                            ]),
+                                          ],
+                                          error: nil)
+                }
+                if request.action == "list_panels" {
+                    return BridgeResponse(id: request.id,
+                                          ok: true,
+                                          result: [
+                                            "workspace_id": .string("video-workspace"),
+                                            "panels": .array([
+                                                .object([
+                                                    "workspace_id": .string("video-workspace"),
+                                                    "panel_id": .string("video-process-cc-panel"),
+                                                    "effective_shell_pid": .number(Double(outerCarrierShellPID)),
+                                                    "ordinary_tmux": .object([
+                                                        "client_tty": .string("/dev/ttys030"),
+                                                        "target_session": .string("video-process-cc"),
+                                                    ]),
+                                                ]),
+                                            ]),
+                                          ],
+                                          error: nil)
+                }
+                XCTFail("Unexpected Tidey socket action: \(request.action)")
+                return BridgeResponse(id: request.id, ok: false, result: nil, error: nil)
+            },
+            livePanelListProjector: { result in
+                projector.projectPanelListResult(result)
+            },
+            runtimeSyncer: runtimeSyncer
+        )
+        try monitor.start()
+
+        XCTAssertEqual(requestedActions, ["list_workspaces", "list_panels"])
+        let snapshot = try XCTUnwrap(monitor.activeSessionSnapshots().first)
+        XCTAssertEqual(snapshot.workspaceID, "video-workspace")
+        XCTAssertEqual(snapshot.panelID, "video-process-cc-panel")
+        let syncedRecord = try XCTUnwrap(runtimeSyncer.latestRecords.first)
+        XCTAssertEqual(syncedRecord.workspaceID, "video-workspace")
+        XCTAssertEqual(syncedRecord.panelID, "video-process-cc-panel")
+        XCTAssertEqual(try Data(contentsOf: registryURL), recordData)
+    }
+
+    func testScanDoesNotReconcileClaudeWithoutPaneIDWhenProcessAncestryMatchesMultiplePanels() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let registryURL = paths.claudeAgentSessionsDirectory
+            .appendingPathComponent("claude-session-ambiguous-process.json")
+        let recordData = Data("""
+        {
+          "version": 1,
+          "vendor": "claude",
+          "workspace_id": "stale-workspace",
+          "session_id": "session-ambiguous-process",
+          "panel_id": "stale-panel",
+          "pid": \(getpid()),
+          "cwd": "/tmp",
+          "created_at": "2026-07-22T07:41:00Z"
+        }
+        """.utf8)
+        try recordData.write(to: registryURL)
+
+        let firstPaneShellPID: Int32 = 12_345
+        let secondPaneShellPID: Int32 = 23_456
+        let projector = OrdinaryTmuxPanelProjector(
+            adapter: RegistryMonitorOrdinaryTmuxProjectionStub(
+                expectedTargetSession: "ambiguous-cc",
+                projectedPanels: [
+                    OrdinaryTmuxProjectedPanel(
+                        panelID: "ordinary-tmux:default:$1:@1",
+                        socketPath: "/tmp/tmux-501/default",
+                        sessionID: "$1",
+                        sessionName: "ambiguous-cc",
+                        windowID: "@1",
+                        windowIndex: 0,
+                        windowName: "first",
+                        isCurrentWindow: true,
+                        activePaneID: "%30",
+                        activePanePID: firstPaneShellPID,
+                        cwd: "/tmp",
+                        currentCommand: "claude",
+                        title: "first",
+                        subtitle: "/tmp"
+                    ),
+                    OrdinaryTmuxProjectedPanel(
+                        panelID: "ordinary-tmux:default:$1:@2",
+                        socketPath: "/tmp/tmux-501/default",
+                        sessionID: "$1",
+                        sessionName: "ambiguous-cc",
+                        windowID: "@2",
+                        windowIndex: 1,
+                        windowName: "second",
+                        isCurrentWindow: false,
+                        activePaneID: "%31",
+                        activePanePID: secondPaneShellPID,
+                        cwd: "/tmp",
+                        currentCommand: "claude",
+                        title: "second",
+                        subtitle: "/tmp"
+                    ),
+                ]
+            )
+        )
+        let monitor = AgentSessionRegistryMonitor(
+            paths: paths,
+            fileManager: fileManager,
+            hub: AgentEventHub(),
+            tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+            parentPIDLookup: { pid in
+                if pid == getpid() {
+                    return firstPaneShellPID
+                }
+                return pid == firstPaneShellPID ? secondPaneShellPID : nil
+            },
+            livePanelSnapshotRequestSender: { request in
+                if request.action == "list_workspaces" {
+                    return BridgeResponse(id: request.id,
+                                          ok: true,
+                                          result: [
+                                            "workspaces": .array([
+                                                .object([
+                                                    "workspace_id": .string("ambiguous-workspace"),
+                                                ]),
+                                            ]),
+                                          ],
+                                          error: nil)
+                }
+                if request.action == "list_panels" {
+                    return BridgeResponse(id: request.id,
+                                          ok: true,
+                                          result: [
+                                            "workspace_id": .string("ambiguous-workspace"),
+                                            "panels": .array([
+                                                .object([
+                                                    "workspace_id": .string("ambiguous-workspace"),
+                                                    "panel_id": .string("ambiguous-carrier"),
+                                                    "effective_shell_pid": .number(41_808),
+                                                    "ordinary_tmux": .object([
+                                                        "client_tty": .string("/dev/ttys031"),
+                                                        "target_session": .string("ambiguous-cc"),
+                                                    ]),
+                                                ]),
+                                            ]),
+                                          ],
+                                          error: nil)
+                }
+                return BridgeResponse(id: request.id, ok: false, result: nil, error: nil)
+            },
+            livePanelListProjector: { result in
+                projector.projectPanelListResult(result)
+            })
+        try monitor.start()
+
+        let snapshot = try XCTUnwrap(monitor.activeSessionSnapshots().first)
+        XCTAssertEqual(snapshot.workspaceID, "stale-workspace")
+        XCTAssertEqual(snapshot.panelID, "stale-panel")
         XCTAssertEqual(try Data(contentsOf: registryURL), recordData)
     }
 
@@ -2371,6 +2816,18 @@ private final class CapturingRuntimeSyncer: AgentSessionRuntimeSyncing {
         self.records = records
         lock.unlock()
     }
+}
+
+private struct RegistryMonitorOrdinaryTmuxProjectionStub: OrdinaryTmuxWindowProjecting {
+    let expectedTargetSession: String
+    let projectedPanels: [OrdinaryTmuxProjectedPanel]
+
+    func projectedPanels(for metadata: OrdinaryTmuxAttachMetadata) throws -> [OrdinaryTmuxProjectedPanel] {
+        XCTAssertEqual(metadata.targetSession, expectedTargetSession)
+        return projectedPanels
+    }
+
+    func setPaneIdentity(route: OrdinaryTmuxPanelRoute) throws {}
 }
 
 private final class RegistryMonitorFakeRuntimeSession: CodexAppServerRuntimeSessionControlling {

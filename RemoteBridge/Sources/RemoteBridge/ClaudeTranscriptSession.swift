@@ -199,6 +199,7 @@ final class AgentSessionRegistryMonitor {
     typealias RolloutPathLookup = @Sendable (Int32) -> String?
     typealias CodexRolloutBySessionIDLookup = @Sendable (String) -> String?
     typealias OrdinaryTmuxCarrierIdentityResolver = (AgentSessionRegistryRecord) -> TideyOrdinaryTmuxCarrierIdentity?
+    typealias LivePanelListProjector = ([String: JSONValue]) -> [String: JSONValue]
     private static let liveParentPIDLookup: ParentPIDLookup = { pid in
         guard pid > 0 else {
             return nil
@@ -394,7 +395,9 @@ final class AgentSessionRegistryMonitor {
     private let codexRolloutBySessionIDLookup: CodexRolloutBySessionIDLookup
     private let ordinaryTmuxCarrierIdentityResolver: OrdinaryTmuxCarrierIdentityResolver?
     private let livePanelSnapshotRequestSender: ((BridgeRequest) throws -> BridgeResponse)?
+    private let livePanelListProjector: LivePanelListProjector
     private let livePanelSnapshotRefreshInterval: TimeInterval
+    private let now: @Sendable () -> Date
     private let runtimeSyncer: AgentSessionRuntimeSyncing?
     private let queue = DispatchQueue(label: "com.tidey.remote-bridge.agent-registry")
     private var timer: DispatchSourceTimer?
@@ -421,7 +424,9 @@ final class AgentSessionRegistryMonitor {
          codexRolloutBySessionIDLookup: @escaping CodexRolloutBySessionIDLookup = AgentSessionRegistryMonitor.liveCodexRolloutBySessionIDLookup,
          ordinaryTmuxCarrierIdentityResolver: OrdinaryTmuxCarrierIdentityResolver? = nil,
          livePanelSnapshotRequestSender: ((BridgeRequest) throws -> BridgeResponse)? = nil,
+         livePanelListProjector: @escaping LivePanelListProjector = { $0 },
          livePanelSnapshotRefreshInterval: TimeInterval = 5,
+         now: @escaping @Sendable () -> Date = { Date() },
          runtimeSyncer: AgentSessionRuntimeSyncing? = nil) {
         self.paths = paths
         self.fileManager = fileManager
@@ -443,7 +448,9 @@ final class AgentSessionRegistryMonitor {
         } else {
             self.livePanelSnapshotRequestSender = nil
         }
+        self.livePanelListProjector = livePanelListProjector
         self.livePanelSnapshotRefreshInterval = livePanelSnapshotRefreshInterval
+        self.now = now
         self.runtimeSyncer = runtimeSyncer
     }
 
@@ -559,6 +566,12 @@ final class AgentSessionRegistryMonitor {
         }
     }
 
+    func scanRegistryForTesting() {
+        queue.sync {
+            scanRegistry()
+        }
+    }
+
     deinit {
         stopWatchers()
         timer?.cancel()
@@ -655,7 +668,8 @@ final class AgentSessionRegistryMonitor {
         // memory: writing a previously loaded record here can overwrite a concurrent runtime
         // transition or resurrect a file the wrapper deleted while this scan was resolving it.
         let paneCorrectedEntries = loadedRecords.map { loadedRecord in
-            let correctedRecord = recordWithPaneIdentityIfAvailable(loadedRecord.record)
+            let paneCorrectedRecord = recordWithPaneIdentityIfAvailable(loadedRecord.record)
+            let correctedRecord = recordWithLivePanelProcessIdentityIfAvailable(paneCorrectedRecord)
             return LoadedAgentSessionRegistryRecord(record: correctedRecord, url: loadedRecord.url)
         }
         let effectiveEntries = paneCorrectedEntries
@@ -685,12 +699,12 @@ final class AgentSessionRegistryMonitor {
               let livePanelSnapshotRequestSender else {
             return
         }
-        let now = Date()
+        let currentDate = now()
         if let lastLivePanelSnapshotRefreshAt,
-           now.timeIntervalSince(lastLivePanelSnapshotRefreshAt) < livePanelSnapshotRefreshInterval {
+           currentDate.timeIntervalSince(lastLivePanelSnapshotRefreshAt) < livePanelSnapshotRefreshInterval {
             return
         }
-        lastLivePanelSnapshotRefreshAt = now
+        lastLivePanelSnapshotRefreshAt = currentDate
 
         do {
             let workspaceResponse = try livePanelSnapshotRequestSender(BridgeRequest(id: UUID().uuidString,
@@ -710,8 +724,11 @@ final class AgentSessionRegistryMonitor {
                                                                                     action: "list_panels",
                                                                                     params: ["workspace_id": .string(workspaceID)]))
                 guard panelResponse.ok,
-                      let result = panelResponse.result,
-                      let extracted = AgentPanelProcessSnapshotExtractor.snapshots(fromPanelListResult: result) else {
+                      let result = panelResponse.result else {
+                    continue
+                }
+                let projectedResult = livePanelListProjector(result)
+                guard let extracted = AgentPanelProcessSnapshotExtractor.snapshots(fromPanelListResult: projectedResult) else {
                     continue
                 }
                 livePanelsByWorkspace[extracted.workspaceID] = extracted.snapshots
@@ -724,7 +741,7 @@ final class AgentSessionRegistryMonitor {
     private func recordMayNeedLivePanelSnapshotRefresh(_ record: AgentSessionRegistryRecord) -> Bool {
         guard let paneID = record.tmuxPaneID,
               paneID.isEmpty == false else {
-            return false
+            return record.vendor == "claude"
         }
         guard let panelID = record.panelID,
               panelID.isEmpty == false else {
@@ -732,6 +749,83 @@ final class AgentSessionRegistryMonitor {
         }
         return paneIdentityMatchesKnownLivePanel(TmuxPaneIdentity(workspaceID: record.workspaceID,
                                                                   panelID: panelID)) == false
+    }
+
+    private func recordWithLivePanelProcessIdentityIfAvailable(
+        _ record: AgentSessionRegistryRecord
+    ) -> AgentSessionRegistryRecord {
+        guard let panel = uniqueLivePanelProcessMatch(for: record),
+              panel.workspaceID != record.workspaceID || panel.panelID != record.panelID else {
+            return record
+        }
+
+        let correctionKey = [
+            "process",
+            record.workspaceID,
+            record.panelID ?? "-",
+            panel.workspaceID,
+            panel.panelID,
+            String(record.pid),
+        ].joined(separator: "|")
+        if lastLoggedPaneIdentityCorrectionKeyBySessionID[record.sessionID] != correctionKey {
+            BridgeLogger.server.info("agent registry corrected from live panel process ancestry session_id=\(record.sessionID, privacy: .public) vendor=\(record.vendor, privacy: .public) pid=\(record.pid, privacy: .public) old_workspace_id=\(record.workspaceID, privacy: .public) old_panel_id=\(record.panelID ?? "-", privacy: .public) workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public)")
+            lastLoggedPaneIdentityCorrectionKeyBySessionID[record.sessionID] = correctionKey
+        }
+        return AgentSessionRegistryRecord(version: record.version,
+                                          vendor: record.vendor,
+                                          workspaceID: panel.workspaceID,
+                                          sessionID: record.sessionID,
+                                          panelID: panel.panelID,
+                                          pid: record.pid,
+                                          cwd: record.cwd,
+                                          createdAt: record.createdAt,
+                                          transcriptPath: record.transcriptPath,
+                                          tmuxPaneID: record.tmuxPaneID,
+                                          tmuxSocketPath: record.tmuxSocketPath,
+                                          runtime: record.runtime,
+                                          appServerSocket: record.appServerSocket,
+                                          appServerPID: record.appServerPID,
+                                          remoteTUIPID: record.remoteTUIPID,
+                                          threadID: record.threadID,
+                                          resumeThreadID: record.resumeThreadID)
+    }
+
+    private func uniqueLivePanelProcessMatch(
+        for record: AgentSessionRegistryRecord
+    ) -> AgentPanelProcessSnapshot? {
+        guard record.vendor == "claude",
+              record.pid > 0,
+              (record.tmuxPaneID ?? "").isEmpty else {
+            return nil
+        }
+
+        var ancestorPIDs = Set<Int32>()
+        var currentPID = record.pid
+        for _ in 0..<32 {
+            guard currentPID > 0, ancestorPIDs.insert(currentPID).inserted else {
+                break
+            }
+            guard currentPID > 1,
+                  let parentPID = parentPIDLookup(currentPID),
+                  parentPID > 0 else {
+                break
+            }
+            currentPID = parentPID
+        }
+
+        let matches = livePanelsByWorkspace.values
+            .flatMap { $0 }
+            .filter { panel in
+                guard let effectiveShellPID = panel.effectiveShellPID,
+                      effectiveShellPID > 0 else {
+                    return false
+                }
+                return ancestorPIDs.contains(effectiveShellPID)
+            }
+        guard matches.count == 1 else {
+            return nil
+        }
+        return matches[0]
     }
 
     private func recordsWithObsoleteCodexAppServerPanelRecordsRemoved(_ entries: [LoadedAgentSessionRegistryRecord]) -> [LoadedAgentSessionRegistryRecord] {
