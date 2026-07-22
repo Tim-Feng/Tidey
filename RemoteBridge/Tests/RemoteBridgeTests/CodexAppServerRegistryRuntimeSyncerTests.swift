@@ -467,7 +467,7 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         XCTAssertTrue(messages[0].contains(#""action":"notification.create""#))
         XCTAssertTrue(messages[0].contains(#""title":"Codex""#))
         XCTAssertTrue(messages[0].contains(#""body":"Approve Codex command?""#))
-        XCTAssertEqual(messages[1], "report_shell_state prompt --workspace_id=workspace-1")
+        XCTAssertEqual(messages[1], "report_shell_state needs_input --workspace_id=workspace-1")
     }
 
     func testApprovalPromptResolvedClearsSidebarPromptStateAndAllowsFutureNotification() throws {
@@ -532,10 +532,10 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         let messages = sidebarMessages
         sidebarLock.unlock()
         XCTAssertTrue(messages[0].contains(#""action":"notification.create""#))
-        XCTAssertEqual(messages[1], "report_shell_state prompt --workspace_id=workspace-1")
+        XCTAssertEqual(messages[1], "report_shell_state needs_input --workspace_id=workspace-1")
         XCTAssertEqual(messages[2], "report_shell_state running --workspace_id=workspace-1")
         XCTAssertTrue(messages[3].contains(#""action":"notification.create""#))
-        XCTAssertEqual(messages[4], "report_shell_state prompt --workspace_id=workspace-1")
+        XCTAssertEqual(messages[4], "report_shell_state needs_input --workspace_id=workspace-1")
     }
 
     func testPendingApprovalPromptEventsAreScopedToWorkspaceAndSession() {

@@ -324,7 +324,7 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         XCTAssertEqual(options[1].objectValue?["input_sequence"]?.stringValue, "\u{1b}[B\r")
         XCTAssertEqual(commandSender.commands.count, 2)
         XCTAssertTrue(commandSender.commands[0].contains(#""action":"notification.create""#))
-        XCTAssertEqual(commandSender.commands[1], "report_shell_state prompt --workspace_id=workspace")
+        XCTAssertEqual(commandSender.commands[1], "report_shell_state needs_input --workspace_id=workspace")
 
         try handle.write(contentsOf: Data(makeClaudeToolResultLine(uuid: "u1",
                                                                    toolCallID: "toolu_question_1",
