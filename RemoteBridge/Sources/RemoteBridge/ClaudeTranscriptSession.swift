@@ -2089,6 +2089,12 @@ final class JSONLFileTailer {
     }
 }
 
+struct ClaudeHistoricalClosureIndexStats: Equatable {
+    let scanPassCount: Int
+    let readByteCount: Int
+    let completeLineCount: Int
+}
+
 final class ClaudeTranscriptSession: AgentTranscriptSession {
     private let queue: DispatchQueue
     private let fileManager: FileManager
@@ -2647,8 +2653,20 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private var historicalClosureIndex: HistoricalClosureIndexState?
     private var historicalIndexEventSink: ((AgentEvent) -> Void)?
     var historicalIndexBeforeSourceValidationForTesting: (() -> Void)?
+    private var historicalIndexScanPassCount = 0
+    private var historicalIndexReadByteCount = 0
+    private var historicalIndexCompleteLineCount = 0
     private var historicalReplayOpenerEventIDs = Set<String>()
     private var historicalBackfillAnchorSeq: Int?
+
+    func historicalClosureIndexStatsForTesting() -> ClaudeHistoricalClosureIndexStats {
+        queue.sync {
+            ClaudeHistoricalClosureIndexStats(
+                scanPassCount: historicalIndexScanPassCount,
+                readByteCount: historicalIndexReadByteCount,
+                completeLineCount: historicalIndexCompleteLineCount)
+        }
+    }
 
     private func captureLiveParserState() -> LiveParserStateSnapshot {
         LiveParserStateSnapshot(unsupportedVersions: unsupportedVersions,
