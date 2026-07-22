@@ -257,6 +257,17 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
             partialLineByteLimit: 1_024)
     }
 
+    func testClaudeUnsupportedMajorHistoryRecordHidesCachedOpenersFailClosed() throws {
+        let unsupportedTerminal = makeClaudeToolResultLine(
+            uuid: "unsupported-result",
+            toolCallID: "toolu_fail_closed",
+            content: "future answer",
+            version: "3.0.0")
+        try assertClaudeHistoryIndexFailureHidesCachedOpener(
+            appendedData: Data((unsupportedTerminal + "\n").utf8),
+            partialLineByteLimit: 1_024)
+    }
+
     func testClaudeMalformedHistoryDisablesBufferedPromptSubmission() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
@@ -2251,12 +2262,13 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
 
     private func makeClaudeToolResultLine(uuid: String,
                                           toolCallID: String,
-                                          content: String) -> String {
+                                          content: String,
+                                          version: String = "2.0.0") -> String {
         let object: [String: Any] = [
             "type": "user",
             "uuid": uuid,
             "sessionId": "session",
-            "version": "2.0.0",
+            "version": version,
             "timestamp": "2026-04-30T00:00:02Z",
             "message": [
                 "role": "user",
