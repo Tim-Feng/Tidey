@@ -192,6 +192,158 @@ final class AgentEventHubTests: XCTestCase {
         XCTAssertTrue((result.events.first?.output ?? "").contains("大小限制"))
     }
 
+    func testLiveSubscriberDeliveryFollowsStoreOrderAcrossConcurrentPublishers() {
+        // Window: publisher LOW has STORED its event but has not returned;
+        // publisher HIGH stores next. Delivery must follow the hub's store
+        // order, not the publishers' thread scheduling.
+        let hub = AgentEventHub()
+        let orderLock = NSLock()
+        var delivered = [Int]()
+        let bothDelivered = expectation(description: "both delivered")
+        bothDelivered.expectedFulfillmentCount = 2
+        let (subscriptionID, _) = hub.subscribe(workspaceID: "workspace", sessionID: "session") { envelope in
+            orderLock.lock()
+            delivered.append(envelope.event.seq)
+            orderLock.unlock()
+            bothDelivered.fulfill()
+        }
+        defer { hub.unsubscribe(subscriptionID) }
+
+        let lowStored = DispatchSemaphore(value: 0)
+        let releaseLow = DispatchSemaphore(value: 0)
+        let lowDone = expectation(description: "low publisher done")
+        hub.postStoreDeliveryHook = { [weak hub] event in
+            guard event.eventID == "low" else { return }
+            hub?.postStoreDeliveryHook = nil
+            lowStored.signal()
+            _ = releaseLow.wait(timeout: .now() + 5.0)
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            hub.publish(self.makeAssistantEvent(id: "low", seq: 10))
+            lowDone.fulfill()
+        }
+        XCTAssertEqual(lowStored.wait(timeout: .now() + 2.0), .success,
+                       "low must be stored before high publishes")
+
+        hub.publish(makeAssistantEvent(id: "high", seq: 20))
+        releaseLow.signal()
+
+        wait(for: [bothDelivered, lowDone], timeout: 2.0)
+        orderLock.lock()
+        let observed = delivered
+        orderLock.unlock()
+        XCTAssertEqual(observed, [10, 20],
+                       "live delivery must follow the hub's store order, got \(observed)")
+    }
+
+    func testUnsubscribeAfterSinkResolutionStillPreventsInvocation() {
+        let hub = AgentEventHub()
+        var oldSinkCalls = 0
+        let (oldID, _) = hub.subscribe(workspaceID: "workspace", sessionID: "session") { _ in
+            oldSinkCalls += 1
+        }
+        let resolvedButNotInvoked = DispatchSemaphore(value: 0)
+        let releaseInvoke = DispatchSemaphore(value: 0)
+        hub.preInvokeDeliveryHook = { [weak hub] in
+            hub?.preInvokeDeliveryHook = nil
+            resolvedButNotInvoked.signal()
+            _ = releaseInvoke.wait(timeout: .now() + 5.0)
+        }
+        let publishDone = expectation(description: "publisher returned")
+        DispatchQueue.global(qos: .userInitiated).async {
+            hub.publish(self.makeAssistantEvent(id: "e1", seq: 1))
+            publishDone.fulfill()
+        }
+        XCTAssertEqual(resolvedButNotInvoked.wait(timeout: .now() + 2.0), .success)
+
+        hub.unsubscribe(oldID)
+        releaseInvoke.signal()
+        wait(for: [publishDone], timeout: 2.0)
+        hub.drainDeliveriesForTesting()
+        XCTAssertEqual(oldSinkCalls, 0,
+                       "a sink resolved before unsubscribe returned must still never be invoked")
+    }
+
+    func testUnsubscribeWaitsForInFlightSinkOnAnotherThread() {
+        let hub = AgentEventHub()
+        let orderLock = NSLock()
+        var order = [String]()
+        var sinkCalls = 0
+        let sinkEntered = DispatchSemaphore(value: 0)
+        let releaseSink = DispatchSemaphore(value: 0)
+        let cancelWaiting = DispatchSemaphore(value: 0)
+        hub.unsubscribeCancelWaitHook = {
+            orderLock.lock()
+            order.append("cancel-waiting")
+            orderLock.unlock()
+            cancelWaiting.signal()
+        }
+        let (subscriptionID, _) = hub.subscribe(workspaceID: "workspace", sessionID: "session") { _ in
+            sinkCalls += 1
+            if sinkCalls == 1 {
+                sinkEntered.signal()
+                _ = releaseSink.wait(timeout: .now() + 5.0)
+                orderLock.lock()
+                order.append("sink-released")
+                orderLock.unlock()
+            }
+        }
+        let publishDone = expectation(description: "publisher returned")
+        DispatchQueue.global(qos: .userInitiated).async {
+            hub.publish(self.makeAssistantEvent(id: "e1", seq: 1))
+            publishDone.fulfill()
+        }
+        XCTAssertEqual(sinkEntered.wait(timeout: .now() + 2.0), .success)
+
+        let unsubscribeReturned = expectation(description: "unsubscribe returned")
+        DispatchQueue.global(qos: .userInitiated).async {
+            hub.unsubscribe(subscriptionID)
+            orderLock.lock()
+            order.append("unsubscribe-returned")
+            orderLock.unlock()
+            unsubscribeReturned.fulfill()
+        }
+        XCTAssertEqual(cancelWaiting.wait(timeout: .now() + 2.0), .success,
+                       "unsubscribe must reach the cancel wait window while the sink is in flight")
+        orderLock.lock()
+        let midFlight = order
+        orderLock.unlock()
+        XCTAssertEqual(midFlight, ["cancel-waiting"],
+                       "unsubscribe must not return while the sink is still blocked")
+
+        releaseSink.signal()
+        wait(for: [unsubscribeReturned, publishDone], timeout: 2.0)
+        orderLock.lock()
+        let observed = order
+        orderLock.unlock()
+        XCTAssertEqual(observed, ["cancel-waiting", "sink-released", "unsubscribe-returned"],
+                       "unsubscribe returns only after the in-flight sink completed")
+
+        hub.publish(makeAssistantEvent(id: "e2", seq: 2))
+        hub.drainDeliveriesForTesting()
+        XCTAssertEqual(sinkCalls, 1, "no further deliveries after unsubscribe returned")
+    }
+
+    func testSinkMayUnsubscribeItselfWithoutDeadlock() {
+        let hub = AgentEventHub()
+        var calls = 0
+        var subscriptionID: UUID?
+        let done = expectation(description: "self-unsubscribing sink ran")
+        let (id, _) = hub.subscribe(workspaceID: "workspace", sessionID: "session") { _ in
+            calls += 1
+            if let subscriptionID {
+                hub.unsubscribe(subscriptionID)
+            }
+            done.fulfill()
+        }
+        subscriptionID = id
+        hub.publish(makeAssistantEvent(id: "e1", seq: 1))
+        wait(for: [done], timeout: 2.0)
+        hub.publish(makeAssistantEvent(id: "e2", seq: 2))
+        hub.drainDeliveriesForTesting()
+        XCTAssertEqual(calls, 1, "after self-unsubscribe no further deliveries arrive")
+    }
+
     private func makeAssistantEvent(id: String, seq: Int, text: String? = nil) -> AgentEvent {
         AgentEvent(eventID: id,
                    seq: seq,

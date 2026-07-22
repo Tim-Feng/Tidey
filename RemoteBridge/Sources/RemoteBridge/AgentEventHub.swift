@@ -17,10 +17,61 @@ final class AgentEventHub {
         let hasMore: Bool
     }
 
+    final class SubscriberGate: @unchecked Sendable {
+        private let condition = NSCondition()
+        private var cancelled = false
+        private var invokingThread: Thread?
+
+        func beginInvoke() -> Bool {
+            condition.lock()
+            defer { condition.unlock() }
+            guard cancelled == false else {
+                return false
+            }
+            invokingThread = Thread.current
+            return true
+        }
+
+        func endInvoke() {
+            condition.lock()
+            invokingThread = nil
+            condition.broadcast()
+            condition.unlock()
+        }
+
+        func cancel(waitHook: (() -> Void)? = nil) {
+            condition.lock()
+            cancelled = true
+            var signalledWait = false
+            while let thread = invokingThread, thread !== Thread.current {
+                if signalledWait == false {
+                    signalledWait = true
+                    waitHook?()
+                }
+                condition.wait()
+            }
+            condition.unlock()
+        }
+    }
+
+    private final class DeliveryExecutor {
+        private let queueKey = DispatchSpecificKey<Void>()
+        let queue = DispatchQueue(label: "com.tidey.remote-bridge.agent-event-hub.delivery")
+
+        init() {
+            queue.setSpecific(key: queueKey, value: ())
+        }
+
+        var isCurrent: Bool {
+            DispatchQueue.getSpecific(key: queueKey) != nil
+        }
+    }
+
     private struct Subscriber {
         let workspaceID: String?
         let sessionID: String?
         let sink: (AgentEventEnvelope) -> Void
+        let gate = SubscriberGate()
     }
 
     private struct SessionState {
@@ -36,6 +87,10 @@ final class AgentEventHub {
     }
 
     private let queue = DispatchQueue(label: "com.tidey.remote-bridge.agent-event-hub")
+    private let deliveryExecutor = DeliveryExecutor()
+    var postStoreDeliveryHook: ((AgentEvent) -> Void)?
+    var preInvokeDeliveryHook: (() -> Void)?
+    var unsubscribeCancelWaitHook: (() -> Void)?
     private var subscribers = [UUID: Subscriber]()
     private var sessions = [String: SessionState]()
     private var sessionBindings = [String: SessionBinding]()
@@ -165,9 +220,10 @@ final class AgentEventHub {
     }
 
     func unsubscribe(_ subscriberID: UUID) {
-        _ = queue.sync {
+        let removed = queue.sync {
             subscribers.removeValue(forKey: subscriberID)
         }
+        removed?.gate.cancel(waitHook: unsubscribeCancelWaitHook)
     }
 
     func oldestBufferedSeq(sessionID: String) -> Int? {
@@ -292,10 +348,10 @@ final class AgentEventHub {
     }
 
     func publish(_ event: AgentEvent, deliverToSubscribers: Bool = true) {
-        let deliveries: [Subscriber] = queue.sync {
+        let deliveryCompletion: DispatchSemaphore? = queue.sync {
             var state = sessions[event.sessionID] ?? SessionState()
             if state.seenEventIDs.contains(event.eventID) {
-                return []
+                return nil
             }
 
             state.seenEventIDs.insert(event.eventID)
@@ -319,12 +375,12 @@ final class AgentEventHub {
             sessions[event.sessionID] = state
 
             guard deliverToSubscribers else {
-                return []
+                return nil
             }
             guard let effectiveEvent = effectiveEvent(event) else {
-                return []
+                return nil
             }
-            let deliveries = subscribers.values.filter { subscriber in
+            let matchedIDs = subscribers.filter { _, subscriber in
                 if let workspaceID = subscriber.workspaceID, workspaceID != effectiveEvent.workspaceID {
                     return false
                 }
@@ -332,14 +388,44 @@ final class AgentEventHub {
                     return false
                 }
                 return true
+            }.map(\.key)
+            guard matchedIDs.isEmpty == false else {
+                return nil
             }
-            return Array(deliveries)
+
+            let envelope = AgentEventEnvelope(replay: false, event: effectiveEvent)
+            let completion = DispatchSemaphore(value: 0)
+            deliveryExecutor.queue.async { [weak self] in
+                defer { completion.signal() }
+                guard let self else {
+                    return
+                }
+                let targets = self.queue.sync {
+                    matchedIDs.compactMap { self.subscribers[$0] }
+                }
+                self.preInvokeDeliveryHook?()
+                for target in targets {
+                    guard target.gate.beginInvoke() else {
+                        continue
+                    }
+                    target.sink(envelope)
+                    target.gate.endInvoke()
+                }
+            }
+            return completion
         }
 
-        let envelope = AgentEventEnvelope(replay: false, event: queue.sync { effectiveEvent(event)! })
-        for subscriber in deliveries {
-            subscriber.sink(envelope)
+        postStoreDeliveryHook?(event)
+        if deliveryExecutor.isCurrent == false {
+            deliveryCompletion?.wait()
         }
+    }
+
+    func drainDeliveriesForTesting() {
+        guard deliveryExecutor.isCurrent == false else {
+            return
+        }
+        deliveryExecutor.queue.sync {}
     }
 
     private func effectiveEvent(_ event: AgentEvent?) -> AgentEvent? {
