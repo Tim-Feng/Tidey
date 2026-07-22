@@ -1748,6 +1748,70 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertEqual(response["result"]?.objectValue?["decision"]?.stringValue, "accept")
     }
 
+    func testSessionLifecycleApprovalForwardsCapabilityAndClientRequestIdentity() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let prompts = PromptSink()
+        let session = try Self.makeSession(runner: runner, prompts: prompts)
+        runner.process?.emitStdout("""
+        {"id":"approval-lifecycle","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"cmd-lifecycle","startedAtMs":1786000000000,"command":"ls"}}
+        """)
+        let envelope = try XCTUnwrap(prompts.envelopes().first)
+
+        let outcome = try session.submitApproval(promptID: envelope.prompt.promptID,
+                                                 targetIndex: 0,
+                                                 clientRequestID: "client-lifecycle",
+                                                 lifecycleToken: envelope.event.eventID)
+
+        guard case .pendingConfirmation(let promptID) = outcome else {
+            return XCTFail("expected pendingConfirmation, got \(outcome)")
+        }
+        XCTAssertEqual(promptID, envelope.prompt.promptID)
+        let pending = try XCTUnwrap(session.pendingApprovalPromptEvents().first)
+        XCTAssertEqual(pending.metadata?["submit_state"], "submitting")
+        XCTAssertEqual(pending.metadata?["client_request_id"], "client-lifecycle")
+        XCTAssertEqual(AgentInteractivePromptSidebarMessages.lifecycleToken(from: pending),
+                       envelope.event.eventID)
+        let process = try XCTUnwrap(runner.process)
+        let response = try Self.object(from: process.stdinLines().last ?? "")
+        XCTAssertEqual(response["id"]?.stringValue, "approval-lifecycle")
+        XCTAssertEqual(response["result"]?.objectValue?["decision"]?.stringValue, "accept")
+    }
+
+    func testSessionLifecycleUserInputForwardsStrictStructuredWireShape() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let prompts = PromptSink()
+        let session = try Self.makeSession(runner: runner, prompts: prompts)
+        runner.process?.emitStdout("""
+        {"id":"input-lifecycle","method":"item/tool/requestUserInput","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"input-1","questions":[{"id":"format","header":"Output","question":"Which format?","options":[{"label":"PNG","description":"Lossless"}]},{"id":"notes","header":"Notes","question":"Any notes?"}]}}
+        """)
+        let envelope = try XCTUnwrap(prompts.envelopes().first)
+        let answers = [
+            "format": ["PNG"],
+            "notes": ["keep alpha", "lossless"],
+        ]
+
+        let outcome = try session.submitUserInput(promptID: envelope.prompt.promptID,
+                                                  answers: answers,
+                                                  clientRequestID: "client-input",
+                                                  lifecycleToken: envelope.event.eventID)
+
+        guard case .pendingConfirmation(let promptID) = outcome else {
+            return XCTFail("expected pendingConfirmation, got \(outcome)")
+        }
+        XCTAssertEqual(promptID, envelope.prompt.promptID)
+        let pending = try XCTUnwrap(session.pendingApprovalPromptEvents().first)
+        XCTAssertEqual(pending.metadata?["client_request_id"], "client-input")
+        let process = try XCTUnwrap(runner.process)
+        let response = try Self.object(from: process.stdinLines().last ?? "")
+        let wireAnswers = try XCTUnwrap(response["result"]?.objectValue?["answers"]?.objectValue)
+        XCTAssertEqual(wireAnswers["format"]?.objectValue?["answers"]?.arrayValue,
+                       [.string("PNG")])
+        XCTAssertEqual(wireAnswers["notes"]?.objectValue?["answers"]?.arrayValue,
+                       [.string("keep alpha"), .string("lossless")])
+        XCTAssertEqual(Set(wireAnswers.keys), Set(answers.keys),
+                       "the userInput response must not invent or flatten answer fields")
+    }
+
     func testSessionStopTerminatesProcessAndClosesConnection() throws {
         let runner = FakeCodexAppServerProcessRunner()
         let session = try Self.makeSession(runner: runner)

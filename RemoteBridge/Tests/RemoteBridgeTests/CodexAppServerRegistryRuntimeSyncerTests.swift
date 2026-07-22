@@ -659,6 +659,261 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         XCTAssertEqual(runtime.submitAttempts, ["prompt-done"])
     }
 
+    func testLifecycleApprovalForwardsIdentityToExactOwningRuntime() throws {
+        let firstRuntime = FakeRuntimeSession()
+        let secondRuntime = FakeRuntimeSession()
+        secondRuntime.pendingConfirmationPromptIDs.insert("prompt-owned")
+        var runtimeIndex = 0
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: AgentEventHub(), attachHandler: { _, _, _, _, _, _, _ in
+            defer { runtimeIndex += 1 }
+            return runtimeIndex == 0 ? firstRuntime : secondRuntime
+        })
+        syncer.sync(records: [
+            Self.record(sessionID: "first",
+                        runtime: "codex_app_server",
+                        socketPath: "/tmp/first.sock",
+                        panelID: "panel-first"),
+            Self.record(sessionID: "second",
+                        runtime: "codex_app_server",
+                        socketPath: "/tmp/second.sock",
+                        panelID: "panel-second"),
+        ])
+
+        let outcome = try syncer.submitApproval(promptID: "prompt-owned",
+                                                targetIndex: 2,
+                                                clientRequestID: "client-approval",
+                                                lifecycleToken: "token-approval",
+                                                workspaceID: "workspace-1",
+                                                panelID: "panel-second",
+                                                sessionID: "second")
+
+        guard case .pendingConfirmation(let promptID) = outcome else {
+            return XCTFail("expected pendingConfirmation, got \(outcome)")
+        }
+        XCTAssertEqual(promptID, "prompt-owned")
+        XCTAssertTrue(firstRuntime.submitAttempts.isEmpty)
+        XCTAssertEqual(secondRuntime.submitAttempts, ["prompt-owned"])
+        XCTAssertEqual(secondRuntime.approvalTargetIndices, [2])
+        XCTAssertEqual(secondRuntime.approvalClientRequestIDs, ["client-approval"])
+        XCTAssertEqual(secondRuntime.approvalLifecycleTokens, ["token-approval"])
+    }
+
+    func testLifecycleUserInputForwardsStructuredAnswersAndIdentity() throws {
+        let runtime = FakeRuntimeSession()
+        runtime.pendingConfirmationPromptIDs.insert("prompt-input")
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: AgentEventHub(), attachHandler: { _, _, _, _, _, _, _ in
+            runtime
+        })
+        syncer.sync(records: [
+            Self.record(sessionID: "app",
+                        runtime: "codex_app_server",
+                        socketPath: "/tmp/app.sock",
+                        panelID: "panel-input"),
+        ])
+        let answers = [
+            "format": ["PNG"],
+            "notes": ["keep alpha", "lossless"],
+        ]
+
+        let outcome = try syncer.submitUserInput(promptID: "prompt-input",
+                                                 answers: answers,
+                                                 clientRequestID: "client-input",
+                                                 lifecycleToken: "token-input",
+                                                 workspaceID: "workspace-1",
+                                                 panelID: "panel-input",
+                                                 sessionID: "app")
+
+        guard case .pendingConfirmation(let promptID) = outcome else {
+            return XCTFail("expected pendingConfirmation, got \(outcome)")
+        }
+        XCTAssertEqual(promptID, "prompt-input")
+        XCTAssertEqual(runtime.userInputPromptIDs, ["prompt-input"])
+        XCTAssertEqual(runtime.userInputAnswers, [answers])
+        XCTAssertEqual(runtime.userInputClientRequestIDs, ["client-input"])
+        XCTAssertEqual(runtime.userInputLifecycleTokens, ["token-input"])
+    }
+
+    func testLifecycleSubmitFailsClosedForMissingRuntimeAndMismatchedOwnership() throws {
+        let runtime = FakeRuntimeSession()
+        runtime.pendingConfirmationPromptIDs.insert("prompt-owned")
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: AgentEventHub(), attachHandler: { _, _, _, _, _, _, _ in
+            runtime
+        })
+        syncer.sync(records: [
+            Self.record(sessionID: "app",
+                        runtime: "codex_app_server",
+                        socketPath: "/tmp/app.sock",
+                        panelID: "panel-owned"),
+        ])
+
+        let contexts: [(workspaceID: String, panelID: String, sessionID: String)] = [
+            ("workspace-1", "panel-owned", "missing"),
+            ("workspace-other", "panel-owned", "app"),
+            ("workspace-1", "panel-other", "app"),
+        ]
+        for context in contexts {
+            XCTAssertThrowsError(try syncer.submitApproval(promptID: "prompt-owned",
+                                                           targetIndex: 0,
+                                                           clientRequestID: "client-owned",
+                                                           lifecycleToken: "token-owned",
+                                                           workspaceID: context.workspaceID,
+                                                           panelID: context.panelID,
+                                                           sessionID: context.sessionID)) { error in
+                guard case BridgeInternalError.notFound = error else {
+                    return XCTFail("expected notFound, got \(error)")
+                }
+            }
+        }
+        XCTAssertTrue(runtime.submitAttempts.isEmpty,
+                      "a mismatched context must not reach any runtime")
+    }
+
+    func testLifecycleSubmitUnknownPromptFailsClosedWithoutSyntheticTerminal() throws {
+        let runtime = FakeRuntimeSession()
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: AgentEventHub(), attachHandler: { _, _, _, _, _, _, _ in
+            runtime
+        })
+        syncer.sync(records: [
+            Self.record(sessionID: "app", runtime: "codex_app_server", socketPath: "/tmp/app.sock"),
+        ])
+
+        XCTAssertThrowsError(try syncer.submitApproval(promptID: "prompt-missing",
+                                                       targetIndex: 0,
+                                                       clientRequestID: "client-missing",
+                                                       lifecycleToken: "token-missing",
+                                                       workspaceID: "workspace-1",
+                                                       panelID: "panel-1",
+                                                       sessionID: "app")) { error in
+            guard case BridgeInternalError.notFound = error else {
+                return XCTFail("expected notFound, got \(error)")
+            }
+        }
+        XCTAssertEqual(runtime.submitAttempts, ["prompt-missing"])
+    }
+
+    func testLifecycleSubmitReusesOnlyMatchingAuthoritativeTerminal() throws {
+        let hub = AgentEventHub()
+        let resolved = Self.event(sessionID: "app",
+                                  promptID: "prompt-done",
+                                  lifecycleToken: "token-current")
+        hub.publish(resolved)
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub)
+
+        let outcome = try syncer.submitApproval(promptID: "prompt-done",
+                                                targetIndex: 0,
+                                                clientRequestID: "client-done",
+                                                lifecycleToken: "token-current",
+                                                workspaceID: "workspace-1",
+                                                panelID: "panel-1",
+                                                sessionID: "app")
+        guard case .alreadyResolved(let event) = outcome else {
+            return XCTFail("expected alreadyResolved, got \(outcome)")
+        }
+        XCTAssertEqual(event.eventID, resolved.eventID)
+
+        XCTAssertThrowsError(try syncer.submitApproval(promptID: "prompt-done",
+                                                       targetIndex: 0,
+                                                       clientRequestID: "client-stale",
+                                                       lifecycleToken: "token-stale",
+                                                       workspaceID: "workspace-1",
+                                                       panelID: "panel-1",
+                                                       sessionID: "app")) { error in
+            guard case BridgeInternalError.notFound = error else {
+                return XCTFail("expected notFound for a stale capability, got \(error)")
+            }
+        }
+    }
+
+    func testLifecycleSubmitAcceptsOnlyCapabilityMatchingRuntimeTerminal() throws {
+        let runtime = FakeRuntimeSession()
+        let resolved = Self.event(sessionID: "app",
+                                  promptID: "prompt-runtime-done",
+                                  lifecycleToken: "token-current")
+        runtime.resolvedEventsByPromptID["prompt-runtime-done"] = resolved
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: AgentEventHub(), attachHandler: { _, _, _, _, _, _, _ in
+            runtime
+        })
+        syncer.sync(records: [
+            Self.record(sessionID: "app", runtime: "codex_app_server", socketPath: "/tmp/app.sock"),
+        ])
+
+        XCTAssertThrowsError(try syncer.submitApproval(promptID: "prompt-runtime-done",
+                                                       targetIndex: 0,
+                                                       clientRequestID: "client-stale",
+                                                       lifecycleToken: "token-stale",
+                                                       workspaceID: "workspace-1",
+                                                       panelID: "panel-1",
+                                                       sessionID: "app")) { error in
+            guard case BridgeInternalError.notFound = error else {
+                return XCTFail("expected notFound for mismatched terminal capability, got \(error)")
+            }
+        }
+
+        let outcome = try syncer.submitApproval(promptID: "prompt-runtime-done",
+                                                targetIndex: 0,
+                                                clientRequestID: "client-current",
+                                                lifecycleToken: "token-current",
+                                                workspaceID: "workspace-1",
+                                                panelID: "panel-1",
+                                                sessionID: "app")
+        guard case .alreadyResolved(let event) = outcome else {
+            return XCTFail("expected alreadyResolved, got \(outcome)")
+        }
+        XCTAssertEqual(event.eventID, resolved.eventID)
+    }
+
+    func testLifecycleSubmitDiscardsRetiredGenerationResultAndRetriesCurrentRuntime() throws {
+        let oldRuntime = FakeRuntimeSession()
+        let newRuntime = FakeRuntimeSession()
+        oldRuntime.resolvedEventsByPromptID["prompt-race"] = Self.event(sessionID: "app",
+                                                                       promptID: "prompt-old")
+        oldRuntime.submitEntered = DispatchSemaphore(value: 0)
+        oldRuntime.submitBarrier = DispatchSemaphore(value: 0)
+        newRuntime.pendingConfirmationPromptIDs.insert("prompt-race")
+        var attachCount = 0
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: AgentEventHub(), attachHandler: { _, _, _, _, _, _, _ in
+            defer { attachCount += 1 }
+            return attachCount == 0 ? oldRuntime : newRuntime
+        })
+        syncer.sync(records: [
+            Self.record(sessionID: "app", runtime: "codex_app_server", socketPath: "/tmp/app-1.sock"),
+        ])
+
+        var outcome: CodexAppServerApprovalSubmitOutcome?
+        var submitError: Error?
+        let submitDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                outcome = try syncer.submitApproval(promptID: "prompt-race",
+                                                    targetIndex: 1,
+                                                    clientRequestID: "client-race",
+                                                    lifecycleToken: "token-race",
+                                                    workspaceID: "workspace-1",
+                                                    panelID: "panel-1",
+                                                    sessionID: "app")
+            } catch {
+                submitError = error
+            }
+            submitDone.signal()
+        }
+        XCTAssertEqual(oldRuntime.submitEntered?.wait(timeout: .now() + 2), .success)
+
+        syncer.sync(records: [
+            Self.record(sessionID: "app", runtime: "codex_app_server", socketPath: "/tmp/app-2.sock"),
+        ])
+        oldRuntime.submitBarrier?.signal()
+        XCTAssertEqual(submitDone.wait(timeout: .now() + 2), .success)
+
+        XCTAssertNil(submitError)
+        guard case .pendingConfirmation? = outcome else {
+            return XCTFail("expected current generation pendingConfirmation, got \(String(describing: outcome))")
+        }
+        XCTAssertEqual(newRuntime.submitAttempts, ["prompt-race"])
+        XCTAssertEqual(newRuntime.approvalTargetIndices, [1])
+        XCTAssertEqual(newRuntime.approvalClientRequestIDs, ["client-race"])
+        XCTAssertEqual(newRuntime.approvalLifecycleTokens, ["token-race"])
+    }
+
     func testSubmitMessageRoutesToMatchingRuntimeSession() throws {
         let hub = AgentEventHub()
         let firstRuntime = FakeRuntimeSession()
@@ -1387,6 +1642,14 @@ private final class FakeRuntimeSession: CodexAppServerRuntimeSessionControlling 
     var submittedMessages = [String]()
     var submittedClientRequestIDs = [String?]()
     var resolvedEventsByPromptID = [String: AgentEvent]()
+    var pendingConfirmationPromptIDs = Set<String>()
+    var approvalTargetIndices = [Int]()
+    var approvalClientRequestIDs = [String?]()
+    var approvalLifecycleTokens = [String?]()
+    var userInputPromptIDs = [String]()
+    var userInputAnswers = [[String: [String]]]()
+    var userInputClientRequestIDs = [String?]()
+    var userInputLifecycleTokens = [String?]()
     var pendingPromptEvents = [AgentEvent]()
     var registryRootThreadIDs = [String]()
     var onStop: (() -> Void)?
@@ -1431,6 +1694,44 @@ private final class FakeRuntimeSession: CodexAppServerRuntimeSessionControlling 
             throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
         }
         return event
+    }
+
+    func submitApproval(promptID: String,
+                        targetIndex: Int,
+                        clientRequestID: String?,
+                        lifecycleToken: String?) throws -> CodexAppServerApprovalSubmitOutcome {
+        submitAttempts.append(promptID)
+        approvalTargetIndices.append(targetIndex)
+        approvalClientRequestIDs.append(clientRequestID)
+        approvalLifecycleTokens.append(lifecycleToken)
+        submitEntered?.signal()
+        if let submitBarrier {
+            _ = submitBarrier.wait(timeout: .now() + 5)
+        }
+        if pendingConfirmationPromptIDs.contains(promptID) {
+            return .pendingConfirmation(promptID: promptID)
+        }
+        guard let event = resolvedEventsByPromptID[promptID] else {
+            throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
+        }
+        return .alreadyResolved(event)
+    }
+
+    func submitUserInput(promptID: String,
+                         answers: [String: [String]],
+                         clientRequestID: String?,
+                         lifecycleToken: String?) throws -> CodexAppServerApprovalSubmitOutcome {
+        userInputPromptIDs.append(promptID)
+        userInputAnswers.append(answers)
+        userInputClientRequestIDs.append(clientRequestID)
+        userInputLifecycleTokens.append(lifecycleToken)
+        if pendingConfirmationPromptIDs.contains(promptID) {
+            return .pendingConfirmation(promptID: promptID)
+        }
+        guard let event = resolvedEventsByPromptID[promptID] else {
+            throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
+        }
+        return .alreadyResolved(event)
     }
 
     func submitMessage(text: String) throws {

@@ -353,6 +353,44 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
                            sessionID: sessionID)
     }
 
+    func submitApproval(promptID: String,
+                        targetIndex: Int,
+                        clientRequestID: String?,
+                        lifecycleToken: String?,
+                        workspaceID: String,
+                        panelID: String,
+                        sessionID: String?) throws -> CodexAppServerApprovalSubmitOutcome {
+        try performLifecyclePromptSubmit(promptID: promptID,
+                                         lifecycleToken: lifecycleToken,
+                                         workspaceID: workspaceID,
+                                         panelID: panelID,
+                                         sessionID: sessionID) { session in
+            try session.submitApproval(promptID: promptID,
+                                       targetIndex: targetIndex,
+                                       clientRequestID: clientRequestID,
+                                       lifecycleToken: lifecycleToken)
+        }
+    }
+
+    func submitUserInput(promptID: String,
+                         answers: [String: [String]],
+                         clientRequestID: String?,
+                         lifecycleToken: String?,
+                         workspaceID: String,
+                         panelID: String,
+                         sessionID: String?) throws -> CodexAppServerApprovalSubmitOutcome {
+        try performLifecyclePromptSubmit(promptID: promptID,
+                                         lifecycleToken: lifecycleToken,
+                                         workspaceID: workspaceID,
+                                         panelID: panelID,
+                                         sessionID: sessionID) { session in
+            try session.submitUserInput(promptID: promptID,
+                                        answers: answers,
+                                        clientRequestID: clientRequestID,
+                                        lifecycleToken: lifecycleToken)
+        }
+    }
+
     private func submitApproval(promptID: String,
                                 targetIndex: Int,
                                 workspaceID: String?,
@@ -439,6 +477,152 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
                                                 sessionID: sessionID)
         }
         throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
+    }
+
+    private func performLifecyclePromptSubmit(
+        promptID: String,
+        lifecycleToken: String?,
+        workspaceID: String,
+        panelID: String,
+        sessionID: String?,
+        generationRetriesRemaining: Int = 1,
+        using submit: (CodexAppServerRuntimeSessionControlling) throws -> CodexAppServerApprovalSubmitOutcome
+    ) throws -> CodexAppServerApprovalSubmitOutcome {
+        guard let sessionID,
+              sessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
+        }
+
+        let candidate = lock.withCodexRuntimeSyncerLock { () -> (session: CodexAppServerRuntimeSessionControlling, generation: UUID)? in
+            guard let entry = entriesBySessionID[sessionID],
+                  entry.record.workspaceID == workspaceID,
+                  entry.record.panelID == panelID else {
+                return nil
+            }
+            return (entry.session, entry.generation)
+        }
+
+        if let candidate {
+            let result: Result<CodexAppServerApprovalSubmitOutcome, Error>
+            do {
+                result = .success(try submit(candidate.session))
+            } catch {
+                result = .failure(error)
+            }
+            let stillCurrent = lock.withCodexRuntimeSyncerLock {
+                entriesBySessionID[sessionID]?.generation == candidate.generation
+            }
+            if stillCurrent == false {
+                guard generationRetriesRemaining > 0 else {
+                    throw BridgeInternalError.conflict("Codex runtime was replaced during approval submit; retry.")
+                }
+                try requireTransitionSettled(awaitGenerationTransition(sessionID: sessionID))
+                return try performLifecyclePromptSubmit(
+                    promptID: promptID,
+                    lifecycleToken: lifecycleToken,
+                    workspaceID: workspaceID,
+                    panelID: panelID,
+                    sessionID: sessionID,
+                    generationRetriesRemaining: generationRetriesRemaining - 1,
+                    using: submit)
+            }
+
+            switch result {
+            case .success(let outcome):
+                return try validatedLifecycleOutcome(outcome,
+                                                     promptID: promptID,
+                                                     lifecycleToken: lifecycleToken,
+                                                     workspaceID: workspaceID,
+                                                     panelID: panelID,
+                                                     sessionID: sessionID)
+            case .failure(let error):
+                if case BridgeInternalError.notFound = error {
+                    break
+                }
+                throw error
+            }
+        }
+
+        if candidate == nil,
+           generationRetriesRemaining > 0,
+           lock.withCodexRuntimeSyncerLock({ (transitionDepthBySessionID[sessionID] ?? 0) > 0 }) {
+            try requireTransitionSettled(awaitGenerationTransition(sessionID: sessionID))
+            return try performLifecyclePromptSubmit(
+                promptID: promptID,
+                lifecycleToken: lifecycleToken,
+                workspaceID: workspaceID,
+                panelID: panelID,
+                sessionID: sessionID,
+                generationRetriesRemaining: generationRetriesRemaining - 1,
+                using: submit)
+        }
+
+        if let resolvedEvent = eventHub.latestInteractivePromptResolvedEvent(
+            workspaceID: workspaceID,
+            sessionID: sessionID,
+            promptID: promptID,
+            lifecycleToken: lifecycleToken,
+            openerRequiresCapability: true),
+           isMatchingLifecycleTerminal(resolvedEvent,
+                                       promptID: promptID,
+                                       lifecycleToken: lifecycleToken,
+                                       workspaceID: workspaceID,
+                                       panelID: panelID,
+                                       sessionID: sessionID),
+           eventHub.activeInteractivePrompt(workspaceID: workspaceID,
+                                            sessionID: sessionID,
+                                            promptID: promptID) == nil {
+            return .alreadyResolved(resolvedEvent)
+        }
+        throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
+    }
+
+    private func validatedLifecycleOutcome(
+        _ outcome: CodexAppServerApprovalSubmitOutcome,
+        promptID: String,
+        lifecycleToken: String?,
+        workspaceID: String,
+        panelID: String,
+        sessionID: String
+    ) throws -> CodexAppServerApprovalSubmitOutcome {
+        switch outcome {
+        case .pendingConfirmation(let returnedPromptID):
+            guard returnedPromptID == promptID else {
+                throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
+            }
+        case .alreadyResolved(let event):
+            guard isMatchingLifecycleTerminal(event,
+                                              promptID: promptID,
+                                              lifecycleToken: lifecycleToken,
+                                              workspaceID: workspaceID,
+                                              panelID: panelID,
+                                              sessionID: sessionID) else {
+                throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
+            }
+        }
+        return outcome
+    }
+
+    private func isMatchingLifecycleTerminal(
+        _ event: AgentEvent,
+        promptID: String,
+        lifecycleToken: String?,
+        workspaceID: String,
+        panelID: String,
+        sessionID: String
+    ) -> Bool {
+        let eventPanelID = event.metadata?["panel_id"]
+            ?? event.payload?.objectValue?["panel_id"]?.stringValue
+        return event.vendor == "codex"
+            && event.workspaceID == workspaceID
+            && event.sessionID == sessionID
+            && event.type == .interactivePromptResolved
+            && AgentInteractivePromptSidebarMessages.promptID(from: event) == promptID
+            && eventPanelID == panelID
+            && AgentInteractivePromptSidebarMessages.terminalCloses(
+                openerLifecycleToken: lifecycleToken,
+                openerRequiresCapability: true,
+                terminal: event)
     }
 
     func pendingApprovalPromptEvents(workspaceID: String, sessionID: String? = nil) -> [AgentEvent] {

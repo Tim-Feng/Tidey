@@ -268,6 +268,28 @@ final class CodexAppServerRuntimeSession {
         try connection.submitApproval(promptID: promptID, targetIndex: targetIndex)
     }
 
+    @discardableResult
+    func submitApproval(promptID: String,
+                        targetIndex: Int,
+                        clientRequestID: String?,
+                        lifecycleToken: String?) throws -> CodexAppServerApprovalSubmitOutcome {
+        try connection.submitApproval(promptID: promptID,
+                                      targetIndex: targetIndex,
+                                      clientRequestID: clientRequestID,
+                                      lifecycleToken: lifecycleToken)
+    }
+
+    @discardableResult
+    func submitUserInput(promptID: String,
+                         answers: [String: [String]],
+                         clientRequestID: String?,
+                         lifecycleToken: String?) throws -> CodexAppServerApprovalSubmitOutcome {
+        try connection.submitUserInput(promptID: promptID,
+                                       answers: answers,
+                                       clientRequestID: clientRequestID,
+                                       lifecycleToken: lifecycleToken)
+    }
+
     func pendingApprovalPromptEvents() -> [AgentEvent] {
         connection.pendingApprovalPromptEvents()
     }
