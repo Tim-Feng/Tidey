@@ -69,6 +69,41 @@ final class AgentEventHubTests: XCTestCase {
                       "history projection must not permanently delete the raw command")
     }
 
+    func testHistoricalReplayRefillsEvictedLiveTerminalDespiteSeenTombstone() {
+        let hub = AgentEventHub(maxBufferedEvents: 2, maxSeenEventIDs: 100)
+        let opener = makePromptEvent(id: "historical-opener",
+                                     seq: 10,
+                                     promptID: "prompt",
+                                     token: nil,
+                                     vendor: "claude",
+                                     source: "claude_ask_user_question")
+        let terminal = makeResolvedEvent(id: "evicted-terminal",
+                                         seq: 20,
+                                         promptID: "prompt",
+                                         token: nil,
+                                         vendor: "claude",
+                                         source: "claude_ask_user_question")
+        hub.publish(terminal)
+        hub.publish(makeAssistantEvent(id: "later-live-1", seq: 30))
+        hub.publish(makeAssistantEvent(id: "later-live-2", seq: 31))
+        hub.replaceHistoricalOpenerResolutions(
+            sessionID: "session",
+            resolutions: [
+                opener.eventID: .visibleTerminal(eventID: terminal.eventID, sequence: terminal.seq),
+            ])
+
+        hub.publish(opener, deliverToSubscribers: false, storage: .historicalBackfill)
+        hub.publish(terminal, deliverToSubscribers: false, storage: .historicalBackfill)
+
+        let result = hub.fetch(workspaceID: "workspace",
+                               sessionID: "session",
+                               limit: 20,
+                               beforeSeq: 32)
+        XCTAssertTrue(result.events.contains { $0.eventID == opener.eventID })
+        XCTAssertTrue(result.events.contains { $0.eventID == terminal.eventID },
+                      "an evicted live terminal must be eligible for historical storage again")
+    }
+
     func testSessionStartedStickyReplayUsesReservedSequenceOnlyForFullReplay() {
         let hub = AgentEventHub()
         hub.publish(AgentEvent(eventID: "session-start:test",

@@ -562,8 +562,17 @@ final class AgentEventHub {
         var event = event
         let deliveryCompletion: DispatchSemaphore? = queue.sync {
             var state = sessions[event.sessionID] ?? SessionState()
-            if state.seenEventIDs.contains(event.eventID) || state.historicalEventIDs.contains(event.eventID) {
-                return nil
+            switch storage {
+            case .liveForward:
+                guard state.seenEventIDs.contains(event.eventID) == false,
+                      state.historicalEventIDs.contains(event.eventID) == false else {
+                    return nil
+                }
+            case .historicalBackfill:
+                guard state.historicalEventIDs.contains(event.eventID) == false,
+                      state.bufferedEvents.contains(where: { $0.eventID == event.eventID }) == false else {
+                    return nil
+                }
             }
 
             switch storage {
