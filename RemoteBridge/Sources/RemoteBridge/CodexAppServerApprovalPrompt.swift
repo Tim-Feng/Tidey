@@ -6,9 +6,9 @@ enum CodexAppServerApprovalMethod: String, Equatable, Sendable {
     case fileChange = "item/fileChange/requestApproval"
 }
 
-// The pure request model understands newer server-request methods before the
-// connection wire adopts them. Keep that wider schema separate so adding the
-// model does not silently change which methods the legacy connection claims.
+// The typed request path supports the complete app-server approval surface.
+// Keep the legacy two-method enum below for callers that still opt into the
+// permissive command/file compatibility initializer.
 enum CodexAppServerApprovalRequestMethod: String, Equatable, Sendable {
     case commandExecution = "item/commandExecution/requestApproval"
     case fileChange = "item/fileChange/requestApproval"
@@ -158,9 +158,9 @@ struct CodexAppServerApprovalRequest: Sendable {
         requestID.storageKey
     }
 
-    // Compatibility path for the existing connection. It intentionally keeps
-    // the pre-existing command/file schema until the wire parser is migrated
-    // to the exact typed RequestId path in its own change.
+    // Compatibility path for older callers. It intentionally keeps the
+    // pre-existing permissive command/file schema; the connection uses the
+    // strict typed RequestId initializer below.
     init?(method methodName: String, requestID: JSONValue, params: [String: JSONValue]) {
         guard CodexAppServerApprovalMethod(rawValue: methodName) != nil,
               let method = CodexAppServerApprovalRequestMethod(rawValue: methodName),
@@ -174,9 +174,8 @@ struct CodexAppServerApprovalRequest: Sendable {
                   strictSchema: false)
     }
 
-    // Pure strict model path. The distinct label avoids making legacy
-    // `.string(...)` call sites ambiguous while connection wiring remains a
-    // separate slice.
+    // Strict typed model path. The distinct label avoids making legacy
+    // `.string(...)` call sites ambiguous.
     init?(method methodName: String,
           typedRequestID requestID: CodexAppServerRequestID,
           params: [String: JSONValue]) {
@@ -875,6 +874,14 @@ final class CodexAppServerApprovalPromptStore: @unchecked Sendable {
     @discardableResult
     func record(_ request: CodexAppServerApprovalRequest) -> InteractivePrompt {
         let prompt = request.makePrompt()
+        return record(request, prompt: prompt)
+    }
+
+    // The connection owns process-epoch identity. Accept its prebuilt prompt
+    // so the ID published to clients is exactly the ID later used for submit.
+    @discardableResult
+    func record(_ request: CodexAppServerApprovalRequest,
+                prompt: InteractivePrompt) -> InteractivePrompt {
         let entry = CodexAppServerApprovalPromptEntry(request: request, prompt: prompt)
         lock.withCodexApprovalLock {
             entriesByPromptID[prompt.promptID] = entry

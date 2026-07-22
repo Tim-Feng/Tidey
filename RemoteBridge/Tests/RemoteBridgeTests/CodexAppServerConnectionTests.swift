@@ -39,13 +39,13 @@ final class CodexAppServerConnectionTests: XCTestCase {
         let outbound = LineSink()
         let connection = CodexAppServerConnection(sendLine: { outbound.append($0) })
 
-        connection.receiveLine(#"{"id":"server-1","method":"item/tool/requestUserInput","params":{}}"#)
+        connection.receiveLine(#"{"id":"server-1","method":"item/tool/somethingUnknown","params":{}}"#)
 
         let response = try Self.object(from: outbound.lines()[0])
         XCTAssertEqual(response["id"]?.stringValue, "server-1")
         let error = response["error"]?.objectValue
         XCTAssertEqual(error?["code"]?.intValue, -32601)
-        XCTAssertEqual(error?["message"]?.stringValue, "Unsupported server request: item/tool/requestUserInput")
+        XCTAssertEqual(error?["message"]?.stringValue, "Unsupported server request: item/tool/somethingUnknown")
     }
 
     func testCommandApprovalRequestPublishesPromptAndSubmitSendsDecisionReply() throws {

@@ -46,6 +46,17 @@ struct CodexAppServerApprovalContext: Sendable {
     let workspaceID: String
     let panelID: String
     let sessionID: String
+    let epoch: String
+
+    init(workspaceID: String,
+         panelID: String,
+         sessionID: String,
+         epoch: String = "") {
+        self.workspaceID = workspaceID
+        self.panelID = panelID
+        self.sessionID = sessionID
+        self.epoch = epoch
+    }
 }
 
 struct CodexAppServerInteractivePromptEnvelope: Sendable {
@@ -156,12 +167,20 @@ final class CodexAppServerConnection {
         let id = object["id"]
         let method = object["method"]?.stringValue
         if let id, let method {
-            if CodexAppServerApprovalMethod(rawValue: method) != nil {
-                BridgeLogger.server.info("codex app-server server request received method=\(method, privacy: .public) id=\(Self.idKey(from: id) ?? "-", privacy: .public)")
-            } else {
-                BridgeLogger.server.debug("codex app-server server request received method=\(method, privacy: .public) id=\(Self.idKey(from: id) ?? "-", privacy: .public)")
+            let rawObject = Self.rawJSONObject(from: trimmed)
+            guard let typedID = CodexAppServerRequestID(rawJSONObjectValue: rawObject?["id"])
+                    ?? CodexAppServerRequestID(jsonValue: id) else {
+                BridgeLogger.server.error("codex app-server server request with unsupported id shape method=\(method, privacy: .public)")
+                return
             }
-            handleServerRequest(id: id, method: method, params: object["params"]?.objectValue ?? [:])
+            if CodexAppServerApprovalRequestMethod(rawValue: method) != nil {
+                BridgeLogger.server.info("codex app-server server request received method=\(method, privacy: .public) id=\(typedID.storageKey, privacy: .public)")
+            } else {
+                BridgeLogger.server.debug("codex app-server server request received method=\(method, privacy: .public) id=\(typedID.storageKey, privacy: .public)")
+            }
+            handleServerRequest(id: typedID,
+                                method: method,
+                                params: object["params"]?.objectValue ?? [:])
             return
         }
         if let id {
@@ -172,6 +191,14 @@ final class CodexAppServerConnection {
             onNotification(CodexAppServerNotification(method: method,
                                                       params: object["params"]?.objectValue ?? [:]))
         }
+    }
+
+    private static func rawJSONObject(from line: String) -> [String: Any]? {
+        guard let data = line.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return object
     }
 
     func close(error: CodexAppServerConnectionError? = nil) {
@@ -197,12 +224,16 @@ final class CodexAppServerConnection {
         }
     }
 
-    func handleServerRequest(id: JSONValue, method: String, params: [String: JSONValue]) {
-        if let request = CodexAppServerApprovalRequest(method: method, requestID: id, params: params) {
+    func handleServerRequest(id: CodexAppServerRequestID,
+                             method: String,
+                             params: [String: JSONValue]) {
+        if let request = CodexAppServerApprovalRequest(method: method,
+                                                       typedRequestID: id,
+                                                       params: params) {
             handleApprovalRequest(request)
             return
         }
-        if CodexAppServerApprovalMethod(rawValue: method) != nil {
+        if CodexAppServerApprovalRequestMethod(rawValue: method) != nil {
             sendError(id: id,
                       code: -32602,
                       message: "Invalid Codex approval request: \(method)")
@@ -221,28 +252,50 @@ final class CodexAppServerConnection {
             (entry, response) = try approvalStore.resolveEntry(promptID: promptID,
                                                                targetIndex: targetIndex)
         } catch BridgeInternalError.notFound {
-            if let resolvedApproval = resolvedApproval(promptID: promptID) {
-                let event = makeResolvedEvent(prompt: resolvedApproval.prompt, reason: "already_resolved")
-                onInteractivePromptResolved(event)
-                return event
-            }
+            return try alreadyResolvedEvent(promptID: promptID)
+        }
+        return completeSubmit(entry: entry, response: response)
+    }
+
+    @discardableResult
+    func submitUserInput(promptID: String,
+                         answers: [String: [String]]) throws -> AgentEvent {
+        guard let pendingEntry = approvalStore.entry(promptID: promptID) else {
+            return try alreadyResolvedEvent(promptID: promptID)
+        }
+        let response = try pendingEntry.request.userInputResponse(answers: answers)
+        guard let entry = approvalStore.remove(promptID: promptID) else {
+            return try alreadyResolvedEvent(promptID: promptID)
+        }
+        return completeSubmit(entry: entry, response: response)
+    }
+
+    private func alreadyResolvedEvent(promptID: String) throws -> AgentEvent {
+        guard let resolvedApproval = resolvedApproval(promptID: promptID) else {
             throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
         }
-        rememberResolvedApproval(prompt: entry.prompt, response: response)
-        let event = makeResolvedEvent(prompt: entry.prompt, reason: "submit")
+        let event = makeResolvedEvent(prompt: resolvedApproval.prompt, reason: "already_resolved")
         onInteractivePromptResolved(event)
-        sendResult(id: entry.request.requestIDValue, result: response)
         return event
     }
 
-    func sendResult(id: JSONValue, result: JSONValue) {
-        try? sendIfOpen(.object([
-            "id": id,
-            "result": result,
-        ]))
+    private func completeSubmit(entry: CodexAppServerApprovalPromptEntry,
+                                response: JSONValue) -> AgentEvent {
+        rememberResolvedApproval(prompt: entry.prompt, response: response)
+        let event = makeResolvedEvent(prompt: entry.prompt, reason: "submit")
+        onInteractivePromptResolved(event)
+        sendResult(id: entry.request.requestID, result: response)
+        return event
     }
 
-    func sendError(id: JSONValue, code: Int, message: String, data: JSONValue? = nil) {
+    func sendResult(id: CodexAppServerRequestID, result: JSONValue) {
+        try? sendResponseLine(id: id, bodyKey: "result", value: result)
+    }
+
+    func sendError(id: CodexAppServerRequestID,
+                   code: Int,
+                   message: String,
+                   data: JSONValue? = nil) {
         var error: [String: JSONValue] = [
             "code": .number(Double(code)),
             "message": .string(message),
@@ -250,10 +303,21 @@ final class CodexAppServerConnection {
         if let data {
             error["data"] = data
         }
-        try? sendIfOpen(.object([
-            "id": id,
-            "error": .object(error),
-        ]))
+        try? sendResponseLine(id: id, bodyKey: "error", value: .object(error))
+    }
+
+    private func sendResponseLine(id: CodexAppServerRequestID,
+                                  bodyKey: String,
+                                  value: JSONValue) throws {
+        stateLock.lock()
+        let isClosed = closed
+        stateLock.unlock()
+        guard !isClosed else {
+            throw CodexAppServerConnectionError.closed
+        }
+        let data = try JSONEncoder().encode(value)
+        let valueJSON = String(decoding: data, as: UTF8.self)
+        try sendLine("{\"id\":\(id.jsonToken),\"\(bodyKey)\":\(valueJSON)}\n")
     }
 
     private func handleClientResponse(id: JSONValue, result: JSONValue?, error: JSONValue?) {
@@ -312,20 +376,22 @@ final class CodexAppServerConnection {
     }
 
     private func handleApprovalRequest(_ request: CodexAppServerApprovalRequest) {
-        let incomingPrompt = request.makePrompt()
-        if let resolvedApproval = resolvedApproval(promptID: incomingPrompt.promptID) {
-            let event = makeResolvedEvent(prompt: resolvedApproval.prompt, reason: "already_resolved")
-            onInteractivePromptResolved(event)
-            sendResult(id: request.requestIDValue, result: resolvedApproval.response)
-            return
-        }
-        guard approvalContext != nil else {
-            sendError(id: request.requestIDValue,
+        guard let approvalContext else {
+            sendError(id: request.requestID,
                       code: -32000,
                       message: "Codex approval context is unavailable.")
             return
         }
-        let prompt = approvalStore.record(request)
+        let incomingPrompt = approvalContext.epoch.isEmpty
+            ? request.makePrompt()
+            : request.makePrompt(epoch: approvalContext.epoch)
+        if let resolvedApproval = resolvedApproval(promptID: incomingPrompt.promptID) {
+            let event = makeResolvedEvent(prompt: resolvedApproval.prompt, reason: "already_resolved")
+            onInteractivePromptResolved(event)
+            sendResult(id: request.requestID, result: resolvedApproval.response)
+            return
+        }
+        let prompt = approvalStore.record(request, prompt: incomingPrompt)
         let event = makePromptEvent(prompt: prompt)
         BridgeLogger.server.info("codex app-server approval prompt publishing method=\(request.method.rawValue, privacy: .public) prompt_id=\(prompt.promptID, privacy: .public) source=\(prompt.source, privacy: .public)")
         onInteractivePrompt(CodexAppServerInteractivePromptEnvelope(request: request,
@@ -342,6 +408,9 @@ final class CodexAppServerConnection {
             "source": prompt.source,
             "prompt_id": prompt.promptID,
         ]
+        if !approvalContext.epoch.isEmpty {
+            metadata["app_server_epoch"] = approvalContext.epoch
+        }
         if let submitChannel = prompt.submitChannel {
             metadata["submit_channel"] = submitChannel
         }
