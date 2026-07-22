@@ -42,6 +42,11 @@ codexRuntimeSyncer.activeThreadHandler = { [weak registryMonitor] sessionID, thr
 let workspaceEventMonitor = TideyWorkspaceEventMonitor(locator: locator,
                                                        hub: workspaceEventHub,
                                                        paneIdentityReconciler: ordinaryTmuxPaneIdentityReconciler)
+// Live three-state lifecycle patches share the workspace-event channel and
+// the same aggregate revisions as the list snapshots.
+let agentLifecycleEventPublisher = AgentLifecycleEventPublisher(store: AgentSessionLifecycle.store,
+                                                                hub: workspaceEventHub)
+agentLifecycleEventPublisher.attach()
 let observability = BridgeObservabilityCenter()
 let cloudflaredStatusStore = BridgeCloudflaredStatusStore(fileURL: bridgePaths.cloudflaredStateFileURL)
 let cloudflaredManager = BridgeCloudflaredManager(statusStore: cloudflaredStatusStore,
