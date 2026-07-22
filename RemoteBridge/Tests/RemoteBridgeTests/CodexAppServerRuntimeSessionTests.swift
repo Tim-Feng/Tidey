@@ -123,6 +123,40 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertEqual(startThread["method"]?.stringValue, "thread/start")
     }
 
+    func testFactoryCarriesExplicitAppServerEpochIntoApprovalContext() throws {
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(
+            processRunner: FakeCodexAppServerProcessRunner(),
+            transportConnector: connector)
+        let prompts = PromptSink()
+        let epoch = "pid:9001|sock:/tmp/tidey-real-panel/app.sock"
+        let session = try factory.attach(
+            socketPath: "/tmp/tidey-real-panel/app.sock",
+            processID: 9001,
+            context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                  panelID: "panel-1",
+                                                  sessionID: "session-1"),
+            epoch: epoch,
+            nextSequence: { _ in 1 },
+            timestampProvider: { "2026-06-07T00:00:00.000Z" },
+            onAgentEvent: { _ in },
+            onInteractivePrompt: { prompts.append($0) },
+            onInteractivePromptResolved: { _ in })
+
+        let transport = try XCTUnwrap(connector.transport)
+        transport.emitLine("""
+        {"id":"approval-epoch","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"cmd-1","startedAtMs":1786000000000,"command":"ls"}}
+        """)
+
+        let envelope = try XCTUnwrap(prompts.envelopes().first)
+        XCTAssertEqual(envelope.event.metadata?["app_server_epoch"], epoch)
+        XCTAssertEqual(envelope.prompt.promptID,
+                       envelope.request.makePrompt(epoch: epoch).promptID)
+        XCTAssertNotEqual(envelope.prompt.promptID,
+                          envelope.request.makePrompt().promptID)
+        withExtendedLifetime(session) {}
+    }
+
     func testFactoryAttachesExistingUnixSocketResumesLoadedThread() throws {
         let runner = FakeCodexAppServerProcessRunner()
         let connector = FakeCodexAppServerTransportConnector()
