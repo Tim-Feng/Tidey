@@ -1625,6 +1625,11 @@ final class AgentSessionRegistryMonitor {
     }
 }
 
+struct JSONLFileSourceIdentity: Equatable, Sendable {
+    let device: UInt64
+    let inode: UInt64
+}
+
 final class JSONLFileTailer {
     private let fileURL: URL
     private let queue: DispatchQueue
@@ -1639,6 +1644,7 @@ final class JSONLFileTailer {
     private var pendingLineOffset: Int?
     private(set) var earliestLoadedOffset: Int?
     private(set) var reachedStartOfFile = false
+    private(set) var openedSourceIdentity: JSONLFileSourceIdentity?
 
     init(fileURL: URL,
          queue: DispatchQueue,
@@ -1657,7 +1663,15 @@ final class JSONLFileTailer {
         guard fd >= 0 else {
             throw POSIXError(.ENOENT)
         }
+        var fileStatus = stat()
+        guard fstat(fd, &fileStatus) == 0 else {
+            let posixCode = POSIXErrorCode(rawValue: errno) ?? .EIO
+            close(fd)
+            throw POSIXError(posixCode)
+        }
         self.fd = fd
+        openedSourceIdentity = JSONLFileSourceIdentity(device: UInt64(fileStatus.st_dev),
+                                                       inode: UInt64(fileStatus.st_ino))
         let bootstrappedLines = try JSONLFileReader.readTail(fileURL: fileURL, limit: bootstrapLineLimit)
         for (offset, line) in bootstrappedLines {
             lineHandler(offset, line)
@@ -1717,6 +1731,7 @@ final class JSONLFileTailer {
     }
 
     func stop() {
+        openedSourceIdentity = nil
         if let source {
             self.source = nil
             source.cancel()
