@@ -65,6 +65,13 @@ struct CodexAppServerInteractivePromptEnvelope: Sendable {
     let event: AgentEvent
 }
 
+// A response write is not an authoritative approval resolution. The prompt
+// remains pending until the app-server emits a lifecycle terminal.
+enum CodexAppServerApprovalSubmitOutcome: Sendable {
+    case pendingConfirmation(promptID: String)
+    case alreadyResolved(AgentEvent)
+}
+
 private struct CodexAppServerResolvedApproval: Sendable {
     let prompt: InteractivePrompt
     let response: JSONValue
@@ -91,8 +98,18 @@ final class CodexAppServerConnection {
     private let timestampProvider: TimestampProvider
     private let onInteractivePrompt: InteractivePromptHandler
     private let onInteractivePromptResolved: InteractivePromptResolvedHandler
+    // Serializes admission/publication with lifecycle terminals so observers
+    // never receive a terminal before the pending event it terminates.
+    private let publicationLock = NSRecursiveLock()
     private let resolvedApprovalLock = NSLock()
     private var resolvedApprovalsByPromptID: [String: CodexAppServerResolvedApproval] = [:]
+    private let generationID = UUID().uuidString
+
+    private func withPublicationLock<T>(_ body: () throws -> T) rethrows -> T {
+        publicationLock.lock()
+        defer { publicationLock.unlock() }
+        return try body()
+    }
 
     init(sendLine: @escaping SendLine,
          onNotification: @escaping NotificationHandler = { _ in },
@@ -188,8 +205,15 @@ final class CodexAppServerConnection {
             return
         }
         if let method {
+            let params = object["params"]?.objectValue ?? [:]
+            let rawObject = method == "serverRequest/resolved"
+                ? Self.rawJSONObject(from: trimmed)
+                : nil
+            handleApprovalLifecycleNotification(method: method,
+                                                params: params,
+                                                rawObject: rawObject)
             onNotification(CodexAppServerNotification(method: method,
-                                                      params: object["params"]?.objectValue ?? [:]))
+                                                      params: params))
         }
     }
 
@@ -199,6 +223,12 @@ final class CodexAppServerConnection {
             return nil
         }
         return object
+    }
+
+    private func isClosedNow() -> Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return closed
     }
 
     func close(error: CodexAppServerConnectionError? = nil) {
@@ -213,15 +243,66 @@ final class CodexAppServerConnection {
         pending = pendingClientResponses
         pendingClientResponses.removeAll()
         stateLock.unlock()
+        expirePendingApprovals()
         for handler in pending.values {
             handler(.failure(failure))
         }
     }
 
-    func pendingApprovalPromptEvents() -> [AgentEvent] {
-        approvalStore.entries().map { entry in
-            makePromptEvent(prompt: entry.prompt)
+    private func expirePendingApprovals() {
+        guard approvalContext != nil else {
+            return
         }
+        withPublicationLock {
+            let records = approvalStore.retireAndResolveAll(reason: "expired") {
+                entry, reason, attempt in
+                makeLifecycleResolvedEvent(entry, reason, attempt)
+            }
+            publishTerminalRecords(records)
+        }
+    }
+
+    func pendingApprovalPromptEvents() -> [AgentEvent] {
+        approvalStore.pendingStates().compactMap { state in
+            guard let published = state.publishedEvent else {
+                return nil
+            }
+            var extraMetadata: [String: String] = [:]
+            switch state.phase {
+            case .pending:
+                extraMetadata["submit_state"] = "pending"
+            case .submitting(let attempt):
+                extraMetadata["submit_state"] = "submitting"
+                if let clientRequestID = attempt.clientRequestID {
+                    extraMetadata["client_request_id"] = clientRequestID
+                }
+            }
+            return Self.overlayMetadata(published,
+                                        extraMetadata: extraMetadata)
+        }
+    }
+
+    private static func overlayMetadata(
+        _ event: AgentEvent,
+        extraMetadata: [String: String]
+    ) -> AgentEvent {
+        var metadata = event.metadata ?? [:]
+        metadata.merge(extraMetadata) { _, override in override }
+        return AgentEvent(eventID: event.eventID,
+                          seq: event.seq,
+                          vendor: event.vendor,
+                          workspaceID: event.workspaceID,
+                          sessionID: event.sessionID,
+                          timestamp: event.timestamp,
+                          type: event.type,
+                          role: event.role,
+                          text: event.text,
+                          name: event.name,
+                          input: event.input,
+                          output: event.output,
+                          toolCallID: event.toolCallID,
+                          metadata: metadata,
+                          payload: event.payload)
     }
 
     func handleServerRequest(id: CodexAppServerRequestID,
@@ -270,6 +351,79 @@ final class CodexAppServerConnection {
         return completeSubmit(entry: entry, response: response)
     }
 
+    // Transitional lifecycle submit seam. Registry/Bridge still call the
+    // two-argument compatibility API above; callers that carry the published
+    // lifecycle capability use this overload and await an app-server terminal.
+    @discardableResult
+    func submitApproval(promptID: String,
+                        targetIndex: Int,
+                        clientRequestID: String?,
+                        lifecycleToken: String?) throws -> CodexAppServerApprovalSubmitOutcome {
+        try withPublicationLock {
+            try completeLifecycleSubmit(
+                promptID: promptID,
+                outcome: approvalStore.beginSubmit(promptID: promptID,
+                                                   targetIndex: targetIndex,
+                                                   clientRequestID: clientRequestID,
+                                                   lifecycleToken: lifecycleToken))
+        }
+    }
+
+    @discardableResult
+    func submitUserInput(promptID: String,
+                         answers: [String: [String]],
+                         clientRequestID: String?,
+                         lifecycleToken: String?) throws -> CodexAppServerApprovalSubmitOutcome {
+        try withPublicationLock {
+            try completeLifecycleSubmit(
+                promptID: promptID,
+                outcome: approvalStore.beginSubmitUserInput(
+                    promptID: promptID,
+                    answers: answers,
+                    clientRequestID: clientRequestID,
+                    lifecycleToken: lifecycleToken))
+        }
+    }
+
+    private func completeLifecycleSubmit(
+        promptID: String,
+        outcome: CodexAppServerApprovalPromptStore.BeginSubmitOutcome
+    ) throws -> CodexAppServerApprovalSubmitOutcome {
+        switch outcome {
+        case .terminal(let record):
+            return .alreadyResolved(record.event)
+        case .unknown:
+            throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
+        case .duplicateInFlight:
+            return .pendingConfirmation(promptID: promptID)
+        case .inFlightConflict:
+            throw BridgeInternalError.conflict("Codex approval submit is already in flight.")
+        case .optionConflict:
+            throw BridgeInternalError.conflict("A different decision was already submitted for this approval.")
+        case .lifecycleTokenMismatch:
+            throw BridgeInternalError.conflict("The approval card is from an older delivery of this request; refresh and decide again.")
+        case .begin(let entry, let response, let lifecycleAttempt):
+            do {
+                try sendResponseLine(id: entry.request.requestID,
+                                     bodyKey: "result",
+                                     value: response)
+            } catch {
+                _ = approvalStore.failSubmit(promptID: promptID,
+                                             lifecycleAttempt: lifecycleAttempt)
+                throw error
+            }
+            switch approvalStore.completeSubmitFlush(
+                promptID: promptID,
+                lifecycleAttempt: lifecycleAttempt
+            ) {
+            case .terminal(let record):
+                return .alreadyResolved(record.event)
+            case .awaitingConfirmation, .supersededLifecycle:
+                return .pendingConfirmation(promptID: promptID)
+            }
+        }
+    }
+
     private func alreadyResolvedEvent(promptID: String) throws -> AgentEvent {
         guard let resolvedApproval = resolvedApproval(promptID: promptID) else {
             throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
@@ -286,6 +440,76 @@ final class CodexAppServerConnection {
         onInteractivePromptResolved(event)
         sendResult(id: entry.request.requestID, result: response)
         return event
+    }
+
+    private func handleApprovalLifecycleNotification(
+        method: String,
+        params: [String: JSONValue],
+        rawObject: [String: Any]?
+    ) {
+        guard approvalContext != nil else {
+            return
+        }
+        withPublicationLock {
+            let records: [CodexAppServerApprovalTerminalRecord]
+            switch method {
+            case "serverRequest/resolved":
+                guard let threadID = Self.notificationThreadID(from: params) else {
+                    return
+                }
+                let rawParams = rawObject?["params"] as? [String: Any]
+                let requestID = CodexAppServerRequestID(
+                    rawJSONObjectValue: rawParams?["requestId"])
+                    ?? CodexAppServerRequestID(jsonValue: params["requestId"])
+                guard let requestIDKey = requestID?.storageKey else {
+                    return
+                }
+                records = approvalStore.resolveExternally(
+                    reason: "server_resolved",
+                    where: {
+                        $0.threadID == threadID
+                            && $0.requestIDKey == requestIDKey
+                    },
+                    makeEvent: makeLifecycleResolvedEvent)
+            case "turn/completed", "turn/aborted":
+                guard let threadID = Self.notificationThreadID(from: params),
+                      let turnID = Self.notificationTurnID(from: params) else {
+                    return
+                }
+                records = approvalStore.resolveExternally(
+                    reason: "turn_completed",
+                    where: {
+                        $0.threadID == threadID && $0.turnID == turnID
+                    },
+                    makeEvent: makeLifecycleResolvedEvent)
+            default:
+                return
+            }
+            publishTerminalRecords(records)
+        }
+    }
+
+    private func publishTerminalRecords(
+        _ records: [CodexAppServerApprovalTerminalRecord]
+    ) {
+        for record in records {
+            BridgeLogger.server.info("codex app-server approval prompt resolved prompt_id=\(record.entry.prompt.promptID, privacy: .public) reason=\(record.reason, privacy: .public)")
+            onInteractivePromptResolved(record.event)
+        }
+    }
+
+    private static func notificationThreadID(
+        from params: [String: JSONValue]
+    ) -> String? {
+        params["threadId"]?.stringValue
+            ?? params["thread"]?.objectValue?["id"]?.stringValue
+    }
+
+    private static func notificationTurnID(
+        from params: [String: JSONValue]
+    ) -> String? {
+        params["turnId"]?.stringValue
+            ?? params["turn"]?.objectValue?["id"]?.stringValue
     }
 
     func sendResult(id: CodexAppServerRequestID, result: JSONValue) {
@@ -382,24 +606,60 @@ final class CodexAppServerConnection {
                       message: "Codex approval context is unavailable.")
             return
         }
-        let incomingPrompt = approvalContext.epoch.isEmpty
-            ? request.makePrompt()
-            : request.makePrompt(epoch: approvalContext.epoch)
-        if let resolvedApproval = resolvedApproval(promptID: incomingPrompt.promptID) {
-            let event = makeResolvedEvent(prompt: resolvedApproval.prompt, reason: "already_resolved")
-            onInteractivePromptResolved(event)
-            sendResult(id: request.requestID, result: resolvedApproval.response)
-            return
+        withPublicationLock {
+            guard !isClosedNow() else {
+                return
+            }
+            let prompt = approvalContext.epoch.isEmpty
+                ? request.makePrompt()
+                : request.makePrompt(epoch: approvalContext.epoch)
+
+            // Retain compatibility for the old two-argument submit path until
+            // Registry/Bridge switch to lifecycle outcomes in their own slice.
+            if let resolvedApproval = resolvedApproval(promptID: prompt.promptID) {
+                let event = makeResolvedEvent(prompt: resolvedApproval.prompt,
+                                              reason: "already_resolved")
+                onInteractivePromptResolved(event)
+                sendResult(id: request.requestID,
+                           result: resolvedApproval.response)
+                return
+            }
+
+            let entry = CodexAppServerApprovalPromptEntry(request: request,
+                                                          prompt: prompt)
+            let outcome = approvalStore.register(entry: entry) {
+                entry, reason, attempt in
+                makeLifecycleResolvedEvent(entry, reason, attempt)
+            }
+            let attempt: Int
+            switch outcome {
+            case .rejectedRetired:
+                return
+            case .recorded(_, let recordedAttempt):
+                attempt = recordedAttempt
+                BridgeLogger.server.info("codex app-server approval prompt publishing method=\(request.method.rawValue, privacy: .public) prompt_id=\(prompt.promptID, privacy: .public) source=\(prompt.source, privacy: .public)")
+            case .reactivated(_, let reactivatedAttempt):
+                attempt = reactivatedAttempt
+                BridgeLogger.server.info("codex app-server approval prompt redelivered method=\(request.method.rawValue, privacy: .public) prompt_id=\(prompt.promptID, privacy: .public)")
+            case .supersededPayloadChanged(let terminal, _, let replacementAttempt):
+                attempt = replacementAttempt
+                publishTerminalRecords([terminal])
+            }
+            let event = makePromptEvent(prompt: prompt,
+                                        request: request,
+                                        attempt: attempt)
+            approvalStore.recordPublishedPromptEvent(promptID: prompt.promptID,
+                                                     event: event)
+            onInteractivePrompt(CodexAppServerInteractivePromptEnvelope(
+                request: request,
+                prompt: prompt,
+                event: event))
         }
-        let prompt = approvalStore.record(request, prompt: incomingPrompt)
-        let event = makePromptEvent(prompt: prompt)
-        BridgeLogger.server.info("codex app-server approval prompt publishing method=\(request.method.rawValue, privacy: .public) prompt_id=\(prompt.promptID, privacy: .public) source=\(prompt.source, privacy: .public)")
-        onInteractivePrompt(CodexAppServerInteractivePromptEnvelope(request: request,
-                                                                    prompt: prompt,
-                                                                    event: event))
     }
 
-    private func makePromptEvent(prompt: InteractivePrompt) -> AgentEvent {
+    private func makePromptEvent(prompt: InteractivePrompt,
+                                 request: CodexAppServerApprovalRequest,
+                                 attempt: Int) -> AgentEvent {
         guard let approvalContext else {
             preconditionFailure("approvalContext must exist before creating prompt events")
         }
@@ -407,6 +667,8 @@ final class CodexAppServerConnection {
             "panel_id": approvalContext.panelID,
             "source": prompt.source,
             "prompt_id": prompt.promptID,
+            "attempt": String(attempt),
+            "connection_generation": generationID,
         ]
         if !approvalContext.epoch.isEmpty {
             metadata["app_server_epoch"] = approvalContext.epoch
@@ -414,7 +676,11 @@ final class CodexAppServerConnection {
         if let submitChannel = prompt.submitChannel {
             metadata["submit_channel"] = submitChannel
         }
-        return AgentEvent(eventID: "codex-app-server-prompt:\(prompt.promptID)",
+        applyRequestIdentity(request, to: &metadata)
+        let lifecycleToken = "codex-app-server-prompt:\(prompt.promptID):\(deliveryToken(attempt: attempt))"
+        var payload = prompt.jsonValue.objectValue ?? [:]
+        payload["lifecycle_token"] = .string(lifecycleToken)
+        return AgentEvent(eventID: lifecycleToken,
                           seq: nextSequence(approvalContext.sessionID),
                           vendor: "codex",
                           workspaceID: approvalContext.workspaceID,
@@ -428,7 +694,7 @@ final class CodexAppServerConnection {
                           output: nil,
                           toolCallID: nil,
                           metadata: metadata,
-                          payload: prompt.jsonValue)
+                          payload: .object(payload))
     }
 
     private func makeResolvedEvent(prompt: InteractivePrompt, reason: String) -> AgentEvent {
@@ -461,10 +727,70 @@ final class CodexAppServerConnection {
                           payload: prompt.jsonValue)
     }
 
+    private func makeLifecycleResolvedEvent(
+        _ entry: CodexAppServerApprovalPromptEntry,
+        _ reason: String,
+        _ attempt: Int
+    ) -> AgentEvent {
+        guard let approvalContext else {
+            preconditionFailure("approvalContext must exist before creating resolved events")
+        }
+        let prompt = entry.prompt
+        let lifecycleToken = "codex-app-server-prompt:\(prompt.promptID):\(deliveryToken(attempt: attempt))"
+        var metadata = [
+            "panel_id": approvalContext.panelID,
+            "source": prompt.source,
+            "prompt_id": prompt.promptID,
+            "reason": reason,
+            "attempt": String(attempt),
+            "connection_generation": generationID,
+            "lifecycle_token": lifecycleToken,
+        ]
+        if !approvalContext.epoch.isEmpty {
+            metadata["app_server_epoch"] = approvalContext.epoch
+        }
+        if let submitChannel = prompt.submitChannel {
+            metadata["submit_channel"] = submitChannel
+        }
+        applyRequestIdentity(entry.request, to: &metadata)
+        var payload = prompt.jsonValue.objectValue ?? [:]
+        payload["lifecycle_token"] = .string(lifecycleToken)
+        return AgentEvent(
+            eventID: "codex-app-server-prompt-resolved:\(prompt.promptID):\(reason):\(deliveryToken(attempt: attempt))",
+            seq: nextSequence(approvalContext.sessionID),
+            vendor: "codex",
+            workspaceID: approvalContext.workspaceID,
+            sessionID: approvalContext.sessionID,
+            timestamp: timestampProvider(),
+            type: .interactivePromptResolved,
+            role: nil,
+            text: prompt.title,
+            name: nil,
+            input: nil,
+            output: nil,
+            toolCallID: nil,
+            metadata: metadata,
+            payload: .object(payload))
+    }
+
     private static func iso8601Now() -> String {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.string(from: Date())
+    }
+
+    private func deliveryToken(attempt: Int) -> String {
+        "g\(generationID)a\(attempt)"
+    }
+
+    private func applyRequestIdentity(
+        _ request: CodexAppServerApprovalRequest,
+        to metadata: inout [String: String]
+    ) {
+        metadata["thread_id"] = request.threadID
+        metadata["turn_id"] = request.turnID
+        metadata["item_id"] = request.itemID
+        metadata["request_id"] = request.requestIDKey
     }
 
     private func rememberResolvedApproval(prompt: InteractivePrompt, response: JSONValue) {
