@@ -32,6 +32,9 @@ let registryMonitor = AgentSessionRegistryMonitor(hub: eventHub,
                                                   ordinaryTmuxCarrierIdentityResolver: { record in
                                                       ordinaryTmuxCarrierResolver.carrierIdentity(for: record)
                                                   },
+                                                  livePanelListProjector: { result in
+                                                      ordinaryTmuxProjectionContext.projector.projectPanelListResult(result)
+                                                  },
                                                   runtimeSyncer: codexRuntimeSyncer)
 codexRuntimeSyncer.activeThreadHandler = { [weak registryMonitor] sessionID, threadID in
     registryMonitor?.appServerActiveThreadDidChange(sessionID: sessionID, threadID: threadID)
