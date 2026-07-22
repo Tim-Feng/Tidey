@@ -1693,23 +1693,25 @@ final class JSONLFileTailer {
         guard beforeOffset > 0, limit > 0 else {
             return false
         }
-        guard !reachedStartOfFile else {
-            return false
-        }
-
-        let targetOffset = min(beforeOffset, earliestLoadedOffset ?? beforeOffset)
+        // Honor the caller's anchor. A fresh client may request a newer range
+        // than the deepest page another client already read; neither the
+        // earliest observed offset nor a sticky start-of-file marker may
+        // redirect or block that request.
         let lines = try JSONLFileReader.readBefore(fileURL: fileURL,
-                                                   beforeOffset: targetOffset,
+                                                   beforeOffset: beforeOffset,
                                                    limit: limit)
         guard !lines.isEmpty else {
-            reachedStartOfFile = true
+            if beforeOffset <= (earliestLoadedOffset ?? beforeOffset) {
+                reachedStartOfFile = true
+            }
             return false
         }
 
         for (offset, line) in lines {
             lineHandler(offset, line)
         }
-        earliestLoadedOffset = lines.first?.offset
+        earliestLoadedOffset = min(earliestLoadedOffset ?? Int.max,
+                                   lines.first?.offset ?? Int.max)
         reachedStartOfFile = (lines.first?.offset ?? 0) == 0
         return true
     }
