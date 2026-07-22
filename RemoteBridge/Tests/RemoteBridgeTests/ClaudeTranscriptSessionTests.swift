@@ -377,6 +377,303 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         XCTAssertFalse(result.events.contains { $0.type == .interactivePrompt })
     }
 
+    func testClaudeBackfillOlderLinesKeepOriginalCursorPositions() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+
+        let totalLines = transcriptBootstrapLineLimit + 20
+        let lines = (0..<totalLines).map {
+            makeClaudeUserLine(uuid: "uuid-\($0)", content: "line-\($0)")
+        }
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL,
+                                                            atomically: true,
+                                                            encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1)
+                .events.first?.text == "line-\(totalLines - 1)"
+        })
+        let initial = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+        XCTAssertFalse(initial.events.contains { $0.text == "line-0" })
+        let oldestLoadedSeq = initial.events
+            .filter { ($0.text ?? "").hasPrefix("line-") }
+            .map(\.seq)
+            .min() ?? 0
+        let newestSeq = initial.events.map(\.seq).max() ?? 0
+
+        XCTAssertTrue(session.backfill(beforeSeq: oldestLoadedSeq, limit: 50))
+        let older = hub.fetch(workspaceID: "workspace",
+                              sessionID: "session",
+                              limit: 5000,
+                              beforeSeq: oldestLoadedSeq)
+        XCTAssertFalse(older.events.isEmpty)
+        XCTAssertTrue(older.events.allSatisfy { $0.seq < oldestLoadedSeq })
+        XCTAssertTrue(older.events.contains { ($0.text ?? "").hasPrefix("line-") })
+
+        let catchUp = hub.fetch(workspaceID: "workspace",
+                                sessionID: "session",
+                                limit: 5000,
+                                afterSeq: newestSeq)
+        XCTAssertTrue(catchUp.events.isEmpty,
+                      "backfilled history must not appear as new live events")
+    }
+
+    func testClaudeBackfillDoesNotConsumeLiveEchoOrLeakParserState() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+
+        var lines = [
+            makeClaudeUserLine(uuid: "old-echo", content: "repeat me"),
+            makeClaudeAskUserQuestionAssistantLine(uuid: "old-question", toolCallID: "toolu_old"),
+            makeClaudeUserLine(uuid: "old-context", content: "<command-name>/context</command-name>"),
+        ]
+        lines.append(contentsOf: (0..<transcriptBootstrapLineLimit).map {
+            makeClaudeUserLine(uuid: "uuid-\($0)", content: "line-\($0)")
+        })
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL,
+                                                            atomically: true,
+                                                            encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let registry = ChatSubmitEchoRegistry()
+        registry.register(workspaceID: "workspace",
+                          panelID: "panel",
+                          sessionID: "session",
+                          vendor: "claude",
+                          text: "repeat me",
+                          clientRequestID: "client-live")
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub,
+                                              chatSubmitEchoRegistry: registry)
+        session.start()
+        defer { session.stop() }
+
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1)
+                .events.first?.text == "line-\(transcriptBootstrapLineLimit - 1)"
+        })
+        let oldestLoadedSeq = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+            .events
+            .filter { ($0.text ?? "").hasPrefix("line-") }
+            .map(\.seq)
+            .min() ?? 0
+
+        XCTAssertTrue(session.backfill(beforeSeq: oldestLoadedSeq, limit: 600))
+        XCTAssertEqual(registry.snapshot().map(\.clientRequestID), ["client-live"])
+
+        let handle = try FileHandle(forWritingTo: transcriptURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data((makeClaudeToolResultLine(uuid: "live-result",
+                                                                    toolCallID: "toolu_old",
+                                                                    content: "answered") + "\n").utf8))
+        try handle.write(contentsOf: Data((makeClaudeUserLine(uuid: "live-stdout",
+                                                              content: "<local-command-stdout>whatever</local-command-stdout>") + "\n").utf8))
+        try handle.write(contentsOf: Data((makeClaudeUserLine(uuid: "live-echo", content: "repeat me") + "\n").utf8))
+        try handle.close()
+
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000).events.contains {
+                $0.text == "repeat me" && $0.metadata?["client_request_id"] == "client-live"
+            }
+        })
+        let allEvents = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000).events
+        XCTAssertFalse(allEvents.contains {
+            $0.type == .interactivePromptResolved && $0.metadata?["prompt_id"] == "toolu_old"
+        })
+        XCTAssertFalse(allEvents.contains { $0.metadata?["tidey_generated"] == "claude_context" })
+    }
+
+    func testClaudeBackfillPreservesExistingLiveParserCorrelation() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+
+        var lines = [
+            makeClaudeToolResultLine(uuid: "old-result", toolCallID: "toolu_live", content: "historical"),
+            makeClaudeContextStdoutLine(uuid: "old-stdout"),
+        ]
+        lines.append(contentsOf: (0..<transcriptBootstrapLineLimit).map {
+            makeClaudeUserLine(uuid: "uuid-\($0)", content: "line-\($0)")
+        })
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL,
+                                                            atomically: true,
+                                                            encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1)
+                .events.first?.text == "line-\(transcriptBootstrapLineLimit - 1)"
+        })
+
+        func append(_ line: String) throws {
+            let handle = try FileHandle(forWritingTo: transcriptURL)
+            try handle.seekToEnd()
+            try handle.write(contentsOf: Data((line + "\n").utf8))
+            try handle.close()
+        }
+
+        try append(makeClaudeAskUserQuestionAssistantLine(uuid: "live-ask", toolCallID: "toolu_live"))
+        try append(makeClaudeUserLine(uuid: "live-command", content: "<command-name>/context</command-name>"))
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20)
+                .events.contains { $0.type == .interactivePrompt }
+        })
+        let boundary = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+            .events
+            .filter { ($0.text ?? "").hasPrefix("line-") }
+            .map(\.seq)
+            .min() ?? 0
+
+        XCTAssertTrue(session.backfill(beforeSeq: boundary, limit: 600))
+        try append(makeClaudeToolResultLine(uuid: "live-result",
+                                            toolCallID: "toolu_live",
+                                            content: "live"))
+        try append(makeClaudeContextStdoutLine(uuid: "live-stdout"))
+
+        XCTAssertTrue(waitUntil {
+            let events = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000).events
+            let resolvedLiveAsk = events.contains {
+                $0.type == .interactivePromptResolved
+                    && $0.metadata?["prompt_id"] == "toolu_live"
+                    && $0.eventID.contains("live-result")
+            }
+            let summarizedLiveCommand = events.contains {
+                $0.metadata?["tidey_generated"] == "claude_context"
+                    && $0.eventID.contains("live-stdout")
+            }
+            return resolvedLiveAsk && summarizedLiveCommand
+        })
+    }
+
+    func testClaudeBackfillDoesNotRunSidebarSideEffects() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+
+        var lines = [makeClaudeAskUserQuestionAssistantLine(uuid: "old-question", toolCallID: "toolu_old")]
+        lines.append(contentsOf: (0..<transcriptBootstrapLineLimit).map {
+            makeClaudeUserLine(uuid: "uuid-\($0)", content: "line-\($0)")
+        })
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL,
+                                                            atomically: true,
+                                                            encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let sender = StubClaudeCommandSender()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub,
+                                              socketClient: sender)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1)
+                .events.first?.text == "line-\(transcriptBootstrapLineLimit - 1)"
+        })
+        let commandsBeforeBackfill = sender.commands
+        let oldestLoadedSeq = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+            .events
+            .filter { ($0.text ?? "").hasPrefix("line-") }
+            .map(\.seq)
+            .min() ?? 0
+
+        XCTAssertTrue(session.backfill(beforeSeq: oldestLoadedSeq, limit: 100))
+        XCTAssertEqual(sender.commands, commandsBeforeBackfill)
+    }
+
+    func testTranscriptSwitchRevokesOldHistoryAndMapsNewSourceCursor() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let oldURL = directory.appendingPathComponent("old.jsonl", isDirectory: false)
+        let longPad = String(repeating: "x", count: 400)
+        var oldLines = [makeClaudeUserLine(uuid: "shared", content: "old-row")]
+        oldLines.append(contentsOf: (0..<200).map {
+            makeClaudeUserLine(uuid: "old-pad-\($0)", content: "pad-\($0)-\(longPad)")
+        })
+        oldLines.append(contentsOf: (0..<transcriptBootstrapLineLimit).map {
+            makeClaudeUserLine(uuid: "old-filler-\($0)", content: "old-live-\($0)")
+        })
+        try (oldLines.joined(separator: "\n") + "\n").write(to: oldURL,
+                                                               atomically: true,
+                                                               encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: oldURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1)
+                .events.first?.text == "old-live-\(transcriptBootstrapLineLimit - 1)"
+        })
+        let oldBoundary = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+            .events.filter { ($0.text ?? "").hasPrefix("old-live-") }.map(\.seq).min() ?? 0
+        XCTAssertTrue(session.backfill(beforeSeq: oldBoundary, limit: 300))
+        XCTAssertTrue(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+            .events.contains { $0.text == "old-row" })
+        let oldMaxSeq = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+            .events.map(\.seq).max() ?? 0
+
+        let newURL = directory.appendingPathComponent("new.jsonl", isDirectory: false)
+        var newLines = [
+            makeClaudeUserLine(uuid: "shared", content: "new-old-0"),
+            makeClaudeUserLine(uuid: "new-old-1", content: "new-old-1"),
+        ]
+        newLines.append(contentsOf: (0..<transcriptBootstrapLineLimit).map {
+            makeClaudeUserLine(uuid: "new-filler-\($0)", content: "new-live-\($0)")
+        })
+        try (newLines.joined(separator: "\n") + "\n").write(to: newURL,
+                                                               atomically: true,
+                                                               encoding: .utf8)
+        session.update(record: makeRecord(transcriptPath: newURL.path))
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1)
+                .events.first?.text == "new-live-\(transcriptBootstrapLineLimit - 1)"
+        })
+
+        let switched = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+        XCTAssertFalse(switched.events.contains { $0.text == "old-row" })
+        let newBoundary = switched.events
+            .filter { ($0.text ?? "").hasPrefix("new-live-") }
+            .map(\.seq)
+            .min() ?? 0
+        XCTAssertGreaterThan(newBoundary, oldMaxSeq)
+        XCTAssertTrue(session.backfill(beforeSeq: newBoundary, limit: 2))
+        let history = hub.fetch(workspaceID: "workspace",
+                                sessionID: "session",
+                                limit: 5000,
+                                beforeSeq: newBoundary)
+            .events
+            .filter { $0.seq > 0 }
+        XCTAssertEqual(history.compactMap(\.text), ["new-old-0", "new-old-1"])
+    }
+
     private func makeRecord(transcriptPath: String) -> AgentSessionRegistryRecord {
         AgentSessionRegistryRecord(version: 1,
                                    vendor: "claude",
@@ -470,6 +767,11 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         ]
         let data = try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
         return String(data: data, encoding: .utf8)!
+    }
+
+    private func makeClaudeContextStdoutLine(uuid: String) -> String {
+        makeClaudeUserLine(uuid: uuid,
+                           content: "<local-command-stdout>Context Usage\n10k/200k tokens (5%)\nSystem prompt: 2k tokens (1%)</local-command-stdout>")
     }
 
     private func makeClaudeQueuedCommandAttachment(uuid: String, prompt: String) -> String {

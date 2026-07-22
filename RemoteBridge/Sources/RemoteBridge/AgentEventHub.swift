@@ -458,6 +458,23 @@ final class AgentEventHub {
         }
     }
 
+    // A transcript source switch revokes the old source's stored products
+    // and idempotency state. Cursor authority survives so events from the
+    // replacement source continue above every cursor already observed by a
+    // client.
+    func beginNewSourceEpoch(sessionID: String) {
+        queue.sync {
+            guard var state = sessions[sessionID] else {
+                return
+            }
+            state.bufferedEvents.removeAll()
+            state.historicalEvents.removeAll()
+            state.historicalEventIDs.removeAll()
+            state.seenEventIDs.removeAll()
+            sessions[sessionID] = state
+        }
+    }
+
     enum PublishStorage {
         case liveForward
         case historicalBackfill
