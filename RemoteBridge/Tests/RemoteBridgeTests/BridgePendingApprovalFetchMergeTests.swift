@@ -49,6 +49,20 @@ final class BridgePendingApprovalFetchMergeTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(merged.newestSeq, 14)
     }
 
+    func testEmptyBeforePageKeepsStoredBoundsWhenInjectingPendingSnapshot() {
+        let pending = prompt(id: "prompt-500", seq: 500, submitState: "pending")
+
+        let merged = BridgePendingApprovalFetchMerge.merge(pageEvents: [],
+                                                           pageOldestSeq: 0,
+                                                           pageNewestSeq: 0,
+                                                           requestedBeforeSeq: 100,
+                                                           pendingEvents: [pending])
+
+        XCTAssertEqual(merged.events.map(\.eventID), ["prompt-500"])
+        XCTAssertEqual(merged.oldestSeq, 0)
+        XCTAssertEqual(merged.newestSeq, 0)
+    }
+
     func testReplaySnapshotMetadataWinsAndLiveDuplicateIsSuppressed() {
         let retained = prompt(id: "prompt-5", seq: 5, submitState: "pending")
         let snapshot = prompt(id: "prompt-5",
