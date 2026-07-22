@@ -80,6 +80,28 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
                       "the final result must be refetched after a failed coverage attempt")
     }
 
+    func testAfterCursorStopsWhenBackfillDoesNotAdvanceCoverage() {
+        let hub = AgentEventHub()
+        for seq in 100...105 {
+            hub.publish(makeEvent(seq: seq, text: "live-\(seq)"))
+        }
+        var backfillCalls = 0
+
+        let output = BridgeAgentEventFetchFlow.run(eventHub: hub,
+                                                   workspaceID: "workspace",
+                                                   sessionID: "session",
+                                                   limit: 3,
+                                                   beforeSeq: nil,
+                                                   afterSeq: 1) { _, _, _ in
+            backfillCalls += 1
+            return backfillCalls < 3
+        }
+
+        XCTAssertEqual(backfillCalls, 1,
+                       "a successful read that publishes no older event cannot justify retrying the same anchor")
+        XCTAssertTrue(output.didBackfill)
+    }
+
     private func makeEvent(seq: Int, text: String) -> AgentEvent {
         AgentEvent(eventID: "event-\(seq)",
                    seq: seq,
