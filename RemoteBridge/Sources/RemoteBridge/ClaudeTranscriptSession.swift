@@ -3961,10 +3961,14 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                              timestamp: String,
                                              lineOffset: Int) -> Bool {
         if let commandName = Self.localCommandName(in: text) {
+            let replayedContextOpenerEventID = commandName == "/context"
+                ? "\(uuid):claude-context-command:0"
+                : nil
             if isBackfillingHistory == false,
                historicalIndexEventSink == nil,
                let index = historicalClosureIndex,
-               let openerEventID = index.pendingContextOpenerEventID {
+               let openerEventID = index.pendingContextOpenerEventID,
+               openerEventID != replayedContextOpenerEventID {
                 index.contextConsumerSequenceByOpenerEventID[openerEventID]
                     = transcriptSequenceBase
                     + transcriptEventSequence(lineOffset: lineOffset, ordinal: 0)
@@ -4002,8 +4006,10 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         if command == nil,
            isBackfillingHistory == false,
            historicalIndexEventSink == nil {
-            historicalOpenerEventID = historicalClosureIndex?.pendingContextOpenerEventID
-                ?? historicalClosureIndex?.openerEventIDByClosureEventID["\(uuid):claude-context:0"]
+            let closureEventID = "\(uuid):claude-context:0"
+            historicalOpenerEventID = historicalClosureIndex?
+                .openerEventIDByClosureEventID[closureEventID]
+                ?? historicalClosureIndex?.pendingContextOpenerEventID
         } else {
             historicalOpenerEventID = nil
         }
@@ -4016,7 +4022,9 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 index.contextConsumerSequenceByOpenerEventID[historicalOpenerEventID]
                     = transcriptSequenceBase
                     + transcriptEventSequence(lineOffset: lineOffset, ordinal: 0)
-                index.pendingContextOpenerEventID = nil
+                if index.pendingContextOpenerEventID == historicalOpenerEventID {
+                    index.pendingContextOpenerEventID = nil
+                }
                 synchronizeHistoricalOpenerClosureSequences()
             }
             return true
@@ -4039,7 +4047,9 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                              ])
         if let historicalOpenerEventID,
            let index = historicalClosureIndex {
-            index.pendingContextOpenerEventID = nil
+            if index.pendingContextOpenerEventID == historicalOpenerEventID {
+                index.pendingContextOpenerEventID = nil
+            }
             index.closureByOpenerEventID[historicalOpenerEventID] = summaryEvent
             index.openerEventIDByClosureEventID[summaryEvent.eventID] = historicalOpenerEventID
             synchronizeHistoricalOpenerClosureSequences()

@@ -564,6 +564,93 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                         "terminal A must not close the newer same-ID Ask B")
     }
 
+    func testClaudeIndexFirstContextSummaryDoesNotCloseLaterCommand() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        let contextA = makeClaudeUserLine(uuid: "context-a",
+                                          content: "<command-name>/context</command-name>")
+        let fillerLines = (0..<transcriptBootstrapLineLimit).map {
+            makeClaudeUserLine(uuid: "filler-\($0)", content: "filler-\($0)")
+        }
+        try (([contextA] + fillerLines).joined(separator: "\n") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1)
+                .events.first?.text == "filler-\(transcriptBootstrapLineLimit - 1)"
+        })
+        let firstFillerOffset = (contextA + "\n").utf8.count
+        let initialAnchor = transcriptEventSequence(lineOffset: firstFillerOffset, ordinal: 0)
+        XCTAssertTrue(session.backfill(beforeSeq: initialAnchor, limit: 20))
+
+        let summaryA = makeClaudeContextStdoutLine(uuid: "summary-a")
+        let contextB = makeClaudeUserLine(uuid: "context-b",
+                                          content: "<command-name>/context</command-name>")
+        var appendError: Error?
+        var didAppend = false
+        session.historicalIndexBeforeScanForTesting = {
+            guard didAppend == false else { return }
+            didAppend = true
+            do {
+                let handle = try FileHandle(forWritingTo: transcriptURL)
+                try handle.seekToEnd()
+                try handle.write(contentsOf: Data(([summaryA, contextB].joined(separator: "\n") + "\n").utf8))
+                try handle.close()
+            } catch {
+                appendError = error
+            }
+        }
+
+        XCTAssertTrue(session.backfill(beforeSeq: initialAnchor, limit: 20))
+        XCTAssertNil(appendError)
+        XCTAssertTrue(waitUntil {
+            let events = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000).events
+            return events.contains { $0.eventID == "summary-a:claude-context:0" }
+                && events.contains { $0.eventID == "context-b:claude-context-command:0" }
+        })
+
+        let contextC = makeClaudeUserLine(uuid: "context-c",
+                                          content: "<command-name>/context</command-name>")
+        let marker = makeClaudeUserLine(uuid: "context-marker", content: "history marker")
+        let handle = try FileHandle(forWritingTo: transcriptURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(([contextC, marker].joined(separator: "\n") + "\n").utf8))
+        try handle.close()
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+                .events.contains { $0.eventID == "context-marker:user-text:0" }
+        })
+        let markerSeq = try XCTUnwrap(
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+                .events.first { $0.eventID == "context-marker:user-text:0" }?.seq
+        )
+
+        let page = BridgeAgentEventFetchFlow.run(eventHub: hub,
+                                                 workspaceID: "workspace",
+                                                 sessionID: "session",
+                                                 limit: 500,
+                                                 beforeSeq: markerSeq,
+                                                 afterSeq: nil) { _, beforeSeq, limit in
+            session.backfill(beforeSeq: beforeSeq, limit: limit)
+        }
+        XCTAssertTrue(page.didBackfill)
+        XCTAssertFalse(page.fetchResult.events.contains {
+            $0.eventID == "context-b:claude-context-command:0"
+        }, "the later context C must silently consume still-open context B")
+        XCTAssertTrue(page.fetchResult.events.contains {
+            $0.eventID == "context-c:claude-context-command:0"
+        }, "context C itself must remain the open command")
+    }
+
     func testClaudeHistoricalIndexRejectsSameInodeMutationWhileAdoptingPartial() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
