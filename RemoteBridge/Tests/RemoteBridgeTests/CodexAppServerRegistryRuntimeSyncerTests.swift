@@ -1041,11 +1041,15 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
                                        ],
                                        selectedIndex: 0,
                                        submitChannel: InteractivePromptSubmitChannel.codexAppServer)
-        let event = Self.interactivePromptEvent(sessionID: "app", promptID: prompt.promptID)
+        let event = Self.interactivePromptEvent(sessionID: "app",
+                                                promptID: prompt.promptID,
+                                                lifecycleToken: "token-1")
         let envelope = CodexAppServerInteractivePromptEnvelope(request: request,
                                                               prompt: prompt,
                                                               event: event)
-        let resolvedEvent = Self.event(sessionID: "app", promptID: prompt.promptID)
+        let resolvedEvent = Self.event(sessionID: "app",
+                                       promptID: prompt.promptID,
+                                       lifecycleToken: "token-1")
 
         onInteractivePrompt(envelope)
         onInteractivePromptResolved(resolvedEvent)
@@ -1177,46 +1181,58 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         return (syncer, attachEntered, releaseAttach, syncDone)
     }
 
-    private static func event(sessionID: String, promptID: String) -> AgentEvent {
-        AgentEvent(eventID: "resolved-\(promptID)",
-                   seq: 1,
-                   vendor: "codex",
-                   workspaceID: "workspace-1",
-                   sessionID: sessionID,
-                   timestamp: "2026-06-07T00:00:00.000Z",
-                   type: .interactivePromptResolved,
-                   role: nil,
-                   text: nil,
-                   name: nil,
-                   input: nil,
-                   output: nil,
-                   toolCallID: nil,
-                   metadata: [
-                    "panel_id": "panel-1",
-                    "prompt_id": promptID,
-                    "source": "codex_command_approval",
-                   ])
+    private static func event(sessionID: String,
+                              promptID: String,
+                              lifecycleToken: String? = nil) -> AgentEvent {
+        var metadata = [
+            "panel_id": "panel-1",
+            "prompt_id": promptID,
+            "source": "codex_command_approval",
+        ]
+        if let lifecycleToken {
+            metadata["lifecycle_token"] = lifecycleToken
+        }
+        return AgentEvent(eventID: "resolved-\(promptID)",
+                          seq: 1,
+                          vendor: "codex",
+                          workspaceID: "workspace-1",
+                          sessionID: sessionID,
+                          timestamp: "2026-06-07T00:00:00.000Z",
+                          type: .interactivePromptResolved,
+                          role: nil,
+                          text: nil,
+                          name: nil,
+                          input: nil,
+                          output: nil,
+                          toolCallID: nil,
+                          metadata: metadata)
     }
 
-    private static func interactivePromptEvent(sessionID: String, promptID: String) -> AgentEvent {
-        AgentEvent(eventID: "prompt-\(promptID)",
-                   seq: 1,
-                   vendor: "codex",
-                   workspaceID: "workspace-1",
-                   sessionID: sessionID,
-                   timestamp: "2026-06-07T00:00:00.000Z",
-                   type: .interactivePrompt,
-                   role: nil,
-                   text: "Approve Codex command?",
-                   name: nil,
-                   input: nil,
-                   output: nil,
-                   toolCallID: nil,
-                   metadata: [
-                    "panel_id": "panel-1",
-                    "prompt_id": promptID,
-                    "source": "codex_command_approval",
-                   ])
+    private static func interactivePromptEvent(sessionID: String,
+                                               promptID: String,
+                                               lifecycleToken: String? = nil) -> AgentEvent {
+        var metadata = [
+            "panel_id": "panel-1",
+            "prompt_id": promptID,
+            "source": "codex_command_approval",
+        ]
+        if let lifecycleToken {
+            metadata["lifecycle_token"] = lifecycleToken
+        }
+        return AgentEvent(eventID: "prompt-\(promptID)",
+                          seq: 1,
+                          vendor: "codex",
+                          workspaceID: "workspace-1",
+                          sessionID: sessionID,
+                          timestamp: "2026-06-07T00:00:00.000Z",
+                          type: .interactivePrompt,
+                          role: nil,
+                          text: "Approve Codex command?",
+                          name: nil,
+                          input: nil,
+                          output: nil,
+                          toolCallID: nil,
+                          metadata: metadata)
     }
 
     private static func conversationEvent(eventID: String,

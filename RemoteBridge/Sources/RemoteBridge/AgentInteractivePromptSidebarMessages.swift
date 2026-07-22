@@ -142,6 +142,12 @@ enum AgentInteractivePromptSidebarMessages {
 }
 
 final class AgentInteractivePromptNotificationDeduper: @unchecked Sendable {
+    private enum NotifiedLifecycle: Equatable {
+        case token(String)
+        case capabilityTokenless
+        case legacy
+    }
+
     enum ResolveOutcome: Equatable {
         case clearedNotified
         case noneNotified
@@ -149,19 +155,41 @@ final class AgentInteractivePromptNotificationDeduper: @unchecked Sendable {
     }
 
     private let queue = DispatchQueue(label: "com.tidey.remote-bridge.interactive-prompt-notification-deduper")
-    private var notifiedPromptIDsBySessionID = [String: Set<String>]()
+    private var notifiedLifecyclesBySessionID = [String: [String: NotifiedLifecycle]]()
+
+    private static func lifecycle(for event: AgentEvent) -> NotifiedLifecycle {
+        if let token = AgentInteractivePromptSidebarMessages.lifecycleToken(from: event) {
+            return .token(token)
+        }
+        if AgentInteractivePromptSidebarMessages.requiresLifecycleCapability(event) {
+            return .capabilityTokenless
+        }
+        return .legacy
+    }
 
     func shouldNotify(_ event: AgentEvent, sessionID: String) -> Bool {
         guard let promptID = AgentInteractivePromptSidebarMessages.promptID(from: event) else {
             return true
         }
+        let incoming = Self.lifecycle(for: event)
         return queue.sync {
-            var notifiedPromptIDs = notifiedPromptIDsBySessionID[sessionID] ?? []
-            guard !notifiedPromptIDs.contains(promptID) else {
-                return false
+            var notified = notifiedLifecyclesBySessionID[sessionID] ?? [:]
+            if let current = notified[promptID] {
+                switch (current, incoming) {
+                case (.token(let currentToken), .token(let incomingToken)):
+                    guard currentToken != incomingToken else {
+                        return false
+                    }
+                case (.token, .capabilityTokenless),
+                     (.capabilityTokenless, .capabilityTokenless),
+                     (.legacy, .legacy):
+                    return false
+                default:
+                    break
+                }
             }
-            notifiedPromptIDs.insert(promptID)
-            notifiedPromptIDsBySessionID[sessionID] = notifiedPromptIDs
+            notified[promptID] = incoming
+            notifiedLifecyclesBySessionID[sessionID] = notified
             return true
         }
     }
@@ -171,18 +199,32 @@ final class AgentInteractivePromptNotificationDeduper: @unchecked Sendable {
         guard let promptID = AgentInteractivePromptSidebarMessages.promptID(from: event) else {
             return .noneNotified
         }
+        let terminalToken = AgentInteractivePromptSidebarMessages.lifecycleToken(from: event)
+        let terminalRequiresCapability = AgentInteractivePromptSidebarMessages.requiresLifecycleCapability(event)
         return queue.sync {
-            guard notifiedPromptIDsBySessionID[sessionID]?.contains(promptID) == true else {
+            guard let current = notifiedLifecyclesBySessionID[sessionID]?[promptID] else {
                 return .noneNotified
             }
-            notifiedPromptIDsBySessionID[sessionID]?.remove(promptID)
+            let matches: Bool
+            switch current {
+            case .token(let currentToken):
+                matches = terminalToken == currentToken
+            case .capabilityTokenless:
+                matches = false
+            case .legacy:
+                matches = terminalToken == nil && terminalRequiresCapability == false
+            }
+            guard matches else {
+                return .staleMismatch
+            }
+            notifiedLifecyclesBySessionID[sessionID]?.removeValue(forKey: promptID)
             return .clearedNotified
         }
     }
 
     func remove(sessionID: String) {
         _ = queue.sync {
-            notifiedPromptIDsBySessionID.removeValue(forKey: sessionID)
+            notifiedLifecyclesBySessionID.removeValue(forKey: sessionID)
         }
     }
 }
