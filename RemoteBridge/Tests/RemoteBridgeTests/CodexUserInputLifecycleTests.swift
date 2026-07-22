@@ -95,6 +95,59 @@ final class CodexUserInputLifecycleTests: XCTestCase {
         XCTAssertEqual(AgentSessionLifecycle.store.snapshot(harness.identity)?.state, .idle)
     }
 
+    func testRequestUserInputBlockerSurvivesProviderIdleUntilServerResolution() throws {
+        let harness = try WiringHarness(sessionID: "session-wire-user-input-blocker")
+        try harness.bindRoot()
+        harness.respondToResume(status: #"{"type":"active","activeFlags":[]}"#)
+
+        harness.transport.emitLine("""
+        {"id":"ask-persist","method":"item/tool/requestUserInput","params":{"threadId":"thread-root","turnId":"turn-ask","itemId":"item-ask","questions":[{"id":"note","header":"Note","question":"補充說明","isOther":true}]}}
+        """)
+
+        let opened = try XCTUnwrap(AgentSessionLifecycle.store.snapshot(harness.identity))
+        XCTAssertEqual(opened.state, .needsInput)
+        XCTAssertEqual(opened.blockerIDs.count, 1)
+        XCTAssertTrue(opened.blockerIDs.first?.hasPrefix("codex-prompt:") == true)
+
+        harness.emitRootStatus(#"{"type":"idle"}"#)
+        let afterProviderIdle = try XCTUnwrap(AgentSessionLifecycle.store.snapshot(harness.identity))
+        XCTAssertEqual(afterProviderIdle.state, .needsInput)
+        XCTAssertEqual(afterProviderIdle.blockerIDs, opened.blockerIDs)
+
+        harness.transport.emitLine(#"{"method":"serverRequest/resolved","params":{"threadId":"thread-root","requestId":"ask-persist"}}"#)
+        let resolved = try XCTUnwrap(AgentSessionLifecycle.store.snapshot(harness.identity))
+        XCTAssertEqual(resolved.state, .idle)
+        XCTAssertTrue(resolved.blockerIDs.isEmpty)
+    }
+
+    func testApprovalBlockerOpensAndTurnTerminalResolvesIt() throws {
+        let harness = try WiringHarness(sessionID: "session-wire-approval-blocker")
+        try harness.bindRoot()
+        harness.respondToResume(status: #"{"type":"idle"}"#)
+        harness.transport.emitLine(#"{"method":"turn/started","params":{"threadId":"thread-root","turn":{"id":"turn-approval"}}}"#)
+
+        harness.transport.emitLine("""
+        {"id":"approval-persist","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-root","turnId":"turn-approval","itemId":"item-command","startedAtMs":1786000000000,"command":"ls"}}
+        """)
+
+        let opened = try XCTUnwrap(AgentSessionLifecycle.store.snapshot(harness.identity))
+        XCTAssertEqual(opened.state, .needsInput)
+        XCTAssertEqual(opened.blockerIDs.count, 1)
+        XCTAssertTrue(opened.blockerIDs.first?.hasPrefix("codex-prompt:") == true)
+
+        let promptID = try XCTUnwrap(harness.session.pendingApprovalPromptEvents().first?.metadata?["prompt_id"])
+        _ = try harness.session.submitApproval(promptID: promptID, targetIndex: 0)
+        let afterLocalSubmit = try XCTUnwrap(AgentSessionLifecycle.store.snapshot(harness.identity))
+        XCTAssertEqual(afterLocalSubmit.state, .needsInput)
+        XCTAssertEqual(afterLocalSubmit.blockerIDs, opened.blockerIDs,
+                       "a local response write is not an authoritative terminal")
+
+        harness.transport.emitLine(#"{"method":"turn/completed","params":{"threadId":"thread-root","turn":{"id":"turn-approval"}}}"#)
+        let resolved = try XCTUnwrap(AgentSessionLifecycle.store.snapshot(harness.identity))
+        XCTAssertEqual(resolved.state, .idle)
+        XCTAssertTrue(resolved.blockerIDs.isEmpty)
+    }
+
     func testStopRetiresLifecycleIdentity() throws {
         let harness = try WiringHarness(sessionID: "session-wire-stop")
         try harness.bindRoot()

@@ -1417,6 +1417,33 @@ final class CodexAppServerRuntimeSessionFactory {
                            rootThreadID: { activeThreadStore.currentThreadID() })
     }
 
+    static func wrapPromptHandlers(feed: CodexLifecycleFeed,
+                                   onInteractivePrompt: @escaping CodexAppServerConnection.InteractivePromptHandler,
+                                   onInteractivePromptResolved: @escaping CodexAppServerConnection.InteractivePromptResolvedHandler)
+        -> (prompt: CodexAppServerConnection.InteractivePromptHandler,
+            resolved: CodexAppServerConnection.InteractivePromptResolvedHandler) {
+        let prompt: CodexAppServerConnection.InteractivePromptHandler = { envelope in
+            feed.openPrompt(promptID: envelope.prompt.promptID,
+                            attempt: Self.promptAttempt(from: envelope.event) ?? 1,
+                            kind: envelope.request.method == .requestUserInput ? .userQuestion : .permission,
+                            turnID: envelope.request.turnID)
+            onInteractivePrompt(envelope)
+        }
+        let resolved: CodexAppServerConnection.InteractivePromptResolvedHandler = { event in
+            if let promptID = event.metadata?["prompt_id"],
+               let attempt = Self.promptAttempt(from: event) {
+                feed.resolvePrompt(promptID: promptID,
+                                   attempt: attempt)
+            }
+            onInteractivePromptResolved(event)
+        }
+        return (prompt, resolved)
+    }
+
+    private static func promptAttempt(from event: AgentEvent) -> Int? {
+        Int(event.metadata?["attempt"] ?? "")
+    }
+
     private let processRunner: CodexAppServerProcessRunning
     private let transportConnector: CodexAppServerTransportConnecting
     private let externalProcessFactory: (Int32?) -> CodexAppServerManagedProcess
@@ -1471,6 +1498,9 @@ final class CodexAppServerRuntimeSessionFactory {
         let turnStateStore = CodexAppServerTurnStateStore()
         let lifecycleFeed = Self.makeLifecycleFeed(context: context,
                                                    activeThreadStore: activeThreadStore)
+        let promptHandlers = Self.wrapPromptHandlers(feed: lifecycleFeed,
+                                                     onInteractivePrompt: onInteractivePrompt,
+                                                     onInteractivePromptResolved: onInteractivePromptResolved)
         let runtime = CodexAppServerHeadlessRuntime(context: context,
                                                     nextSequence: nextSequence,
                                                     timestampProvider: timestampProvider,
@@ -1500,8 +1530,8 @@ final class CodexAppServerRuntimeSessionFactory {
                                                                                                   epoch: epoch),
                                                    nextSequence: nextSequence,
                                                    timestampProvider: timestampProvider,
-                                                   onInteractivePrompt: onInteractivePrompt,
-                                                   onInteractivePromptResolved: onInteractivePromptResolved,
+                                                   onInteractivePrompt: promptHandlers.prompt,
+                                                   onInteractivePromptResolved: promptHandlers.resolved,
                                                    onProtocolViolation: {
                                                        protocolViolationRouter.trigger()
                                                    })
@@ -1574,6 +1604,9 @@ final class CodexAppServerRuntimeSessionFactory {
         let turnStateStore = CodexAppServerTurnStateStore()
         let lifecycleFeed = Self.makeLifecycleFeed(context: context,
                                                    activeThreadStore: activeThreadStore)
+        let promptHandlers = Self.wrapPromptHandlers(feed: lifecycleFeed,
+                                                     onInteractivePrompt: onInteractivePrompt,
+                                                     onInteractivePromptResolved: onInteractivePromptResolved)
         let runtime = CodexAppServerHeadlessRuntime(context: context,
                                                     nextSequence: nextSequence,
                                                     timestampProvider: timestampProvider,
@@ -1603,8 +1636,8 @@ final class CodexAppServerRuntimeSessionFactory {
                                                                                                   epoch: epoch),
                                                    nextSequence: nextSequence,
                                                    timestampProvider: timestampProvider,
-                                                   onInteractivePrompt: onInteractivePrompt,
-                                                   onInteractivePromptResolved: onInteractivePromptResolved,
+                                                   onInteractivePrompt: promptHandlers.prompt,
+                                                   onInteractivePromptResolved: promptHandlers.resolved,
                                                    onProtocolViolation: {
                                                        protocolViolationRouter.trigger()
                                                    })
