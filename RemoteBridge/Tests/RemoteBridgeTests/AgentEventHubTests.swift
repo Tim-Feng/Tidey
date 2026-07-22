@@ -61,6 +61,9 @@ final class AgentEventHubTests: XCTestCase {
     }
 
     func testFetchAfterSeqUsesSessionBufferOrderForCatchUpCursor() {
+        // The late arrival that claims seq 11 after 12 was stored must move
+        // above the stored high-water, otherwise an advanced cursor can miss
+        // it permanently.
         let hub = AgentEventHub()
         for seq in [10, 12, 11] {
             hub.publish(makeAssistantEvent(id: "assistant-\(seq)", seq: seq))
@@ -72,9 +75,10 @@ final class AgentEventHubTests: XCTestCase {
                                beforeSeq: nil,
                                afterSeq: 10)
 
-        XCTAssertEqual(result.events.map(\.seq), [11, 12])
-        XCTAssertEqual(result.oldestSeq, 11)
-        XCTAssertEqual(result.newestSeq, 12)
+        XCTAssertEqual(result.events.map(\.seq), [12, 13])
+        XCTAssertEqual(result.events.map(\.eventID), ["assistant-12", "assistant-11"])
+        XCTAssertEqual(result.oldestSeq, 12)
+        XCTAssertEqual(result.newestSeq, 13)
         XCTAssertFalse(result.hasMore)
     }
 
@@ -190,6 +194,162 @@ final class AgentEventHubTests: XCTestCase {
         XCTAssertEqual(result.events.first?.metadata?["tidey_truncated"], "true")
         XCTAssertNotEqual(result.events.first?.output, String(repeating: "x", count: 4096))
         XCTAssertTrue((result.events.first?.output ?? "").contains("大小限制"))
+    }
+
+    // MARK: Live sequence authority
+
+    func testReservedSeqTakenByNativePublishRebasesSyntheticEvent() {
+        let hub = AgentEventHub()
+        let reserved = hub.nextSyntheticSeq(sessionID: "session")
+        hub.publish(makeAssistantEvent(id: "native", seq: reserved))
+        hub.publish(makeAssistantEvent(id: "synthetic", seq: reserved))
+
+        let all = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10)
+        XCTAssertEqual(all.events.count, 2)
+        XCTAssertEqual(Set(all.events.map(\.seq)).count, 2)
+
+        let first = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1, afterSeq: 0)
+        XCTAssertEqual(first.events.count, 1)
+        let second = hub.fetch(workspaceID: "workspace",
+                               sessionID: "session",
+                               limit: 10,
+                               afterSeq: first.events[0].seq)
+        XCTAssertEqual(second.events.count, 1,
+                       "the second event must remain reachable from the catch-up cursor")
+        XCTAssertNotEqual(second.events[0].eventID, first.events[0].eventID)
+    }
+
+    func testBatchReservationsStayUniqueAgainstInterleavedNativePublishes() {
+        let hub = AgentEventHub()
+        let r1 = hub.nextSyntheticSeq(sessionID: "session")
+        let r2 = hub.nextSyntheticSeq(sessionID: "session")
+        let r3 = hub.nextSyntheticSeq(sessionID: "session")
+        hub.publish(makeAssistantEvent(id: "native-a", seq: r2))
+        hub.publish(makeAssistantEvent(id: "batch-1", seq: r1))
+        hub.publish(makeAssistantEvent(id: "batch-2", seq: r2))
+        hub.publish(makeAssistantEvent(id: "batch-3", seq: r3))
+
+        let all = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10)
+        XCTAssertEqual(all.events.count, 4)
+        XCTAssertEqual(Set(all.events.map(\.seq)).count, 4,
+                       "all published events must own distinct cursor positions")
+    }
+
+    func testNativeHighSeqLiftsNextSyntheticReservation() {
+        let hub = AgentEventHub()
+        hub.publish(makeAssistantEvent(id: "native-high", seq: 100))
+
+        let reserved = hub.nextSyntheticSeq(sessionID: "session")
+
+        XCTAssertGreaterThan(reserved, 100)
+    }
+
+    func testLateUnseenLowerSeqIsRebasedAboveHighWater() throws {
+        let hub = AgentEventHub()
+        var liveSeqs = [Int]()
+        let (subscriptionID, _) = hub.subscribe(workspaceID: "workspace", sessionID: "session") { envelope in
+            liveSeqs.append(envelope.event.seq)
+        }
+        defer { hub.unsubscribe(subscriptionID) }
+
+        hub.publish(makeAssistantEvent(id: "high", seq: 100))
+        hub.publish(makeAssistantEvent(id: "late", seq: 50))
+
+        let catchUp = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10, afterSeq: 100)
+        let late = try XCTUnwrap(catchUp.events.first)
+        XCTAssertEqual(catchUp.events.map(\.eventID), ["late"])
+        XCTAssertGreaterThan(late.seq, 100)
+        XCTAssertEqual(liveSeqs.count, 2)
+        XCTAssertGreaterThan(liveSeqs[1], liveSeqs[0])
+    }
+
+    func testVeryOldUnseenSeqAfterRealBufferEvictionIsStillRebased() throws {
+        let hub = AgentEventHub(maxBufferedEvents: 4, maxSeenEventIDs: 4)
+        for index in 1...20 {
+            hub.publish(makeAssistantEvent(id: "event-\(index)", seq: index * 10))
+        }
+
+        let beforeLateArrival = try XCTUnwrap(hub.debugSnapshots().first)
+        XCTAssertEqual(beforeLateArrival.bufferedEventCount, 4,
+                       "the test must exercise the post-eviction state")
+        XCTAssertEqual(beforeLateArrival.oldestSeq, 170)
+        XCTAssertEqual(beforeLateArrival.newestSeq, 200)
+
+        hub.publish(makeAssistantEvent(id: "ancient-unseen", seq: 1))
+
+        let catchUp = hub.fetch(workspaceID: "workspace",
+                                sessionID: "session",
+                                limit: 10,
+                                afterSeq: 200)
+        let ancient = try XCTUnwrap(catchUp.events.first)
+        XCTAssertEqual(catchUp.events.map(\.eventID), ["ancient-unseen"])
+        XCTAssertGreaterThan(ancient.seq, 200)
+    }
+
+    func testReservationsPublishedOutOfOrderStayMonotonic() {
+        let hub = AgentEventHub()
+        let r1 = hub.nextSyntheticSeq(sessionID: "session")
+        let r2 = hub.nextSyntheticSeq(sessionID: "session")
+        hub.publish(makeAssistantEvent(id: "second-reserved", seq: r2))
+        hub.publish(makeAssistantEvent(id: "first-reserved", seq: r1))
+
+        let all = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10)
+        let firstSeq = all.events.first { $0.eventID == "first-reserved" }!.seq
+        let secondSeq = all.events.first { $0.eventID == "second-reserved" }!.seq
+        XCTAssertEqual(Set(all.events.map(\.seq)).count, 2)
+        XCTAssertGreaterThan(firstSeq, secondSeq)
+        XCTAssertEqual(hub.fetch(workspaceID: "workspace",
+                                 sessionID: "session",
+                                 limit: 10,
+                                 afterSeq: secondSeq).events.map(\.eventID),
+                       ["first-reserved"])
+    }
+
+    func testConcurrentSyntheticReservationsAreUnique() {
+        let hub = AgentEventHub()
+        let lock = NSLock()
+        var reservations = [Int]()
+        let bothReserved = expectation(description: "both producers reserved")
+        bothReserved.expectedFulfillmentCount = 2
+        let releasePublish = DispatchSemaphore(value: 0)
+        let group = DispatchGroup()
+
+        for producer in 0..<2 {
+            DispatchQueue.global(qos: .userInitiated).async(group: group) {
+                let reserved = hub.nextSyntheticSeq(sessionID: "session")
+                lock.lock()
+                reservations.append(reserved)
+                lock.unlock()
+                bothReserved.fulfill()
+                _ = releasePublish.wait(timeout: .now() + 5.0)
+                hub.publish(self.makeAssistantEvent(id: "producer-\(producer)", seq: reserved))
+            }
+        }
+
+        wait(for: [bothReserved], timeout: 2.0)
+        releasePublish.signal()
+        releasePublish.signal()
+        XCTAssertEqual(group.wait(timeout: .now() + 5.0), .success)
+
+        lock.lock()
+        let observedReservations = reservations
+        lock.unlock()
+        XCTAssertEqual(Set(observedReservations).count, 2)
+        let stored = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10).events
+        XCTAssertEqual(stored.count, 2)
+        XCTAssertEqual(Set(stored.map(\.seq)).count, 2)
+    }
+
+    func testSameEventIDRepublishDoesNotConsumeSequence() {
+        let hub = AgentEventHub()
+        let reserved = hub.nextSyntheticSeq(sessionID: "session")
+        hub.publish(makeAssistantEvent(id: "same", seq: reserved, text: "original"))
+        hub.publish(makeAssistantEvent(id: "same", seq: reserved, text: "duplicate"))
+
+        let all = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10)
+        XCTAssertEqual(all.events.map(\.eventID), ["same"])
+        XCTAssertEqual(all.events.map(\.seq), [reserved])
+        XCTAssertEqual(hub.nextSyntheticSeq(sessionID: "session"), reserved + 1)
     }
 
     func testLiveSubscriberDeliveryFollowsStoreOrderAcrossConcurrentPublishers() {

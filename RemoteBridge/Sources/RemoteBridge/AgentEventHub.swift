@@ -79,6 +79,9 @@ final class AgentEventHub {
         var bufferedEvents = [AgentEvent]()
         var latestSessionStarted: AgentEvent?
         var isActive = false
+        // Persists beyond buffer eviction so a late unseen event cannot fall
+        // behind a cursor that clients have already advanced.
+        var storedSeqHighWater: Int?
     }
 
     private struct SessionBinding {
@@ -94,8 +97,14 @@ final class AgentEventHub {
     private var subscribers = [UUID: Subscriber]()
     private var sessions = [String: SessionState]()
     private var sessionBindings = [String: SessionBinding]()
-    private let maxBufferedEvents = 2000
-    private let maxSeenEventIDs = 4000
+    private var reservedSeqBySessionID = [String: Int]()
+    private let maxBufferedEvents: Int
+    private let maxSeenEventIDs: Int
+
+    init(maxBufferedEvents: Int = 2000, maxSeenEventIDs: Int = 4000) {
+        self.maxBufferedEvents = max(1, maxBufferedEvents)
+        self.maxSeenEventIDs = max(1, maxSeenEventIDs)
+    }
 
     func subscribe(workspaceID: String?,
                    sessionID: String? = nil,
@@ -236,9 +245,11 @@ final class AgentEventHub {
 
     func nextSyntheticSeq(sessionID: String) -> Int {
         queue.sync {
-            let bufferedMax = sessions[sessionID]?.bufferedEvents.map(\.seq).max() ?? transcriptSessionStartedSequence
-            let startMax = sessions[sessionID]?.latestSessionStarted?.seq ?? transcriptSessionStartedSequence
-            return max(bufferedMax, startMax) + 1
+            let stored = sessions[sessionID]?.storedSeqHighWater ?? transcriptSessionStartedSequence
+            let reserved = reservedSeqBySessionID[sessionID] ?? transcriptSessionStartedSequence
+            let next = max(stored, reserved) + 1
+            reservedSeqBySessionID[sessionID] = next
+            return next
         }
     }
 
@@ -348,6 +359,7 @@ final class AgentEventHub {
     }
 
     func publish(_ event: AgentEvent, deliverToSubscribers: Bool = true) {
+        var event = event
         let deliveryCompletion: DispatchSemaphore? = queue.sync {
             var state = sessions[event.sessionID] ?? SessionState()
             if state.seenEventIDs.contains(event.eventID) {
@@ -358,6 +370,17 @@ final class AgentEventHub {
             if state.seenEventIDs.count > maxSeenEventIDs {
                 state.seenEventIDs = Set(state.seenEventIDs.suffix(maxSeenEventIDs / 2))
             }
+
+            // A live event is only cursor-visible if its stored sequence is
+            // above everything already stored. Rebase collisions and stale
+            // producer sequences above both stored and reserved positions.
+            if let highWater = state.storedSeqHighWater, event.seq <= highWater {
+                let reserved = reservedSeqBySessionID[event.sessionID] ?? transcriptSessionStartedSequence
+                let rebased = max(highWater, reserved) + 1
+                event = event.withSeq(rebased)
+                reservedSeqBySessionID[event.sessionID] = rebased
+            }
+            state.storedSeqHighWater = max(state.storedSeqHighWater ?? event.seq, event.seq)
 
             state.bufferedEvents.append(event)
             if state.bufferedEvents.count > maxBufferedEvents {
@@ -551,5 +574,27 @@ final class AgentEventHub {
                           toolCallID: event.toolCallID,
                           metadata: metadata,
                           payload: event.payload)
+    }
+}
+
+private extension AgentEvent {
+    // Rebasing changes only cursor position; event identity remains stable
+    // so ordinary event-id deduplication still applies.
+    func withSeq(_ seq: Int) -> AgentEvent {
+        AgentEvent(eventID: eventID,
+                   seq: seq,
+                   vendor: vendor,
+                   workspaceID: workspaceID,
+                   sessionID: sessionID,
+                   timestamp: timestamp,
+                   type: type,
+                   role: role,
+                   text: text,
+                   name: name,
+                   input: input,
+                   output: output,
+                   toolCallID: toolCallID,
+                   metadata: metadata,
+                   payload: payload)
     }
 }
