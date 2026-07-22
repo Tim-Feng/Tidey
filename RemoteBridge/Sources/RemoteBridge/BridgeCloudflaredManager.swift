@@ -308,18 +308,12 @@ struct BridgeCloudflaredLaunchAgentController: BridgeCloudflaredSupervisorContro
     }
 
     private static func runLaunchctl(arguments: [String]) -> Bool {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        process.arguments = arguments
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-            process.waitUntilExit()
-            return process.terminationStatus == 0
-        } catch {
+        guard let result = BoundedProcessRunner.run(executablePath: "/bin/launchctl",
+                                                    arguments: arguments,
+                                                    timeout: 5) else {
             return false
         }
+        return result.terminationStatus == 0
     }
 }
 

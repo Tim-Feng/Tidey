@@ -2,6 +2,23 @@ import XCTest
 @testable import RemoteBridge
 
 final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
+    private final class ConcurrentRunnerOutcome: @unchecked Sendable {
+        private let lock = NSLock()
+        private var failures = [String]()
+
+        func recordFailure(_ failure: String) {
+            lock.lock()
+            failures.append(failure)
+            lock.unlock()
+        }
+
+        var recordedFailures: [String] {
+            lock.lock()
+            defer { lock.unlock() }
+            return failures
+        }
+    }
+
     private final class RunnerState: @unchecked Sendable {
         struct Call: Equatable {
             let socket: OrdinaryTmuxSocketSelector
@@ -49,6 +66,47 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
             OrdinaryTmuxCLIAdapter.arguments(for: .name("work"), commandArguments: ["list-clients"]),
             ["-L", "work", "list-clients"]
         )
+    }
+
+    func testProcessRunnerCompletesConcurrentShortLivedCommandsWithoutFalseTimeouts() {
+        let runner = OrdinaryTmuxCLIAdapter.processCommandRunner(executablePath: "/bin/echo",
+                                                                 timeoutSeconds: 1)
+        let group = DispatchGroup()
+        let queue = DispatchQueue(label: "OrdinaryTmuxCLIAdapterTests.concurrent-processes",
+                                  attributes: .concurrent)
+        let outcome = ConcurrentRunnerOutcome()
+
+        for index in 0..<32 {
+            group.enter()
+            queue.async {
+                defer { group.leave() }
+                do {
+                    let output = try runner(.defaultSocket, ["probe-\(index)"], nil)
+                    if output != "probe-\(index)" {
+                        outcome.recordFailure("unexpected output for \(index): \(output)")
+                    }
+                } catch {
+                    outcome.recordFailure("command \(index) failed: \(error)")
+                }
+            }
+        }
+
+        XCTAssertEqual(group.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(outcome.recordedFailures, [])
+    }
+
+    func testProcessRunnerPreservesStdinAndTimeoutSemantics() throws {
+        let catRunner = OrdinaryTmuxCLIAdapter.processCommandRunner(executablePath: "/bin/cat",
+                                                                    timeoutSeconds: 1)
+        XCTAssertEqual(try catRunner(.defaultSocket, [], "hello from stdin\n"), "hello from stdin")
+
+        let sleepRunner = OrdinaryTmuxCLIAdapter.processCommandRunner(executablePath: "/bin/sleep",
+                                                                      timeoutSeconds: 0.05)
+        XCTAssertThrowsError(try sleepRunner(.defaultSocket, ["2"], nil)) { error in
+            let nsError = error as NSError
+            XCTAssertEqual(nsError.domain, "OrdinaryTmuxCLIAdapter")
+            XCTAssertEqual(nsError.code, 124)
+        }
     }
 
     func testResolvesClientByTTYAndTargetSessionFromDefaultSocket() throws {

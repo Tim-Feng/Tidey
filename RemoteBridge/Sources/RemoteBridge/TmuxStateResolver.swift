@@ -34,6 +34,7 @@ final class TmuxStateResolver {
     private static var hasLoggedMissingTmux = false
     private static let envLogState = DispatchQueue(label: "com.tidey.remote-bridge.tmux-env-log-state")
     private static var hasLoggedRunnerEnv = false
+    private static let commandTimeoutSeconds: TimeInterval = 3
     private static let liveCommandRunner: CommandRunner = { socketPath, arguments in
         guard let tmuxBinaryPath = resolvedTmuxBinaryPath else {
             missingTmuxLogState.sync {
@@ -55,30 +56,28 @@ final class TmuxStateResolver {
             }
         }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: tmuxBinaryPath)
-        process.arguments = ["-S", socketPath] + arguments
+        let commandArguments = ["-S", socketPath] + arguments
         var environment = ProcessInfo.processInfo.environment
         environment["LC_CTYPE"] = "UTF-8"
         environment["LANG"] = "en_US.UTF-8"
-        process.environment = environment
+        guard let result = BoundedProcessRunner.run(executablePath: tmuxBinaryPath,
+                                                    arguments: commandArguments,
+                                                    environment: environment,
+                                                    timeout: commandTimeoutSeconds) else {
+            throw NSError(domain: "TmuxStateResolver",
+                          code: 124,
+                          userInfo: [NSLocalizedDescriptionKey: "tmux command timed out"])
+        }
 
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
-        try process.run()
-        process.waitUntilExit()
-
-        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+        let outputData = result.standardOutput
+        let errorData = result.standardError
         let stdoutText = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let stderrText = String(data: errorData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        BridgeLogger.server.debug("tmux command argv=\(process.arguments?.joined(separator: " ") ?? "-", privacy: .public) stdout_bytes=\(outputData.count, privacy: .public) stderr_bytes=\(errorData.count, privacy: .public) stdout=\(String(stdoutText.prefix(500)), privacy: .public) stderr=\(String(stderrText.prefix(500)), privacy: .public)")
-        guard process.terminationStatus == 0 else {
-            let stderr = stderrText.isEmpty ? "tmux exited \(process.terminationStatus)" : stderrText
+        BridgeLogger.server.debug("tmux command argv=\(commandArguments.joined(separator: " "), privacy: .public) stdout_bytes=\(outputData.count, privacy: .public) stderr_bytes=\(errorData.count, privacy: .public) stdout=\(String(stdoutText.prefix(500)), privacy: .public) stderr=\(String(stderrText.prefix(500)), privacy: .public)")
+        guard result.terminationStatus == 0 else {
+            let stderr = stderrText.isEmpty ? "tmux exited \(result.terminationStatus)" : stderrText
             throw NSError(domain: "TmuxStateResolver",
-                          code: Int(process.terminationStatus),
+                          code: Int(result.terminationStatus),
                           userInfo: [NSLocalizedDescriptionKey: stderr])
         }
         return stdoutText
