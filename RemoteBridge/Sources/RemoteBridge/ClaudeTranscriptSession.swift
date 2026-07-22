@@ -1647,7 +1647,7 @@ final class JSONLFileTailer {
         let validatedBoundary: Data
     }
 
-    private static let sourceValidationBoundaryByteCount = 4096
+    fileprivate static let sourceValidationBoundaryByteCount = 4096
 
     private let fileURL: URL
     private let queue: DispatchQueue
@@ -2007,8 +2007,8 @@ final class JSONLFileTailer {
         return true
     }
 
-    private static func readBoundary(fileDescriptor: Int32,
-                                     throughOffset: Int) -> Data? {
+    fileprivate static func readBoundary(fileDescriptor: Int32,
+                                         throughOffset: Int) -> Data? {
         guard throughOffset >= 0 else {
             return nil
         }
@@ -2629,6 +2629,9 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private final class HistoricalClosureIndexState {
         let sourceIdentity: HistoricalClosureSourceIdentity
         var indexedThroughByteOffset: Int
+        var scannedThroughByteOffset: Int
+        var scannedBoundary: Data
+        var pendingPartialLineData: Data
         var parserState: LiveParserStateSnapshot?
         var pendingAskOpenerEventIDByPromptID: [String: String]
         var pendingContextOpenerEventID: String?
@@ -2636,12 +2639,18 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
 
         init(sourceIdentity: HistoricalClosureSourceIdentity,
              indexedThroughByteOffset: Int,
+             scannedThroughByteOffset: Int,
+             scannedBoundary: Data,
+             pendingPartialLineData: Data,
              parserState: LiveParserStateSnapshot?,
              pendingAskOpenerEventIDByPromptID: [String: String],
              pendingContextOpenerEventID: String?,
              closureByOpenerEventID: [String: AgentEvent]) {
             self.sourceIdentity = sourceIdentity
             self.indexedThroughByteOffset = indexedThroughByteOffset
+            self.scannedThroughByteOffset = scannedThroughByteOffset
+            self.scannedBoundary = scannedBoundary
+            self.pendingPartialLineData = pendingPartialLineData
             self.parserState = parserState
             self.pendingAskOpenerEventIDByPromptID = pendingAskOpenerEventIDByPromptID
             self.pendingContextOpenerEventID = pendingContextOpenerEventID
@@ -2652,6 +2661,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private var historicalClosureSourceEpoch: UInt64 = 0
     private var historicalClosureIndex: HistoricalClosureIndexState?
     private var historicalIndexEventSink: ((AgentEvent) -> Void)?
+    var historicalIndexBeforeScanForTesting: (() -> Void)?
     var historicalIndexBeforeSourceValidationForTesting: (() -> Void)?
     private var historicalIndexScanPassCount = 0
     private var historicalIndexReadByteCount = 0
@@ -2879,7 +2889,16 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             // unknown because the source could not be indexed. Unknown must
             // fail closed; replaying the page would otherwise revive an
             // opener whose terminal may simply be outside this page.
-            let closureIndexIsReady = ensureHistoricalClosureIndex()
+            let closureIndexIsReady: Bool
+            do {
+                closureIndexIsReady = try ensureHistoricalClosureIndex()
+            } catch JSONLFileTailerError.sourceInvalidated {
+                beginNewSourceEpoch()
+                startResolver()
+                return false
+            } catch {
+                return false
+            }
             do {
                 try tailer.validateCurrentSource()
             } catch JSONLFileTailerError.sourceInvalidated {
@@ -2931,7 +2950,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         }
     }
 
-    private func ensureHistoricalClosureIndex() -> Bool {
+    private func ensureHistoricalClosureIndex() throws -> Bool {
+        historicalIndexBeforeScanForTesting?()
         guard let transcriptURL,
               let handle = try? FileHandle(forReadingFrom: transcriptURL) else {
             return false
@@ -2949,11 +2969,22 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             epoch: historicalClosureSourceEpoch)
         let sourceSize = Int(fileStatus.st_size)
 
-        if historicalClosureIndex?.sourceIdentity != sourceIdentity
-            || sourceSize < (historicalClosureIndex?.indexedThroughByteOffset ?? 0) {
+        if let existingIndex = historicalClosureIndex {
+            guard existingIndex.sourceIdentity == sourceIdentity,
+                  sourceSize >= existingIndex.scannedThroughByteOffset,
+                  let currentBoundary = JSONLFileTailer.readBoundary(
+                    fileDescriptor: handle.fileDescriptor,
+                    throughOffset: existingIndex.scannedThroughByteOffset),
+                  currentBoundary == existingIndex.scannedBoundary else {
+                throw JSONLFileTailerError.sourceInvalidated
+            }
+        } else {
             historicalClosureIndex = HistoricalClosureIndexState(
                 sourceIdentity: sourceIdentity,
                 indexedThroughByteOffset: 0,
+                scannedThroughByteOffset: 0,
+                scannedBoundary: Data(),
+                pendingPartialLineData: Data(),
                 parserState: nil,
                 pendingAskOpenerEventIDByPromptID: [:],
                 pendingContextOpenerEventID: nil,
@@ -2984,23 +3015,42 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         }
 
         do {
-            try handle.seek(toOffset: UInt64(startingIndex.indexedThroughByteOffset))
+            try handle.seek(toOffset: UInt64(startingIndex.scannedThroughByteOffset))
+            // Move, rather than copy, a potentially large unterminated
+            // record out of the state object. Appending many small suffixes
+            // must not trigger Data COW of the entire retained prefix on
+            // every history request.
             var pendingData = Data()
+            swap(&pendingData, &startingIndex.pendingPartialLineData)
             var pendingDataOffset = startingIndex.indexedThroughByteOffset
-            var searchedThroughIndex = pendingData.startIndex
+            var searchedThroughIndex = pendingData.endIndex
+            var scannedThroughByteOffset = startingIndex.scannedThroughByteOffset
+            var scannedBoundary = startingIndex.scannedBoundary
             // Scan a fixed EOF snapshot. A continuously appending Claude
             // process must not make this synchronous history request chase
             // a moving end forever; the next ensure call consumes the suffix.
-            var remainingByteCount = max(0, sourceSize - startingIndex.indexedThroughByteOffset)
-            if remainingByteCount > 0 {
-                historicalIndexScanPassCount += 1
-            }
+            var remainingByteCount = max(0, sourceSize - startingIndex.scannedThroughByteOffset)
+            var countedScanPass = false
             while remainingByteCount > 0,
                   let chunk = try handle.read(upToCount: min(64 * 1024, remainingByteCount)),
                   chunk.isEmpty == false {
+                if countedScanPass == false {
+                    historicalIndexScanPassCount += 1
+                    countedScanPass = true
+                }
                 pendingData.append(chunk)
                 remainingByteCount -= chunk.count
+                scannedThroughByteOffset += chunk.count
                 historicalIndexReadByteCount += chunk.count
+                if chunk.count >= JSONLFileTailer.sourceValidationBoundaryByteCount {
+                    scannedBoundary = Data(chunk.suffix(JSONLFileTailer.sourceValidationBoundaryByteCount))
+                } else {
+                    scannedBoundary.append(chunk)
+                    if scannedBoundary.count > JSONLFileTailer.sourceValidationBoundaryByteCount {
+                        scannedBoundary.removeFirst(
+                            scannedBoundary.count - JSONLFileTailer.sourceValidationBoundaryByteCount)
+                    }
+                }
                 var lineStartIndex = pendingData.startIndex
                 var newlineSearchIndex = min(searchedThroughIndex, pendingData.endIndex)
                 while newlineSearchIndex < pendingData.endIndex,
@@ -3033,13 +3083,22 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
 
             historicalIndexBeforeSourceValidationForTesting?()
             guard let currentIdentity = historicalClosureSourceIdentity(at: transcriptURL),
-                  currentIdentity == sourceIdentity else {
-                return false
+                  currentIdentity == sourceIdentity,
+                  let currentBoundary = JSONLFileTailer.readBoundary(
+                    fileDescriptor: handle.fileDescriptor,
+                    throughOffset: scannedThroughByteOffset),
+                  currentBoundary == scannedBoundary else {
+                throw JSONLFileTailerError.sourceInvalidated
             }
             historicalClosureIndex?.indexedThroughByteOffset = pendingDataOffset
+            historicalClosureIndex?.scannedThroughByteOffset = scannedThroughByteOffset
+            historicalClosureIndex?.scannedBoundary = scannedBoundary
+            historicalClosureIndex?.pendingPartialLineData = pendingData
             historicalClosureIndex?.parserState = captureLiveParserState()
             completed = true
             return true
+        } catch JSONLFileTailerError.sourceInvalidated {
+            throw JSONLFileTailerError.sourceInvalidated
         } catch {
             return false
         }

@@ -81,6 +81,195 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                        "an indexed suffix must not be scanned again")
     }
 
+    func testClaudeHistoricalClosureIndexRetainsUnterminatedTailWithoutRereading() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        let promptID = "toolu_partial_tail"
+        let askLine = makeClaudeAskUserQuestionAssistantLine(uuid: "partial-ask",
+                                                             toolCallID: promptID)
+        let fillerLines = (0..<transcriptBootstrapLineLimit).map {
+            makeClaudeUserLine(uuid: "initial-\($0)", content: "initial-\($0)")
+        }
+        let initialLines = [askLine] + fillerLines
+        let initialPayload = initialLines.joined(separator: "\n") + "\n"
+        try initialPayload.write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20)
+                .events.contains { $0.text == "initial-\(transcriptBootstrapLineLimit - 1)" }
+        })
+        let initialAnchor = try XCTUnwrap(
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20)
+                .events.first { $0.text == "initial-\(transcriptBootstrapLineLimit - 1)" }?.seq
+        )
+        XCTAssertTrue(session.backfill(beforeSeq: initialAnchor, limit: 2))
+        let baseline = session.historicalClosureIndexStatsForTesting()
+        XCTAssertEqual(baseline,
+                       ClaudeHistoricalClosureIndexStats(scanPassCount: 1,
+                                                         readByteCount: initialPayload.utf8.count,
+                                                         completeLineCount: initialLines.count))
+
+        let partialLine = makeClaudeToolResultLine(uuid: "partial-result",
+                                                   toolCallID: promptID,
+                                                   content: "已回答")
+        let partialLineData = Data(partialLine.utf8)
+        let multibyteRange = try XCTUnwrap(partialLineData.range(of: Data("已".utf8)))
+        let splitOffset = partialLineData.distance(from: partialLineData.startIndex,
+                                                   to: multibyteRange.lowerBound) + 1
+        let partialPrefix = Data(partialLineData.prefix(splitOffset))
+        var partialCompletion = Data(partialLineData.dropFirst(splitOffset))
+        partialCompletion.append(0x0a)
+        let partialHandle = try FileHandle(forWritingTo: transcriptURL)
+        try partialHandle.seekToEnd()
+        try partialHandle.write(contentsOf: partialPrefix)
+        try partialHandle.close()
+
+        XCTAssertTrue(session.backfill(beforeSeq: initialAnchor, limit: 2))
+        let afterPartialScan = session.historicalClosureIndexStatsForTesting()
+        XCTAssertEqual(afterPartialScan,
+                       ClaudeHistoricalClosureIndexStats(
+                           scanPassCount: 2,
+                           readByteCount: initialPayload.utf8.count + partialPrefix.count,
+                           completeLineCount: initialLines.count))
+
+        XCTAssertTrue(session.backfill(beforeSeq: initialAnchor, limit: 2))
+        XCTAssertEqual(session.historicalClosureIndexStatsForTesting(), afterPartialScan,
+                       "an unchanged partial record must not be reread")
+
+        let completionHandle = try FileHandle(forWritingTo: transcriptURL)
+        try completionHandle.seekToEnd()
+        try completionHandle.write(contentsOf: partialCompletion)
+        try completionHandle.close()
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20)
+                .events.contains { $0.type == .toolResult && $0.toolCallID == promptID }
+        })
+        let completedAnchor = try XCTUnwrap(
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20)
+                .events.first { $0.type == .toolResult && $0.toolCallID == promptID }?.seq
+        )
+
+        XCTAssertTrue(session.backfill(beforeSeq: completedAnchor, limit: 2))
+        let afterPartialCompletion = session.historicalClosureIndexStatsForTesting()
+        XCTAssertEqual(afterPartialCompletion,
+                       ClaudeHistoricalClosureIndexStats(
+                           scanPassCount: 3,
+                           readByteCount: initialPayload.utf8.count
+                               + partialPrefix.count
+                               + partialCompletion.count,
+                           completeLineCount: initialLines.count + 1))
+
+        XCTAssertTrue(session.backfill(beforeSeq: completedAnchor, limit: 2))
+        XCTAssertEqual(session.historicalClosureIndexStatsForTesting(), afterPartialCompletion,
+                       "a completed partial record must advance both scan frontiers")
+
+        let firstFillerOffset = (askLine + "\n").utf8.count
+        let askPageAnchor = transcriptEventSequence(lineOffset: firstFillerOffset, ordinal: 0)
+        let askPage = BridgeAgentEventFetchFlow.run(eventHub: hub,
+                                                    workspaceID: "workspace",
+                                                    sessionID: "session",
+                                                    limit: 20,
+                                                    beforeSeq: askPageAnchor,
+                                                    afterSeq: nil) { _, anchor, limit in
+            session.backfill(beforeSeq: anchor, limit: limit)
+        }
+        XCTAssertTrue(askPage.didBackfill)
+        XCTAssertFalse(askPage.fetchResult.events.contains {
+            $0.type == .interactivePrompt && $0.metadata?["prompt_id"] == promptID
+        }, "the UTF-8 partial terminal must be reassembled and close its historical opener")
+        XCTAssertNil(hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                  sessionID: "session",
+                                                  promptID: promptID))
+    }
+
+    func testClaudeHistoricalIndexRejectsSameInodeMutationWhileAdoptingPartial() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        let initialLines = (0..<8).map {
+            makeClaudeUserLine(uuid: "old-\($0)", content: "old-\($0)")
+        }
+        let initialPayload = initialLines.joined(separator: "\n") + "\n"
+        try initialPayload.write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20)
+                .events.contains { $0.text == "old-7" }
+        })
+        let initialAnchor = try XCTUnwrap(
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20)
+                .events.first { $0.text == "old-7" }?.seq
+        )
+        XCTAssertTrue(session.backfill(beforeSeq: initialAnchor, limit: 2))
+
+        let partialLine = makeClaudeToolResultLine(uuid: "partial-result",
+                                                   toolCallID: "toolu_mutated_partial",
+                                                   content: "舊回答")
+        let partialLineData = Data(partialLine.utf8)
+        let partialPrefix = Data(partialLineData.prefix(partialLineData.count / 2))
+        var seamError: Error?
+        var appendedPartial = false
+        var mutatedPartial = false
+        session.historicalIndexBeforeScanForTesting = {
+            guard appendedPartial == false else { return }
+            appendedPartial = true
+            do {
+                let handle = try FileHandle(forWritingTo: transcriptURL)
+                try handle.seekToEnd()
+                try handle.write(contentsOf: partialPrefix)
+                try handle.close()
+            } catch {
+                seamError = error
+            }
+        }
+        session.historicalIndexBeforeSourceValidationForTesting = {
+            guard mutatedPartial == false else { return }
+            mutatedPartial = true
+            do {
+                let handle = try FileHandle(forWritingTo: transcriptURL)
+                try handle.truncate(atOffset: UInt64(initialPayload.utf8.count))
+                try handle.seek(toOffset: UInt64(initialPayload.utf8.count))
+                try handle.write(contentsOf: Data(repeating: 0x78, count: partialPrefix.count))
+                try handle.close()
+            } catch {
+                seamError = error
+            }
+        }
+
+        let output = BridgeAgentEventFetchFlow.run(eventHub: hub,
+                                                   workspaceID: "workspace",
+                                                   sessionID: "session",
+                                                   limit: 4,
+                                                   beforeSeq: initialAnchor,
+                                                   afterSeq: nil) { _, anchor, limit in
+            session.backfill(beforeSeq: anchor, limit: limit)
+        }
+
+        XCTAssertNil(seamError)
+        XCTAssertTrue(appendedPartial)
+        XCTAssertTrue(mutatedPartial)
+        XCTAssertFalse(output.didBackfill)
+        XCTAssertTrue(output.fetchResult.events.isEmpty,
+                      "same-inode mutation must revoke the old fetch transaction synchronously")
+    }
+
     func testClaudeLocalCommandEnvelopeUserMessagesAreNotPublished() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
