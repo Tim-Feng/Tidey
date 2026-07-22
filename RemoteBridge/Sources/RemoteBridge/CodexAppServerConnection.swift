@@ -365,14 +365,15 @@ final class CodexAppServerConnection {
                         targetIndex: Int,
                         clientRequestID: String?,
                         lifecycleToken: String?) throws -> CodexAppServerApprovalSubmitOutcome {
-        try withPublicationLock {
-            try completeLifecycleSubmit(
-                promptID: promptID,
-                outcome: approvalStore.beginSubmit(promptID: promptID,
-                                                   targetIndex: targetIndex,
-                                                   clientRequestID: clientRequestID,
-                                                   lifecycleToken: lifecycleToken))
-        }
+        // Store admission is atomic. Do not hold publicationLock across the
+        // confirmed transport write: close or an app-server lifecycle signal
+        // must be able to publish the authoritative terminal while it blocks.
+        try completeLifecycleSubmit(
+            promptID: promptID,
+            outcome: approvalStore.beginSubmit(promptID: promptID,
+                                               targetIndex: targetIndex,
+                                               clientRequestID: clientRequestID,
+                                               lifecycleToken: lifecycleToken))
     }
 
     @discardableResult
@@ -380,15 +381,14 @@ final class CodexAppServerConnection {
                          answers: [String: [String]],
                          clientRequestID: String?,
                          lifecycleToken: String?) throws -> CodexAppServerApprovalSubmitOutcome {
-        try withPublicationLock {
-            try completeLifecycleSubmit(
+        // See submitApproval: authoritative terminals must not wait for I/O.
+        try completeLifecycleSubmit(
+            promptID: promptID,
+            outcome: approvalStore.beginSubmitUserInput(
                 promptID: promptID,
-                outcome: approvalStore.beginSubmitUserInput(
-                    promptID: promptID,
-                    answers: answers,
-                    clientRequestID: clientRequestID,
-                    lifecycleToken: lifecycleToken))
-        }
+                answers: answers,
+                clientRequestID: clientRequestID,
+                lifecycleToken: lifecycleToken))
     }
 
     private func completeLifecycleSubmit(
@@ -415,9 +415,15 @@ final class CodexAppServerConnection {
                                      value: response,
                                      preferConfirmed: true)
             } catch {
-                _ = approvalStore.failSubmit(promptID: promptID,
-                                             lifecycleAttempt: lifecycleAttempt)
-                throw error
+                switch approvalStore.failSubmit(
+                    promptID: promptID,
+                    lifecycleAttempt: lifecycleAttempt
+                ) {
+                case .terminal(let record):
+                    return .alreadyResolved(record.event)
+                case .awaitingConfirmation, .supersededLifecycle:
+                    throw error
+                }
             }
             switch approvalStore.completeSubmitFlush(
                 promptID: promptID,
