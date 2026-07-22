@@ -1630,7 +1630,25 @@ struct JSONLFileSourceIdentity: Equatable, Sendable {
     let inode: UInt64
 }
 
+enum JSONLFileTailerError: Error {
+    case sourceInvalidated
+}
+
 final class JSONLFileTailer {
+    private enum SourceContinuity {
+        case valid
+        case detached
+        case mutated
+    }
+
+    private struct SourceSnapshot {
+        let identity: JSONLFileSourceIdentity
+        let size: Int
+        let validatedBoundary: Data
+    }
+
+    private static let sourceValidationBoundaryByteCount = 4096
+
     private let fileURL: URL
     private let queue: DispatchQueue
     private let bootstrapLineLimit: Int
@@ -1645,6 +1663,8 @@ final class JSONLFileTailer {
     private(set) var earliestLoadedOffset: Int?
     private(set) var reachedStartOfFile = false
     private(set) var openedSourceIdentity: JSONLFileSourceIdentity?
+    private var validatedBoundaryOffset = 0
+    private var validatedBoundary = Data()
 
     init(fileURL: URL,
          queue: DispatchQueue,
@@ -1663,49 +1683,77 @@ final class JSONLFileTailer {
         guard fd >= 0 else {
             throw POSIXError(.ENOENT)
         }
-        var fileStatus = stat()
-        guard fstat(fd, &fileStatus) == 0 else {
-            let posixCode = POSIXErrorCode(rawValue: errno) ?? .EIO
-            close(fd)
-            throw POSIXError(posixCode)
-        }
         self.fd = fd
-        openedSourceIdentity = JSONLFileSourceIdentity(device: UInt64(fileStatus.st_dev),
-                                                       inode: UInt64(fileStatus.st_ino))
-        let bootstrappedLines = try JSONLFileReader.readTail(fileURL: fileURL, limit: bootstrapLineLimit)
-        for (offset, line) in bootstrappedLines {
-            lineHandler(offset, line)
-        }
-        earliestLoadedOffset = bootstrappedLines.first?.offset
-        reachedStartOfFile = (bootstrappedLines.first?.offset ?? 0) == 0
+        do {
+            var fileStatus = stat()
+            guard fstat(fd, &fileStatus) == 0 else {
+                let posixCode = POSIXErrorCode(rawValue: errno) ?? .EIO
+                throw POSIXError(posixCode)
+            }
+            openedSourceIdentity = JSONLFileSourceIdentity(device: UInt64(fileStatus.st_dev),
+                                                           inode: UInt64(fileStatus.st_ino))
 
-        let endOffset = lseek(fd, 0, SEEK_END)
-        guard endOffset >= 0 else {
-            let posixCode = POSIXErrorCode(rawValue: errno) ?? .EIO
-            close(fd)
-            self.fd = -1
-            throw POSIXError(posixCode)
-        }
-        nextReadOffset = Int(endOffset)
-        pendingData.removeAll(keepingCapacity: false)
-        pendingLineOffset = nil
+            // Arm the vnode watcher as soon as the opened descriptor has an
+            // identity. A truncate-and-regrow after this point must leave a
+            // filesystem event for the live tail; work done before this
+            // point is simply part of the source we are opening.
+            let source = DispatchSource.makeFileSystemObjectSource(
+                fileDescriptor: fd,
+                eventMask: [.write, .extend, .delete, .rename, .revoke],
+                queue: queue)
+            source.setEventHandler { [weak self] in
+                self?.handleFileEvent()
+            }
+            source.setCancelHandler { [fd] in
+                close(fd)
+            }
+            self.source = source
+            source.resume()
 
-        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd,
-                                                               eventMask: [.write, .extend, .delete, .rename, .revoke],
-                                                               queue: queue)
-        source.setEventHandler { [weak self] in
-            self?.handleFileEvent()
+            // Adopt an initial EOF only after two matching descriptor
+            // snapshots agree with the current path. This prevents a
+            // truncate-and-regrow during startup from being mistaken for a
+            // stable initial frontier.
+            guard establishInitialValidatedFrontier() else {
+                throw JSONLFileTailerError.sourceInvalidated
+            }
+            pendingData.removeAll(keepingCapacity: false)
+            pendingLineOffset = nil
+
+            let bootstrappedLines = try JSONLFileReader.readBefore(
+                fileURL: fileURL,
+                beforeOffset: nextReadOffset,
+                limit: bootstrapLineLimit)
+            guard currentSourceIsValid(minimumSize: nextReadOffset) else {
+                throw JSONLFileTailerError.sourceInvalidated
+            }
+
+            // Drain any append that landed after the fixed bootstrap EOF.
+            // Publication waits until the post-read fence succeeds.
+            let appendedLines = readAvailableData()
+            guard currentSourceIsValid(minimumSize: nextReadOffset),
+                  refreshValidatedBoundary(),
+                  currentSourceIsValid(minimumSize: nextReadOffset) else {
+                throw JSONLFileTailerError.sourceInvalidated
+            }
+            let initialLines = bootstrappedLines + appendedLines
+            for (offset, line) in initialLines {
+                lineHandler(offset, line)
+            }
+            earliestLoadedOffset = bootstrappedLines.first?.offset ?? appendedLines.first?.offset
+            reachedStartOfFile = (earliestLoadedOffset ?? 0) == 0
+        } catch {
+            stop()
+            throw error
         }
-        source.setCancelHandler { [fd] in
-            close(fd)
-        }
-        source.resume()
-        self.source = source
     }
 
     func backfill(beforeOffset: Int, limit: Int) throws -> Bool {
         guard beforeOffset > 0, limit > 0 else {
             return false
+        }
+        guard currentSourceIsValid(minimumSize: nextReadOffset) else {
+            throw JSONLFileTailerError.sourceInvalidated
         }
         // Honor the caller's anchor. A fresh client may request a newer range
         // than the deepest page another client already read; neither the
@@ -1714,6 +1762,9 @@ final class JSONLFileTailer {
         let lines = try JSONLFileReader.readBefore(fileURL: fileURL,
                                                    beforeOffset: beforeOffset,
                                                    limit: limit)
+        guard currentSourceIsValid(minimumSize: nextReadOffset) else {
+            throw JSONLFileTailerError.sourceInvalidated
+        }
         guard !lines.isEmpty else {
             if beforeOffset <= (earliestLoadedOffset ?? beforeOffset) {
                 reachedStartOfFile = true
@@ -1730,8 +1781,16 @@ final class JSONLFileTailer {
         return true
     }
 
+    func validateCurrentSource() throws {
+        guard currentSourceIsValid(minimumSize: nextReadOffset) else {
+            throw JSONLFileTailerError.sourceInvalidated
+        }
+    }
+
     func stop() {
         openedSourceIdentity = nil
+        validatedBoundaryOffset = 0
+        validatedBoundary.removeAll(keepingCapacity: false)
         if let source {
             self.source = nil
             source.cancel()
@@ -1754,17 +1813,234 @@ final class JSONLFileTailer {
             // drain the final appends (e.g. a session-end journal line
             // written just before the wrapper removed the file) BEFORE
             // tearing the tailer down.
-            readAvailableData()
+            drainDetachedSourceAndInvalidate()
+            return
+        }
+        switch sourceContinuity(minimumSize: nextReadOffset) {
+        case .detached:
+            // vnode delivery can coalesce an append followed by unlink into
+            // a write-only event. The open descriptor still names the old
+            // immutable generation, so its final complete lines are safe to
+            // publish before switching epochs.
+            drainDetachedSourceAndInvalidate()
+            return
+        case .mutated:
+            // Same-inode truncation/rewrite can expose bytes from a different
+            // logical generation through this descriptor. Never drain it.
+            stop()
+            invalidationHandler()
+            return
+        case .valid:
+            break
+        }
+        let lines = readAvailableData()
+        switch sourceContinuity(minimumSize: nextReadOffset) {
+        case .detached:
+            // The path detached after the pre-read fence. All bytes just
+            // read still came from the old descriptor and precede the epoch
+            // switch, so preserve them exactly once.
+            drainDetachedSourceAndInvalidate(alreadyRead: lines)
+            return
+        case .mutated:
+            stop()
+            invalidationHandler()
+            return
+        case .valid:
+            break
+        }
+        guard refreshValidatedBoundary() else {
+            if sourceContinuity(minimumSize: nextReadOffset) == .detached {
+                drainDetachedSourceAndInvalidate(alreadyRead: lines)
+                return
+            }
             stop()
             invalidationHandler()
             return
         }
-        readAvailableData()
+        switch sourceContinuity(minimumSize: nextReadOffset) {
+        case .valid:
+            for (offset, line) in lines {
+                lineHandler(offset, line)
+            }
+        case .detached:
+            // Unlink/rename can land after the proposed boundary was
+            // adopted but before publication. The buffered bytes still came
+            // from the old descriptor and must precede invalidation.
+            drainDetachedSourceAndInvalidate(alreadyRead: lines)
+        case .mutated:
+            stop()
+            invalidationHandler()
+        }
     }
 
-    private func readAvailableData() {
+    private func drainDetachedSourceAndInvalidate(
+        alreadyRead: [(offset: Int, line: String)] = []
+    ) {
+        let lines = alreadyRead + readAvailableData()
+        if openedDescriptorPreservesValidatedPrefix(minimumSize: nextReadOffset) {
+            for (offset, line) in lines {
+                lineHandler(offset, line)
+            }
+        }
+        stop()
+        invalidationHandler()
+    }
+
+    private func openedDescriptorPreservesValidatedPrefix(minimumSize: Int) -> Bool {
+        guard fd >= 0, let openedSourceIdentity else {
+            return false
+        }
+        var fileStatus = stat()
+        guard fstat(fd, &fileStatus) == 0,
+              JSONLFileSourceIdentity(device: UInt64(fileStatus.st_dev),
+                                      inode: UInt64(fileStatus.st_ino)) == openedSourceIdentity,
+              Int(fileStatus.st_size) >= minimumSize,
+              let boundary = Self.readBoundary(fileDescriptor: fd,
+                                               throughOffset: validatedBoundaryOffset),
+              boundary == validatedBoundary else {
+            return false
+        }
+        return true
+    }
+
+    private func currentSourceIsValid(minimumSize: Int) -> Bool {
+        sourceContinuity(minimumSize: minimumSize) == .valid
+    }
+
+    private func sourceContinuity(minimumSize: Int) -> SourceContinuity {
+        guard let openedSourceIdentity else {
+            return .mutated
+        }
+        guard let snapshot = Self.sourceSnapshot(at: fileURL,
+                                                 boundaryOffset: validatedBoundaryOffset) else {
+            return .detached
+        }
+        guard snapshot.identity == openedSourceIdentity else {
+            return .detached
+        }
+        guard snapshot.size >= minimumSize,
+              snapshot.validatedBoundary == validatedBoundary else {
+            return .mutated
+        }
+        return .valid
+    }
+
+    private static func sourceSnapshot(at url: URL,
+                                       boundaryOffset: Int) -> SourceSnapshot? {
+        let currentFD = open(url.path, O_RDONLY)
+        guard currentFD >= 0 else {
+            return nil
+        }
+        defer { close(currentFD) }
+        var fileStatus = stat()
+        guard fstat(currentFD, &fileStatus) == 0 else {
+            return nil
+        }
+        guard let boundary = readBoundary(fileDescriptor: currentFD,
+                                          throughOffset: boundaryOffset) else {
+            return nil
+        }
+        return SourceSnapshot(identity: JSONLFileSourceIdentity(device: UInt64(fileStatus.st_dev),
+                                                                inode: UInt64(fileStatus.st_ino)),
+                              size: Int(fileStatus.st_size),
+                              validatedBoundary: boundary)
+    }
+
+    private static func sourceSnapshot(fileDescriptor: Int32) -> SourceSnapshot? {
+        var fileStatus = stat()
+        guard fstat(fileDescriptor, &fileStatus) == 0 else {
+            return nil
+        }
+        let size = Int(fileStatus.st_size)
+        guard let boundary = readBoundary(fileDescriptor: fileDescriptor,
+                                          throughOffset: size) else {
+            return nil
+        }
+        return SourceSnapshot(identity: JSONLFileSourceIdentity(device: UInt64(fileStatus.st_dev),
+                                                                inode: UInt64(fileStatus.st_ino)),
+                              size: size,
+                              validatedBoundary: boundary)
+    }
+
+    private func establishInitialValidatedFrontier() -> Bool {
+        guard fd >= 0, let openedSourceIdentity else {
+            return false
+        }
+        for _ in 0..<3 {
+            guard let first = Self.sourceSnapshot(fileDescriptor: fd),
+                  first.identity == openedSourceIdentity,
+                  let pathSnapshot = Self.sourceSnapshot(at: fileURL,
+                                                         boundaryOffset: first.size),
+                  let second = Self.sourceSnapshot(fileDescriptor: fd),
+                  second.identity == first.identity,
+                  second.size == first.size,
+                  second.validatedBoundary == first.validatedBoundary,
+                  pathSnapshot.identity == first.identity,
+                  pathSnapshot.size >= first.size,
+                  pathSnapshot.validatedBoundary == first.validatedBoundary,
+                  lseek(fd, off_t(first.size), SEEK_SET) == off_t(first.size) else {
+                continue
+            }
+            nextReadOffset = first.size
+            validatedBoundaryOffset = first.size
+            validatedBoundary = first.validatedBoundary
+            return true
+        }
+        return false
+    }
+
+    private func refreshValidatedBoundary() -> Bool {
+        guard fd >= 0,
+              let openedSourceIdentity,
+              let proposedBoundary = Self.readBoundary(fileDescriptor: fd,
+                                                       throughOffset: nextReadOffset),
+              currentSourceIsValid(minimumSize: nextReadOffset),
+              let proposedPathSnapshot = Self.sourceSnapshot(at: fileURL,
+                                                             boundaryOffset: nextReadOffset),
+              proposedPathSnapshot.identity == openedSourceIdentity,
+              proposedPathSnapshot.size >= nextReadOffset,
+              proposedPathSnapshot.validatedBoundary == proposedBoundary else {
+            return false
+        }
+        validatedBoundaryOffset = nextReadOffset
+        validatedBoundary = proposedBoundary
+        return true
+    }
+
+    private static func readBoundary(fileDescriptor: Int32,
+                                     throughOffset: Int) -> Data? {
+        guard throughOffset >= 0 else {
+            return nil
+        }
+        let byteCount = min(sourceValidationBoundaryByteCount, throughOffset)
+        guard byteCount > 0 else {
+            return Data()
+        }
+        let startOffset = throughOffset - byteCount
+        var bytes = [UInt8](repeating: 0, count: byteCount)
+        var totalBytesRead = 0
+        while totalBytesRead < byteCount {
+            let bytesRead = bytes.withUnsafeMutableBytes { buffer in
+                pread(fileDescriptor,
+                      buffer.baseAddress?.advanced(by: totalBytesRead),
+                      byteCount - totalBytesRead,
+                      off_t(startOffset + totalBytesRead))
+            }
+            if bytesRead > 0 {
+                totalBytesRead += bytesRead
+                continue
+            }
+            if bytesRead < 0, errno == EINTR {
+                continue
+            }
+            return nil
+        }
+        return Data(bytes)
+    }
+
+    private func readAvailableData() -> [(offset: Int, line: String)] {
         guard fd >= 0 else {
-            return
+            return []
         }
 
         var chunk = [UInt8](repeating: 0, count: 8192)
@@ -1788,10 +2064,11 @@ final class JSONLFileTailer {
             break
         }
 
-        drainCompleteLines()
+        return drainCompleteLines()
     }
 
-    private func drainCompleteLines() {
+    private func drainCompleteLines() -> [(offset: Int, line: String)] {
+        var lines = [(offset: Int, line: String)]()
         while let newlineIndex = pendingData.firstIndex(of: 0x0a) {
             let lineData = pendingData.prefix(upTo: newlineIndex)
             let lineOffset = pendingLineOffset ?? nextReadOffset
@@ -1806,8 +2083,9 @@ final class JSONLFileTailer {
                   let line = String(data: lineData, encoding: .utf8) else {
                 continue
             }
-            lineHandler(lineOffset, line)
+            lines.append((offset: lineOffset, line: line))
         }
+        return lines
     }
 }
 
@@ -2368,6 +2646,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private var historicalClosureSourceEpoch: UInt64 = 0
     private var historicalClosureIndex: HistoricalClosureIndexState?
     private var historicalIndexEventSink: ((AgentEvent) -> Void)?
+    var historicalIndexBeforeSourceValidationForTesting: (() -> Void)?
     private var historicalReplayOpenerEventIDs = Set<String>()
     private var historicalBackfillAnchorSeq: Int?
 
@@ -2569,11 +2848,30 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                   beforeOffset > 0 else {
                 return false
             }
+            do {
+                try tailer.validateCurrentSource()
+            } catch JSONLFileTailerError.sourceInvalidated {
+                beginNewSourceEpoch()
+                startResolver()
+                return false
+            } catch {
+                return false
+            }
             // Closure knowledge is three-state: closed, genuinely open, or
             // unknown because the source could not be indexed. Unknown must
             // fail closed; replaying the page would otherwise revive an
             // opener whose terminal may simply be outside this page.
-            guard ensureHistoricalClosureIndex() else {
+            let closureIndexIsReady = ensureHistoricalClosureIndex()
+            do {
+                try tailer.validateCurrentSource()
+            } catch JSONLFileTailerError.sourceInvalidated {
+                beginNewSourceEpoch()
+                startResolver()
+                return false
+            } catch {
+                return false
+            }
+            guard closureIndexIsReady else {
                 return false
             }
             let liveParserState = captureLiveParserState()
@@ -2581,12 +2879,25 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             historicalReplayOpenerEventIDs = []
             historicalBackfillAnchorSeq = beforeSeq
             isBackfillingHistory = true
+            var sourceWasInvalidated = false
             defer {
                 historicalBackfillAnchorSeq = nil
                 isBackfillingHistory = false
                 restoreLiveParserState(liveParserState)
+                if sourceWasInvalidated {
+                    beginNewSourceEpoch()
+                    startResolver()
+                }
             }
-            let didLoad = (try? tailer.backfill(beforeOffset: beforeOffset, limit: limit)) ?? false
+            let didLoad: Bool
+            do {
+                didLoad = try tailer.backfill(beforeOffset: beforeOffset, limit: limit)
+            } catch JSONLFileTailerError.sourceInvalidated {
+                sourceWasInvalidated = true
+                return false
+            } catch {
+                return false
+            }
             if didLoad, let index = historicalClosureIndex {
                 for openerEventID in historicalReplayOpenerEventIDs {
                     guard let closure = index.closureByOpenerEventID[openerEventID] else {
@@ -2697,6 +3008,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 searchedThroughIndex = pendingData.endIndex
             }
 
+            historicalIndexBeforeSourceValidationForTesting?()
             guard let currentIdentity = historicalClosureSourceIdentity(at: transcriptURL),
                   currentIdentity == sourceIdentity else {
                 return false

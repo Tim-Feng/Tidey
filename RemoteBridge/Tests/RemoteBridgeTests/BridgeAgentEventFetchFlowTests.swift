@@ -38,6 +38,48 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
         XCTAssertEqual(output.fetchResult.events.compactMap(\.text), ["near-97", "near-98", "near-99"])
     }
 
+    func testBeforeCursorRefetchesWhenBackfillInvalidatesOldSourceWithoutLoading() {
+        let hub = AgentEventHub()
+        for seq in 100...105 {
+            hub.publish(makeEvent(seq: seq, text: "old-\(seq)"))
+        }
+
+        let output = BridgeAgentEventFetchFlow.run(eventHub: hub,
+                                                   workspaceID: "workspace",
+                                                   sessionID: "session",
+                                                   limit: 3,
+                                                   beforeSeq: 106,
+                                                   afterSeq: nil) { sessionID, _, _ in
+            hub.beginNewSourceEpoch(sessionID: sessionID)
+            return false
+        }
+
+        XCTAssertFalse(output.didBackfill)
+        XCTAssertTrue(output.fetchResult.events.isEmpty,
+                      "a fetch transaction must not return its pre-reset source snapshot")
+    }
+
+    func testAfterCursorRefetchesBeforeStoppingWhenBackfillInvalidatesOldSource() {
+        let hub = AgentEventHub()
+        for seq in 100...105 {
+            hub.publish(makeEvent(seq: seq, text: "old-\(seq)"))
+        }
+
+        let output = BridgeAgentEventFetchFlow.run(eventHub: hub,
+                                                   workspaceID: "workspace",
+                                                   sessionID: "session",
+                                                   limit: 3,
+                                                   beforeSeq: nil,
+                                                   afterSeq: 1) { sessionID, _, _ in
+            hub.beginNewSourceEpoch(sessionID: sessionID)
+            return false
+        }
+
+        XCTAssertFalse(output.didBackfill)
+        XCTAssertTrue(output.fetchResult.events.isEmpty,
+                      "the final result must be refetched after a failed coverage attempt")
+    }
+
     private func makeEvent(seq: Int, text: String) -> AgentEvent {
         AgentEvent(eventID: "event-\(seq)",
                    seq: seq,
