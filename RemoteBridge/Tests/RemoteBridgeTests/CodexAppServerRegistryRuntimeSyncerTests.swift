@@ -232,6 +232,133 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         XCTAssertEqual(observed, ["A", "B", "C"])
     }
 
+    func testRetiredCallbacksAreDroppedAtExecutionTime() throws {
+        let hub = AgentEventHub()
+        let sidebarQueue = DispatchQueue(label: "test.codex.retired-callback.sidebar")
+        let releaseSidebar = DispatchSemaphore(value: 0)
+        sidebarQueue.async { releaseSidebar.wait() }
+        let sidebarLock = NSLock()
+        var sidebarMessages = [String]()
+        var agentHandlers = [CodexAppServerHeadlessRuntime.AgentEventHandler]()
+        var promptHandlers = [CodexAppServerConnection.InteractivePromptHandler]()
+        var threadHandlers = [CodexAppServerHeadlessRuntime.ThreadIDHandler]()
+        var forwardedThreadIDs = [String]()
+        let syncer = CodexAppServerRegistryRuntimeSyncer(
+            eventHub: hub,
+            sidebarMessageSender: { message in
+                sidebarLock.lock()
+                sidebarMessages.append(message)
+                sidebarLock.unlock()
+            },
+            sidebarQueue: sidebarQueue,
+            attachHandler: { _, _, _, onAgentEvent, onInteractivePrompt, _, onActiveThreadID in
+                agentHandlers.append(onAgentEvent)
+                promptHandlers.append(onInteractivePrompt)
+                threadHandlers.append(onActiveThreadID)
+                return FakeRuntimeSession()
+            })
+        syncer.activeThreadHandler = { _, threadID in forwardedThreadIDs.append(threadID) }
+
+        syncer.sync(records: [
+            Self.record(sessionID: "app", runtime: "codex_app_server", socketPath: "/tmp/app-1.sock"),
+        ])
+        agentHandlers[0](Self.appServerEvent(eventID: "old-turn",
+                                             seq: 1,
+                                             sessionID: "app",
+                                             type: .thinking,
+                                             text: "old",
+                                             payloadKind: "turn_started"))
+        syncer.sync(records: [
+            Self.record(sessionID: "app", runtime: "codex_app_server", socketPath: "/tmp/app-2.sock"),
+        ])
+        promptHandlers[0](Self.approvalEnvelope(sessionID: "app", requestID: "approval-old"))
+        threadHandlers[0]("thread-old")
+
+        releaseSidebar.signal()
+        sidebarQueue.sync {}
+        sidebarLock.lock()
+        let deliveredSidebarMessages = sidebarMessages
+        sidebarLock.unlock()
+        XCTAssertTrue(deliveredSidebarMessages.isEmpty,
+                      "queued work from the retired generation must be dropped")
+        XCTAssertTrue(hub.fetch(workspaceID: "workspace-1", sessionID: "app", limit: 10).events.isEmpty)
+        XCTAssertTrue(forwardedThreadIDs.isEmpty)
+
+        let newEnvelope = Self.approvalEnvelope(sessionID: "app", requestID: "approval-new")
+        promptHandlers[1](newEnvelope)
+        threadHandlers[1]("thread-new")
+        XCTAssertEqual(hub.fetch(workspaceID: "workspace-1", sessionID: "app", limit: 10).events.map(\.eventID),
+                       [newEnvelope.event.eventID])
+        XCTAssertEqual(forwardedThreadIDs, ["thread-new"])
+    }
+
+    func testCallbackRechecksGenerationBeforePublishing() throws {
+        let hub = AgentEventHub()
+        var promptHandlers = [CodexAppServerConnection.InteractivePromptHandler]()
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { _, _, _, _, onInteractivePrompt, _, _ in
+            promptHandlers.append(onInteractivePrompt)
+            return FakeRuntimeSession()
+        })
+        syncer.sync(records: [
+            Self.record(sessionID: "app", runtime: "codex_app_server", socketPath: "/tmp/app-1.sock"),
+        ])
+
+        syncer.generationRecheckHook = { [weak syncer] in
+            syncer?.generationRecheckHook = nil
+            syncer?.sync(records: [
+                Self.record(sessionID: "app", runtime: "codex_app_server", socketPath: "/tmp/app-2.sock"),
+            ])
+        }
+        promptHandlers[0](Self.approvalEnvelope(sessionID: "app", requestID: "approval-stale"))
+
+        XCTAssertEqual(promptHandlers.count, 2)
+        XCTAssertTrue(hub.fetch(workspaceID: "workspace-1", sessionID: "app", limit: 10).events.isEmpty,
+                      "a callback that loses the generation race must not publish")
+    }
+
+    func testRetiringGenerationResolvedCleanupReachesHubAndSidebar() throws {
+        let hub = AgentEventHub()
+        let sidebarQueue = DispatchQueue(label: "test.codex.retiring-cleanup.sidebar")
+        let sidebarLock = NSLock()
+        var sidebarMessages = [String]()
+        let runtime = FakeRuntimeSession()
+        var promptHandler: CodexAppServerConnection.InteractivePromptHandler?
+        var resolvedHandler: CodexAppServerConnection.InteractivePromptResolvedHandler?
+        let syncer = CodexAppServerRegistryRuntimeSyncer(
+            eventHub: hub,
+            sidebarMessageSender: { message in
+                sidebarLock.lock()
+                sidebarMessages.append(message)
+                sidebarLock.unlock()
+            },
+            sidebarQueue: sidebarQueue,
+            attachHandler: { _, _, _, _, onInteractivePrompt, onInteractivePromptResolved, _ in
+                promptHandler = onInteractivePrompt
+                resolvedHandler = onInteractivePromptResolved
+                return runtime
+            })
+        syncer.sync(records: [
+            Self.record(sessionID: "app", runtime: "codex_app_server", socketPath: "/tmp/app.sock"),
+        ])
+        let envelope = Self.approvalEnvelope(sessionID: "app", requestID: "approval-retiring")
+        try XCTUnwrap(promptHandler)(envelope)
+        sidebarQueue.sync {}
+        runtime.onStop = {
+            resolvedHandler?(Self.event(sessionID: "app", promptID: envelope.prompt.promptID))
+        }
+
+        syncer.sync(records: [])
+        sidebarQueue.sync {}
+
+        XCTAssertEqual(hub.fetch(workspaceID: "workspace-1", sessionID: "app", limit: 10).events.map(\.type),
+                       [.interactivePrompt, .interactivePromptResolved])
+        sidebarLock.lock()
+        let deliveredSidebarMessages = sidebarMessages
+        sidebarLock.unlock()
+        XCTAssertEqual(deliveredSidebarMessages.last,
+                       "report_shell_state running --workspace_id=workspace-1")
+    }
+
     func testSyncStopsStaleAndReplacedRuntimes() {
         let hub = AgentEventHub()
         var runtimes = [FakeRuntimeSession]()
@@ -946,6 +1073,7 @@ private final class FakeRuntimeSession: CodexAppServerRuntimeSessionControlling 
     var resolvedEventsByPromptID = [String: AgentEvent]()
     var pendingPromptEvents = [AgentEvent]()
     var registryRootThreadIDs = [String]()
+    var onStop: (() -> Void)?
 
     func canSubmitMessage() -> Bool {
         canSubmit
@@ -988,6 +1116,7 @@ private final class FakeRuntimeSession: CodexAppServerRuntimeSessionControlling 
     }
 
     func stop() {
+        onStop?()
         stopped = true
     }
 }

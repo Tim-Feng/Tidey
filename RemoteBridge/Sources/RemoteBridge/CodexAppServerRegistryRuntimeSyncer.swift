@@ -57,6 +57,7 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
     private struct RuntimeEntry {
         let record: AgentSessionRegistryRecord
         let session: CodexAppServerRuntimeSessionControlling
+        let generation: UUID
         let effectiveRootThreadID: String?
     }
 
@@ -70,7 +71,10 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
     private let attachHandler: AttachHandler
     private let promptNotificationDeduper = AgentInteractivePromptNotificationDeduper()
     private let lock = NSLock()
+    private let forwardLock = NSRecursiveLock()
     private var entriesBySessionID = [String: RuntimeEntry]()
+    private var currentGenerationBySessionID = [String: UUID]()
+    private var retiringGenerations = Set<UUID>()
     private var lastAssistantTextBySessionID = [String: String]()
     private var nextActiveThreadRefreshAtBySessionID = [String: Date]()
     var activeThreadHandler: ActiveThreadHandler?
@@ -126,9 +130,19 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
         let runtimeRecords = records.filter(Self.isAttachableCodexAppServerRecord(_:))
         let activeSessionIDs = Set(runtimeRecords.map(\.sessionID))
 
+        forwardLock.lock()
         lock.lock()
         let staleSessionIDs = entriesBySessionID.keys.filter { !activeSessionIDs.contains($0) }
-        let staleEntries = staleSessionIDs.compactMap { entriesBySessionID.removeValue(forKey: $0) }
+        let staleEntries = staleSessionIDs.compactMap { sessionID -> RuntimeEntry? in
+            guard let entry = entriesBySessionID.removeValue(forKey: sessionID) else {
+                return nil
+            }
+            if currentGenerationBySessionID[sessionID] == entry.generation {
+                currentGenerationBySessionID.removeValue(forKey: sessionID)
+                retiringGenerations.insert(entry.generation)
+            }
+            return entry
+        }
         let recordsToAttach = runtimeRecords.filter { record in
             guard let existing = entriesBySessionID[record.sessionID] else {
                 return true
@@ -148,12 +162,22 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
             }
             return false
         }
-        let replacedEntries = recordsToAttach.compactMap { entriesBySessionID.removeValue(forKey: $0.sessionID) }
+        let replacedEntries = recordsToAttach.compactMap { record -> RuntimeEntry? in
+            guard let entry = entriesBySessionID.removeValue(forKey: record.sessionID) else {
+                return nil
+            }
+            if currentGenerationBySessionID[record.sessionID] == entry.generation {
+                currentGenerationBySessionID.removeValue(forKey: record.sessionID)
+                retiringGenerations.insert(entry.generation)
+            }
+            return entry
+        }
         let reusedRecords = runtimeRecords.filter { record in
             entriesBySessionID[record.sessionID] != nil &&
                 recordsToAttach.contains(where: { $0.sessionID == record.sessionID }) == false
         }
         lock.unlock()
+        forwardLock.unlock()
 
         if recordsToAttach.isEmpty == false || staleEntries.isEmpty == false || replacedEntries.isEmpty == false {
             BridgeLogger.server.info("codex app-server diagnostic sync changed runtime_count=\(runtimeRecords.count, privacy: .public) attach_count=\(recordsToAttach.count, privacy: .public) reuse_count=\(reusedRecords.count, privacy: .public) stale_count=\(staleEntries.count, privacy: .public) replace_count=\(replacedEntries.count, privacy: .public) session_ids=\(runtimeRecords.map(\.sessionID).joined(separator: ","), privacy: .public)")
@@ -162,11 +186,24 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
         for entry in staleEntries + replacedEntries {
             entry.session.stop()
         }
+        let retiredEntries = staleEntries + replacedEntries
         lock.withCodexRuntimeSyncerLock {
-            for entry in staleEntries + replacedEntries {
+            for entry in retiredEntries {
                 lastAssistantTextBySessionID.removeValue(forKey: entry.record.sessionID)
                 nextActiveThreadRefreshAtBySessionID.removeValue(forKey: entry.record.sessionID)
                 promptNotificationDeduper.remove(sessionID: entry.record.sessionID)
+            }
+        }
+        if retiredEntries.isEmpty == false {
+            sidebarQueue.async { [weak self] in
+                guard let self else { return }
+                self.forwardLock.withCodexRuntimeSyncerLock {
+                    self.lock.withCodexRuntimeSyncerLock {
+                        for entry in retiredEntries {
+                            self.retiringGenerations.remove(entry.generation)
+                        }
+                    }
+                }
             }
         }
 
@@ -181,6 +218,7 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
                     entriesBySessionID[record.sessionID] = RuntimeEntry(
                         record: record,
                         session: entry.session,
+                        generation: entry.generation,
                         effectiveRootThreadID: Self.registryRootThreadID(from: record)
                             ?? entry.effectiveRootThreadID)
                 }
@@ -360,33 +398,47 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
     }
 
     private func attach(record: AgentSessionRegistryRecord) {
+        let generation = UUID()
+        forwardLock.withCodexRuntimeSyncerLock {
+            lock.withCodexRuntimeSyncerLock {
+                currentGenerationBySessionID[record.sessionID] = generation
+            }
+        }
         let stage = CodexAppServerAttachStage()
         attachStageHook?(stage)
         do {
             let session = try attachHandler(record,
                                             { [eventHub] sessionID in eventHub.nextSyntheticSeq(sessionID: sessionID) },
                                             timestampProvider,
-                                            { [weak self] event in
+                                            { [weak self, sessionID = record.sessionID, generation] event in
                                                 stage.run {
-                                                    self?.handleSidebarEvent(event, record: record)
+                                                    self?.forwardIfCurrent(sessionID: sessionID, generation: generation) {
+                                                        self?.handleSidebarEvent(event, record: record, generation: generation)
+                                                    }
                                                 }
                                             },
-                                            { [weak self, eventHub] envelope in
+                                            { [weak self, eventHub, sessionID = record.sessionID, generation] envelope in
                                                 stage.run {
-                                                    eventHub.publish(envelope.event)
-                                                    self?.handleSidebarEvent(envelope.event, record: record)
-                                                    BridgeLogger.server.info("codex app-server approval prompt published workspace_id=\(envelope.event.workspaceID, privacy: .public) panel_id=\(envelope.event.metadata?["panel_id"] ?? "-", privacy: .public) session_id=\(envelope.event.sessionID, privacy: .public) prompt_id=\(envelope.prompt.promptID, privacy: .public)")
+                                                    self?.forwardIfCurrent(sessionID: sessionID, generation: generation) {
+                                                        eventHub.publish(envelope.event)
+                                                        self?.handleSidebarEvent(envelope.event, record: record, generation: generation)
+                                                        BridgeLogger.server.info("codex app-server approval prompt published workspace_id=\(envelope.event.workspaceID, privacy: .public) panel_id=\(envelope.event.metadata?["panel_id"] ?? "-", privacy: .public) session_id=\(envelope.event.sessionID, privacy: .public) prompt_id=\(envelope.prompt.promptID, privacy: .public)")
+                                                    }
                                                 }
                                             },
-                                            { [weak self, eventHub] event in
+                                            { [weak self, eventHub, sessionID = record.sessionID, generation] event in
                                                 stage.run {
-                                                    eventHub.publish(event)
-                                                    self?.handleSidebarEvent(event, record: record)
+                                                    self?.forwardIfCurrentOrRetiring(sessionID: sessionID, generation: generation) {
+                                                        eventHub.publish(event)
+                                                        self?.handleSidebarEvent(event, record: record, generation: generation)
+                                                    }
                                                 }
                                             },
-                                            { [weak self, sessionID = record.sessionID] threadID in
+                                            { [weak self, sessionID = record.sessionID, generation] threadID in
                                                 stage.run {
-                                                    self?.activeThreadHandler?(sessionID, threadID)
+                                                    self?.forwardIfCurrent(sessionID: sessionID, generation: generation) {
+                                                        self?.activeThreadHandler?(sessionID, threadID)
+                                                    }
                                                 }
                                             })
             let rootThreadID = Self.registryRootThreadID(from: record)
@@ -394,6 +446,7 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
             lock.withCodexRuntimeSyncerLock {
                 entriesBySessionID[record.sessionID] = RuntimeEntry(record: record,
                                                                     session: session,
+                                                                    generation: generation,
                                                                     effectiveRootThreadID: rootThreadID)
                 nextActiveThreadRefreshAtBySessionID[record.sessionID] = dateProvider().addingTimeInterval(activeThreadRefreshInterval)
             }
@@ -401,13 +454,73 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
             BridgeLogger.server.info("codex app-server registry runtime attached workspace_id=\(record.workspaceID, privacy: .public) panel_id=\(record.panelID ?? "-", privacy: .public) session_id=\(record.sessionID, privacy: .public)")
         } catch {
             stage.discard()
+            forwardLock.withCodexRuntimeSyncerLock {
+                lock.withCodexRuntimeSyncerLock {
+                    if currentGenerationBySessionID[record.sessionID] == generation {
+                        currentGenerationBySessionID.removeValue(forKey: record.sessionID)
+                    }
+                }
+            }
             BridgeLogger.server.error("codex app-server registry runtime attach failed workspace_id=\(record.workspaceID, privacy: .public) panel_id=\(record.panelID ?? "-", privacy: .public) session_id=\(record.sessionID, privacy: .public) error=\(String(describing: error), privacy: .public)")
         }
     }
 
-    private func handleSidebarEvent(_ event: AgentEvent, record: AgentSessionRegistryRecord) {
+    private func forwardIfCurrent(sessionID: String, generation: UUID, _ commit: () -> Void) {
+        guard isCurrentGeneration(sessionID: sessionID, generation: generation) else {
+            return
+        }
+        generationRecheckHook?()
+        forwardLock.withCodexRuntimeSyncerLock {
+            guard isCurrentGeneration(sessionID: sessionID, generation: generation) else {
+                return
+            }
+            commit()
+        }
+    }
+
+    private func forwardIfCurrentOrRetiring(sessionID: String, generation: UUID, _ commit: () -> Void) {
+        guard isCurrentOrRetiringGeneration(sessionID: sessionID, generation: generation) else {
+            return
+        }
+        generationRecheckHook?()
+        forwardLock.withCodexRuntimeSyncerLock {
+            guard isCurrentOrRetiringGeneration(sessionID: sessionID, generation: generation) else {
+                return
+            }
+            commit()
+        }
+    }
+
+    private func isCurrentGeneration(sessionID: String, generation: UUID) -> Bool {
+        lock.withCodexRuntimeSyncerLock {
+            currentGenerationBySessionID[sessionID] == generation
+        }
+    }
+
+    private func isCurrentOrRetiringGeneration(sessionID: String, generation: UUID) -> Bool {
+        lock.withCodexRuntimeSyncerLock {
+            currentGenerationBySessionID[sessionID] == generation || retiringGenerations.contains(generation)
+        }
+    }
+
+    private func handleSidebarEvent(_ event: AgentEvent,
+                                    record: AgentSessionRegistryRecord,
+                                    generation: UUID) {
         sidebarQueue.async { [weak self] in
-            self?.handleSidebarEventOnQueue(event, record: record)
+            guard let self else { return }
+            let mayExecute: () -> Bool = {
+                if event.type == .interactivePromptResolved {
+                    return self.isCurrentOrRetiringGeneration(sessionID: record.sessionID,
+                                                              generation: generation)
+                }
+                return self.isCurrentGeneration(sessionID: record.sessionID, generation: generation)
+            }
+            guard mayExecute() else { return }
+            self.sidebarDequeueRecheckHook?()
+            self.forwardLock.withCodexRuntimeSyncerLock {
+                guard mayExecute() else { return }
+                self.handleSidebarEventOnQueue(event, record: record)
+            }
         }
     }
 
@@ -567,6 +680,14 @@ final class CodexAppServerAttachStage: @unchecked Sendable {
 }
 
 private extension NSLock {
+    func withCodexRuntimeSyncerLock<T>(_ body: () throws -> T) rethrows -> T {
+        lock()
+        defer { unlock() }
+        return try body()
+    }
+}
+
+private extension NSRecursiveLock {
     func withCodexRuntimeSyncerLock<T>(_ body: () throws -> T) rethrows -> T {
         lock()
         defer { unlock() }
