@@ -616,6 +616,11 @@ final class CodexAppServerRuntimeSession {
         lifecycleFeed?.retire()
     }
 
+    func handleProtocolViolation() {
+        BridgeLogger.server.error("codex app-server protocol violation: stopping runtime session session_id=\(self.runtime.contextSessionID, privacy: .public)")
+        stop()
+    }
+
     func handleTransportClosed(error: Error?) {
         lock.lock()
         guard stopped == false else {
@@ -1431,6 +1436,7 @@ final class CodexAppServerRuntimeSessionFactory {
         let stdoutRouter = CodexAppServerConnectionLineRouter()
         let exitRouter = CodexAppServerRuntimeSessionExitRouter(onExit: onExit)
         let closeRouter = CodexAppServerTransportCloseRouter()
+        let protocolViolationRouter = CodexAppServerProtocolViolationRouter()
         let process = try processRunner.start(configuration: configuration,
                                               onStdoutLine: { line in
                                                   stdoutRouter.receive(line)
@@ -1482,7 +1488,10 @@ final class CodexAppServerRuntimeSessionFactory {
                                                    nextSequence: nextSequence,
                                                    timestampProvider: timestampProvider,
                                                    onInteractivePrompt: onInteractivePrompt,
-                                                   onInteractivePromptResolved: onInteractivePromptResolved)
+                                                   onInteractivePromptResolved: onInteractivePromptResolved,
+                                                   onProtocolViolation: {
+                                                       protocolViolationRouter.trigger()
+                                                   })
         let initialization = CodexAppServerInitializationState()
         let runtimeSession = CodexAppServerRuntimeSession(process: process,
                                                           processOwnership: .owned,
@@ -1495,6 +1504,7 @@ final class CodexAppServerRuntimeSessionFactory {
                                                           lifecycleFeed: lifecycleFeed)
         exitRouter.attach(runtimeSession)
         closeRouter.attach(runtimeSession)
+        protocolViolationRouter.attach(runtimeSession)
         stdoutRouter.attach(connection)
         try connection.sendClientRequest(method: "initialize",
                                          params: [
@@ -1538,6 +1548,7 @@ final class CodexAppServerRuntimeSessionFactory {
         let stdoutRouter = CodexAppServerConnectionLineRouter()
         let process = externalProcessFactory(processID)
         let closeRouter = CodexAppServerTransportCloseRouter()
+        let protocolViolationRouter = CodexAppServerProtocolViolationRouter()
         let transport = try transportConnector.connect(mode: .unixSocket(path: socketPath),
                                                        onLine: { line in
                                                            stdoutRouter.receive(line)
@@ -1575,7 +1586,10 @@ final class CodexAppServerRuntimeSessionFactory {
                                                    nextSequence: nextSequence,
                                                    timestampProvider: timestampProvider,
                                                    onInteractivePrompt: onInteractivePrompt,
-                                                   onInteractivePromptResolved: onInteractivePromptResolved)
+                                                   onInteractivePromptResolved: onInteractivePromptResolved,
+                                                   onProtocolViolation: {
+                                                       protocolViolationRouter.trigger()
+                                                   })
         let initialization = CodexAppServerInitializationState()
         let runtimeSession = CodexAppServerRuntimeSession(process: process,
                                                           processOwnership: .external,
@@ -1587,6 +1601,7 @@ final class CodexAppServerRuntimeSessionFactory {
                                                           turnStateStore: turnStateStore,
                                                           lifecycleFeed: lifecycleFeed)
         closeRouter.attach(runtimeSession)
+        protocolViolationRouter.attach(runtimeSession)
         stdoutRouter.attach(connection)
         try connection.sendClientRequest(method: "initialize",
                                          params: [
@@ -2202,6 +2217,44 @@ private final class CodexAppServerTransportCloseRouter: @unchecked Sendable {
         }
         lock.unlock()
         session.handleTransportClosed(error: error)
+    }
+}
+
+private final class CodexAppServerProtocolViolationRouter: @unchecked Sendable {
+    private let lock = NSLock()
+    private weak var session: CodexAppServerRuntimeSession?
+    private var pendingTrigger = false
+    private var delivered = false
+
+    func attach(_ session: CodexAppServerRuntimeSession) {
+        lock.lock()
+        self.session = session
+        let shouldDeliver = pendingTrigger && delivered == false
+        if shouldDeliver {
+            delivered = true
+        }
+        lock.unlock()
+
+        if shouldDeliver {
+            session.handleProtocolViolation()
+        }
+    }
+
+    func trigger() {
+        lock.lock()
+        guard delivered == false else {
+            lock.unlock()
+            return
+        }
+        guard let session else {
+            pendingTrigger = true
+            lock.unlock()
+            return
+        }
+        delivered = true
+        lock.unlock()
+
+        session.handleProtocolViolation()
     }
 }
 

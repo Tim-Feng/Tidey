@@ -1838,6 +1838,91 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertFalse(session.canSubmitMessage())
     }
 
+    func testAttachedProtocolViolationClosesChannelWithoutTerminatingExternalProcessAndCanReattach() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let externalProcess = FakeCodexAppServerExternalProcess(processID: 9001)
+        let factory = CodexAppServerRuntimeSessionFactory(
+            processRunner: runner,
+            transportConnector: connector,
+            externalProcessFactory: { _ in externalProcess })
+        let session = try Self.attachSession(factory: factory)
+        let firstTransport = try XCTUnwrap(connector.transport)
+
+        firstTransport.emitLine(Self.protocolOwnerLine)
+        firstTransport.emitLine(Self.protocolCollisionLine)
+
+        XCTAssertTrue(Self.waitFor { session.isStopped() })
+        XCTAssertEqual(firstTransport.closeCallCount, 1)
+        XCTAssertEqual(externalProcess.terminateCallCount, 0)
+        XCTAssertTrue(runner.startedConfigurations.isEmpty)
+
+        let replacement = try Self.attachSession(factory: factory)
+        let replacementTransport = try XCTUnwrap(connector.transport)
+        XCTAssertFalse(firstTransport === replacementTransport)
+        XCTAssertEqual(replacementTransport.sentLines().count, 1)
+        XCTAssertFalse(replacement.isStopped())
+
+        replacement.stop()
+        XCTAssertEqual(externalProcess.terminateCallCount, 0)
+    }
+
+    func testOwnedStdioProtocolViolationTerminatesProcessExactlyOnce() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let session = try Self.makeSession(runner: runner)
+        let process = try XCTUnwrap(runner.process)
+
+        process.emitStdout(Self.protocolOwnerLine)
+        process.emitStdout(Self.protocolCollisionLine)
+        process.emitStdout(Self.protocolCollisionLine)
+        session.stop()
+
+        XCTAssertTrue(session.isStopped())
+        XCTAssertEqual(process.terminateCallCount, 1)
+    }
+
+    func testProtocolViolationAndStopExpireApprovalsAndPendingClientHandlersExactlyOnce() throws {
+        let connector = FakeCodexAppServerTransportConnector()
+        let prompts = PromptSink()
+        let factory = CodexAppServerRuntimeSessionFactory(
+            processRunner: FakeCodexAppServerProcessRunner(),
+            transportConnector: connector)
+        let session = try factory.attach(
+            socketPath: "/tmp/tidey-real-panel/app.sock",
+            processID: 9001,
+            context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                  panelID: "panel-1",
+                                                  sessionID: "session-1"),
+            nextSequence: { _ in 1 },
+            timestampProvider: { "2026-07-22T00:00:00.000Z" },
+            onAgentEvent: { _ in },
+            onInteractivePrompt: { prompts.append($0) },
+            onInteractivePromptResolved: { prompts.appendResolved($0) })
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+        transport.emitLine(Self.pendingApprovalLine)
+        XCTAssertEqual(session.pendingApprovalPromptEvents().count, 1)
+
+        var clientResponses = [Result<JSONValue, CodexAppServerConnectionError>]()
+        try session.startThread(cwd: nil) { clientResponses.append($0) }
+
+        transport.emitLine(Self.protocolOwnerLine)
+        transport.emitLine(Self.protocolCollisionLine)
+        session.stop()
+        transport.emitClose(CodexAppServerTransportError.closed)
+        transport.emitLine(Self.protocolCollisionLine)
+
+        let protocolTerminals = prompts.resolvedEvents().filter {
+            $0.metadata?["reason"] == "protocol_violation"
+        }
+        XCTAssertEqual(protocolTerminals.count, 1)
+        XCTAssertTrue(session.pendingApprovalPromptEvents().isEmpty)
+        XCTAssertEqual(clientResponses.count, 1)
+        guard case .failure(.protocolViolation) = clientResponses[0] else {
+            return XCTFail("pending client handler must receive protocolViolation exactly once")
+        }
+    }
+
     func testProcessExitClosesPendingClientRequests() throws {
         let runner = FakeCodexAppServerProcessRunner()
         let session = try Self.makeSession(runner: runner)
@@ -1855,6 +1940,13 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
             return XCTFail("expected closed failure")
         }
     }
+
+    private static let protocolOwnerLine =
+        #"{"id":"collision-1","method":"unknown/method","params":{"value":1}}"#
+    private static let protocolCollisionLine =
+        #"{"id":"collision-1","method":"unknown/method","params":{"value":2}}"#
+    private static let pendingApprovalLine =
+        #"{"id":"approval-pending","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","startedAtMs":1786000000000,"command":"ls"}}"#
 
     func testUnixWebSocketConnectorWaitsForUpgradeBeforeReturningTransport() throws {
         let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
@@ -2017,17 +2109,23 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         let connector = FakeCodexAppServerTransportConnector()
         let factory = CodexAppServerRuntimeSessionFactory(processRunner: FakeCodexAppServerProcessRunner(),
                                                           transportConnector: connector)
-        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
-                                         processID: 9001,
-                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
-                                                                               panelID: "panel-1",
-                                                                               sessionID: "session-1"),
-                                         nextSequence: { _ in 1 },
-                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
-                                         onAgentEvent: { _ in },
-                                         onInteractivePrompt: { _ in },
-                                         onInteractivePromptResolved: { _ in })
+        let session = try attachSession(factory: factory)
         return (session, try XCTUnwrap(connector.transport))
+    }
+
+    private static func attachSession(
+        factory: CodexAppServerRuntimeSessionFactory
+    ) throws -> CodexAppServerRuntimeSession {
+        try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                           processID: 9001,
+                           context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                 panelID: "panel-1",
+                                                                 sessionID: "session-1"),
+                           nextSequence: { _ in 1 },
+                           timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                           onAgentEvent: { _ in },
+                           onInteractivePrompt: { _ in },
+                           onInteractivePromptResolved: { _ in })
     }
 
     private static func object(from line: String,
