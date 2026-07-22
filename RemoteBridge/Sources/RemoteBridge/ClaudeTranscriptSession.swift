@@ -3211,7 +3211,16 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                     if lineData.isEmpty == false {
                         guard let line = String(data: Data(lineData), encoding: .utf8),
                               let jsonData = line.data(using: .utf8),
-                              (try? JSONSerialization.jsonObject(with: jsonData)) is [String: Any] else {
+                              let object = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+                            encounteredMalformedRecord = true
+                            break
+                        }
+                        if let version = object["version"] as? String,
+                           version.hasPrefix(claudeTranscriptMajorVersion) == false {
+                            // A valid future-major record may carry a closure
+                            // terminal whose shape this parser cannot know.
+                            // Treating it as eventless would make coverage
+                            // appear complete and revive stale openers.
                             encounteredMalformedRecord = true
                             break
                         }
