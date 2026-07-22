@@ -1682,6 +1682,162 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         XCTAssertEqual(history.compactMap(\.text), ["new-old-0", "new-old-1"])
     }
 
+    func testTranscriptSwitchPreservesExactCursorWhenHubRebasesFirstEvent() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let oldURL = directory.appendingPathComponent("old.jsonl", isDirectory: false)
+        try (makeClaudeUserLine(uuid: "old", content: "old") + "\n")
+            .write(to: oldURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub(maxBufferedEvents: 1)
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: oldURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1)
+                .events.first?.text == "old"
+        })
+        let oldSeq = try XCTUnwrap(
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1).events.first?.seq
+        )
+        hub.publish(AgentEvent(eventID: "external-synthetic",
+                               seq: oldSeq + 1_000,
+                               vendor: "claude",
+                               workspaceID: "workspace",
+                               sessionID: "session",
+                               timestamp: "2026-07-23T00:00:00Z",
+                               type: .status,
+                               role: nil,
+                               text: nil,
+                               name: nil,
+                               input: nil,
+                               output: nil,
+                               toolCallID: nil,
+                               metadata: nil))
+
+        let deliveryLock = NSLock()
+        var deliveredEvents = [AgentEvent]()
+        let (subscriptionID, _) = hub.subscribe(workspaceID: "workspace", sessionID: "session") { envelope in
+            deliveryLock.lock()
+            deliveredEvents.append(envelope.event)
+            deliveryLock.unlock()
+        }
+        defer { hub.unsubscribe(subscriptionID) }
+
+        let newURL = directory.appendingPathComponent("new.jsonl", isDirectory: false)
+        let newLines = [
+            makeClaudeUserLine(uuid: "new-first", content: "new-first"),
+            makeClaudeUserLine(uuid: "new-second", content: "new-second"),
+        ]
+        try (newLines.joined(separator: "\n") + "\n")
+            .write(to: newURL, atomically: true, encoding: .utf8)
+        session.update(record: makeRecord(transcriptPath: newURL.path))
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            deliveryLock.lock()
+            defer { deliveryLock.unlock() }
+            return deliveredEvents.contains { $0.text == "new-first" }
+                && deliveredEvents.contains { $0.text == "new-second" }
+        })
+        deliveryLock.lock()
+        let firstPublicSeq = deliveredEvents.first { $0.text == "new-first" }?.seq
+        deliveryLock.unlock()
+        let firstSeq = try XCTUnwrap(firstPublicSeq)
+        XCTAssertFalse(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10)
+            .events.contains { $0.text == "new-first" },
+                       "capacity one must evict the first event before historical replay")
+
+        let beforeFirst = BridgeAgentEventFetchFlow.run(eventHub: hub,
+                                                        workspaceID: "workspace",
+                                                        sessionID: "session",
+                                                        limit: 10,
+                                                        beforeSeq: firstSeq,
+                                                        afterSeq: nil) { _, beforeSeq, limit in
+            session.backfill(beforeSeq: beforeSeq, limit: limit)
+        }
+        XCTAssertFalse(beforeFirst.fetchResult.events.contains { $0.text == "new-first" },
+                       "a rebased public cursor must still exclude its exact source event")
+    }
+
+    func testFileBackedCursorUsesAcceptedHubSequenceAfterMidSourceRebase() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        try (makeClaudeUserLine(uuid: "initial", content: "initial") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub(maxBufferedEvents: 1)
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1)
+                .events.first?.text == "initial"
+        })
+        hub.publish(AgentEvent(eventID: "mid-source-synthetic",
+                               seq: 20_000_000,
+                               vendor: "claude",
+                               workspaceID: "workspace",
+                               sessionID: "session",
+                               timestamp: "2026-07-23T00:00:00Z",
+                               type: .status,
+                               role: nil,
+                               text: nil,
+                               name: nil,
+                               input: nil,
+                               output: nil,
+                               toolCallID: nil,
+                               metadata: nil))
+
+        let deliveryLock = NSLock()
+        var deliveredEvents = [AgentEvent]()
+        let (subscriptionID, _) = hub.subscribe(workspaceID: "workspace", sessionID: "session") { envelope in
+            deliveryLock.lock()
+            deliveredEvents.append(envelope.event)
+            deliveryLock.unlock()
+        }
+        defer { hub.unsubscribe(subscriptionID) }
+        let appendedLines = [
+            makeClaudeUserLine(uuid: "rebased", content: "rebased"),
+            makeClaudeUserLine(uuid: "after-rebased", content: "after-rebased"),
+        ]
+        let handle = try FileHandle(forWritingTo: transcriptURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data((appendedLines.joined(separator: "\n") + "\n").utf8))
+        try handle.close()
+        XCTAssertTrue(waitUntil {
+            deliveryLock.lock()
+            defer { deliveryLock.unlock() }
+            return deliveredEvents.contains { $0.text == "rebased" }
+                && deliveredEvents.contains { $0.text == "after-rebased" }
+        })
+        deliveryLock.lock()
+        let rebasedPublicSeq = deliveredEvents.first { $0.text == "rebased" }?.seq
+        deliveryLock.unlock()
+        let rebasedSeq = try XCTUnwrap(rebasedPublicSeq)
+        XCTAssertGreaterThan(rebasedSeq, 20_000_000)
+        XCTAssertFalse(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10)
+            .events.contains { $0.text == "rebased" })
+
+        let beforeRebased = BridgeAgentEventFetchFlow.run(eventHub: hub,
+                                                          workspaceID: "workspace",
+                                                          sessionID: "session",
+                                                          limit: 10,
+                                                          beforeSeq: rebasedSeq,
+                                                          afterSeq: nil) { _, beforeSeq, limit in
+            session.backfill(beforeSeq: beforeSeq, limit: limit)
+        }
+        XCTAssertFalse(beforeRebased.fetchResult.events.contains { $0.text == "rebased" },
+                       "cursor inversion must use the sequence actually accepted by Hub")
+    }
+
     func testFetchDoesNotReturnOldPageWhenSamePathIsReplacedDuringBackfill() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
