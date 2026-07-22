@@ -679,6 +679,45 @@ final class CodexTranscriptSessionTests: XCTestCase {
                        "the historical replacement must retract the previously stored newer derivation, got \(history.map { ($0.eventID, $0.seq) })")
     }
 
+    func testRepeatedReplayAfterSeenIDTrimDoesNotDuplicateHistory() throws {
+        // A tiny Hub seen-ID capacity forces trims; repeated window replays
+        // must still fetch UNIQUE events (the seen lifecycle must cover all
+        // currently stored IDs).
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout-session.jsonl", isDirectory: false)
+        var lines = [String]()
+        for index in 0..<12 {
+            lines.append(makeCodexMessageLine(role: "assistant", content: "old-\(index)"))
+        }
+        for index in 0..<transcriptBootstrapLineLimit {
+            lines.append(makeCodexMessageLine(role: "assistant", content: "line-\(index)"))
+        }
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub(maxBufferedEvents: 2000, maxSeenEventIDs: 16)
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                             fileManager: .default,
+                                             hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1).events.first?.text == "line-\(transcriptBootstrapLineLimit - 1)"
+        })
+        let boundary = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+            .events.filter { ($0.text ?? "").hasPrefix("line-") }.map(\.seq).min() ?? 0
+
+        for _ in 0..<6 {
+            _ = session.backfill(beforeSeq: boundary, limit: 2)
+        }
+        let history = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000, beforeSeq: boundary).events
+        let ids = history.map(\.eventID)
+        XCTAssertEqual(ids.count, Set(ids).count,
+                       "repeated replays after seen-ID trims must not duplicate stored history, got \(ids)")
+    }
+
     func testTranscriptIdentitySwitchIsolatesHistoricalState() throws {
         // Backfill under identity A, switch to transcript B, backfill again:
         // B's history must not contain A's lines.
@@ -777,6 +816,280 @@ final class CodexTranscriptSessionTests: XCTestCase {
     }
 
     // MARK: - Round 11 P0-2 second review
+
+    func testFreshClientCanReloadEvictedNewerHistoricalRange() throws {
+        // Client A pages deep enough to evict newer historical pages from the
+        // bounded window; a fresh client B then requests a NEWER beforeSeq.
+        // The tailer must honor B's anchor (re-reading the evicted range)
+        // and the eviction/replacement must keep the requested page — no
+        // permanent gap.
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout-session.jsonl", isDirectory: false)
+        var lines = [String]()
+        for index in 0..<30 {
+            lines.append(makeCodexMessageLine(role: "assistant", content: "old-\(index)"))
+        }
+        for index in 0..<transcriptBootstrapLineLimit {
+            lines.append(makeCodexMessageLine(role: "assistant", content: "line-\(index)"))
+        }
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                             fileManager: .default,
+                                             hub: hub,
+                                             historicalReplayWindowCapacity: 6)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1).events.first?.text == "line-\(transcriptBootstrapLineLimit - 1)"
+        })
+        let boundary = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+            .events.filter { ($0.text ?? "").hasPrefix("line-") }.map(\.seq).min() ?? 0
+
+        // Client A pages deep: far beyond the window capacity, evicting the
+        // newer historical pages (old-29, old-28, ...).
+        for _ in 0..<25 {
+            _ = session.backfill(beforeSeq: boundary, limit: 1)
+        }
+        // Fresh client B: requests the NEWER historical range again (just
+        // below the live boundary).
+        XCTAssertTrue(session.backfill(beforeSeq: boundary, limit: 3),
+                      "a fresh client's newer-range request must be honored after deep paging")
+        let history = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000, beforeSeq: boundary).events
+        for expected in ["old-29", "old-28", "old-27"] {
+            XCTAssertTrue(history.contains { $0.text == expected },
+                          "the requested newer page (\(expected)) must be reloadable after eviction, got \(history.compactMap(\.text))")
+        }
+    }
+
+    // R12 B1: a fresh client's requested anchor must be served by the REAL
+    // fetch_agent_events flow even when a deep page cache could satisfy the
+    // limit — the server must not let cache hasMore stand in for requested-
+    // range coverage.
+    func testServerFetchServesRequestedAnchorDespiteDeepCache() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout-session.jsonl", isDirectory: false)
+        var lines = [String]()
+        for index in 0..<30 {
+            lines.append(makeCodexMessageLine(role: "assistant", content: "old-\(index)"))
+        }
+        for index in 0..<transcriptBootstrapLineLimit {
+            lines.append(makeCodexMessageLine(role: "assistant", content: "line-\(index)"))
+        }
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                             fileManager: .default,
+                                             hub: hub,
+                                             historicalReplayWindowCapacity: 6)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 2000).events.contains { $0.text == "line-\(transcriptBootstrapLineLimit - 1)" }
+        })
+        let boundary = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+            .events.filter { ($0.text ?? "").hasPrefix("line-") }.map(\.seq).min() ?? 0
+        let backfill: (String, Int, Int) -> Bool = { _, beforeSeq, limit in
+            session.backfill(beforeSeq: beforeSeq, limit: limit)
+        }
+        func serverFetch(limit: Int, beforeSeq: Int) -> AgentEventHub.FetchResult {
+            BridgeAgentEventFetchFlow.run(eventHub: hub,
+                                          workspaceID: "workspace",
+                                          sessionID: "session",
+                                          limit: limit,
+                                          beforeSeq: beforeSeq,
+                                          afterSeq: nil,
+                                          backfill: backfill).fetchResult
+        }
+
+        // Client A pages deep through the REAL flow, advancing by the
+        // returned oldest_seq, until the cache window sits at the deep end.
+        var cursorA = boundary
+        for _ in 0..<12 {
+            let page = serverFetch(limit: 4, beforeSeq: cursorA)
+            guard let next = page.events.map(\.seq).filter({ $0 > 0 }).min(), next < cursorA else {
+                break
+            }
+            cursorA = next
+        }
+
+        // Client B starts fresh at the ORIGINAL newer anchor with a small
+        // limit: the response must be the page adjacent to B's anchor.
+        let pageB = serverFetch(limit: 3, beforeSeq: boundary)
+        let textsB = pageB.events.compactMap(\.text)
+        for expected in ["old-29", "old-28", "old-27"] {
+            XCTAssertTrue(textsB.contains(expected),
+                          "the requested anchor-adjacent page must be served (\(expected)), got \(textsB)")
+        }
+
+        // B pages on: the union must be contiguous, exactly once each.
+        var union = textsB
+        var cursorB = pageB.events.map(\.seq).filter { $0 > 0 }.min() ?? boundary
+        for _ in 0..<30 {
+            let page = serverFetch(limit: 3, beforeSeq: cursorB)
+            let texts = page.events.compactMap(\.text)
+            guard texts.isEmpty == false,
+                  let next = page.events.map(\.seq).filter({ $0 > 0 }).min(), next < cursorB else {
+                break
+            }
+            union.append(contentsOf: texts)
+            cursorB = next
+        }
+        let expectedUnion = (0..<30).map { "old-\($0)" }
+        XCTAssertEqual(Set(union), Set(expectedUnion), "no gap in B's union")
+        XCTAssertEqual(union.count, expectedUnion.count, "no duplicate in B's union")
+    }
+
+    // R12 B2: a single request whose limit exceeds the raw window capacity
+    // must not skip lines before their FIRST parse — every returned page is
+    // adjacent to the request anchor and the union is exact and ordered.
+    func testLimitLargerThanRawCapacityNeverSkipsLines() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout-session.jsonl", isDirectory: false)
+        var lines = [String]()
+        for index in 0..<8 {
+            lines.append(makeCodexMessageLine(role: "assistant", content: "old-\(index)"))
+        }
+        for index in 0..<transcriptBootstrapLineLimit {
+            lines.append(makeCodexMessageLine(role: "assistant", content: "line-\(index)"))
+        }
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                             fileManager: .default,
+                                             hub: hub,
+                                             historicalReplayWindowCapacity: 2)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 2000).events.contains { $0.text == "line-\(transcriptBootstrapLineLimit - 1)" }
+        })
+        let boundary = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+            .events.filter { ($0.text ?? "").hasPrefix("line-") }.map(\.seq).min() ?? 0
+
+        // Production paging with requested limit 5 > raw capacity 2: each
+        // returned page must be ADJACENT to the anchor (no silent skip), and
+        // the final union exact, ordered and complete.
+        var cursor = boundary
+        var union = [String]()
+        for _ in 0..<20 {
+            XCTAssertTrue(session.backfill(beforeSeq: cursor, limit: 5) || union.count == 8)
+            let page = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000, beforeSeq: cursor).events
+            let texts = page.compactMap(\.text)
+            guard texts.isEmpty == false else {
+                break
+            }
+            // Adjacency: the NEWEST returned event must be the line
+            // immediately below the anchor.
+            let newestReturned = page.map(\.seq).max() ?? 0
+            let expectedAdjacentIndex = 8 - union.count - 1
+            XCTAssertEqual(texts.last, "old-\(expectedAdjacentIndex)",
+                           "the page must start immediately below the anchor, got \(texts)")
+            union.append(contentsOf: texts.reversed())
+            _ = newestReturned
+            guard let next = page.map(\.seq).filter({ $0 > 0 }).min(), next < cursor else {
+                break
+            }
+            cursor = next
+            if union.count >= 8 {
+                break
+            }
+        }
+        XCTAssertEqual(union, (0..<8).reversed().map { "old-\($0)" },
+                       "the union must be exact, in order, no gap, no duplicate, got \(union)")
+    }
+
+    func testHistoricalReplacementRespectsHubCapacityWithoutDroppingRequestedPage() throws {
+        // A small Hub historical bound: any replacement stays within it AND
+        // the just-requested page survives the trim.
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout-session.jsonl", isDirectory: false)
+        var lines = [String]()
+        for index in 0..<10 {
+            lines.append(makeCodexMessageLine(role: "assistant", content: "old-\(index)"))
+        }
+        for index in 0..<transcriptBootstrapLineLimit {
+            lines.append(makeCodexMessageLine(role: "assistant", content: "line-\(index)"))
+        }
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub(maxBufferedEvents: 3, maxSeenEventIDs: 100)
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                             fileManager: .default,
+                                             hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 2000).events.contains { $0.text == "line-\(transcriptBootstrapLineLimit - 1)" }
+        })
+        let boundary = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+            .events.filter { ($0.text ?? "").hasPrefix("line-") }.map(\.seq).min() ?? 0
+
+        // Page deep like a production client: each request anchors before the
+        // oldest event already fetched. Every page derives more events than
+        // the Hub bound — the bound must hold after EVERY replacement while
+        // the just-requested page keeps surviving the trim (otherwise the
+        // cursor could never advance and paging would stall).
+        var cursor = boundary
+        var reachedOldest = false
+        // Gapless contract: the client pages through EVERY line below the
+        // live buffer (bound 3 per page) before reaching the oldest — no
+        // silent skipping.
+        for _ in 0..<400 {
+            guard session.backfill(beforeSeq: cursor, limit: 50) else {
+                break
+            }
+            let page = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000, beforeSeq: boundary).events
+            XCTAssertLessThanOrEqual(page.count, 3,
+                                     "the Hub historical bound must hold across replacements, got \(page.count)")
+            let nextCursor = page.map(\.seq).filter { $0 > 0 }.min() ?? cursor
+            XCTAssertLessThan(nextCursor, cursor,
+                              "the just-requested page must survive the bound trim so paging advances, got \(page.compactMap(\.text))")
+            cursor = nextCursor
+            if page.contains(where: { $0.text == "old-0" }) {
+                reachedOldest = true
+                break
+            }
+        }
+        XCTAssertTrue(reachedOldest,
+                      "bounded replacements must still let a client page all the way to the oldest line")
+    }
+
+    func testEvictedSeenIDsDoNotSuppressLegitimateReplacement() {
+        // Precise trace from the review: tiny hub, h1 then h2 historical;
+        // eviction keeps only h2 but the stale seen-ID for h1 must not
+        // suppress a later replacement that legitimately re-derives h1.
+        let hub = AgentEventHub(maxBufferedEvents: 1, maxSeenEventIDs: 3)
+        func live(_ id: String, seq: Int) -> AgentEvent {
+            AgentEvent(eventID: id, seq: seq, vendor: "codex", workspaceID: "workspace-1",
+                       sessionID: "session-1", timestamp: "2026-07-15T12:00:00.000Z",
+                       type: .assistantMessage, role: nil, text: id, name: nil, input: nil,
+                       output: nil, toolCallID: nil, metadata: nil)
+        }
+        hub.publish(live("live-100", seq: 100))
+        hub.publish(live("h1", seq: 10), deliverToSubscribers: false, storage: .historicalBackfill)
+        hub.publish(live("h2", seq: 20), deliverToSubscribers: false, storage: .historicalBackfill)
+        // Legitimate reconcile back to [h1].
+        hub.replaceHistoricalEvents(sessionID: "session-1", events: [live("h1", seq: 10)], anchorSeq: 10)
+        let history = hub.fetch(workspaceID: "workspace-1", sessionID: "session-1", limit: 10, beforeSeq: 100).events
+        XCTAssertEqual(history.map(\.eventID), ["h1"],
+                       "an evicted historical ID must not block a legitimate replacement, got \(history.map(\.eventID))")
+    }
 
     func testIdentitySwitchImmediatelyRevokesOldHistoryEvenWithoutNewPages() throws {
         // Identity A has backfilled history; the switch to B (whose file has
