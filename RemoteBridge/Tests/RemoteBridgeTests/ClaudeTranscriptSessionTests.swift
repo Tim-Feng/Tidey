@@ -696,7 +696,7 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                       "backfilled history must not appear as new live events")
     }
 
-    func testClaudeBackfillDoesNotConsumeLiveEchoOrLeakParserState() throws {
+    func testClaudeBackfillPreservesLiveEchoAndKeepsLocalCommandParserStateIsolated() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -759,9 +759,9 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
             }
         })
         let allEvents = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000).events
-        XCTAssertFalse(allEvents.contains {
+        XCTAssertTrue(allEvents.contains {
             $0.type == .interactivePromptResolved && $0.metadata?["prompt_id"] == "toolu_old"
-        })
+        }, "the separate history index may resolve an exposed Ask without leaking replay parser state")
         XCTAssertFalse(allEvents.contains { $0.metadata?["tidey_generated"] == "claude_context" })
     }
 
@@ -1064,6 +1064,73 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         XCTAssertNotNil(hub.activeInteractivePrompt(workspaceID: "workspace",
                                                      sessionID: "session",
                                                      promptID: promptID))
+    }
+
+    func testClaudeLiveResultResolvesPreviouslyBackfilledAsk() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+
+        let promptID = "toolu_historical_then_live"
+        let askLine = makeClaudeAskUserQuestionAssistantLine(uuid: "historical-ask",
+                                                             toolCallID: promptID)
+        let fillerLines = (0..<transcriptBootstrapLineLimit).map {
+            makeClaudeUserLine(uuid: "filler-\($0)", content: "filler-\($0)")
+        }
+        try (([askLine] + fillerLines).joined(separator: "\n") + "\n").write(to: transcriptURL,
+                                                                               atomically: true,
+                                                                               encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1)
+                .events.first?.text == "filler-\(transcriptBootstrapLineLimit - 1)"
+        })
+
+        let firstFillerOffset = (askLine + "\n").utf8.count
+        let firstFillerSeq = transcriptEventSequence(lineOffset: firstFillerOffset, ordinal: 0)
+        let askPage = BridgeAgentEventFetchFlow.run(eventHub: hub,
+                                                    workspaceID: "workspace",
+                                                    sessionID: "session",
+                                                    limit: 1,
+                                                    beforeSeq: firstFillerSeq,
+                                                    afterSeq: nil) { _, beforeSeq, limit in
+            session.backfill(beforeSeq: beforeSeq, limit: limit)
+        }
+        XCTAssertTrue(askPage.didBackfill)
+        XCTAssertEqual(askPage.fetchResult.events.map(\.eventID),
+                       ["historical-ask:ask-user-question:\(promptID)"])
+        XCTAssertNotNil(hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                     sessionID: "session",
+                                                     promptID: promptID))
+
+        let resultLine = makeClaudeToolResultLine(uuid: "live-result",
+                                                  toolCallID: promptID,
+                                                  content: "answered live")
+        let handle = try FileHandle(forWritingTo: transcriptURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data((resultLine + "\n").utf8))
+        try handle.close()
+
+        XCTAssertTrue(waitUntil {
+            let events = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000).events
+            let didResolve = events.contains {
+                $0.type == .interactivePromptResolved
+                    && $0.metadata?["prompt_id"] == promptID
+                    && $0.eventID.contains("live-result")
+            }
+            return didResolve
+                && hub.activeInteractivePrompt(workspaceID: "workspace",
+                                               sessionID: "session",
+                                               promptID: promptID) == nil
+        }, "a live terminal must resolve the exact historical opener already exposed by backfill")
     }
 
     func testClaudeBackfillTreatsLaterCommandAsContextConsumer() throws {
