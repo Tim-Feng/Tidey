@@ -200,32 +200,21 @@ final class AgentSessionRegistryMonitor {
     typealias CodexRolloutBySessionIDLookup = @Sendable (String) -> String?
     typealias OrdinaryTmuxCarrierIdentityResolver = (AgentSessionRegistryRecord) -> TideyOrdinaryTmuxCarrierIdentity?
     typealias LivePanelListProjector = ([String: JSONValue]) -> [String: JSONValue]
+    private static let processLookupTimeout: TimeInterval = 1
+    private static let rolloutLookupTimeout: TimeInterval = 2
     private static let liveParentPIDLookup: ParentPIDLookup = { pid in
         guard pid > 0 else {
             return nil
         }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/ps")
-        process.arguments = ["-o", "ppid=", "-p", String(pid)]
-
-        let outputPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = Pipe()
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
+        guard let result = BoundedProcessRunner.run(executablePath: "/bin/ps",
+                                                    arguments: ["-o", "ppid=", "-p", String(pid)],
+                                                    timeout: processLookupTimeout),
+              result.terminationStatus == 0 else {
             return nil
         }
 
-        guard process.terminationStatus == 0 else {
-            return nil
-        }
-
-        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        guard let output = String(data: outputData, encoding: .utf8)?
+        guard let output = String(data: result.standardOutput, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
               let parentPID = Int32(output) else {
             return nil
@@ -261,22 +250,11 @@ final class AgentSessionRegistryMonitor {
             return nil
         }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
-        process.arguments = ["-Fn", "-p", String(pid)]
-        let outputPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = Pipe()
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            return nil
-        }
-
-        guard process.terminationStatus == 0,
-              let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(),
+        guard let result = BoundedProcessRunner.run(executablePath: "/usr/sbin/lsof",
+                                                    arguments: ["-Fn", "-p", String(pid)],
+                                                    timeout: rolloutLookupTimeout),
+              result.terminationStatus == 0,
+              let output = String(data: result.standardOutput,
                                   encoding: .utf8) else {
             return nil
         }
@@ -327,21 +305,11 @@ final class AgentSessionRegistryMonitor {
             return []
         }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        process.arguments = ["-P", String(pid)]
-        let outputPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = Pipe()
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            return []
-        }
-
-        guard let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(),
+        guard let result = BoundedProcessRunner.run(executablePath: "/usr/bin/pgrep",
+                                                    arguments: ["-P", String(pid)],
+                                                    timeout: processLookupTimeout),
+              result.terminationStatus == 0,
+              let output = String(data: result.standardOutput,
                                   encoding: .utf8) else {
             return []
         }
@@ -355,22 +323,11 @@ final class AgentSessionRegistryMonitor {
             return nil
         }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/ps")
-        process.arguments = ["-o", "comm=", "-o", "args=", "-p", String(pid)]
-        let outputPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = Pipe()
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            return nil
-        }
-
-        guard process.terminationStatus == 0,
-              let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(),
+        guard let result = BoundedProcessRunner.run(executablePath: "/bin/ps",
+                                                    arguments: ["-o", "comm=", "-o", "args=", "-p", String(pid)],
+                                                    timeout: processLookupTimeout),
+              result.terminationStatus == 0,
+              let output = String(data: result.standardOutput,
                                   encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines),
               output.isEmpty == false else {
