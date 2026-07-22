@@ -1,5 +1,15 @@
 import Foundation
 
+final class OrdinaryTmuxProjectionContext: @unchecked Sendable {
+    let registry: OrdinaryTmuxPanelRegistry
+    let projector: OrdinaryTmuxPanelProjector
+
+    init(registry: OrdinaryTmuxPanelRegistry = OrdinaryTmuxPanelRegistry()) {
+        self.registry = registry
+        self.projector = OrdinaryTmuxPanelProjector(registry: registry)
+    }
+}
+
 final class OrdinaryTmuxPanelProjector {
     private struct CacheEntry {
         let panels: [OrdinaryTmuxProjectedPanel]

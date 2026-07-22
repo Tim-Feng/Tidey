@@ -22,7 +22,7 @@ final class TideyRemoteBridgeServer {
     private let uploadGarbageCollector: BridgeUploadGarbageCollector
     private let startRegistryMonitor: Bool
     private let startCloudflaredSupervisor: Bool
-    private let ordinaryTmuxPanelRegistry = OrdinaryTmuxPanelRegistry()
+    private let ordinaryTmuxProjectionContext: OrdinaryTmuxProjectionContext
     private let group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
 
     init(host: String = "0.0.0.0",
@@ -39,7 +39,8 @@ final class TideyRemoteBridgeServer {
          cloudflaredManager: BridgeCloudflaredManager = BridgeCloudflaredManager(),
          uploadGarbageCollector: BridgeUploadGarbageCollector = BridgeUploadGarbageCollector(uploadDirectory: BridgePaths().uploadsDirectory),
          startRegistryMonitor: Bool = true,
-         startCloudflaredSupervisor: Bool = true) {
+         startCloudflaredSupervisor: Bool = true,
+         ordinaryTmuxProjectionContext: OrdinaryTmuxProjectionContext = OrdinaryTmuxProjectionContext()) {
         self.host = host
         self.port = port
         self.token = token
@@ -55,6 +56,7 @@ final class TideyRemoteBridgeServer {
         self.uploadGarbageCollector = uploadGarbageCollector
         self.startRegistryMonitor = startRegistryMonitor
         self.startCloudflaredSupervisor = startCloudflaredSupervisor
+        self.ordinaryTmuxProjectionContext = ordinaryTmuxProjectionContext
     }
 
     func run() throws {
@@ -78,7 +80,7 @@ final class TideyRemoteBridgeServer {
                 }
                 return channel.eventLoop.makeSucceededFuture([:])
             },
-            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub, registryMonitor, codexApprovalProvider, observability, ordinaryTmuxPanelRegistry, port, cloudflaredManager] channel, _ in
+            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub, registryMonitor, codexApprovalProvider, observability, ordinaryTmuxProjectionContext, port, cloudflaredManager] channel, _ in
                 channel.pipeline.addHandler(WebSocketFrameHandler(socketClient: socketClient,
                                                                   eventHub: eventHub,
                                                                   workspaceEventHub: workspaceEventHub,
@@ -87,7 +89,7 @@ final class TideyRemoteBridgeServer {
                                                                   observability: observability,
                                                                   bridgePort: port,
                                                                   cloudflaredManager: cloudflaredManager,
-                                                                  ordinaryTmuxPanelRegistry: ordinaryTmuxPanelRegistry))
+                                                                  ordinaryTmuxProjectionContext: ordinaryTmuxProjectionContext))
             }
         )
 
@@ -608,7 +610,7 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
          observability: BridgeObservabilityCenter,
          bridgePort: Int,
          cloudflaredManager: BridgeCloudflaredManager,
-         ordinaryTmuxPanelRegistry: OrdinaryTmuxPanelRegistry) {
+         ordinaryTmuxProjectionContext: OrdinaryTmuxProjectionContext = OrdinaryTmuxProjectionContext()) {
         self.socketClient = socketClient
         self.eventHub = eventHub
         self.workspaceEventHub = workspaceEventHub
@@ -617,8 +619,9 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
         self.observability = observability
         self.bridgePort = bridgePort
         self.cloudflaredManager = cloudflaredManager
-        self.ordinaryTmuxPanelRegistry = ordinaryTmuxPanelRegistry
-        let routeResolver = OrdinaryTmuxRouteResolver(registry: ordinaryTmuxPanelRegistry)
+        self.ordinaryTmuxPanelRegistry = ordinaryTmuxProjectionContext.registry
+        self.ordinaryTmuxPanelProjector = ordinaryTmuxProjectionContext.projector
+        let routeResolver = OrdinaryTmuxRouteResolver(registry: ordinaryTmuxProjectionContext.registry)
         self.ordinaryTmuxRouteResolver = routeResolver
         self.inputActionHandler = BridgeInputActionHandler(socketSender: socketClient,
                                                            sessionResolver: registryMonitor,
@@ -635,7 +638,6 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                                                                             codexApprovalSubmitter: codexApprovalSubmitter)
         self.imageUploadHandler = BridgeImageUploadHandler(destinationResolver: ApplicationSupportImageUploadDestinationResolver(),
                                                            filenameGenerator: TimestampedImageUploadFilenameGenerator())
-        self.ordinaryTmuxPanelProjector = OrdinaryTmuxPanelProjector(registry: ordinaryTmuxPanelRegistry)
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {

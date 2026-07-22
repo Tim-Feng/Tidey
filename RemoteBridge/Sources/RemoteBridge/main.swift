@@ -19,6 +19,7 @@ let locator = TideySocketLocator()
 let socketClient = TideySocketClient(locator: locator)
 let eventHub = AgentEventHub()
 let workspaceEventHub = WorkspaceEventHub()
+let ordinaryTmuxProjectionContext = OrdinaryTmuxProjectionContext()
 let ordinaryTmuxCarrierResolver = TideyOrdinaryTmuxCarrierResolver(socketClient: socketClient)
 let codexRuntimeSyncer = CodexAppServerRegistryRuntimeSyncer(eventHub: eventHub,
                                                              sidebarMessageSender: { command in
@@ -60,7 +61,8 @@ let server = TideyRemoteBridgeServer(host: runtimeConfiguration.host,
                                      cloudflaredManager: cloudflaredManager,
                                      uploadGarbageCollector: uploadGarbageCollector,
                                      startRegistryMonitor: runtimeConfiguration.shouldStartRegistryMonitor,
-                                     startCloudflaredSupervisor: runtimeConfiguration.shouldStartCloudflaredSupervisor)
+                                     startCloudflaredSupervisor: runtimeConfiguration.shouldStartCloudflaredSupervisor,
+                                     ordinaryTmuxProjectionContext: ordinaryTmuxProjectionContext)
 
 do {
     if runtimeConfiguration.shouldStartBackgroundServices {
