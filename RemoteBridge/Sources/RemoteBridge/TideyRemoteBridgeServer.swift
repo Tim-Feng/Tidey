@@ -1200,6 +1200,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                 return panelValue
             }
             let snapshot = AgentPanelProcessSnapshotExtractor.snapshot(from: panelValue, defaultWorkspaceID: workspaceID)
+            var hasAgentSession = false
             if let session = registryMonitor.activeSessionForPanel(workspaceID: workspaceID,
                                                                    panelID: panelID,
                                                                    effectiveShellPID: snapshot?.effectiveShellPID,
@@ -1209,7 +1210,13 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                     "vendor": .string(session.vendor),
                     "session_id": .string(session.sessionID),
                 ])
+                hasAgentSession = true
             }
+            panel = AgentLifecycleListAugmenter.augmentPanel(panel,
+                                                             workspaceID: workspaceID,
+                                                             panelID: panelID,
+                                                             hasAgentSession: hasAgentSession,
+                                                             store: lifecycleStore)
             return .object(panel)
         }
 
@@ -1234,6 +1241,9 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                     workspace["agent_panel_id"] = .string(panelID)
                 }
             }
+            workspace = AgentLifecycleListAugmenter.augmentWorkspace(workspace,
+                                                                     workspaceID: workspaceID,
+                                                                     store: lifecycleStore)
             return .object(workspace)
         }
 
