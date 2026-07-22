@@ -62,10 +62,11 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
 
     private let eventHub: AgentEventHub
     private let sidebarMessageSender: SidebarMessageSender
-    private let sidebarQueue = DispatchQueue(label: "com.tidey.remote-bridge.codex-app-server-sidebar")
+    private let sidebarQueue: DispatchQueue
     private let timestampProvider: CodexAppServerConnection.TimestampProvider
     private let dateProvider: DateProvider
     private let activeThreadRefreshInterval: TimeInterval
+    private let transitionWaitTimeout: TimeInterval
     private let attachHandler: AttachHandler
     private let promptNotificationDeduper = AgentInteractivePromptNotificationDeduper()
     private let lock = NSLock()
@@ -73,6 +74,11 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
     private var lastAssistantTextBySessionID = [String: String]()
     private var nextActiveThreadRefreshAtBySessionID = [String: Date]()
     var activeThreadHandler: ActiveThreadHandler?
+    var generationRecheckHook: (() -> Void)?
+    var transitionWaitHook: ((String) -> Void)?
+    var sidebarDequeueRecheckHook: (() -> Void)?
+    var syncArrivalHook: (([AgentSessionRegistryRecord]) -> Void)?
+    var attachStageHook: ((CodexAppServerAttachStage) -> Void)?
 
     init(eventHub: AgentEventHub,
          factory: CodexAppServerRuntimeSessionFactory = CodexAppServerRuntimeSessionFactory(),
@@ -80,8 +86,12 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
          timestampProvider: @escaping CodexAppServerConnection.TimestampProvider = CodexAppServerRegistryRuntimeSyncer.iso8601Now,
          dateProvider: @escaping DateProvider = Date.init,
          activeThreadRefreshInterval: TimeInterval = 2.0,
+         sidebarQueue: DispatchQueue = DispatchQueue(label: "com.tidey.remote-bridge.codex-app-server-sidebar"),
+         transitionWaitTimeout: TimeInterval = 5.0,
          attachHandler: AttachHandler? = nil) {
         self.eventHub = eventHub
+        self.sidebarQueue = sidebarQueue
+        self.transitionWaitTimeout = transitionWaitTimeout
         self.sidebarMessageSender = sidebarMessageSender
         self.timestampProvider = timestampProvider
         self.dateProvider = dateProvider
@@ -112,6 +122,7 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
     }
 
     func sync(records: [AgentSessionRegistryRecord]) {
+        syncArrivalHook?(records)
         let runtimeRecords = records.filter(Self.isAttachableCodexAppServerRecord(_:))
         let activeSessionIDs = Set(runtimeRecords.map(\.sessionID))
 
@@ -485,6 +496,20 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.string(from: Date())
     }
+}
+
+// Test seam for attach-time callback transactionality. The pass-through
+// implementation preserves existing behavior until the behavioral change
+// wires staging into attach().
+final class CodexAppServerAttachStage: @unchecked Sendable {
+    var commitDrainHook: (() -> Void)?
+
+    func run(_ work: @escaping () -> Void) {
+        work()
+    }
+
+    func commit() {}
+    func discard() {}
 }
 
 private extension NSLock {
