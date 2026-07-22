@@ -229,6 +229,35 @@ final class ClaudeLifecycleFeedTests: XCTestCase {
         waitForState(.idle)
     }
 
+    func testOverlappingRepeatedAskKeepsNewerLifecycleBlockerOpenAfterDelayedResult() throws {
+        try startSessionAndWaitForTail()
+
+        try appendTranscript([userLine(uuid: "u1", text: "start the task")])
+        waitForState(.working)
+        let askInput = #"{"questions":[{"header":"Q","question":"pick one","options":[{"label":"A"},{"label":"B"}]}]}"#
+        try appendTranscript([
+            assistantToolUseLine(uuid: "ask-a", toolCallID: "reused-ask", name: "AskUserQuestion", input: askInput),
+            assistantToolUseLine(uuid: "ask-b", toolCallID: "reused-ask", name: "AskUserQuestion", input: askInput),
+        ])
+        XCTAssertTrue(waitUntil {
+            self.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 500)
+                .events.filter { $0.type == .interactivePrompt && $0.toolCallID == "reused-ask" }
+                .count == 2
+        })
+        waitForState(.needsInput)
+
+        try appendTranscript([userArrayLine(uuid: "result-a", blocks: [
+            #"{"type":"tool_result","tool_use_id":"reused-ask","content":"A"}"#,
+        ])])
+        XCTAssertFalse(waitUntil(timeout: 0.6) { self.state() != .needsInput },
+                       "the delayed first result must not clear the newer Ask lifecycle")
+
+        try appendTranscript([userArrayLine(uuid: "result-b", blocks: [
+            #"{"type":"tool_result","tool_use_id":"reused-ask","content":"B"}"#,
+        ])])
+        waitForState(.working)
+    }
+
     func testStopIsTurnScopedIdleEdgeWithActivityRecovery() throws {
         try startSessionAndWaitForTail()
 

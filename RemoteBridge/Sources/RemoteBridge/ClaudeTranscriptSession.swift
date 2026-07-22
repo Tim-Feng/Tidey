@@ -2131,7 +2131,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     // AskUserQuestion tool calls whose lifecycle blocker is open. Keyed by
     // tool_use_id; the matching tool_result resolves the blocker even when
     // the CARD shape is unsupported (e.g. multiSelect).
-    private var openLifecycleQuestionToolCallIDs = Set<String>()
+    private var openLifecycleQuestionTokensByToolCallID = [String: [String]]()
     // Typed hook journal (wrapper-written JSONL): PermissionRequest PREPARES
     // the identity; only the actual permission_prompt notification opens the
     // needs_input blocker (an auto-allowed PermissionRequest never leaves a
@@ -2229,7 +2229,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         }
         // The store's turn terminal resolves every blocker; the local
         // tracking must not survive it.
-        openLifecycleQuestionToolCallIDs = []
+        openLifecycleQuestionTokensByToolCallID = [:]
         openLifecyclePermissionSuffixes = []
         preparedPermissionToolUseIDs = []
         let turnID = lifecycleActiveTurnID
@@ -2324,9 +2324,11 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         return (true, boundTurnID)
     }
 
-    private func lifecycleOpenQuestionBlocker(toolCallID: String, sourceTurnID: String?) {
+    private func lifecycleOpenQuestionBlocker(toolCallID: String,
+                                              lifecycleToken: String,
+                                              sourceTurnID: String?) {
         guard !isBackfillingHistory else { return }
-        openLifecycleQuestionToolCallIDs.insert(toolCallID)
+        openLifecycleQuestionTokensByToolCallID[toolCallID, default: []].append(lifecycleToken)
         // Fenced to the SOURCE turn the AskUserQuestion event itself
         // belongs to (the assistant message's own uuid) — NOT a fresh read
         // of "whatever is current right now", which would trivially always
@@ -2334,18 +2336,25 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         lifecycleStore.openBlocker(lifecycleIdentity,
                                    vendor: record.vendor,
                                    generation: lifecycleGeneration,
-                                   blockerID: "question:\(toolCallID)",
+                                   blockerID: "question:\(lifecycleToken)",
                                    kind: .userQuestion,
                                    expectedTurnID: sourceTurnID)
     }
 
     private func lifecycleResolveQuestionBlocker(toolCallID: String) {
         guard !isBackfillingHistory else { return }
-        guard openLifecycleQuestionToolCallIDs.remove(toolCallID) != nil else { return }
+        var lifecycleTokens = openLifecycleQuestionTokensByToolCallID[toolCallID] ?? []
+        guard lifecycleTokens.isEmpty == false else { return }
+        let lifecycleToken = lifecycleTokens.removeFirst()
+        if lifecycleTokens.isEmpty {
+            openLifecycleQuestionTokensByToolCallID.removeValue(forKey: toolCallID)
+        } else {
+            openLifecycleQuestionTokensByToolCallID[toolCallID] = lifecycleTokens
+        }
         lifecycleStore.resolveBlocker(lifecycleIdentity,
                                       vendor: record.vendor,
                                       generation: lifecycleGeneration,
-                                      blockerID: "question:\(toolCallID)")
+                                      blockerID: "question:\(lifecycleToken)")
     }
 
     private func lifecycleEndSession() {
@@ -2889,7 +2898,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         lifecycleStore.claimGeneration(lifecycleIdentity,
                                        vendor: record.vendor,
                                        generation: lifecycleGeneration)
-        openLifecycleQuestionToolCallIDs = []
+        openLifecycleQuestionTokensByToolCallID = [:]
         promptNotificationDeduper.remove(sessionID: record.sessionID)
         hub.beginNewSourceEpoch(sessionID: record.sessionID)
         transcriptURL = nil
@@ -3592,7 +3601,10 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                     // trailing assistant lines are processed (Claude Code
                     // can begin processing a queued prompt B before every
                     // one of A's lines is done appending).
-                    lifecycleOpenQuestionBlocker(toolCallID: toolCallID, sourceTurnID: lifecycleOwningTurnID(for: uuid))
+                    lifecycleOpenQuestionBlocker(
+                        toolCallID: toolCallID,
+                        lifecycleToken: "\(uuid):ask-user-question:\(toolCallID)",
+                        sourceTurnID: lifecycleOwningTurnID(for: uuid))
                 }
                 if name == "AskUserQuestion",
                    let prompt = Self.askUserQuestionPrompt(from: block, uuid: uuid, index: index) {
