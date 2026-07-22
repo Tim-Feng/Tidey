@@ -949,7 +949,7 @@ final class CodexAppServerRuntimeSessionFactory {
     }
 }
 
-private func codexAppServerLoadedThreadID(from value: JSONValue) -> String? {
+func codexAppServerLoadedThreadID(from value: JSONValue) -> String? {
     if let object = value.objectValue {
         if let thread = object["thread"]?.objectValue,
            let id = thread["id"]?.stringValue ?? thread["threadId"]?.stringValue {
