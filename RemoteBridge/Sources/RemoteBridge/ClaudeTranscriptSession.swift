@@ -1748,8 +1748,10 @@ final class JSONLFileTailer {
         }
     }
 
-    func backfill(beforeOffset: Int, limit: Int) throws -> Bool {
-        guard beforeOffset > 0, limit > 0 else {
+    func backfill(beforeOffset: Int,
+                  limit: Int,
+                  includeAnchorLine: Bool = false) throws -> Bool {
+        guard (beforeOffset > 0 || includeAnchorLine), limit > 0 else {
             return false
         }
         guard currentSourceIsValid(minimumSize: nextReadOffset) else {
@@ -1761,7 +1763,8 @@ final class JSONLFileTailer {
         // redirect or block that request.
         let lines = try JSONLFileReader.readBefore(fileURL: fileURL,
                                                    beforeOffset: beforeOffset,
-                                                   limit: limit)
+                                                   limit: limit,
+                                                   includeAnchorLine: includeAnchorLine)
         guard currentSourceIsValid(minimumSize: nextReadOffset) else {
             throw JSONLFileTailerError.sourceInvalidated
         }
@@ -2705,11 +2708,11 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         lifecycleTurnLineageOrder = snapshot.lifecycleTurnLineageOrder
     }
 
-    private func transcriptLineOffsetInCurrentSource(for seq: Int) -> Int? {
+    private func transcriptEventPositionInCurrentSource(for seq: Int) -> TranscriptEventPosition? {
         guard seq > transcriptSequenceBase else {
             return nil
         }
-        return transcriptLineOffset(for: seq - transcriptSequenceBase)
+        return transcriptEventPosition(for: seq - transcriptSequenceBase)
     }
 
     private struct ClaudeLocalCommand {
@@ -2875,8 +2878,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             guard let tailer else {
                 return false
             }
-            guard let beforeOffset = transcriptLineOffsetInCurrentSource(for: beforeSeq),
-                  beforeOffset > 0 else {
+            guard let beforePosition = transcriptEventPositionInCurrentSource(for: beforeSeq),
+                  beforePosition.lineOffset > 0 || beforePosition.ordinal > 0 else {
                 return false
             }
             do {
@@ -2931,7 +2934,10 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             }
             let didLoad: Bool
             do {
-                didLoad = try tailer.backfill(beforeOffset: beforeOffset, limit: limit)
+                didLoad = try tailer.backfill(
+                    beforeOffset: beforePosition.lineOffset,
+                    limit: limit,
+                    includeAnchorLine: beforePosition.ordinal > 0)
             } catch JSONLFileTailerError.sourceInvalidated {
                 sourceWasInvalidated = true
                 return false
@@ -4063,6 +4069,10 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         }
         maxObservedSeq = max(maxObservedSeq, seq)
         if isBackfillingHistory {
+            if let anchorSeq = historicalBackfillAnchorSeq,
+               event.seq >= anchorSeq {
+                return event
+            }
             // A before-cursor response cannot include a terminal whose
             // original sequence is at or above that cursor. In that case,
             // fail closed by withholding the already-resolved opener; the
