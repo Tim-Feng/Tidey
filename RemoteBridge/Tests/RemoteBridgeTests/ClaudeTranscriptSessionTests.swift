@@ -298,7 +298,7 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                        "warning deduplication must not parse later unsupported records")
     }
 
-    func testClaudeMalformedHistoryDisablesBufferedPromptSubmission() throws {
+    func testClaudeMalformedHistoryHidesBufferedPromptFromLatestAndSubmission() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -333,6 +333,9 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         try handle.close()
 
         XCTAssertFalse(session.backfill(beforeSeq: askSeq, limit: 2))
+        XCTAssertFalse(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20)
+            .events.contains { $0.eventID == "buffered-ask:ask-user-question:\(promptID)" },
+                       "latest fetch must not replay an opener with unknown closure coverage")
         XCTAssertNil(hub.activeInteractivePrompt(workspaceID: "workspace",
                                                   sessionID: "session",
                                                   promptID: promptID),
