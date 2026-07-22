@@ -3512,22 +3512,21 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         }
         let timestamp = (object["timestamp"] as? String) ?? ISO8601DateFormatter().string(from: Date())
         let version = object["version"] as? String
-        if let version,
-           !version.hasPrefix(claudeTranscriptMajorVersion),
-           !unsupportedVersions.contains(version) {
-            unsupportedVersions.insert(version)
-            publishFileBacked(kind: .status,
-                              lineOffset: lineOffset,
-                              ordinal: 0,
-                              eventID: "status:\(record.sessionID):unsupported-version:\(version)",
-                              timestamp: timestamp,
-                              role: nil,
-                              text: "Unsupported Claude transcript version \(version)",
-                              name: nil,
-                              input: nil,
-                              output: nil,
-                              toolCallID: nil,
-                              metadata: ["reason": "unsupported_version"])
+        if let version, !version.hasPrefix(claudeTranscriptMajorVersion) {
+            if unsupportedVersions.insert(version).inserted {
+                publishFileBacked(kind: .status,
+                                  lineOffset: lineOffset,
+                                  ordinal: 0,
+                                  eventID: "status:\(record.sessionID):unsupported-version:\(version)",
+                                  timestamp: timestamp,
+                                  role: nil,
+                                  text: "Unsupported Claude transcript version \(version)",
+                                  name: nil,
+                                  input: nil,
+                                  output: nil,
+                                  toolCallID: nil,
+                                  metadata: ["reason": "unsupported_version"])
+            }
             return
         }
 
