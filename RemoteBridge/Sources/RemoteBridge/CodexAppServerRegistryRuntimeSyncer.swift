@@ -73,6 +73,14 @@ protocol CodexAppServerRuntimeSessionControlling: AnyObject {
     func pendingApprovalPromptEvents() -> [AgentEvent]
     func refreshActiveThread()
     func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent
+    func submitApproval(promptID: String,
+                        targetIndex: Int,
+                        clientRequestID: String?,
+                        lifecycleToken: String?) throws -> CodexAppServerApprovalSubmitOutcome
+    func submitUserInput(promptID: String,
+                         answers: [String: [String]],
+                         clientRequestID: String?,
+                         lifecycleToken: String?) throws -> CodexAppServerApprovalSubmitOutcome
     func submitMessage(text: String) throws
     func submitMessage(text: String, clientRequestID: String?) throws
     func stop()
@@ -81,6 +89,22 @@ protocol CodexAppServerRuntimeSessionControlling: AnyObject {
 extension CodexAppServerRuntimeSessionControlling {
     func setRegistryRootThreadID(_ rawThreadID: String?) {}
     func isStopped() -> Bool { false }
+    func submitApproval(promptID: String,
+                        targetIndex: Int,
+                        clientRequestID: String?,
+                        lifecycleToken: String?) throws -> CodexAppServerApprovalSubmitOutcome {
+        let event = try submitApproval(promptID: promptID, targetIndex: targetIndex)
+        if let reason = event.metadata?["reason"], reason != "submit" {
+            return .alreadyResolved(event)
+        }
+        return .pendingConfirmation(promptID: promptID)
+    }
+    func submitUserInput(promptID: String,
+                         answers: [String: [String]],
+                         clientRequestID: String?,
+                         lifecycleToken: String?) throws -> CodexAppServerApprovalSubmitOutcome {
+        throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
+    }
     func submitMessage(text: String, clientRequestID: String?) throws {
         try submitMessage(text: text)
     }
