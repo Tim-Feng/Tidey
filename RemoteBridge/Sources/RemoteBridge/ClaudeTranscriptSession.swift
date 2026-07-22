@@ -3408,7 +3408,10 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 return
             }
         case .interactivePromptResolved:
-            promptNotificationDeduper.markResolved(event, sessionID: record.sessionID)
+            guard promptNotificationDeduper.markResolved(event,
+                                                         sessionID: record.sessionID) == .clearedNotified else {
+                return
+            }
         default:
             return
         }

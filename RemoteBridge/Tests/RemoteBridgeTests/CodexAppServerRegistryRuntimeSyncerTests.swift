@@ -344,7 +344,9 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         try XCTUnwrap(promptHandler)(envelope)
         sidebarQueue.sync {}
         runtime.onStop = {
-            resolvedHandler?(Self.event(sessionID: "app", promptID: envelope.prompt.promptID))
+            resolvedHandler?(Self.event(sessionID: "app",
+                                        promptID: envelope.prompt.promptID,
+                                        lifecycleToken: envelope.event.eventID))
         }
 
         syncer.sync(records: [])
@@ -1070,6 +1072,75 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         XCTAssertEqual(messages[4], "report_shell_state needs_input --workspace_id=workspace-1")
     }
 
+    func testReplacementPromptLifecycleSidebarEffectsAreExactlyOnce() throws {
+        let hub = AgentEventHub()
+        let sidebarQueue = DispatchQueue(label: "test.sidebar.prompt-replacement")
+        let sidebarLock = NSLock()
+        var sidebarMessages = [String]()
+        var promptHandlers = [CodexAppServerConnection.InteractivePromptHandler]()
+        var resolvedHandlers = [CodexAppServerConnection.InteractivePromptResolvedHandler]()
+        let oldRuntime = FakeRuntimeSession()
+        let newRuntime = FakeRuntimeSession()
+        var runtimeIndex = 0
+        let syncer = CodexAppServerRegistryRuntimeSyncer(
+            eventHub: hub,
+            sidebarMessageSender: { message in
+                sidebarLock.lock()
+                sidebarMessages.append(message)
+                sidebarLock.unlock()
+            },
+            sidebarQueue: sidebarQueue,
+            attachHandler: { _, _, _, _, onInteractivePrompt, onInteractivePromptResolved, _ in
+                promptHandlers.append(onInteractivePrompt)
+                resolvedHandlers.append(onInteractivePromptResolved)
+                defer { runtimeIndex += 1 }
+                return runtimeIndex == 0 ? oldRuntime : newRuntime
+            })
+        syncer.sync(records: [
+            Self.record(sessionID: "app", runtime: "codex_app_server", socketPath: "/tmp/app-1.sock"),
+        ])
+
+        let promptA = Self.approvalEnvelope(sessionID: "app",
+                                            requestID: "approval-1",
+                                            lifecycleTokenOverride: "token-a")
+        promptHandlers[0](promptA)
+        sidebarQueue.sync {}
+        oldRuntime.onStop = {
+            resolvedHandlers[0](Self.event(sessionID: "app",
+                                           promptID: promptA.prompt.promptID,
+                                           lifecycleToken: "token-a"))
+        }
+        syncer.sync(records: [
+            Self.record(sessionID: "app", runtime: "codex_app_server", socketPath: "/tmp/app-2.sock"),
+        ])
+
+        let promptB = Self.approvalEnvelope(sessionID: "app",
+                                            requestID: "approval-1",
+                                            lifecycleTokenOverride: "token-b")
+        promptHandlers[1](promptB)
+        resolvedHandlers[1](Self.event(sessionID: "app",
+                                       promptID: promptB.prompt.promptID,
+                                       lifecycleToken: "token-a"))
+        promptHandlers[1](promptB)
+        resolvedHandlers[1](Self.event(sessionID: "app",
+                                       promptID: promptB.prompt.promptID,
+                                       lifecycleToken: "token-b"))
+        resolvedHandlers[1](Self.event(sessionID: "app",
+                                       promptID: promptB.prompt.promptID,
+                                       lifecycleToken: "token-b"))
+        sidebarQueue.sync {}
+
+        sidebarLock.lock()
+        let messages = sidebarMessages
+        sidebarLock.unlock()
+        XCTAssertEqual(messages.filter { $0.contains("notification.create") }.count, 2,
+                       "each capability-token attempt must notify once")
+        XCTAssertEqual(messages.filter {
+            $0 == "report_shell_state running --workspace_id=workspace-1"
+        }.count, 2,
+                       "the retired A lifecycle and current B lifecycle must each resolve exactly once")
+    }
+
     func testPendingApprovalPromptEventsAreScopedToWorkspaceAndSession() {
         let hub = AgentEventHub()
         let firstRuntime = FakeRuntimeSession()
@@ -1129,7 +1200,8 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
     }
 
     private static func approvalEnvelope(sessionID: String,
-                                         requestID: String) -> CodexAppServerInteractivePromptEnvelope {
+                                         requestID: String,
+                                         lifecycleTokenOverride: String? = nil) -> CodexAppServerInteractivePromptEnvelope {
         let request = CodexAppServerApprovalRequest(
             method: "item/commandExecution/requestApproval",
             requestID: .string(requestID),
@@ -1140,10 +1212,13 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
                 "command": .string("ls"),
             ])!
         let prompt = request.makePrompt(epoch: "test-epoch")
+        let event = interactivePromptEvent(sessionID: sessionID,
+                                           promptID: prompt.promptID,
+                                           lifecycleToken: lifecycleTokenOverride ?? "prompt-\(prompt.promptID)")
         return CodexAppServerInteractivePromptEnvelope(
             request: request,
             prompt: prompt,
-            event: interactivePromptEvent(sessionID: sessionID, promptID: prompt.promptID))
+            event: event)
     }
 
     private func makeReplacementEntryGap(

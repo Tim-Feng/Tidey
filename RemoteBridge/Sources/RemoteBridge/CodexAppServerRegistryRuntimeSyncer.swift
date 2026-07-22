@@ -254,16 +254,19 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
             for entry in retiredEntries {
                 lastAssistantTextBySessionID.removeValue(forKey: entry.record.sessionID)
                 nextActiveThreadRefreshAtBySessionID.removeValue(forKey: entry.record.sessionID)
-                promptNotificationDeduper.remove(sessionID: entry.record.sessionID)
             }
         }
         if retiredEntries.isEmpty == false {
+            // stop() may synchronously enqueue the retiring lifecycle's terminal.
+            // Clear its notification state behind that work and before callbacks
+            // from the replacement attach can enqueue their new lifecycle.
             sidebarQueue.async { [weak self] in
                 guard let self else { return }
                 self.forwardLock.withCodexRuntimeSyncerLock {
                     self.lock.withCodexRuntimeSyncerLock {
                         for entry in retiredEntries {
                             self.retiringGenerations.remove(entry.generation)
+                            self.promptNotificationDeduper.remove(sessionID: entry.record.sessionID)
                         }
                     }
                 }
@@ -683,7 +686,10 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
                                sessionID: record.sessionID)
 
         case (.interactivePromptResolved, _):
-            markPromptResolved(event, sessionID: record.sessionID)
+            guard promptNotificationDeduper.markResolved(event,
+                                                         sessionID: record.sessionID) == .clearedNotified else {
+                return
+            }
             sendSidebarOnQueue(messages: AgentInteractivePromptSidebarMessages.messages(for: event,
                                                                                        workspaceID: record.workspaceID),
                                sessionID: record.sessionID)
@@ -695,10 +701,6 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
 
     private func shouldNotifyPrompt(_ event: AgentEvent, sessionID: String) -> Bool {
         promptNotificationDeduper.shouldNotify(event, sessionID: sessionID)
-    }
-
-    private func markPromptResolved(_ event: AgentEvent, sessionID: String) {
-        promptNotificationDeduper.markResolved(event, sessionID: sessionID)
     }
 
     private func sendSidebarOnQueue(messages: [String], sessionID: String) {

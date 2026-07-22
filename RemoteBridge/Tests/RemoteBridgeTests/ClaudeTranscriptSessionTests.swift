@@ -674,6 +674,52 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         XCTAssertEqual(history.compactMap(\.text), ["new-old-0", "new-old-1"])
     }
 
+    func testInteractivePromptSidebarTerminalEffectsAreExactlyOnce() {
+        let sender = ClaudePromptRecordingCommandSender()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: "/tmp/unused.jsonl"),
+                                              hub: AgentEventHub(),
+                                              socketClient: sender)
+        func event(_ eventID: String,
+                   type: AgentEventKind,
+                   promptID: String = "prompt-1") -> AgentEvent {
+            AgentEvent(eventID: eventID,
+                       seq: 1,
+                       vendor: "claude",
+                       workspaceID: "workspace",
+                       sessionID: "session",
+                       timestamp: "2026-04-30T00:00:00Z",
+                       type: type,
+                       role: nil,
+                       text: nil,
+                       name: nil,
+                       input: nil,
+                       output: nil,
+                       toolCallID: nil,
+                       metadata: ["prompt_id": promptID])
+        }
+        func notificationCount() -> Int {
+            sender.commands().filter { $0.contains("notification.create") }.count
+        }
+        func runningCount() -> Int {
+            sender.commands().filter { $0.contains("report_shell_state running") }.count
+        }
+
+        session.publishInteractivePromptSidebarIfNeeded(event("prompt-a", type: .interactivePrompt))
+        session.publishInteractivePromptSidebarIfNeeded(event("prompt-a-duplicate", type: .interactivePrompt))
+        XCTAssertEqual(notificationCount(), 1)
+
+        session.publishInteractivePromptSidebarIfNeeded(event("unknown-terminal",
+                                                               type: .interactivePromptResolved,
+                                                               promptID: "other-prompt"))
+        XCTAssertEqual(runningCount(), 0)
+        session.publishInteractivePromptSidebarIfNeeded(event("matching-terminal", type: .interactivePromptResolved))
+        session.publishInteractivePromptSidebarIfNeeded(event("duplicate-terminal", type: .interactivePromptResolved))
+        XCTAssertEqual(runningCount(), 1)
+
+        session.publishInteractivePromptSidebarIfNeeded(event("prompt-redelivery", type: .interactivePrompt))
+        XCTAssertEqual(notificationCount(), 2)
+    }
+
     private func makeRecord(transcriptPath: String) -> AgentSessionRegistryRecord {
         AgentSessionRegistryRecord(version: 1,
                                    vendor: "claude",
@@ -800,6 +846,23 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
             RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
         }
         return condition()
+    }
+}
+
+private final class ClaudePromptRecordingCommandSender: TideyCommandSending {
+    private let lock = NSLock()
+    private var storage = [String]()
+
+    func send(command: String) throws {
+        lock.lock()
+        storage.append(command)
+        lock.unlock()
+    }
+
+    func commands() -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
     }
 }
 
