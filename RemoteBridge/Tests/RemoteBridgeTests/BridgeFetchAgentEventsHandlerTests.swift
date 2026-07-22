@@ -77,6 +77,75 @@ final class BridgeFetchAgentEventsHandlerTests: XCTestCase {
                        "subscribe_agent_events since_seq requires session_id")
     }
 
+    func testHandlerRejectsMalformedCursorFields() throws {
+        let supportDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BridgeFetchHandlerTests-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: .default)
+        defer { try? FileManager.default.removeItem(at: supportDirectory) }
+
+        let hub = AgentEventHub()
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: .default,
+                                                  hub: hub,
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+                                                  parentPIDLookup: { _ in nil })
+        let handler = WebSocketFrameHandler(socketClient: TideySocketClient(locator: TideySocketLocator()),
+                                            eventHub: hub,
+                                            workspaceEventHub: WorkspaceEventHub(),
+                                            registryMonitor: monitor,
+                                            observability: BridgeObservabilityCenter(),
+                                            bridgePort: 0,
+                                            cloudflaredManager: BridgeCloudflaredManager(binaryResolver: { nil }),
+                                            ordinaryTmuxProjectionContext: OrdinaryTmuxProjectionContext())
+        let channel = EmbeddedChannel(handler: handler)
+        defer { _ = try? channel.finish() }
+        let context = try channel.pipeline.syncOperations.context(handler: handler)
+
+        let cases: [(id: String, params: [String: JSONValue], message: String)] = [
+            (
+                "malformed-before",
+                [
+                    "workspace_id": .string("workspace"),
+                    "limit": .number(20),
+                    "before_seq": .string("oops"),
+                ],
+                "fetch_agent_events received an unrepresentable before_seq"
+            ),
+            (
+                "fractional-after",
+                [
+                    "workspace_id": .string("workspace"),
+                    "session_id": .string("session"),
+                    "limit": .number(20),
+                    "after_seq": .number(1.5),
+                ],
+                "fetch_agent_events received an unrepresentable after_seq"
+            ),
+            (
+                "dual-raw-cursors",
+                [
+                    "workspace_id": .string("workspace"),
+                    "session_id": .string("session"),
+                    "limit": .number(20),
+                    "before_seq": .string("oops"),
+                    "after_seq": .number(10),
+                ],
+                "fetch_agent_events accepts either before_seq or after_seq, not both"
+            ),
+        ]
+
+        for testCase in cases {
+            let request = BridgeRequest(id: testCase.id,
+                                        action: "fetch_agent_events",
+                                        params: testCase.params)
+            let result = try XCTUnwrap(handler.handleLocalRequest(request, context: context))
+            XCTAssertFalse(result.response.ok, testCase.id)
+            XCTAssertEqual(result.response.error?.code, "invalid_request", testCase.id)
+            XCTAssertEqual(result.response.error?.message, testCase.message, testCase.id)
+        }
+    }
+
     func testHandlerServesRequestedAnchorDespiteDeepCache() throws {
         let supportDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("BridgeFetchHandlerTests-\(UUID().uuidString)", isDirectory: true)
