@@ -866,6 +866,66 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
                        "remote after TUI idle")
     }
 
+    func testTurnStateStoreRoutesIdlePendingAndKnownTurnAtomically() {
+        let store = CodexAppServerTurnStateStore()
+        let claimID = UUID()
+
+        XCTAssertEqual(store.routeSubmit(threadID: "thread-live", claimID: claimID), .start)
+        XCTAssertEqual(store.routeSubmit(threadID: "thread-live"), .busyWithoutTurnID)
+
+        store.reconcileAcceptedStart(threadID: "thread-live",
+                                     claimID: claimID,
+                                     turnID: "turn-1")
+        XCTAssertEqual(store.routeSubmit(threadID: "thread-live"), .steer(turnID: "turn-1"))
+    }
+
+    func testTurnStateStoreDuplicateStartPreservesRemoteOriginAcrossIdleStatus() {
+        let store = CodexAppServerTurnStateStore()
+        let claimID = UUID()
+
+        XCTAssertEqual(store.routeSubmit(threadID: "thread-live", claimID: claimID), .start)
+        store.markStarted(threadID: "thread-live", turnID: "turn-1")
+        store.markStarted(threadID: "thread-live", turnID: "turn-1")
+        store.markThreadIdle(threadID: "thread-live")
+
+        XCTAssertEqual(store.routeSubmit(threadID: "thread-live"), .steer(turnID: "turn-1"),
+                       "an idempotent duplicate turn/started must not relabel a remote turn as app-server-owned")
+    }
+
+    func testTurnStateStoreCompletionBeforeResponseDoesNotResurrectTurn() {
+        let store = CodexAppServerTurnStateStore()
+        let claimID = UUID()
+
+        XCTAssertEqual(store.routeSubmit(threadID: "thread-live", claimID: claimID), .start)
+        store.markCompleted(threadID: "thread-live", turnID: "turn-fast")
+        store.reconcileAcceptedStart(threadID: "thread-live",
+                                     claimID: claimID,
+                                     turnID: "turn-fast")
+
+        XCTAssertEqual(store.routeSubmit(threadID: "thread-live"), .start)
+    }
+
+    func testTurnStateStoreLateExpiredClaimCannotOverwriteReplacement() {
+        var now = Date(timeIntervalSince1970: 100)
+        let store = CodexAppServerTurnStateStore(timeout: 1) { now }
+        let firstClaimID = UUID()
+        let secondClaimID = UUID()
+
+        XCTAssertEqual(store.routeSubmit(threadID: "thread-live", claimID: firstClaimID), .start)
+        now = now.addingTimeInterval(2)
+        XCTAssertEqual(store.routeSubmit(threadID: "thread-live", claimID: secondClaimID), .start)
+
+        store.reconcileAcceptedStart(threadID: "thread-live",
+                                     claimID: firstClaimID,
+                                     turnID: "turn-stale")
+        XCTAssertEqual(store.routeSubmit(threadID: "thread-live"), .busyWithoutTurnID)
+
+        store.reconcileAcceptedStart(threadID: "thread-live",
+                                     claimID: secondClaimID,
+                                     turnID: "turn-current")
+        XCTAssertEqual(store.routeSubmit(threadID: "thread-live"), .steer(turnID: "turn-current"))
+    }
+
     func testTurnStateStoreExpiresStuckActiveTurn() throws {
         var now = Date(timeIntervalSince1970: 100)
         let store = CodexAppServerTurnStateStore(timeout: 1) {

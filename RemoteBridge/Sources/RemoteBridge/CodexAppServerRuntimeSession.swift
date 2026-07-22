@@ -839,10 +839,17 @@ final class CodexAppServerTurnStateStore: @unchecked Sendable {
     func markStarted(threadID: String, turnID: String) {
         lock.lock()
         updateStateLocked(threadID: threadID) { state in
-            let origin: TurnOrigin = state.pendingSubmit == nil ? .appServer : .remoteSubmit
+            let pending = state.pendingSubmit
+            let existing = state.turn
+            let origin: TurnOrigin
+            if pending != nil || (existing?.turnID == turnID && existing?.origin == .remoteSubmit) {
+                origin = .remoteSubmit
+            } else {
+                origin = .appServer
+            }
             state.pendingSubmit = nil
             state.turn = TurnActivity(turnID: turnID,
-                                      startedAt: now(),
+                                      startedAt: existing?.turnID == turnID ? existing?.startedAt ?? now() : pending?.startedAt ?? now(),
                                       origin: origin)
         }
         lock.unlock()
