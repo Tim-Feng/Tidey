@@ -2466,6 +2466,7 @@ final class FakeCodexAppServerTransportConnector: CodexAppServerTransportConnect
 final class FakeCodexAppServerConnectionTransport: CodexAppServerConnectionTransport {
     private let lock = NSLock()
     private var lines: [String] = []
+    private var confirmedLines: [String] = []
     private var closed = false
     private var closeCount = 0
     private let onLine: @Sendable (String) -> Void
@@ -2480,6 +2481,12 @@ final class FakeCodexAppServerConnectionTransport: CodexAppServerConnectionTrans
     func sendLine(_ line: String) throws {
         lock.lock()
         lines.append(line)
+        lock.unlock()
+    }
+
+    func sendLineAwaitingWrite(_ line: String) throws {
+        lock.lock()
+        confirmedLines.append(line)
         lock.unlock()
     }
 
@@ -2509,6 +2516,12 @@ final class FakeCodexAppServerConnectionTransport: CodexAppServerConnectionTrans
         lock.lock()
         defer { lock.unlock() }
         return lines
+    }
+
+    func confirmedSentLines() -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return confirmedLines
     }
 }
 

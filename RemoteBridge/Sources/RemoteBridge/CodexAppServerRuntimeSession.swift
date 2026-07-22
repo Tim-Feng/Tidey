@@ -43,7 +43,14 @@ enum CodexAppServerTransportError: Error {
 
 protocol CodexAppServerConnectionTransport: AnyObject {
     func sendLine(_ line: String) throws
+    func sendLineAwaitingWrite(_ line: String) throws
     func close()
+}
+
+extension CodexAppServerConnectionTransport {
+    func sendLineAwaitingWrite(_ line: String) throws {
+        try sendLine(line)
+    }
 }
 
 protocol CodexAppServerTransportConnecting {
