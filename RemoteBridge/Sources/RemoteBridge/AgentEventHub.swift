@@ -221,13 +221,28 @@ final class AgentEventHub {
             } else {
                 countLimitedEvents = Array(matchingEvents.suffix(effectiveLimit))
             }
-            let slice = budgetLimitedEvents(countLimitedEvents,
-                                            maxBytes: maxBytes,
-                                            prefersNewestEvents: afterSeq == nil)
+            let budgetedSlice = budgetLimitedEvents(countLimitedEvents,
+                                                    maxBytes: maxBytes,
+                                                    prefersNewestEvents: afterSeq == nil)
+            let slice = beforeSeq == nil
+                ? budgetedSlice
+                : droppingOpenersWithoutFinalSliceTerminal(budgetedSlice)
             let oldestSeq = slice.first?.seq ?? 0
             let newestSeq = slice.last?.seq ?? 0
             let hasMore = matchingEvents.count > slice.count
             return FetchResult(events: slice, oldestSeq: oldestSeq, newestSeq: newestSeq, hasMore: hasMore)
+        }
+    }
+
+    private func droppingOpenersWithoutFinalSliceTerminal(_ events: [AgentEvent]) -> [AgentEvent] {
+        let finalEventIDs = Set(events.map(\.eventID))
+        return events.filter { event in
+            guard let state = sessions[event.sessionID],
+                  case .visibleTerminal(let terminalEventID, _)? =
+                    state.historicalOpenerResolutions[event.eventID] else {
+                return true
+            }
+            return finalEventIDs.contains(terminalEventID)
         }
     }
 

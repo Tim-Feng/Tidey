@@ -69,6 +69,68 @@ final class AgentEventHubTests: XCTestCase {
                       "history projection must not permanently delete the raw command")
     }
 
+    func testWorkspaceBeforeCursorDropsOpenerWhenFinalSliceTrimsTerminal() {
+        let hub = AgentEventHub()
+        let terminal = AgentEvent(eventID: "terminal",
+                                  seq: 20,
+                                  vendor: "claude",
+                                  workspaceID: "workspace",
+                                  sessionID: "paired-session",
+                                  timestamp: "2026-01-01T00:00:00Z",
+                                  type: .interactivePromptResolved,
+                                  role: "tool",
+                                  text: nil,
+                                  name: "AskUserQuestion",
+                                  input: nil,
+                                  output: nil,
+                                  toolCallID: "prompt",
+                                  metadata: ["prompt_id": "prompt"])
+        let unrelated = AgentEvent(eventID: "unrelated",
+                                   seq: 10,
+                                   vendor: "claude",
+                                   workspaceID: "workspace",
+                                   sessionID: "other-session",
+                                   timestamp: "2026-01-01T00:00:01Z",
+                                   type: .assistantMessage,
+                                   role: "assistant",
+                                   text: "unrelated",
+                                   name: nil,
+                                   input: nil,
+                                   output: nil,
+                                   toolCallID: nil,
+                                   metadata: nil)
+        let opener = AgentEvent(eventID: "opener",
+                                seq: 19,
+                                vendor: "claude",
+                                workspaceID: "workspace",
+                                sessionID: "paired-session",
+                                timestamp: "2026-01-01T00:00:02Z",
+                                type: .interactivePrompt,
+                                role: "assistant",
+                                text: "Choose",
+                                name: "AskUserQuestion",
+                                input: nil,
+                                output: nil,
+                                toolCallID: "prompt",
+                                metadata: ["prompt_id": "prompt"])
+        hub.publish(terminal)
+        hub.publish(unrelated)
+        hub.publish(opener)
+        hub.replaceHistoricalOpenerResolutions(
+            sessionID: "paired-session",
+            resolutions: [
+                opener.eventID: .visibleTerminal(eventID: terminal.eventID, sequence: terminal.seq),
+            ])
+
+        let result = hub.fetch(workspaceID: "workspace",
+                               limit: 2,
+                               beforeSeq: 100)
+
+        XCTAssertEqual(result.events.map(\.eventID), [unrelated.eventID],
+                       "the final workspace slice must not expose an opener without its terminal")
+        XCTAssertTrue(result.hasMore)
+    }
+
     func testHistoricalReplayRefillsEvictedLiveTerminalDespiteSeenTombstone() {
         let hub = AgentEventHub(maxBufferedEvents: 2, maxSeenEventIDs: 100)
         let opener = makePromptEvent(id: "historical-opener",
