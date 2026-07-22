@@ -352,6 +352,211 @@ final class AgentEventHubTests: XCTestCase {
         XCTAssertEqual(hub.nextSyntheticSeq(sessionID: "session"), reserved + 1)
     }
 
+    // MARK: Historical storage
+
+    func testHistoricalBackfillKeepsOriginalCursorPositionAndNeverLiveDelivers() {
+        let hub = AgentEventHub()
+        var deliveredIDs = [String]()
+        let (subscriptionID, _) = hub.subscribe(workspaceID: "workspace", sessionID: "session") { envelope in
+            deliveredIDs.append(envelope.event.eventID)
+        }
+        defer { hub.unsubscribe(subscriptionID) }
+
+        hub.publish(makeAssistantEvent(id: "live-100", seq: 100))
+        hub.publish(makeAssistantEvent(id: "history-50", seq: 50),
+                    storage: .historicalBackfill)
+        hub.drainDeliveriesForTesting()
+
+        let older = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10, beforeSeq: 100)
+        XCTAssertEqual(older.events.map(\.eventID), ["history-50"])
+        XCTAssertEqual(older.events.map(\.seq), [50])
+        XCTAssertTrue(hub.fetch(workspaceID: "workspace",
+                                sessionID: "session",
+                                limit: 10,
+                                afterSeq: 100).events.isEmpty)
+        XCTAssertEqual(deliveredIDs, ["live-100"])
+        XCTAssertEqual(hub.nextSyntheticSeq(sessionID: "session"), 101)
+    }
+
+    func testHistoricalBackfillHasIndependentBoundAndDoesNotEvictLiveWindow() {
+        let hub = AgentEventHub(maxBufferedEvents: 3, maxSeenEventIDs: 100)
+        for seq in 100...102 {
+            hub.publish(makeAssistantEvent(id: "live-\(seq)", seq: seq))
+        }
+        for seq in [10, 20, 30, 40] {
+            hub.publish(makeAssistantEvent(id: "history-\(seq)", seq: seq),
+                        storage: .historicalBackfill)
+        }
+
+        let live = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10, afterSeq: 99)
+        XCTAssertEqual(live.events.map(\.eventID), ["live-100", "live-101", "live-102"])
+        let history = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10, beforeSeq: 100)
+        XCTAssertEqual(history.events.map(\.eventID), ["history-20", "history-30", "history-40"])
+    }
+
+    func testHistoricalBackfillAtOrAboveHighWaterIsRejectedWithoutMovingCursor() {
+        let hub = AgentEventHub()
+        hub.publish(makeAssistantEvent(id: "live-100", seq: 100))
+        hub.publish(makeAssistantEvent(id: "history-100", seq: 100),
+                    storage: .historicalBackfill)
+        hub.publish(makeAssistantEvent(id: "history-150", seq: 150),
+                    storage: .historicalBackfill)
+
+        XCTAssertEqual(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10)
+            .events.map(\.eventID), ["live-100"])
+        XCTAssertEqual(hub.nextSyntheticSeq(sessionID: "session"), 101)
+
+        hub.publish(makeSessionEvent(id: "unanchored-history",
+                                     seq: 10,
+                                     sessionID: "unanchored"),
+                    storage: .historicalBackfill)
+        XCTAssertTrue(hub.fetch(workspaceID: "workspace", sessionID: "unanchored", limit: 10).events.isEmpty)
+    }
+
+    func testHistoricalReplacementRetractsStaleEventsAndResetsHistoricalIdentity() {
+        let hub = AgentEventHub()
+        hub.publish(makeAssistantEvent(id: "live-100", seq: 100))
+
+        hub.replaceHistoricalEvents(sessionID: "session",
+                                    events: [makeAssistantEvent(id: "history-10", seq: 10),
+                                             makeAssistantEvent(id: "history-20", seq: 20),
+                                             makeAssistantEvent(id: "history-20", seq: 20)])
+        XCTAssertEqual(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10, beforeSeq: 100)
+            .events.map(\.eventID), ["history-10", "history-20"])
+
+        hub.replaceHistoricalEvents(sessionID: "session",
+                                    events: [makeAssistantEvent(id: "history-20", seq: 20),
+                                             makeAssistantEvent(id: "history-30", seq: 30)])
+        XCTAssertEqual(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10, beforeSeq: 100)
+            .events.map(\.eventID), ["history-20", "history-30"])
+
+        hub.replaceHistoricalEvents(sessionID: "session", events: [])
+        hub.replaceHistoricalEvents(sessionID: "session",
+                                    events: [makeAssistantEvent(id: "history-10", seq: 10)])
+        XCTAssertEqual(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10, beforeSeq: 100)
+            .events.map(\.eventID), ["history-10"])
+    }
+
+    func testHistoricalReplacementBoundKeepsEventsAdjacentToAnchor() {
+        let hub = AgentEventHub(maxBufferedEvents: 3, maxSeenEventIDs: 100)
+        hub.publish(makeAssistantEvent(id: "live-100", seq: 100))
+        let history = [10, 20, 30, 40, 50].map {
+            makeAssistantEvent(id: "history-\($0)", seq: $0)
+        }
+
+        hub.replaceHistoricalEvents(sessionID: "session", events: history, anchorSeq: 45)
+        XCTAssertEqual(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10, beforeSeq: 100)
+            .events.map(\.seq), [20, 30, 40])
+
+        hub.replaceHistoricalEvents(sessionID: "session", events: history)
+        XCTAssertEqual(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10, beforeSeq: 100)
+            .events.map(\.seq), [30, 40, 50])
+    }
+
+    func testHistoricalReplacementRejectsWrongSessionEvents() {
+        let hub = AgentEventHub()
+        hub.publish(makeSessionEvent(id: "a-live", seq: 100, sessionID: "session-A"))
+        hub.publish(makeSessionEvent(id: "b-live", seq: 100, sessionID: "session-B"))
+
+        hub.replaceHistoricalEvents(sessionID: "session-A",
+                                    events: [makeSessionEvent(id: "b-history", seq: 10, sessionID: "session-B"),
+                                             makeSessionEvent(id: "a-history", seq: 10, sessionID: "session-A")])
+
+        let fetchA = hub.fetch(workspaceID: "workspace", sessionID: "session-A", limit: 10).events
+        XCTAssertEqual(fetchA.map(\.eventID), ["a-history", "a-live"])
+        let workspaceWide = hub.fetch(workspaceID: "workspace", limit: 10).events
+        XCTAssertFalse(workspaceWide.contains { $0.eventID == "b-history" })
+    }
+
+    func testHistoricalReplacementRejectsLiveIdentityAndNonHistoricalSequences() {
+        let hub = AgentEventHub()
+        hub.publish(makeAssistantEvent(id: "live-100", seq: 100))
+
+        hub.replaceHistoricalEvents(sessionID: "session",
+                                    events: [makeAssistantEvent(id: "live-100", seq: 10),
+                                             makeAssistantEvent(id: "history-100", seq: 100),
+                                             makeAssistantEvent(id: "history-150", seq: 150)])
+
+        XCTAssertEqual(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10)
+            .events.map(\.eventID), ["live-100"])
+        XCTAssertEqual(hub.nextSyntheticSeq(sessionID: "session"), 101)
+    }
+
+    func testSessionFetchFiltersCorruptHistoricalEventOwnedByAnotherSession() {
+        let hub = AgentEventHub()
+        hub.publish(makeSessionEvent(id: "a-live", seq: 100, sessionID: "session-A"))
+        hub.injectCorruptStoredHistoricalEventForTesting(
+            sessionID: "session-A",
+            event: makeSessionEvent(id: "b-corrupt", seq: 10, sessionID: "session-B")
+        )
+
+        XCTAssertTrue(hub.fetch(workspaceID: "workspace", limit: 10)
+            .events.contains { $0.eventID == "b-corrupt" })
+        let fetchA = hub.fetch(workspaceID: "workspace", sessionID: "session-A", limit: 10).events
+        XCTAssertEqual(fetchA.map(\.eventID), ["a-live"])
+    }
+
+    func testHistoricalReplacementPreservesLiveHighWaterAndDoesNotDeliver() {
+        let hub = AgentEventHub()
+        hub.publish(makeAssistantEvent(id: "live-100", seq: 100))
+        var delivered = [AgentEvent]()
+        let (subscriptionID, _) = hub.subscribe(workspaceID: "workspace",
+                                                sessionID: "session",
+                                                sinceSeq: Int.max) { envelope in
+            delivered.append(envelope.event)
+        }
+        defer { hub.unsubscribe(subscriptionID) }
+
+        hub.replaceHistoricalEvents(sessionID: "session",
+                                    events: [makeAssistantEvent(id: "history-10", seq: 10),
+                                             makeAssistantEvent(id: "history-20", seq: 20)])
+        hub.drainDeliveriesForTesting()
+        XCTAssertTrue(delivered.isEmpty)
+
+        hub.publish(makeAssistantEvent(id: "late-live", seq: 50))
+        XCTAssertEqual(delivered.map(\.eventID), ["late-live"])
+        XCTAssertEqual(delivered.map(\.seq), [101])
+        XCTAssertEqual(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10, afterSeq: 100)
+            .events.map(\.eventID), ["late-live"])
+    }
+
+    func testHistoricalReplacementPreservesSyntheticSequenceReservation() {
+        let hub = AgentEventHub()
+        hub.publish(makeAssistantEvent(id: "live-100", seq: 100))
+        let before = hub.nextSyntheticSeq(sessionID: "session")
+
+        hub.replaceHistoricalEvents(sessionID: "session",
+                                    events: [makeAssistantEvent(id: "history-10", seq: 10)])
+
+        XCTAssertEqual(hub.nextSyntheticSeq(sessionID: "session"), before + 1)
+    }
+
+    func testHistoricalStorageMigratesAndReplaysWithCurrentBinding() throws {
+        let hub = AgentEventHub()
+        hub.publish(makeAssistantEvent(id: "live-100", seq: 100))
+        hub.publish(makeAssistantEvent(id: "history-50", seq: 50),
+                    storage: .historicalBackfill)
+
+        XCTAssertEqual(hub.migrateSession(sessionID: "session",
+                                          toWorkspaceID: "current-workspace",
+                                          panelID: "current-panel"), 2)
+        XCTAssertEqual(hub.oldestBufferedSeq(sessionID: "session"), 50)
+        let snapshot = try XCTUnwrap(hub.debugSnapshots().first)
+        XCTAssertEqual(snapshot.bufferedEventCount, 2)
+        XCTAssertEqual(snapshot.oldestSeq, 50)
+        XCTAssertEqual(snapshot.newestSeq, 100)
+
+        let fetched = hub.fetch(workspaceID: "current-workspace", sessionID: "session", limit: 10).events
+        XCTAssertEqual(fetched.map(\.eventID), ["history-50", "live-100"])
+        XCTAssertEqual(Set(fetched.map(\.workspaceID)), ["current-workspace"])
+        XCTAssertEqual(Set(fetched.compactMap { $0.metadata?["panel_id"] }), ["current-panel"])
+
+        let (_, replay) = hub.subscribe(workspaceID: "current-workspace",
+                                        sessionID: "session",
+                                        sinceSeq: nil) { _ in }
+        XCTAssertEqual(replay.map(\.event.eventID), ["history-50", "live-100"])
+    }
+
     func testLiveSubscriberDeliveryFollowsStoreOrderAcrossConcurrentPublishers() {
         // Window: publisher LOW has STORED its event but has not returned;
         // publisher HIGH stores next. Delivery must follow the hub's store
@@ -514,6 +719,23 @@ final class AgentEventHubTests: XCTestCase {
                    type: .assistantMessage,
                    role: "assistant",
                    text: text ?? id,
+                   name: nil,
+                   input: nil,
+                   output: nil,
+                   toolCallID: nil,
+                   metadata: nil)
+    }
+
+    private func makeSessionEvent(id: String, seq: Int, sessionID: String) -> AgentEvent {
+        AgentEvent(eventID: id,
+                   seq: seq,
+                   vendor: "claude",
+                   workspaceID: "workspace",
+                   sessionID: sessionID,
+                   timestamp: "2026-01-01T00:00:00Z",
+                   type: .assistantMessage,
+                   role: "assistant",
+                   text: id,
                    name: nil,
                    input: nil,
                    output: nil,

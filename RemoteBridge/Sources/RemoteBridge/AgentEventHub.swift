@@ -77,6 +77,9 @@ final class AgentEventHub {
     private struct SessionState {
         var seenEventIDs = Set<String>()
         var bufferedEvents = [AgentEvent]()
+        var historicalEvents = [AgentEvent]()
+        var historicalEventIDs = Set<String>()
+        var allStoredEvents: [AgentEvent] { historicalEvents + bufferedEvents }
         var latestSessionStarted: AgentEvent?
         var isActive = false
         // Persists beyond buffer eviction so a late unseen event cannot fall
@@ -130,24 +133,30 @@ final class AgentEventHub {
             let effectiveLimit = max(limit, 1)
             let matchingEvents: [AgentEvent]
 
-            if let sessionID, let state = sessions[sessionID] {
-                matchingEvents = state.bufferedEvents
-                    .compactMap { effectiveEvent($0) }
-                    .filter { event in
-                    guard event.workspaceID == workspaceID else {
-                        return false
-                    }
-                    if let beforeSeq {
-                        return event.seq < beforeSeq
-                    }
-                    if let afterSeq {
-                        return event.seq > afterSeq
-                    }
-                    return true
-                }.sorted { $0.seq < $1.seq }
+            if let sessionID {
+                if let state = sessions[sessionID] {
+                    matchingEvents = state.allStoredEvents
+                        .compactMap { effectiveEvent($0) }
+                        .filter { event in
+                            guard event.sessionID == sessionID,
+                                  event.workspaceID == workspaceID else {
+                                return false
+                            }
+                            if let beforeSeq {
+                                return event.seq < beforeSeq
+                            }
+                            if let afterSeq {
+                                return event.seq > afterSeq
+                            }
+                            return true
+                        }
+                        .sorted { $0.seq < $1.seq }
+                } else {
+                    matchingEvents = []
+                }
             } else {
                 matchingEvents = sessions.values
-                    .flatMap(\.bufferedEvents)
+                    .flatMap(\.allStoredEvents)
                     .compactMap { effectiveEvent($0) }
                     .filter { event in
                         guard event.workspaceID == workspaceID else {
@@ -195,7 +204,7 @@ final class AgentEventHub {
 
         return filteredStates
             .flatMap { state -> [AgentEvent] in
-                var events = state.bufferedEvents
+                var events = state.allStoredEvents
                 if state.isActive,
                    let sessionStarted = state.latestSessionStarted,
                    !events.contains(where: { $0.eventID == sessionStarted.eventID }),
@@ -237,7 +246,7 @@ final class AgentEventHub {
 
     func oldestBufferedSeq(sessionID: String) -> Int? {
         queue.sync {
-            sessions[sessionID]?.bufferedEvents
+            sessions[sessionID]?.allStoredEvents
                 .map(\.seq)
                 .min()
         }
@@ -253,14 +262,26 @@ final class AgentEventHub {
         }
     }
 
+    // Test seam for verifying that a session-scoped fetch defends against
+    // foreign-session data even if stored state is already corrupt.
+    func injectCorruptStoredHistoricalEventForTesting(sessionID: String, event: AgentEvent) {
+        queue.sync {
+            var state = sessions[sessionID] ?? SessionState()
+            state.historicalEvents.append(event)
+            state.historicalEvents.sort { $0.seq < $1.seq }
+            state.historicalEventIDs.insert(event.eventID)
+            sessions[sessionID] = state
+        }
+    }
+
     func debugSnapshots() -> [SessionDebugSnapshot] {
         queue.sync {
             sessions.map { sessionID, state in
-                let effectiveEvents = state.bufferedEvents.compactMap { effectiveEvent($0) }
+                let effectiveEvents = state.allStoredEvents.compactMap { effectiveEvent($0) }
                 let seqs = effectiveEvents.map(\.seq)
                 return SessionDebugSnapshot(sessionID: sessionID,
                                             workspaceID: effectiveEvents.last?.workspaceID ?? effectiveEvent(state.latestSessionStarted)?.workspaceID,
-                                            bufferedEventCount: state.bufferedEvents.count,
+                                            bufferedEventCount: state.allStoredEvents.count,
                                             oldestSeq: seqs.min(),
                                             newestSeq: seqs.max(),
                                             isActive: state.isActive)
@@ -276,7 +297,7 @@ final class AgentEventHub {
                 return nil
             }
             var activePrompt: InteractivePrompt?
-            for event in state.bufferedEvents
+            for event in state.allStoredEvents
                 .compactMap({ effectiveEvent($0) })
                 .filter({ $0.workspaceID == workspaceID && $0.sessionID == sessionID })
                 .sorted(by: { $0.seq < $1.seq }) {
@@ -303,7 +324,7 @@ final class AgentEventHub {
             guard let state = sessions[sessionID] else {
                 return nil
             }
-            return state.bufferedEvents
+            return state.allStoredEvents
                 .compactMap { effectiveEvent($0) }
                 .filter { event in
                     event.workspaceID == workspaceID &&
@@ -327,7 +348,7 @@ final class AgentEventHub {
                         panelID: String?) -> Int {
         queue.sync {
             sessionBindings[sessionID] = SessionBinding(workspaceID: workspaceID, panelID: panelID)
-            guard var state = sessions[sessionID], !state.bufferedEvents.isEmpty else {
+            guard var state = sessions[sessionID], !state.allStoredEvents.isEmpty else {
                 if sessions[sessionID]?.latestSessionStarted == nil {
                     return 0
                 }
@@ -344,6 +365,9 @@ final class AgentEventHub {
                 return 0
             }
 
+            state.historicalEvents = state.historicalEvents.map { event in
+                Self.rewritten(event: event, workspaceID: workspaceID, panelID: panelID)
+            }
             state.bufferedEvents = state.bufferedEvents.map { event in
                 Self.rewritten(event: event, workspaceID: workspaceID, panelID: panelID)
             }
@@ -352,35 +376,60 @@ final class AgentEventHub {
                                                             workspaceID: workspaceID,
                                                             panelID: panelID)
             }
-            let migratedCount = state.bufferedEvents.count
+            let migratedCount = state.allStoredEvents.count
             sessions[sessionID] = state
             return migratedCount
         }
     }
 
-    func publish(_ event: AgentEvent, deliverToSubscribers: Bool = true) {
+    enum PublishStorage {
+        case liveForward
+        case historicalBackfill
+    }
+
+    func publish(_ event: AgentEvent,
+                 deliverToSubscribers: Bool = true,
+                 storage: PublishStorage = .liveForward) {
         var event = event
         let deliveryCompletion: DispatchSemaphore? = queue.sync {
             var state = sessions[event.sessionID] ?? SessionState()
-            if state.seenEventIDs.contains(event.eventID) {
+            if state.seenEventIDs.contains(event.eventID) || state.historicalEventIDs.contains(event.eventID) {
                 return nil
             }
 
-            state.seenEventIDs.insert(event.eventID)
-            if state.seenEventIDs.count > maxSeenEventIDs {
-                state.seenEventIDs = Set(state.seenEventIDs.suffix(maxSeenEventIDs / 2))
-            }
+            switch storage {
+            case .liveForward:
+                state.seenEventIDs.insert(event.eventID)
+                if state.seenEventIDs.count > maxSeenEventIDs {
+                    state.seenEventIDs = Set(state.bufferedEvents.map(\.eventID))
+                    state.seenEventIDs.insert(event.eventID)
+                }
 
-            // A live event is only cursor-visible if its stored sequence is
-            // above everything already stored. Rebase collisions and stale
-            // producer sequences above both stored and reserved positions.
-            if let highWater = state.storedSeqHighWater, event.seq <= highWater {
-                let reserved = reservedSeqBySessionID[event.sessionID] ?? transcriptSessionStartedSequence
-                let rebased = max(highWater, reserved) + 1
-                event = event.withSeq(rebased)
-                reservedSeqBySessionID[event.sessionID] = rebased
+                // Historical storage never changes live cursor authority.
+                if let highWater = state.storedSeqHighWater, event.seq <= highWater {
+                    let reserved = reservedSeqBySessionID[event.sessionID] ?? transcriptSessionStartedSequence
+                    let rebased = max(highWater, reserved) + 1
+                    event = event.withSeq(rebased)
+                    reservedSeqBySessionID[event.sessionID] = rebased
+                }
+                state.storedSeqHighWater = max(state.storedSeqHighWater ?? event.seq, event.seq)
+
+            case .historicalBackfill:
+                // Backfill must remain strictly behind an established live
+                // cursor. It keeps its source sequence and never delivers.
+                guard let highWater = state.storedSeqHighWater, event.seq < highWater else {
+                    return nil
+                }
+                state.historicalEventIDs.insert(event.eventID)
+                state.historicalEvents.append(event)
+                state.historicalEvents.sort { $0.seq < $1.seq }
+                if state.historicalEvents.count > maxBufferedEvents {
+                    state.historicalEvents.removeFirst(state.historicalEvents.count - maxBufferedEvents)
+                    state.historicalEventIDs = Set(state.historicalEvents.map(\.eventID))
+                }
+                sessions[event.sessionID] = state
+                return nil
             }
-            state.storedSeqHighWater = max(state.storedSeqHighWater ?? event.seq, event.seq)
 
             state.bufferedEvents.append(event)
             if state.bufferedEvents.count > maxBufferedEvents {
@@ -441,6 +490,50 @@ final class AgentEventHub {
         postStoreDeliveryHook?(event)
         if deliveryExecutor.isCurrent == false {
             deliveryCompletion?.wait()
+        }
+    }
+
+    // Replaces the caller-owned historical window atomically. Live events,
+    // live cursor authority, reservations and subscribers remain untouched.
+    func replaceHistoricalEvents(sessionID: String,
+                                 events: [AgentEvent],
+                                 anchorSeq: Int? = nil) {
+        queue.sync {
+            var state = sessions[sessionID] ?? SessionState()
+            let liveIDs = Set(state.bufferedEvents.map(\.eventID))
+            var replacementIDs = Set<String>()
+            var accepted = [AgentEvent]()
+
+            for event in events {
+                guard event.sessionID == sessionID else {
+                    continue
+                }
+                guard let highWater = state.storedSeqHighWater, event.seq < highWater else {
+                    continue
+                }
+                guard liveIDs.contains(event.eventID) == false,
+                      replacementIDs.insert(event.eventID).inserted else {
+                    continue
+                }
+                accepted.append(event)
+            }
+
+            accepted.sort { $0.seq < $1.seq }
+            if accepted.count > maxBufferedEvents {
+                if let anchorSeq {
+                    let belowAnchor = accepted.filter { $0.seq < anchorSeq }
+                    let atOrAboveAnchor = accepted.filter { $0.seq >= anchorSeq }
+                    let keptBelow = belowAnchor.suffix(maxBufferedEvents)
+                    let remainingCapacity = maxBufferedEvents - keptBelow.count
+                    accepted = Array(keptBelow) + Array(atOrAboveAnchor.prefix(remainingCapacity))
+                } else {
+                    accepted.removeFirst(accepted.count - maxBufferedEvents)
+                }
+            }
+
+            state.historicalEvents = accepted
+            state.historicalEventIDs = Set(accepted.map(\.eventID))
+            sessions[sessionID] = state
         }
     }
 
