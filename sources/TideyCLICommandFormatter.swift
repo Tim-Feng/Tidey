@@ -53,6 +53,22 @@ final class TideyCLICommandFormatter: NSObject {
         let stdinData = stdinJSON?.data(using: .utf8)
         return messages(forClaudeHookEvent: event,
                         workspaceID: workspaceID,
+                        panelID: nil,
+                        stdinData: stdinData) { _ in
+            transcriptContent
+        }
+    }
+
+    @objc(messagesForClaudeHookEvent:workspaceID:panelID:stdinJSON:transcriptContent:)
+    static func messages(forClaudeHookEvent event: String,
+                         workspaceID: String,
+                         panelID: String?,
+                         stdinJSON: String?,
+                         transcriptContent: String?) -> [String] {
+        let stdinData = stdinJSON?.data(using: .utf8)
+        return messages(forClaudeHookEvent: event,
+                        workspaceID: workspaceID,
+                        panelID: panelID,
                         stdinData: stdinData) { _ in
             transcriptContent
         }
@@ -92,46 +108,124 @@ final class TideyCLICommandFormatter: NSObject {
 
     static func messages(forClaudeHookEvent event: String,
                          workspaceID: String,
+                         panelID: String? = nil,
                          stdinData: Data?,
                          transcriptLoader: (String) -> String?) -> [String] {
         guard !workspaceID.isEmpty else {
             return []
         }
 
+        // Owner identity for the shell_state: the status store tracks one
+        // entry per session/panel and aggregates — a workspace is never a
+        // last-writer cell shared by unrelated sessions.
+        let sessionID = claudeHookInputContext(stdinData: stdinData)?.sessionID
+        let ownerArgs = shellStateOwnerArguments(panelID: panelID, sessionID: sessionID)
+        let ownerJSON = shellStateOwnerJSONFields(panelID: panelID, sessionID: sessionID)
+
         switch event {
         case "session-start":
             return [
-                "report_shell_state prompt --workspace_id=\(workspaceID)",
+                "report_shell_state prompt --workspace_id=\(workspaceID)\(ownerArgs)",
                 "{\"action\":\"set_title\",\"workspace_id\":\"\(jsonEscapedString(workspaceID))\",\"title\":\"Claude Code\"}"
             ]
 
-        case "notification":
+        case "notification-permission":
+            // ONLY the ACTUAL permission prompt is needs-input.
             return [
-                "{\"action\":\"set_status\",\"workspace_id\":\"\(jsonEscapedString(workspaceID))\",\"key\":\"shell_state\",\"value\":\"Needs input\",\"icon\":\"bell.fill\",\"color\":\"#4C8DFF\"}"
+                "{\"action\":\"set_status\",\"workspace_id\":\"\(jsonEscapedString(workspaceID))\",\"key\":\"shell_state\",\"value\":\"Needs input\",\"icon\":\"bell.fill\",\"color\":\"#4C8DFF\"\(ownerJSON)}"
             ]
 
+        case "permission-request":
+            // PermissionRequest is PREPARATION only — another hook may
+            // auto-allow it and no prompt ever appears. Same semantics as
+            // the Bridge path: no state change.
+            return []
+
+        case "notification-idle":
+            // idle_prompt means Claude is WAITING at an idle prompt — that
+            // is idle, never needs-input.
+            return [
+                "report_shell_state prompt --workspace_id=\(workspaceID)\(ownerArgs)"
+            ]
+
+        case "notification":
+            // Untyped notifications (legacy wrapper) change NO state.
+            return []
+
         case "stop":
+            // Stop is a TURN-SCOPED idle edge, same semantics as the Bridge
+            // path. stop_hook_active means a Stop hook is already driving a
+            // continuation — no terminal, no toast; a later prompt-submit /
+            // permission signal for this owner restores the state.
+            if stopHookActive(stdinData: stdinData) {
+                return []
+            }
             let body = notificationBodyForStopEvent(stdinData: stdinData,
                                                     transcriptLoader: transcriptLoader)
             return [
                 "{\"action\":\"notification.create\",\"workspace_id\":\"\(jsonEscapedString(workspaceID))\",\"title\":\"Claude Code\",\"body\":\"\(jsonEscapedString(body))\"}",
-                "report_shell_state prompt --workspace_id=\(workspaceID)"
+                "report_shell_state prompt --workspace_id=\(workspaceID)\(ownerArgs)"
             ]
 
         case "session-end":
             return [
-                "{\"action\":\"clear_status\",\"workspace_id\":\"\(jsonEscapedString(workspaceID))\",\"key\":\"shell_state\"}",
+                "{\"action\":\"clear_status\",\"workspace_id\":\"\(jsonEscapedString(workspaceID))\",\"key\":\"shell_state\"\(ownerJSON)}",
                 "{\"action\":\"set_title\",\"workspace_id\":\"\(jsonEscapedString(workspaceID))\",\"title\":\"\"}"
             ]
 
         case "prompt-submit":
             return [
-                "report_shell_state running --workspace_id=\(workspaceID)"
+                "report_shell_state running --workspace_id=\(workspaceID)\(ownerArgs)"
+            ]
+
+        case "post-tool-use":
+            // PERMISSION RESOLUTION: a tool actually running proves any
+            // permission prompt for it was decided (allow or already
+            // allowed) — mirrors the Bridge's tool_result-correlated
+            // resolve. Reports Running, same as prompt-submit; a still-
+            // executing turn stays Running until Stop/idle.
+            return [
+                "report_shell_state running --workspace_id=\(workspaceID)\(ownerArgs)"
             ]
 
         default:
             return []
         }
+    }
+
+    // Plaintext `--key=value` args cannot carry spaces (the socket splits on
+    // spaces); identities are opaque tokens so they are passed through when
+    // space-free and dropped otherwise.
+    private static func shellStateOwnerArguments(panelID: String?, sessionID: String?) -> String {
+        var arguments = ""
+        if let panelID, !panelID.isEmpty, !panelID.contains(" ") {
+            arguments += " --panel_id=\(panelID)"
+        }
+        if let sessionID, !sessionID.isEmpty, !sessionID.contains(" ") {
+            arguments += " --session_id=\(sessionID)"
+        }
+        return arguments
+    }
+
+    private static func shellStateOwnerJSONFields(panelID: String?, sessionID: String?) -> String {
+        var fields = ""
+        if let panelID, !panelID.isEmpty {
+            fields += ",\"panel_id\":\"\(jsonEscapedString(panelID))\""
+        }
+        if let sessionID, !sessionID.isEmpty {
+            fields += ",\"session_id\":\"\(jsonEscapedString(sessionID))\""
+        }
+        return fields
+    }
+
+    static func stopHookActive(stdinData: Data?) -> Bool {
+        guard let stdinData,
+              let inputJSON = try? JSONSerialization.jsonObject(with: stdinData) as? [String: Any] else {
+            return false
+        }
+        return (inputJSON["stop_hook_active"] as? Bool)
+            ?? (inputJSON["stopHookActive"] as? Bool)
+            ?? false
     }
 
     static func claudeHookInputContext(stdinData: Data?) -> ClaudeHookInputContext? {

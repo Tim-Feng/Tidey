@@ -105,8 +105,10 @@ private func handleClaudeHook(event: String, socketPath: String, workspaceID: St
     // state/notifications to every workspace.
     let stdinData = FileHandle.standardInput.readDataToEndOfFile()
     handleClaudeRegistryLifecycle(event: event, workspaceID: workspaceID, stdinData: stdinData)
+    let panelID = ProcessInfo.processInfo.environment["TIDEY_PANEL_ID"] ?? ""
     let messages = TideyCLICommandFormatter.messages(forClaudeHookEvent: event,
                                                      workspaceID: workspaceID,
+                                                     panelID: panelID.isEmpty ? nil : panelID,
                                                      stdinData: stdinData) { transcriptPath in
         let expandedPath = NSString(string: transcriptPath).expandingTildeInPath
         guard let data = FileManager.default.contents(atPath: expandedPath) else {

@@ -12,6 +12,10 @@ REGISTRY_ROOT="$HOME/Library/Application Support/Tidey Remote Bridge/agent-sessi
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 source "$HOOK_DIR/tidey-tmux-pane-identity"
+# shellcheck source=/dev/null
+source "$HOOK_DIR/claude-hook-journal-lifecycle"
+# shellcheck source=/dev/null
+source "$HOOK_DIR/claude-hook-argv-session-id"
 
 json_escape() {
     local s="${1-}"
@@ -165,7 +169,7 @@ shell_quote() {
 build_hook_command() {
     local event="$1"
     local prefix="${2:-}"
-    local tidey_bin_path="$HOOK_DIR/tidey"
+    local dispatch_path="$HOOK_DIR/claude-hook-dispatch"
     local pane_helper_path="$HOOK_DIR/tidey-tmux-pane-identity"
     local script=""
 
@@ -174,7 +178,14 @@ build_hook_command() {
     fi
 
     script+=". $(shell_quote "$pane_helper_path"); tidey_hydrate_tmux_pane_identity; "
-    script+="exec $(shell_quote "$tidey_bin_path") claude-hook $(shell_quote "$event")"
+    # Dispatch journals the typed event for the Remote Bridge lifecycle
+    # (JSONL under the shared registry root) and forwards stdin to the
+    # tidey CLI unchanged. The epoch token identifies THIS wrapper
+    # instance so the Bridge can reject a retired wrapper's late events.
+    # REGISTRY_ROOT is always passed so dispatch can lazily discover the
+    # session id from the hook's own payload when it was unknown at
+    # wrapper launch (implicit resume).
+    script+="exec $(shell_quote "$dispatch_path") $(shell_quote "$event") $(shell_quote "${HOOK_JOURNAL_FILE:-}") $(shell_quote "${HOOK_JOURNAL_EPOCH:-}") $(shell_quote "$REGISTRY_ROOT")"
 
     printf '/bin/sh -c %s' "$(shell_quote "$script")"
 }
@@ -191,6 +202,11 @@ find_real_claude() {
     return 1
 }
 
+# A Tidey client may attach to a tmux pane whose shell was created earlier by
+# SSH/Termius. Hydrate the currently available runtime context before deciding
+# whether this invocation belongs to Tidey.
+tidey_hydrate_tmux_runtime_environment
+
 # Pass through if not in a Tidey terminal or socket is unavailable.
 if [[ -z "${TIDEY_SOCKET_PATH:-}" || ! -S "${TIDEY_SOCKET_PATH:-}" ]]; then
     REAL_CLAUDE="$(find_real_claude)" || { echo "Error: claude not found in PATH" >&2; exit 127; }
@@ -204,63 +220,22 @@ case "${1:-}" in
     mcp|config|api-key) exec "$REAL_CLAUDE" "$@" ;;
 esac
 
-find_explicit_session_id() {
-    local args=("$@")
-    local i=0
-    while [[ $i -lt ${#args[@]} ]]; do
-        local arg="${args[$i]}"
-        case "$arg" in
-            --session-id=*)
-                printf '%s' "${arg#--session-id=}"
-                return 0
-                ;;
-            --resume=*)
-                printf '%s' "${arg#--resume=}"
-                return 0
-                ;;
-            --continue=*)
-                printf '%s' "${arg#--continue=}"
-                return 0
-                ;;
-            --session-id|--resume|--continue|-r|-c)
-                if [[ $((i + 1)) -lt ${#args[@]} ]]; then
-                    local next="${args[$((i + 1))]}"
-                    if [[ "$next" != -* ]]; then
-                        printf '%s' "$next"
-                        return 0
-                    fi
-                fi
-                ;;
-        esac
-        i=$((i + 1))
-    done
-    return 1
-}
-
-has_implicit_resume_flag() {
-    local args=("$@")
-    local i=0
-    while [[ $i -lt ${#args[@]} ]]; do
-        local arg="${args[$i]}"
-        case "$arg" in
-            --resume|--continue|-r|-c)
-                if [[ $((i + 1)) -ge ${#args[@]} ]]; then
-                    return 0
-                fi
-                local next="${args[$((i + 1))]}"
-                if [[ "$next" == -* ]]; then
-                    return 0
-                fi
-                ;;
-        esac
-        i=$((i + 1))
-    done
-    return 1
-}
+# Interactive Claude runtimes need the projected pane identity for Bridge
+# registration. Wait only after non-runtime passthrough subcommands have exited.
+if [[ -n "${TMUX_PANE:-}" ]] &&
+   [[ -n "${TIDEY_SOCKET_PATH:-}" && -S "${TIDEY_SOCKET_PATH:-}" ]] &&
+   [[ -z "${TIDEY_WORKSPACE_ID:-}" || -z "${TIDEY_PANEL_ID:-}" ]]; then
+    tidey_wait_for_tmux_pane_identity || true
+    tidey_hydrate_tmux_runtime_environment
+fi
 
 SESSION_ID=""
-if ! SESSION_ID="$(find_explicit_session_id "$@")"; then
-    if has_implicit_resume_flag "$@"; then
+if ! SESSION_ID="$(claude_hook_find_explicit_session_id "$@")"; then
+    if claude_hook_has_implicit_resume_flag "$@"; then
+        # No trusted id ahead of time (picker, most-recent continuation,
+        # non-UUID search term, or --fork-session): the actual session_id
+        # is claimed dynamically from the first hook payload that reports
+        # it (see claude-hook-dispatch).
         SESSION_ID=""
     else
         SESSION_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
@@ -269,15 +244,43 @@ if ! SESSION_ID="$(find_explicit_session_id "$@")"; then
 fi
 tidey_hydrate_tmux_pane_identity
 
+# Typed hook journal for the Remote Bridge three-state lifecycle. Only a
+# session with a known id gets one (same condition as the registry file).
+# The epoch token names THIS wrapper run: a resumed session's new wrapper
+# gets a new epoch, so the Bridge can drop the old wrapper's late events.
+HOOK_JOURNAL_FILE=""
+HOOK_JOURNAL_EPOCH="$$-$(date +%s)"
+HOOK_JOURNAL_EPOCH_MARKER=""
+if [[ -n "$SESSION_ID" ]]; then
+    mkdir -p "$REGISTRY_ROOT" 2>/dev/null || true
+    HOOK_JOURNAL_FILE="$REGISTRY_ROOT/claude-hooks-${SESSION_ID}.jsonl"
+    HOOK_JOURNAL_EPOCH_MARKER="$REGISTRY_ROOT/claude-hooks-${SESSION_ID}.epoch"
+    # Durable handoff: claim ownership of the shared journal by writing OUR
+    # epoch to the marker LAST. A resumed session's new wrapper overwrites
+    # it; this wrapper's later cleanup then sees a marker that no longer
+    # matches and skips deletion — the new wrapper's journal/counter/seqlock
+    # survive an old wrapper's teardown race.
+    claude_hook_journal_claim "$HOOK_JOURNAL_EPOCH_MARKER" "$HOOK_JOURNAL_EPOCH"
+fi
+
 # Build hooks settings JSON.
 # Claude Code merges --settings additively with the user's own settings.json.
 SESSION_HOOK_PREFIX="export TIDEY_CLAUDE_WRAPPER_PID=$(shell_quote "$$"); export TIDEY_CLAUDE_WRAPPER_CWD=$(shell_quote "$PWD")"
 SESSION_START_CMD="$(json_escape "$(build_hook_command "session-start" "$SESSION_HOOK_PREFIX")")"
-NOTIFICATION_CMD="$(json_escape "$(build_hook_command "notification")")"
+NOTIFICATION_PERMISSION_CMD="$(json_escape "$(build_hook_command "notification-permission")")"
+NOTIFICATION_IDLE_CMD="$(json_escape "$(build_hook_command "notification-idle")")"
+PERMISSION_REQUEST_CMD="$(json_escape "$(build_hook_command "permission-request")")"
 STOP_CMD="$(json_escape "$(build_hook_command "stop")")"
 SESSION_END_CMD="$(json_escape "$(build_hook_command "session-end" "$SESSION_HOOK_PREFIX")")"
 PROMPT_SUBMIT_CMD="$(json_escape "$(build_hook_command "prompt-submit")")"
-HOOKS_JSON="{\"hooks\":{\"SessionStart\":[{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"$SESSION_START_CMD\",\"timeout\":10}]}],\"Notification\":[{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"$NOTIFICATION_CMD\",\"timeout\":10}]}],\"Stop\":[{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"$STOP_CMD\",\"timeout\":10}]}],\"SessionEnd\":[{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"$SESSION_END_CMD\",\"timeout\":1}]}],\"UserPromptSubmit\":[{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"$PROMPT_SUBMIT_CMD\",\"timeout\":10}]}]}}"
+POST_TOOL_USE_CMD="$(json_escape "$(build_hook_command "post-tool-use")")"
+# Typed notification matchers: ONLY permission_prompt implies needs-input;
+# idle_prompt is idle; every other notification changes no state (so it is
+# not registered). PermissionRequest is the authoritative permission opener.
+# PostToolUse is the Mac-side permission RESOLUTION signal: any tool
+# actually running proves its permission (if any) was decided, mirroring
+# the Bridge's tool_result-correlated resolve.
+HOOKS_JSON="{\"hooks\":{\"SessionStart\":[{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"$SESSION_START_CMD\",\"timeout\":10}]}],\"Notification\":[{\"matcher\":\"permission_prompt\",\"hooks\":[{\"type\":\"command\",\"command\":\"$NOTIFICATION_PERMISSION_CMD\",\"timeout\":10}]},{\"matcher\":\"idle_prompt\",\"hooks\":[{\"type\":\"command\",\"command\":\"$NOTIFICATION_IDLE_CMD\",\"timeout\":10}]}],\"PermissionRequest\":[{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"$PERMISSION_REQUEST_CMD\",\"timeout\":10}]}],\"Stop\":[{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"$STOP_CMD\",\"timeout\":10}]}],\"SessionEnd\":[{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"$SESSION_END_CMD\",\"timeout\":1}]}],\"UserPromptSubmit\":[{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"$PROMPT_SUBMIT_CMD\",\"timeout\":10}]}],\"PostToolUse\":[{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"$POST_TOOL_USE_CMD\",\"timeout\":10}]}]}}"
 
 REGISTRY_FILE=""
 MONITOR_PID=""
@@ -301,6 +304,11 @@ cleanup() {
     fi
     if [[ -n "${REGISTRY_FILE:-}" ]]; then
         rm -f "$REGISTRY_FILE"
+    fi
+    if [[ -n "${HOOK_JOURNAL_FILE:-}" ]]; then
+        # A newer wrapper's later claim on the marker is respected — its
+        # journal, counter, and seqlock are NOT ours to delete.
+        claude_hook_journal_cleanup "$HOOK_JOURNAL_FILE" "$HOOK_JOURNAL_EPOCH_MARKER" "$HOOK_JOURNAL_EPOCH" || true
     fi
 }
 

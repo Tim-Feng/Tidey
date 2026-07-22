@@ -9,6 +9,9 @@ Sync the installed Tidey app's runtime bin payload from a freshly built app bund
 This copies:
   - tidey
   - claude
+  - claude-hook-dispatch
+  - claude-hook-journal-lifecycle
+  - claude-hook-argv-session-id
   - codex
   - codex-hook-dispatch
   - tidey-tmux-pane-identity
@@ -59,7 +62,7 @@ for path in "$SOURCE_APP" "$TARGET_APP" "$SOURCE_BIN_DIR" "$TARGET_BIN_DIR"; do
   fi
 done
 
-for name in tidey claude codex codex-hook-dispatch tidey-tmux-pane-identity; do
+for name in tidey claude claude-hook-dispatch claude-hook-journal-lifecycle claude-hook-argv-session-id codex codex-hook-dispatch tidey-tmux-pane-identity; do
   source_file="$SOURCE_BIN_DIR/$name"
   target_file="$TARGET_BIN_DIR/$name"
   if [[ ! -f "$source_file" ]]; then

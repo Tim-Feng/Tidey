@@ -2260,7 +2260,7 @@ final class ClaudeHookRegistryTests: XCTestCase {
 
         XCTAssertEqual(messages, [
             "{\"action\":\"notification.create\",\"workspace_id\":\"ws-1\",\"title\":\"Claude Code\",\"body\":\"Latest assistant reply\"}",
-            "report_shell_state prompt --workspace_id=ws-1"
+            "report_shell_state prompt --workspace_id=ws-1 --session_id=c211f108-d22f-4813-bde4-a72c5241034a"
         ])
     }
 
@@ -2285,7 +2285,7 @@ final class ClaudeHookRegistryTests: XCTestCase {
 
         XCTAssertEqual(messages, [
             "{\"action\":\"notification.create\",\"workspace_id\":\"ws-1\",\"title\":\"Claude Code\",\"body\":\"Transcript assistant reply\"}",
-            "report_shell_state prompt --workspace_id=ws-1"
+            "report_shell_state prompt --workspace_id=ws-1 --session_id=c211f108-d22f-4813-bde4-a72c5241034a"
         ])
     }
 
