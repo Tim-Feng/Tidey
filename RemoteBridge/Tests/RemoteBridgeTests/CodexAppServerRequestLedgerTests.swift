@@ -83,12 +83,31 @@ final class CodexAppServerRequestLedgerTests: XCTestCase {
                          promptID: "prompt-2")
 
         XCTAssertFalse(ledger.resolve(requestIDKey: "s:request-1",
+                                      fingerprint: "fingerprint-a",
                                       promptID: "prompt-1"))
         XCTAssertTrue(ledger.resolve(requestIDKey: "s:request-1",
+                                     fingerprint: "fingerprint-b",
                                      promptID: "prompt-2"))
         XCTAssertEqual(ledger.admit(requestIDKey: "s:request-1",
                                     fingerprint: "fingerprint-c",
                                     promptID: "prompt-3"),
                        .acceptedNew)
+    }
+
+    func testStaleResolutionCannotReleaseSamePromptWithNewFingerprint() {
+        let ledger = CodexAppServerRequestLedger()
+        _ = ledger.admit(requestIDKey: "s:request-1",
+                         fingerprint: "fingerprint-a",
+                         promptID: "prompt-1")
+        _ = ledger.admit(requestIDKey: "s:request-1",
+                         fingerprint: "fingerprint-b",
+                         promptID: "prompt-1")
+
+        XCTAssertFalse(ledger.resolve(requestIDKey: "s:request-1",
+                                      fingerprint: "fingerprint-a",
+                                      promptID: "prompt-1"))
+        XCTAssertTrue(ledger.beginResponse(requestIDKey: "s:request-1",
+                                           fingerprint: "fingerprint-b",
+                                           promptID: "prompt-1"))
     }
 }

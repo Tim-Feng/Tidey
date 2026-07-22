@@ -153,6 +153,7 @@ struct CodexAppServerApprovalRequest: Sendable {
     let environmentID: String?
     let userInputQuestions: [CodexAppServerUserInputQuestion]
     let autoResolutionMs: Int?
+    let wireFingerprint: String
 
     var requestIDKey: String {
         requestID.storageKey
@@ -171,14 +172,18 @@ struct CodexAppServerApprovalRequest: Sendable {
                   requestID: typedRequestID,
                   requestIDValue: requestID,
                   params: params,
-                  strictSchema: false)
+                  strictSchema: false,
+                  wireFingerprint: CodexAppServerRequestFingerprint.make(
+                    method: methodName,
+                    params: params))
     }
 
     // Strict typed model path. The distinct label avoids making legacy
     // `.string(...)` call sites ambiguous.
     init?(method methodName: String,
           typedRequestID requestID: CodexAppServerRequestID,
-          params: [String: JSONValue]) {
+          params: [String: JSONValue],
+          wireFingerprint: String? = nil) {
         guard let method = CodexAppServerApprovalRequestMethod(rawValue: methodName) else {
             return nil
         }
@@ -186,14 +191,19 @@ struct CodexAppServerApprovalRequest: Sendable {
                   requestID: requestID,
                   requestIDValue: requestID.legacyJSONValue,
                   params: params,
-                  strictSchema: true)
+                  strictSchema: true,
+                  wireFingerprint: wireFingerprint
+                    ?? CodexAppServerRequestFingerprint.make(
+                        method: methodName,
+                        params: params))
     }
 
     private init?(method: CodexAppServerApprovalRequestMethod,
                   requestID: CodexAppServerRequestID,
                   requestIDValue: JSONValue,
                   params: [String: JSONValue],
-                  strictSchema: Bool) {
+                  strictSchema: Bool,
+                  wireFingerprint: String) {
         guard let threadID = params["threadId"]?.stringValue,
               let turnID = params["turnId"]?.stringValue,
               let itemID = params["itemId"]?.stringValue else {
@@ -253,6 +263,7 @@ struct CodexAppServerApprovalRequest: Sendable {
         environmentID = Self.nonEmptyString(params["environmentId"])
         userInputQuestions = questions
         autoResolutionMs = params["autoResolutionMs"]?.intValue
+        self.wireFingerprint = wireFingerprint
     }
 
     private static func userInputQuestions(from value: JSONValue?) -> [CodexAppServerUserInputQuestion]? {

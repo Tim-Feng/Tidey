@@ -101,6 +101,7 @@ final class CodexAppServerConnection {
     private let onNotification: NotificationHandler
     private let approvalContext: CodexAppServerApprovalContext?
     private let approvalStore: CodexAppServerApprovalPromptStore
+    private let requestLedger = CodexAppServerRequestLedger()
     private let nextSequence: SequenceProvider
     private let timestampProvider: TimestampProvider
     private let onInteractivePrompt: InteractivePromptHandler
@@ -211,9 +212,15 @@ final class CodexAppServerConnection {
             } else {
                 BridgeLogger.server.debug("codex app-server server request received method=\(method, privacy: .public) id=\(typedID.storageKey, privacy: .public)")
             }
+            let params = object["params"]?.objectValue ?? [:]
+            let wireFingerprint = CodexAppServerRequestFingerprint.make(
+                method: method,
+                rawObject: rawObject,
+                fallbackParams: params)
             handleServerRequest(id: typedID,
                                 method: method,
-                                params: object["params"]?.objectValue ?? [:])
+                                params: params,
+                                wireFingerprint: wireFingerprint)
             return
         }
         if id != nil {
@@ -254,34 +261,51 @@ final class CodexAppServerConnection {
     }
 
     func close(error: CodexAppServerConnectionError? = nil) {
+        _ = closeConnection(error: error ?? .closed,
+                            approvalTerminalReason: "expired")
+    }
+
+    @discardableResult
+    private func closeConnection(
+        error: CodexAppServerConnectionError,
+        approvalTerminalReason: String
+    ) -> Bool {
         let pending: [String: ClientResponseHandler]
         stateLock.lock()
         guard !closed else {
             stateLock.unlock()
-            return
+            return false
         }
         closed = true
-        let failure = error ?? .closed
         pending = pendingClientResponses
         pendingClientResponses.removeAll()
         stateLock.unlock()
-        expirePendingApprovals()
+        expirePendingApprovals(reason: approvalTerminalReason)
         for handler in pending.values {
-            handler(.failure(failure))
+            handler(.failure(error))
         }
+        return true
     }
 
-    private func expirePendingApprovals() {
+    private func expirePendingApprovals(reason: String) {
         guard approvalContext != nil else {
             return
         }
         withPublicationLock {
-            let records = approvalStore.retireAndResolveAll(reason: "expired") {
+            let records = approvalStore.retireAndResolveAll(reason: reason) {
                 entry, reason, attempt in
                 makeLifecycleResolvedEvent(entry, reason, attempt)
             }
             publishTerminalRecords(records)
         }
+    }
+
+    private func abortForProtocolViolation() {
+        guard closeConnection(error: .protocolViolation,
+                              approvalTerminalReason: "protocol_violation") else {
+            return
+        }
+        onProtocolViolation()
     }
 
     func pendingApprovalPromptEvents() -> [AgentEvent] {
@@ -329,48 +353,89 @@ final class CodexAppServerConnection {
 
     func handleServerRequest(id: CodexAppServerRequestID,
                              method: String,
-                             params: [String: JSONValue]) {
+                             params: [String: JSONValue],
+                             wireFingerprint: String? = nil) {
+        let fingerprint = wireFingerprint
+            ?? CodexAppServerRequestFingerprint.make(method: method,
+                                                      params: params)
         if let request = CodexAppServerApprovalRequest(method: method,
                                                        typedRequestID: id,
-                                                       params: params) {
+                                                       params: params,
+                                                       wireFingerprint: fingerprint) {
             handleApprovalRequest(request)
             return
         }
+        handleServerErrorRequest(id: id,
+                                 method: method,
+                                 fingerprint: fingerprint)
+    }
+
+    private func handleServerErrorRequest(id: CodexAppServerRequestID,
+                                          method: String,
+                                          fingerprint: String) {
+        let code: Int
+        let message: String
         if CodexAppServerApprovalRequestMethod(rawValue: method) != nil {
-            sendError(id: id,
-                      code: -32602,
-                      message: "Invalid Codex approval request: \(method)")
-            return
+            code = -32602
+            message = "Invalid Codex approval request: \(method)"
+        } else {
+            code = -32601
+            message = "Unsupported server request: \(method)"
         }
-        sendError(id: id,
-                  code: -32601,
-                  message: "Unsupported server request: \(method)")
+        withPublicationLock {
+            guard !isClosedNow(),
+                  admitServerRequest(requestIDKey: id.storageKey,
+                                     fingerprint: fingerprint,
+                                     promptID: nil),
+                  requestLedger.beginResponse(requestIDKey: id.storageKey,
+                                              fingerprint: fingerprint,
+                                              promptID: nil) else {
+                return
+            }
+            sendError(id: id, code: code, message: message)
+        }
     }
 
     @discardableResult
     func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent {
-        let entry: CodexAppServerApprovalPromptEntry
-        let response: JSONValue
-        do {
-            (entry, response) = try approvalStore.resolveEntry(promptID: promptID,
-                                                               targetIndex: targetIndex)
-        } catch BridgeInternalError.notFound {
-            return try alreadyResolvedEvent(promptID: promptID)
+        try withPublicationLock {
+            guard let pendingEntry = approvalStore.entry(promptID: promptID) else {
+                return try alreadyResolvedEvent(promptID: promptID)
+            }
+            guard requestLedger.beginResponse(
+                requestIDKey: pendingEntry.request.requestIDKey,
+                fingerprint: pendingEntry.request.wireFingerprint,
+                promptID: promptID) else {
+                throw BridgeInternalError.conflict(
+                    "Codex approval lifecycle changed before the response could be sent.")
+            }
+            let (entry, response) = try approvalStore.resolveEntry(
+                promptID: promptID,
+                targetIndex: targetIndex)
+            return completeSubmit(entry: entry, response: response)
         }
-        return completeSubmit(entry: entry, response: response)
     }
 
     @discardableResult
     func submitUserInput(promptID: String,
                          answers: [String: [String]]) throws -> AgentEvent {
-        guard let pendingEntry = approvalStore.entry(promptID: promptID) else {
-            return try alreadyResolvedEvent(promptID: promptID)
+        try withPublicationLock {
+            guard let pendingEntry = approvalStore.entry(promptID: promptID) else {
+                return try alreadyResolvedEvent(promptID: promptID)
+            }
+            let response = try pendingEntry.request.userInputResponse(answers: answers)
+            guard requestLedger.beginResponse(
+                requestIDKey: pendingEntry.request.requestIDKey,
+                fingerprint: pendingEntry.request.wireFingerprint,
+                promptID: promptID) else {
+                throw BridgeInternalError.conflict(
+                    "Codex approval lifecycle changed before the response could be sent.")
+            }
+            guard let entry = approvalStore.remove(promptID: promptID) else {
+                return try alreadyResolvedEvent(promptID: promptID)
+            }
+            return completeSubmit(entry: entry, response: response)
         }
-        let response = try pendingEntry.request.userInputResponse(answers: answers)
-        guard let entry = approvalStore.remove(promptID: promptID) else {
-            return try alreadyResolvedEvent(promptID: promptID)
-        }
-        return completeSubmit(entry: entry, response: response)
     }
 
     // Transitional lifecycle submit seam. Registry/Bridge still call the
@@ -425,6 +490,18 @@ final class CodexAppServerConnection {
         case .lifecycleTokenMismatch:
             throw BridgeInternalError.conflict("The approval card is from an older delivery of this request; refresh and decide again.")
         case .begin(let entry, let response, let lifecycleAttempt):
+            guard requestLedger.beginResponse(
+                requestIDKey: entry.request.requestIDKey,
+                fingerprint: entry.request.wireFingerprint,
+                promptID: promptID) else {
+                if let terminal = approvalStore.terminalRecord(promptID: promptID) {
+                    return .alreadyResolved(terminal.event)
+                }
+                _ = approvalStore.failSubmit(promptID: promptID,
+                                             lifecycleAttempt: lifecycleAttempt)
+                throw BridgeInternalError.conflict(
+                    "Codex approval lifecycle changed before the response could be sent.")
+            }
             do {
                 try sendResponseLine(id: entry.request.requestID,
                                      bodyKey: "result",
@@ -513,6 +590,12 @@ final class CodexAppServerConnection {
                     makeEvent: makeLifecycleResolvedEvent)
             default:
                 return
+            }
+            for record in records {
+                _ = requestLedger.resolve(
+                    requestIDKey: record.entry.request.requestIDKey,
+                    fingerprint: record.entry.request.wireFingerprint,
+                    promptID: record.entry.prompt.promptID)
             }
             publishTerminalRecords(records)
         }
@@ -623,24 +706,68 @@ final class CodexAppServerConnection {
         try sendLine(line + "\n")
     }
 
+    private func admitServerRequest(requestIDKey: String,
+                                    fingerprint: String,
+                                    promptID: String?) -> Bool {
+        switch requestLedger.admit(requestIDKey: requestIDKey,
+                                   fingerprint: fingerprint,
+                                   promptID: promptID) {
+        case .acceptedNew, .acceptedDuplicate:
+            return true
+        case .replaced:
+            let records = approvalStore.resolveExternally(
+                reason: "superseded",
+                where: { $0.requestIDKey == requestIDKey },
+                makeEvent: makeLifecycleResolvedEvent)
+            publishTerminalRecords(records)
+            return true
+        case .protocolViolation(let isNew):
+            if isNew {
+                BridgeLogger.server.error("codex app-server RequestId collision after response start request_id=\(requestIDKey, privacy: .public)")
+                abortForProtocolViolation()
+            }
+            return false
+        }
+    }
+
     private func handleApprovalRequest(_ request: CodexAppServerApprovalRequest) {
-        guard let approvalContext else {
-            sendError(id: request.requestID,
-                      code: -32000,
-                      message: "Codex approval context is unavailable.")
-            return
+        let prompt: InteractivePrompt
+        if let approvalContext, !approvalContext.epoch.isEmpty {
+            prompt = request.makePrompt(epoch: approvalContext.epoch)
+        } else {
+            prompt = request.makePrompt()
         }
         withPublicationLock {
             guard !isClosedNow() else {
                 return
             }
-            let prompt = approvalContext.epoch.isEmpty
-                ? request.makePrompt()
-                : request.makePrompt(epoch: approvalContext.epoch)
+            guard admitServerRequest(requestIDKey: request.requestIDKey,
+                                     fingerprint: request.wireFingerprint,
+                                     promptID: prompt.promptID) else {
+                return
+            }
+            guard approvalContext != nil else {
+                guard requestLedger.beginResponse(
+                    requestIDKey: request.requestIDKey,
+                    fingerprint: request.wireFingerprint,
+                    promptID: prompt.promptID) else {
+                    return
+                }
+                sendError(id: request.requestID,
+                          code: -32000,
+                          message: "Codex approval context is unavailable.")
+                return
+            }
 
             // Retain compatibility for the old two-argument submit path until
             // Registry/Bridge switch to lifecycle outcomes in their own slice.
             if let resolvedApproval = resolvedApproval(promptID: prompt.promptID) {
+                guard requestLedger.beginResponse(
+                    requestIDKey: request.requestIDKey,
+                    fingerprint: request.wireFingerprint,
+                    promptID: prompt.promptID) else {
+                    return
+                }
                 let event = makeResolvedEvent(prompt: resolvedApproval.prompt,
                                               reason: "already_resolved")
                 onInteractivePromptResolved(event)

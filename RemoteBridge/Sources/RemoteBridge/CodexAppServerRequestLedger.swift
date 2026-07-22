@@ -1,5 +1,50 @@
 import Foundation
 
+enum CodexAppServerRequestFingerprint {
+    static func make(method: String,
+                     rawObject: [String: Any]?,
+                     fallbackParams: [String: JSONValue]) -> String {
+        let paramsComponent: String
+        if let rawObject {
+            if rawObject.keys.contains("params") {
+                let rawParams = rawObject["params"] ?? NSNull()
+                paramsComponent = canonicalRawFragment(rawParams)
+                    .map { "present:\($0.utf8.count):\($0)" }
+                    ?? canonicalFallback(fallbackParams)
+            } else {
+                paramsComponent = "missing"
+            }
+        } else {
+            paramsComponent = canonicalFallback(fallbackParams)
+        }
+        return "method:\(method.utf8.count):\(method)\nparams:\(paramsComponent)"
+    }
+
+    static func make(method: String,
+                     params: [String: JSONValue]) -> String {
+        make(method: method, rawObject: nil, fallbackParams: params)
+    }
+
+    private static func canonicalRawFragment(_ value: Any) -> String? {
+        guard let data = try? JSONSerialization.data(
+            withJSONObject: value,
+            options: [.sortedKeys, .fragmentsAllowed]) else {
+            return nil
+        }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private static func canonicalFallback(
+        _ params: [String: JSONValue]
+    ) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = (try? encoder.encode(JSONValue.object(params))) ?? Data()
+        let value = String(decoding: data, as: UTF8.self)
+        return "present:\(value.utf8.count):\(value)"
+    }
+}
+
 // Connection-scoped ownership for JSON-RPC ids used by server-initiated
 // requests. A response may only be written by the exact request fingerprint
 // and prompt association that admitted the id.
@@ -79,11 +124,14 @@ final class CodexAppServerRequestLedger: @unchecked Sendable {
     // An authoritative lifecycle terminal releases only the association it
     // actually resolved. A stale terminal cannot clear a newer owner.
     @discardableResult
-    func resolve(requestIDKey: String, promptID: String?) -> Bool {
+    func resolve(requestIDKey: String,
+                 fingerprint: String,
+                 promptID: String?) -> Bool {
         lock.lock()
         defer { lock.unlock() }
 
         guard let owner = ownersByRequestID[requestIDKey],
+              owner.fingerprint == fingerprint,
               owner.promptID == promptID,
               !owner.poisoned else {
             return false
