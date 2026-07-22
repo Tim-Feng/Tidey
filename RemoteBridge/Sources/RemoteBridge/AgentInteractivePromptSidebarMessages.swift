@@ -6,7 +6,7 @@ enum AgentInteractivePromptSidebarMessages {
         case .interactivePrompt:
             return [
                 notificationMessage(for: event, workspaceID: workspaceID),
-                "report_shell_state prompt --workspace_id=\(workspaceID)",
+                "report_shell_state needs_input --workspace_id=\(workspaceID)",
             ]
 
         case .interactivePromptResolved:

@@ -15,7 +15,7 @@ final class AgentInteractivePromptSidebarMessagesTests: XCTestCase {
         XCTAssertTrue(messages[0].contains(#""workspace_id":"workspace-1""#))
         XCTAssertTrue(messages[0].contains(#""title":"Claude Code""#))
         XCTAssertTrue(messages[0].contains("Choose deployment target: Pick the environment to deploy."))
-        XCTAssertEqual(messages[1], "report_shell_state prompt --workspace_id=workspace-1")
+        XCTAssertEqual(messages[1], "report_shell_state needs_input --workspace_id=workspace-1")
     }
 
     func testResolvedPromptClearsPromptShellState() {
