@@ -244,6 +244,20 @@
   - 只加 bootstrap line limit 會留下 reconnect 落後；只補 catch-up 又會被 replay / no-replay 混合路徑打回來
   - 這題要當成一條完整資料流處理：paged history fetch、bootstrap 上限、reconnect catch-up、stream completion / replay_count、以及不重播時的 parser 邏輯一起收
   - 補證：`208595cae` `c48599a47` `f14a0959e` `aea886f8f` `7627e99bf`
+- transcript 的 raw byte 進度不等於 client 看得見的 event coverage
+  - 一條 JSONL record 可能產生零個、多個或只產生 silent consumer event；只看「讀過幾行」或 Hub oldest seq，eventless 區段會讓分頁提早停、同一行的 ordinal 會漏掉
+  - source cursor 要保存精確 `(lineOffset, ordinal)`，raw scan frontier 與已完成索引 frontier要分開；`before_seq` 的 anchor line也必須能重讀，包括 byte offset 0
+  - 補證：`8bc228295` `43c8266a6` `2ec452f29` `2bc9efc28` `70c0bf01c` `2a6683494`
+- 跨頁關聯事件要用 source-wide closure evidence，再做 anchor-owned atomic projection
+  - Ask opener / terminal與 `/context` command / summary可能隔很多頁；單頁內配對會把已結束的舊 opener誤顯示成待輸入
+  - 先增量建立全 source closure index，再一次替換該 anchor擁有的 historical window；最後套完 workspace排序、limit與byte budget後，還要重驗 terminal仍在實際 slice，否則 fail closed隱藏 opener
+  - live tailer與history index可能反序看到同一 suffix，closure identity與 lifecycle blocker都要用每次 lifecycle的 exact token，不能只用可重複的 tool ID
+  - 補證：`5d2e53eb5` `637c3e634` `2ff375d71` `8022a3352` `1886326ae`
+- append-only history index仍要把 source mutation與不完整輸入當正式狀態
+  - 固定 EOF snapshot後只掃 append suffix；每輪驗 inode / path / boundary，保留跨 append partial UTF-8，但 partial要有硬上限
+  - scanned frontier與indexed frontier不可混用：只有完整 newline record才可推進 indexed frontier；invalid UTF-8、malformed JSON、超限 partial或source identity改變都要撤回舊頁並把 closure coverage標成 unknown
+  - unknown不是「目前沒看到 terminal」；若繼續顯示已cache opener就是 fail open
+  - 補證：`0d48cfc65` `b8bc20c19` `6ec7dffa4` `f19628650` `5487592c4` `d25a8908b`
 - `security` / `codesign` / `notarytool` 的 keychain 狀態不要用 sandbox 內結果下結論
   - 這條特別是 Codex 這邊的 agent sandbox 問題；同一台機器的互動 shell 與 Claude Code session 不一定會重現
   - 這類命令在 Codex agent sandbox 裡可能出現假陰性：`security find-identity` 回 `0 valid identities found`、`codesign` 回參數錯、`notarytool` 回 keychain access error，但同一台機器的互動 shell 實際是正常的
