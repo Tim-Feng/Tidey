@@ -20,6 +20,76 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         XCTAssertFalse(runtime.stopped)
     }
 
+    func testAttachForwardsAuthoritativeRegistryRootIdentity() {
+        let runtime = FakeRuntimeSession()
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: AgentEventHub(), attachHandler: { _, _, _, _, _, _, _ in
+            runtime
+        })
+
+        syncer.sync(records: [
+            Self.record(sessionID: "app",
+                        runtime: "codex_app_server",
+                        socketPath: "/tmp/app.sock",
+                        threadID: "  thread-root  "),
+        ])
+
+        XCTAssertEqual(runtime.registryRootThreadIDs, ["thread-root"])
+        XCTAssertEqual(CodexAppServerRegistryRuntimeSyncer.registryRootThreadID(
+            from: Self.record(sessionID: "fallback",
+                              runtime: "codex_app_server",
+                              socketPath: "/tmp/fallback.sock",
+                              threadID: "  ",
+                              resumeThreadID: "resume-root")), "resume-root")
+        XCTAssertNil(CodexAppServerRegistryRuntimeSyncer.registryRootThreadID(
+            from: Self.record(sessionID: "blank",
+                              runtime: "codex_app_server",
+                              socketPath: "/tmp/blank.sock",
+                              threadID: "\n",
+                              resumeThreadID: "  ")))
+    }
+
+    func testRegistryRootChangeReplacesRuntimeGeneration() {
+        var runtimes = [FakeRuntimeSession]()
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: AgentEventHub(), attachHandler: { _, _, _, _, _, _, _ in
+            let runtime = FakeRuntimeSession()
+            runtimes.append(runtime)
+            return runtime
+        })
+
+        syncer.sync(records: [Self.record(sessionID: "app", runtime: "codex_app_server",
+                                          socketPath: "/tmp/app.sock", threadID: "thread-a")])
+        syncer.sync(records: [Self.record(sessionID: "app", runtime: "codex_app_server",
+                                          socketPath: "/tmp/app.sock", threadID: "thread-b")])
+
+        XCTAssertEqual(runtimes.count, 2)
+        XCTAssertTrue(runtimes[0].stopped)
+        XCTAssertEqual(runtimes[0].registryRootThreadIDs, ["thread-a"])
+        XCTAssertEqual(runtimes[1].registryRootThreadIDs, ["thread-b"])
+    }
+
+    func testEffectiveRegistryRootSurvivesBlankRecordRoundTrip() {
+        var runtimes = [FakeRuntimeSession]()
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: AgentEventHub(), attachHandler: { _, _, _, _, _, _, _ in
+            let runtime = FakeRuntimeSession()
+            runtimes.append(runtime)
+            return runtime
+        })
+
+        for threadID in ["thread-a", nil, "thread-a"] as [String?] {
+            syncer.sync(records: [Self.record(sessionID: "app", runtime: "codex_app_server",
+                                              socketPath: "/tmp/app.sock", threadID: threadID)])
+        }
+        XCTAssertEqual(runtimes.count, 1, "A -> blank -> A reuses the last-known-good generation")
+
+        syncer.sync(records: [Self.record(sessionID: "app", runtime: "codex_app_server",
+                                          socketPath: "/tmp/app.sock", threadID: nil)])
+        syncer.sync(records: [Self.record(sessionID: "app", runtime: "codex_app_server",
+                                          socketPath: "/tmp/app.sock", threadID: "thread-b")])
+        XCTAssertEqual(runtimes.count, 2, "A -> blank -> B replaces exactly once")
+        XCTAssertTrue(runtimes[0].stopped)
+        XCTAssertEqual(runtimes[1].registryRootThreadIDs, ["thread-b"])
+    }
+
     func testSyncStopsStaleAndReplacedRuntimes() {
         let hub = AgentEventHub()
         var runtimes = [FakeRuntimeSession]()
@@ -578,7 +648,8 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
                                socketPath: String?,
                                panelID: String = "panel-1",
                                workspaceID: String = "workspace-1",
-                               threadID: String? = nil) -> AgentSessionRegistryRecord {
+                               threadID: String? = nil,
+                               resumeThreadID: String? = nil) -> AgentSessionRegistryRecord {
         AgentSessionRegistryRecord(version: 1,
                                    vendor: "codex",
                                    workspaceID: workspaceID,
@@ -592,7 +663,7 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
                                    appServerSocket: socketPath,
                                    appServerPID: Int32(getpid()),
                                    threadID: threadID,
-                                   resumeThreadID: threadID)
+                                   resumeThreadID: resumeThreadID ?? threadID)
     }
 
     private static func event(sessionID: String, promptID: String) -> AgentEvent {
@@ -714,6 +785,7 @@ private final class FakeRuntimeSession: CodexAppServerRuntimeSessionControlling 
     var submittedMessages = [String]()
     var resolvedEventsByPromptID = [String: AgentEvent]()
     var pendingPromptEvents = [AgentEvent]()
+    var registryRootThreadIDs = [String]()
 
     func canSubmitMessage() -> Bool {
         canSubmit
@@ -721,6 +793,18 @@ private final class FakeRuntimeSession: CodexAppServerRuntimeSessionControlling 
 
     func ensureThreadSubscription() {
         ensureThreadSubscriptionCallCount += 1
+    }
+
+    func setRegistryRootThreadID(_ rawThreadID: String?) {
+        guard let threadID = rawThreadID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              threadID.isEmpty == false else {
+            return
+        }
+        registryRootThreadIDs.append(threadID)
+    }
+
+    func isStopped() -> Bool {
+        stopped
     }
 
     func refreshActiveThread() {

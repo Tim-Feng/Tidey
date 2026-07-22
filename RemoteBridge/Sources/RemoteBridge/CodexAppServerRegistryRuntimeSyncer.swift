@@ -57,6 +57,7 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
     private struct RuntimeEntry {
         let record: AgentSessionRegistryRecord
         let session: CodexAppServerRuntimeSessionControlling
+        let effectiveRootThreadID: String?
     }
 
     private let eventHub: AgentEventHub
@@ -121,10 +122,17 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
             guard let existing = entriesBySessionID[record.sessionID] else {
                 return true
             }
-            return existing.record.appServerSocket != record.appServerSocket ||
+            if existing.record.appServerSocket != record.appServerSocket ||
                 existing.record.appServerPID != record.appServerPID ||
                 existing.record.workspaceID != record.workspaceID ||
-                existing.record.panelID != record.panelID
+                existing.record.panelID != record.panelID {
+                return true
+            }
+            if let rootThreadID = Self.registryRootThreadID(from: record),
+               rootThreadID != existing.effectiveRootThreadID {
+                return true
+            }
+            return false
         }
         let replacedEntries = recordsToAttach.compactMap { entriesBySessionID.removeValue(forKey: $0.sessionID) }
         let reusedRecords = runtimeRecords.filter { record in
@@ -156,7 +164,11 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
             let now = dateProvider()
             for record in reusedRecords {
                 if let entry = entriesBySessionID[record.sessionID] {
-                    entriesBySessionID[record.sessionID] = RuntimeEntry(record: record, session: entry.session)
+                    entriesBySessionID[record.sessionID] = RuntimeEntry(
+                        record: record,
+                        session: entry.session,
+                        effectiveRootThreadID: Self.registryRootThreadID(from: record)
+                            ?? entry.effectiveRootThreadID)
                 }
             }
             return reusedRecords.compactMap { record -> (session: CodexAppServerRuntimeSessionControlling, shouldRefresh: Bool)? in
@@ -323,6 +335,16 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
         return result
     }
 
+    static func registryRootThreadID(from record: AgentSessionRegistryRecord) -> String? {
+        for candidate in [record.threadID, record.resumeThreadID] {
+            if let threadID = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
+               threadID.isEmpty == false {
+                return threadID
+            }
+        }
+        return nil
+    }
+
     private func attach(record: AgentSessionRegistryRecord) {
         do {
             let session = try attachHandler(record,
@@ -343,8 +365,12 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
                                             { [weak self, sessionID = record.sessionID] threadID in
                                                 self?.activeThreadHandler?(sessionID, threadID)
                                             })
+            let rootThreadID = Self.registryRootThreadID(from: record)
+            session.setRegistryRootThreadID(rootThreadID)
             lock.withCodexRuntimeSyncerLock {
-                entriesBySessionID[record.sessionID] = RuntimeEntry(record: record, session: session)
+                entriesBySessionID[record.sessionID] = RuntimeEntry(record: record,
+                                                                    session: session,
+                                                                    effectiveRootThreadID: rootThreadID)
                 nextActiveThreadRefreshAtBySessionID[record.sessionID] = dateProvider().addingTimeInterval(activeThreadRefreshInterval)
             }
             BridgeLogger.server.info("codex app-server registry runtime attached workspace_id=\(record.workspaceID, privacy: .public) panel_id=\(record.panelID ?? "-", privacy: .public) session_id=\(record.sessionID, privacy: .public)")
