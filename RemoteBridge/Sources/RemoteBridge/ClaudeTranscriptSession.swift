@@ -2685,6 +2685,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private var historicalIndexReadByteCount = 0
     private var historicalIndexCompleteLineCount = 0
     private var historicalReplayOpenerEventIDs = Set<String>()
+    private var historicalReplayProducts = [AgentEvent]()
     private var historicalBackfillAnchorSeq: Int?
 
     func historicalClosureIndexStatsForTesting() -> ClaudeHistoricalClosureIndexStats {
@@ -2849,6 +2850,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         historicalClosureIndex = nil
         historicalIndexEventSink = nil
         historicalReplayOpenerEventIDs = []
+        historicalReplayProducts = []
         historicalBackfillAnchorSeq = nil
         activeAskUserQuestionLifecyclesByToolCallID = [:]
         pendingLocalCommand = nil
@@ -2936,11 +2938,13 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             let liveParserState = captureLiveParserState()
             resetParserStateForHistoricalReplay()
             historicalReplayOpenerEventIDs = []
+            historicalReplayProducts = []
             historicalBackfillAnchorSeq = beforeSeq
             isBackfillingHistory = true
             var sourceWasInvalidated = false
             defer {
                 historicalBackfillAnchorSeq = nil
+                historicalReplayProducts = []
                 isBackfillingHistory = false
                 restoreLiveParserState(liveParserState)
                 if sourceWasInvalidated {
@@ -2962,13 +2966,19 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             }
             if didLoad, let index = historicalClosureIndex {
                 for openerEventID in historicalReplayOpenerEventIDs {
-                    guard let closure = index.closureByOpenerEventID[openerEventID] else {
+                    guard let closure = index.closureByOpenerEventID[openerEventID],
+                          closure.seq < beforeSeq else {
                         continue
                     }
-                    hub.publish(closure,
-                                deliverToSubscribers: false,
-                                storage: .historicalBackfill)
+                    historicalReplayProducts.append(closure)
                 }
+                var seenEventIDs = Set<String>()
+                let products = historicalReplayProducts.filter {
+                    seenEventIDs.insert($0.eventID).inserted
+                }
+                hub.replaceHistoricalEvents(sessionID: record.sessionID,
+                                            events: products,
+                                            anchorSeq: beforeSeq)
             }
             historicalReplayOpenerEventIDs = []
             return didLoad
@@ -4137,9 +4147,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 || event.metadata?["tidey_generated"] == "claude_context_command" {
                 historicalReplayOpenerEventIDs.insert(event.eventID)
             }
-            hub.publish(event,
-                        deliverToSubscribers: false,
-                        storage: .historicalBackfill)
+            historicalReplayProducts.append(event)
             return event
         }
         hub.publish(event)
