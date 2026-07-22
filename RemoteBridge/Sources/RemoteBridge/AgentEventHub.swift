@@ -851,7 +851,7 @@ final class AgentEventHub {
     }
 }
 
-private extension AgentEvent {
+extension AgentEvent {
     // Rebasing changes only cursor position; event identity remains stable
     // so ordinary event-id deduplication still applies.
     func withSeq(_ seq: Int) -> AgentEvent {
