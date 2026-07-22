@@ -127,6 +127,74 @@ final class JSONLFileTailerTests: XCTestCase {
         XCTAssertEqual(captured.suffix(3), ["three", "four", "five"])
     }
 
+    func testInvalidUTF8RecordsDeliverAfterSourceFence() throws {
+        var data = Data("one\n".utf8)
+        data.append(contentsOf: [0xff, 0x0a])
+        data.append(Data("three\n".utf8))
+        let fileURL = try writeFile(data: data)
+        let queue = DispatchQueue(label: "JSONLFileTailerTests.invalid-utf8")
+        let appendedInvalidExpectation = expectation(description: "appended invalid record delivered")
+        let appendedLineExpectation = expectation(description: "line after invalid record delivered")
+        var captured = [(Int, String)]()
+        var invalidOffsets = [Int]()
+        let tailer = JSONLFileTailer(fileURL: fileURL,
+                                     queue: queue,
+                                     bootstrapLineLimit: 3,
+                                     lineHandler: { offset, line in
+                                         captured.append((offset, line))
+                                         if line == "four" {
+                                             appendedLineExpectation.fulfill()
+                                         }
+                                     },
+                                     invalidUTF8Handler: { offset in
+                                         invalidOffsets.append(offset)
+                                         if invalidOffsets.count == 2 {
+                                             appendedInvalidExpectation.fulfill()
+                                         }
+                                     },
+                                     invalidationHandler: {})
+
+        try tailer.start()
+        let handle = try FileHandle(forWritingTo: fileURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data([0xfe, 0x0a]))
+        try handle.write(contentsOf: Data("four\n".utf8))
+        try handle.close()
+
+        wait(for: [appendedInvalidExpectation, appendedLineExpectation], timeout: 2)
+        tailer.stop()
+        XCTAssertEqual(captured.map(\.1), ["one", "three", "four"])
+        XCTAssertEqual(captured.map(\.0), [0, 6, 14])
+        XCTAssertEqual(invalidOffsets, [4, 12])
+    }
+
+    func testBackfillDoesNotDeliverInvalidUTF8BeforeSourceFence() throws {
+        var data = Data("one\n".utf8)
+        data.append(contentsOf: [0xff, 0x0a])
+        data.append(Data("two\nthree\nfour\n".utf8))
+        let fileURL = try writeFile(data: data)
+        let queue = DispatchQueue(label: "JSONLFileTailerTests.invalid-fence")
+        var captured = [String]()
+        var invalidOffsets = [Int]()
+        let tailer = JSONLFileTailer(fileURL: fileURL,
+                                     queue: queue,
+                                     bootstrapLineLimit: 2,
+                                     lineHandler: { _, line in captured.append(line) },
+                                     invalidUTF8Handler: { invalidOffsets.append($0) },
+                                     invalidationHandler: {})
+        try tailer.start()
+        defer { tailer.stop() }
+        tailer.backfillAfterReadForTesting = {
+            try! Data("replacement-one\nreplacement-two\n".utf8)
+                .write(to: fileURL, options: .atomic)
+        }
+
+        XCTAssertThrowsError(try tailer.backfill(beforeOffset: 10, limit: 3))
+        XCTAssertEqual(captured, ["three", "four"])
+        XCTAssertTrue(invalidOffsets.isEmpty,
+                      "records rejected by the post-read source fence must have no side effects")
+    }
+
     func testOpenedSourceIdentityStaysBoundToActiveFileDescriptor() throws {
         let fileURL = try writeTestFile()
         let queue = DispatchQueue(label: "JSONLFileTailerTests.source-identity")
@@ -234,11 +302,15 @@ final class JSONLFileTailerTests: XCTestCase {
     }
 
     private func writeFile(contents: String) throws -> URL {
+        try writeFile(data: Data(contents.utf8))
+    }
+
+    private func writeFile(data: Data) throws -> URL {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let fileURL = directory.appendingPathComponent("events.jsonl")
-        try contents.write(to: fileURL, atomically: true, encoding: .utf8)
+        try data.write(to: fileURL, options: .atomic)
         addTeardownBlock {
             try? FileManager.default.removeItem(at: directory)
         }

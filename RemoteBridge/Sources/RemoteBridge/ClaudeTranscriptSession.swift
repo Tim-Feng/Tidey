@@ -1653,6 +1653,7 @@ final class JSONLFileTailer {
     private let queue: DispatchQueue
     private let bootstrapLineLimit: Int
     private let lineHandler: (Int, String) -> Void
+    private let invalidUTF8Handler: ((Int) -> Void)?
     private let invalidationHandler: () -> Void
 
     private var fd: Int32 = -1
@@ -1663,6 +1664,7 @@ final class JSONLFileTailer {
     private(set) var earliestLoadedOffset: Int?
     private(set) var reachedStartOfFile = false
     private(set) var openedSourceIdentity: JSONLFileSourceIdentity?
+    var backfillAfterReadForTesting: (() -> Void)?
     private var validatedBoundaryOffset = 0
     private var validatedBoundary = Data()
 
@@ -1670,11 +1672,13 @@ final class JSONLFileTailer {
          queue: DispatchQueue,
          bootstrapLineLimit: Int = transcriptBootstrapLineLimit,
          lineHandler: @escaping (Int, String) -> Void,
+         invalidUTF8Handler: ((Int) -> Void)? = nil,
          invalidationHandler: @escaping () -> Void) {
         self.fileURL = fileURL
         self.queue = queue
         self.bootstrapLineLimit = bootstrapLineLimit
         self.lineHandler = lineHandler
+        self.invalidUTF8Handler = invalidUTF8Handler
         self.invalidationHandler = invalidationHandler
     }
 
@@ -1720,7 +1724,7 @@ final class JSONLFileTailer {
             pendingData.removeAll(keepingCapacity: false)
             pendingLineOffset = nil
 
-            let bootstrappedLines = try JSONLFileReader.readBefore(
+            let bootstrappedRecords = try JSONLFileReader.readBeforeRecords(
                 fileURL: fileURL,
                 beforeOffset: nextReadOffset,
                 limit: bootstrapLineLimit)
@@ -1730,17 +1734,15 @@ final class JSONLFileTailer {
 
             // Drain any append that landed after the fixed bootstrap EOF.
             // Publication waits until the post-read fence succeeds.
-            let appendedLines = readAvailableData()
+            let appendedRecords = readAvailableRecords()
             guard currentSourceIsValid(minimumSize: nextReadOffset),
                   refreshValidatedBoundary(),
                   currentSourceIsValid(minimumSize: nextReadOffset) else {
                 throw JSONLFileTailerError.sourceInvalidated
             }
-            let initialLines = bootstrappedLines + appendedLines
-            for (offset, line) in initialLines {
-                lineHandler(offset, line)
-            }
-            earliestLoadedOffset = bootstrappedLines.first?.offset ?? appendedLines.first?.offset
+            deliver(bootstrappedRecords + appendedRecords)
+            earliestLoadedOffset = bootstrappedRecords.first?.offset
+                ?? appendedRecords.first?.offset
             reachedStartOfFile = (earliestLoadedOffset ?? 0) == 0
         } catch {
             stop()
@@ -1761,26 +1763,26 @@ final class JSONLFileTailer {
         // than the deepest page another client already read; neither the
         // earliest observed offset nor a sticky start-of-file marker may
         // redirect or block that request.
-        let lines = try JSONLFileReader.readBefore(fileURL: fileURL,
-                                                   beforeOffset: beforeOffset,
-                                                   limit: limit,
-                                                   includeAnchorLine: includeAnchorLine)
+        let records = try JSONLFileReader.readBeforeRecords(
+            fileURL: fileURL,
+            beforeOffset: beforeOffset,
+            limit: limit,
+            includeAnchorLine: includeAnchorLine)
+        backfillAfterReadForTesting?()
         guard currentSourceIsValid(minimumSize: nextReadOffset) else {
             throw JSONLFileTailerError.sourceInvalidated
         }
-        guard !lines.isEmpty else {
+        guard !records.isEmpty else {
             if beforeOffset <= (earliestLoadedOffset ?? beforeOffset) {
                 reachedStartOfFile = true
             }
             return false
         }
 
-        for (offset, line) in lines {
-            lineHandler(offset, line)
-        }
+        deliver(records)
         earliestLoadedOffset = min(earliestLoadedOffset ?? Int.max,
-                                   lines.first?.offset ?? Int.max)
-        reachedStartOfFile = (lines.first?.offset ?? 0) == 0
+                                   records.first?.offset ?? Int.max)
+        reachedStartOfFile = (records.first?.offset ?? 0) == 0
         return true
     }
 
@@ -1836,13 +1838,13 @@ final class JSONLFileTailer {
         case .valid:
             break
         }
-        let lines = readAvailableData()
+        let records = readAvailableRecords()
         switch sourceContinuity(minimumSize: nextReadOffset) {
         case .detached:
             // The path detached after the pre-read fence. All bytes just
             // read still came from the old descriptor and precede the epoch
             // switch, so preserve them exactly once.
-            drainDetachedSourceAndInvalidate(alreadyRead: lines)
+            drainDetachedSourceAndInvalidate(alreadyRead: records)
             return
         case .mutated:
             stop()
@@ -1853,7 +1855,7 @@ final class JSONLFileTailer {
         }
         guard refreshValidatedBoundary() else {
             if sourceContinuity(minimumSize: nextReadOffset) == .detached {
-                drainDetachedSourceAndInvalidate(alreadyRead: lines)
+                drainDetachedSourceAndInvalidate(alreadyRead: records)
                 return
             }
             stop()
@@ -1862,14 +1864,12 @@ final class JSONLFileTailer {
         }
         switch sourceContinuity(minimumSize: nextReadOffset) {
         case .valid:
-            for (offset, line) in lines {
-                lineHandler(offset, line)
-            }
+            deliver(records)
         case .detached:
             // Unlink/rename can land after the proposed boundary was
             // adopted but before publication. The buffered bytes still came
             // from the old descriptor and must precede invalidation.
-            drainDetachedSourceAndInvalidate(alreadyRead: lines)
+            drainDetachedSourceAndInvalidate(alreadyRead: records)
         case .mutated:
             stop()
             invalidationHandler()
@@ -1877,13 +1877,11 @@ final class JSONLFileTailer {
     }
 
     private func drainDetachedSourceAndInvalidate(
-        alreadyRead: [(offset: Int, line: String)] = []
+        alreadyRead: [JSONLFileRecord] = []
     ) {
-        let lines = alreadyRead + readAvailableData()
+        let records = alreadyRead + readAvailableRecords()
         if openedDescriptorPreservesValidatedPrefix(minimumSize: nextReadOffset) {
-            for (offset, line) in lines {
-                lineHandler(offset, line)
-            }
+            deliver(records)
         }
         stop()
         invalidationHandler()
@@ -2041,7 +2039,7 @@ final class JSONLFileTailer {
         return Data(bytes)
     }
 
-    private func readAvailableData() -> [(offset: Int, line: String)] {
+    private func readAvailableRecords() -> [JSONLFileRecord] {
         guard fd >= 0 else {
             return []
         }
@@ -2067,11 +2065,11 @@ final class JSONLFileTailer {
             break
         }
 
-        return drainCompleteLines()
+        return drainCompleteRecords()
     }
 
-    private func drainCompleteLines() -> [(offset: Int, line: String)] {
-        var lines = [(offset: Int, line: String)]()
+    private func drainCompleteRecords() -> [JSONLFileRecord] {
+        var records = [JSONLFileRecord]()
         while let newlineIndex = pendingData.firstIndex(of: 0x0a) {
             let lineData = pendingData.prefix(upTo: newlineIndex)
             let lineOffset = pendingLineOffset ?? nextReadOffset
@@ -2082,13 +2080,27 @@ final class JSONLFileTailer {
             } else {
                 pendingLineOffset = lineOffset + consumedBytes
             }
-            guard !lineData.isEmpty,
-                  let line = String(data: lineData, encoding: .utf8) else {
+            guard !lineData.isEmpty else {
                 continue
             }
-            lines.append((offset: lineOffset, line: line))
+            if let line = String(data: lineData, encoding: .utf8) {
+                records.append(.line(offset: lineOffset, value: line))
+            } else {
+                records.append(.invalidUTF8(offset: lineOffset))
+            }
         }
-        return lines
+        return records
+    }
+
+    private func deliver(_ records: [JSONLFileRecord]) {
+        for record in records {
+            switch record {
+            case .line(let offset, let value):
+                lineHandler(offset, value)
+            case .invalidUTF8(let offset):
+                invalidUTF8Handler?(offset)
+            }
+        }
     }
 }
 

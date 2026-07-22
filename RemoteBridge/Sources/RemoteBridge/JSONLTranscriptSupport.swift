@@ -30,21 +30,56 @@ func transcriptEventPosition(for sequence: Int) -> TranscriptEventPosition {
         ordinal: zeroBasedSequence % transcriptLineSequenceMultiplier)
 }
 
+enum JSONLFileRecord: Equatable {
+    case line(offset: Int, value: String)
+    case invalidUTF8(offset: Int)
+
+    var offset: Int {
+        switch self {
+        case .line(let offset, _), .invalidUTF8(let offset):
+            return offset
+        }
+    }
+}
+
 enum JSONLFileReader {
     private static let chunkSize = 64 * 1024
 
     static func readTail(fileURL: URL, limit: Int) throws -> [(offset: Int, line: String)] {
-        try readLines(fileURL: fileURL, beforeOffsetExclusive: nil, limit: limit)
+        try readTailRecords(fileURL: fileURL, limit: limit).compactMap { record in
+            guard case .line(let offset, let value) = record else { return nil }
+            return (offset: offset, line: value)
+        }
+    }
+
+    static func readTailRecords(fileURL: URL, limit: Int) throws -> [JSONLFileRecord] {
+        try readRecords(fileURL: fileURL, beforeOffsetExclusive: nil, limit: limit)
     }
 
     static func readBefore(fileURL: URL,
                            beforeOffset: Int,
                            limit: Int,
-                           includeAnchorLine: Bool = false) throws -> [(offset: Int, line: String)] {
+                           includeAnchorLine: Bool = false) throws
+        -> [(offset: Int, line: String)] {
+        try readBeforeRecords(fileURL: fileURL,
+                              beforeOffset: beforeOffset,
+                              limit: limit,
+                              includeAnchorLine: includeAnchorLine).compactMap { record in
+            guard case .line(let offset, let value) = record else { return nil }
+            return (offset: offset, line: value)
+        }
+    }
+
+    static func readBeforeRecords(fileURL: URL,
+                                  beforeOffset: Int,
+                                  limit: Int,
+                                  includeAnchorLine: Bool = false) throws -> [JSONLFileRecord] {
         let endOffset = includeAnchorLine
             ? try offsetAfterLine(fileURL: fileURL, lineOffset: beforeOffset)
             : beforeOffset
-        return try readLines(fileURL: fileURL, beforeOffsetExclusive: endOffset, limit: limit)
+        return try readRecords(fileURL: fileURL,
+                               beforeOffsetExclusive: endOffset,
+                               limit: limit)
     }
 
     private static func offsetAfterLine(fileURL: URL, lineOffset: Int) throws -> Int {
@@ -67,9 +102,9 @@ enum JSONLFileReader {
         return fileSize
     }
 
-    private static func readLines(fileURL: URL,
-                                  beforeOffsetExclusive: Int?,
-                                  limit: Int) throws -> [(offset: Int, line: String)] {
+    private static func readRecords(fileURL: URL,
+                                    beforeOffsetExclusive: Int?,
+                                    limit: Int) throws -> [JSONLFileRecord] {
         guard limit > 0 else {
             return []
         }
@@ -112,32 +147,35 @@ enum JSONLFileReader {
             buffer.removeFirst(bytesToDrop)
         }
 
-        return parseLines(buffer, baseOffset: parseBaseOffset, limit: limit)
+        return parseRecords(buffer, baseOffset: parseBaseOffset, limit: limit)
     }
 
-    private static func parseLines(_ data: Data,
-                                   baseOffset: Int,
-                                   limit: Int) -> [(offset: Int, line: String)] {
+    private static func parseRecords(_ data: Data,
+                                     baseOffset: Int,
+                                     limit: Int) -> [JSONLFileRecord] {
         guard !data.isEmpty else {
             return []
         }
 
-        var lines = [(offset: Int, line: String)]()
+        var records = [JSONLFileRecord]()
         var lineStartIndex = data.startIndex
 
         for index in data.indices where data[index] == 0x0A {
             let lineData = data[lineStartIndex..<index]
-            if !lineData.isEmpty,
-               let line = String(data: lineData, encoding: .utf8) {
+            if !lineData.isEmpty {
                 let lineOffset = baseOffset + data.distance(from: data.startIndex, to: lineStartIndex)
-                lines.append((offset: lineOffset, line: line))
+                if let line = String(data: lineData, encoding: .utf8) {
+                    records.append(.line(offset: lineOffset, value: line))
+                } else {
+                    records.append(.invalidUTF8(offset: lineOffset))
+                }
             }
             lineStartIndex = data.index(after: index)
         }
 
-        if lines.count > limit {
-            return Array(lines.suffix(limit))
+        if records.count > limit {
+            return Array(records.suffix(limit))
         }
-        return lines
+        return records
     }
 }
