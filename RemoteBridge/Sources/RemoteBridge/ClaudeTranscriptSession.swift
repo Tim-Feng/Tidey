@@ -3397,7 +3397,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         publishInteractivePromptSidebarIfNeeded(event)
     }
 
-    private func publishInteractivePromptSidebarIfNeeded(_ event: AgentEvent) {
+    func publishInteractivePromptSidebarIfNeeded(_ event: AgentEvent) {
         guard !isBackfillingHistory,
               event.type == .interactivePrompt || event.type == .interactivePromptResolved else {
             return
