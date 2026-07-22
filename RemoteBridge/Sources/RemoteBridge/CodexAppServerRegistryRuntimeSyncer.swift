@@ -7,6 +7,20 @@ protocol CodexAppServerApprovalSubmitting: AnyObject {
                         workspaceID: String,
                         panelID: String,
                         sessionID: String?) throws -> AgentEvent
+    func submitApproval(promptID: String,
+                        targetIndex: Int,
+                        clientRequestID: String?,
+                        lifecycleToken: String?,
+                        workspaceID: String,
+                        panelID: String,
+                        sessionID: String?) throws -> CodexAppServerApprovalSubmitOutcome
+    func submitUserInput(promptID: String,
+                         answers: [String: [String]],
+                         clientRequestID: String?,
+                         lifecycleToken: String?,
+                         workspaceID: String,
+                         panelID: String,
+                         sessionID: String?) throws -> CodexAppServerApprovalSubmitOutcome
 }
 
 extension CodexAppServerApprovalSubmitting {
@@ -16,6 +30,34 @@ extension CodexAppServerApprovalSubmitting {
                         panelID: String,
                         sessionID: String?) throws -> AgentEvent {
         try submitApproval(promptID: promptID, targetIndex: targetIndex)
+    }
+
+    func submitApproval(promptID: String,
+                        targetIndex: Int,
+                        clientRequestID: String?,
+                        lifecycleToken: String?,
+                        workspaceID: String,
+                        panelID: String,
+                        sessionID: String?) throws -> CodexAppServerApprovalSubmitOutcome {
+        let event = try submitApproval(promptID: promptID,
+                                       targetIndex: targetIndex,
+                                       workspaceID: workspaceID,
+                                       panelID: panelID,
+                                       sessionID: sessionID)
+        if let reason = event.metadata?["reason"], reason != "submit" {
+            return .alreadyResolved(event)
+        }
+        return .pendingConfirmation(promptID: promptID)
+    }
+
+    func submitUserInput(promptID: String,
+                         answers: [String: [String]],
+                         clientRequestID: String?,
+                         lifecycleToken: String?,
+                         workspaceID: String,
+                         panelID: String,
+                         sessionID: String?) throws -> CodexAppServerApprovalSubmitOutcome {
+        throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
     }
 }
 
