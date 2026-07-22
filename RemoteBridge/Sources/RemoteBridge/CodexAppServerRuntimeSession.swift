@@ -49,6 +49,7 @@ final class CodexAppServerRuntimeSession {
     private let initialization: CodexAppServerInitializationState
     private let activeThreadStore: CodexAppServerActiveThreadStore
     private let turnStateStore: CodexAppServerTurnStateStore
+    private let lifecycleFeed: CodexLifecycleFeed?
     private let callbackQueue: DispatchQueue
     private let lock = NSLock()
     private var stopped = false
@@ -91,6 +92,7 @@ final class CodexAppServerRuntimeSession {
          initialization: CodexAppServerInitializationState = CodexAppServerInitializationState(),
          activeThreadStore: CodexAppServerActiveThreadStore = CodexAppServerActiveThreadStore(),
          turnStateStore: CodexAppServerTurnStateStore = CodexAppServerTurnStateStore(),
+         lifecycleFeed: CodexLifecycleFeed? = nil,
          callbackQueue: DispatchQueue = DispatchQueue(label: "com.tidey.remote-bridge.codex-app-server-runtime-session")) {
         self.process = process
         self.transport = transport
@@ -99,6 +101,7 @@ final class CodexAppServerRuntimeSession {
         self.initialization = initialization
         self.activeThreadStore = activeThreadStore
         self.turnStateStore = turnStateStore
+        self.lifecycleFeed = lifecycleFeed
         self.callbackQueue = callbackQueue
     }
 
@@ -135,10 +138,18 @@ final class CodexAppServerRuntimeSession {
                       cwd: String?,
                       onResponse: @escaping CodexAppServerConnection.ClientResponseHandler = { _ in }) throws -> Int {
         try initialization.wait()
+        let snapshotBarrier = lifecycleFeed?.snapshotBarrier()
         return try runtime.resumeThread(on: connection,
                                         threadID: threadID,
                                         cwd: cwd,
-                                        onResponse: onResponse)
+                                        onResponse: { [weak self] response in
+                                            if case .success(let payload) = response {
+                                                self?.lifecycleFeed?.applySnapshotResult(payload,
+                                                                                         threadID: threadID,
+                                                                                         barrier: snapshotBarrier)
+                                            }
+                                            onResponse(response)
+                                        })
     }
 
     @discardableResult
@@ -277,6 +288,7 @@ final class CodexAppServerRuntimeSession {
         connection.close()
         transport.close()
         process.terminate()
+        lifecycleFeed?.retire()
     }
 
     func handleProcessExit(exitCode: Int32) {
@@ -285,6 +297,7 @@ final class CodexAppServerRuntimeSession {
         lock.unlock()
         initialization.fail(CodexAppServerConnectionError.closed)
         connection.close()
+        lifecycleFeed?.retire()
     }
 
     func whenInitialized(_ callback: @escaping @Sendable (Result<Void, Error>) -> Void) {
@@ -403,6 +416,7 @@ final class CodexAppServerRuntimeSession {
 
     private func sendThreadResumeForSubscription(threadID: String) {
         BridgeLogger.server.debug("codex app-server diagnostic resume request session_id=\(self.runtime.contextSessionID, privacy: .public) thread_id=\(threadID, privacy: .public) request_has_approvalsReviewer=false cwd=- source=subscription_ensure")
+        let snapshotBarrier = lifecycleFeed?.snapshotBarrier()
         do {
             try connection.sendClientRequest(method: "thread/resume",
                                              params: [
@@ -415,8 +429,11 @@ final class CodexAppServerRuntimeSession {
                                                                                                       threadID: threadID,
                                                                                                       requestHasApprovalsReviewer: false)
                                                 switch response {
-                                                case .success:
+                                                case .success(let payload):
                                                     self?.setAttachSubscriptionState(.subscribed(threadID: threadID), reason: "thread_resume_success")
+                                                    self?.lifecycleFeed?.applySnapshotResult(payload,
+                                                                                             threadID: threadID,
+                                                                                             barrier: snapshotBarrier)
                                                 case .failure(let error):
                                                     if self?.handleThreadResumeNoRollout(error, threadID: threadID) == true {
                                                         return
@@ -627,6 +644,21 @@ final class CodexAppServerActiveThreadStore: @unchecked Sendable {
         return changed
     }
 
+    // Passive notification observations may seed an empty binding but may
+    // never replace an already-authoritative loaded-list/resume root.
+    @discardableResult
+    func noteObservedThreadID(_ threadID: String) -> Bool {
+        lock.lock()
+        guard self.threadID == nil else {
+            lock.unlock()
+            return false
+        }
+        self.threadID = threadID
+        lock.unlock()
+        onChange(threadID)
+        return true
+    }
+
     func currentThreadID() -> String? {
         lock.lock()
         defer { lock.unlock() }
@@ -760,6 +792,14 @@ final class CodexAppServerInitializationState: @unchecked Sendable {
 }
 
 final class CodexAppServerRuntimeSessionFactory {
+    static func makeLifecycleFeed(context: CodexAppServerRuntimeContext,
+                                  activeThreadStore: CodexAppServerActiveThreadStore) -> CodexLifecycleFeed {
+        CodexLifecycleFeed(identity: AgentSessionLifecycleIdentity(workspaceID: context.workspaceID,
+                                                                   panelID: context.panelID,
+                                                                   sessionID: context.sessionID),
+                           rootThreadID: { activeThreadStore.currentThreadID() })
+    }
+
     private let processRunner: CodexAppServerProcessRunning
     private let transportConnector: CodexAppServerTransportConnecting
 
@@ -806,15 +846,24 @@ final class CodexAppServerRuntimeSessionFactory {
         }
         let activeThreadStore = CodexAppServerActiveThreadStore(onChange: onActiveThreadID)
         let turnStateStore = CodexAppServerTurnStateStore()
+        let lifecycleFeed = Self.makeLifecycleFeed(context: context,
+                                                   activeThreadStore: activeThreadStore)
         let runtime = CodexAppServerHeadlessRuntime(context: context,
                                                     nextSequence: nextSequence,
                                                     timestampProvider: timestampProvider,
                                                     onAgentEvent: onAgentEvent,
-                                                    onThreadID: { _ = activeThreadStore.setThreadID($0) },
-                                                    onTurnStarted: turnStateStore.markStarted,
-                                                    onTurnCompleted: turnStateStore.markCompleted,
+                                                    onThreadID: { _ = activeThreadStore.noteObservedThreadID($0) },
+                                                    onTurnStarted: { threadID, turnID in
+                                                        turnStateStore.markStarted(threadID: threadID, turnID: turnID)
+                                                        lifecycleFeed.applyTurnStarted(threadID: threadID, turnID: turnID)
+                                                    },
+                                                    onTurnCompleted: { threadID, turnID in
+                                                        turnStateStore.markCompleted(threadID: threadID, turnID: turnID)
+                                                        lifecycleFeed.applyTurnCompleted(threadID: threadID, turnID: turnID)
+                                                    },
                                                     onThreadActive: turnStateStore.markThreadActive,
-                                                    onThreadIdle: turnStateStore.markThreadIdle)
+                                                    onThreadIdle: turnStateStore.markThreadIdle,
+                                                    onThreadStatusLifecycle: lifecycleFeed.applyStatus)
         let connection = CodexAppServerConnection(sendLine: { line in
             try transport.sendLine(line)
         },
@@ -833,7 +882,8 @@ final class CodexAppServerRuntimeSessionFactory {
                                                           runtime: runtime,
                                                           initialization: initialization,
                                                           activeThreadStore: activeThreadStore,
-                                                          turnStateStore: turnStateStore)
+                                                          turnStateStore: turnStateStore,
+                                                          lifecycleFeed: lifecycleFeed)
         exitRouter.attach(runtimeSession)
         stdoutRouter.attach(connection)
         try connection.sendClientRequest(method: "initialize",
@@ -888,15 +938,24 @@ final class CodexAppServerRuntimeSessionFactory {
                                                        })
         let activeThreadStore = CodexAppServerActiveThreadStore(onChange: onActiveThreadID)
         let turnStateStore = CodexAppServerTurnStateStore()
+        let lifecycleFeed = Self.makeLifecycleFeed(context: context,
+                                                   activeThreadStore: activeThreadStore)
         let runtime = CodexAppServerHeadlessRuntime(context: context,
                                                     nextSequence: nextSequence,
                                                     timestampProvider: timestampProvider,
                                                     onAgentEvent: onAgentEvent,
-                                                    onThreadID: { _ = activeThreadStore.setThreadID($0) },
-                                                    onTurnStarted: turnStateStore.markStarted,
-                                                    onTurnCompleted: turnStateStore.markCompleted,
+                                                    onThreadID: { _ = activeThreadStore.noteObservedThreadID($0) },
+                                                    onTurnStarted: { threadID, turnID in
+                                                        turnStateStore.markStarted(threadID: threadID, turnID: turnID)
+                                                        lifecycleFeed.applyTurnStarted(threadID: threadID, turnID: turnID)
+                                                    },
+                                                    onTurnCompleted: { threadID, turnID in
+                                                        turnStateStore.markCompleted(threadID: threadID, turnID: turnID)
+                                                        lifecycleFeed.applyTurnCompleted(threadID: threadID, turnID: turnID)
+                                                    },
                                                     onThreadActive: turnStateStore.markThreadActive,
-                                                    onThreadIdle: turnStateStore.markThreadIdle)
+                                                    onThreadIdle: turnStateStore.markThreadIdle,
+                                                    onThreadStatusLifecycle: lifecycleFeed.applyStatus)
         let connection = CodexAppServerConnection(sendLine: { line in
             try transport.sendLine(line)
         },
@@ -915,7 +974,8 @@ final class CodexAppServerRuntimeSessionFactory {
                                                           runtime: runtime,
                                                           initialization: initialization,
                                                           activeThreadStore: activeThreadStore,
-                                                          turnStateStore: turnStateStore)
+                                                          turnStateStore: turnStateStore,
+                                                          lifecycleFeed: lifecycleFeed)
         stdoutRouter.attach(connection)
         try connection.sendClientRequest(method: "initialize",
                                          params: [
@@ -970,12 +1030,13 @@ func codexAppServerLoadedThreadID(from value: JSONValue) -> String? {
         ?? value.arrayValue
         ?? []
     let candidates = threads.compactMap(codexAppServerLoadedThreadCandidate(from:))
-    if candidates.count == 1 {
-        return candidates[0].id
-    }
-    let currentCandidates = candidates.filter(\.isCurrent)
+    let nonChildCandidates = candidates.filter { $0.isChild == false }
+    let currentCandidates = nonChildCandidates.filter(\.isCurrent)
     if currentCandidates.count == 1 {
         return currentCandidates[0].id
+    }
+    if nonChildCandidates.count == 1 {
+        return nonChildCandidates[0].id
     }
     return nil
 }
@@ -993,26 +1054,48 @@ private func codexAppServerLoadedThreadListIsPaginated(_ object: [String: JSONVa
 private struct CodexAppServerLoadedThreadCandidate {
     let id: String
     let isCurrent: Bool
+    let isChild: Bool
 }
 
 private func codexAppServerLoadedThreadCandidate(from value: JSONValue) -> CodexAppServerLoadedThreadCandidate? {
     if let id = value.stringValue {
-        return CodexAppServerLoadedThreadCandidate(id: id, isCurrent: false)
+        return CodexAppServerLoadedThreadCandidate(id: id, isCurrent: false, isChild: false)
     }
     guard let object = value.objectValue else {
         return nil
     }
     if let id = object["id"]?.stringValue ?? object["threadId"]?.stringValue {
         return CodexAppServerLoadedThreadCandidate(id: id,
-                                                   isCurrent: codexAppServerLoadedThreadIsCurrent(object))
+                                                   isCurrent: codexAppServerLoadedThreadIsCurrent(object),
+                                                   isChild: codexAppServerLoadedThreadIsChild(object))
     }
     if let thread = object["thread"]?.objectValue,
        let id = thread["id"]?.stringValue ?? thread["threadId"]?.stringValue {
         return CodexAppServerLoadedThreadCandidate(id: id,
                                                    isCurrent: codexAppServerLoadedThreadIsCurrent(object)
-                                                    || codexAppServerLoadedThreadIsCurrent(thread))
+                                                    || codexAppServerLoadedThreadIsCurrent(thread),
+                                                   isChild: codexAppServerLoadedThreadIsChild(object)
+                                                    || codexAppServerLoadedThreadIsChild(thread))
     }
     return nil
+}
+
+private func codexAppServerLoadedThreadIsChild(_ object: [String: JSONValue]) -> Bool {
+    let parentKeys = ["parentThreadId", "parent_thread_id", "parentId", "parent_id"]
+    for key in parentKeys where object[key]?.stringValue != nil {
+        return true
+    }
+    let agentKeys = ["agentRole", "agent_role", "agentNickname", "agent_nickname"]
+    for key in agentKeys where object[key]?.stringValue?.isEmpty == false {
+        return true
+    }
+    if object["role"]?.stringValue == "subagent" {
+        return true
+    }
+    if object["source"]?.objectValue?["subAgent"] != nil {
+        return true
+    }
+    return false
 }
 
 private func codexAppServerLoadedThreadIsCurrent(_ object: [String: JSONValue]) -> Bool {

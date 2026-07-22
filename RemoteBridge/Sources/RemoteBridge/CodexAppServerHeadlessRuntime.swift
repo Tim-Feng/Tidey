@@ -73,6 +73,7 @@ final class CodexAppServerHeadlessRuntime {
     typealias ThreadIDHandler = (String) -> Void
     typealias TurnLifecycleHandler = (_ threadID: String, _ turnID: String) -> Void
     typealias ThreadStatusHandler = (_ threadID: String) -> Void
+    typealias ThreadStatusLifecycleHandler = (_ threadID: String, _ statusType: String, _ activeFlags: [String]?) -> Void
 
     private let context: CodexAppServerRuntimeContext
     private let nextSequence: SequenceProvider
@@ -83,6 +84,7 @@ final class CodexAppServerHeadlessRuntime {
     private let onTurnCompleted: TurnLifecycleHandler
     private let onThreadActive: ThreadStatusHandler
     private let onThreadIdle: ThreadStatusHandler
+    private let onThreadStatusLifecycle: ThreadStatusLifecycleHandler
 
     var contextSessionID: String {
         context.sessionID
@@ -96,7 +98,8 @@ final class CodexAppServerHeadlessRuntime {
          onTurnStarted: @escaping TurnLifecycleHandler = { _, _ in },
          onTurnCompleted: @escaping TurnLifecycleHandler = { _, _ in },
          onThreadActive: @escaping ThreadStatusHandler = { _ in },
-         onThreadIdle: @escaping ThreadStatusHandler = { _ in }) {
+         onThreadIdle: @escaping ThreadStatusHandler = { _ in },
+         onThreadStatusLifecycle: @escaping ThreadStatusLifecycleHandler = { _, _, _ in }) {
         self.context = context
         self.nextSequence = nextSequence
         self.timestampProvider = timestampProvider
@@ -106,6 +109,7 @@ final class CodexAppServerHeadlessRuntime {
         self.onTurnCompleted = onTurnCompleted
         self.onThreadActive = onThreadActive
         self.onThreadIdle = onThreadIdle
+        self.onThreadStatusLifecycle = onThreadStatusLifecycle
     }
 
     @discardableResult
@@ -244,7 +248,10 @@ final class CodexAppServerHeadlessRuntime {
     }
 
     func handleNotification(_ notification: CodexAppServerNotification) {
-        if let threadID = Self.threadID(from: notification.params) {
+        // Bare threadId notifications also come from subagents. Only a
+        // positively identified root thread/started may establish the root
+        // binding; loaded-list/resume remain authoritative thereafter.
+        if let threadID = Self.rootThreadStartedThreadID(from: notification) {
             onThreadID(threadID)
         }
         if notification.method == "turn/started",
@@ -268,6 +275,9 @@ final class CodexAppServerHeadlessRuntime {
             default:
                 break
             }
+            let activeFlags: [String]? = notification.params["status"]?.objectValue?["activeFlags"]?.arrayValue
+                .map { $0.compactMap(\.stringValue) }
+            onThreadStatusLifecycle(threadID, status, activeFlags)
         }
         guard let event = makeEvent(from: notification) else {
             return
@@ -608,6 +618,32 @@ final class CodexAppServerHeadlessRuntime {
     private static func threadID(from params: [String: JSONValue]) -> String? {
         params["threadId"]?.stringValue
             ?? params["thread"]?.objectValue?["id"]?.stringValue
+    }
+
+    static func rootThreadStartedThreadID(from notification: CodexAppServerNotification) -> String? {
+        guard notification.method == "thread/started",
+              let thread = notification.params["thread"]?.objectValue,
+              let threadID = thread["id"]?.stringValue else {
+            return nil
+        }
+        let parentKeys = ["parentThreadId", "parent_thread_id", "parentId", "parent_id"]
+        for key in parentKeys {
+            guard let value = thread[key] ?? notification.params[key] else {
+                continue
+            }
+            if case .null = value {
+                continue
+            }
+            return nil
+        }
+        let agentKeys = ["agentRole", "agent_role", "agentNickname", "agent_nickname"]
+        for key in agentKeys where thread[key]?.stringValue?.isEmpty == false {
+            return nil
+        }
+        if thread["role"]?.stringValue == "subagent" {
+            return nil
+        }
+        return threadID
     }
 
     private static func turnID(from params: [String: JSONValue]) -> String? {
