@@ -109,6 +109,129 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         XCTAssertFalse(runtimes[1].stopped)
     }
 
+    func testAttachFailureDiscardsStagedCallbackSideEffects() throws {
+        let hub = AgentEventHub()
+        let sidebarQueue = DispatchQueue(label: "test.codex.attach-failure.sidebar")
+        let sidebarLock = NSLock()
+        var sidebarMessages = [String]()
+        var threadIDs = [String]()
+        let envelope = Self.approvalEnvelope(sessionID: "app", requestID: "approval-failed")
+        let syncer = CodexAppServerRegistryRuntimeSyncer(
+            eventHub: hub,
+            sidebarMessageSender: { message in
+                sidebarLock.lock()
+                sidebarMessages.append(message)
+                sidebarLock.unlock()
+            },
+            sidebarQueue: sidebarQueue,
+            attachHandler: { _, _, _, onAgentEvent, onInteractivePrompt, onInteractivePromptResolved, onActiveThreadID in
+                onAgentEvent(Self.appServerEvent(eventID: "turn-failed-attach",
+                                                 seq: 1,
+                                                 sessionID: "app",
+                                                 type: .thinking,
+                                                 text: "starting",
+                                                 payloadKind: "turn_started"))
+                onInteractivePrompt(envelope)
+                onInteractivePromptResolved(Self.event(sessionID: "app", promptID: envelope.prompt.promptID))
+                onActiveThreadID("thread-failed-attach")
+                throw BridgeInternalError.invalidRequest("attach failed after callbacks")
+            })
+        syncer.activeThreadHandler = { _, threadID in threadIDs.append(threadID) }
+
+        syncer.sync(records: [
+            Self.record(sessionID: "app", runtime: "codex_app_server", socketPath: "/tmp/app.sock"),
+        ])
+        sidebarQueue.sync {}
+
+        XCTAssertTrue(hub.fetch(workspaceID: "workspace-1", sessionID: "app", limit: 10).events.isEmpty)
+        XCTAssertTrue(threadIDs.isEmpty)
+        sidebarLock.lock()
+        let deliveredSidebarMessages = sidebarMessages
+        sidebarLock.unlock()
+        XCTAssertTrue(deliveredSidebarMessages.isEmpty)
+    }
+
+    func testAttachSuccessCommitsStagedCallbacksInFIFOOrder() throws {
+        let hub = AgentEventHub()
+        let orderLock = NSLock()
+        var deliveryOrder = [String]()
+        let (subscriptionID, _) = hub.subscribe(workspaceID: "workspace-1", sessionID: "app") { envelope in
+            orderLock.lock()
+            deliveryOrder.append(envelope.event.eventID)
+            orderLock.unlock()
+        }
+        defer { hub.unsubscribe(subscriptionID) }
+        let first = Self.approvalEnvelope(sessionID: "app", requestID: "approval-A")
+        let second = Self.approvalEnvelope(sessionID: "app", requestID: "approval-B")
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub, attachHandler: { _, _, _, _, onInteractivePrompt, _, onActiveThreadID in
+            onInteractivePrompt(first)
+            onActiveThreadID("thread-between")
+            onInteractivePrompt(second)
+            return FakeRuntimeSession()
+        })
+        syncer.activeThreadHandler = { _, threadID in
+            orderLock.lock()
+            deliveryOrder.append(threadID)
+            orderLock.unlock()
+        }
+
+        syncer.sync(records: [
+            Self.record(sessionID: "app", runtime: "codex_app_server", socketPath: "/tmp/app.sock"),
+        ])
+
+        orderLock.lock()
+        let observed = deliveryOrder
+        orderLock.unlock()
+        XCTAssertEqual(observed, [first.event.eventID, "thread-between", second.event.eventID])
+    }
+
+    func testAttachStageCommitDrainPreservesFIFOForMidDrainArrival() {
+        let stage = CodexAppServerAttachStage()
+        let orderLock = NSLock()
+        var order = [String]()
+        let record: (String) -> Void = { value in
+            orderLock.lock()
+            order.append(value)
+            orderLock.unlock()
+        }
+        stage.run { record("A") }
+        stage.run { record("B") }
+        orderLock.lock()
+        let beforeCommit = order
+        orderLock.unlock()
+        XCTAssertTrue(beforeCommit.isEmpty, "attach callbacks must remain staged before commit")
+
+        let firstDrainEntered = DispatchSemaphore(value: 0)
+        let releaseFirstDrain = DispatchSemaphore(value: 0)
+        var paused = false
+        stage.commitDrainHook = {
+            guard paused == false else { return }
+            paused = true
+            firstDrainEntered.signal()
+            _ = releaseFirstDrain.wait(timeout: .now() + 5)
+        }
+        let commitDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            stage.commit()
+            commitDone.signal()
+        }
+        XCTAssertEqual(firstDrainEntered.wait(timeout: .now() + 2), .success)
+
+        let cSubmitted = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            stage.run { record("C") }
+            cSubmitted.signal()
+        }
+        XCTAssertEqual(cSubmitted.wait(timeout: .now() + 2), .success)
+        releaseFirstDrain.signal()
+        XCTAssertEqual(commitDone.wait(timeout: .now() + 2), .success)
+
+        orderLock.lock()
+        let observed = order
+        orderLock.unlock()
+        XCTAssertEqual(observed, ["A", "B", "C"])
+    }
+
     func testSyncStopsStaleAndReplacedRuntimes() {
         let hub = AgentEventHub()
         var runtimes = [FakeRuntimeSession]()
@@ -683,6 +806,24 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
                                    appServerPID: Int32(getpid()),
                                    threadID: threadID,
                                    resumeThreadID: resumeThreadID ?? threadID)
+    }
+
+    private static func approvalEnvelope(sessionID: String,
+                                         requestID: String) -> CodexAppServerInteractivePromptEnvelope {
+        let request = CodexAppServerApprovalRequest(
+            method: "item/commandExecution/requestApproval",
+            requestID: .string(requestID),
+            params: [
+                "threadId": .string("thread-1"),
+                "turnId": .string("turn-1"),
+                "itemId": .string("item-1"),
+                "command": .string("ls"),
+            ])!
+        let prompt = request.makePrompt(epoch: "test-epoch")
+        return CodexAppServerInteractivePromptEnvelope(
+            request: request,
+            prompt: prompt,
+            event: interactivePromptEvent(sessionID: sessionID, promptID: prompt.promptID))
     }
 
     private static func event(sessionID: String, promptID: String) -> AgentEvent {

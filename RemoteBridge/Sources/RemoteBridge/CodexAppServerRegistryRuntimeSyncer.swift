@@ -360,24 +360,34 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
     }
 
     private func attach(record: AgentSessionRegistryRecord) {
+        let stage = CodexAppServerAttachStage()
+        attachStageHook?(stage)
         do {
             let session = try attachHandler(record,
                                             { [eventHub] sessionID in eventHub.nextSyntheticSeq(sessionID: sessionID) },
                                             timestampProvider,
                                             { [weak self] event in
-                                                self?.handleSidebarEvent(event, record: record)
+                                                stage.run {
+                                                    self?.handleSidebarEvent(event, record: record)
+                                                }
                                             },
                                             { [weak self, eventHub] envelope in
-                                                eventHub.publish(envelope.event)
-                                                self?.handleSidebarEvent(envelope.event, record: record)
-                                                BridgeLogger.server.info("codex app-server approval prompt published workspace_id=\(envelope.event.workspaceID, privacy: .public) panel_id=\(envelope.event.metadata?["panel_id"] ?? "-", privacy: .public) session_id=\(envelope.event.sessionID, privacy: .public) prompt_id=\(envelope.prompt.promptID, privacy: .public)")
+                                                stage.run {
+                                                    eventHub.publish(envelope.event)
+                                                    self?.handleSidebarEvent(envelope.event, record: record)
+                                                    BridgeLogger.server.info("codex app-server approval prompt published workspace_id=\(envelope.event.workspaceID, privacy: .public) panel_id=\(envelope.event.metadata?["panel_id"] ?? "-", privacy: .public) session_id=\(envelope.event.sessionID, privacy: .public) prompt_id=\(envelope.prompt.promptID, privacy: .public)")
+                                                }
                                             },
                                             { [weak self, eventHub] event in
-                                                eventHub.publish(event)
-                                                self?.handleSidebarEvent(event, record: record)
+                                                stage.run {
+                                                    eventHub.publish(event)
+                                                    self?.handleSidebarEvent(event, record: record)
+                                                }
                                             },
                                             { [weak self, sessionID = record.sessionID] threadID in
-                                                self?.activeThreadHandler?(sessionID, threadID)
+                                                stage.run {
+                                                    self?.activeThreadHandler?(sessionID, threadID)
+                                                }
                                             })
             let rootThreadID = Self.registryRootThreadID(from: record)
             session.setRegistryRootThreadID(rootThreadID)
@@ -387,8 +397,10 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
                                                                     effectiveRootThreadID: rootThreadID)
                 nextActiveThreadRefreshAtBySessionID[record.sessionID] = dateProvider().addingTimeInterval(activeThreadRefreshInterval)
             }
+            stage.commit()
             BridgeLogger.server.info("codex app-server registry runtime attached workspace_id=\(record.workspaceID, privacy: .public) panel_id=\(record.panelID ?? "-", privacy: .public) session_id=\(record.sessionID, privacy: .public)")
         } catch {
+            stage.discard()
             BridgeLogger.server.error("codex app-server registry runtime attach failed workspace_id=\(record.workspaceID, privacy: .public) panel_id=\(record.panelID ?? "-", privacy: .public) session_id=\(record.sessionID, privacy: .public) error=\(String(describing: error), privacy: .public)")
         }
     }
@@ -502,14 +514,56 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
 // implementation preserves existing behavior until the behavioral change
 // wires staging into attach().
 final class CodexAppServerAttachStage: @unchecked Sendable {
+    private enum Mode {
+        case staging
+        case committing
+        case committed
+        case discarded
+    }
+
+    private let lock = NSLock()
+    private var mode = Mode.staging
+    private var buffered = [() -> Void]()
     var commitDrainHook: (() -> Void)?
 
     func run(_ work: @escaping () -> Void) {
-        work()
+        lock.lock()
+        switch mode {
+        case .staging, .committing:
+            buffered.append(work)
+            lock.unlock()
+        case .committed:
+            lock.unlock()
+            work()
+        case .discarded:
+            lock.unlock()
+        }
     }
 
-    func commit() {}
-    func discard() {}
+    func commit() {
+        lock.lock()
+        guard mode == .staging else {
+            lock.unlock()
+            return
+        }
+        mode = .committing
+        while buffered.isEmpty == false {
+            let next = buffered.removeFirst()
+            lock.unlock()
+            commitDrainHook?()
+            next()
+            lock.lock()
+        }
+        mode = .committed
+        lock.unlock()
+    }
+
+    func discard() {
+        lock.lock()
+        mode = .discarded
+        buffered = []
+        lock.unlock()
+    }
 }
 
 private extension NSLock {
