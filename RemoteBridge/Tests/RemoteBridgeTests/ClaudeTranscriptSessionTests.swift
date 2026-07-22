@@ -1273,6 +1273,60 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                        transcriptEventSequence(lineOffset: 0, ordinal: 1))
     }
 
+    func testClaudeBeforeCursorPagesSequentialOrdinalsFromOffsetZero() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        let offsetZeroLine = makeClaudeAssistantTextLine(uuid: "offset-zero",
+                                                         texts: ["zero", "one", "two"])
+        let fillerLines = (0..<transcriptBootstrapLineLimit).map {
+            makeClaudeUserLine(uuid: "filler-\($0)", content: "filler-\($0)")
+        }
+        try (([offsetZeroLine] + fillerLines).joined(separator: "\n") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1)
+                .events.first?.text == "filler-\(transcriptBootstrapLineLimit - 1)"
+        })
+
+        let beforeOrdinalTwo = BridgeAgentEventFetchFlow.run(
+            eventHub: hub,
+            workspaceID: "workspace",
+            sessionID: "session",
+            limit: 1,
+            beforeSeq: transcriptEventSequence(lineOffset: 0, ordinal: 2),
+            afterSeq: nil
+        ) { _, beforeSeq, limit in
+            session.backfill(beforeSeq: beforeSeq, limit: limit)
+        }
+        XCTAssertTrue(beforeOrdinalTwo.didBackfill)
+        XCTAssertEqual(beforeOrdinalTwo.fetchResult.events.compactMap(\.text), ["one"])
+
+        let beforeOrdinalOne = BridgeAgentEventFetchFlow.run(
+            eventHub: hub,
+            workspaceID: "workspace",
+            sessionID: "session",
+            limit: 1,
+            beforeSeq: transcriptEventSequence(lineOffset: 0, ordinal: 1),
+            afterSeq: nil
+        ) { _, beforeSeq, limit in
+            session.backfill(beforeSeq: beforeSeq, limit: limit)
+        }
+        XCTAssertTrue(beforeOrdinalOne.didBackfill)
+        XCTAssertEqual(beforeOrdinalOne.fetchResult.events.compactMap(\.text), ["zero"])
+        XCTAssertFalse(beforeOrdinalOne.fetchResult.events.contains { $0.text == "one" },
+                       "the exact-anchor replacement must not leak the prior ordinal page")
+    }
+
     func testClaudeBackfillIncludesEarlierOrdinalFromAnchorRecord() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
