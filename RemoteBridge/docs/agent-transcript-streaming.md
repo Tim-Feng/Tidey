@@ -116,12 +116,22 @@ New actions:
 - `subscribe_agent_events`
 - `unsubscribe_agent_events`
 
+### Fetching agent events
+
+Agent event sequence numbers are scoped to one agent session. They are not workspace-global cursors, and a cursor from one session must not be reused for another session.
+
 `fetch_agent_events` accepts:
 
 - `workspace_id` required
-- `session_id` optional
-- `limit` required
-- `before_seq` optional
+- `limit` required; must be an integer from `1` through `2000`
+- `session_id` optional when fetching the latest workspace snapshot; required when `before_seq` or `after_seq` is present
+- `before_seq` optional; selects the newest transcript page whose stored event sequences are strictly less than the cursor
+- `after_seq` optional; selects the earliest transcript page whose stored event sequences are strictly greater than the cursor
+- `max_bytes` optional; applies a soft page-size budget after the count limit (an individually oversized event may be replaced by a bounded placeholder)
+
+`before_seq` and `after_seq` are mutually exclusive. Each cursor must be an integral numeric value representable by the bridge. A malformed cursor, both cursor fields in one request, or a cursor request without `session_id` returns `invalid_request`.
+
+Without a cursor, the bridge returns the newest matching events. Results are returned in ascending order. A session-scoped cursor request may read older transcript records to cover the requested range; concurrent history requests for the same session are isolated from one another.
 
 It returns:
 
@@ -134,6 +144,19 @@ It returns:
 }
 ```
 
+`has_more` reports whether the bridge's currently materialized matching window contains more events than this count- or byte-limited page; it is not an authoritative end-of-transcript marker.
+
+### Subscribing to agent events
+
+`subscribe_agent_events` accepts optional filters:
+
+- `workspace_id`
+- `session_id`
+- `since_seq`; selects buffered replay events from that session whose stored sequences are strictly greater than the cursor
+- `no_replay`; when true, skips the initial buffered replay and delivers only subsequent live events
+
+Because `since_seq` is session-scoped, it requires `session_id` and must be an integral numeric value representable by the bridge. A malformed `since_seq`, or `since_seq` without `session_id`, returns `invalid_request`. A workspace-wide subscription remains valid when no `since_seq` is supplied. `no_replay` may also be used without `session_id` because it does not compare sequence numbers.
+
 `subscribe_agent_events` responds with:
 
 ```json
@@ -141,19 +164,19 @@ It returns:
   "subscribed": true,
   "workspace_id": "ws-123",
   "session_id": "6d22e1a7-...",
+  "no_replay": false,
   "replay_count": 12
 }
 ```
 
-`subscribe_agent_events` also accepts optional replay filters:
-
-- `session_id`
-- `since_seq`
-
 After subscription, bridge sends:
 
-- replayed buffered events with `"replay": true`
-- live events with `"replay": false`
+- matching buffered events with `"replay": true`, unless `no_replay` is true
+- subsequent live events with `"replay": false`
+
+Cursor filtering applies to the stored transcript page or replay. To preserve actionable UI state, the bridge may additionally include an active Codex approval snapshot whose sequence lies outside that cursor range. Clients must deduplicate by `event_id` and advance polling cursors from `oldest_seq`/`newest_seq` rather than from an injected snapshot.
+
+`unsubscribe_agent_events` takes no cursor and ends the connection's current agent-event subscription.
 
 ## Filtering
 
@@ -166,12 +189,12 @@ Only normalized user-visible events are pushed.
 
 ## Compatibility Rules
 
-- Claude MVP accepts transcript versions starting with `2.`
-- unknown transcript versions are reported as `status` events and ignored
-- unknown line shapes are skipped without killing the stream
+- Claude accepts versionless legacy records and string versions starting with `2.`.
+- An unsupported major version is reported once as a `status` event. Unsupported, explicitly non-string, malformed JSON, and invalid UTF-8 records make source-wide closure knowledge unknown; cached interactive openers are hidden from fetch, replay, and submission rather than treated as safely open.
+- Unknown shapes inside an otherwise supported, valid record are skipped without killing the stream.
 
 ## Known Gaps
 
 - Claude resume flows without a concrete `session_id` cannot be mapped reliably.
 - Codex bootstrap `role=user` messages contain injected instructions and are filtered with heuristics.
-- Transcript replay and history fetches are bounded in memory by the bridge event hub.
+- Replay buffers are bounded by the event hub. Claude's first cross-page closure lookup lazily indexes the current source, then indexes only appended suffixes; each external fetch is limited to 2000 events.
