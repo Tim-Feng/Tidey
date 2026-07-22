@@ -63,10 +63,139 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         XCTAssertEqual(monitor.activeSessionForWorkspace(workspaceID: "stale-workspace")?.sessionID, nil)
         XCTAssertEqual(monitor.activeSessionForWorkspace(workspaceID: "current-workspace")?.sessionID, "session-stale-env")
 
-        let canonicalizedData = try Data(contentsOf: registryURL)
-        let canonicalizedRecord = try JSONDecoder().decode(AgentSessionRegistryRecord.self, from: canonicalizedData)
-        XCTAssertEqual(canonicalizedRecord.workspaceID, "current-workspace")
-        XCTAssertEqual(canonicalizedRecord.panelID, "current-panel")
+        XCTAssertEqual(try Data(contentsOf: registryURL), recordData)
+    }
+
+    func testScanDoesNotOverwriteRegistryRecordAdvancedWhileResolvingPaneIdentity() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let registryURL = paths.codexAgentSessionsDirectory
+            .appendingPathComponent("codex-concurrent-runtime-advance.json")
+        let sessionID = "019f7731-32ee-7f61-b700-2df0ae55b09e"
+        let startingRecord = AgentSessionRegistryRecord(version: 1,
+                                                        vendor: "codex",
+                                                        workspaceID: "stale-workspace",
+                                                        sessionID: sessionID,
+                                                        panelID: "stale-panel",
+                                                        pid: getpid(),
+                                                        cwd: "/tmp",
+                                                        createdAt: "2026-07-22T07:30:00Z",
+                                                        transcriptPath: nil,
+                                                        tmuxPaneID: "%31",
+                                                        tmuxSocketPath: "/tmp/tmux-501/default",
+                                                        runtime: "codex_app_server_starting",
+                                                        appServerSocket: "/tmp/app.sock",
+                                                        appServerPID: getpid(),
+                                                        threadID: sessionID,
+                                                        resumeThreadID: sessionID)
+        try JSONEncoder().encode(startingRecord).write(to: registryURL, options: [.atomic])
+
+        let advancedRecord = AgentSessionRegistryRecord(version: 1,
+                                                        vendor: "codex",
+                                                        workspaceID: "writer-workspace",
+                                                        sessionID: sessionID,
+                                                        panelID: "writer-panel",
+                                                        pid: getpid(),
+                                                        cwd: "/tmp",
+                                                        createdAt: "2026-07-22T07:30:00Z",
+                                                        transcriptPath: nil,
+                                                        tmuxPaneID: "%31",
+                                                        tmuxSocketPath: "/tmp/tmux-501/default",
+                                                        runtime: "codex_app_server",
+                                                        appServerSocket: "/tmp/app.sock",
+                                                        appServerPID: getpid(),
+                                                        remoteTUIPID: getpid(),
+                                                        threadID: sessionID,
+                                                        resumeThreadID: sessionID)
+        let advancedData = try JSONEncoder().encode(advancedRecord)
+
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: fileManager,
+                                                  hub: AgentEventHub(),
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+                                                  parentPIDLookup: { _ in nil },
+                                                  ordinaryTmuxCarrierIdentityResolver: { _ in
+                                                      do {
+                                                          try advancedData.write(to: registryURL, options: [.atomic])
+                                                      } catch {
+                                                          XCTFail("Failed to advance registry fixture: \(error)")
+                                                      }
+                                                      return TideyOrdinaryTmuxCarrierIdentity(
+                                                          workspaceID: "current-workspace",
+                                                          panelID: "current-panel",
+                                                          socketPath: "/tmp/tmux-501/default",
+                                                          targetSession: "storage")
+                                                  })
+        try monitor.start()
+
+        let snapshot = try XCTUnwrap(monitor.activeSessionSnapshots().first)
+        XCTAssertEqual(snapshot.workspaceID, "current-workspace")
+        XCTAssertEqual(snapshot.panelID, "current-panel")
+        XCTAssertEqual(try Data(contentsOf: registryURL), advancedData)
+
+        let persisted = try JSONDecoder().decode(AgentSessionRegistryRecord.self,
+                                                 from: Data(contentsOf: registryURL))
+        XCTAssertEqual(persisted.runtime, "codex_app_server")
+        XCTAssertEqual(persisted.remoteTUIPID, getpid())
+    }
+
+    func testScanDoesNotResurrectRegistryRecordDeletedWhileResolvingPaneIdentity() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let registryURL = paths.codexAgentSessionsDirectory
+            .appendingPathComponent("codex-concurrent-runtime-delete.json")
+        let sessionID = "019f840d-e291-7d83-99df-bffaabe66df7"
+        let startingRecord = AgentSessionRegistryRecord(version: 1,
+                                                        vendor: "codex",
+                                                        workspaceID: "stale-workspace",
+                                                        sessionID: sessionID,
+                                                        panelID: "stale-panel",
+                                                        pid: getpid(),
+                                                        cwd: "/tmp",
+                                                        createdAt: "2026-07-22T07:31:00Z",
+                                                        transcriptPath: nil,
+                                                        tmuxPaneID: "%32",
+                                                        tmuxSocketPath: "/tmp/tmux-501/default",
+                                                        runtime: "codex_app_server_starting",
+                                                        appServerSocket: "/tmp/app.sock",
+                                                        appServerPID: getpid(),
+                                                        threadID: sessionID,
+                                                        resumeThreadID: sessionID)
+        try JSONEncoder().encode(startingRecord).write(to: registryURL, options: [.atomic])
+
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: fileManager,
+                                                  hub: AgentEventHub(),
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+                                                  parentPIDLookup: { _ in nil },
+                                                  ordinaryTmuxCarrierIdentityResolver: { _ in
+                                                      do {
+                                                          try fileManager.removeItem(at: registryURL)
+                                                      } catch {
+                                                          XCTFail("Failed to delete registry fixture: \(error)")
+                                                      }
+                                                      return TideyOrdinaryTmuxCarrierIdentity(
+                                                          workspaceID: "current-workspace",
+                                                          panelID: "current-panel",
+                                                          socketPath: "/tmp/tmux-501/default",
+                                                          targetSession: "video-process-codex")
+                                                  })
+        try monitor.start()
+
+        let snapshot = try XCTUnwrap(monitor.activeSessionSnapshots().first)
+        XCTAssertEqual(snapshot.workspaceID, "current-workspace")
+        XCTAssertEqual(snapshot.panelID, "current-panel")
+        XCTAssertFalse(fileManager.fileExists(atPath: registryURL.path))
     }
 
     func testScanCorrectsStaleRegistryRecordFromLivePaneSnapshotWithoutSocketPath() throws {
@@ -120,12 +249,7 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         XCTAssertNil(monitor.activeSessionForPanel(workspaceID: "stale-workspace",
                                                    panelID: "stale-panel"))
 
-        let canonicalizedData = try Data(contentsOf: registryURL)
-        let canonicalizedRecord = try JSONDecoder().decode(AgentSessionRegistryRecord.self, from: canonicalizedData)
-        XCTAssertEqual(canonicalizedRecord.workspaceID, "current-workspace")
-        XCTAssertEqual(canonicalizedRecord.panelID, "current-panel")
-        XCTAssertEqual(canonicalizedRecord.tmuxPaneID, "%14")
-        XCTAssertEqual(canonicalizedRecord.tmuxSocketPath, "/tmp/tmux-501/default")
+        XCTAssertEqual(try Data(contentsOf: registryURL), recordData)
     }
 
     func testScanCorrectsStaleAppServerRecordFromOrdinaryTmuxCarrierWhenPaneOptionsAreEmpty() throws {
@@ -234,11 +358,7 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         XCTAssertEqual(monitor.activeSessionForWorkspace(workspaceID: "genesis-workspace")?.sessionID, nil)
         XCTAssertEqual(monitor.activeSessionForWorkspace(workspaceID: "tidey-workspace")?.sessionID, "app-server-session")
 
-        let canonicalizedData = try Data(contentsOf: registryURL)
-        let canonicalizedRecord = try JSONDecoder().decode(AgentSessionRegistryRecord.self, from: canonicalizedData)
-        XCTAssertEqual(canonicalizedRecord.workspaceID, "tidey-workspace")
-        XCTAssertEqual(canonicalizedRecord.panelID, "tidey-carrier-panel")
-        XCTAssertEqual(canonicalizedRecord.tmuxSocketPath, "/tmp/tmux-501/default")
+        XCTAssertEqual(try Data(contentsOf: registryURL), recordData)
 
         let syncedRecord = try XCTUnwrap(runtimeSyncer.latestRecords.first)
         XCTAssertEqual(syncedRecord.workspaceID, "tidey-workspace")
@@ -345,11 +465,7 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         XCTAssertEqual(monitor.activeSessionForWorkspace(workspaceID: "genesis-workspace")?.sessionID,
                        "app-server-session")
 
-        let canonicalizedData = try Data(contentsOf: registryURL)
-        let canonicalizedRecord = try JSONDecoder().decode(AgentSessionRegistryRecord.self, from: canonicalizedData)
-        XCTAssertEqual(canonicalizedRecord.workspaceID, "genesis-workspace")
-        XCTAssertEqual(canonicalizedRecord.panelID, "genesis-carrier-panel")
-        XCTAssertEqual(canonicalizedRecord.tmuxSocketPath, "/tmp/tmux-501/default")
+        XCTAssertEqual(try Data(contentsOf: registryURL), recordData)
 
         let syncedRecord = try XCTUnwrap(runtimeSyncer.latestRecords.first)
         XCTAssertEqual(syncedRecord.workspaceID, "genesis-workspace")
@@ -462,11 +578,7 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         XCTAssertEqual(monitor.activeSessionForWorkspace(workspaceID: "adbrewer-workspace")?.panelID,
                        "adbrewer-codex-panel")
 
-        let canonicalizedData = try Data(contentsOf: registryURL)
-        let canonicalizedRecord = try JSONDecoder().decode(AgentSessionRegistryRecord.self, from: canonicalizedData)
-        XCTAssertEqual(canonicalizedRecord.workspaceID, "adbrewer-workspace")
-        XCTAssertEqual(canonicalizedRecord.panelID, "adbrewer-codex-panel")
-        XCTAssertEqual(canonicalizedRecord.tmuxSocketPath, "/tmp/tmux-501/default")
+        XCTAssertEqual(try Data(contentsOf: registryURL), recordData)
 
         let syncedRecord = try XCTUnwrap(runtimeSyncer.latestRecords.first)
         XCTAssertEqual(syncedRecord.workspaceID, "adbrewer-workspace")

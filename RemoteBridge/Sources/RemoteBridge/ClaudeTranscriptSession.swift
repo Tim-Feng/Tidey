@@ -651,11 +651,11 @@ final class AgentSessionRegistryMonitor {
         resolvedPanelBindings = resolvedPanelBindings.filter { activeSessionIDs.contains($0.key) }
         lastLoggedPaneIdentityCorrectionKeyBySessionID = lastLoggedPaneIdentityCorrectionKeyBySessionID
             .filter { activeSessionIDs.contains($0.key) }
+        // Registry runtime lifecycle fields are wrapper-owned. Keep pane identity correction in
+        // memory: writing a previously loaded record here can overwrite a concurrent runtime
+        // transition or resurrect a file the wrapper deleted while this scan was resolving it.
         let paneCorrectedEntries = loadedRecords.map { loadedRecord in
             let correctedRecord = recordWithPaneIdentityIfAvailable(loadedRecord.record)
-            persistCanonicalizedRecordIfNeeded(sourceRecord: loadedRecord.record,
-                                               correctedRecord: correctedRecord,
-                                               url: loadedRecord.url)
             return LoadedAgentSessionRegistryRecord(record: correctedRecord, url: loadedRecord.url)
         }
         let effectiveEntries = paneCorrectedEntries
@@ -952,25 +952,6 @@ final class AgentSessionRegistryMonitor {
 
     private func normalizedNonEmptySocketPath(_ socketPath: String?) -> String? {
         Self.normalizedNonEmptySocketPath(socketPath)
-    }
-
-    private func persistCanonicalizedRecordIfNeeded(sourceRecord: AgentSessionRegistryRecord,
-                                                    correctedRecord: AgentSessionRegistryRecord,
-                                                    url: URL) {
-        guard sourceRecord.workspaceID != correctedRecord.workspaceID ||
-              sourceRecord.panelID != correctedRecord.panelID ||
-              sourceRecord.tmuxSocketPath != correctedRecord.tmuxSocketPath else {
-            return
-        }
-        do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.sortedKeys]
-            let data = try encoder.encode(correctedRecord)
-            try data.write(to: url, options: [.atomic])
-            BridgeLogger.server.info("agent registry canonicalized pane identity session_id=\(correctedRecord.sessionID, privacy: .public) vendor=\(correctedRecord.vendor, privacy: .public) workspace_id=\(correctedRecord.workspaceID, privacy: .public) panel_id=\(correctedRecord.panelID ?? "-", privacy: .public)")
-        } catch {
-            BridgeLogger.server.error("agent registry canonicalize_failed session_id=\(correctedRecord.sessionID, privacy: .public) vendor=\(correctedRecord.vendor, privacy: .public) error=\(String(describing: error), privacy: .public)")
-        }
     }
 
     private func directSessionForWorkspace(workspaceID: String) -> ActiveAgentSessionSnapshot? {
