@@ -902,7 +902,18 @@ main() {
     local profile_flag=""
 
     real_codex="$(find_real_codex)" || { echo "Error: codex not found in PATH" >&2; exit 127; }
-    tidey_hydrate_tmux_pane_identity
+    tidey_hydrate_tmux_runtime_environment
+    if is_app_server_runtime_command "$@" &&
+       [[ -n "${TMUX_PANE:-}" ]] &&
+       [[ -n "${TIDEY_SOCKET_PATH:-}" && -S "${TIDEY_SOCKET_PATH:-}" ]] &&
+       [[ -z "${TIDEY_WORKSPACE_ID:-}" || -z "${TIDEY_PANEL_ID:-}" ]]; then
+        # Ordinary tmux projection is asynchronous. A shell created by SSH can
+        # be attached to Tidey a few seconds before Bridge writes pane-scoped
+        # identity. Wait for that authoritative context instead of silently
+        # launching an untracked plain Codex process.
+        tidey_wait_for_tmux_pane_identity || true
+        tidey_hydrate_tmux_runtime_environment
+    fi
 
     if [[ -z "${TIDEY_SOCKET_PATH:-}" || ! -S "${TIDEY_SOCKET_PATH:-}" || -z "${TIDEY_WORKSPACE_ID:-}" ]]; then
         exec "$real_codex" "$@"

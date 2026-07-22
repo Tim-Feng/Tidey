@@ -1180,4 +1180,80 @@ FAKE_CODEX
 
 run_app_server_runtime_socket_timeout_falls_back_to_plain_test
 
+run_late_tmux_context_enters_wrapper_test() {
+    local tmpdir
+    local fake_home
+    local mock_bin
+    local real_bin
+    local socket
+    local socket_pid
+    local codex_log
+
+    tmpdir="$(mktemp -d "/private/tmp/tidey-codex-late-tmux.XXXXXX")"
+    fake_home="$tmpdir/home"
+    mock_bin="$tmpdir/mock-bin"
+    real_bin="$tmpdir/real-bin"
+    socket="$tmpdir/tidey.sock"
+    codex_log="$tmpdir/codex.log"
+    mkdir -p "$fake_home" "$mock_bin" "$real_bin"
+
+    cat > "$mock_bin/tmux" <<'FAKE_TMUX'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  "show-options -p -v -t %42 @tidey_workspace_id") printf 'workspace-late\n' ;;
+  "show-options -p -v -t %42 @tidey_panel_id") printf 'panel-late\n' ;;
+  "show-options -p -v -t %42 @tidey_socket_path") printf '%s\n' "${FAKE_TIDEY_SOCKET:?}" ;;
+  "show-options -p -v -t %42 @tidey_bin_dir") printf '%s\n' "${FAKE_TIDEY_BIN_DIR:?}" ;;
+  'display-message -p -t %42 #{session_name}') printf 'video-process\n' ;;
+  *) exit 1 ;;
+esac
+FAKE_TMUX
+
+    cat > "$real_bin/codex" <<'FAKE_CODEX'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "--help" ]]; then
+    printf '%s\n' 'Usage: codex --profile <CONFIG_PROFILE>'
+    exit 0
+fi
+printf 'hooks=%s|workspace=%s|panel=%s|args=%s\n' \
+    "${TIDEY_CODEX_HOOKS_ENABLED:-}" \
+    "${TIDEY_WORKSPACE_ID:-}" \
+    "${TIDEY_PANEL_ID:-}" \
+    "$*" > "${FAKE_CODEX_LOG:?}"
+FAKE_CODEX
+    chmod +x "$mock_bin/tmux" "$real_bin/codex"
+
+    python3 -c 'import socket,sys,time; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(1); c,_=s.accept(); c.close(); time.sleep(30)' "$socket" >/dev/null 2>&1 &
+    socket_pid=$!
+    for _ in $(seq 1 100); do
+        [[ -S "$socket" ]] && break
+        sleep 0.01
+    done
+    [[ -S "$socket" ]] || fail "late tmux socket fixture did not start"
+
+    env -u TIDEY_SOCKET_PATH -u TIDEY_WORKSPACE_ID -u TIDEY_PANEL_ID -u TIDEY_BIN_DIR \
+        HOME="$fake_home" \
+        PATH="$mock_bin:$real_bin:/usr/bin:/bin" \
+        TMUX=/tmp/tmux-test,1,0 \
+        TMUX_PANE=%42 \
+        FAKE_TIDEY_SOCKET="$socket" \
+        FAKE_TIDEY_BIN_DIR="$(dirname "$CODEX_UNDER_TEST")" \
+        FAKE_CODEX_LOG="$codex_log" \
+        TIDEY_CODEX_APP_SERVER_DISABLE=1 \
+        "$CODEX_UNDER_TEST"
+
+    grep -q 'hooks=1|workspace=workspace-late|panel=panel-late|' "$codex_log" ||
+        fail "absolute wrapper did not hydrate late tmux pane context"
+    grep -q -- '--profile tidey-codex-video-process' "$codex_log" ||
+        fail "late tmux invocation fell through to plain Codex"
+
+    kill "$socket_pid" 2>/dev/null || true
+    wait "$socket_pid" 2>/dev/null || true
+    rm -rf "$tmpdir"
+}
+
+run_late_tmux_context_enters_wrapper_test
+
 echo "PASS"
