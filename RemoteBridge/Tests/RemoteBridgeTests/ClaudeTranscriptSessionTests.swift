@@ -1229,6 +1229,50 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         }, "a cached /context command must be filtered when its summary is outside before_seq")
     }
 
+    func testClaudeAfterCursorBackfillsNextOrdinalFromSameLineAtCapacityOne() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        let line = makeClaudeAssistantTextLine(uuid: "same-line",
+                                               texts: ["zero", "one", "two"])
+        try (line + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub(maxBufferedEvents: 1)
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1)
+                .events.first?.text == "two"
+        })
+
+        let firstOrdinalSeq = transcriptEventSequence(lineOffset: 0, ordinal: 0)
+        XCTAssertEqual(hub.fetch(workspaceID: "workspace",
+                                 sessionID: "session",
+                                 limit: 1,
+                                 afterSeq: firstOrdinalSeq).events.compactMap(\.text),
+                       ["two"],
+                       "capacity one initially retains only the last same-line ordinal")
+
+        let page = BridgeAgentEventFetchFlow.run(eventHub: hub,
+                                                 workspaceID: "workspace",
+                                                 sessionID: "session",
+                                                 limit: 1,
+                                                 beforeSeq: nil,
+                                                 afterSeq: firstOrdinalSeq) { _, beforeSeq, limit in
+            session.backfill(beforeSeq: beforeSeq, limit: limit)
+        }
+
+        XCTAssertTrue(page.didBackfill)
+        XCTAssertEqual(page.fetchResult.events.compactMap(\.text), ["one"])
+        XCTAssertEqual(page.fetchResult.events.first?.seq,
+                       transcriptEventSequence(lineOffset: 0, ordinal: 1))
+    }
+
     func testClaudeBackfillIncludesEarlierOrdinalFromAnchorRecord() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
@@ -2033,6 +2077,22 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
             $0.eventID == "fail-closed-ask:ask-user-question:\(promptID)"
         }, "unknown source-wide closure coverage must never expose a cached opener",
                        file: file, line: line)
+    }
+
+    private func makeClaudeAssistantTextLine(uuid: String, texts: [String]) -> String {
+        let object: [String: Any] = [
+            "type": "assistant",
+            "uuid": uuid,
+            "sessionId": "session",
+            "version": "2.0.0",
+            "timestamp": "2026-04-30T00:00:00Z",
+            "message": [
+                "role": "assistant",
+                "content": texts.map { ["type": "text", "text": $0] },
+            ],
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        return String(data: data, encoding: .utf8)!
     }
 
     private func makeClaudeUserLine(uuid: String, content: String) -> String {
