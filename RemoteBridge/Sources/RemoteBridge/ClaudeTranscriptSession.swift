@@ -3105,14 +3105,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             historicalClosureIndex?.pendingPartialLineData = pendingData
             historicalClosureIndex?.parserState = captureLiveParserState()
             completed = true
-            if let index = historicalClosureIndex {
-                var closureSequences = index.contextConsumerSequenceByOpenerEventID
-                for (openerEventID, closure) in index.closureByOpenerEventID {
-                    closureSequences[openerEventID] = closure.seq
-                }
-                hub.replaceHistoricalOpenerClosureSequences(sessionID: record.sessionID,
-                                                            sequences: closureSequences)
-            }
+            synchronizeHistoricalOpenerClosureSequences()
             return true
         } catch JSONLFileTailerError.sourceInvalidated {
             throw JSONLFileTailerError.sourceInvalidated
@@ -3135,6 +3128,18 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             device: UInt64(fileStatus.st_dev),
             inode: UInt64(fileStatus.st_ino),
             epoch: historicalClosureSourceEpoch)
+    }
+
+    private func synchronizeHistoricalOpenerClosureSequences() {
+        guard let index = historicalClosureIndex else {
+            return
+        }
+        var closureSequences = index.contextConsumerSequenceByOpenerEventID
+        for (openerEventID, closure) in index.closureByOpenerEventID {
+            closureSequences[openerEventID] = closure.seq
+        }
+        hub.replaceHistoricalOpenerClosureSequences(sessionID: record.sessionID,
+                                                    sequences: closureSequences)
     }
 
     private func recordHistoricalClosureIndexEvent(_ event: AgentEvent) {
@@ -3624,29 +3629,42 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                     lifecycleResolveQuestionBlocker(toolCallID: toolCallID)
                     lifecycleResolvePermissionBlocker(toolCallID: toolCallID)
                 }
-                if let toolCallID,
-                   let promptID = activeAskUserQuestionPromptIDByToolCallID.removeValue(forKey: toolCallID) {
-                    publishFileBacked(kind: .interactivePromptResolved,
-                                      lineOffset: lineOffset,
-                                      ordinal: ordinal,
-                                      eventID: "\(uuid):ask-user-question-resolved:\(promptID)",
-                                      timestamp: timestamp,
-                                      role: "tool",
-                                      text: nil,
-                                      name: "AskUserQuestion",
-                                      input: nil,
-                                      output: output,
-                                      toolCallID: toolCallID,
-                                      metadata: [
-                                        "source": "claude_ask_user_question",
-                                        "prompt_id": promptID,
-                                        "reason": "tool_result",
-                                      ],
-                                      payload: .object([
-                                        "prompt_id": .string(promptID),
-                                        "reason": .string("tool_result"),
-                                      ]))
-                    ordinal += 1
+                if let toolCallID {
+                    let livePromptID = activeAskUserQuestionPromptIDByToolCallID
+                        .removeValue(forKey: toolCallID)
+                    let historicalOpenerEventID = livePromptID == nil
+                        ? historicalClosureIndex?.pendingAskOpenerEventIDByPromptID[toolCallID]
+                        : nil
+                    if let promptID = livePromptID ?? historicalOpenerEventID.map({ _ in toolCallID }) {
+                        let resolvedEvent = publishFileBacked(
+                            kind: .interactivePromptResolved,
+                            lineOffset: lineOffset,
+                            ordinal: ordinal,
+                            eventID: "\(uuid):ask-user-question-resolved:\(promptID)",
+                            timestamp: timestamp,
+                            role: "tool",
+                            text: nil,
+                            name: "AskUserQuestion",
+                            input: nil,
+                            output: output,
+                            toolCallID: toolCallID,
+                            metadata: [
+                                "source": "claude_ask_user_question",
+                                "prompt_id": promptID,
+                                "reason": "tool_result",
+                            ],
+                            payload: .object([
+                                "prompt_id": .string(promptID),
+                                "reason": .string("tool_result"),
+                            ]))
+                        if let historicalOpenerEventID,
+                           let index = historicalClosureIndex {
+                            index.pendingAskOpenerEventIDByPromptID.removeValue(forKey: toolCallID)
+                            index.closureByOpenerEventID[historicalOpenerEventID] = resolvedEvent
+                            synchronizeHistoricalOpenerClosureSequences()
+                        }
+                        ordinal += 1
+                    }
                 }
             } else if blockType == "text" {
                 let text = Self.compactString(block["text"])
@@ -3974,6 +3992,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         return groups
     }
 
+    @discardableResult
     private func publishFileBacked(kind: AgentEventKind,
                                    lineOffset: Int,
                                    ordinal: Int,
@@ -3986,7 +4005,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                    output: String?,
                                    toolCallID: String?,
                                    metadata: [String: String]?,
-                                   payload: JSONValue? = nil) {
+                                   payload: JSONValue? = nil) -> AgentEvent {
         let seq = transcriptSequenceBase + transcriptEventSequence(lineOffset: lineOffset, ordinal: ordinal)
         let resolvedMetadata = metadataWithClientRequestID(kind: kind, text: text, metadata: metadata)
         let event = AgentEvent(eventID: eventID,
@@ -4006,7 +4025,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                payload: payload)
         if let historicalIndexEventSink {
             historicalIndexEventSink(event)
-            return
+            return event
         }
         maxObservedSeq = max(maxObservedSeq, seq)
         if isBackfillingHistory {
@@ -4017,7 +4036,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             if let anchorSeq = historicalBackfillAnchorSeq,
                let closureSeq = historicalClosureSequence(forOpener: event),
                closureSeq >= anchorSeq {
-                return
+                return event
             }
             if event.type == .interactivePrompt
                 || event.metadata?["tidey_generated"] == "claude_context_command" {
@@ -4026,10 +4045,11 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             hub.publish(event,
                         deliverToSubscribers: false,
                         storage: .historicalBackfill)
-            return
+            return event
         }
         hub.publish(event)
         publishInteractivePromptSidebarIfNeeded(event)
+        return event
     }
 
     private func publishSynthetic(kind: AgentEventKind,
