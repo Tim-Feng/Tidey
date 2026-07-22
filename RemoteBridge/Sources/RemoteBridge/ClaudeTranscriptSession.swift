@@ -2299,12 +2299,55 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private var tailer: JSONLFileTailer?
     private var transcriptURL: URL?
     private var maxObservedSeq = transcriptSessionStartedSequence
+    // File offsets restart at zero for each transcript source. This base
+    // keeps the public cursor monotonic across source switches while still
+    // allowing an exact inverse mapping to the current file.
+    private var transcriptSequenceBase = transcriptSessionStartedSequence
     private var didPublishStart = false
     private var didPublishEnd = false
     private var unsupportedVersions = Set<String>()
     private var isBackfillingHistory = false
     private var pendingLocalCommand: ClaudeLocalCommand?
     private var activeAskUserQuestionPromptIDByToolCallID = [String: String]()
+
+    private struct LiveParserStateSnapshot {
+        let unsupportedVersions: Set<String>
+        let pendingLocalCommand: ClaudeLocalCommand?
+        let activeAskUserQuestionPromptIDByToolCallID: [String: String]
+        let lifecycleTurnLineageByUuid: [String: String]
+        let lifecycleTurnLineageOrder: [String]
+    }
+
+    private func captureLiveParserState() -> LiveParserStateSnapshot {
+        LiveParserStateSnapshot(unsupportedVersions: unsupportedVersions,
+                                pendingLocalCommand: pendingLocalCommand,
+                                activeAskUserQuestionPromptIDByToolCallID: activeAskUserQuestionPromptIDByToolCallID,
+                                lifecycleTurnLineageByUuid: lifecycleTurnLineageByUuid,
+                                lifecycleTurnLineageOrder: lifecycleTurnLineageOrder)
+    }
+
+    private func resetParserStateForHistoricalReplay() {
+        unsupportedVersions = []
+        pendingLocalCommand = nil
+        activeAskUserQuestionPromptIDByToolCallID = [:]
+        lifecycleTurnLineageByUuid = [:]
+        lifecycleTurnLineageOrder = []
+    }
+
+    private func restoreLiveParserState(_ snapshot: LiveParserStateSnapshot) {
+        unsupportedVersions = snapshot.unsupportedVersions
+        pendingLocalCommand = snapshot.pendingLocalCommand
+        activeAskUserQuestionPromptIDByToolCallID = snapshot.activeAskUserQuestionPromptIDByToolCallID
+        lifecycleTurnLineageByUuid = snapshot.lifecycleTurnLineageByUuid
+        lifecycleTurnLineageOrder = snapshot.lifecycleTurnLineageOrder
+    }
+
+    private func transcriptLineOffsetInCurrentSource(for seq: Int) -> Int? {
+        guard seq > transcriptSequenceBase else {
+            return nil
+        }
+        return transcriptLineOffset(for: seq - transcriptSequenceBase)
+    }
 
     private struct ClaudeLocalCommand {
         let name: String
@@ -2419,6 +2462,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private func beginNewSourceEpoch() {
         tailer?.stop()
         tailer = nil
+        transcriptSequenceBase = maxObservedSeq
         activeAskUserQuestionPromptIDByToolCallID = [:]
         pendingLocalCommand = nil
         unsupportedVersions = []
@@ -2450,6 +2494,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                        vendor: record.vendor,
                                        generation: lifecycleGeneration)
         openLifecycleQuestionToolCallIDs = []
+        promptNotificationDeduper.remove(sessionID: record.sessionID)
+        hub.beginNewSourceEpoch(sessionID: record.sessionID)
         transcriptURL = nil
     }
 
@@ -2461,12 +2507,17 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             guard let tailer else {
                 return false
             }
-            let beforeOffset = transcriptLineOffset(for: beforeSeq)
-            guard beforeOffset > 0 else {
+            guard let beforeOffset = transcriptLineOffsetInCurrentSource(for: beforeSeq),
+                  beforeOffset > 0 else {
                 return false
             }
+            let liveParserState = captureLiveParserState()
+            resetParserStateForHistoricalReplay()
             isBackfillingHistory = true
-            defer { isBackfillingHistory = false }
+            defer {
+                isBackfillingHistory = false
+                restoreLiveParserState(liveParserState)
+            }
             return (try? tailer.backfill(beforeOffset: beforeOffset, limit: limit)) ?? false
         }
     }
@@ -3286,7 +3337,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                    toolCallID: String?,
                                    metadata: [String: String]?,
                                    payload: JSONValue? = nil) {
-        let seq = transcriptEventSequence(lineOffset: lineOffset, ordinal: ordinal)
+        let seq = transcriptSequenceBase + transcriptEventSequence(lineOffset: lineOffset, ordinal: ordinal)
         maxObservedSeq = max(maxObservedSeq, seq)
         let resolvedMetadata = metadataWithClientRequestID(kind: kind, text: text, metadata: metadata)
         let event = AgentEvent(eventID: eventID,
@@ -3304,7 +3355,13 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                toolCallID: toolCallID,
                                metadata: baseMetadata(resolvedMetadata),
                                payload: payload)
-        hub.publish(event, deliverToSubscribers: !isBackfillingHistory)
+        if isBackfillingHistory {
+            hub.publish(event,
+                        deliverToSubscribers: false,
+                        storage: .historicalBackfill)
+            return
+        }
+        hub.publish(event)
         publishInteractivePromptSidebarIfNeeded(event)
     }
 
@@ -3385,7 +3442,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private func metadataWithClientRequestID(kind: AgentEventKind,
                                              text: String?,
                                              metadata: [String: String]?) -> [String: String]? {
-        guard kind == .userMessage,
+        guard isBackfillingHistory == false,
+              kind == .userMessage,
               let text,
               let clientRequestID = chatSubmitEchoRegistry.consumeClientRequestID(workspaceID: record.workspaceID,
                                                                                   panelID: record.panelID,

@@ -82,6 +82,21 @@ final class AgentEventHubTests: XCTestCase {
         XCTAssertFalse(result.hasMore)
     }
 
+    func testNewSourceEpochRevokesStoredIdentityButPreservesCursorAuthority() {
+        let hub = AgentEventHub()
+        hub.publish(makeAssistantEvent(id: "shared-id", seq: 10, text: "old source"))
+        XCTAssertEqual(hub.nextSyntheticSeq(sessionID: "session"), 11)
+
+        hub.beginNewSourceEpoch(sessionID: "session")
+
+        XCTAssertTrue(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10).events.isEmpty)
+        hub.publish(makeAssistantEvent(id: "shared-id", seq: 1, text: "new source"))
+        let replacement = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10).events
+        XCTAssertEqual(replacement.map(\.text), ["new source"])
+        XCTAssertEqual(replacement.map(\.seq), [12])
+        XCTAssertEqual(hub.nextSyntheticSeq(sessionID: "session"), 13)
+    }
+
     func testReplayUsesMigratedWorkspaceIDAfterSessionBindingChanges() {
         let hub = AgentEventHub()
         hub.publish(makeAssistantEvent(id: "assistant-1", seq: 1))
