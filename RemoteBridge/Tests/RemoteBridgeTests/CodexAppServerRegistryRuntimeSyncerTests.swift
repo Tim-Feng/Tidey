@@ -2,6 +2,51 @@ import XCTest
 @testable import RemoteBridge
 
 final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
+    func testProductionAttachPreservesPromptIdentityAcrossBridgeReconnectForSameAppServerEpoch() throws {
+        let hub = AgentEventHub()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(
+            processRunner: FakeCodexAppServerProcessRunner(),
+            transportConnector: connector)
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: hub,
+                                                         factory: factory)
+        let originalRecord = Self.record(sessionID: "app",
+                                         runtime: "codex_app_server",
+                                         socketPath: "/tmp/app.sock",
+                                         appServerPID: 9001)
+
+        syncer.sync(records: [originalRecord])
+        let firstTransport = try XCTUnwrap(connector.transport)
+        firstTransport.emitLine(Self.epochApprovalLine)
+        let firstPrompt = try XCTUnwrap(Self.promptEvents(in: hub).last)
+
+        firstTransport.emitClose(CodexAppServerTransportError.closed)
+        syncer.sync(records: [originalRecord])
+        let reconnectedTransport = try XCTUnwrap(connector.transport)
+        XCTAssertFalse(firstTransport === reconnectedTransport)
+        reconnectedTransport.emitLine(Self.epochApprovalLine)
+        let reconnectedPrompt = try XCTUnwrap(Self.promptEvents(in: hub).last)
+
+        XCTAssertEqual(reconnectedPrompt.metadata?["prompt_id"],
+                       firstPrompt.metadata?["prompt_id"])
+        XCTAssertEqual(reconnectedPrompt.metadata?["app_server_epoch"],
+                       "pid:9001|sock:/tmp/app.sock")
+
+        reconnectedTransport.emitClose(CodexAppServerTransportError.closed)
+        syncer.sync(records: [Self.record(sessionID: "app",
+                                          runtime: "codex_app_server",
+                                          socketPath: "/tmp/app.sock",
+                                          appServerPID: 9002)])
+        let restartedTransport = try XCTUnwrap(connector.transport)
+        restartedTransport.emitLine(Self.epochApprovalLine)
+        let restartedPrompt = try XCTUnwrap(Self.promptEvents(in: hub).last)
+
+        XCTAssertNotEqual(restartedPrompt.metadata?["prompt_id"],
+                          firstPrompt.metadata?["prompt_id"])
+        XCTAssertEqual(restartedPrompt.metadata?["app_server_epoch"],
+                       "pid:9002|sock:/tmp/app.sock")
+    }
+
     func testSyncAttachesOnlyCodexAppServerRecords() {
         let hub = AgentEventHub()
         let runtime = FakeRuntimeSession()
@@ -1437,7 +1482,8 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
                                panelID: String = "panel-1",
                                workspaceID: String = "workspace-1",
                                threadID: String? = nil,
-                               resumeThreadID: String? = nil) -> AgentSessionRegistryRecord {
+                               resumeThreadID: String? = nil,
+                               appServerPID: Int32 = Int32(getpid())) -> AgentSessionRegistryRecord {
         AgentSessionRegistryRecord(version: 1,
                                    vendor: "codex",
                                    workspaceID: workspaceID,
@@ -1449,9 +1495,18 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
                                    transcriptPath: nil,
                                    runtime: runtime,
                                    appServerSocket: socketPath,
-                                   appServerPID: Int32(getpid()),
+                                   appServerPID: appServerPID,
                                    threadID: threadID,
                                    resumeThreadID: resumeThreadID ?? threadID)
+    }
+
+    private static let epochApprovalLine =
+        #"{"id":"approval-epoch","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","startedAtMs":1786000000000,"command":"ls"}}"#
+
+    private static func promptEvents(in hub: AgentEventHub) -> [AgentEvent] {
+        hub.fetch(workspaceID: "workspace-1", sessionID: "app", limit: 100).events.filter {
+            $0.type == .interactivePrompt
+        }
     }
 
     private static func approvalEnvelope(sessionID: String,

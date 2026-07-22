@@ -188,6 +188,7 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
                                           context: CodexAppServerRuntimeContext(workspaceID: record.workspaceID,
                                                                                panelID: panelID,
                                                                                sessionID: record.sessionID),
+                                          epoch: Self.appServerEpoch(record: record),
                                           nextSequence: nextSequence,
                                           timestampProvider: timestampProvider,
                                           onAgentEvent: onAgentEvent,
@@ -720,6 +721,12 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
             }
         }
         return nil
+    }
+
+    static func appServerEpoch(record: AgentSessionRegistryRecord) -> String {
+        let processID = record.appServerPID.map(String.init) ?? "-"
+        let socketPath = record.appServerSocket ?? "-"
+        return "pid:\(processID)|sock:\(socketPath)"
     }
 
     private func attach(record: AgentSessionRegistryRecord) {
