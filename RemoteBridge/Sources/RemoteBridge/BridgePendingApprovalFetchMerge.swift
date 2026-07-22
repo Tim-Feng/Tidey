@@ -10,6 +10,7 @@ enum BridgePendingApprovalFetchMerge {
     static func merge(pageEvents: [AgentEvent],
                       pageOldestSeq: Int,
                       pageNewestSeq: Int,
+                      requestedBeforeSeq: Int? = nil,
                       requestedAfterSeq: Int? = nil,
                       pendingEvents: [AgentEvent]) -> Merged {
         let activePending = AgentInteractivePromptEventReducer.pendingEvents(
@@ -18,6 +19,11 @@ enum BridgePendingApprovalFetchMerge {
         let merged = AgentInteractivePromptEventReducer.mergedEvents(pageEvents, activePending)
         let events = overlaySnapshots(merged, activePending: activePending)
         guard pageEvents.isEmpty else {
+            return Merged(events: events,
+                          oldestSeq: pageOldestSeq,
+                          newestSeq: pageNewestSeq)
+        }
+        if requestedBeforeSeq != nil {
             return Merged(events: events,
                           oldestSeq: pageOldestSeq,
                           newestSeq: pageNewestSeq)

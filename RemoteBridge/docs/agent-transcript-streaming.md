@@ -131,7 +131,7 @@ Agent event sequence numbers are scoped to one agent session. They are not works
 
 `before_seq` and `after_seq` are mutually exclusive. Each cursor must be an integral numeric value representable by the bridge. A malformed cursor, both cursor fields in one request, or a cursor request without `session_id` returns `invalid_request`.
 
-Without a cursor, the bridge returns the newest matching events. Results are returned in ascending order. A session-scoped cursor request may read older transcript records to cover the requested range; concurrent history requests for the same session are isolated from one another.
+Without a cursor, the bridge returns the newest matching events. Final merged responses are ordered chronologically by timestamp, then by sequence when timestamps match. A session-scoped cursor request may read older transcript records to cover the requested range; concurrent history requests for the same session are isolated from one another.
 
 It returns:
 
@@ -155,7 +155,7 @@ It returns:
 - `since_seq`; selects buffered replay events from that session whose stored sequences are strictly greater than the cursor
 - `no_replay`; when true, skips the initial buffered replay and delivers only subsequent live events
 
-Because `since_seq` is session-scoped, it requires `session_id` and must be an integral numeric value representable by the bridge. A malformed `since_seq`, or `since_seq` without `session_id`, returns `invalid_request`. A workspace-wide subscription remains valid when no `since_seq` is supplied. `no_replay` may also be used without `session_id` because it does not compare sequence numbers.
+Because `since_seq` is session-scoped, it requires `session_id` and must be an integral numeric value representable by the bridge. A malformed `since_seq`, or `since_seq` without `session_id`, returns `invalid_request`. A workspace-wide subscription remains valid when no `since_seq` is supplied. `no_replay` may also be used without `session_id` because it does not compare sequence numbers; when both are supplied, `no_replay` takes precedence and suppresses replay.
 
 `subscribe_agent_events` responds with:
 
@@ -174,7 +174,7 @@ After subscription, bridge sends:
 - matching buffered events with `"replay": true`, unless `no_replay` is true
 - subsequent live events with `"replay": false`
 
-Cursor filtering applies to the stored transcript page or replay. To preserve actionable UI state, the bridge may additionally include an active Codex approval snapshot whose sequence lies outside that cursor range. Clients must deduplicate by `event_id` and advance polling cursors from `oldest_seq`/`newest_seq` rather than from an injected snapshot.
+Cursor filtering applies to the stored transcript page or replay. To preserve actionable UI state, the bridge may additionally include an active Codex approval snapshot whose sequence lies outside that cursor range. Clients must deduplicate by `event_id`; for `before_seq` paging advance from `oldest_seq`, and for `after_seq` polling advance from `newest_seq`. Injected approval snapshots do not alter those stored-page cursor bounds.
 
 `unsubscribe_agent_events` takes no cursor and ends the connection's current agent-event subscription.
 
