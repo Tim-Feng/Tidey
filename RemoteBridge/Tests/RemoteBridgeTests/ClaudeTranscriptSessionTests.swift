@@ -689,6 +689,11 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                                                      sessionID: "session",
                                                      promptID: promptID),
                         "terminal A must not close the newer same-ID Ask B")
+        _ = session.backfill(beforeSeq: anchor, limit: 20)
+        XCTAssertNotNil(hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                     sessionID: "session",
+                                                     promptID: promptID),
+                        "re-indexing terminal A must not close Ask B")
     }
 
     func testClaudeIndexFirstContextSummaryDoesNotCloseLaterCommand() throws {

@@ -3369,9 +3369,18 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             guard openerEventIDs.isEmpty == false else {
                 return
             }
-            let openerIndex = event.metadata?["lifecycle_token"]
-                .flatMap { openerEventIDs.firstIndex(of: $0) }
-                ?? openerEventIDs.startIndex
+            let openerIndex: Int
+            if let lifecycleToken = event.metadata?["lifecycle_token"] {
+                guard let exactIndex = openerEventIDs.firstIndex(of: lifecycleToken) else {
+                    // A capability terminal revisited by an incremental scan
+                    // may already have been reconciled live. Never let its
+                    // stale token fall through to a newer same-ID opener.
+                    return
+                }
+                openerIndex = exactIndex
+            } else {
+                openerIndex = openerEventIDs.startIndex
+            }
             let openerEventID = openerEventIDs.remove(at: openerIndex)
             if openerEventIDs.isEmpty {
                 index.pendingAskOpenerEventIDsByPromptID.removeValue(forKey: promptID)
