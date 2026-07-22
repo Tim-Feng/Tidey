@@ -1117,6 +1117,78 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                                                      promptID: promptID))
     }
 
+    func testClaudeRepeatedAskUsesExactLifecycleForDelayedTerminal() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+
+        let promptID = "toolu_overlapping_reuse"
+        let firstAskLine = makeClaudeAskUserQuestionAssistantLine(uuid: "overlap-first",
+                                                                  toolCallID: promptID)
+        let secondAskLine = makeClaudeAskUserQuestionAssistantLine(uuid: "overlap-second",
+                                                                   toolCallID: promptID)
+        let delayedResultLine = makeClaudeToolResultLine(uuid: "delayed-first-result",
+                                                         toolCallID: promptID,
+                                                         content: "answered first lifecycle")
+        let lifecycleLines = [firstAskLine, secondAskLine, delayedResultLine]
+        let fillerLines = (0..<transcriptBootstrapLineLimit).map {
+            makeClaudeUserLine(uuid: "filler-\($0)", content: "filler-\($0)")
+        }
+        try ((lifecycleLines + fillerLines).joined(separator: "\n") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1)
+                .events.first?.text == "filler-\(transcriptBootstrapLineLimit - 1)"
+        })
+
+        let resultOffset = ([firstAskLine, secondAskLine].joined(separator: "\n") + "\n").utf8.count
+        let resultSeq = transcriptEventSequence(lineOffset: resultOffset, ordinal: 0)
+        let beforeResult = BridgeAgentEventFetchFlow.run(eventHub: hub,
+                                                         workspaceID: "workspace",
+                                                         sessionID: "session",
+                                                         limit: 20,
+                                                         beforeSeq: resultSeq,
+                                                         afterSeq: nil) { _, beforeSeq, limit in
+            session.backfill(beforeSeq: beforeSeq, limit: limit)
+        }
+        XCTAssertTrue(beforeResult.didBackfill)
+        XCTAssertFalse(beforeResult.fetchResult.events.contains {
+            $0.eventID == "overlap-first:ask-user-question:\(promptID)"
+        })
+        XCTAssertTrue(beforeResult.fetchResult.events.contains {
+            $0.eventID == "overlap-second:ask-user-question:\(promptID)"
+        }, "the delayed terminal belongs to the oldest pending lifecycle, not the later reused ID")
+
+        let firstFillerOffset = (lifecycleLines.joined(separator: "\n") + "\n").utf8.count
+        let afterResult = BridgeAgentEventFetchFlow.run(
+            eventHub: hub,
+            workspaceID: "workspace",
+            sessionID: "session",
+            limit: 20,
+            beforeSeq: transcriptEventSequence(lineOffset: firstFillerOffset, ordinal: 0),
+            afterSeq: nil) { _, beforeSeq, limit in
+                session.backfill(beforeSeq: beforeSeq, limit: limit)
+            }
+        let firstLifecycleToken = "overlap-first:ask-user-question:\(promptID)"
+        XCTAssertTrue(afterResult.fetchResult.events.contains {
+            $0.type == .interactivePromptResolved
+                && $0.metadata?["lifecycle_token"] == firstLifecycleToken
+        })
+        XCTAssertNotNil(hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                     sessionID: "session",
+                                                     promptID: promptID),
+                        "the newer overlapping lifecycle must remain active after the old terminal")
+    }
+
     func testClaudeLiveResultResolvesPreviouslyBackfilledAsk() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
