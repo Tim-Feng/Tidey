@@ -51,6 +51,22 @@ final class JSONLFileReaderTests: XCTestCase {
         XCTAssertEqual(lines.map(\.offset), [0, 2])
     }
 
+    func testReadBeforeCanIncludeAnchorLine() throws {
+        let fileURL = try writeJSONLFile(contents: "a\nb\nc\n")
+
+        let exclusive = try JSONLFileReader.readBefore(fileURL: fileURL,
+                                                       beforeOffset: 2,
+                                                       limit: 2)
+        let inclusive = try JSONLFileReader.readBefore(fileURL: fileURL,
+                                                       beforeOffset: 2,
+                                                       limit: 2,
+                                                       includeAnchorLine: true)
+
+        XCTAssertEqual(exclusive.map(\.line), ["a"])
+        XCTAssertEqual(inclusive.map(\.line), ["a", "b"])
+        XCTAssertEqual(inclusive.map(\.offset), [0, 2])
+    }
+
     private func writeJSONLFile(contents: String) throws -> URL {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
