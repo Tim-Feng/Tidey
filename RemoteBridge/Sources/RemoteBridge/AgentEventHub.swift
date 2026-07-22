@@ -1,5 +1,17 @@
 import Foundation
 
+enum HistoricalOpenerResolution: Equatable, Sendable {
+    case visibleTerminal(eventID: String, sequence: Int)
+    case silentConsumer(sequence: Int)
+
+    var sequence: Int {
+        switch self {
+        case .visibleTerminal(_, let sequence), .silentConsumer(let sequence):
+            return sequence
+        }
+    }
+}
+
 final class AgentEventHub {
     struct SessionDebugSnapshot: Equatable {
         let sessionID: String
@@ -79,7 +91,7 @@ final class AgentEventHub {
         var bufferedEvents = [AgentEvent]()
         var historicalEvents = [AgentEvent]()
         var historicalEventIDs = Set<String>()
-        var historicalOpenerClosureSequences = [String: Int]()
+        var historicalOpenerResolutions = [String: HistoricalOpenerResolution]()
         var allStoredEvents: [AgentEvent] { historicalEvents + bufferedEvents }
         var latestSessionStarted: AgentEvent?
         var isActive = false
@@ -144,8 +156,8 @@ final class AgentEventHub {
                                 return false
                             }
                             if let beforeSeq {
-                                if let closureSeq = state.historicalOpenerClosureSequences[event.eventID],
-                                   closureSeq >= beforeSeq {
+                                if let resolution = state.historicalOpenerResolutions[event.eventID],
+                                   resolution.sequence >= beforeSeq {
                                     return false
                                 }
                                 return event.seq < beforeSeq
@@ -166,10 +178,10 @@ final class AgentEventHub {
                             .compactMap { effectiveEvent($0) }
                             .filter { event in
                                 guard let beforeSeq,
-                                      let closureSeq = state.historicalOpenerClosureSequences[event.eventID] else {
+                                      let resolution = state.historicalOpenerResolutions[event.eventID] else {
                                     return true
                                 }
-                                return closureSeq < beforeSeq
+                                return resolution.sequence < beforeSeq
                             }
                     }
                     .filter { event in
@@ -484,7 +496,7 @@ final class AgentEventHub {
             state.bufferedEvents.removeAll()
             state.historicalEvents.removeAll()
             state.historicalEventIDs.removeAll()
-            state.historicalOpenerClosureSequences.removeAll()
+            state.historicalOpenerResolutions.removeAll()
             state.seenEventIDs.removeAll()
             sessions[sessionID] = state
         }
@@ -494,11 +506,13 @@ final class AgentEventHub {
     // cached page. A before-cursor fetch uses it to suppress an opener whose
     // exact terminal/consumer sits at or beyond the requested boundary,
     // including when bootstrap or another client already cached the opener.
-    func replaceHistoricalOpenerClosureSequences(sessionID: String,
-                                                 sequences: [String: Int]) {
+    func replaceHistoricalOpenerResolutions(
+        sessionID: String,
+        resolutions: [String: HistoricalOpenerResolution]
+    ) {
         queue.sync {
             var state = sessions[sessionID] ?? SessionState()
-            state.historicalOpenerClosureSequences = sequences
+            state.historicalOpenerResolutions = resolutions
             sessions[sessionID] = state
         }
     }
