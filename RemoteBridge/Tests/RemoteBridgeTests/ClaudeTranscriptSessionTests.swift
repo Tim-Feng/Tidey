@@ -268,6 +268,36 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
             partialLineByteLimit: 1_024)
     }
 
+    func testClaudeRepeatedUnsupportedVersionRecordsNeverReachSupportedParser() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        let lines = [
+            makeClaudeUserLine(uuid: "unsupported-first", content: "must-not-publish-first", version: "3.0.0"),
+            makeClaudeUserLine(uuid: "unsupported-second", content: "must-not-publish-second", version: "3.0.0"),
+        ]
+        try (lines.joined(separator: "\n") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20)
+                .events.contains { $0.metadata?["reason"] == "unsupported_version" }
+        })
+
+        let events = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20).events
+        XCTAssertEqual(events.filter { $0.metadata?["reason"] == "unsupported_version" }.count, 1)
+        XCTAssertFalse(events.contains { ($0.text ?? "").hasPrefix("must-not-publish") },
+                       "warning deduplication must not parse later unsupported records")
+    }
+
     func testClaudeMalformedHistoryDisablesBufferedPromptSubmission() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
@@ -2201,12 +2231,14 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         return String(data: data, encoding: .utf8)!
     }
 
-    private func makeClaudeUserLine(uuid: String, content: String) -> String {
+    private func makeClaudeUserLine(uuid: String,
+                                    content: String,
+                                    version: String = "2.0.0") -> String {
         let object: [String: Any] = [
             "type": "user",
             "uuid": uuid,
             "sessionId": "session",
-            "version": "2.0.0",
+            "version": version,
             "timestamp": "2026-04-30T00:00:00Z",
             "message": [
                 "role": "user",
