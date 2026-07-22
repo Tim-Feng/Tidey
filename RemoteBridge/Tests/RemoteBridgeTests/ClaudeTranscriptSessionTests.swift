@@ -245,6 +245,18 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
             partialLineByteLimit: 1_024)
     }
 
+    func testClaudeMalformedHistoryRecordHidesCachedOpenersFailClosed() throws {
+        try assertClaudeHistoryIndexFailureHidesCachedOpener(
+            appendedData: Data("{not-json}\n".utf8),
+            partialLineByteLimit: 1_024)
+    }
+
+    func testClaudeInvalidUTF8HistoryRecordHidesCachedOpenersFailClosed() throws {
+        try assertClaudeHistoryIndexFailureHidesCachedOpener(
+            appendedData: Data([0xff, 0x0a]),
+            partialLineByteLimit: 1_024)
+    }
+
     func testClaudeBackfillReplacesFullHistoricalWindowAtRequestedAnchor() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
