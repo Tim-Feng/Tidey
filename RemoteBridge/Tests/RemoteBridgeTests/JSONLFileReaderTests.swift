@@ -14,6 +14,15 @@ final class JSONLFileReaderTests: XCTestCase {
         XCTAssertEqual(transcriptLineOffset(for: newestSeq), 8192)
     }
 
+    func testTranscriptEventPositionRoundTripsLineOffsetAndOrdinal() {
+        let sequence = transcriptEventSequence(lineOffset: 8192, ordinal: 37)
+
+        XCTAssertEqual(transcriptEventPosition(for: sequence),
+                       TranscriptEventPosition(lineOffset: 8192, ordinal: 37))
+        XCTAssertEqual(transcriptEventPosition(for: transcriptSessionStartedSequence),
+                       TranscriptEventPosition(lineOffset: 0, ordinal: 0))
+    }
+
     func testReadTailReturnsLatestLinesWithOffsets() throws {
         let fileURL = try writeJSONLFile(contents: "a\nb\nc\n")
         let lines = try JSONLFileReader.readTail(fileURL: fileURL, limit: 2)
