@@ -681,6 +681,35 @@ final class InteractivePromptActionHandlerTests: XCTestCase {
         XCTAssertTrue(router.sentInputs.isEmpty)
     }
 
+    func testSubmitClaudeAskRejectsTranscriptCacheWhenHistoryCoverageIsUnknown() throws {
+        let route = ordinaryRoute()
+        let eventHub = AgentEventHub()
+        let router = StubPromptInputRouter(routedPanelIDs: [route.panelID])
+        eventHub.publish(Self.claudeAskUserQuestionEvent(route: route, promptID: "toolu_question_1"))
+        eventHub.setHistoricalClosureCoverage(sessionID: route.sessionID, isComplete: false)
+        let handler = makeHandler(route: route,
+                                  adapter: StubPromptAdapter(outputs: ["regular terminal output"]),
+                                  eventHub: eventHub,
+                                  router: router)
+
+        XCTAssertThrowsError(
+            try handler.handle(BridgeRequest(id: "request-1",
+                                             action: "submit_interactive_prompt",
+                                             params: [
+                                                "workspace_id": .string(route.workspaceID),
+                                                "panel_id": .string(route.panelID),
+                                                "prompt_id": .string("toolu_question_1"),
+                                                "target_index": .number(1),
+                                             ]))
+        ) { error in
+            guard case BridgeInternalError.conflict(let message) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertTrue(message.contains("no longer active"))
+        }
+        XCTAssertTrue(router.sentInputs.isEmpty)
+    }
+
     private func makeHandler(route: OrdinaryTmuxPanelRoute?,
                              adapter: StubPromptAdapter,
                              eventHub: AgentEventHub = AgentEventHub(),
