@@ -182,6 +182,23 @@ final class OrdinaryTmuxPanelRegistry: @unchecked Sendable {
         }
     }
 
+    func hasCarrierOwnership(workspaceID: String, carrierPanelID: String) -> Bool {
+        queue.sync {
+            routesByPanelID.values.contains {
+                $0.workspaceID == workspaceID && $0.carrierPanelID == carrierPanelID
+            } || authorizedTargets.values.contains {
+                $0.workspaceID == workspaceID && $0.carrierPanelID == carrierPanelID
+            }
+        }
+    }
+
+    func hasWorkspaceOwnership(workspaceID: String) -> Bool {
+        queue.sync {
+            routesByPanelID.values.contains { $0.workspaceID == workspaceID }
+                || authorizedTargets.values.contains { $0.workspaceID == workspaceID }
+        }
+    }
+
     func authorizedTarget(for logicalID: OrdinaryTmuxLogicalPanelID,
                           workspaceID: String?,
                           now: Date = Date()) -> OrdinaryTmuxAuthorizedTarget? {

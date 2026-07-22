@@ -20,6 +20,8 @@ let socketClient = TideySocketClient(locator: locator)
 let eventHub = AgentEventHub()
 let workspaceEventHub = WorkspaceEventHub()
 let ordinaryTmuxProjectionContext = OrdinaryTmuxProjectionContext()
+let ordinaryTmuxPaneIdentityReconciler = OrdinaryTmuxPaneIdentityReconciler(socketClient: socketClient,
+                                                                            projectionContext: ordinaryTmuxProjectionContext)
 let ordinaryTmuxCarrierResolver = TideyOrdinaryTmuxCarrierResolver(socketClient: socketClient)
 let codexRuntimeSyncer = CodexAppServerRegistryRuntimeSyncer(eventHub: eventHub,
                                                              sidebarMessageSender: { command in
@@ -34,7 +36,9 @@ let registryMonitor = AgentSessionRegistryMonitor(hub: eventHub,
 codexRuntimeSyncer.activeThreadHandler = { [weak registryMonitor] sessionID, threadID in
     registryMonitor?.appServerActiveThreadDidChange(sessionID: sessionID, threadID: threadID)
 }
-let workspaceEventMonitor = TideyWorkspaceEventMonitor(locator: locator, hub: workspaceEventHub)
+let workspaceEventMonitor = TideyWorkspaceEventMonitor(locator: locator,
+                                                       hub: workspaceEventHub,
+                                                       paneIdentityReconciler: ordinaryTmuxPaneIdentityReconciler)
 let observability = BridgeObservabilityCenter()
 let cloudflaredStatusStore = BridgeCloudflaredStatusStore(fileURL: bridgePaths.cloudflaredStateFileURL)
 let cloudflaredManager = BridgeCloudflaredManager(statusStore: cloudflaredStatusStore,

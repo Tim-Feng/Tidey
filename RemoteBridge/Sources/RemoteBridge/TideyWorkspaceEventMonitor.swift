@@ -3,12 +3,16 @@ import Foundation
 final class TideyWorkspaceEventMonitor {
     private let locator: TideySocketLocator
     private let hub: WorkspaceEventHub
+    private let paneIdentityReconciler: OrdinaryTmuxPaneIdentityReconciler?
     private let queue = DispatchQueue(label: "com.tidey.remote-bridge.workspace-event-monitor")
     private var shouldRun = false
 
-    init(locator: TideySocketLocator, hub: WorkspaceEventHub) {
+    init(locator: TideySocketLocator,
+         hub: WorkspaceEventHub,
+         paneIdentityReconciler: OrdinaryTmuxPaneIdentityReconciler? = nil) {
         self.locator = locator
         self.hub = hub
+        self.paneIdentityReconciler = paneIdentityReconciler
     }
 
     func start() {
@@ -107,7 +111,7 @@ final class TideyWorkspaceEventMonitor {
                 if let envelope = try? JSONDecoder().decode(WorkspaceEventEnvelope.self, from: line),
                    envelope.type == "workspace_event",
                    envelope.v == bridgeProtocolVersion {
-                    hub.publish(envelope.event)
+                    process(event: envelope.event)
                     continue
                 }
                 throw BridgeInternalError.invalidResponse
@@ -145,7 +149,12 @@ final class TideyWorkspaceEventMonitor {
         if let envelope = try? JSONDecoder().decode(WorkspaceEventEnvelope.self, from: line),
            envelope.type == "workspace_event",
            envelope.v == bridgeProtocolVersion {
-            hub.publish(envelope.event)
+            process(event: envelope.event)
         }
+    }
+
+    func process(event: WorkspaceEvent) {
+        hub.publish(event)
+        paneIdentityReconciler?.observe(event)
     }
 }
