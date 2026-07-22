@@ -239,6 +239,12 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                        "a poisoned history index must not retain or reread the oversized suffix")
     }
 
+    func testClaudeOversizedHistoryIndexHidesCachedOpenersFailClosed() throws {
+        try assertClaudeHistoryIndexFailureHidesCachedOpener(
+            appendedData: Data(repeating: 0x78, count: 1_025),
+            partialLineByteLimit: 1_024)
+    }
+
     func testClaudeBackfillReplacesFullHistoricalWindowAtRequestedAnchor() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
@@ -1948,6 +1954,73 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                                    cwd: "/tmp",
                                    createdAt: "2026-04-30T00:00:00Z",
                                    transcriptPath: transcriptPath)
+    }
+
+    private func assertClaudeHistoryIndexFailureHidesCachedOpener(
+        appendedData: Data,
+        partialLineByteLimit: Int,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        let promptID = "toolu_fail_closed"
+        let askLine = makeClaudeAskUserQuestionAssistantLine(uuid: "fail-closed-ask",
+                                                             toolCallID: promptID)
+        let fillerLines = (0..<transcriptBootstrapLineLimit).map {
+            makeClaudeUserLine(uuid: "filler-\($0)", content: "filler-\($0)")
+        }
+        try (([askLine] + fillerLines).joined(separator: "\n") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(
+            record: makeRecord(transcriptPath: transcriptURL.path),
+            fileManager: .default,
+            hub: hub,
+            historicalPartialLineByteLimit: partialLineByteLimit)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1)
+                .events.first?.text == "filler-\(transcriptBootstrapLineLimit - 1)"
+        }, "bootstrap must reach the live anchor", file: file, line: line)
+        let firstFillerOffset = (askLine + "\n").utf8.count
+        let anchor = transcriptEventSequence(lineOffset: firstFillerOffset, ordinal: 0)
+        let initialPage = BridgeAgentEventFetchFlow.run(
+            eventHub: hub,
+            workspaceID: "workspace",
+            sessionID: "session",
+            limit: 20,
+            beforeSeq: anchor,
+            afterSeq: nil) { _, beforeSeq, limit in
+                session.backfill(beforeSeq: beforeSeq, limit: limit)
+            }
+        XCTAssertTrue(initialPage.fetchResult.events.contains {
+            $0.eventID == "fail-closed-ask:ask-user-question:\(promptID)"
+        }, "the baseline index must expose a genuinely open historical Ask; got \(initialPage.fetchResult.events.map(\.eventID))",
+                      file: file, line: line)
+
+        let handle = try FileHandle(forWritingTo: transcriptURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: appendedData)
+        try handle.close()
+        let failedPage = BridgeAgentEventFetchFlow.run(
+            eventHub: hub,
+            workspaceID: "workspace",
+            sessionID: "session",
+            limit: 20,
+            beforeSeq: anchor,
+            afterSeq: nil) { _, beforeSeq, limit in
+                session.backfill(beforeSeq: beforeSeq, limit: limit)
+            }
+        XCTAssertFalse(failedPage.fetchResult.events.contains {
+            $0.eventID == "fail-closed-ask:ask-user-question:\(promptID)"
+        }, "unknown source-wide closure coverage must never expose a cached opener",
+                       file: file, line: line)
     }
 
     private func makeClaudeUserLine(uuid: String, content: String) -> String {

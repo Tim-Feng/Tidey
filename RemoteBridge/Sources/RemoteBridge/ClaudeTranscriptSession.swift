@@ -2931,6 +2931,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 startResolver()
                 return false
             } catch {
+                failHistoricalClosureCoverage(beforeSeq: beforeSeq)
                 return false
             }
             // Closure knowledge is three-state: closed, genuinely open, or
@@ -2945,6 +2946,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 startResolver()
                 return false
             } catch {
+                failHistoricalClosureCoverage(beforeSeq: beforeSeq)
                 return false
             }
             do {
@@ -2954,11 +2956,14 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 startResolver()
                 return false
             } catch {
+                failHistoricalClosureCoverage(beforeSeq: beforeSeq)
                 return false
             }
             guard closureIndexIsReady else {
+                failHistoricalClosureCoverage(beforeSeq: beforeSeq)
                 return false
             }
+            hub.setHistoricalClosureCoverage(sessionID: record.sessionID, isComplete: true)
             let liveParserState = captureLiveParserState()
             resetParserStateForHistoricalReplay()
             historicalReplayOpenerEventIDs = []
@@ -3075,6 +3080,13 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                         anchorSeq: beforeSeq)
             return loadedAnyRawPage
         }
+    }
+
+    private func failHistoricalClosureCoverage(beforeSeq: Int) {
+        hub.setHistoricalClosureCoverage(sessionID: record.sessionID, isComplete: false)
+        hub.replaceHistoricalEvents(sessionID: record.sessionID,
+                                    events: [],
+                                    anchorSeq: beforeSeq)
     }
 
     private func ensureHistoricalClosureIndex() throws -> Bool {
