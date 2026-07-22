@@ -496,6 +496,74 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         }, "live publication must reconcile against exact closures already consumed by the index")
     }
 
+    func testClaudeIndexFirstRepeatedAskTerminalKeepsNewerLifecycleOpen() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        let promptID = "toolu_index_first_repeated"
+        let firstAsk = makeClaudeAskUserQuestionAssistantLine(uuid: "index-first-a",
+                                                              toolCallID: promptID)
+        let secondAsk = makeClaudeAskUserQuestionAssistantLine(uuid: "index-first-b",
+                                                               toolCallID: promptID)
+        let fillerLines = (0..<transcriptBootstrapLineLimit).map {
+            makeClaudeUserLine(uuid: "filler-\($0)", content: "filler-\($0)")
+        }
+        try (([firstAsk, secondAsk] + fillerLines).joined(separator: "\n") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1)
+                .events.first?.text == "filler-\(transcriptBootstrapLineLimit - 1)"
+        })
+        let firstFillerOffset = ([firstAsk, secondAsk].joined(separator: "\n") + "\n").utf8.count
+        let anchor = transcriptEventSequence(lineOffset: firstFillerOffset, ordinal: 0)
+        XCTAssertTrue(session.backfill(beforeSeq: anchor, limit: 20))
+
+        let terminal = makeClaudeToolResultLine(uuid: "index-first-result-a",
+                                                toolCallID: promptID,
+                                                content: "answered A")
+        var appendError: Error?
+        var didAppend = false
+        session.historicalIndexBeforeScanForTesting = {
+            guard didAppend == false else { return }
+            didAppend = true
+            do {
+                let handle = try FileHandle(forWritingTo: transcriptURL)
+                try handle.seekToEnd()
+                try handle.write(contentsOf: Data((terminal + "\n").utf8))
+                try handle.close()
+            } catch {
+                appendError = error
+            }
+        }
+
+        XCTAssertTrue(session.backfill(beforeSeq: anchor, limit: 20))
+        XCTAssertNil(appendError)
+        let terminalEventID = "index-first-result-a:ask-user-question-resolved:\(promptID)"
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+                .events.contains { $0.eventID == terminalEventID }
+        })
+        let terminalEvent = try XCTUnwrap(
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+                .events.first { $0.eventID == terminalEventID }
+        )
+        XCTAssertEqual(terminalEvent.metadata?["lifecycle_token"],
+                       "index-first-a:ask-user-question:\(promptID)")
+        XCTAssertNotNil(hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                     sessionID: "session",
+                                                     promptID: promptID),
+                        "terminal A must not close the newer same-ID Ask B")
+    }
+
     func testClaudeHistoricalIndexRejectsSameInodeMutationWhileAdoptingPartial() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)

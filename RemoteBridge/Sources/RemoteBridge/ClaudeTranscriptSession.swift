@@ -3838,8 +3838,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                         }
                     }
                     let historicalOpenerEventID = liveLifecycle == nil
-                        ? historicalClosureIndex?.pendingAskOpenerEventIDsByPromptID[toolCallID]?.first
-                            ?? historicalClosureIndex?.openerEventIDByClosureEventID[resolvedEventID]
+                        ? historicalClosureIndex?.openerEventIDByClosureEventID[resolvedEventID]
+                            ?? historicalClosureIndex?.pendingAskOpenerEventIDsByPromptID[toolCallID]?.first
                         : nil
                     let promptID = liveLifecycle?.promptID
                         ?? historicalOpenerEventID.map { _ in toolCallID }
