@@ -267,6 +267,90 @@ if [[ -o interactive ]]; then
     fi
 
     iterm2_print_state_data
-    printf "\033]1337;ShellIntegrationVersion=15;shell=zsh\007"
+    printf "\033]1337;ShellIntegrationVersion=16;shell=zsh\007"
   fi
+fi
+
+# Tidey late-tmux-attach bootstrap.
+#
+# This intentionally lives outside the iTerm2 escape-sequence integration
+# guard. A tmux pane may have been created earlier by SSH/Termius, before a
+# Tidey client attached and updated the tmux session environment. tmux cannot
+# retroactively mutate that already-running zsh process, so refresh the
+# canonical Tidey runtime immediately before the next command (and prompt).
+if [[ -o interactive && -n "${TMUX_PANE-}" ]]; then
+  _tidey_tmux_export_pane_option() {
+    local env_name="$1"
+    local pane_option="$2"
+    local value=""
+    value="$(tmux show-options -p -v -t "$TMUX_PANE" "$pane_option" 2>/dev/null || true)"
+    if [[ -n "$value" ]]; then
+      export "$env_name=$value"
+      return 0
+    fi
+    unset "$env_name"
+    return 1
+  }
+
+  _tidey_tmux_export_runtime_value() {
+    local env_name="$1"
+    local pane_option="$2"
+    local value=""
+    local session_value=""
+
+    value="$(tmux show-options -p -v -t "$TMUX_PANE" "$pane_option" 2>/dev/null || true)"
+    if [[ -n "$value" ]]; then
+      export "$env_name=$value"
+      return 0
+    fi
+
+    session_value="$(tmux show-environment -t "$TMUX_PANE" "$env_name" 2>/dev/null || true)"
+    case "$session_value" in
+      "$env_name="*) export "$env_name=${session_value#"$env_name="}" ;;
+      "-$env_name") unset "$env_name" ;;
+    esac
+  }
+
+  _tidey_refresh_late_tmux_runtime() {
+    if ! command -v tmux >/dev/null 2>&1; then
+      return 0
+    fi
+
+    # Once all values are healthy, avoid spawning tmux before every command.
+    # A Tidey restart invalidates the old socket and automatically reopens the
+    # refresh path on the next prompt/command.
+    if [[ -n "${TIDEY_WORKSPACE_ID-}" &&
+          -n "${TIDEY_PANEL_ID-}" &&
+          -n "${TIDEY_SOCKET_PATH-}" && -S "${TIDEY_SOCKET_PATH-}" &&
+          -n "${TIDEY_BIN_DIR-}" && -d "${TIDEY_BIN_DIR-}" &&
+          ":$PATH:" == *":${TIDEY_BIN_DIR}:"* ]]; then
+      return 0
+    fi
+
+    local previous_bin_dir="${TIDEY_BIN_DIR-}"
+    _tidey_tmux_export_pane_option TIDEY_WORKSPACE_ID @tidey_workspace_id || true
+    _tidey_tmux_export_pane_option TIDEY_PANEL_ID @tidey_panel_id || true
+    _tidey_tmux_export_runtime_value TIDEY_SOCKET_PATH @tidey_socket_path
+    _tidey_tmux_export_runtime_value TIDEY_BIN_DIR @tidey_bin_dir
+
+    if [[ -n "${TIDEY_SOCKET_PATH-}" && -S "${TIDEY_SOCKET_PATH-}" &&
+          -n "${TIDEY_BIN_DIR-}" && -d "${TIDEY_BIN_DIR-}" ]]; then
+      local cleaned_path="$PATH"
+      if [[ -n "$previous_bin_dir" ]]; then
+        cleaned_path="${cleaned_path//$previous_bin_dir:/}"
+        cleaned_path="${cleaned_path//:$previous_bin_dir/}"
+      fi
+      cleaned_path="${cleaned_path//$TIDEY_BIN_DIR:/}"
+      cleaned_path="${cleaned_path//:$TIDEY_BIN_DIR/}"
+      export PATH="${TIDEY_BIN_DIR}:${cleaned_path}"
+      rehash 2>/dev/null || true
+    fi
+  }
+
+  autoload -Uz add-zsh-hook
+  add-zsh-hook -d preexec _tidey_refresh_late_tmux_runtime 2>/dev/null || true
+  add-zsh-hook -d precmd _tidey_refresh_late_tmux_runtime 2>/dev/null || true
+  add-zsh-hook preexec _tidey_refresh_late_tmux_runtime
+  add-zsh-hook precmd _tidey_refresh_late_tmux_runtime
+  _tidey_refresh_late_tmux_runtime
 fi
