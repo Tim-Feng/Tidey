@@ -2099,11 +2099,14 @@ struct ClaudeHistoricalClosureIndexStats: Equatable {
 }
 
 final class ClaudeTranscriptSession: AgentTranscriptSession {
+    private static let defaultHistoricalPartialLineByteLimit = 16 * 1024 * 1024
+
     private let queue: DispatchQueue
     private let fileManager: FileManager
     private let hub: AgentEventHub
     private let socketClient: TideyCommandSending?
     private let chatSubmitEchoRegistry: ChatSubmitEchoRegistry
+    private let historicalPartialLineByteLimit: Int
     private let promptNotificationDeduper = AgentInteractivePromptNotificationDeduper()
 
     private var record: AgentSessionRegistryRecord
@@ -2646,6 +2649,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         var pendingContextOpenerEventID: String?
         var closureByOpenerEventID: [String: AgentEvent]
         var contextConsumerSequenceByOpenerEventID: [String: Int]
+        var isPoisonedByOversizedPartialLine: Bool
 
         init(sourceIdentity: HistoricalClosureSourceIdentity,
              indexedThroughByteOffset: Int,
@@ -2656,7 +2660,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
              pendingAskOpenerEventIDsByPromptID: [String: [String]],
              pendingContextOpenerEventID: String?,
              closureByOpenerEventID: [String: AgentEvent],
-             contextConsumerSequenceByOpenerEventID: [String: Int]) {
+             contextConsumerSequenceByOpenerEventID: [String: Int],
+             isPoisonedByOversizedPartialLine: Bool = false) {
             self.sourceIdentity = sourceIdentity
             self.indexedThroughByteOffset = indexedThroughByteOffset
             self.scannedThroughByteOffset = scannedThroughByteOffset
@@ -2667,6 +2672,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             self.pendingContextOpenerEventID = pendingContextOpenerEventID
             self.closureByOpenerEventID = closureByOpenerEventID
             self.contextConsumerSequenceByOpenerEventID = contextConsumerSequenceByOpenerEventID
+            self.isPoisonedByOversizedPartialLine = isPoisonedByOversizedPartialLine
         }
     }
 
@@ -2748,12 +2754,14 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
          fileManager: FileManager = .default,
          hub: AgentEventHub,
          socketClient: TideyCommandSending? = nil,
-         chatSubmitEchoRegistry: ChatSubmitEchoRegistry? = nil) {
+         chatSubmitEchoRegistry: ChatSubmitEchoRegistry? = nil,
+         historicalPartialLineByteLimit: Int = ClaudeTranscriptSession.defaultHistoricalPartialLineByteLimit) {
         self.record = record
         self.fileManager = fileManager
         self.hub = hub
         self.socketClient = socketClient
         self.chatSubmitEchoRegistry = chatSubmitEchoRegistry ?? ChatSubmitEchoRegistry()
+        self.historicalPartialLineByteLimit = max(1, historicalPartialLineByteLimit)
         self.queue = DispatchQueue(label: "com.tidey.remote-bridge.claude-session.\(record.sessionID)")
     }
 
@@ -2995,6 +3003,9 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                   currentBoundary == existingIndex.scannedBoundary else {
                 throw JSONLFileTailerError.sourceInvalidated
             }
+            guard existingIndex.isPoisonedByOversizedPartialLine == false else {
+                return false
+            }
         } else {
             historicalClosureIndex = HistoricalClosureIndexState(
                 sourceIdentity: sourceIdentity,
@@ -3102,6 +3113,16 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 // newline. The next chunk resumes at this frontier instead
                 // of rescanning an arbitrarily long partial JSON record.
                 searchedThroughIndex = pendingData.endIndex
+                if pendingData.count > historicalPartialLineByteLimit {
+                    // A source with an unbounded record cannot provide
+                    // complete closure evidence. Keep only the validated
+                    // source frontier and fail all history requests closed;
+                    // retaining or rereading this suffix would turn a
+                    // corrupt transcript into unbounded memory/CPU growth.
+                    startingIndex.isPoisonedByOversizedPartialLine = true
+                    pendingData = Data()
+                    break
+                }
             }
 
             historicalIndexBeforeSourceValidationForTesting?()
@@ -3113,14 +3134,17 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                   currentBoundary == scannedBoundary else {
                 throw JSONLFileTailerError.sourceInvalidated
             }
-            historicalClosureIndex?.indexedThroughByteOffset = pendingDataOffset
+            historicalClosureIndex?.indexedThroughByteOffset =
+                startingIndex.isPoisonedByOversizedPartialLine
+                    ? scannedThroughByteOffset
+                    : pendingDataOffset
             historicalClosureIndex?.scannedThroughByteOffset = scannedThroughByteOffset
             historicalClosureIndex?.scannedBoundary = scannedBoundary
             historicalClosureIndex?.pendingPartialLineData = pendingData
             historicalClosureIndex?.parserState = captureLiveParserState()
             completed = true
             synchronizeHistoricalOpenerClosureSequences()
-            return true
+            return startingIndex.isPoisonedByOversizedPartialLine == false
         } catch JSONLFileTailerError.sourceInvalidated {
             throw JSONLFileTailerError.sourceInvalidated
         } catch {
