@@ -15,6 +15,38 @@ enum BridgeAgentEventFetchFlow {
                     beforeSeq: Int?,
                     afterSeq: Int?,
                     backfill: (_ sessionID: String, _ beforeSeq: Int, _ limit: Int) -> Bool) -> Output {
+        if let sessionID, beforeSeq != nil || afterSeq != nil {
+            return eventHub.withHistoricalRequestTransaction(sessionID: sessionID) {
+                runUnlocked(eventHub: eventHub,
+                            workspaceID: workspaceID,
+                            sessionID: sessionID,
+                            limit: limit,
+                            maxBytes: maxBytes,
+                            beforeSeq: beforeSeq,
+                            afterSeq: afterSeq,
+                            backfill: backfill)
+            }
+        }
+        return runUnlocked(eventHub: eventHub,
+                           workspaceID: workspaceID,
+                           sessionID: sessionID,
+                           limit: limit,
+                           maxBytes: maxBytes,
+                           beforeSeq: beforeSeq,
+                           afterSeq: afterSeq,
+                           backfill: backfill)
+    }
+
+    private static func runUnlocked(
+        eventHub: AgentEventHub,
+        workspaceID: String,
+        sessionID: String?,
+        limit: Int,
+        maxBytes: Int?,
+        beforeSeq: Int?,
+        afterSeq: Int?,
+        backfill: (_ sessionID: String, _ beforeSeq: Int, _ limit: Int) -> Bool
+    ) -> Output {
         var fetchResult = eventHub.fetch(workspaceID: workspaceID,
                                          sessionID: sessionID,
                                          limit: limit,
