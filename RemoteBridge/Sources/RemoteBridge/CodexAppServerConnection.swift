@@ -152,7 +152,8 @@ final class CodexAppServerConnection {
         }
         let id = nextRequestID
         nextRequestID += 1
-        pendingClientResponses[String(id)] = onResponse
+        let requestIDKey = CodexAppServerRequestID.integer(Int64(id)).storageKey
+        pendingClientResponses[requestIDKey] = onResponse
         stateLock.unlock()
 
         do {
@@ -163,7 +164,7 @@ final class CodexAppServerConnection {
             ]))
         } catch {
             stateLock.lock()
-            pendingClientResponses.removeValue(forKey: String(id))
+            pendingClientResponses.removeValue(forKey: requestIDKey)
             stateLock.unlock()
             throw error
         }
@@ -195,10 +196,13 @@ final class CodexAppServerConnection {
 
         let id = object["id"]
         let method = object["method"]?.stringValue
-        if let id, let method {
-            let rawObject = Self.rawJSONObject(from: trimmed)
-            guard let typedID = CodexAppServerRequestID(rawJSONObjectValue: rawObject?["id"])
-                    ?? CodexAppServerRequestID(jsonValue: id) else {
+        let rawObject = id == nil ? nil : Self.rawJSONObject(from: trimmed)
+        let typedID = id.flatMap {
+            CodexAppServerRequestID(rawJSONObjectValue: rawObject?["id"])
+                ?? CodexAppServerRequestID(jsonValue: $0)
+        }
+        if let method, id != nil {
+            guard let typedID else {
                 BridgeLogger.server.error("codex app-server server request with unsupported id shape method=\(method, privacy: .public)")
                 return
             }
@@ -212,8 +216,14 @@ final class CodexAppServerConnection {
                                 params: object["params"]?.objectValue ?? [:])
             return
         }
-        if let id {
-            handleClientResponse(id: id, result: object["result"], error: object["error"])
+        if id != nil {
+            guard let typedID else {
+                BridgeLogger.server.error("codex app-server ignored response with unsupported id shape")
+                return
+            }
+            handleClientResponse(id: typedID,
+                                 result: object["result"],
+                                 error: object["error"])
             return
         }
         if let method {
@@ -575,12 +585,11 @@ final class CodexAppServerConnection {
         try sendLine(line)
     }
 
-    private func handleClientResponse(id: JSONValue, result: JSONValue?, error: JSONValue?) {
-        guard let key = Self.idKey(from: id) else {
-            return
-        }
+    private func handleClientResponse(id: CodexAppServerRequestID,
+                                      result: JSONValue?,
+                                      error: JSONValue?) {
         stateLock.lock()
-        let handler = pendingClientResponses.removeValue(forKey: key)
+        let handler = pendingClientResponses.removeValue(forKey: id.storageKey)
         stateLock.unlock()
         guard let handler else {
             return
@@ -612,22 +621,6 @@ final class CodexAppServerConnection {
             throw CodexAppServerConnectionError.invalidJSONLine("<encoding failed>")
         }
         try sendLine(line + "\n")
-    }
-
-    static func idKey(from id: JSONValue) -> String? {
-        switch id {
-        case .string(let value):
-            return value
-        case .number(let value):
-            if value.isFinite,
-               value.rounded(.towardZero) == value,
-               let exact = Int(exactly: value) {
-                return String(exact)
-            }
-            return String(value)
-        default:
-            return nil
-        }
     }
 
     private func handleApprovalRequest(_ request: CodexAppServerApprovalRequest) {
