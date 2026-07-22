@@ -1009,6 +1009,57 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         }, "a cached /context command must be filtered when its summary is outside before_seq")
     }
 
+    func testClaudeBackfillIncludesEarlierOrdinalFromAnchorRecord() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+
+        let promptID = "toolu_same_record"
+        let askLine = makeClaudeAskUserQuestionAssistantLine(uuid: "same-record-ask",
+                                                             toolCallID: promptID)
+        let resultLine = makeClaudeToolResultLine(uuid: "same-record-result",
+                                                  toolCallID: promptID,
+                                                  content: "answered")
+        let fillerLines = (0..<transcriptBootstrapLineLimit).map {
+            makeClaudeUserLine(uuid: "filler-\($0)", content: "filler-\($0)")
+        }
+        try (([askLine, resultLine] + fillerLines).joined(separator: "\n") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1)
+                .events.first?.text == "filler-\(transcriptBootstrapLineLimit - 1)"
+        })
+
+        let resultOffset = (askLine + "\n").utf8.count
+        let resolvedOrdinalSeq = transcriptEventSequence(lineOffset: resultOffset, ordinal: 1)
+        let page = BridgeAgentEventFetchFlow.run(eventHub: hub,
+                                                 workspaceID: "workspace",
+                                                 sessionID: "session",
+                                                 limit: 20,
+                                                 beforeSeq: resolvedOrdinalSeq,
+                                                 afterSeq: nil) { _, beforeSeq, limit in
+            session.backfill(beforeSeq: beforeSeq, limit: limit)
+        }
+
+        XCTAssertTrue(page.didBackfill)
+        XCTAssertTrue(page.fetchResult.events.contains {
+            $0.eventID == "same-record-result:tool-result:0" && $0.type == .toolResult
+        }, "ordinal zero from the anchor record must remain visible before ordinal one")
+        XCTAssertFalse(page.fetchResult.events.contains {
+            $0.eventID == "same-record-result:ask-user-question-resolved:\(promptID)"
+        })
+        XCTAssertTrue(page.fetchResult.events.allSatisfy { $0.seq < resolvedOrdinalSeq })
+    }
+
     func testClaudeBackfillKeepsRepeatedAskOpenAfterEarlierSameIDWasResolved() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
