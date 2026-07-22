@@ -26,11 +26,18 @@ protocol CodexAppServerApprovalPromptProviding: CodexAppServerApprovalSubmitting
 protocol CodexAppServerRuntimeSessionControlling: AnyObject {
     func canSubmitMessage() -> Bool
     func ensureThreadSubscription()
+    func setRegistryRootThreadID(_ rawThreadID: String?)
+    func isStopped() -> Bool
     func pendingApprovalPromptEvents() -> [AgentEvent]
     func refreshActiveThread()
     func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent
     func submitMessage(text: String) throws
     func stop()
+}
+
+extension CodexAppServerRuntimeSessionControlling {
+    func setRegistryRootThreadID(_ rawThreadID: String?) {}
+    func isStopped() -> Bool { false }
 }
 
 extension CodexAppServerRuntimeSession: CodexAppServerRuntimeSessionControlling {}

@@ -55,6 +55,13 @@ final class CodexAppServerRuntimeSession {
     private var stopped = false
     private var attachSubscriptionState = AttachSubscriptionState.noLoadedThread
     private var nextSubscriptionRetryAt: Date?
+    var loadedThreadUnresolvedHook: (() -> Void)?
+
+    var attachSubscriptionStateForTesting: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return attachSubscriptionState.logValue
+    }
 
     enum AttachSubscriptionState: Equatable {
         case noLoadedThread
