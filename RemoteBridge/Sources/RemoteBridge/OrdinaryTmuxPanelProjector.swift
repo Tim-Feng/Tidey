@@ -56,7 +56,10 @@ final class OrdinaryTmuxPanelProjector {
         var didProjectCarrier = false
         var nextPanels = [JSONValue]()
         var registryRoutes = [OrdinaryTmuxPanelRoute]()
+        var authoritativeRoutesByCarrier = [String: [OrdinaryTmuxPanelRoute]]()
         var didObserveFreshProjection = false
+        var ordinaryCarrierCount = 0
+        var everyCarrierProjectionIsAuthoritative = true
         var timedOutSocketKeys = Set<String>()
 
         for panelValue in panels {
@@ -68,12 +71,15 @@ final class OrdinaryTmuxPanelProjector {
                 nextPanels.append(panelValue)
                 continue
             }
+            ordinaryCarrierCount += 1
             guard let carrierPanelID = carrierPanel["panel_id"]?.stringValue else {
+                everyCarrierProjectionIsAuthoritative = false
                 BridgeLogger.server.debug("ordinary tmux projection skipped workspace_id=\(workspaceID, privacy: .public) fallback_reason=missing_carrier_panel_id")
                 nextPanels.append(panelValue)
                 continue
             }
             guard let metadata = OrdinaryTmuxAttachMetadata(json: ordinaryTmuxMetadata) else {
+                everyCarrierProjectionIsAuthoritative = false
                 BridgeLogger.server.debug("ordinary tmux projection skipped workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) fallback_reason=invalid_metadata")
                 nextPanels.append(panelValue)
                 continue
@@ -82,6 +88,7 @@ final class OrdinaryTmuxPanelProjector {
             BridgeLogger.server.debug("ordinary tmux projection metadata workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) tty=\(metadata.clientTTY, privacy: .public) target=\(metadata.targetSession ?? "<default>", privacy: .public)")
             let socketKey = metadata.preferredSocketSelector.cacheKey
             if timedOutSocketKeys.contains(socketKey) {
+                everyCarrierProjectionIsAuthoritative = false
                 BridgeLogger.server.info("ordinary tmux projection skipped workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) socket=\(metadata.preferredSocketSelector.logDescription, privacy: .public) reason=socket_timeout_in_request")
                 didProjectCarrier = true
                 nextPanels.append(Self.carrierPanelValue(carrierPanel,
@@ -96,11 +103,15 @@ final class OrdinaryTmuxPanelProjector {
                                                           workspaceID: workspaceID,
                                                           carrierPanelID: carrierPanelID)
             } catch {
+                everyCarrierProjectionIsAuthoritative = false
                 BridgeLogger.server.error("ordinary tmux projection failed workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) tty=\(metadata.clientTTY, privacy: .public) target=\(metadata.targetSession ?? "<default>", privacy: .public) fallback_reason=adapter_error error=\(String(describing: error), privacy: .public)")
                 nextPanels.append(panelValue)
                 continue
             }
             let projectedPanels = projectedLoad.panels
+            if projectedLoad.canReplaceRegistry == false {
+                everyCarrierProjectionIsAuthoritative = false
+            }
             if projectedLoad.timedOutWithoutCache {
                 timedOutSocketKeys.insert(socketKey)
             }
@@ -124,6 +135,7 @@ final class OrdinaryTmuxPanelProjector {
                     if projectedLoad.canReplaceRegistry {
                         didObserveFreshProjection = true
                         registryRoutes.append(route)
+                        authoritativeRoutesByCarrier[carrierPanelID] = [route]
                     }
                     nextPanels.append(Self.carrierPanelValue(for: projectedPanel,
                                                              carrierPanel: carrierPanel,
@@ -140,6 +152,7 @@ final class OrdinaryTmuxPanelProjector {
                     BridgeLogger.server.debug("ordinary tmux projection skipped workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) projected_count=0 fallback_reason=no_windows")
                     if projectedLoad.canReplaceRegistry {
                         didObserveFreshProjection = true
+                        authoritativeRoutesByCarrier[carrierPanelID] = []
                     }
                     nextPanels.append(panelValue)
                 }
@@ -161,6 +174,7 @@ final class OrdinaryTmuxPanelProjector {
             if projectedLoad.canReplaceRegistry {
                 didObserveFreshProjection = true
                 registryRoutes.append(contentsOf: projectedRoutes)
+                authoritativeRoutesByCarrier[carrierPanelID] = projectedRoutes
             }
             nextPanels.append(contentsOf: projectedPanels.map {
                 Self.panelValue(for: $0,
@@ -171,8 +185,20 @@ final class OrdinaryTmuxPanelProjector {
             })
         }
 
-        if didObserveFreshProjection {
-            registry?.replaceRoutes(workspaceID: workspaceID, routes: registryRoutes, observedAt: now())
+        if ordinaryCarrierCount == 0 {
+            registry?.replaceRoutesAuthoritatively(workspaceID: workspaceID, routes: [], observedAt: now())
+        } else if everyCarrierProjectionIsAuthoritative, didObserveFreshProjection {
+            registry?.replaceRoutesAuthoritatively(workspaceID: workspaceID,
+                                                   routes: registryRoutes,
+                                                   observedAt: now())
+        } else {
+            let observedAt = now()
+            for (carrierPanelID, routes) in authoritativeRoutesByCarrier {
+                registry?.replaceRoutes(workspaceID: workspaceID,
+                                        carrierPanelID: carrierPanelID,
+                                        routes: routes,
+                                        observedAt: observedAt)
+            }
         }
 
         guard didProjectCarrier else {

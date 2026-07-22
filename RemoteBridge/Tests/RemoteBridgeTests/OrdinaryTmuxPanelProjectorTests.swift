@@ -20,6 +20,19 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
         func setPaneIdentity(route: OrdinaryTmuxPanelRoute) throws {}
     }
 
+    private struct PartialFailureAdapter: OrdinaryTmuxWindowProjecting {
+        let successPanels: [OrdinaryTmuxProjectedPanel]
+
+        func projectedPanels(for metadata: OrdinaryTmuxAttachMetadata) throws -> [OrdinaryTmuxProjectedPanel] {
+            if metadata.targetSession == "adbrewer-cc" {
+                throw NSError(domain: "OrdinaryTmuxPanelProjectorTests.partial", code: 1)
+            }
+            return successPanels
+        }
+
+        func setPaneIdentity(route: OrdinaryTmuxPanelRoute) throws {}
+    }
+
     private final class TimeoutAdapter: OrdinaryTmuxWindowProjecting, @unchecked Sendable {
         private let lock = NSLock()
         private(set) var callCount = 0
@@ -477,6 +490,50 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
         XCTAssertEqual(waitForIdentityRoutes(adapter, count: 2).count, 2)
     }
 
+    func testPartialCarrierFailureDoesNotReplaceWorkspaceRegistry() throws {
+        let registry = OrdinaryTmuxPanelRegistry()
+        let oldRoute = route(panelID: "old-cc-route",
+                             carrierPanelID: "carrier-cc",
+                             windowID: "@90",
+                             paneID: "%90")
+        registry.replaceRoutes(workspaceID: "workspace-1", routes: [oldRoute])
+        let projector = OrdinaryTmuxPanelProjector(adapter: PartialFailureAdapter(successPanels: [
+            projectedPanel(windowID: "@15", index: 0, name: "codex", paneID: "%15", current: true),
+        ]), registry: registry)
+
+        let result = projector.projectPanelListResult(twoCarrierPanelListResult())
+
+        XCTAssertEqual(registry.route(forPanelID: oldRoute.panelID), oldRoute,
+                       "one fresh carrier must not atomically replace routes while another carrier projection failed")
+        let projectedPanelID = try XCTUnwrap(result["panels"]?.arrayValue?.compactMap(\.objectValue)
+            .first { $0["panel_id"]?.stringValue == "carrier-codex" }?["panel_id"]?.stringValue)
+        XCTAssertNotNil(registry.route(forPanelID: projectedPanelID),
+                        "every newly exposed projected panel must be routable even when another carrier failed")
+    }
+
+    func testAuthoritativeZeroCarrierListClearsRoutesAndAuthorization() throws {
+        let registry = OrdinaryTmuxPanelRegistry()
+        let oldRoute = route(panelID: OrdinaryTmuxCLIAdapter.stablePanelID(socketComponent: "/tmp/tmux-501/default",
+                                                                           sessionID: "$7",
+                                                                           windowID: "@90"),
+                             carrierPanelID: "carrier-cc",
+                             windowID: "@90",
+                             paneID: "%90")
+        registry.replaceRoutes(workspaceID: "workspace-1", routes: [oldRoute])
+        let logicalID = try XCTUnwrap(OrdinaryTmuxLogicalPanelID(rawValue: oldRoute.panelID))
+        XCTAssertNotNil(registry.authorizedTarget(for: logicalID, workspaceID: "workspace-1"))
+        let projector = OrdinaryTmuxPanelProjector(adapter: StubAdapter(panels: []), registry: registry)
+
+        _ = projector.projectPanelListResult([
+            "workspace_id": .string("workspace-1"),
+            "panels": .array([]),
+        ])
+
+        XCTAssertNil(registry.route(forPanelID: oldRoute.panelID))
+        XCTAssertNil(registry.authorizedTarget(for: logicalID, workspaceID: "workspace-1"),
+                     "an authoritative empty workspace must not retain logical-ID fallback authorization")
+    }
+
     private func waitForIdentityRoutes(_ adapter: MutableAdapter,
                                        count: Int,
                                        timeout: TimeInterval = 1,
@@ -490,6 +547,23 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
         }
         XCTAssertGreaterThanOrEqual(routes.count, count, file: file, line: line)
         return routes
+    }
+
+    private func route(panelID: String,
+                       carrierPanelID: String,
+                       windowID: String,
+                       paneID: String) -> OrdinaryTmuxPanelRoute {
+        OrdinaryTmuxPanelRoute(workspaceID: "workspace-1",
+                               panelID: panelID,
+                               carrierPanelID: carrierPanelID,
+                               socket: .path("/tmp/tmux-501/default"),
+                               sessionID: "$7",
+                               sessionName: "genesis-extraction",
+                               windowID: windowID,
+                               windowIndex: 0,
+                               activePaneID: paneID,
+                               cwd: "/Users/timfeng/GitHub/test",
+                               currentCommand: "zsh")
     }
 
     private func panelListResult() -> [String: JSONValue] {
