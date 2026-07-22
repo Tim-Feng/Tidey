@@ -1085,7 +1085,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                                          result: [
                                             "subscribed": .bool(true),
                                             "workspace_id": workspaceID.map(JSONValue.string) ?? .null,
-                                            "replay_count": .number(0),
+                                            "replay_count": .number(Double(replayEnvelopes.count)),
                                          ],
                                          error: nil),
                 agentReplayEnvelopes: [],
