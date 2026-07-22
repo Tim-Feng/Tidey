@@ -9,13 +9,28 @@ enum AgentInteractivePromptEventReducer {
 
     static func pendingEvents(_ pendingEvents: [AgentEvent],
                               excludingResolvedIn replayEvents: [AgentEvent]) -> [AgentEvent] {
-        let resolvedKeys = Set(replayEvents.compactMap { event -> PromptKey? in
-            guard event.type == .interactivePromptResolved else {
-                return nil
+        // A resolved terminal only suppresses the pending delivery it
+        // terminates. Token-bound (Codex) lifecycles match on the EXACT
+        // lifecycle token — a late terminal for lifecycle A, even when the
+        // Hub's publish authority rebased it after lifecycle B, must not
+        // suppress B. Tokenless legacy prompts keep the promptID+seq rule
+        // (and only tokenless terminals participate in it).
+        var resolvedTokensByKey: [PromptKey: Set<String>] = [:]
+        var latestTokenlessResolvedSeqByKey: [PromptKey: Int] = [:]
+        for event in replayEvents where event.type == .interactivePromptResolved {
+            guard let key = promptKey(for: event) else {
+                continue
             }
-            return promptKey(for: event)
-        })
-        guard resolvedKeys.isEmpty == false else {
+            if let token = AgentInteractivePromptSidebarMessages.lifecycleToken(from: event) {
+                resolvedTokensByKey[key, default: []].insert(token)
+            } else if AgentInteractivePromptSidebarMessages.requiresLifecycleCapability(event) == false {
+                // The strict legacy contract: only a tokenless NON-CAPABILITY
+                // terminal creates a legacy tombstone. A tokenless Codex/
+                // capability terminal proves nothing about a legacy opener.
+                latestTokenlessResolvedSeqByKey[key] = max(latestTokenlessResolvedSeqByKey[key] ?? Int.min, event.seq)
+            }
+        }
+        guard resolvedTokensByKey.isEmpty == false || latestTokenlessResolvedSeqByKey.isEmpty == false else {
             return pendingEvents
         }
         return pendingEvents.filter { event in
@@ -23,7 +38,18 @@ enum AgentInteractivePromptEventReducer {
                   let key = promptKey(for: event) else {
                 return true
             }
-            return resolvedKeys.contains(key) == false
+            if let token = AgentInteractivePromptSidebarMessages.lifecycleToken(from: event) {
+                return resolvedTokensByKey[key]?.contains(token) != true
+            }
+            if AgentInteractivePromptSidebarMessages.requiresLifecycleCapability(event) {
+                // A capability-bound pending prompt with a MISSING token
+                // fails closed: no terminal may suppress it by promptID.
+                return true
+            }
+            guard let resolvedSeq = latestTokenlessResolvedSeqByKey[key] else {
+                return true
+            }
+            return event.seq > resolvedSeq
         }
     }
 

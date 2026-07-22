@@ -300,6 +300,45 @@
   - 症狀：Bridge log 顯示 `notification.create` 正常送出，但 Dev 的 sidebar 和 Dock 完全沒反應；關掉 prod 後 Dev 立刻正常
   - 這題現在的 workaround 是測 Codex 時先關 prod；真要根治，session registry 就要帶 per-session socket path
 
+### Codex app-server approval / event stream（2026-07 permission-approval 加固，round 1–6）
+
+- seq 取號要用 reservation，不能用 peek
+  - 「看 buffer 最大值 +1」的 peek 在同一批多個 event 先建立、後發布時會全部拿到同一個 seq
+  - 取號當下就要墊高 high-water（reservation），批次 terminal、close 一次收多個 prompt 都靠這個
+- 每個 session 只能有一個 seq authority，且 unique 不等於 cursor monotonic
+  - synthetic reservation 與 native producer（transcript session）各自宣稱 seq，遲早撞號；`after_seq` cursor 會永久漏掉其中一筆
+  - 只防「相同 seq」不夠：晚到的 unseen 較小 seq（先發 100 再來 50）對已推進到 100 的 cursor 一樣永久不可見；批次 reservation 反序 publish 同理
+  - hub `publish` 以 stored high-water 為準：unseen event 的 seq 不高於 high-water 就 rebase 到 `max(highWater, reservation)+1`（保留 eventID identity）；high-water 不隨 buffer trim 消失，eviction 不會復活舊 cursor
+  - monotonic 規則只適用 live/forward publish：transcript 的 historical backfill（載入比現存更舊的頁）必須用明確命名的 storage policy 保留原始 cursor 位置——照 rebase 會把舊歷史搬到最新 cursor 後面，`before_seq` 取不到、`after_seq` 誤當新 live event。不要拿 `deliverToSubscribers == false` 隱含判斷 backfill，policy 要進 API 契約並 audit 所有 caller
+  - lifecycle token 也要進所有下游判斷：reducer 的 suppression key、hub 的 active/latest-resolved query、submit 的 hub fallback 只按 promptID 判斷時，晚到又被 rebase 的舊 terminal 會 suppress 新 delivery、或把舊 terminal 當新 submit 的答案
+- snapshot / 補發要重用已發布 event 的 identity，動態欄位用 overlay，bounds 停在 retained page
+  - pending snapshot 若配新 seq，就會注入 hub 沒發過的 cursor 位置，跟下一筆真 event 撞
+  - 正解：同 eventID + 原 seq + 原 timestamp，只 overlay submit_state / client_request_id 這類動態 metadata；空 page 注入舊 snapshot 時 newest_seq 要 clamp 在 requested after_seq 之上，否則 poll cursor 反覆倒退
+- capability token 必須保護 request、completion、terminal、recovery 四個方向
+  - 只在 submit request 帶 token 擋不住其餘三路：晚到的舊 attempt completion（error / already_resolved）會蓋掉新 attempt、舊 lifecycle 的 live terminal 會清掉新卡片、recovery snapshot 會把舊 client_request_id 沿用到新 lifecycle
+  - completion 要帶 expected clientRequestID 只改 exact attempt；terminal event 要攜帶被終結 delivery 的 token、consumer 只清 token 相符的卡片；recovery 比對 displayed token 與 local attempt token，不同就整個清掉（fresh lifecycle、fresh identity）
+- wire 協定的 RequestId 和 UI 生命週期是兩種 identity，各要各的 guard
+  - JSON-RPC RequestId 是 wire collision domain：response 已 enqueue/flush 後同 id 換內容 = protocol violation，要 poison 該 id、不再寫任何 bytes、abort transport；poison scope 是單一 connection
+  - wire taint 是 connection-level history，不是 attempt state：identical redelivery 可以 re-arm 卡片，但不能把「已有 response 上 wire」的 taint 降回 false，否則之後的 changed request 繞過 violation
+  - collision domain 涵蓋所有 server-initiated frame：malformed / unsupported request 的 error response 也要先 claim 同一個 ledger，反向（先寫過 error 再變成 valid approval）同樣算 violation
+  - abort 要真的停掉 runtime generation：websocket 關 channel、stdio 要 terminate owned process（transport close 對 stdio 是 no-op 的話 violation 只是形式上的）
+  - UI 卡片要另發 server-issued lifecycle capability token（本案用 published event 的 eventID），submit 必須原樣 echo、`beginSubmit` 原子驗證；changed payload 換 token，舊卡片打新 lifecycle 只會拿到 conflict、零 response bytes
+  - 只靠 prompt_id + target_index 擋不住「舊卡片批准新內容」——prompt_id 對 changed payload 是同一個
+- close() 先 retire store、收 terminal，再跑任何外部 callback
+  - 反過來做，一個阻塞的 pending-response handler 就開出「closed connection 還能 admit server request / terminal→pending 復活」的窗口
+  - 所有 admission / terminal publication 走同一把 publication lock；測試要用 latch 證明競爭者真的抵達 lock（純 barrier 可能只是循序排程僥倖通過）
+- generation 換代要做成 transaction，不是 check-then-act
+  - stale session 先移 generation 再 stop() 會把 stop 同步發出的 expired terminal 丟掉：先標 retiring（只放行 terminal cleanup）、stop 完才移除
+  - attach 失敗要能回滾：attach 期間 callback 先 staging，成功才按序 commit，失敗 discard——否則 handler 同步 flush 的 event 已洩漏到 hub / sidebar
+  - staging 的 commit 本身也有 arrival race：先把 mode 翻成 committed 再 drain，post-commit callback 會直接執行、插到還沒 drain 的 staged work 前面。要用 committing 狀態 + 單一 drain executor：drain 完成前新 callback 一律排隊尾，FIFO 才成立
+  - generation 檢查與 side-effect commit 要在同一把 lock 裡重驗；排進 queue 的工作要攜帶 generation，執行當下再驗
+  - 整個 sync/attach pass 要在元件內部序列化（不能依賴呼叫端剛好用 serial queue）：兩個 sync 交錯會讓 entry 與 current generation 分裂（entry 是舊代、current 是新代，submit 與 callback 各路由一邊）
+  - 換代造成的「entry 空窗」（舊 entry 已移除、新 attach 未 commit）不是 authoritative 的「沒有 runtime」：submit 撞到空窗要等 transition commit（bounded wait，用 DispatchGroup 之類的 signal，不是 sleep 輪詢）再 reconcile
+- subscribe 的 replay / live race 要用 eventID 合併
+  - 先裝 live subscriber、後取 snapshot 之間發布的 event 會同時進 live buffer 和 replay；gate open 時要 suppress 已 replay 的 eventID，保留 snapshot（帶最新 submit metadata）那份
+- flush ≠ 結案：transport 寫出成功只代表 bytes 出去了
+  - 結案只能由 authoritative 訊號（serverRequest/resolved、turn completed、expiry）驅動；把 flush 當 resolved 會讓 server 沒收到時 UI 假成功
+
 ## Theme System
 
 - `NSTableViewStyleSourceList` 的 selection 顏色無法自訂

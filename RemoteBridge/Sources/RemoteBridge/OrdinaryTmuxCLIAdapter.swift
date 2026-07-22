@@ -117,61 +117,75 @@ final class OrdinaryTmuxCLIAdapter {
 
     private static let fieldSeparator = "\t"
     private static let commandTimeoutSeconds: TimeInterval = 3
-    private static let liveCommandRunner: CommandRunner = { socket, arguments, stdin in
-        guard let tmuxBinaryPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
-            BridgeLogger.server.error("ordinary tmux adapter could not find a tmux binary in supported paths")
-            throw NSError(domain: "OrdinaryTmuxCLIAdapter",
-                          code: 127,
-                          userInfo: [NSLocalizedDescriptionKey: "tmux not found"])
-        }
+    private static let liveCommandRunner: CommandRunner = processCommandRunner(
+        executablePath: TmuxStateResolver.discoverTmuxBinaryPath(),
+        timeoutSeconds: commandTimeoutSeconds
+    )
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: tmuxBinaryPath)
-        process.arguments = OrdinaryTmuxCLIAdapter.arguments(for: socket, commandArguments: arguments)
-        var environment = ProcessInfo.processInfo.environment
-        environment["LC_CTYPE"] = "UTF-8"
-        environment["LANG"] = "en_US.UTF-8"
-        process.environment = environment
+    static func processCommandRunner(executablePath: String?,
+                                     timeoutSeconds: TimeInterval) -> CommandRunner {
+        { socket, arguments, stdin in
+            guard let executablePath else {
+                BridgeLogger.server.error("ordinary tmux adapter could not find a tmux binary in supported paths")
+                throw NSError(domain: "OrdinaryTmuxCLIAdapter",
+                              code: 127,
+                              userInfo: [NSLocalizedDescriptionKey: "tmux not found"])
+            }
 
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        let inputPipe = stdin == nil ? nil : Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
-        if let inputPipe {
-            process.standardInput = inputPipe
-        }
-        try process.run()
-        if let stdin, let inputPipe {
-            inputPipe.fileHandleForWriting.write(Data(stdin.utf8))
-            try? inputPipe.fileHandleForWriting.close()
-        }
-        let waitSemaphore = DispatchSemaphore(value: 0)
-        DispatchQueue.global(qos: .utility).async {
-            process.waitUntilExit()
-            waitSemaphore.signal()
-        }
-        if waitSemaphore.wait(timeout: .now() + OrdinaryTmuxCLIAdapter.commandTimeoutSeconds) == .timedOut {
-            process.terminate()
-            _ = waitSemaphore.wait(timeout: .now() + 1)
-            BridgeLogger.server.info("ordinary tmux command timeout argv=\(process.arguments?.joined(separator: " ") ?? "-", privacy: .public) socket=\(socket.logDescription, privacy: .public) timeout_seconds=\(OrdinaryTmuxCLIAdapter.commandTimeoutSeconds, privacy: .public)")
-            throw NSError(domain: "OrdinaryTmuxCLIAdapter",
-                          code: 124,
-                          userInfo: [NSLocalizedDescriptionKey: "tmux command timed out"])
-        }
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: executablePath)
+            process.arguments = OrdinaryTmuxCLIAdapter.arguments(for: socket, commandArguments: arguments)
+            var environment = ProcessInfo.processInfo.environment
+            environment["LC_CTYPE"] = "UTF-8"
+            environment["LANG"] = "en_US.UTF-8"
+            process.environment = environment
 
-        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-        let stdoutText = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let stderrText = String(data: errorData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        BridgeLogger.server.debug("ordinary tmux command argv=\(process.arguments?.joined(separator: " ") ?? "-", privacy: .public) socket=\(socket.logDescription, privacy: .public) exit_code=\(process.terminationStatus, privacy: .public) stdout_bytes=\(outputData.count, privacy: .public) stderr_bytes=\(errorData.count, privacy: .public) stdout_prefix=\(String(stdoutText.prefix(500)), privacy: .public) stderr_prefix=\(String(stderrText.prefix(500)), privacy: .public)")
-        guard process.terminationStatus == 0 else {
-            let stderr = stderrText.isEmpty ? "tmux exited \(process.terminationStatus)" : stderrText
-            throw NSError(domain: "OrdinaryTmuxCLIAdapter",
-                          code: Int(process.terminationStatus),
-                          userInfo: [NSLocalizedDescriptionKey: stderr])
+            let outputPipe = Pipe()
+            let errorPipe = Pipe()
+            let inputPipe = stdin == nil ? nil : Pipe()
+            process.standardOutput = outputPipe
+            process.standardError = errorPipe
+            if let inputPipe {
+                process.standardInput = inputPipe
+            }
+            let waitSemaphore = DispatchSemaphore(value: 0)
+            // Foundation's waitUntilExit() runs a CFRunLoop. Calling it on an
+            // unrelated global worker after launching Process can remain parked
+            // even after a very short-lived tmux child has exited. Each false wait
+            // consumed a worker until the adapter's timeout, eventually turning
+            // otherwise instant tmux queries into deterministic 3-second failures.
+            // Observe termination on Process itself instead of scheduling a
+            // cross-thread waitUntilExit().
+            process.terminationHandler = { _ in
+                waitSemaphore.signal()
+            }
+            try process.run()
+            if let stdin, let inputPipe {
+                inputPipe.fileHandleForWriting.write(Data(stdin.utf8))
+                try? inputPipe.fileHandleForWriting.close()
+            }
+            if waitSemaphore.wait(timeout: .now() + timeoutSeconds) == .timedOut {
+                process.terminate()
+                _ = waitSemaphore.wait(timeout: .now() + 1)
+                BridgeLogger.server.info("ordinary tmux command timeout argv=\(process.arguments?.joined(separator: " ") ?? "-", privacy: .public) socket=\(socket.logDescription, privacy: .public) timeout_seconds=\(timeoutSeconds, privacy: .public)")
+                throw NSError(domain: "OrdinaryTmuxCLIAdapter",
+                              code: 124,
+                              userInfo: [NSLocalizedDescriptionKey: "tmux command timed out"])
+            }
+
+            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            let stdoutText = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let stderrText = String(data: errorData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            BridgeLogger.server.debug("ordinary tmux command argv=\(process.arguments?.joined(separator: " ") ?? "-", privacy: .public) socket=\(socket.logDescription, privacy: .public) exit_code=\(process.terminationStatus, privacy: .public) stdout_bytes=\(outputData.count, privacy: .public) stderr_bytes=\(errorData.count, privacy: .public) stdout_prefix=\(String(stdoutText.prefix(500)), privacy: .public) stderr_prefix=\(String(stderrText.prefix(500)), privacy: .public)")
+            guard process.terminationStatus == 0 else {
+                let stderr = stderrText.isEmpty ? "tmux exited \(process.terminationStatus)" : stderrText
+                throw NSError(domain: "OrdinaryTmuxCLIAdapter",
+                              code: Int(process.terminationStatus),
+                              userInfo: [NSLocalizedDescriptionKey: stderr])
+            }
+            return stdoutText
         }
-        return stdoutText
     }
 
     private let commandRunner: CommandRunner
@@ -568,6 +582,18 @@ final class OrdinaryTmuxCLIAdapter {
                               nil)
         _ = try commandRunner(route.socket,
                               ["set-option", "-p", "-t", paneID, "@tidey_panel_id", route.panelID],
+                              nil)
+        // `tmux attach` updates the session environment, but cannot mutate an
+        // already-running pane shell created earlier by SSH/Termius. Project
+        // the current Tidey runtime into pane-scoped options so shell hooks and
+        // wrappers can hydrate it without cross-pane/prod-dev last-writer bugs.
+        _ = try commandRunner(route.socket,
+                              ["set-option", "-p", "-F", "-t", paneID,
+                               "@tidey_socket_path", "#{E:TIDEY_SOCKET_PATH}"],
+                              nil)
+        _ = try commandRunner(route.socket,
+                              ["set-option", "-p", "-F", "-t", paneID,
+                               "@tidey_bin_dir", "#{E:TIDEY_BIN_DIR}"],
                               nil)
     }
 

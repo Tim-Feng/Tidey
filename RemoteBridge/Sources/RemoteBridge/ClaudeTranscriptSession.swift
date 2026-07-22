@@ -8,9 +8,42 @@ protocol AgentTranscriptSession: AnyObject {
     func update(record: AgentSessionRegistryRecord)
     func backfill(beforeSeq: Int, limit: Int) -> Bool
     func stop()
+    // Two-phase, race-free workspace-migration transaction used by
+    // AgentSessionRegistryMonitor whenever a SURVIVING session (not
+    // retired — same sessionID) is discovered to have moved to a new
+    // workspace_id, whether via a registry scan or a resolved pane/process
+    // binding correction:
+    //
+    // prepareUpdate(record:) runs SYNCHRONOUSLY on this session's own
+    // private queue. Any work ALREADY enqueued/executing there (e.g. a
+    // just-detected task_complete the tailer's file watcher fired for)
+    // drains first via plain FIFO ordering — the same guarantee stop()/
+    // backfill() already rely on. It then holds ALL of this session's own
+    // sidebar-ish publication (Codex's report_shell_state sidebar, Claude's
+    // interactive-prompt lifecycle messages) and switches this session's
+    // record and Hub workspace binding to the new workspace — all before
+    // returning. Nothing this session could ever say about the new
+    // workspace is observable yet.
+    //
+    // The monitor then sends the OLD workspace's last-owner departure
+    // cleanup (only if no other current session still owns it).
+    //
+    // finishUpdate() releases the hold and flushes EVERY held message
+    // batch, in the exact order they were produced — never coalesced or
+    // dropped, so a lifecycle-specific message (a task_complete
+    // notification, an AskUserQuestion prompt, ...) produced during the
+    // held window is still said in full, just delayed until now. This is
+    // what actually closes the race a bare "drain, then separately call
+    // async update()" sequence could not: draining only flushes what was
+    // ALREADY queued, it does not prevent something NEW from being queued
+    // (and its sidebar effect published) ahead of a later, separate async
+    // update() call — holding publication for the whole prepare-to-finish
+    // window does.
+    func prepareUpdate(record: AgentSessionRegistryRecord)
+    func finishUpdate()
 }
 
-struct AgentSessionRegistryRecord: Codable, Sendable {
+struct AgentSessionRegistryRecord: Codable, Sendable, Equatable {
     let version: Int
     let vendor: String
     let workspaceID: String
@@ -191,6 +224,19 @@ struct AgentProcessDescriptor: Equatable, Sendable {
     let pid: Int32
     let command: String
     let arguments: String
+}
+
+// Adapts a plain (String) throws -> Void sender to TideyCommandSending, so
+// an injected sidebarMessageSender can also be handed to transcript
+// sessions (which require the protocol type) — see AgentSessionRegistryMonitor.
+private final class ClosureCommandSender: TideyCommandSending {
+    private let sender: (String) throws -> Void
+    init(send: @escaping (String) throws -> Void) {
+        self.sender = send
+    }
+    func send(command: String) throws {
+        try sender(command)
+    }
 }
 
 final class AgentSessionRegistryMonitor {
@@ -396,6 +442,18 @@ final class AgentSessionRegistryMonitor {
     private let livePanelSnapshotRequestSender: ((BridgeRequest) throws -> BridgeResponse)?
     private let livePanelSnapshotRefreshInterval: TimeInterval
     private let runtimeSyncer: AgentSessionRuntimeSyncing?
+    // Injectable seam for the departed-workspace sidebar ownership cleanup
+    // (see sendSidebarCleanupForDepartedWorkspaceOwners) — defaults to
+    // wrapping socketClient.send(command:), but production tests can inject
+    // a recorder directly without needing a real Unix socket, and failures
+    // are always logged here rather than silently swallowed at the call site.
+    private let sidebarMessageSender: (String) throws -> Void
+    // The SAME effective sender, wrapped as TideyCommandSending, so an
+    // injected sidebarMessageSender ALSO reaches each transcript session's
+    // OWN sidebar activation (running/prompt) — not just this class's
+    // departed-workspace cleanup. Production default is still socketClient
+    // itself (no wrapping, no behavior change) when no override is given.
+    private let transcriptCommandSender: TideyCommandSending?
     private let queue = DispatchQueue(label: "com.tidey.remote-bridge.agent-registry")
     private var timer: DispatchSourceTimer?
     private var watchers = [String: DispatchSourceFileSystemObject]()
@@ -422,7 +480,8 @@ final class AgentSessionRegistryMonitor {
          ordinaryTmuxCarrierIdentityResolver: OrdinaryTmuxCarrierIdentityResolver? = nil,
          livePanelSnapshotRequestSender: ((BridgeRequest) throws -> BridgeResponse)? = nil,
          livePanelSnapshotRefreshInterval: TimeInterval = 5,
-         runtimeSyncer: AgentSessionRuntimeSyncing? = nil) {
+         runtimeSyncer: AgentSessionRuntimeSyncing? = nil,
+         sidebarMessageSender: ((String) throws -> Void)? = nil) {
         self.paths = paths
         self.fileManager = fileManager
         self.hub = hub
@@ -445,6 +504,20 @@ final class AgentSessionRegistryMonitor {
         }
         self.livePanelSnapshotRefreshInterval = livePanelSnapshotRefreshInterval
         self.runtimeSyncer = runtimeSyncer
+        if let sidebarMessageSender {
+            self.sidebarMessageSender = sidebarMessageSender
+            // An injected sender must ALSO be what each transcript session
+            // uses for its own sidebar activation — otherwise a production
+            // test can observe this class's cleanup commands but never the
+            // sessions' own running/prompt activation, which is not the
+            // real production wiring (both flow through ONE sender there).
+            self.transcriptCommandSender = ClosureCommandSender(send: sidebarMessageSender)
+        } else {
+            self.sidebarMessageSender = { message in
+                try socketClient?.send(command: message)
+            }
+            self.transcriptCommandSender = socketClient
+        }
     }
 
     func start() throws {
@@ -670,14 +743,84 @@ final class AgentSessionRegistryMonitor {
             BridgeLogger.server.info("codex app-server diagnostic scan registry app_server_count=\(appServerRecords.count, privacy: .public) session_ids=\(appServerRecords.map(\.sessionID).joined(separator: ","), privacy: .public)")
             lastLoggedAppServerSessionIDs = appServerSessionIDs
         }
-        syncRecords(activeRecords)
+        let previousActiveRecords = Array(self.activeRecords.values)
+        // Everything below runs AFTER the independent app-server runtime
+        // producer's own old-generation fence/stop/sidebar-drain (reconcile's
+        // internal retirement + sidebarQueue barrier) — as ONE ordered
+        // sequence inside the reconcile callback, not staged before it:
+        //
+        // 1. Retire stale TRANSCRIPT sessions. session.stop() is queue.sync,
+        //    so it drains any work ALREADY enqueued on that session's own
+        //    queue (e.g. a task_complete the tailer's file watcher just
+        //    fired for) before this call returns. Doing this INSIDE the
+        //    callback (after the runtime's own stop-driven terminal may
+        //    already have published) means a stop-driven runtime terminal
+        //    can never arrive AFTER this transcript's sessionEnded — the
+        //    Hub's removal boundary for this session is the LAST lifecycle
+        //    event, not an intermediate one an old runtime terminal can
+        //    still slip behind.
+        // 2. Prepare EVERY surviving session whose record actually changed —
+        //    not just a workspace migration, ANY change (panel, transcript
+        //    path/source identity, app-server socket/root...) — atomically
+        //    switching its record/Hub-binding and holding sidebar
+        //    publication. Running this AFTER the runtime fence (not before
+        //    reconcile, and not before transcript retirement) is what
+        //    establishes each session's Hub epoch (e.g.
+        //    CodexTranscriptSession.start's beginNewSourceEpoch) only once
+        //    no old runtime generation can still publish into it.
+        // 3. Send the all-vendor departed-workspace cleanup.
+        // 4. Create/start genuinely NEW transcript sessions — establishing
+        //    THEIR Hub epoch too — before the runtime syncer attaches any
+        //    new/surviving producer.
+        //
+        // Only after this whole callback returns does runtime attach run;
+        // prepared sessions are released (finishUpdate) after reconcile
+        // itself returns. With no runtime syncer, the callback still runs,
+        // directly, in the same order.
+        var prepared: [(sessionID: String, record: AgentSessionRegistryRecord)] = []
+        let retirePrepareCleanupAndActivateNewSessions = {
+            self.retireStaleSessions(activeRecords)
+            prepared = self.prepareExistingSessionUpdates(activeRecords)
+            self.sendSidebarCleanupForDepartedWorkspaceOwners(previousRecords: previousActiveRecords, currentRecords: activeRecords)
+            self.activateSessions(activeRecords, skipping: Set(self.sessions.keys))
+        }
+        if let runtimeSyncer {
+            runtimeSyncer.reconcile(records: activeRecords, betweenRetirementAndActivation: retirePrepareCleanupAndActivateNewSessions)
+        } else {
+            retirePrepareCleanupAndActivateNewSessions()
+        }
+        for entry in prepared {
+            sessions[entry.sessionID]?.finishUpdate()
+        }
         self.activeRecords = Dictionary(uniqueKeysWithValues: activeRecords.map { ($0.sessionID, $0) })
-        runtimeSyncer?.sync(records: activeRecords)
         for record in activeRecords where resolvedPanelBindings[record.sessionID] != nil {
             applyResolvedBinding(sessionID: record.sessionID,
                                  workspaceID: record.workspaceID,
                                  panelID: record.panelID)
         }
+    }
+
+    // Prepares (synchronously switches record/Hub-binding + holds sidebar
+    // publication for) every EXISTING session whose record actually changed
+    // this scan — a superset of "workspace migrated": panel-only changes,
+    // transcript-path/source-identity switches, and app-server root/socket
+    // changes all establish their new Hub epoch here too, before any
+    // independent runtime producer or new-session activation runs. Returns
+    // the prepared entries so the caller can both skip them in
+    // activateSessions and finishUpdate() them once the runtime producer has
+    // been reconciled.
+    private func prepareExistingSessionUpdates(_ currentRecords: [AgentSessionRegistryRecord]) -> [(sessionID: String, record: AgentSessionRegistryRecord)] {
+        var prepared: [(sessionID: String, record: AgentSessionRegistryRecord)] = []
+        for record in currentRecords {
+            guard let session = sessions[record.sessionID],
+                  activeRecords[record.sessionID] != record else {
+                continue
+            }
+            session.prepareUpdate(record: record)
+            activeRecords[record.sessionID] = record
+            prepared.append((record.sessionID, record))
+        }
+        return prepared
     }
 
     private func refreshLivePanelSnapshotsIfNeeded(for records: [AgentSessionRegistryRecord]) {
@@ -1348,8 +1491,11 @@ final class AgentSessionRegistryMonitor {
             encoder.outputFormatting = [.sortedKeys]
             let data = try encoder.encode(record)
             try data.write(to: url, options: [.atomic])
+            // A single newly-discovered record is being ADDED here, never
+            // removed — no retirement or departed-workspace cleanup applies,
+            // just activation (create-or-update) for this record.
             let records = activeRecords.values.filter { $0.sessionID != record.sessionID } + [record]
-            syncRecords(records)
+            activateSessions(records)
             activeRecords[record.sessionID] = record
         } catch {
             BridgeLogger.server.error("agent panel live codex discovery persist_failed workspace_id=\(record.workspaceID, privacy: .public) panel_id=\(record.panelID ?? "-", privacy: .public) session_id=\(record.sessionID, privacy: .public) error=\(String(describing: error), privacy: .public)")
@@ -1388,7 +1534,26 @@ final class AgentSessionRegistryMonitor {
                                                  resumeThreadID: record.resumeThreadID ?? record.threadID)
 
         activeRecords[sessionID] = updated
-        sessions[sessionID]?.update(record: updated)
+        // Route through the SAME runtime-reconcile-first, prepare-inside-
+        // callback shape as scanRegistry/applyResolvedBinding: this active-
+        // thread update can itself be a transcript source-identity switch
+        // (rolloutPath/threadID changed), which must only begin its new Hub
+        // epoch AFTER the runtime syncer's own reconciliation has
+        // fenced/drained the OLD root-thread generation (the root thread ID
+        // changed too) — never before it, or a stale runtime callback could
+        // leak into the new epoch. Workspace is unchanged here, so there is
+        // no departed-workspace cleanup to send.
+        if let session = sessions[sessionID] {
+            let prepare = { session.prepareUpdate(record: updated) }
+            if let runtimeSyncer {
+                runtimeSyncer.reconcile(records: Array(activeRecords.values), betweenRetirementAndActivation: prepare)
+            } else {
+                prepare()
+            }
+            session.finishUpdate()
+        } else {
+            runtimeSyncer?.reconcile(records: Array(activeRecords.values), betweenRetirementAndActivation: {})
+        }
         persistCodexAppServerActiveThreadRecord(updated)
         BridgeLogger.server.info("codex app-server active thread updated session_id=\(sessionID, privacy: .public) thread_id=\(threadID, privacy: .public) transcript_path=\(rolloutPath ?? "-", privacy: .private)")
     }
@@ -1512,20 +1677,86 @@ final class AgentSessionRegistryMonitor {
             return
         }
         resolvedPanelBindings[sessionID] = binding
-        hub.migrateSession(sessionID: sessionID,
-                           toWorkspaceID: workspaceID,
-                           panelID: panelID)
         guard let sourceRecord = activeRecords[sessionID] else {
+            // No active record yet to derive an effective record from —
+            // there is no session/sidebar/runtime state to reconcile
+            // against either (a runtime entry is always derived from a real
+            // registry record already in activeRecords).
+            hub.migrateSession(sessionID: sessionID, toWorkspaceID: workspaceID, panelID: panelID)
             return
         }
         let effective = effectiveRecord(for: sourceRecord)
+        let previousWorkspaceID = sourceRecord.workspaceID
+        let session = sessions[sessionID]
         activeRecords[sessionID] = effective
-        sessions[sessionID]?.update(record: effective)
+        // EVERY effective-record change (workspace and/or panel-only, with
+        // or without an existing transcript session) is reconciled through
+        // the SAME runtime-first, prepare/migrate-inside-callback shape
+        // scanRegistry uses (see prepareExistingSessionUpdates): an
+        // independent app-server runtime producer must never retain a stale
+        // workspace/panel context (and thus a stale submit/prompt route)
+        // until a LATER scan happens to notice it — a panel-only correction
+        // still needs its runtime context switched immediately, just
+        // without any departed-workspace cleanup (workspace unchanged).
+        // Running prepare/migrate INSIDE the callback (after reconcile's
+        // own old-generation fence/drain) means a stale runtime generation
+        // can never leak into a same-call transcript source-epoch reset.
+        let prepareOrMigrateThenCleanupIfNeeded = {
+            if let session {
+                session.prepareUpdate(record: effective)
+            } else {
+                self.hub.migrateSession(sessionID: sessionID, toWorkspaceID: workspaceID, panelID: panelID)
+            }
+            if previousWorkspaceID != effective.workspaceID,
+               !self.isWorkspaceStillOwned(previousWorkspaceID, excludingSessionID: sessionID) {
+                for message in CodexSidebarMessages.prompt(workspaceID: previousWorkspaceID) {
+                    self.sendSidebarMessage(message)
+                }
+            }
+        }
+        if let runtimeSyncer {
+            runtimeSyncer.reconcile(records: Array(activeRecords.values), betweenRetirementAndActivation: prepareOrMigrateThenCleanupIfNeeded)
+        } else {
+            prepareOrMigrateThenCleanupIfNeeded()
+        }
+        session?.finishUpdate()
     }
 
-    private func syncRecords(_ records: [AgentSessionRegistryRecord]) {
+    private func isWorkspaceStillOwned(_ workspaceID: String, excludingSessionID: String) -> Bool {
+        activeRecords.values.contains { $0.sessionID != excludingSessionID && $0.workspaceID == workspaceID }
+    }
+
+    // Retirement runs as the FIRST step inside the runtime-reconcile
+    // callback (see scanRegistry) — after the independent app-server runtime
+    // producer's own old-generation fence/stop/sidebar-drain, so an old
+    // runtime's allowed stop-driven terminal (e.g. an interactivePrompt
+    // resolution) can never arrive AFTER this transcript session's own
+    // sessionEnded boundary. session.stop() is itself queue.sync, which
+    // drains any work ALREADY enqueued on that session's own queue (e.g. a
+    // just-detected task_complete line the tailer's file watcher fired for,
+    // which would itself send a sidebar "completed" message) before stop()'s
+    // own body runs — any such terminal sidebar output a retiring session
+    // was ever going to send is fully flushed before anything else in this
+    // callback runs.
+    private func retireStaleSessions(_ records: [AgentSessionRegistryRecord]) {
         let activeSessionIDs = Set(records.map(\.sessionID))
+        let staleSessionIDs = sessions.keys.filter { !activeSessionIDs.contains($0) }
+        for sessionID in staleSessionIDs {
+            sessions.removeValue(forKey: sessionID)?.stop()
+        }
+    }
+    // Activation (create-or-update) runs INSIDE the runtime reconcile
+    // callback, after cleanup and after every already-existing session was
+    // already prepared — see scanRegistry. `skipping` excludes sessionIDs
+    // already fully handled by prepareExistingSessionUpdates's own
+    // prepare/finish transaction, so only genuinely NEW sessions are
+    // created here (and their Hub epoch established) before the runtime
+    // syncer attaches any new/surviving producer.
+    private func activateSessions(_ records: [AgentSessionRegistryRecord], skipping skippedSessionIDs: Set<String> = []) {
         for record in records {
+            if skippedSessionIDs.contains(record.sessionID) {
+                continue
+            }
             if let session = sessions[record.sessionID] {
                 session.update(record: record)
                 continue
@@ -1536,15 +1767,64 @@ final class AgentSessionRegistryMonitor {
             let session = vendor.makeTranscriptSession(record: record,
                                                        fileManager: fileManager,
                                                        hub: hub,
-                                                       socketClient: socketClient,
+                                                       socketClient: transcriptCommandSender,
                                                        chatSubmitEchoRegistry: chatSubmitEchoRegistry)
             sessions[record.sessionID] = session
             session.start()
         }
+    }
 
-        let staleSessionIDs = sessions.keys.filter { !activeSessionIDs.contains($0) }
-        for sessionID in staleSessionIDs {
-            sessions.removeValue(forKey: sessionID)?.stop()
+    // Workspace ownership departure cleanup (no workspace-status lifecycle
+    // store): a workspace's sidebar shell-state (running/prompt) is owned
+    // by whichever record(s) — of EITHER vendor — currently claim that
+    // workspace_id. Claude's own interactive-prompt lifecycle writes
+    // sidebar state for a shared workspace too, so a Claude record is just
+    // as much a current owner as a Codex one; ownership here is generic
+    // across vendors even though the actual cleanup message sent is
+    // Codex's `report_shell_state` sidebar protocol (the only vendor with a
+    // sidebar shell-state notion to clean up). A record leaving a
+    // workspace — a true workspace migration, a stale-record removal, or a
+    // stop — must not leave that workspace's sidebar frozen on its
+    // last-seen running state.
+    //
+    // This only ever fires when NO current record (of any vendor) still
+    // claims the departed workspace_id (the monitor is the only place that
+    // sees both the previous and the current full record sets at once, so
+    // it is the only place that can prove no other owner remains) —
+    // checking only "was there a Codex owner before that's gone now" would
+    // miss the two-step case: Codex leaves first (correctly no-ops, Claude
+    // still owns it), then Claude leaves later with no Codex change in that
+    // round at all — a Codex-only candidate set would never fire for that
+    // second, actually-final departure, leaving the workspace's sidebar
+    // frozen on Codex's old running state forever. A panel-only migration
+    // (workspace_id unchanged) never appears in this diff at all. The
+    // arriving workspace's own correct state (running/prompt) is
+    // established independently by that record's own transcript session
+    // bootstrap (see CodexTranscriptSession.resolveTranscriptIfPossible /
+    // publishSidebarSessionActivation) — this only cleans up what was left
+    // behind, sending the same plain `prompt` message idle-stop already
+    // uses (never a "completed" notification, which would be a fabricated
+    // claim about how the departed session actually ended).
+    private func sendSidebarCleanupForDepartedWorkspaceOwners(previousRecords: [AgentSessionRegistryRecord],
+                                                              currentRecords: [AgentSessionRegistryRecord]) {
+        let previousWorkspaces = Set(previousRecords.map(\.workspaceID))
+        let currentWorkspaces = Set(currentRecords.map(\.workspaceID))
+        let departedWorkspaces = previousWorkspaces.subtracting(currentWorkspaces)
+        guard !departedWorkspaces.isEmpty else {
+            return
+        }
+        for workspaceID in departedWorkspaces.sorted() {
+            for message in CodexSidebarMessages.prompt(workspaceID: workspaceID) {
+                sendSidebarMessage(message)
+            }
+        }
+    }
+
+    private func sendSidebarMessage(_ message: String) {
+        do {
+            try sidebarMessageSender(message)
+        } catch {
+            BridgeLogger.server.error("departed-workspace sidebar cleanup command failed message=\(message, privacy: .public) error=\(String(describing: error), privacy: .public)")
         }
     }
 
@@ -1657,32 +1937,53 @@ final class JSONLFileTailer {
         self.source = source
     }
 
+    // Test observability at the CALLEE: records every beforeOffset this
+    // tailer actually RECEIVED — a call-site mutation cannot fake it.
+    private(set) var receivedBackfillOffsetsForTesting: [Int] = []
+
+    func resetBackfillObservationForTesting() {
+        receivedBackfillOffsetsForTesting = []
+    }
+
     func backfill(beforeOffset: Int, limit: Int) throws -> Bool {
+        receivedBackfillOffsetsForTesting.append(beforeOffset)
         guard beforeOffset > 0, limit > 0 else {
             return false
         }
-        guard !reachedStartOfFile else {
-            return false
-        }
-
-        let targetOffset = min(beforeOffset, earliestLoadedOffset ?? beforeOffset)
+        // Honor the CALLER's anchor: a fresh client may legitimately request
+        // a NEWER range than the deepest page another client already read —
+        // neither `earliestLoadedOffset` nor a sticky EOF marker may redirect
+        // or block that request.
         let lines = try JSONLFileReader.readBefore(fileURL: fileURL,
-                                                   beforeOffset: targetOffset,
+                                                   beforeOffset: beforeOffset,
                                                    limit: limit)
         guard !lines.isEmpty else {
-            reachedStartOfFile = true
+            if beforeOffset <= (earliestLoadedOffset ?? beforeOffset) {
+                reachedStartOfFile = true
+            }
             return false
         }
 
         for (offset, line) in lines {
             lineHandler(offset, line)
         }
-        earliestLoadedOffset = lines.first?.offset
+        earliestLoadedOffset = min(earliestLoadedOffset ?? Int.max, lines.first?.offset ?? Int.max)
         reachedStartOfFile = (lines.first?.offset ?? 0) == 0
         return true
     }
 
     func stop() {
+        // Drain any bytes already written to the fd but not yet delivered
+        // by a dispatched .write/.extend event: stop() runs synchronously
+        // on this tailer's own queue (via the wrapping session's
+        // queue.sync stop()), so this read cannot race a LATER file-event
+        // callback — it can only pick up data already sitting in the fd
+        // right now. Without this, a final line written in the same
+        // instant as removal/migration (e.g. a task_complete or
+        // prompt-resolved terminal) could be silently lost: the
+        // DispatchSource is cancelled below before its event for that
+        // write would ever fire.
+        readAvailableData()
         if let source {
             self.source = nil
             source.cancel()
@@ -1770,12 +2071,162 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private var tailer: JSONLFileTailer?
     private var transcriptURL: URL?
     private var maxObservedSeq = transcriptSessionStartedSequence
+    // Per-source sequence base (Codex-style): a NEW source epoch emits every
+    // file-backed seq above the previous stream, keeping the Hub cursor
+    // monotonic while raw offsets stay local to the new file.
+    private var transcriptSequenceBase = transcriptSessionStartedSequence
     private var didPublishStart = false
     private var didPublishEnd = false
     private var unsupportedVersions = Set<String>()
     private var isBackfillingHistory = false
+    // Set for the duration of a prepareUpdate()...finishUpdate() workspace
+    // migration transaction (see CodexTranscriptSession.isSidebarPublicationHeld
+    // for the full rationale). While held,
+    // publishInteractivePromptSidebarIfNeeded BUFFERS each message batch,
+    // in order, instead of sending — finishUpdate() flushes them all, in
+    // the same order, never coalesced/dropped.
+    private var isSidebarPublicationHeld = false
+    private var heldSidebarMessageBatches: [[String]] = []
     private var pendingLocalCommand: ClaudeLocalCommand?
     private var activeAskUserQuestionPromptIDByToolCallID = [String: String]()
+    // Historical replay transaction: raw historical lines (offset-sorted,
+    // capacity-limited) are re-parsed with a FRESH parser state on every
+    // page, so cross-page correlations (Ask across pages, /context pairs)
+    // derive complete history without touching live parser state.
+    private var historicalRawLines: [(offset: Int, line: String)] = []
+    private var historicalReplayProducts: [AgentEvent] = []
+    private var isCollectingBackfillPage = false
+    private var collectedBackfillPage: [(offset: Int, line: String)] = []
+    private let historicalReplayWindowCapacity: Int
+
+    private struct LiveParserStateSnapshot {
+        let unsupportedVersions: Set<String>
+        let pendingLocalCommand: ClaudeLocalCommand?
+        let activeAskUserQuestionPromptIDByToolCallID: [String: String]
+    }
+
+    private func captureLiveParserState() -> LiveParserStateSnapshot {
+        LiveParserStateSnapshot(unsupportedVersions: unsupportedVersions,
+                                pendingLocalCommand: pendingLocalCommand,
+                                activeAskUserQuestionPromptIDByToolCallID: activeAskUserQuestionPromptIDByToolCallID)
+    }
+
+    private func resetParserStateForHistoricalReplay() {
+        unsupportedVersions = []
+        pendingLocalCommand = nil
+        activeAskUserQuestionPromptIDByToolCallID = [:]
+    }
+
+    private func restoreLiveParserState(_ snapshot: LiveParserStateSnapshot) {
+        unsupportedVersions = snapshot.unsupportedVersions
+        pendingLocalCommand = snapshot.pendingLocalCommand
+        activeAskUserQuestionPromptIDByToolCallID = snapshot.activeAskUserQuestionPromptIDByToolCallID
+    }
+
+    private func transcriptEventSequenceAnchor(forLineOffset lineOffset: Int) -> Int {
+        transcriptSequenceBase + transcriptEventSequence(lineOffset: lineOffset, ordinal: 0)
+    }
+
+    // Reverse seq→line-offset mapping for the CURRENT source: fails closed
+    // for cursors at/below the base (they belong to a previous source).
+    private func transcriptLineOffsetInCurrentSource(for seq: Int) -> Int? {
+        guard seq > transcriptSequenceBase else {
+            return nil
+        }
+        return transcriptLineOffset(for: seq - transcriptSequenceBase)
+    }
+
+    private var lastBackfillPageOffsets: ClosedRange<Int>?
+    private var lastRequestedBackfillAnchorSeq: Int?
+    // Test observability: the EXACT first beforeOffset the tailer RECEIVED
+    // during the last backfill call — recorded at the callee entry.
+    var lastBackfillStartOffsetForTesting: Int? {
+        queue.sync { tailer?.receivedBackfillOffsetsForTesting.first }
+    }
+    // Test observability: the CURRENT local sequence base — direct proof
+    // that a boundary/start seq is seeded from publish's ACTUAL return
+    // value, not the pre-publish reservation. A test asserting only on
+    // externally-observed seqs (subscriber deliveries, Hub fetch) cannot
+    // reliably catch a wrong local base: every event that flows back
+    // through `hub.publish` gets silently rebased-on-collision by the
+    // Hub's OWN safety net, which launders a systematically wrong local
+    // base into a still-monotonic, still-externally-consistent sequence.
+    // Only OFFLINE arithmetic that never touches `hub.publish` again
+    // (`transcriptLineOffsetInCurrentSource`, used by `backfill`) would
+    // eventually diverge, but confirming that divergence indirectly is
+    // fragile — this exposes the actual value directly.
+    var transcriptSequenceBaseForTesting: Int {
+        queue.sync { transcriptSequenceBase }
+    }
+    // Correlation-closure retention: derived terminals / context summaries
+    // whose OPENER may outlive them in the bounded raw window. Eviction must
+    // never leave half a lifecycle — a window that still shows the opener
+    // gets its retained closure re-added to the replacement.
+    private var retainedHistoricalClosuresByKey: [String: AgentEvent] = [:]
+    private var retainedHistoricalClosureKeyOrder: [String] = []
+    let retainedHistoricalClosureCapacity: Int
+    // Resolution safety is derived from the FILE (the source of truth), not
+    // from an evictable in-memory ledger or a fixed line budget: any finite
+    // in-memory threshold just moves the semantic-eviction bug. The forward
+    // probe scans to EOF (bounded by the transcript itself).
+
+    private func mergeHistoricalPage(_ page: [(offset: Int, line: String)]) {
+        guard let pageMin = page.map(\.offset).min(),
+              let pageMax = page.map(\.offset).max() else {
+            return
+        }
+        lastBackfillPageOffsets = pageMin...pageMax
+        var merged = page + historicalRawLines
+        merged.sort { $0.offset < $1.offset }
+        var seenOffsets = Set<Int>()
+        merged = merged.filter { seenOffsets.insert($0.offset).inserted }
+        // Direction-aware eviction: the JUST-REQUESTED page always stays; the
+        // window sheds whichever end is farther from it, so deep old-paging
+        // sheds the newest end while a fresh newer-range request sheds the
+        // oldest end. The Hub's historical replacement scope follows the
+        // window exactly.
+        while merged.count > historicalReplayWindowCapacity {
+            let distanceToOldEnd = pageMin - (merged.first?.offset ?? pageMin)
+            let distanceToNewEnd = (merged.last?.offset ?? pageMax) - pageMax
+            if distanceToNewEnd >= distanceToOldEnd {
+                merged.removeLast()
+            } else {
+                merged.removeFirst()
+            }
+        }
+        historicalRawLines = merged
+    }
+
+    // The historical parse is an isolated transaction: fresh parser state,
+    // full replay of the window in offset order, storage-only publication
+    // (the Hub dedupes replays by original line identity), then the live
+    // parser state is restored untouched.
+    @discardableResult
+    private func replayHistoricalWindow() -> [AgentEvent] {
+        let liveSnapshot = captureLiveParserState()
+        resetParserStateForHistoricalReplay()
+        historicalReplayProducts = []
+        isBackfillingHistory = true
+        for entry in historicalRawLines {
+            consume(line: entry.line, lineOffset: entry.offset)
+        }
+        isBackfillingHistory = false
+        restoreLiveParserState(liveSnapshot)
+        // Atomic replacement: the Hub's historical state becomes EXACTLY the
+        // window's derived set — retracting derivations (newer duplicates,
+        // cross-page statuses) that this replay proved wrong. The anchor
+        // marks the just-requested page so capacity trims never drop it.
+        // The trim anchor is the REQUESTED before-seq: when the Hub bound is
+        // smaller than the window, the retained interval stays adjacent to
+        // the caller's anchor so its next cursor advances without a gap.
+        let anchorSeq = lastRequestedBackfillAnchorSeq
+        let products = reconcileHistoricalCorrelationClosures(historicalReplayProducts)
+        hub.replaceHistoricalEvents(sessionID: record.sessionID,
+                                    events: products,
+                                    anchorSeq: anchorSeq)
+        historicalReplayProducts = []
+        return products
+    }
 
     private struct ClaudeLocalCommand {
         let name: String
@@ -1798,55 +2249,543 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         let breakdown: [ClaudeContextMetric]
     }
 
+    private func retainClosure(key: String, event: AgentEvent) {
+        if retainedHistoricalClosuresByKey[key] == nil {
+            retainedHistoricalClosureKeyOrder.append(key)
+            while retainedHistoricalClosureKeyOrder.count > retainedHistoricalClosureCapacity {
+                let evicted = retainedHistoricalClosureKeyOrder.removeFirst()
+                retainedHistoricalClosuresByKey.removeValue(forKey: evicted)
+            }
+        }
+        retainedHistoricalClosuresByKey[key] = event
+    }
+
+    private func fileProvesClosureExists(afterLineOffset offset: Int,
+                                         matching predicate: (String) -> Bool,
+                                         terminatedBy terminator: ((String) -> Bool)? = nil) -> Bool {
+        guard let transcriptURL,
+              let handle = try? FileHandle(forReadingFrom: transcriptURL) else {
+            return false
+        }
+        defer { try? handle.close() }
+        guard offset >= 0, (try? handle.seek(toOffset: UInt64(offset))) != nil else {
+            return false
+        }
+        var buffer = Data()
+        var skippedOpenerLine = false
+        func check(_ lineData: Data) -> Bool? {
+            guard skippedOpenerLine else {
+                skippedOpenerLine = true
+                return nil
+            }
+            guard let line = String(data: lineData, encoding: .utf8) else {
+                return nil
+            }
+            // Production recognizes a NEW local command before treating
+            // content as stdout: the terminator is checked FIRST so a line
+            // carrying both a command tag and parseable stdout ends the
+            // previous search instead of closing it.
+            if let terminator, terminator(line) {
+                return false
+            }
+            if predicate(line) {
+                return true
+            }
+            return nil
+        }
+        while true {
+            guard let chunk = try? handle.read(upToCount: 64 * 1024), chunk.isEmpty == false else {
+                break
+            }
+            buffer.append(chunk)
+            while let newlineIndex = buffer.firstIndex(of: UInt8(ascii: "\n")) {
+                let lineData = buffer.subdata(in: buffer.startIndex..<newlineIndex)
+                buffer.removeSubrange(buffer.startIndex...newlineIndex)
+                if let verdict = check(lineData) {
+                    return verdict
+                }
+            }
+        }
+        // The transcript's LAST line may not have its newline yet: the
+        // residual buffer is still a complete record for closure purposes.
+        if buffer.isEmpty == false, let verdict = check(buffer) {
+            return verdict
+        }
+        return false
+    }
+
+    // The probe mirrors the production parser's OUTER admission: a record
+    // only counts when consume() itself would accept and derive from it —
+    // correct outer type, user path, and this session's identity.
+    private func probeAdmittedUserObject(_ line: String) -> [String: Any]? {
+        guard let data = line.data(using: .utf8),
+              let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return nil
+        }
+        if let sessionID = object["sessionId"] as? String, sessionID != record.sessionID {
+            return nil
+        }
+        if let version = object["version"] as? String, !version.hasPrefix(claudeTranscriptMajorVersion) {
+            return nil
+        }
+        guard (object["type"] as? String) == "user",
+              object["uuid"] is String,
+              let message = object["message"] as? [String: Any],
+              message["role"] as? String == "user" else {
+            return nil
+        }
+        return object
+    }
+
+    // Exact closure recognition: only a REAL tool_result whose tool_use_id
+    // equals the prompt id, on a record the production parser would accept.
+    private func lineProvesAskClosure(_ line: String, promptID: String) -> Bool {
+        guard let object = probeAdmittedUserObject(line),
+              let message = object["message"] as? [String: Any],
+              let content = message["content"] as? [[String: Any]] else {
+            return false
+        }
+        return content.contains { block in
+            (block["type"] as? String) == "tool_result" && (block["tool_use_id"] as? String) == promptID
+        }
+    }
+
+    // Exact context closure: production only treats STRING-content user
+    // records as local command envelopes, and the summary must actually be
+    // parseable by the production context-summary parser.
+    private func lineProvesContextClosure(_ line: String) -> Bool {
+        guard let object = probeAdmittedUserObject(line),
+              let message = object["message"] as? [String: Any],
+              let content = message["content"] as? String else {
+            return false
+        }
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let stdout = Self.localCommandStdout(in: trimmed) else {
+            return false
+        }
+        return Self.markdownForClaudeContext(stdout: stdout) != nil
+    }
+
+    // A later context COMMAND ends the previous command's closure search: a
+    // summary belongs to the nearest preceding unmatched command.
+    private func lineIsContextCommand(_ line: String) -> Bool {
+        guard let object = probeAdmittedUserObject(line),
+              let message = object["message"] as? [String: Any],
+              let content = message["content"] as? String else {
+            return false
+        }
+        return Self.localCommandName(in: content.trimmingCharacters(in: .whitespacesAndNewlines)) != nil
+    }
+
+    private func reconcileHistoricalCorrelationClosures(_ products: [AgentEvent]) -> [AgentEvent] {
+        // 1. Record closures visible in THIS window, keyed by their SPECIFIC
+        //    opener event (a later lifecycle reusing the same promptID must
+        //    never inherit an old terminal).
+        for event in products {
+            if event.type == .interactivePromptResolved,
+               let promptID = event.metadata?["prompt_id"] {
+                let opener = products.last { candidate in
+                    candidate.type == .interactivePrompt
+                        && candidate.metadata?["prompt_id"] == promptID
+                        && candidate.seq < event.seq
+                }
+                if let opener {
+                    retainClosure(key: "ask:\(opener.eventID)", event: event)
+                }
+            }
+            if event.metadata?["tidey_generated"] == "claude_context" {
+                let opener = products.last { candidate in
+                    candidate.metadata?["tidey_generated"] == "claude_context_command" && candidate.seq < event.seq
+                }
+                if let opener {
+                    retainClosure(key: "context:\(opener.eventID)", event: event)
+                }
+            }
+        }
+        // 2. Re-add retained closures whose opener is in the window but whose
+        //    closing event was evicted; when the bounded retention has lost
+        //    the closure of a KNOWN-resolved opener, the opener is withdrawn
+        //    (fail closed) instead of reviving.
+        var reconciled = products
+        var presentIDs = Set(products.map(\.eventID))
+        var withdrawnOpenerIDs = Set<String>()
+        for event in products {
+            if event.type == .interactivePrompt,
+               let promptID = event.metadata?["prompt_id"],
+               products.contains(where: { $0.type == .interactivePromptResolved && $0.metadata?["prompt_id"] == promptID && $0.seq > event.seq }) == false {
+                if let retained = retainedHistoricalClosuresByKey["ask:\(event.eventID)"] {
+                    if presentIDs.insert(retained.eventID).inserted {
+                        reconciled.append(retained)
+                    }
+                } else if let promptID = event.metadata?["prompt_id"],
+                          let openerOffset = transcriptLineOffsetInCurrentSource(for: event.seq),
+                          fileProvesClosureExists(afterLineOffset: openerOffset,
+                                                  matching: { self.lineProvesAskClosure($0, promptID: promptID) }) {
+                    withdrawnOpenerIDs.insert(event.eventID)
+                }
+            }
+            if event.metadata?["tidey_generated"] == "claude_context_command",
+               products.contains(where: { $0.metadata?["tidey_generated"] == "claude_context" && $0.seq > event.seq }) == false {
+                if let retained = retainedHistoricalClosuresByKey["context:\(event.eventID)"] {
+                    if presentIDs.insert(retained.eventID).inserted {
+                        reconciled.append(retained)
+                    }
+                } else if let openerOffset = transcriptLineOffsetInCurrentSource(for: event.seq),
+                          fileProvesClosureExists(afterLineOffset: openerOffset,
+                                                  matching: { self.lineProvesContextClosure($0) },
+                                                  terminatedBy: { self.lineIsContextCommand($0) }) {
+                    withdrawnOpenerIDs.insert(event.eventID)
+                }
+            }
+        }
+        if withdrawnOpenerIDs.isEmpty == false {
+            reconciled.removeAll { withdrawnOpenerIDs.contains($0.eventID) }
+        }
+        return reconciled.sorted { $0.seq < $1.seq }
+    }
+
+    // TEST-ONLY: overrides the fallback scan's search root (production
+    // default is ~/.claude/projects). Lets tests exercise the fallback
+    // path (and a reintroduced-fallback-bug mutation) against an isolated
+    // temp directory instead of the user's real project history — mirrors
+    // CodexTranscriptSession's sessionsDirectoryOverrideForTesting.
+    private let projectsDirectoryOverride: URL?
+
     init(record: AgentSessionRegistryRecord,
          fileManager: FileManager = .default,
          hub: AgentEventHub,
          socketClient: TideyCommandSending? = nil,
-         chatSubmitEchoRegistry: ChatSubmitEchoRegistry? = nil) {
+         chatSubmitEchoRegistry: ChatSubmitEchoRegistry? = nil,
+         historicalReplayWindowCapacity: Int = 4000,
+         retainedHistoricalClosureCapacity: Int = 256,
+         projectsDirectoryOverrideForTesting: URL? = nil) {
+        self.historicalReplayWindowCapacity = max(1, historicalReplayWindowCapacity)
+        self.retainedHistoricalClosureCapacity = max(1, retainedHistoricalClosureCapacity)
         self.record = record
         self.fileManager = fileManager
         self.hub = hub
         self.socketClient = socketClient
         self.chatSubmitEchoRegistry = chatSubmitEchoRegistry ?? ChatSubmitEchoRegistry()
+        self.projectsDirectoryOverride = projectsDirectoryOverrideForTesting
         self.queue = DispatchQueue(label: "com.tidey.remote-bridge.claude-session.\(record.sessionID)")
     }
 
     func start() {
-        queue.async {
-            guard !self.didPublishStart else {
-                return
-            }
-            self.didPublishStart = true
-            self.publishSynthetic(kind: .sessionStarted,
-                                  seq: transcriptSessionStartedSequence,
-                                  eventID: "session-start:\(self.record.sessionID)",
-                                  timestamp: self.record.createdAt,
-                                  role: nil,
-                                  text: nil,
-                                  name: nil,
-                                  input: nil,
-                                  output: nil,
-                                  toolCallID: nil,
-                                  metadata: self.baseMetadata(["cwd": self.record.cwd]))
-            self.startResolver()
+        guard !didPublishStart else {
+            return
+        }
+        didPublishStart = true
+        // New-generation ownership handoff (see CodexTranscriptSession.start
+        // for the full rationale): this session object IS a new source
+        // incarnation for its sessionID — reset Hub-side seen/live state and
+        // workspace bindings SYNCHRONOUSLY, BEFORE returning to the caller
+        // (the registry monitor), so a runtime syncer started immediately
+        // afterward can never race behind this, and a reused eventID from a
+        // registry monitor stop+recreate is never suppressed by the OLD
+        // generation's seen set. Safe no-op for a genuinely fresh sessionID.
+        //
+        // The boundary's seq is minted from the Hub's OWN cross-generation
+        // reservation (nextSyntheticSeq), NOT the fixed sentinel
+        // transcriptSessionStartedSequence — this only seeds a readable/
+        // unique eventID and a claimed seq to publish; it is NEVER trusted
+        // as the final stored seq (see the Round 7G TOCTOU contract below).
+        //
+        // Round 7G P0 (TOCTOU fix, corrected contract): `maxObservedSeq`/
+        // `transcriptSequenceBase` are set from `publish`'s RETURN VALUE
+        // (the TRUE stored seq, post-rebase), never the pre-publish
+        // reservation — the reservation is only used to make the eventID
+        // readable and to seed the boundary event's claimed seq. `publish`
+        // returns `nil` when the event was NOT genuinely stored (duplicate
+        // eventID / suppressed), which is not proof of any seq — this fails
+        // closed: it does NOT advance the base from the unstored
+        // reservation, leaving `maxObservedSeq`/`transcriptSequenceBase` at
+        // their prior (pre-start) values.
+        hub.beginNewSourceEpoch(sessionID: record.sessionID)
+        let reservedSeq = hub.nextSyntheticSeq(sessionID: record.sessionID)
+        afterBoundaryReservationBeforePublishHook.fire()
+        let publishedStartSeq = hub.publish(AgentEvent(eventID: "session-start:\(record.sessionID)",
+                               seq: reservedSeq,
+                               vendor: "claude",
+                               workspaceID: record.workspaceID,
+                               sessionID: record.sessionID,
+                               timestamp: record.createdAt,
+                               type: .sessionStarted,
+                               role: nil,
+                               text: nil,
+                               name: nil,
+                               input: nil,
+                               output: nil,
+                               toolCallID: nil,
+                               metadata: baseMetadata(["cwd": record.cwd])))
+        if let publishedStartSeq {
+            maxObservedSeq = max(maxObservedSeq, publishedStartSeq)
+        } else {
+            BridgeLogger.server.error("claude session-start boundary marker was not stored; sequence base not advanced from unstored reservation session_id=\(self.record.sessionID, privacy: .public) reserved_seq=\(reservedSeq, privacy: .public)")
+        }
+        transcriptSequenceBase = maxObservedSeq
+        // The resolver's FIRST attach attempt must ALSO complete before
+        // start() returns (see CodexTranscriptSession.start for the full
+        // lost-line race this closes) — a fresh object has nothing else
+        // scheduled on `queue` yet, so this is deadlock-safe. A path that
+        // doesn't resolve yet still returns promptly: resolveTranscriptIfPossible's
+        // failure is quick and startResolver just arms its retry timer.
+        queue.sync {
+            startResolver()
         }
     }
 
     func update(record: AgentSessionRegistryRecord) {
         queue.async {
-            let previousRecord = self.record
-            let didMigrateWorkspace = previousRecord.workspaceID != record.workspaceID
-            let didMigratePanel = previousRecord.panelID != record.panelID
-            if didMigrateWorkspace || didMigratePanel {
-                self.hub.migrateSession(sessionID: previousRecord.sessionID,
-                                        toWorkspaceID: record.workspaceID,
-                                        panelID: record.panelID)
-            }
-            self.record = record
-            if self.transcriptURL == nil {
-                self.resolveTranscriptIfPossible()
+            self.stopOldTailerBeforeSourceSwitchIfNeeded(for: record)
+            self.performUpdate(record: record)
+        }
+    }
+
+    // Phase 1 of the two-phase, race-free workspace-migration transaction
+    // (see AgentSessionRegistryMonitor / CodexTranscriptSession.prepareUpdate
+    // for the full protocol this participates in). Claude's OWN sidebar
+    // publication is the AskUserQuestion/permission interactive-prompt
+    // lifecycle (publishInteractivePromptSidebarIfNeeded) — held here for
+    // the same reason Codex's is: forced synchronous (queue.sync, draining
+    // any already enqueued work first) so the monitor can prove this
+    // session's transition to the new workspace happens strictly before it
+    // sends the OLD workspace's departure cleanup, and nothing this session
+    // says about the interactive-prompt lifecycle for the NEW workspace can
+    // leak out before then either.
+    func prepareUpdate(record: AgentSessionRegistryRecord) {
+        queue.sync {
+            // Stop/drain the OLD tailer under the OLD record — BEFORE the
+            // hold is enabled — so a legitimate final A interactive-prompt
+            // lifecycle message (e.g. an AskUserQuestion/permission
+            // resolution already sitting in A's fd) is attributed to and
+            // sent for workspace A immediately, normally — never buried in
+            // B's held batches (see stopOldTailerBeforeSourceSwitchIfNeeded,
+            // matching CodexTranscriptSession's equivalent fix).
+            self.stopOldTailerBeforeSourceSwitchIfNeeded(for: record)
+            self.isSidebarPublicationHeld = true
+            self.heldSidebarMessageBatches = []
+            self.performUpdate(record: record)
+        }
+    }
+
+    // TEST-ONLY OBSERVATION SEAM — fires synchronously, ON this session's
+    // own queue, inside stopOldTailerBeforeSourceSwitchIfNeeded, after a
+    // genuine switch is confirmed but BEFORE tailer.stop() actually runs.
+    // See CodexTranscriptSession's equivalent hook for why this makes an
+    // append from inside the hook deterministic (no other file-event
+    // callback can have consumed it first). No production caller.
+    var beforeOldTailerStopForTesting: (() -> Void)?
+
+    // TEST-ONLY: fires synchronously, immediately after a boundary/start seq
+    // is RESERVED (hub.nextSyntheticSeq) but before it is PUBLISHED — see
+    // CodexTranscriptSession's equivalent hook for the full rationale (this
+    // is the exact window the Round 7G TOCTOU fix closes). `start()` runs
+    // synchronously on the CALLER's thread while other call sites run on
+    // this session's own queue — `TestHookBox` is lock-protected
+    // unconditionally so both are race-free. No production caller.
+    private let afterBoundaryReservationBeforePublishHook = TestHookBox()
+    func setAfterBoundaryReservationBeforePublishHookForTesting(_ hook: (() -> Void)?) {
+        afterBoundaryReservationBeforePublishHook.set(hook)
+    }
+
+    // TEST-ONLY: fires synchronously at the END of every
+    // resolveTranscriptIfPossible() attempt — including the resolver
+    // timer's own periodic retries — whether or not it attached anything.
+    // See CodexTranscriptSession's equivalent hook for the full rationale.
+    // No production caller.
+    private let afterResolveAttemptHook = TestHookBox()
+    func setAfterResolveAttemptHookForTesting(_ hook: (() -> Void)?) {
+        afterResolveAttemptHook.set(hook)
+    }
+
+    // A genuine source-identity switch (a DIFFERENT explicit, canonical
+    // transcript path) must stop/drain the OLD tailer under the OLD
+    // record, BEFORE anything else (Hub binding switch, self.record
+    // assignment, or the migration sidebar hold) changes. This checks only
+    // the EXPLICIT registry transcriptPath field, not the resolver's own
+    // fallback chain — Claude's resolver DOES still scan
+    // ~/.claude/projects when no explicit path resolves, same as Codex has
+    // process-tree/directory enumeration; the reason this check only looks
+    // at the explicit field is that the REGISTRY's identity switch signal
+    // is the explicit path itself, not resolver fallback behavior.
+    // JSONLFileTailer.stop() drains any bytes already written to the fd
+    // but not yet delivered; running that drain AFTER self.record already
+    // flipped to B and the hold is already active would attribute (and
+    // bury) a legitimate final A interactive-prompt message into B's held
+    // batches instead of sending it immediately, normally, for A. A nil or
+    // empty/whitespace path, an equivalent ~/./ spelling, or a pure
+    // metadata addition that still resolves to the SAME file must never
+    // trigger this.
+    // SHARED between the pre-check (detectsSourceSwitch) and performUpdate's
+    // own epoch-reset decision — both must treat an explicit transcriptPath
+    // identically, or the two can drift: one says "not a switch" (skips
+    // the drain) while the other still resets the epoch on record=B,
+    // reproducing the exact wrong-order bug this fix exists to close. A
+    // nil or whitespace-only path is never explicit.
+    private static func explicitTranscriptPath(from record: AgentSessionRegistryRecord) -> String? {
+        guard let path = record.transcriptPath else {
+            return nil
+        }
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : path
+    }
+
+    private func detectsSourceSwitch(for candidateRecord: AgentSessionRegistryRecord) -> Bool {
+        guard let currentURL = transcriptURL,
+              let newPath = Self.explicitTranscriptPath(from: candidateRecord) else {
+            return false
+        }
+        return Self.canonicalTranscriptPath(newPath) != Self.canonicalTranscriptPath(currentURL.path)
+    }
+
+    private func stopOldTailerBeforeSourceSwitchIfNeeded(for candidateRecord: AgentSessionRegistryRecord) {
+        guard detectsSourceSwitch(for: candidateRecord) else {
+            return
+        }
+        beforeOldTailerStopForTesting?()
+        tailer?.stop()
+        tailer = nil
+    }
+
+    // Phase 2: releases the hold and flushes EVERY buffered interactive-
+    // prompt message batch, in the SAME order they were produced — never
+    // coalesced/dropped, so an AskUserQuestion/permission lifecycle message
+    // produced during the held window is still said in full, just delayed.
+    func finishUpdate() {
+        queue.sync {
+            self.isSidebarPublicationHeld = false
+            let batches = self.heldSidebarMessageBatches
+            self.heldSidebarMessageBatches = []
+            for batch in batches {
+                self.sendInteractivePromptSidebarMessagesNow(batch)
             }
         }
+    }
+
+    private func performUpdate(record: AgentSessionRegistryRecord) {
+        let previousRecord = self.record
+        let didMigrateWorkspace = previousRecord.workspaceID != record.workspaceID
+        let didMigratePanel = previousRecord.panelID != record.panelID
+        if didMigrateWorkspace || didMigratePanel {
+            self.hub.migrateSession(sessionID: previousRecord.sessionID,
+                                    toWorkspaceID: record.workspaceID,
+                                    panelID: record.panelID)
+        }
+        self.record = record
+        // A registry update pointing at a DIFFERENT transcript is a full
+        // source identity switch — even while the old file still exists.
+        // Identity is the STANDARDIZED resolved path: a nil path later
+        // filled in with the file we already resolved is a pure metadata
+        // update, never a reset.
+        if let currentURL = self.transcriptURL,
+           let newPath = Self.explicitTranscriptPath(from: record),
+           Self.canonicalTranscriptPath(newPath) != Self.canonicalTranscriptPath(currentURL.path) {
+            self.beginNewSourceEpoch()
+            // Round 7G P0: a SINGLE `resolveTranscriptIfPossible()` call
+            // only ever tries once — if the NEW explicit path does not
+            // exist YET (a genuinely delayed new source), this session
+            // would then wait forever with no retry, matching Codex's
+            // `switchTranscriptIdentity` (which arms its own resolver timer
+            // on every source switch, not just on tailer invalidation).
+            // `startResolver()` tries once immediately and, if still
+            // unresolved, arms the periodic retry timer exactly like
+            // `handleTailerInvalidation` already does for a same-path
+            // delete-and-recreate.
+            if self.resolverTimer == nil {
+                self.startResolver()
+            } else {
+                self.resolveTranscriptIfPossible()
+            }
+            return
+        }
+        if self.transcriptURL == nil {
+            self.resolveTranscriptIfPossible()
+        }
+    }
+
+    // Everything that could let the OLD source suppress or leak into the new
+    // one is revoked: the old tailer (no late injection), the historical
+    // window/retention, the Hub's stored products AND idempotency sets (a
+    // reused eventID must be re-acceptable), and the parser correlation /
+    // notification state. Seq high-water and reservations survive so
+    // subscriber cursors stay monotonic.
+    // The SAME canonicalization the resolver uses: tilde expansion +
+    // standardized file URL — two resolver-equivalent spellings never count
+    // as different sources.
+    static func canonicalTranscriptPath(_ path: String) -> String {
+        URL(fileURLWithPath: NSString(string: path).expandingTildeInPath).standardizedFileURL.path
+    }
+
+    private func beginNewSourceEpoch() {
+        tailer?.stop()
+        tailer = nil
+        historicalRawLines = []
+        collectedBackfillPage = []
+        historicalReplayProducts = []
+        lastBackfillPageOffsets = nil
+        lastRequestedBackfillAnchorSeq = nil
+        retainedHistoricalClosuresByKey = [:]
+        retainedHistoricalClosureKeyOrder = []
+        activeAskUserQuestionPromptIDByToolCallID = [:]
+        pendingLocalCommand = nil
+        unsupportedVersions = []
+        promptNotificationDeduper.clearSession(record.sessionID)
+        hub.beginNewSourceEpoch(sessionID: record.sessionID)
+        hub.replaceHistoricalEvents(sessionID: record.sessionID, events: [], anchorSeq: nil)
+        // Round 7D P0: a store-only reset does not, by itself, notify an
+        // ALREADY-SUBSCRIBED client that was mid-turn on the OLD source —
+        // its local reducer keeps showing Working until some new clearing
+        // event arrives. Both iOS ChatTranscriptReducer and ChatResponseState
+        // treat a live `.sessionStarted` as an unconditional Working/
+        // expecting-response reset for the CURRENT session, so it is
+        // LIVE-DELIVERED here as the new source's boundary marker — not
+        // merely stored history. Mirrors CodexTranscriptSession.beginNewSourceEpoch
+        // and this file's own `start()` first-boundary precedent above.
+        //
+        // Round 7G P0 (TOCTOU fix, corrected contract): `nextSyntheticSeq`
+        // only RESERVES a seq — between that reservation and the `publish`
+        // call below, a different producer could publish a higher seq on
+        // the SAME session, which would silently rebase THIS event above
+        // the reservation this session already trusted. `publish` itself is
+        // the ONE atomic critical section that resolves the FINAL stored
+        // seq (it applies the exact same rebase-on-collision the
+        // reservation was trying to avoid), so `maxObservedSeq`/
+        // `transcriptSequenceBase` are set from its RETURN VALUE, never the
+        // earlier reservation — the reservation is used only to make the
+        // eventID readable/unique, never trusted as the actual final seq.
+        // `publish` now returns `nil` when the event was NOT genuinely
+        // stored (duplicate eventID / suppressed) — that is not proof of
+        // any seq, so this fails closed: it does NOT advance
+        // `maxObservedSeq`/`transcriptSequenceBase` from the unstored
+        // reservation, leaving them at whatever this session already knew.
+        let reservedSeq = hub.nextSyntheticSeq(sessionID: record.sessionID)
+        afterBoundaryReservationBeforePublishHook.fire()
+        let publishedBoundarySeq = hub.publish(AgentEvent(eventID: "source-epoch:\(record.sessionID):\(reservedSeq)",
+                                                       seq: reservedSeq,
+                                                       vendor: "claude",
+                                                       workspaceID: record.workspaceID,
+                                                       sessionID: record.sessionID,
+                                                       timestamp: ISO8601DateFormatter().string(from: Date()),
+                                                       type: .sessionStarted,
+                                                       role: nil,
+                                                       text: nil,
+                                                       name: nil,
+                                                       input: nil,
+                                                       output: nil,
+                                                       toolCallID: nil,
+                                                       metadata: baseMetadata(["cwd": record.cwd])))
+        if let publishedBoundarySeq {
+            maxObservedSeq = max(maxObservedSeq, publishedBoundarySeq)
+        } else {
+            BridgeLogger.server.error("claude source epoch boundary marker was not stored; epoch base not advanced from unstored reservation session_id=\(self.record.sessionID, privacy: .public) reserved_seq=\(reservedSeq, privacy: .public)")
+        }
+        // New-source file offsets restart at 0: rebase every future emitted
+        // seq above everything this session has already published,
+        // INCLUDING the boundary marker just published above (using its
+        // TRUE stored seq, not the pre-publish reservation, and never the
+        // reservation itself if the marker failed to store).
+        transcriptSequenceBase = maxObservedSeq
+        transcriptURL = nil
     }
 
     func backfill(beforeSeq: Int, limit: Int) -> Bool {
@@ -1857,13 +2796,40 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             guard let tailer else {
                 return false
             }
-            let beforeOffset = transcriptLineOffset(for: beforeSeq)
-            guard beforeOffset > 0 else {
+            guard let beforeOffset = transcriptLineOffsetInCurrentSource(for: beforeSeq),
+                  beforeOffset > 0 else {
                 return false
             }
-            isBackfillingHistory = true
-            defer { isBackfillingHistory = false }
-            return (try? tailer.backfill(beforeOffset: beforeOffset, limit: limit)) ?? false
+            // The requested anchor is honored exactly; when the page derives
+            // no event visible below the anchor (so the client's oldest_seq
+            // cursor could never advance), keep reading deeper within this
+            // same transaction until progress is visible or the file starts.
+            // A read never exceeds the raw window capacity: reading more and
+            // then evicting would skip lines before their FIRST parse. The
+            // caller pages onward from the returned oldest_seq instead.
+            let effectiveLimit = min(limit, historicalReplayWindowCapacity)
+            lastRequestedBackfillAnchorSeq = beforeSeq
+            var pageAnchorOffset = beforeOffset
+            var loadedAny = false
+            tailer.resetBackfillObservationForTesting()
+            while true {
+                isCollectingBackfillPage = true
+                collectedBackfillPage = []
+                let loaded = (try? tailer.backfill(beforeOffset: pageAnchorOffset, limit: effectiveLimit)) ?? false
+                isCollectingBackfillPage = false
+                guard loaded, collectedBackfillPage.isEmpty == false else {
+                    return loadedAny
+                }
+                loadedAny = true
+                let pageMinOffset = collectedBackfillPage.map(\.offset).min() ?? pageAnchorOffset
+                mergeHistoricalPage(collectedBackfillPage)
+                collectedBackfillPage = []
+                let products = replayHistoricalWindow()
+                if products.contains(where: { $0.seq < beforeSeq }) || pageMinOffset <= 0 {
+                    return true
+                }
+                pageAnchorOffset = pageMinOffset
+            }
         }
     }
 
@@ -1891,6 +2857,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         }
     }
 
+
     private func startResolver() {
         resolveTranscriptIfPossible()
         if tailer != nil {
@@ -1907,6 +2874,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     }
 
     private func resolveTranscriptIfPossible() {
+        defer { afterResolveAttemptHook.fire() }
         guard tailer == nil else {
             return
         }
@@ -1917,7 +2885,12 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         let tailer = JSONLFileTailer(fileURL: transcriptURL,
                                      queue: queue,
                                      lineHandler: { [weak self] offset, line in
-                                         self?.consume(line: line, lineOffset: offset)
+                                         guard let self else { return }
+                                         if self.isCollectingBackfillPage {
+                                             self.collectedBackfillPage.append((offset: offset, line: line))
+                                             return
+                                         }
+                                         self.consume(line: line, lineOffset: offset)
                                      },
                                      invalidationHandler: { [weak self] in
                                          self?.handleTailerInvalidation()
@@ -1934,24 +2907,32 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     }
 
     private func handleTailerInvalidation() {
-        transcriptURL = nil
-        tailer = nil
+        // The transcript source is gone: a delete-and-recreate at the SAME
+        // path is a new source identity exactly like a registry path change —
+        // the FULL epoch reset applies (history, Hub live/seen, parser
+        // correlation, notification state), not a historical-only clear.
+        beginNewSourceEpoch()
         if resolverTimer == nil {
             startResolver()
         }
     }
 
     private func resolveTranscriptURL() -> URL? {
-        if let transcriptPath = record.transcriptPath,
-           !transcriptPath.isEmpty {
-            let url = URL(fileURLWithPath: NSString(string: transcriptPath).expandingTildeInPath)
-            if fileManager.fileExists(atPath: url.path) {
-                return url
-            }
+        // Round 7G P0: an EXPLICIT transcript path is EXCLUSIVE and has NO
+        // fallback — if it does not exist YET (a genuine new source that
+        // has not been created on disk), this must wait for exactly that
+        // path, never scan `.claude/projects` for a DIFFERENT file sharing
+        // the session's filename. Falling back here could re-attach a
+        // REVOKED old source (the same sessionID.jsonl left behind under a
+        // stale cwd) to the NEW epoch — the fallback scan below is only
+        // ever appropriate when the record carries no explicit path at all.
+        if let explicitPath = Self.explicitTranscriptPath(from: record) {
+            let url = URL(fileURLWithPath: NSString(string: explicitPath).expandingTildeInPath)
+            return fileManager.fileExists(atPath: url.path) ? url : nil
         }
 
-        let home = fileManager.homeDirectoryForCurrentUser
-        let projectsDirectory = home.appendingPathComponent(".claude/projects", isDirectory: true)
+        let projectsDirectory = projectsDirectoryOverride ?? fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude/projects", isDirectory: true)
         let sessionFilename = "\(record.sessionID).jsonl"
 
         let candidateDirectory = projectsDirectory
@@ -1990,22 +2971,25 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         }
         let timestamp = (object["timestamp"] as? String) ?? ISO8601DateFormatter().string(from: Date())
         let version = object["version"] as? String
-        if let version,
-           !version.hasPrefix(claudeTranscriptMajorVersion),
-           !unsupportedVersions.contains(version) {
-            unsupportedVersions.insert(version)
-            publishFileBacked(kind: .status,
-                              lineOffset: lineOffset,
-                              ordinal: 0,
-                              eventID: "status:\(record.sessionID):unsupported-version:\(version)",
-                              timestamp: timestamp,
-                              role: nil,
-                              text: "Unsupported Claude transcript version \(version)",
-                              name: nil,
-                              input: nil,
-                              output: nil,
-                              toolCallID: nil,
-                              metadata: ["reason": "unsupported_version"])
+        if let version, !version.hasPrefix(claudeTranscriptMajorVersion) {
+            // EVERY unsupported record is rejected; only the status
+            // notification is deduped — a second same-version record must
+            // not silently continue parsing.
+            if !unsupportedVersions.contains(version) {
+                unsupportedVersions.insert(version)
+                publishFileBacked(kind: .status,
+                                  lineOffset: lineOffset,
+                                  ordinal: 0,
+                                  eventID: "status:\(record.sessionID):\(lineOffset):unsupported-version:\(version)",
+                                  timestamp: timestamp,
+                                  role: nil,
+                                  text: "Unsupported Claude transcript version \(version)",
+                                  name: nil,
+                                  input: nil,
+                                  output: nil,
+                                  toolCallID: nil,
+                                  metadata: ["reason": "unsupported_version"])
+            }
             return
         }
 
@@ -2184,7 +3168,10 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
 
     private func consumeUser(object: [String: Any], timestamp: String, lineOffset: Int) {
         guard let uuid = object["uuid"] as? String,
-              let message = object["message"] as? [String: Any] else {
+              let message = object["message"] as? [String: Any],
+              message["role"] as? String == "user" else {
+            // A type=user record wrapping a non-user message is not a
+            // genuine user message: it derives nothing.
             return
         }
 
@@ -2586,7 +3573,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                    toolCallID: String?,
                                    metadata: [String: String]?,
                                    payload: JSONValue? = nil) {
-        let seq = transcriptEventSequence(lineOffset: lineOffset, ordinal: ordinal)
+        let seq = transcriptSequenceBase + transcriptEventSequence(lineOffset: lineOffset, ordinal: ordinal)
         maxObservedSeq = max(maxObservedSeq, seq)
         let resolvedMetadata = metadataWithClientRequestID(kind: kind, text: text, metadata: metadata)
         let event = AgentEvent(eventID: eventID,
@@ -2604,7 +3591,13 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                toolCallID: toolCallID,
                                metadata: baseMetadata(resolvedMetadata),
                                payload: payload)
-        hub.publish(event, deliverToSubscribers: !isBackfillingHistory)
+        if isBackfillingHistory {
+            // Historical replay is a transaction: products are collected and
+            // applied to the Hub as one atomic replacement afterwards.
+            historicalReplayProducts.append(event)
+            return
+        }
+        hub.publish(event)
         publishInteractivePromptSidebarIfNeeded(event)
     }
 
@@ -2634,11 +3627,22 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                output: output,
                                toolCallID: toolCallID,
                                metadata: metadata)
-        hub.publish(event, deliverToSubscribers: !isBackfillingHistory)
+        if isBackfillingHistory {
+            // Historical replay is a transaction: products are collected and
+            // applied to the Hub as one atomic replacement afterwards.
+            historicalReplayProducts.append(event)
+            return
+        }
+        hub.publish(event)
         publishInteractivePromptSidebarIfNeeded(event)
     }
 
-    private func publishInteractivePromptSidebarIfNeeded(_ event: AgentEvent) {
+    // THE production interactive-prompt seam: both normal publish paths
+    // (publishFileBacked / publishSynthetic) route every constructed event
+    // through here. Internal (not private) so tests can inject synthetic
+    // unknown/duplicate terminals through the exact caller production uses —
+    // the ResolveOutcome guard below is what they lock.
+    func publishInteractivePromptSidebarIfNeeded(_ event: AgentEvent) {
         guard !isBackfillingHistory,
               event.type == .interactivePrompt || event.type == .interactivePromptResolved else {
             return
@@ -2649,15 +3653,36 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 return
             }
         case .interactivePromptResolved:
-            promptNotificationDeduper.markResolved(event, sessionID: record.sessionID)
+            // Shared outcome contract with the Codex path: only a terminal
+            // that ACTUALLY ended the currently notified lifecycle may send
+            // running; unknown/duplicate/stale terminals are zero sidebar
+            // side effects.
+            guard promptNotificationDeduper.markResolved(event, sessionID: record.sessionID) == .clearedNotified else {
+                return
+            }
         default:
             return
         }
 
         let messages = AgentInteractivePromptSidebarMessages.messages(for: event,
                                                                       workspaceID: event.workspaceID)
-        guard let socketClient,
-              !messages.isEmpty else {
+        guard !messages.isEmpty else {
+            return
+        }
+        // Held during a prepared workspace-migration transaction (see
+        // isSidebarPublicationHeld) — BUFFER this exact batch, in order;
+        // finishUpdate() flushes every buffered batch once released. This
+        // dedup bookkeeping above still ran normally either way, so the
+        // notified/resolved lifecycle state stays accurate even while held.
+        guard isSidebarPublicationHeld == false else {
+            heldSidebarMessageBatches.append(messages)
+            return
+        }
+        sendInteractivePromptSidebarMessagesNow(messages)
+    }
+
+    private func sendInteractivePromptSidebarMessagesNow(_ messages: [String]) {
+        guard let socketClient else {
             return
         }
         for message in messages {
@@ -2685,7 +3710,10 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private func metadataWithClientRequestID(kind: AgentEventKind,
                                              text: String?,
                                              metadata: [String: String]?) -> [String: String]? {
-        guard kind == .userMessage,
+        // Backfill is storage-only: history must NOT consume the live submit
+        // echo registry — the true live echo still needs its correlation.
+        guard isBackfillingHistory == false,
+              kind == .userMessage,
               let text,
               let clientRequestID = chatSubmitEchoRegistry.consumeClientRequestID(workspaceID: record.workspaceID,
                                                                                   panelID: record.panelID,

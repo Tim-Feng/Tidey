@@ -4,6 +4,68 @@ import NIOHTTP1
 import NIOPosix
 import NIOWebSocket
 
+// Merges the pending-approval snapshot into a fetch page. The reported
+// bounds must stay at the retained hub page: an injected snapshot (whose seq
+// is the originally published, retained seq) must never advance the client's
+// cursor past positions the hub has actually published.
+enum BridgePendingApprovalFetchMerge {
+    struct Merged {
+        let events: [AgentEvent]
+        let oldestSeq: Int
+        let newestSeq: Int
+    }
+
+    static func merge(pageEvents: [AgentEvent],
+                      pageOldestSeq: Int,
+                      pageNewestSeq: Int,
+                      requestedAfterSeq: Int? = nil,
+                      pendingEvents: [AgentEvent]) -> Merged {
+        let activePending = AgentInteractivePromptEventReducer.pendingEvents(pendingEvents,
+                                                                             excludingResolvedIn: pageEvents)
+        let merged = AgentInteractivePromptEventReducer.mergedEvents(pageEvents, activePending)
+        // When the prompt is still inside the page, the dedupe keeps the page
+        // copy; the snapshot carries the live dynamic submit metadata
+        // (submit_state / client_request_id) on the same identity/seq and
+        // must win, or reconnect reconciliation degrades a genuinely
+        // submitting attempt.
+        let events = overlaySnapshots(merged, activePending: activePending)
+        if pageEvents.isEmpty {
+            // Cursor floor: an injected snapshot retained at an OLDER seq
+            // must not report bounds below the client's requested cursor, or
+            // every poll replays the same window forever.
+            let floor = max(pageNewestSeq, requestedAfterSeq ?? Int.min)
+            return Merged(events: events,
+                          oldestSeq: events.first?.seq ?? pageOldestSeq,
+                          newestSeq: max(events.last?.seq ?? floor, floor))
+        }
+        return Merged(events: events,
+                      oldestSeq: pageOldestSeq,
+                      newestSeq: pageNewestSeq)
+    }
+
+    // Replay-injection variant for subscribe: same identity/overlay rules,
+    // returning envelopes.
+    static func mergeReplayEnvelopes(_ replayEnvelopes: [AgentEventEnvelope],
+                                     pendingEvents: [AgentEvent]) -> [AgentEventEnvelope] {
+        let replayEvents = replayEnvelopes.map(\.event)
+        let activePending = AgentInteractivePromptEventReducer.pendingEvents(pendingEvents,
+                                                                             excludingResolvedIn: replayEvents)
+        let merged = AgentInteractivePromptEventReducer.mergedEvents(replayEvents, activePending)
+        let events = overlaySnapshots(merged, activePending: activePending)
+        return events.map { AgentEventEnvelope(replay: true, event: $0) }
+    }
+
+    private static func overlaySnapshots(_ events: [AgentEvent],
+                                         activePending: [AgentEvent]) -> [AgentEvent] {
+        guard activePending.isEmpty == false else {
+            return events
+        }
+        let snapshotByEventID = Dictionary(activePending.map { ($0.eventID, $0) },
+                                           uniquingKeysWith: { _, latest in latest })
+        return events.map { snapshotByEventID[$0.eventID] ?? $0 }
+    }
+}
+
 final class TideyRemoteBridgeServer {
     private static let maximumWebSocketFrameSizeBytes = 16 * 1024 * 1024
 
@@ -17,6 +79,7 @@ final class TideyRemoteBridgeServer {
     private let workspaceEventHub: WorkspaceEventHub
     private let registryMonitor: AgentSessionRegistryMonitor
     private let codexApprovalProvider: CodexAppServerApprovalPromptProviding?
+    private let promptSubmitDeduper = InteractivePromptSubmitDeduper()
     private let observability: BridgeObservabilityCenter
     private let cloudflaredManager: BridgeCloudflaredManager
     private let uploadGarbageCollector: BridgeUploadGarbageCollector
@@ -78,7 +141,7 @@ final class TideyRemoteBridgeServer {
                 }
                 return channel.eventLoop.makeSucceededFuture([:])
             },
-            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub, registryMonitor, codexApprovalProvider, observability, ordinaryTmuxPanelRegistry, port, cloudflaredManager] channel, _ in
+            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub, registryMonitor, codexApprovalProvider, promptSubmitDeduper, observability, ordinaryTmuxPanelRegistry, port, cloudflaredManager] channel, _ in
                 channel.pipeline.addHandler(WebSocketFrameHandler(socketClient: socketClient,
                                                                   eventHub: eventHub,
                                                                   workspaceEventHub: workspaceEventHub,
@@ -87,7 +150,8 @@ final class TideyRemoteBridgeServer {
                                                                   observability: observability,
                                                                   bridgePort: port,
                                                                   cloudflaredManager: cloudflaredManager,
-                                                                  ordinaryTmuxPanelRegistry: ordinaryTmuxPanelRegistry))
+                                                                  ordinaryTmuxPanelRegistry: ordinaryTmuxPanelRegistry,
+                                                                  promptSubmitDeduper: promptSubmitDeduper))
             }
         )
 
@@ -557,11 +621,13 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
     }
 }
 
-private final class WebSocketFrameHandler: ChannelInboundHandler {
+// Internal (not private): tests dispatch real BridgeRequests through the
+// SAME handler production uses — no parallel test-only flow.
+final class WebSocketFrameHandler: ChannelInboundHandler {
     typealias InboundIn = WebSocketFrame
     typealias OutboundOut = WebSocketFrame
 
-    private struct LocalRequestResult {
+    struct LocalRequestResult {
         let response: BridgeResponse
         let agentReplayEnvelopes: [AgentEventEnvelope]
         let workspaceReplayEnvelopes: [WorkspaceEventEnvelope]
@@ -608,7 +674,8 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
          observability: BridgeObservabilityCenter,
          bridgePort: Int,
          cloudflaredManager: BridgeCloudflaredManager,
-         ordinaryTmuxPanelRegistry: OrdinaryTmuxPanelRegistry) {
+         ordinaryTmuxPanelRegistry: OrdinaryTmuxPanelRegistry,
+         promptSubmitDeduper: InteractivePromptSubmitDeduper = InteractivePromptSubmitDeduper()) {
         self.socketClient = socketClient
         self.eventHub = eventHub
         self.workspaceEventHub = workspaceEventHub
@@ -632,7 +699,8 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                                                                             sessionResolver: registryMonitor,
                                                                             eventHub: eventHub,
                                                                             inputActionHandler: inputActionHandler,
-                                                                            codexApprovalSubmitter: codexApprovalSubmitter)
+                                                                            codexApprovalSubmitter: codexApprovalSubmitter,
+                                                                            submitDeduper: promptSubmitDeduper)
         self.imageUploadHandler = BridgeImageUploadHandler(destinationResolver: ApplicationSupportImageUploadDestinationResolver(),
                                                            filenameGenerator: TimestampedImageUploadFilenameGenerator())
         self.ordinaryTmuxPanelProjector = OrdinaryTmuxPanelProjector(registry: ordinaryTmuxPanelRegistry)
@@ -714,7 +782,8 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                         self.send(workspaceEnvelope: envelope, to: context)
                     }
                     if let agentLiveGate {
-                        for envelope in agentLiveGate.open() {
+                        let replayedKeys = Set(agentReplayEnvelopes.map { BridgeAgentEventSuppressionKey(event: $0.event) })
+                        for envelope in agentLiveGate.open(suppressing: replayedKeys) {
                             self.send(envelope: envelope, to: context)
                         }
                     }
@@ -731,8 +800,8 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
         context.fireChannelInactive()
     }
 
-    private func handleLocalRequest(_ request: BridgeRequest,
-                                    context: ChannelHandlerContext) -> LocalRequestResult? {
+    func handleLocalRequest(_ request: BridgeRequest,
+                            context: ChannelHandlerContext) -> LocalRequestResult? {
         do {
             if request.action == "image_upload" {
                 BridgeImageUploadDiagnostics.log("local dispatch enter request_id=\(request.id)")
@@ -947,46 +1016,20 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                     workspaceReplayEnvelopes: []
                 )
             }
-            var fetchResult = eventHub.fetch(workspaceID: workspaceID,
-                                             sessionID: sessionID,
-                                             limit: limit,
-                                             maxBytes: maxBytes,
-                                             beforeSeq: beforeSeq,
-                                             afterSeq: afterSeq)
-            var didBackfill = false
-            if let sessionID,
-               let beforeSeq,
-               !fetchResult.hasMore {
-                let backfilled = registryMonitor.backfillSession(sessionID: sessionID,
-                                                                 beforeSeq: beforeSeq,
-                                                                 limit: max(limit, transcriptBootstrapLineLimit))
-                if backfilled {
-                    didBackfill = true
-                    fetchResult = eventHub.fetch(workspaceID: workspaceID,
-                                                 sessionID: sessionID,
-                                                 limit: limit,
-                                                 maxBytes: maxBytes,
-                                                 beforeSeq: beforeSeq,
-                                                 afterSeq: nil)
-                }
-            } else if let sessionID, let afterSeq {
-                while let earliestBufferedSeq = eventHub.oldestBufferedSeq(sessionID: sessionID),
-                      earliestBufferedSeq > afterSeq + 1 {
-                    let backfilled = registryMonitor.backfillSession(sessionID: sessionID,
-                                                                     beforeSeq: earliestBufferedSeq,
-                                                                     limit: max(limit, transcriptBootstrapLineLimit))
-                    guard backfilled else {
-                        break
-                    }
-                    didBackfill = true
-                    fetchResult = eventHub.fetch(workspaceID: workspaceID,
-                                                 sessionID: sessionID,
-                                                 limit: limit,
-                                                 maxBytes: maxBytes,
-                                                 beforeSeq: nil,
-                                                 afterSeq: afterSeq)
-                }
-            }
+            let flow = BridgeAgentEventFetchFlow.run(eventHub: eventHub,
+                                                      workspaceID: workspaceID,
+                                                      sessionID: sessionID,
+                                                      limit: limit,
+                                                      maxBytes: maxBytes,
+                                                      beforeSeq: beforeSeq,
+                                                      afterSeq: afterSeq,
+                                                      backfill: { [registryMonitor] sessionID, beforeSeq, limit in
+                                                          registryMonitor.backfillSession(sessionID: sessionID,
+                                                                                          beforeSeq: beforeSeq,
+                                                                                          limit: limit)
+                                                      })
+            let fetchResult = flow.fetchResult
+            let didBackfill = flow.didBackfill
             observability.recordFetch(workspaceID: workspaceID,
                                       sessionID: sessionID,
                                       limit: limit,
@@ -995,18 +1038,19 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                                       returnedCount: fetchResult.events.count,
                                       didBackfill: didBackfill,
                                       durationMs: (CFAbsoluteTimeGetCurrent() - startedAt) * 1000)
-            let pendingEvents = AgentInteractivePromptEventReducer.pendingEvents(
-                pendingCodexApprovalEvents(workspaceID: workspaceID, sessionID: sessionID),
-                excludingResolvedIn: fetchResult.events)
-            let events = AgentInteractivePromptEventReducer.mergedEvents(fetchResult.events,
-                                                                         pendingEvents)
+            let merged = BridgePendingApprovalFetchMerge.merge(pageEvents: fetchResult.events,
+                                                               pageOldestSeq: fetchResult.oldestSeq,
+                                                               pageNewestSeq: fetchResult.newestSeq,
+                                                               requestedAfterSeq: afterSeq,
+                                                               pendingEvents: pendingCodexApprovalEvents(workspaceID: workspaceID,
+                                                                                                         sessionID: sessionID))
             return LocalRequestResult(
                 response: BridgeResponse(id: request.id,
                                          ok: true,
                                          result: [
-                                            "events": .array(events.map(Self.jsonValue(for:))),
-                                            "oldest_seq": .number(Double(events.first?.seq ?? fetchResult.oldestSeq)),
-                                            "newest_seq": .number(Double(events.last?.seq ?? fetchResult.newestSeq)),
+                                            "events": .array(merged.events.map(Self.jsonValue(for:))),
+                                            "oldest_seq": .number(Double(merged.oldestSeq)),
+                                            "newest_seq": .number(Double(merged.newestSeq)),
                                             "has_more": .bool(fetchResult.hasMore),
                                          ],
                                          error: nil),
@@ -1159,17 +1203,9 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
         guard noReplay == false else {
             return replayEnvelopes
         }
-        let pendingEvents = pendingCodexApprovalEvents(workspaceID: workspaceID, sessionID: sessionID)
-        let replayEvents = replayEnvelopes.map(\.event)
-        let activePendingEvents = AgentInteractivePromptEventReducer.pendingEvents(pendingEvents,
-                                                                                  excludingResolvedIn: replayEvents)
-        let events = AgentInteractivePromptEventReducer.mergedEvents(replayEvents, activePendingEvents)
-        return events.map { event in
-            if let existing = replayEnvelopes.first(where: { $0.event.eventID == event.eventID }) {
-                return existing
-            }
-            return AgentEventEnvelope(replay: true, event: event)
-        }
+        return BridgePendingApprovalFetchMerge.mergeReplayEnvelopes(replayEnvelopes,
+                                                                    pendingEvents: pendingCodexApprovalEvents(workspaceID: workspaceID,
+                                                                                                              sessionID: sessionID))
     }
 
     private func augment(response: BridgeResponse, for request: BridgeRequest) -> BridgeResponse {

@@ -69,6 +69,9 @@ final class AgentInteractivePromptEventReducerTests: XCTestCase {
                    metadata: [
                     "prompt_id": promptID,
                     "panel_id": "panel-1",
+                    // Production Codex events always carry the lifecycle
+                    // capability of their delivery.
+                    "lifecycle_token": "token-\(promptID)",
                    ])
     }
 }

@@ -55,6 +55,35 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
         }
     }
 
+    func testSetPaneIdentityAlsoProjectsSessionRuntimeIntoPaneOptions() throws {
+        let route = ordinaryRoute()
+        let state = RunnerState(responses: [:])
+        let adapter = OrdinaryTmuxCLIAdapter { socket, arguments, stdin in
+            try state.run(socket: socket, arguments: arguments, stdin: stdin)
+        }
+
+        try adapter.setPaneIdentity(route: route)
+
+        XCTAssertEqual(state.calls, [
+            .init(socket: route.socket,
+                  arguments: ["set-option", "-p", "-t", route.activePaneID,
+                              "@tidey_workspace_id", route.workspaceID],
+                  stdin: nil),
+            .init(socket: route.socket,
+                  arguments: ["set-option", "-p", "-t", route.activePaneID,
+                              "@tidey_panel_id", route.panelID],
+                  stdin: nil),
+            .init(socket: route.socket,
+                  arguments: ["set-option", "-p", "-F", "-t", route.activePaneID,
+                              "@tidey_socket_path", "#{E:TIDEY_SOCKET_PATH}"],
+                  stdin: nil),
+            .init(socket: route.socket,
+                  arguments: ["set-option", "-p", "-F", "-t", route.activePaneID,
+                              "@tidey_bin_dir", "#{E:TIDEY_BIN_DIR}"],
+                  stdin: nil),
+        ])
+    }
+
     func testRoutesLogicalPanelInputThroughTmuxPasteAndEnter() throws {
         let registry = OrdinaryTmuxPanelRegistry()
         let route = ordinaryRoute()
@@ -80,7 +109,7 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
         XCTAssertTrue(try router.sendInput("hello", toPanelID: route.panelID, mode: .literalChatText))
         XCTAssertTrue(try router.sendInput("\r", toPanelID: route.panelID))
 
-        XCTAssertEqual(state.calls.count, 6)
+        XCTAssertEqual(state.calls.count, 8)
         XCTAssertEqual(state.calls[0], .init(socket: route.socket,
                                              arguments: listPanesArguments(windowID: route.windowID),
                                              stdin: nil))
@@ -90,12 +119,16 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
         XCTAssertEqual(state.calls[2], .init(socket: route.socket,
                                              arguments: ["set-option", "-p", "-t", "%21", "@tidey_panel_id", route.panelID],
                                              stdin: nil))
-        XCTAssertEqual(state.calls[3].arguments, ["load-buffer", "-b", "ignored", "-"])
-        XCTAssertEqual(state.calls[3].stdin, "hello")
-        XCTAssertEqual(state.calls[4], .init(socket: route.socket,
-                                             arguments: ["paste-buffer", "-d", "-p", "-r", "-b", state.calls[4].arguments[5], "-t", "%21"],
+        XCTAssertEqual(state.calls[3].arguments,
+                       ["set-option", "-p", "-F", "-t", "%21", "@tidey_socket_path", "#{E:TIDEY_SOCKET_PATH}"])
+        XCTAssertEqual(state.calls[4].arguments,
+                       ["set-option", "-p", "-F", "-t", "%21", "@tidey_bin_dir", "#{E:TIDEY_BIN_DIR}"])
+        XCTAssertEqual(state.calls[5].arguments, ["load-buffer", "-b", "ignored", "-"])
+        XCTAssertEqual(state.calls[5].stdin, "hello")
+        XCTAssertEqual(state.calls[6], .init(socket: route.socket,
+                                             arguments: ["paste-buffer", "-d", "-p", "-r", "-b", state.calls[6].arguments[5], "-t", "%21"],
                                              stdin: nil))
-        XCTAssertEqual(state.calls[5], .init(socket: route.socket,
+        XCTAssertEqual(state.calls[7], .init(socket: route.socket,
                                              arguments: ["send-keys", "-t", "%21", "Enter"],
                                              stdin: nil))
     }
@@ -124,7 +157,15 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
 
         XCTAssertTrue(try router.sendInput("hello", toPanelID: route.panelID))
 
-        XCTAssertEqual(state.calls.map { $0.arguments.first }, ["list-panes", "set-option", "set-option", "load-buffer", "paste-buffer"])
+        XCTAssertEqual(state.calls.map { $0.arguments.first }, [
+            "list-panes",
+            "set-option",
+            "set-option",
+            "set-option",
+            "set-option",
+            "load-buffer",
+            "paste-buffer",
+        ])
     }
 
     func testLoadBufferTimeoutRetriesBeforePasteAndEnter() throws {
@@ -150,6 +191,8 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
         let commandNames = state.calls.map { $0.arguments.first }
         XCTAssertEqual(commandNames, [
             "list-panes",
+            "set-option",
+            "set-option",
             "set-option",
             "set-option",
             "load-buffer",
@@ -557,6 +600,8 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
 
         XCTAssertEqual(state.calls.map(\.arguments.first), [
             "list-panes",
+            "set-option",
+            "set-option",
             "set-option",
             "set-option",
             "load-buffer",

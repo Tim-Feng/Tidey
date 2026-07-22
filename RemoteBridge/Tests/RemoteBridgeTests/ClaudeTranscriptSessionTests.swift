@@ -377,6 +377,249 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         XCTAssertFalse(result.events.contains { $0.type == .interactivePrompt })
     }
 
+    // MARK: - Round 4: prepareUpdate/finishUpdate gated workspace-migration transaction
+
+    // Deterministic (no sleep/stress) proof that Claude's interactive-prompt
+    // sidebar path is ALSO held during a prepared workspace-migration
+    // transaction, and that every buffered batch flushes intact, in order —
+    // never dropped/coalesced. A REAL AskUserQuestion is BOTH opened AND
+    // resolved entirely while held (not opened beforehand); each Hub-level
+    // effect (never gated by the hold) is awaited as the deterministic
+    // synchronization checkpoint proving that step was fully processed while
+    // sidebar publication was still withheld. Uses the lock-backed
+    // RecordingCommandSender (not StubClaudeCommandSender's unsynchronized
+    // array) since commands() is read from the test thread while sends
+    // happen on the session's own queue.
+    func testClaudePrepareUpdateHoldsInteractivePromptSidebarUntilFinishUpdateFlushes() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        try Data().write(to: transcriptURL)
+
+        let hub = AgentEventHub()
+        let commandSender = RecordingCommandSender()
+        let recordA = AgentSessionRegistryRecord(version: 1,
+                                                 vendor: "claude",
+                                                 workspaceID: "workspace-A",
+                                                 sessionID: "session",
+                                                 panelID: "panel",
+                                                 pid: Int32(ProcessInfo.processInfo.processIdentifier),
+                                                 cwd: "/tmp",
+                                                 createdAt: "2026-04-30T00:00:00Z",
+                                                 transcriptPath: transcriptURL.path)
+        let session = ClaudeTranscriptSession(record: recordA,
+                                              fileManager: .default,
+                                              hub: hub,
+                                              socketClient: commandSender)
+        session.start()
+        defer { session.stop() }
+
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace-A", sessionID: "session", limit: 10)
+                .events.contains { $0.type == .sessionStarted }
+        })
+        let commandsBeforePrepare = commandSender.commands()
+
+        let recordB = AgentSessionRegistryRecord(version: 1,
+                                                 vendor: "claude",
+                                                 workspaceID: "workspace-B",
+                                                 sessionID: "session",
+                                                 panelID: "panel",
+                                                 pid: Int32(ProcessInfo.processInfo.processIdentifier),
+                                                 cwd: "/tmp",
+                                                 createdAt: "2026-04-30T00:00:00Z",
+                                                 transcriptPath: transcriptURL.path)
+        session.prepareUpdate(record: recordB)
+        XCTAssertEqual(commandSender.commands(), commandsBeforePrepare,
+                       "prepareUpdate itself must not publish anything new")
+
+        // Open the AskUserQuestion entirely while held.
+        let handle = try FileHandle(forWritingTo: transcriptURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(makeClaudeAskUserQuestionAssistantLine(uuid: "a1",
+                                                                                 toolCallID: "toolu_gate")
+            .appending("\n")
+            .utf8))
+
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace-B", sessionID: "session", limit: 20)
+                .events.contains { $0.type == .interactivePrompt }
+        }, "the prompt's Hub effect must land even while sidebar publication is held")
+        XCTAssertEqual(commandSender.commands(), commandsBeforePrepare,
+                       "no sidebar output may escape while prepared, even for the prompt's own opening")
+
+        // Resolve the SAME AskUserQuestion, also entirely while held.
+        try handle.write(contentsOf: Data(makeClaudeToolResultLine(uuid: "u1",
+                                                                   toolCallID: "toolu_gate",
+                                                                   content: "Use current file")
+            .appending("\n")
+            .utf8))
+        try handle.close()
+
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace-B", sessionID: "session", limit: 30)
+                .events.contains { $0.type == .interactivePromptResolved }
+        }, "the resolution's Hub effect must land even while sidebar publication is held")
+
+        XCTAssertEqual(commandSender.commands(), commandsBeforePrepare,
+                       "no sidebar output may escape while prepared, even for a real resolution processed under the NEW workspace")
+
+        session.finishUpdate()
+
+        let newCommands = Array(commandSender.commands().dropFirst(commandsBeforePrepare.count))
+        let promptEvent = try XCTUnwrap(hub.fetch(workspaceID: "workspace-B", sessionID: "session", limit: 30)
+            .events.first { $0.type == .interactivePrompt })
+        let expectedOpenBatch = AgentInteractivePromptSidebarMessages.messages(for: promptEvent, workspaceID: "workspace-B")
+        let expectedResolvedBatch = ["report_shell_state running --workspace_id=workspace-B"]
+        XCTAssertEqual(newCommands, expectedOpenBatch + expectedResolvedBatch,
+                       "finishUpdate must flush BOTH held batches (open, then resolve), in order, addressed to the NEW workspace — never dropped/coalesced, got \(newCommands)")
+    }
+
+    // Round 4 P0: a genuine source-identity switch (a DIFFERENT explicit
+    // transcript path) must stop/drain the OLD tailer under the OLD
+    // record — BEFORE the migration hold is even enabled — so a
+    // legitimate final A interactive-prompt lifecycle message (already
+    // sitting in A's fd when the switch begins) is attributed to and sent
+    // for workspace A IMMEDIATELY, normally, never buried inside B's held
+    // batches. Uses the session-level beforeOldTailerStopForTesting hook
+    // (fires synchronously on the session's own queue, right before
+    // tailer.stop() — deterministic by construction, not timing) to inject
+    // the resolving tool_result for a REAL AskUserQuestion.
+    func testClaudeOldTailerDrainsAndAttributesToAWorkspaceBeforeMigrationHoldBeginsOnSourceSwitch() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptA = directory.appendingPathComponent("session-a.jsonl", isDirectory: false)
+        let transcriptB = directory.appendingPathComponent("session-b.jsonl", isDirectory: false)
+        try (makeClaudeAskUserQuestionAssistantLine(uuid: "ask-a", toolCallID: "toolu_a") + "\n")
+            .write(to: transcriptA, atomically: true, encoding: .utf8)
+        try Data().write(to: transcriptB)
+
+        let hub = AgentEventHub()
+        let commandSender = RecordingCommandSender()
+        let recordA = AgentSessionRegistryRecord(version: 1,
+                                                 vendor: "claude",
+                                                 workspaceID: "workspace-A",
+                                                 sessionID: "session",
+                                                 panelID: "panel",
+                                                 pid: Int32(ProcessInfo.processInfo.processIdentifier),
+                                                 cwd: "/tmp",
+                                                 createdAt: "2026-04-30T00:00:00Z",
+                                                 transcriptPath: transcriptA.path)
+        let session = ClaudeTranscriptSession(record: recordA,
+                                              fileManager: .default,
+                                              hub: hub,
+                                              socketClient: commandSender)
+        session.start()
+        defer { session.stop() }
+
+        XCTAssertTrue(waitUntil {
+            commandSender.commands().contains("report_shell_state prompt --workspace_id=workspace-A")
+        })
+        let commandsBeforeSwitch = commandSender.commands()
+
+        // Deterministic by construction: fires ON the session's own serial
+        // queue, AFTER prepareUpdate confirmed a genuine switch but BEFORE
+        // tailer.stop() runs — no pre-existing async file-event dispatch
+        // can possibly have consumed this line first.
+        session.beforeOldTailerStopForTesting = {
+            let handle = try! FileHandle(forWritingTo: transcriptA)
+            handle.seekToEndOfFile()
+            handle.write((self.makeClaudeToolResultLine(uuid: "result-a", toolCallID: "toolu_a", content: "Use current file") + "\n").data(using: .utf8)!)
+            try! handle.close()
+        }
+
+        let recordB = AgentSessionRegistryRecord(version: 1,
+                                                 vendor: "claude",
+                                                 workspaceID: "workspace-B",
+                                                 sessionID: "session",
+                                                 panelID: "panel",
+                                                 pid: Int32(ProcessInfo.processInfo.processIdentifier),
+                                                 cwd: "/tmp",
+                                                 createdAt: "2026-04-30T00:00:00Z",
+                                                 transcriptPath: transcriptB.path)
+        session.prepareUpdate(record: recordB)
+
+        // The A resolution's sidebar effect ("running", clearing the
+        // prompt) must already be sent — normally, immediately, for
+        // workspace A — BEFORE finishUpdate ever runs. If the drain
+        // instead ran AFTER the hold was enabled, this would still be
+        // absent here (buried in B's held batches).
+        XCTAssertTrue(commandSender.commands().dropFirst(commandsBeforeSwitch.count).contains("report_shell_state running --workspace_id=workspace-A"),
+                     "the OLD tailer's drained A resolution must be sent immediately for workspace A, before finishUpdate, got \(commandSender.commands())")
+
+        session.finishUpdate()
+
+        let commandsAfterFinish = commandSender.commands()
+        XCTAssertFalse(commandsAfterFinish.dropFirst(commandsBeforeSwitch.count + 1).contains { $0.contains("workspace_id=workspace-A") },
+                       "no A-addressed command may appear after the drained resolution, got \(commandsAfterFinish)")
+    }
+
+    // The ORDINARY async update() path calls its own pre-stop helper
+    // independently of prepareUpdate — not a shared, unbypassable core —
+    // so it needs its OWN deterministic proof.
+    func testClaudeOrdinaryUpdateAlsoDrainsAndAttributesToAWorkspaceBeforeSourceSwitch() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptA = directory.appendingPathComponent("session-a.jsonl", isDirectory: false)
+        let transcriptB = directory.appendingPathComponent("session-b.jsonl", isDirectory: false)
+        try (makeClaudeAskUserQuestionAssistantLine(uuid: "ask-a2", toolCallID: "toolu_a2") + "\n")
+            .write(to: transcriptA, atomically: true, encoding: .utf8)
+        try Data().write(to: transcriptB)
+
+        let hub = AgentEventHub()
+        let commandSender = RecordingCommandSender()
+        let recordA = AgentSessionRegistryRecord(version: 1,
+                                                 vendor: "claude",
+                                                 workspaceID: "workspace-A",
+                                                 sessionID: "session",
+                                                 panelID: "panel",
+                                                 pid: Int32(ProcessInfo.processInfo.processIdentifier),
+                                                 cwd: "/tmp",
+                                                 createdAt: "2026-04-30T00:00:00Z",
+                                                 transcriptPath: transcriptA.path)
+        let session = ClaudeTranscriptSession(record: recordA,
+                                              fileManager: .default,
+                                              hub: hub,
+                                              socketClient: commandSender)
+        session.start()
+        defer { session.stop() }
+
+        XCTAssertTrue(waitUntil {
+            commandSender.commands().contains("report_shell_state prompt --workspace_id=workspace-A")
+        })
+        let commandsBeforeSwitch = commandSender.commands()
+
+        session.beforeOldTailerStopForTesting = {
+            let handle = try! FileHandle(forWritingTo: transcriptA)
+            handle.seekToEndOfFile()
+            handle.write((self.makeClaudeToolResultLine(uuid: "result-a2", toolCallID: "toolu_a2", content: "Use current file") + "\n").data(using: .utf8)!)
+            try! handle.close()
+        }
+
+        let recordB = AgentSessionRegistryRecord(version: 1,
+                                                 vendor: "claude",
+                                                 workspaceID: "workspace-B",
+                                                 sessionID: "session",
+                                                 panelID: "panel",
+                                                 pid: Int32(ProcessInfo.processInfo.processIdentifier),
+                                                 cwd: "/tmp",
+                                                 createdAt: "2026-04-30T00:00:00Z",
+                                                 transcriptPath: transcriptB.path)
+        session.update(record: recordB)
+
+        XCTAssertTrue(waitUntil {
+            commandSender.commands().dropFirst(commandsBeforeSwitch.count).contains("report_shell_state running --workspace_id=workspace-A")
+        }, "the OLD tailer's drained A resolution must be sent for workspace A, got \(commandSender.commands())")
+        XCTAssertFalse(commandSender.commands().dropFirst(commandsBeforeSwitch.count + 1).contains { $0.contains("workspace_id=workspace-A") },
+                       "no A-addressed command may appear after the drained resolution, got \(commandSender.commands())")
+    }
+
     private func makeRecord(transcriptPath: String) -> AgentSessionRegistryRecord {
         AgentSessionRegistryRecord(version: 1,
                                    vendor: "claude",
@@ -389,6 +632,2356 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                                    transcriptPath: transcriptPath)
     }
 
+    func testClaudeBackfillOlderLinesKeepOriginalCursorPositions() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+
+        let totalLines = transcriptBootstrapLineLimit + 20
+        var lines = [String]()
+        for index in 0..<totalLines {
+            lines.append(makeClaudeUserLine(uuid: "uuid-\(index)", content: "line-\(index)"))
+        }
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1).events.first?.text == "line-\(totalLines - 1)"
+        })
+        let initial = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+        XCTAssertFalse(initial.events.contains { $0.text == "line-0" })
+        let lineEvents = initial.events.filter { ($0.text ?? "").hasPrefix("line-") }
+        let oldestLoadedSeq = lineEvents.map(\.seq).min() ?? 0
+        let newestSeq = initial.events.map(\.seq).max() ?? 0
+
+        XCTAssertTrue(session.backfill(beforeSeq: oldestLoadedSeq, limit: 50))
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace",
+                      sessionID: "session",
+                      limit: 5000,
+                      beforeSeq: oldestLoadedSeq).events.isEmpty == false
+        })
+        let older = hub.fetch(workspaceID: "workspace",
+                              sessionID: "session",
+                              limit: 5000,
+                              beforeSeq: oldestLoadedSeq)
+        XCTAssertTrue(older.events.allSatisfy { $0.seq < oldestLoadedSeq })
+        XCTAssertTrue(older.events.contains { ($0.text ?? "").hasPrefix("line-") })
+
+        let catchUp = hub.fetch(workspaceID: "workspace",
+                                sessionID: "session",
+                                limit: 5000,
+                                afterSeq: newestSeq)
+        XCTAssertTrue(catchUp.events.isEmpty,
+                      "backfilled history must not appear as new live events, got \(catchUp.events.map { ($0.eventID, $0.seq) })")
+    }
+
+    func testClaudeBackfillDoesNotConsumeLiveSubmitEchoOrLiveParserState() throws {
+        // Backfill is a storage-only transaction: the live echo registry, the
+        // AskUserQuestion correlation map, and the pending local command
+        // state must all be untouched by history.
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+
+        var lines = [String]()
+        // OLD region: a same-text user message, an unresolved AskUserQuestion
+        // and a /context command envelope right at the page boundary.
+        lines.append(makeClaudeUserLine(uuid: "old-echo", content: "repeat me"))
+        lines.append(makeClaudeAskUserQuestionAssistantLine(uuid: "old-question", toolCallID: "toolu_old"))
+        lines.append(makeClaudeUserLine(uuid: "old-context", content: "<command-name>/context</command-name>"))
+        for index in 0..<transcriptBootstrapLineLimit {
+            lines.append(makeClaudeUserLine(uuid: "uuid-\(index)", content: "line-\(index)"))
+        }
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let sender = RecordingCommandSender()
+        let registry = ChatSubmitEchoRegistry()
+        registry.register(workspaceID: "workspace",
+                          panelID: "panel",
+                          sessionID: "session",
+                          vendor: "claude",
+                          text: "repeat me",
+                          clientRequestID: "client-live")
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub,
+                                              socketClient: sender,
+                                              chatSubmitEchoRegistry: registry)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1).events.first?.text == "line-\(transcriptBootstrapLineLimit - 1)"
+        })
+        let initial = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+        let oldestLoadedSeq = initial.events.filter { ($0.text ?? "").hasPrefix("line-") }.map(\.seq).min() ?? 0
+        let eventCountBeforeLive = { hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000).events.count }
+
+        XCTAssertTrue(session.backfill(beforeSeq: oldestLoadedSeq, limit: 600))
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000, beforeSeq: oldestLoadedSeq).events.isEmpty == false
+        })
+
+        // 1. Echo registry preserved; live echo still resolves.
+        XCTAssertEqual(registry.snapshot().map(\.clientRequestID), ["client-live"],
+                       "Claude backfill must not consume the live echo registry")
+
+        // 2. A LIVE tool_result for the HISTORICAL AskUserQuestion must not
+        // produce a fake live resolved terminal.
+        let baselineCount = eventCountBeforeLive()
+        let handle = try FileHandle(forWritingTo: transcriptURL)
+        handle.seekToEndOfFile()
+        handle.write((makeClaudeToolResultLine(uuid: "live-result", toolCallID: "toolu_old", content: "answered") + "\n").data(using: .utf8)!)
+        // 3. A LIVE local-command stdout must not pair with the HISTORICAL
+        // /context command.
+        handle.write((makeClaudeUserLine(uuid: "live-stdout", content: "<local-command-stdout>whatever</local-command-stdout>") + "\n").data(using: .utf8)!)
+        // A normal live echo to prove the pipeline is alive and correlated.
+        handle.write((makeClaudeUserLine(uuid: "live-echo", content: "repeat me") + "\n").data(using: .utf8)!)
+        try handle.close()
+
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10).events.contains {
+                $0.text == "repeat me" && $0.metadata?["client_request_id"] == "client-live"
+            }
+        }, "the live echo must still receive its client_request_id")
+
+        let allEvents = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000).events
+        XCTAssertFalse(allEvents.suffix(allEvents.count - baselineCount).contains { event in
+            event.type == .interactivePromptResolved
+        }, "a live tool_result must not resolve a HISTORICAL AskUserQuestion")
+        XCTAssertFalse(allEvents.contains { ($0.metadata?["tidey_generated"] ?? "") == "claude_context" },
+                       "a live stdout must not pair with a HISTORICAL /context command")
+    }
+
+
+    // Round 11 Claude caller blocker: synthetic unknown/duplicate terminals
+    // injected through the SAME production seam the publish paths use
+    // (publishInteractivePromptSidebarIfNeeded) must be zero side effects;
+    // the matching terminal fires running exactly once.
+    func testClaudeProductionSeamIgnoresUnknownAndDuplicateResolvedOutcomes() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        try (makeClaudeUserLine(uuid: "seed", content: "hello") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let sender = RecordingCommandSender()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub,
+                                              socketClient: sender)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5).events.contains { $0.text == "hello" }
+        })
+        func appendLine(_ line: String) throws {
+            let handle = try FileHandle(forWritingTo: transcriptURL)
+            handle.seekToEndOfFile()
+            handle.write((line + "\n").data(using: .utf8)!)
+            try handle.close()
+        }
+        func running() -> Int {
+            sender.commands().filter { $0.contains("report_shell_state running") }.count
+        }
+
+        // A REAL Ask notifies through the production parser first.
+        try appendLine(makeClaudeAskUserQuestionAssistantLine(uuid: "ask-1", toolCallID: "toolu_SEAM"))
+        XCTAssertTrue(waitUntil {
+            sender.commands().contains { $0.contains("notification.create") }
+        })
+        let promptEvent = try XCTUnwrap(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20)
+            .events.first { $0.type == .interactivePrompt })
+        let promptID = try XCTUnwrap(promptEvent.metadata?["prompt_id"] ?? promptEvent.payload?.objectValue?["prompt_id"]?.stringValue)
+
+        func syntheticResolved(id: String, promptID: String) -> AgentEvent {
+            AgentEvent(eventID: id,
+                       seq: 0,
+                       vendor: "claude",
+                       workspaceID: "workspace",
+                       sessionID: "session",
+                       timestamp: "2026-04-12T12:00:00Z",
+                       type: .interactivePromptResolved,
+                       role: nil,
+                       text: nil,
+                       name: nil,
+                       input: nil,
+                       output: nil,
+                       toolCallID: nil,
+                       metadata: ["prompt_id": promptID, "reason": "server_resolved"])
+        }
+
+        // UNKNOWN terminal through the production seam: zero side effects.
+        session.publishInteractivePromptSidebarIfNeeded(syntheticResolved(id: "synthetic-unknown", promptID: "prompt-UNKNOWN"))
+        XCTAssertEqual(running(), 0, "an unknown terminal must not send running, got \(sender.commands())")
+
+        // MATCHING terminal: running exactly once.
+        session.publishInteractivePromptSidebarIfNeeded(syntheticResolved(id: "synthetic-match", promptID: promptID))
+        XCTAssertEqual(running(), 1, "the matching terminal sends running exactly once, got \(sender.commands())")
+
+        // DUPLICATE matching terminal: still exactly once.
+        session.publishInteractivePromptSidebarIfNeeded(syntheticResolved(id: "synthetic-duplicate", promptID: promptID))
+        XCTAssertEqual(running(), 1, "a duplicate terminal must not send running again, got \(sender.commands())")
+    }
+
+    func testClaudeLegacyPromptLifecycleSidebarSequenceIsExactlyOnce() throws {
+        // Production sequence through the REAL Claude session/sidebar path:
+        // Ask X (e1) -> duplicate Ask X (e2, same promptID, different
+        // eventID) -> matching tool_result -> re-delivered Ask X.
+        // Legacy identity is session+promptID: e2 must NOT notify again;
+        // running fires exactly once per terminated lifecycle.
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        try (makeClaudeUserLine(uuid: "seed", content: "hello") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let sender = RecordingCommandSender()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub,
+                                              socketClient: sender)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5).events.contains { $0.text == "hello" }
+        })
+
+        func appendLine(_ line: String) throws {
+            let handle = try FileHandle(forWritingTo: transcriptURL)
+            handle.seekToEndOfFile()
+            handle.write((line + "\n").data(using: .utf8)!)
+            try handle.close()
+        }
+        func notifications() -> Int {
+            sender.commands().filter { $0.contains("notification.create") }.count
+        }
+        func running() -> Int {
+            sender.commands().filter { $0.contains("report_shell_state running") }.count
+        }
+
+        // e1: Ask X notifies once.
+        try appendLine(makeClaudeAskUserQuestionAssistantLine(uuid: "ask-1", toolCallID: "toolu_X"))
+        XCTAssertTrue(waitUntil { notifications() == 1 })
+
+        // e2: duplicate Ask X — same promptID (toolCallID), DIFFERENT
+        // eventID. Legacy identity is session+promptID: no second
+        // notification before the terminal.
+        try appendLine(makeClaudeAskUserQuestionAssistantLine(uuid: "ask-2", toolCallID: "toolu_X"))
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20).events
+                .filter { $0.type == .interactivePrompt }.count == 2
+        })
+        XCTAssertEqual(notifications(), 1,
+                       "a duplicate legacy delivery (new eventID, same promptID) must not notify again, got \(sender.commands())")
+
+        // UNKNOWN terminal (a tool_result with no known prompt): zero
+        // sidebar side effects on this SAME production caller.
+        try appendLine(makeClaudeToolResultLine(uuid: "result-unknown", toolCallID: "toolu_UNKNOWN", content: "noise"))
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 30).events.contains { $0.eventID.contains("result-unknown") }
+        })
+        XCTAssertEqual(running(), 0, "an unknown terminal must not send running, got \(sender.commands())")
+
+        // Matching terminal: running exactly once.
+        try appendLine(makeClaudeToolResultLine(uuid: "result-1", toolCallID: "toolu_X", content: "picked"))
+        XCTAssertTrue(waitUntil { running() == 1 })
+
+        // DUPLICATE terminal after the match: still exactly once.
+        try appendLine(makeClaudeToolResultLine(uuid: "result-2", toolCallID: "toolu_X", content: "picked again"))
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 30).events.contains { $0.eventID.contains("result-2") }
+        })
+        XCTAssertEqual(running(), 1, "a duplicate terminal must not send running again, got \(sender.commands())")
+
+        // Re-delivered Ask X after the terminal: a NEW legacy lifecycle —
+        // notifies again.
+        try appendLine(makeClaudeAskUserQuestionAssistantLine(uuid: "ask-3", toolCallID: "toolu_X"))
+        XCTAssertTrue(waitUntil { notifications() == 2 },
+                      "a re-delivery AFTER the terminal is a new lifecycle, got \(sender.commands())")
+        XCTAssertEqual(running(), 1)
+    }
+
+    // MARK: - Round 11 P0-2: backfill parser transaction
+
+    private struct BackfillHarness {
+        let directory: URL
+        let transcriptURL: URL
+        let hub: AgentEventHub
+        let sender: RecordingCommandSender
+        let registry: ChatSubmitEchoRegistry
+        let session: ClaudeTranscriptSession
+    }
+
+    // R13 B2: the Claude session has its OWN backfill implementation — its
+    // read clamp is locked independently: raw capacity 2, requested limit 5,
+    // every page adjacent to the anchor, exact ordered union, no gap or
+    // duplicate.
+    func testClaudeLimitLargerThanRawCapacityNeverSkipsLines() throws {
+        var oldLines = [String]()
+        for index in 0..<8 {
+            oldLines.append(makeClaudeUserLine(uuid: "old-\(index)", content: "m\(index)"))
+        }
+        let harness = try makeBackfillHarness(oldLines: oldLines, windowCapacity: 2)
+        defer { try? FileManager.default.removeItem(at: harness.directory); harness.session.stop() }
+        waitForBootstrap(harness)
+        let boundary = oldestLoadedSeq(harness)
+
+        var cursor = boundary
+        var union = [String]()
+        for _ in 0..<20 {
+            guard harness.session.backfill(beforeSeq: cursor, limit: 5) else {
+                break
+            }
+            let page = historyEvents(harness, before: cursor).filter { ($0.text ?? "").hasPrefix("m") }
+            let texts = page.compactMap(\.text)
+            guard texts.isEmpty == false else {
+                break
+            }
+            let expectedAdjacentIndex = 8 - union.count - 1
+            XCTAssertEqual(texts.last, "m\(expectedAdjacentIndex)",
+                           "the page must start immediately below the anchor, got \(texts)")
+            union.append(contentsOf: texts.reversed())
+            guard let next = page.filter { $0.type != .sessionStarted }.map(\.seq).min(), next < cursor else {
+                break
+            }
+            cursor = next
+            if union.count >= 8 {
+                break
+            }
+        }
+        XCTAssertEqual(union, (0..<8).reversed().map { "m\($0)" },
+                       "the union must be exact, in order, no gap, no duplicate, got \(union)")
+    }
+
+    // R13 B3: the Hub's OWN bound trim must be correlation-safe. Tiny Hub
+    // cap: a resolved lifecycle [C,P,R,T] plus an older page F at anchor C
+    // must never keep P while dropping T.
+    func testHubTrimNeverLeavesHalfAskLifecycle() throws {
+        let harness = try makeBackfillHarness(oldLines: [
+            makeClaudeUserLine(uuid: "old-f", content: "mF"),
+            makeClaudeAskUserQuestionAssistantLine(uuid: "old-ask", toolCallID: "toolu_HUB"),
+            makeClaudeToolResultLine(uuid: "old-result", toolCallID: "toolu_HUB", content: "picked"),
+        ], windowCapacity: 3, hubCapacity: 4)
+        defer { try? FileManager.default.removeItem(at: harness.directory); harness.session.stop() }
+        waitForBootstrap(harness)
+        let boundary = oldestLoadedSeq(harness)
+
+        // Page down like a real client until the COMPLETE lifecycle
+        // [C(toolCall), P(prompt), R(toolResult), T(terminal)] is stored.
+        var cursor = boundary
+        var promptID: String?
+        for _ in 0..<600 {
+            guard harness.session.backfill(beforeSeq: cursor, limit: 3) else {
+                break
+            }
+            let history = historyEvents(harness, before: boundary)
+            XCTAssertLessThanOrEqual(history.filter { $0.type != .sessionStarted }.count, 4, "the hard Hub bound holds at every step")
+            if let prompt = history.first(where: { $0.type == .interactivePrompt }) {
+                promptID = prompt.metadata?["prompt_id"]
+                break
+            }
+            guard let next = history.filter { $0.type != .sessionStarted }.map(\.seq).min(), next < cursor else {
+                break
+            }
+            cursor = next
+        }
+        let resolvedPromptID = try XCTUnwrap(promptID, "the paged-down lifecycle must surface its prompt")
+        XCTAssertNil(harness.hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                         sessionID: "session",
+                                                         promptID: resolvedPromptID),
+                     "precondition: the lifecycle stored WITH its terminal is resolved")
+
+        // Older page F at anchor C: the Hub cap 4 trim would keep [F,C,P,R]
+        // and drop T — a kept P without its T revives the resolved Ask.
+        let history = historyEvents(harness, before: boundary)
+        cursor = history.filter { $0.type != .sessionStarted }.map(\.seq).min() ?? cursor
+        XCTAssertTrue(harness.session.backfill(beforeSeq: cursor, limit: 1),
+                      "precondition: the older page F must actually load")
+        let afterHistory = historyEvents(harness, before: boundary)
+        XCTAssertTrue(afterHistory.contains { $0.text == "mF" },
+                      "precondition: F entered the requested page/replacement, got \(afterHistory.map(\.eventID))")
+        XCTAssertNil(harness.hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                         sessionID: "session",
+                                                         promptID: resolvedPromptID),
+                     "the Hub trim must never keep P while dropping T, got \(afterHistory.map(\.eventID))")
+        if afterHistory.contains(where: { $0.type == .interactivePrompt && $0.metadata?["prompt_id"] == resolvedPromptID }) {
+            XCTAssertTrue(afterHistory.contains { $0.type == .interactivePromptResolved && $0.metadata?["prompt_id"] == resolvedPromptID },
+                          "keeping P requires keeping its matching T")
+        }
+        XCTAssertLessThanOrEqual(afterHistory.filter { $0.type != .sessionStarted }.count, 4, "the hard Hub bound still holds")
+    }
+
+    // R13 B3: /context — the Hub cap 2 trim must not become [filler, cmd]
+    // dropping the summary.
+    func testHubTrimNeverLeavesCommandWithoutSummary() throws {
+        let harness = try makeBackfillHarness(oldLines: [
+            makeClaudeUserLine(uuid: "old-f", content: "mF"),
+            makeClaudeUserLine(uuid: "old-cmd", content: "<command-name>/context</command-name>"),
+            makeClaudeContextStdoutLine(uuid: "old-stdout"),
+        ], windowCapacity: 3, hubCapacity: 2)
+        defer { try? FileManager.default.removeItem(at: harness.directory); harness.session.stop() }
+        waitForBootstrap(harness)
+        let boundary = oldestLoadedSeq(harness)
+
+        // Page down until the complete [cmd, summary] pair is stored.
+        var cursor = boundary
+        var sawPair = false
+        for _ in 0..<600 {
+            guard harness.session.backfill(beforeSeq: cursor, limit: 3) else {
+                break
+            }
+            let history = historyEvents(harness, before: boundary)
+            XCTAssertLessThanOrEqual(history.filter { $0.type != .sessionStarted }.count, 2, "the hard Hub bound holds at every step")
+            if history.contains(where: { $0.metadata?["tidey_generated"] == "claude_context" }),
+               history.contains(where: { $0.metadata?["tidey_generated"] == "claude_context_command" }) {
+                sawPair = true
+                break
+            }
+            guard let next = history.filter { $0.type != .sessionStarted }.map(\.seq).min(), next < cursor else {
+                break
+            }
+            cursor = next
+        }
+        XCTAssertTrue(sawPair, "precondition: the complete [cmd, summary] pair is stored")
+
+        let history = historyEvents(harness, before: boundary)
+        cursor = history.filter { $0.type != .sessionStarted }.map(\.seq).min() ?? cursor
+        XCTAssertTrue(harness.session.backfill(beforeSeq: cursor, limit: 1),
+                      "precondition: the older page F must actually load")
+        let afterHistory = historyEvents(harness, before: boundary)
+        XCTAssertTrue(afterHistory.contains { $0.text == "mF" },
+                      "precondition: F entered the requested page/replacement, got \(afterHistory.map(\.eventID))")
+        if afterHistory.contains(where: { $0.metadata?["tidey_generated"] == "claude_context_command" }) {
+            XCTAssertTrue(afterHistory.contains { $0.metadata?["tidey_generated"] == "claude_context" },
+                          "keeping cmd requires keeping its summary, got \(afterHistory.map(\.eventID))")
+        }
+        XCTAssertLessThanOrEqual(afterHistory.filter { $0.type != .sessionStarted }.count, 2, "the hard Hub bound still holds")
+    }
+
+    // R13 B3: when the bounded closure retention can no longer supply a
+    // KNOWN-resolved opener's terminal, the opener is withdrawn fail closed —
+    // never revived as active.
+    func testClosureRetentionEvictionFailsClosed() throws {
+        let harness = try makeBackfillHarness(oldLines: [
+            makeClaudeAskUserQuestionAssistantLine(uuid: "ask-A", toolCallID: "toolu_A"),
+            makeClaudeToolResultLine(uuid: "result-A", toolCallID: "toolu_A", content: "answer A"),
+            makeClaudeAskUserQuestionAssistantLine(uuid: "ask-B", toolCallID: "toolu_B"),
+            makeClaudeToolResultLine(uuid: "result-B", toolCallID: "toolu_B", content: "answer B"),
+        ], windowCapacity: 2, retentionCapacity: 1)
+        defer { try? FileManager.default.removeItem(at: harness.directory); harness.session.stop() }
+        waitForBootstrap(harness)
+        let boundary = oldestLoadedSeq(harness)
+
+        // Page down until both pairs were seen (B first, then A) — the
+        // capacity-1 retention then only remembers A's closure.
+        var cursor = boundary
+        var terminalBSeq: Int?
+        var sawA = false
+        for _ in 0..<600 {
+            guard harness.session.backfill(beforeSeq: cursor, limit: 2) else {
+                break
+            }
+            let history = historyEvents(harness, before: boundary)
+            if terminalBSeq == nil,
+               let terminalB = history.first(where: { $0.type == .interactivePromptResolved && $0.metadata?["prompt_id"] == "toolu_B" }) {
+                terminalBSeq = terminalB.seq
+            }
+            if history.contains(where: { $0.metadata?["prompt_id"] == "toolu_A" }) {
+                sawA = true
+                break
+            }
+            guard let next = history.filter { $0.type != .sessionStarted }.map(\.seq).min(), next < cursor else {
+                break
+            }
+            cursor = next
+        }
+        XCTAssertTrue(sawA, "paging must reach pair A")
+        let anchorSeq = try XCTUnwrap(terminalBSeq, "pair B must have been stored on the way down")
+
+        // Fresh request landing on [result-A, ask-B]: B's closure is gone
+        // from the retention — the known-resolved ask-B must be withdrawn,
+        // not revived.
+        XCTAssertTrue(harness.session.backfill(beforeSeq: anchorSeq, limit: 2))
+        XCTAssertNil(harness.hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                         sessionID: "session",
+                                                         promptID: "toolu_B"),
+                     "a known-resolved opener whose closure was evicted from the retention must fail closed")
+    }
+
+    // R13 B3: a LATER lifecycle reusing the same promptID must not inherit
+    // the previous lifecycle's retained terminal — a genuinely unresolved
+    // re-ask stays active.
+    func testRepeatedPromptLifecycleDoesNotReuseOldTerminal() throws {
+        let harness = try makeBackfillHarness(oldLines: [
+            makeClaudeAskUserQuestionAssistantLine(uuid: "ask-1", toolCallID: "toolu_X"),
+            makeClaudeToolResultLine(uuid: "result-1", toolCallID: "toolu_X", content: "first answer"),
+            makeClaudeAskUserQuestionAssistantLine(uuid: "ask-2", toolCallID: "toolu_X"),
+        ], windowCapacity: 2)
+        defer { try? FileManager.default.removeItem(at: harness.directory); harness.session.stop() }
+        waitForBootstrap(harness)
+        let boundary = oldestLoadedSeq(harness)
+
+        // Page down past ask-2 until the FIRST lifecycle's terminal is
+        // actually derived ([ask-1, result-1] co-windowed) — it is then
+        // retained and its opener recorded as resolved.
+        var cursor = boundary
+        var sawFirstTerminal = false
+        for _ in 0..<600 {
+            guard harness.session.backfill(beforeSeq: cursor, limit: 2) else {
+                break
+            }
+            let history = historyEvents(harness, before: boundary)
+            if history.contains(where: { $0.type == .interactivePromptResolved && $0.metadata?["prompt_id"] == "toolu_X" }) {
+                sawFirstTerminal = true
+                break
+            }
+            guard let next = history.filter { $0.type != .sessionStarted }.map(\.seq).min(), next < cursor else {
+                break
+            }
+            cursor = next
+        }
+        XCTAssertTrue(sawFirstTerminal, "paging must derive the first lifecycle's terminal")
+
+        // Fresh request landing on [result-1, ask-2]: ask-2 has NO terminal —
+        // neither the retained old terminal nor the resolved-opener ledger
+        // may close/withdraw the NEW lifecycle.
+        XCTAssertTrue(harness.session.backfill(beforeSeq: boundary, limit: 2))
+        XCTAssertNotNil(harness.hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                            sessionID: "session",
+                                                            promptID: "toolu_X"),
+                        "a NEW unresolved lifecycle must stay active — the old terminal belongs to ask-1")
+    }
+
+    // R13 B3 late addendum: safety does not depend on ANY in-memory bound —
+    // with the retention at capacity 1 and MULTIPLE resolved pairs, every
+    // reload of an opener whose retained closure is gone fails closed (the
+    // file is the source of truth).
+    func testFailClosedWithdrawalSurvivesRetentionPressure() throws {
+        let harness = try makeBackfillHarness(oldLines: [
+            makeClaudeAskUserQuestionAssistantLine(uuid: "ask-A", toolCallID: "toolu_A"),
+            makeClaudeToolResultLine(uuid: "result-A", toolCallID: "toolu_A", content: "answer A"),
+            makeClaudeAskUserQuestionAssistantLine(uuid: "ask-B", toolCallID: "toolu_B"),
+            makeClaudeToolResultLine(uuid: "result-B", toolCallID: "toolu_B", content: "answer B"),
+            makeClaudeAskUserQuestionAssistantLine(uuid: "ask-C", toolCallID: "toolu_C"),
+            makeClaudeToolResultLine(uuid: "result-C", toolCallID: "toolu_C", content: "answer C"),
+        ], windowCapacity: 2, retentionCapacity: 1)
+        defer { try? FileManager.default.removeItem(at: harness.directory); harness.session.stop() }
+        waitForBootstrap(harness)
+        let boundary = oldestLoadedSeq(harness)
+
+        // Page down through all three pairs, remembering each terminal seq.
+        var cursor = boundary
+        var terminalSeqs = [String: Int]()
+        for _ in 0..<600 {
+            guard harness.session.backfill(beforeSeq: cursor, limit: 2) else {
+                break
+            }
+            let history = historyEvents(harness, before: boundary)
+            for terminal in history where terminal.type == .interactivePromptResolved {
+                if let promptID = terminal.metadata?["prompt_id"] {
+                    terminalSeqs[promptID] = terminal.seq
+                }
+            }
+            guard let next = history.filter { $0.type != .sessionStarted }.map(\.seq).min(), next < cursor else {
+                break
+            }
+            cursor = next
+        }
+
+        // Reload each pair's opener at an anchor that shows it WITHOUT its
+        // terminal: no matter which closures the capacity-1 retention lost,
+        // NONE of the known-resolved asks may revive.
+        for promptID in ["toolu_B", "toolu_C"] {
+            let anchorSeq = try XCTUnwrap(terminalSeqs[promptID], "pair \(promptID) must have been stored on the way down")
+            XCTAssertTrue(harness.session.backfill(beforeSeq: anchorSeq, limit: 2))
+            XCTAssertNil(harness.hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                             sessionID: "session",
+                                                             promptID: promptID),
+                         "\(promptID) is known-resolved and must fail closed on reload")
+        }
+    }
+
+    // R13 B3 late addendum: source invalidation clears the closure retention
+    // — a NEW transcript identity reusing the same line uuids must not
+    // inherit the previous identity's terminals.
+    func testInvalidationClearsClosureRetentionState() throws {
+        let harness = try makeBackfillHarness(oldLines: [
+            makeClaudeAskUserQuestionAssistantLine(uuid: "ask-1", toolCallID: "toolu_X"),
+            makeClaudeToolResultLine(uuid: "result-1", toolCallID: "toolu_X", content: "answer"),
+        ], windowCapacity: 2)
+        defer { try? FileManager.default.removeItem(at: harness.directory); harness.session.stop() }
+        waitForBootstrap(harness)
+        let boundary = oldestLoadedSeq(harness)
+
+        // Page until the terminal is derived — the retention now holds the
+        // closure keyed by ask-1's opener event.
+        var cursor = boundary
+        var sawTerminal = false
+        for _ in 0..<600 {
+            guard harness.session.backfill(beforeSeq: cursor, limit: 2) else {
+                break
+            }
+            let history = historyEvents(harness, before: boundary)
+            if history.contains(where: { $0.type == .interactivePromptResolved && $0.metadata?["prompt_id"] == "toolu_X" }) {
+                sawTerminal = true
+                break
+            }
+            guard let next = history.filter { $0.type != .sessionStarted }.map(\.seq).min(), next < cursor else {
+                break
+            }
+            cursor = next
+        }
+        XCTAssertTrue(sawTerminal)
+
+        // Invalidate the source (delete the file) and wait for the history
+        // revocation.
+        try FileManager.default.removeItem(at: harness.transcriptURL)
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000, beforeSeq: boundary)
+                .events.filter { $0.type != .sessionStarted }.isEmpty
+        }, "the invalidation must revoke the old identity's history")
+
+        // NEW identity at the same path: the SAME uuids but ask-1 UNRESOLVED.
+        var lines = [makeClaudeAskUserQuestionAssistantLine(uuid: "ask-1", toolCallID: "toolu_X")]
+        for index in 0..<transcriptBootstrapLineLimit {
+            lines.append(makeClaudeUserLine(uuid: "filler-\(index)", content: "line-\(index)"))
+        }
+        try (lines.joined(separator: "\n") + "\n").write(to: harness.transcriptURL, atomically: true, encoding: .utf8)
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10)
+                .events.contains { $0.text == "line-\(transcriptBootstrapLineLimit - 1)" }
+        }, "the session must re-resolve the new transcript")
+
+        let newBoundary = oldestLoadedSeq(harness)
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            harness.session.backfill(beforeSeq: newBoundary, limit: 2)
+        })
+        XCTAssertNotNil(harness.hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                            sessionID: "session",
+                                                            promptID: "toolu_X"),
+                        "the new identity's UNRESOLVED ask must be active — the old closure must not leak across the invalidation")
+    }
+
+    // R13 B3 late addendum 2: the closure probe must not fail OPEN past any
+    // fixed line budget — a closure 4000+ lines after its opener still
+    // withdraws the opener on a fresh exact-anchor reload.
+    func testProbeFindsClosureBeyondAnyFixedLineBudget() throws {
+        var oldLines = [makeClaudeAskUserQuestionAssistantLine(uuid: "ask-far", toolCallID: "toolu_FAR")]
+        for index in 0..<4500 {
+            oldLines.append(makeClaudeUserLine(uuid: "spacer-\(index)", content: "s\(index)"))
+        }
+        oldLines.append(makeClaudeToolResultLine(uuid: "result-far", toolCallID: "toolu_FAR", content: "answer"))
+        let harness = try makeBackfillHarness(oldLines: oldLines, windowCapacity: 2)
+        defer { try? FileManager.default.removeItem(at: harness.directory); harness.session.stop() }
+        waitForBootstrap(harness)
+
+        // Exact-anchor reload of the window [ask-far, spacer-0]: the ask has
+        // no in-window closure and the retention never saw it.
+        let allLines = oldLines
+        var offsets = [Int]()
+        var offset = 0
+        for line in allLines {
+            offsets.append(offset)
+            offset += line.utf8.count + 1
+        }
+        let sessionStartSeq = harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+            .events.first { $0.type == .sessionStarted }?.seq ?? 0
+        let anchorSeq = sessionStartSeq + offsets[2] * 4096 + 1 // spacer-1's line offset
+        XCTAssertTrue(harness.session.backfill(beforeSeq: anchorSeq, limit: 2),
+                      "precondition: the exact-anchor page must load")
+        let history = historyEvents(harness, before: anchorSeq)
+        XCTAssertTrue(history.contains { $0.text == "s0" },
+                      "precondition: the requested page really contains the spacer companion, got \(history.map(\.eventID))")
+        XCTAssertTrue(history.contains { $0.type == .toolCall && $0.toolCallID == "toolu_FAR" },
+                      "precondition: the opener LINE was loaded and parsed (its toolCall companion is stored), got \(history.map(\.eventID))")
+        XCTAssertNil(harness.hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                         sessionID: "session",
+                                                         promptID: "toolu_FAR"),
+                     "the closure exists in the FILE (4500 lines later) — no fixed probe budget may revive the opener")
+    }
+
+    // R13 B3 late addendum 2: plain TEXT mentioning tool_use_id / the prompt
+    // id is NOT a closure — the probe must only accept an exact
+    // tool_result.tool_use_id match, or it hides a real permission prompt.
+    func testProbeIgnoresPlainTextMentionOfToolUseID() throws {
+        let harness = try makeBackfillHarness(oldLines: [
+            makeClaudeAskUserQuestionAssistantLine(uuid: "ask-fp", toolCallID: "toolu_FP"),
+            makeClaudeUserLine(uuid: "chatter", content: "we were discussing tool_use_id \"toolu_FP\" in plain text"),
+        ], windowCapacity: 2)
+        defer { try? FileManager.default.removeItem(at: harness.directory); harness.session.stop() }
+        waitForBootstrap(harness)
+        let boundary = oldestLoadedSeq(harness)
+
+        // Page down to the genuinely UNRESOLVED ask.
+        var cursor = boundary
+        for _ in 0..<600 {
+            guard harness.session.backfill(beforeSeq: cursor, limit: 2) else {
+                break
+            }
+            let history = historyEvents(harness, before: boundary)
+            if history.contains(where: { $0.type == .interactivePrompt && $0.metadata?["prompt_id"] == "toolu_FP" }) {
+                break
+            }
+            guard let next = history.filter { $0.type != .sessionStarted }.map(\.seq).min(), next < cursor else {
+                break
+            }
+            cursor = next
+        }
+        XCTAssertNotNil(harness.hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                            sessionID: "session",
+                                                            promptID: "toolu_FP"),
+                        "a plain-text mention must never count as the closure of a REAL permission prompt")
+    }
+
+    // R13 B3 late addendum 2: plain text mentioning local-command-stdout is
+    // NOT a context closure — the pending command message must stay.
+    func testProbeIgnoresPlainTextMentionOfLocalCommandStdout() throws {
+        let harness = try makeBackfillHarness(oldLines: [
+            makeClaudeUserLine(uuid: "old-cmd", content: "<command-name>/context</command-name>"),
+            makeClaudeUserLine(uuid: "chatter", content: "the tag local-command-stdout appears in prose here"),
+        ], windowCapacity: 2)
+        defer { try? FileManager.default.removeItem(at: harness.directory); harness.session.stop() }
+        waitForBootstrap(harness)
+        let boundary = oldestLoadedSeq(harness)
+
+        var cursor = boundary
+        var sawCommand = false
+        for _ in 0..<600 {
+            guard harness.session.backfill(beforeSeq: cursor, limit: 2) else {
+                break
+            }
+            let history = historyEvents(harness, before: boundary)
+            if history.contains(where: { $0.metadata?["tidey_generated"] == "claude_context_command" }) {
+                sawCommand = true
+                break
+            }
+            guard let next = history.filter { $0.type != .sessionStarted }.map(\.seq).min(), next < cursor else {
+                break
+            }
+            cursor = next
+        }
+        XCTAssertTrue(sawCommand,
+                      "the genuinely stdout-less command message must stay — prose mentioning the tag is not its closure")
+    }
+
+    // R13 B3D2: the transcript's LAST line may not have its trailing newline
+    // yet — the closure in the residual EOF buffer still counts.
+    func testProbeRecognizesClosureInUnterminatedLastLine() throws {
+        var oldLines = [makeClaudeAskUserQuestionAssistantLine(uuid: "ask-eof", toolCallID: "toolu_EOF")]
+        for index in 0..<transcriptBootstrapLineLimit {
+            oldLines.append(makeClaudeUserLine(uuid: "mid-\(index)", content: "mid-\(index)"))
+        }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        // The final tool_result has NO trailing newline.
+        let body = oldLines.joined(separator: "\n") + "\n"
+            + makeClaudeToolResultLine(uuid: "result-eof", toolCallID: "toolu_EOF", content: "answer")
+        try body.write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let sender = RecordingCommandSender()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub,
+                                              socketClient: sender,
+                                              historicalReplayWindowCapacity: 2)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 2000).events.isEmpty == false
+        })
+
+        // Exact-anchor reload of the window showing the ask WITHOUT its
+        // closure (retention never saw the pair co-windowed).
+        var offsets = [Int]()
+        var offset = 0
+        for line in oldLines {
+            offsets.append(offset)
+            offset += line.utf8.count + 1
+        }
+        let sessionStartSeq = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+            .events.first { $0.type == .sessionStarted }?.seq ?? 0
+        let anchorSeq = sessionStartSeq + offsets[2] * 4096 + 1
+        XCTAssertTrue(session.backfill(beforeSeq: anchorSeq, limit: 2),
+                      "precondition: the exact-anchor page must load")
+        let page = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000, beforeSeq: anchorSeq).events
+        XCTAssertTrue(page.contains { $0.type == .toolCall && $0.toolCallID == "toolu_EOF" },
+                      "precondition: the opener LINE was loaded (its toolCall companion is stored), got \(page.map(\.eventID))")
+        XCTAssertTrue(page.contains { $0.text == "mid-0" },
+                      "precondition: the spacer companion is in the requested page, got \(page.map(\.eventID))")
+        XCTAssertNil(hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                 sessionID: "session",
+                                                 promptID: "toolu_EOF"),
+                     "the closure in the unterminated last line must still withdraw the opener")
+    }
+
+    // R13 B3D3: a FOREIGN-session exact tool_result never closes this
+    // session's Ask — the probe mirrors the production parser's outer
+    // session identity.
+    func testProbeRejectsForeignSessionToolResult() throws {
+        var foreignResult = makeClaudeToolResultLine(uuid: "result-foreign", toolCallID: "toolu_FOREIGN", content: "answer")
+        foreignResult = foreignResult.replacingOccurrences(of: "\"sessionId\":\"session\"", with: "\"sessionId\":\"other-session\"")
+        XCTAssertTrue(foreignResult.contains("other-session"), "fixture sanity")
+        let harness = try makeBackfillHarness(oldLines: [
+            makeClaudeAskUserQuestionAssistantLine(uuid: "ask-foreign", toolCallID: "toolu_FOREIGN"),
+            foreignResult,
+        ], windowCapacity: 1)
+        defer { try? FileManager.default.removeItem(at: harness.directory); harness.session.stop() }
+        waitForBootstrap(harness)
+        let boundary = oldestLoadedSeq(harness)
+
+        var cursor = boundary
+        for _ in 0..<600 {
+            guard harness.session.backfill(beforeSeq: cursor, limit: 1) else {
+                break
+            }
+            let history = historyEvents(harness, before: boundary)
+            if history.contains(where: { $0.type == .interactivePrompt }) {
+                break
+            }
+            guard let next = history.filter { $0.type != .sessionStarted }.map(\.seq).min(), next < cursor else {
+                break
+            }
+            cursor = next
+        }
+        XCTAssertNotNil(harness.hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                            sessionID: "session",
+                                                            promptID: "toolu_FOREIGN"),
+                        "a foreign-session tool_result must never close this session's Ask")
+    }
+
+    // R13 B3D3: a real stdout tag inside an ASSISTANT record is not a local
+    // command envelope; an unparseable stdout is not a summary. Neither
+    // closes the pending command.
+    func testProbeRejectsNonUserAndUnparseableContextClosures() throws {
+        let assistantStdout = """
+        {"type":"assistant","uuid":"assistant-stdout","sessionId":"session","version":"2.0.0","timestamp":"2026-04-30T00:00:03Z","message":{"role":"assistant","content":[{"type":"text","text":"<local-command-stdout>Context Usage\\n10k/200k tokens (5%)</local-command-stdout>"}]}}
+        """
+        let unparseableStdout = makeClaudeUserLine(uuid: "user-garbage",
+                                                   content: "<local-command-stdout>garbage without usage</local-command-stdout>")
+        let harness = try makeBackfillHarness(oldLines: [
+            makeClaudeUserLine(uuid: "old-cmd", content: "<command-name>/context</command-name>"),
+            assistantStdout,
+            unparseableStdout,
+        ], windowCapacity: 1)
+        defer { try? FileManager.default.removeItem(at: harness.directory); harness.session.stop() }
+        waitForBootstrap(harness)
+        let boundary = oldestLoadedSeq(harness)
+
+        var cursor = boundary
+        var sawCommand = false
+        for _ in 0..<600 {
+            guard harness.session.backfill(beforeSeq: cursor, limit: 1) else {
+                break
+            }
+            let history = historyEvents(harness, before: boundary)
+            if history.contains(where: { $0.metadata?["tidey_generated"] == "claude_context_command" }) {
+                sawCommand = true
+                break
+            }
+            guard let next = history.filter { $0.type != .sessionStarted }.map(\.seq).min(), next < cursor else {
+                break
+            }
+            cursor = next
+        }
+        XCTAssertTrue(sawCommand,
+                      "neither an assistant-record stdout tag nor an unparseable stdout is the command's closure — the pending command stays")
+    }
+
+    // R13 B3D4: a registry update pointing at a DIFFERENT transcript is a
+    // full source identity switch even while the old file exists — reused
+    // eventIDs must be re-acceptable and the new UNRESOLVED Ask active.
+    func testUpdateRecordTranscriptSwitchIsFullSourceEpochSwitch() throws {
+        let harness = try makeBackfillHarness(oldLines: [
+            makeClaudeAskUserQuestionAssistantLine(uuid: "ask-1", toolCallID: "toolu_SW"),
+            makeClaudeToolResultLine(uuid: "result-1", toolCallID: "toolu_SW", content: "answer"),
+        ], fillerCount: 4, windowCapacity: 4000)
+        defer { try? FileManager.default.removeItem(at: harness.directory); harness.session.stop() }
+        // Small filler: the whole OLD file bootstraps LIVE, including the
+        // resolved Ask pair (live terminal + seen eventIDs).
+        XCTAssertTrue(waitUntil {
+            harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                .events.contains { $0.type == .interactivePromptResolved }
+        })
+        XCTAssertNil(harness.hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                         sessionID: "session",
+                                                         promptID: "toolu_SW"))
+
+        // NEW transcript at a DIFFERENT path: SAME uuids, but the Ask is
+        // UNRESOLVED. The old file stays on disk.
+        let newURL = harness.directory.appendingPathComponent("session-new.jsonl", isDirectory: false)
+        var newLines = [makeClaudeAskUserQuestionAssistantLine(uuid: "ask-1", toolCallID: "toolu_SW")]
+        for index in 0..<4 {
+            newLines.append(makeClaudeUserLine(uuid: "new-filler-\(index)", content: "new-line-\(index)"))
+        }
+        try (newLines.joined(separator: "\n") + "\n").write(to: newURL, atomically: true, encoding: .utf8)
+
+        let oldMaxSeq = harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+            .events.map(\.seq).max() ?? 0
+        harness.session.update(record: makeRecord(transcriptPath: newURL.path))
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                .events.contains { $0.text == "new-line-3" }
+        }, "the session must resolve and bootstrap the NEW transcript")
+        let newEventSeqs = harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+            .events.filter { $0.text?.hasPrefix("new-line") == true }.map(\.seq)
+        XCTAssertFalse(newEventSeqs.isEmpty)
+        XCTAssertTrue(newEventSeqs.allSatisfy { $0 > oldMaxSeq },
+                      "the transport high-water survives the epoch switch: new events rebase ABOVE the old stream, got \(newEventSeqs) vs old max \(oldMaxSeq)")
+
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            harness.hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                sessionID: "session",
+                                                promptID: "toolu_SW") != nil
+        }, "the new source's UNRESOLVED Ask must be active — the old source's terminal/seen state must not suppress it")
+        XCTAssertFalse(harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+            .events.contains { $0.type == .interactivePromptResolved },
+                       "the old source's resolved terminal must be revoked")
+    }
+
+    // R13 B3D4: a nil transcript path later filled in with the SAME resolved
+    // file is a pure metadata update — never a source reset.
+    func testUpdateRecordSamePathIsNotASourceReset() throws {
+        let harness = try makeBackfillHarness(oldLines: [
+            makeClaudeUserLine(uuid: "old-m", content: "keep-me"),
+        ], fillerCount: 4)
+        defer { try? FileManager.default.removeItem(at: harness.directory); harness.session.stop() }
+        XCTAssertTrue(waitUntil {
+            harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                .events.contains { $0.text == "keep-me" }
+        })
+        let before = harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50).events.map(\.eventID)
+
+        // Same actual file via NON-standardized path spellings (./ and ..).
+        let directoryPath = harness.transcriptURL.deletingLastPathComponent().path
+        let directoryName = harness.transcriptURL.deletingLastPathComponent().lastPathComponent
+        let samePathWeird = directoryPath + "/./" + harness.transcriptURL.lastPathComponent
+        harness.session.update(record: makeRecord(transcriptPath: samePathWeird))
+        let samePathDotDot = directoryPath + "/../" + directoryName + "/" + harness.transcriptURL.lastPathComponent
+        harness.session.update(record: makeRecord(transcriptPath: samePathDotDot))
+
+        // A whitespace-only transcriptPath must be treated the SAME as nil
+        // (never a switch signal) in BOTH the drain pre-check AND
+        // performUpdate's own epoch-reset decision (a shared
+        // explicitTranscriptPath helper is what keeps them from drifting
+        // apart) — verified three ways: the pre-stop hook never fires, the
+        // Hub epoch/event-ID snapshot is untouched, and the OLD tailer is
+        // still the live one receiving further appends (not replaced/reset).
+        var beforeStopHookFired = false
+        harness.session.beforeOldTailerStopForTesting = { beforeStopHookFired = true }
+        harness.session.update(record: makeRecord(transcriptPath: "   "))
+        _ = harness.session.backfill(beforeSeq: 1, limit: 1)
+        XCTAssertFalse(beforeStopHookFired, "a whitespace-only transcriptPath must never be treated as a source switch")
+        harness.session.beforeOldTailerStopForTesting = nil
+
+        let afterWhitespaceUpdate = harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50).events.map(\.eventID)
+        XCTAssertEqual(afterWhitespaceUpdate, before, "a whitespace-only transcriptPath update must not reset the Hub source epoch")
+
+        // The OLD tailer must still be the live one: a fresh append is
+        // still picked up normally, proving it was never stopped/replaced.
+        let appendHandle = try FileHandle(forWritingTo: harness.transcriptURL)
+        appendHandle.seekToEndOfFile()
+        appendHandle.write(Data((makeClaudeUserLine(uuid: "after-whitespace", content: "still-live") + "\n").utf8))
+        try appendHandle.close()
+        XCTAssertTrue(waitUntil {
+            harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                .events.contains { $0.text == "still-live" }
+        }, "the OLD tailer must still be receiving live appends after a whitespace-only transcriptPath update")
+
+        // Both must hold — NOT an either/or: the new live append truly
+        // landed, AND the pre-existing history (from before ANY of the
+        // metadata updates above — same-path spellings and the whitespace
+        // path alike) is still fully present, undisturbed. A mutation that
+        // let the new append through while silently wiping the old epoch
+        // must fail this.
+        let after = harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50).events.map(\.eventID)
+        XCTAssertTrue(after.contains { $0.hasPrefix("after-whitespace") },
+                      "the new live append must be present, got \(after)")
+        XCTAssertTrue(before.allSatisfy(after.contains),
+                      "a same-file metadata update must not reset the source epoch, got \(after) vs before \(before)")
+    }
+
+    // R13 B3D5: file reload — a later command TERMINATES the previous
+    // command's closure search; summary2 never closes cmd1.
+    func testProbePairsSummaryWithNearestPrecedingCommandOnReload() throws {
+        let harness = try makeBackfillHarness(oldLines: [
+            makeClaudeUserLine(uuid: "cmd-1", content: "<command-name>/context</command-name>"),
+            makeClaudeUserLine(uuid: "cmd-2", content: "<command-name>/context</command-name>"),
+            makeClaudeContextStdoutLine(uuid: "stdout-2"),
+        ], windowCapacity: 1)
+        defer { try? FileManager.default.removeItem(at: harness.directory); harness.session.stop() }
+        waitForBootstrap(harness)
+        let boundary = oldestLoadedSeq(harness)
+
+        // Page deep enough that the window shows cmd-1 ALONE.
+        var cursor = boundary
+        var sawCmd1 = false
+        for _ in 0..<600 {
+            guard harness.session.backfill(beforeSeq: cursor, limit: 1) else {
+                break
+            }
+            let history = historyEvents(harness, before: boundary)
+            if history.contains(where: { $0.eventID.hasPrefix("cmd-1") }) {
+                sawCmd1 = true
+                break
+            }
+            guard let next = history.filter { $0.type != .sessionStarted }.map(\.seq).min(), next < cursor else {
+                break
+            }
+            cursor = next
+        }
+        XCTAssertTrue(sawCmd1,
+                      "cmd1 is an UNMATCHED opener — summary2 belongs to cmd2 and must not withdraw cmd1")
+    }
+
+    // R13 delta (1): an unsupported-version record is rejected EVERY time —
+    // the probe must not accept its exact tool_result as a closure, and the
+    // parser must not resume parsing after the deduped status notification.
+    func testUnsupportedVersionRecordsAreAlwaysRejected() throws {
+        var unsupportedResult = makeClaudeToolResultLine(uuid: "result-v3", toolCallID: "toolu_V3", content: "answer")
+        unsupportedResult = unsupportedResult.replacingOccurrences(of: "\"version\":\"2.0.0\"", with: "\"version\":\"3.0.0\"")
+        XCTAssertTrue(unsupportedResult.contains("3.0.0"), "fixture sanity")
+        var secondUnsupported = makeClaudeToolResultLine(uuid: "result-v3b", toolCallID: "toolu_V3", content: "second")
+        secondUnsupported = secondUnsupported.replacingOccurrences(of: "\"version\":\"2.0.0\"", with: "\"version\":\"3.0.0\"")
+
+        let harness = try makeBackfillHarness(oldLines: [
+            makeClaudeAskUserQuestionAssistantLine(uuid: "ask-v", toolCallID: "toolu_V3"),
+            unsupportedResult,
+            secondUnsupported,
+        ], windowCapacity: 2)
+        defer { try? FileManager.default.removeItem(at: harness.directory); harness.session.stop() }
+        waitForBootstrap(harness)
+        let boundary = oldestLoadedSeq(harness)
+
+        var cursor = boundary
+        var sawToolResultDuringPaging = false
+        for _ in 0..<600 {
+            guard harness.session.backfill(beforeSeq: cursor, limit: 2) else {
+                break
+            }
+            let history = historyEvents(harness, before: boundary)
+            if history.contains(where: { $0.type == .toolResult }) {
+                sawToolResultDuringPaging = true
+            }
+            if history.contains(where: { $0.type == .interactivePrompt }) {
+                break
+            }
+            guard let next = history.filter { $0.type != .sessionStarted }.map(\.seq).min(), next < cursor else {
+                break
+            }
+            cursor = next
+        }
+        XCTAssertNotNil(harness.hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                            sessionID: "session",
+                                                            promptID: "toolu_V3"),
+                        "an unsupported-version tool_result must not close this session's Ask")
+        // NEITHER unsupported record may have been parsed at ANY point — the
+        // second same-version record must not silently resume parsing.
+        XCTAssertFalse(sawToolResultDuringPaging,
+                       "unsupported records are rejected every time")
+    }
+
+    // R13 delta D4: a type=user record wrapping a NESTED assistant message is
+    // not a genuine user message — neither the production parser nor the
+    // probe may derive/close from its exact tool_result or parseable stdout.
+    func testNestedAssistantRoleUserRecordDerivesAndClosesNothing() throws {
+        var roleMasqueradeResult = makeClaudeToolResultLine(uuid: "result-mask", toolCallID: "toolu_MASK", content: "answer")
+        roleMasqueradeResult = roleMasqueradeResult.replacingOccurrences(of: "\"role\":\"user\"", with: "\"role\":\"assistant\"")
+        XCTAssertTrue(roleMasqueradeResult.contains("\"role\":\"assistant\""), "fixture sanity")
+        let maskedStdout = """
+        {"type":"user","uuid":"stdout-mask","sessionId":"session","version":"2.0.0","timestamp":"2026-04-30T00:00:03Z","message":{"role":"assistant","content":"<local-command-stdout>Context Usage\\n10k/200k tokens (5%)</local-command-stdout>"}}
+        """
+        let harness = try makeBackfillHarness(oldLines: [
+            makeClaudeUserLine(uuid: "old-cmd", content: "<command-name>/context</command-name>"),
+            makeClaudeAskUserQuestionAssistantLine(uuid: "ask-mask", toolCallID: "toolu_MASK"),
+            roleMasqueradeResult,
+            maskedStdout,
+        ], windowCapacity: 1)
+        defer { try? FileManager.default.removeItem(at: harness.directory); harness.session.stop() }
+        waitForBootstrap(harness)
+        let boundary = oldestLoadedSeq(harness)
+
+        var cursor = boundary
+        var sawCommand = false
+        var sawAsk = false
+        var derivedToolResult = false
+        for _ in 0..<600 {
+            guard harness.session.backfill(beforeSeq: cursor, limit: 1) else {
+                break
+            }
+            let history = historyEvents(harness, before: boundary)
+            if history.contains(where: { $0.type == .toolResult }) {
+                derivedToolResult = true
+            }
+            if history.contains(where: { $0.type == .interactivePrompt }) {
+                sawAsk = true
+                // While the Ask is IN the window, the masqueraded closure
+                // must not have closed or withdrawn it.
+                XCTAssertNotNil(harness.hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                                    sessionID: "session",
+                                                                    promptID: "toolu_MASK"),
+                                "the masqueraded tool_result must not close the Ask")
+            }
+            if history.contains(where: { $0.metadata?["tidey_generated"] == "claude_context_command" }) {
+                sawCommand = true
+                break
+            }
+            guard let next = history.filter { $0.type != .sessionStarted }.map(\.seq).min(), next < cursor else {
+                break
+            }
+            cursor = next
+        }
+        // Production parser: the role-masqueraded record derives NOTHING.
+        XCTAssertFalse(derivedToolResult, "a nested-assistant type=user record must not derive a tool_result")
+        XCTAssertTrue(sawAsk)
+        XCTAssertTrue(sawCommand, "the masqueraded stdout must not withdraw the pending command")
+    }
+
+    // R13 delta D4: a single user string carrying BOTH a real command tag and
+    // parseable stdout is a NEW command — it terminates the previous
+    // command's closure search instead of closing it.
+    func testCombinedCommandAndStdoutLineTerminatesPreviousSearch() throws {
+        let combined = makeClaudeUserLine(uuid: "combined",
+                                          content: "<command-name>/context</command-name><local-command-stdout>Context Usage\n10k/200k tokens (5%)</local-command-stdout>")
+        let harness = try makeBackfillHarness(oldLines: [
+            makeClaudeUserLine(uuid: "cmd-1", content: "<command-name>/context</command-name>"),
+            combined,
+        ], windowCapacity: 1)
+        defer { try? FileManager.default.removeItem(at: harness.directory); harness.session.stop() }
+        waitForBootstrap(harness)
+        let boundary = oldestLoadedSeq(harness)
+
+        var cursor = boundary
+        var sawCmd1 = false
+        var sawCombinedCommandEvent = false
+        var sawAnyContextSummary = false
+        for _ in 0..<600 {
+            guard harness.session.backfill(beforeSeq: cursor, limit: 1) else {
+                break
+            }
+            let history = historyEvents(harness, before: boundary)
+            if history.contains(where: { $0.eventID.hasPrefix("combined") && $0.metadata?["tidey_generated"] == "claude_context_command" }) {
+                sawCombinedCommandEvent = true
+            }
+            if history.contains(where: { $0.metadata?["tidey_generated"] == "claude_context" }) {
+                sawAnyContextSummary = true
+            }
+            if history.contains(where: { $0.eventID.hasPrefix("cmd-1") }) {
+                sawCmd1 = true
+                break
+            }
+            guard let next = history.filter { $0.type != .sessionStarted }.map(\.seq).min(), next < cursor else {
+                break
+            }
+            cursor = next
+        }
+        XCTAssertTrue(sawCmd1,
+                      "the combined line is a NEW command — it must terminate cmd-1's search, not close/withdraw it")
+        // The combined record is CONSUMED as the new command by the
+        // production parser itself.
+        XCTAssertTrue(sawCombinedCommandEvent,
+                      "the combined record publishes its own claude_context_command event")
+        XCTAssertFalse(sawAnyContextSummary,
+                       "the combined record must NOT be treated as the preceding command's stdout result")
+    }
+
+    // R13 delta D5: after a source switch the seq base maps the NEW file's
+    // offsets — the Hub-visible cursor drives real backfill into the new
+    // source, never the old one.
+    func testSourceSwitchBackfillMapsNewFileOffsets() throws {
+        // OLD source: LONG rows — its raw byte max strictly exceeds the
+        // entire NEW file's EOF, so an unbased/EOF-clamped inverse mapping
+        // is observably wrong.
+        let longPad = String(repeating: "x", count: 400)
+        var oldLines = [makeClaudeUserLine(uuid: "old-a", content: "old-row-a")]
+        for index in 0..<200 {
+            oldLines.append(makeClaudeUserLine(uuid: "old-pad-\(index)", content: "pad-\(index)-\(longPad)"))
+        }
+        let harness = try makeBackfillHarness(oldLines: oldLines, fillerCount: transcriptBootstrapLineLimit)
+        defer { try? FileManager.default.removeItem(at: harness.directory); harness.session.stop() }
+        waitForBootstrap(harness)
+        let oldFileSize = (try FileManager.default.attributesOfItem(atPath: harness.transcriptURL.path)[.size] as? Int) ?? 0
+        // Old historical content genuinely loaded before the switch.
+        let boundary = oldestLoadedSeq(harness)
+        var cursor = boundary
+        var sawOldRow = false
+        for _ in 0..<600 {
+            guard harness.session.backfill(beforeSeq: cursor, limit: 50) else {
+                break
+            }
+            let history = historyEvents(harness, before: boundary)
+            if history.contains(where: { $0.text == "old-row-a" }) {
+                sawOldRow = true
+                break
+            }
+            guard let next = history.filter { $0.type != .sessionStarted }.map(\.seq).min(), next < cursor else {
+                break
+            }
+            cursor = next
+        }
+        XCTAssertTrue(sawOldRow, "precondition: old historical content was genuinely loaded")
+        let oldMaxSeq = harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+            .events.map(\.seq).max() ?? 0
+        XCTAssertGreaterThan(oldMaxSeq, 0)
+
+        // NEW SHORT transcript: tiny rows; two older rows outside bootstrap.
+        let newURL = harness.directory.appendingPathComponent("session-new.jsonl", isDirectory: false)
+        var newLines = [makeClaudeUserLine(uuid: "new-old-0", content: "new-old-0"),
+                        makeClaudeUserLine(uuid: "new-old-1", content: "new-old-1")]
+        for index in 0..<transcriptBootstrapLineLimit {
+            newLines.append(makeClaudeUserLine(uuid: "nf-\(index)", content: "new-line-\(index)"))
+        }
+        let newBody = newLines.joined(separator: "\n") + "\n"
+        try newBody.write(to: newURL, atomically: true, encoding: .utf8)
+        // Geometry precondition: old raw/file max strictly greater than the
+        // NEW source's EOF.
+        XCTAssertGreaterThan(oldFileSize, newBody.utf8.count,
+                             "precondition: the old source's raw max exceeds the new source's EOF")
+        harness.session.update(record: makeRecord(transcriptPath: newURL.path))
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+                .events.contains { $0.text == "new-line-\(transcriptBootstrapLineLimit - 1)" }
+        })
+        // New live events rebase above the old stream.
+        let newBoundary = harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+            .events.filter { ($0.text ?? "").hasPrefix("new-line-") }.map(\.seq).min() ?? 0
+        XCTAssertGreaterThan(newBoundary, oldMaxSeq)
+
+        // Old historical content is absent after the switch.
+        XCTAssertFalse(harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+            .events.contains { $0.text == "old-row-a" },
+                       "old historical content is revoked by the switch")
+
+        // Real backfill from the new Hub-visible cursor loads the EXACT
+        // older NEW-source rows, in order, with no old-source rows — and the
+        // inverse mapping targets the EXACT expected new-source raw offset
+        // (unrescuable by the progress loop).
+        XCTAssertTrue(harness.session.backfill(beforeSeq: newBoundary, limit: 2),
+                      "the new-source cursor must map back to the new file")
+        let expectedAnchorOffset = newLines[0].utf8.count + 1 + newLines[1].utf8.count + 1
+        XCTAssertEqual(harness.session.lastBackfillStartOffsetForTesting, expectedAnchorOffset,
+                       "the first inverse seq→offset mapping must target the new-source offset exactly")
+        let history = historyEvents(harness, before: newBoundary).filter { $0.type != .sessionStarted }
+        XCTAssertEqual(history.compactMap(\.text), ["new-old-0", "new-old-1"],
+                       "the exact older new-source rows load in order")
+        XCTAssertFalse(history.contains { $0.text == "old-row-a" }, "no old-source rows return")
+
+        // A line appended to the OLD file cannot inject; the NEW file can.
+        try appendLine(harness, makeClaudeUserLine(uuid: "stale-inject", content: "stale-inject"))
+        let newHandle = try FileHandle(forWritingTo: newURL)
+        newHandle.seekToEndOfFile()
+        newHandle.write((makeClaudeUserLine(uuid: "fresh-inject", content: "fresh-inject") + "\n").data(using: .utf8)!)
+        try newHandle.close()
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+                .events.contains { $0.text == "fresh-inject" }
+        }, "the NEW source keeps injecting")
+        XCTAssertFalse(harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+            .events.contains { $0.text == "stale-inject" },
+                       "the OLD tailer must not inject after the switch")
+    }
+
+    // R13 delta D5: file invalidation (delete-and-recreate at the SAME path)
+    // is a FULL source epoch reset — old live/seen state must not suppress a
+    // reused-eventID unresolved Ask.
+    func testInvalidationIsFullSourceEpochReset() throws {
+        let harness = try makeBackfillHarness(oldLines: [
+            makeClaudeAskUserQuestionAssistantLine(uuid: "ask-1", toolCallID: "toolu_INV"),
+            makeClaudeToolResultLine(uuid: "result-1", toolCallID: "toolu_INV", content: "answer"),
+        ], fillerCount: 4)
+        defer { try? FileManager.default.removeItem(at: harness.directory); harness.session.stop() }
+        // Small filler: the whole file (incl. the resolved pair) bootstraps
+        // LIVE — the terminal and the seen eventIDs are genuinely live state.
+        XCTAssertTrue(waitUntil {
+            harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                .events.contains { $0.type == .interactivePromptResolved }
+        })
+
+        try FileManager.default.removeItem(at: harness.transcriptURL)
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000, beforeSeq: Int.max)
+                .events.contains { $0.type == .interactivePromptResolved } == false
+        }, "the invalidation must revoke the old source's terminal")
+
+        // Recreate the SAME path: reused uuid/eventID, but UNRESOLVED.
+        var lines = [makeClaudeAskUserQuestionAssistantLine(uuid: "ask-1", toolCallID: "toolu_INV")]
+        for index in 0..<4 {
+            lines.append(makeClaudeUserLine(uuid: "recreate-\(index)", content: "recreate-\(index)"))
+        }
+        try (lines.joined(separator: "\n") + "\n").write(to: harness.transcriptURL, atomically: true, encoding: .utf8)
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            harness.hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                sessionID: "session",
+                                                promptID: "toolu_INV") != nil
+        }, "the recreated source's UNRESOLVED Ask (reused eventID) must be accepted and active")
+    }
+
+    // Round 7G TOCTOU addendum: `start()`'s boundary/start seq is RESERVED
+    // (hub.nextSyntheticSeq) then PUBLISHED — between those two calls, a
+    // competing producer on the SAME session could publish a higher seq,
+    // forcing publish()'s own rebase-on-collision to fire. `maxObservedSeq`/
+    // `transcriptSequenceBase` must be seeded from publish's RETURN VALUE
+    // (the ACTUAL stored seq), never the stale reservation. Uses
+    // `afterBoundaryReservationBeforePublishForTesting` to force this
+    // deterministically — no thread/timing dependency.
+    func testClaudeStartCompetingProducerRaceSeedsBaseFromActualPublishedSeq() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+
+        let totalLines = transcriptBootstrapLineLimit + 5
+        var lines = [String]()
+        for index in 0..<totalLines {
+            lines.append(makeClaudeUserLine(uuid: "uuid-\(index)", content: "line-\(index)"))
+        }
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        defer { session.stop() }
+
+        let collector = LockedEventCollector()
+        let (subscriptionID, _) = hub.subscribe(workspaceID: "workspace", sessionID: "session") { envelope in
+            collector.append(envelope.event)
+        }
+        defer { hub.unsubscribe(subscriptionID) }
+
+        session.setAfterBoundaryReservationBeforePublishHookForTesting {
+            let reserved = hub.nextSyntheticSeq(sessionID: "session")
+            // `transcriptEventSequence`'s lineOffset argument is a BYTE
+            // offset into the file, not a line index — `* multiplier`
+            // converts bytes to seq units, so a gap of only a few
+            // multiplier-widths is just a few BYTES of offset, easily
+            // absorbed within a single JSONL line. A large, deliberately
+            // arbitrary test-only factor (10,000x the multiplier) forces
+            // the gap to span thousands of file bytes — many complete
+            // JSONL rows regardless of their actual length — so a wrong
+            // local base shifts the computed byte offset by whole lines,
+            // not a sub-line amount integer arithmetic could tolerate.
+            let competingSeq = reserved + transcriptLineSequenceMultiplier * 10_000
+            hub.publish(AgentEvent(eventID: "competing-native-start",
+                                   seq: competingSeq,
+                                   vendor: "claude",
+                                   workspaceID: "workspace",
+                                   sessionID: "session",
+                                   timestamp: "2026-01-01T00:00:00Z",
+                                   type: .assistantMessage,
+                                   role: "assistant",
+                                   text: "competing",
+                                   name: nil,
+                                   input: nil,
+                                   output: nil,
+                                   toolCallID: nil,
+                                   metadata: nil))
+        }
+
+        session.start()
+
+        XCTAssertTrue(waitUntil {
+            hub.drainDeliveriesForTesting()
+            return collector.snapshot().contains { $0.type == .sessionStarted }
+        })
+
+        let delivered = collector.snapshot()
+        let boundaryEvent = try XCTUnwrap(delivered.first { $0.type == .sessionStarted && $0.eventID == "session-start:session" })
+        let competingEvent = try XCTUnwrap(delivered.first { $0.eventID == "competing-native-start" })
+        XCTAssertGreaterThan(boundaryEvent.seq, competingEvent.seq,
+                            "the boundary marker's ACTUAL stored seq must land above the competing producer it raced against")
+
+        let fetchedBoundary = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+            .events.first(where: { $0.type == .sessionStarted && $0.eventID == "session-start:session" })
+        XCTAssertEqual(fetchedBoundary?.seq, boundaryEvent.seq,
+                       "subscriber envelope and Hub fetch must agree on the SAME actual stored seq")
+
+        // Direct, unconfounded proof: `transcriptSequenceBase` itself must
+        // equal the ACTUAL published boundary seq. This is the root-cause
+        // assertion — externally-observed seqs alone are NOT reliable
+        // here, since every event that flows back through `hub.publish`
+        // gets silently rebased-on-collision by the Hub's own safety net,
+        // which launders even a systematically wrong local base into a
+        // still-monotonic, still-externally-plausible sequence.
+        XCTAssertEqual(session.transcriptSequenceBaseForTesting, boundaryEvent.seq,
+                       "transcriptSequenceBase must be seeded from the ACTUAL published boundary seq, never the stale pre-publish reservation")
+
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1).events.first?.text == "line-\(totalLines - 1)"
+        })
+
+        // ALL new-source content — not merely the first/newest — must sit
+        // strictly above the ACTUAL boundary seq, sorted and unique.
+        let contentEvents = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+            .events.filter { ($0.text ?? "").hasPrefix("line-") }
+        let contentSeqs = contentEvents.map(\.seq)
+        XCTAssertEqual(Set(contentSeqs).count, contentSeqs.count, "every content event must own a distinct seq")
+        XCTAssertEqual(contentSeqs.sorted(), contentSeqs, "content events must already be strictly seq-ordered")
+        let minContentSeq = try XCTUnwrap(contentSeqs.min())
+        XCTAssertGreaterThan(minContentSeq, boundaryEvent.seq,
+                            "EVERY new-source content event must land strictly above the ACTUAL boundary seq")
+
+        // The exact earliest LIVE line: totalLines (505) minus the
+        // bootstrap tail window (500) = "line-5" is the first live line;
+        // "line-4" is the exact nearest-preceding historical line. With
+        // the forced multi-stride competitor gap above, a wrong local base
+        // would shift this computed lineOffset by whole lines, not get
+        // silently absorbed by integer-division tolerance.
+        let firstLiveFileEvent = try XCTUnwrap(contentEvents.first { $0.text == "line-5" }?.seq)
+        XCTAssertTrue(session.backfill(beforeSeq: firstLiveFileEvent, limit: 600))
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000, beforeSeq: firstLiveFileEvent)
+                .events.contains { $0.text == "line-4" }
+        }, "backfill after a competing-producer race must resolve to the EXACT nearest-preceding line using the ACTUAL boundary-derived sequence base")
+        let historicalPage = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000, beforeSeq: firstLiveFileEvent)
+        XCTAssertTrue(historicalPage.events.allSatisfy { $0.seq < firstLiveFileEvent })
+        XCTAssertFalse(historicalPage.events.contains { $0.text == "line-5" },
+                       "the already-live line-5 must not also appear as historical")
+    }
+
+    // Round 7G TOCTOU addendum: the SAME race, but for beginNewSourceEpoch
+    // (a source-identity SWITCH, not the initial start) — the two call
+    // sites share the reserve→publish pattern and must both be race-safe.
+    func testClaudeSourceSwitchCompetingProducerRaceSeedsBaseFromActualPublishedSeq() throws {
+        let harness = try makeBackfillHarness(oldLines: [
+            makeClaudeUserLine(uuid: "old-1", content: "old-message"),
+        ], fillerCount: 4)
+        defer { try? FileManager.default.removeItem(at: harness.directory); harness.session.stop() }
+        XCTAssertTrue(waitUntil {
+            harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                .events.contains { $0.text == "old-message" }
+        })
+
+        let collector = LockedEventCollector()
+        let (subscriptionID, _) = harness.hub.subscribe(workspaceID: "workspace", sessionID: "session") { envelope in
+            collector.append(envelope.event)
+        }
+        defer { harness.hub.unsubscribe(subscriptionID) }
+
+        harness.session.setAfterBoundaryReservationBeforePublishHookForTesting {
+            let reserved = harness.hub.nextSyntheticSeq(sessionID: "session")
+            // See testClaudeStartCompetingProducerRaceSeedsBaseFromActualPublishedSeq
+            // for why this gap must be a large, deliberately arbitrary
+            // multiple of the multiplier, not merely 1-2x.
+            let competingSeq = reserved + transcriptLineSequenceMultiplier * 10_000
+            harness.hub.publish(AgentEvent(eventID: "competing-native-switch",
+                                           seq: competingSeq,
+                                           vendor: "claude",
+                                           workspaceID: "workspace",
+                                           sessionID: "session",
+                                           timestamp: "2026-01-01T00:00:00Z",
+                                           type: .assistantMessage,
+                                           role: "assistant",
+                                           text: "competing",
+                                           name: nil,
+                                           input: nil,
+                                           output: nil,
+                                           toolCallID: nil,
+                                           metadata: nil))
+        }
+
+        let totalLines = transcriptBootstrapLineLimit + 5
+        var newLines = [String]()
+        for index in 0..<totalLines {
+            newLines.append(makeClaudeUserLine(uuid: "new-\(index)", content: "new-line-\(index)"))
+        }
+        let newURL = harness.directory.appendingPathComponent("new-source.jsonl", isDirectory: false)
+        try (newLines.joined(separator: "\n") + "\n").write(to: newURL, atomically: true, encoding: .utf8)
+
+        harness.session.update(record: makeRecord(transcriptPath: newURL.path))
+
+        XCTAssertTrue(waitUntil {
+            harness.hub.drainDeliveriesForTesting()
+            return collector.snapshot().contains { $0.eventID.hasPrefix("source-epoch:") }
+        })
+
+        let delivered = collector.snapshot()
+        let boundaryEvent = try XCTUnwrap(delivered.first { $0.eventID.hasPrefix("source-epoch:") })
+        let competingEvent = try XCTUnwrap(delivered.first { $0.eventID == "competing-native-switch" })
+        XCTAssertGreaterThan(boundaryEvent.seq, competingEvent.seq,
+                            "the switch boundary's ACTUAL stored seq must land above the competing producer it raced against")
+
+        let fetchedBoundary = harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+            .events.first(where: { $0.eventID.hasPrefix("source-epoch:") })
+        XCTAssertEqual(fetchedBoundary?.seq, boundaryEvent.seq,
+                       "subscriber envelope and Hub fetch must agree on the SAME actual stored seq")
+
+        // Direct, unconfounded proof (see the start()-path test for why
+        // externally-observed seqs alone are unreliable here).
+        XCTAssertEqual(harness.session.transcriptSequenceBaseForTesting, boundaryEvent.seq,
+                       "transcriptSequenceBase must be seeded from the ACTUAL published switch-boundary seq, never the stale pre-publish reservation")
+
+        XCTAssertTrue(waitUntil {
+            harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1).events.first?.text == "new-line-\(totalLines - 1)"
+        })
+
+        let contentEvents = harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+            .events.filter { ($0.text ?? "").hasPrefix("new-line-") }
+        let contentSeqs = contentEvents.map(\.seq)
+        XCTAssertEqual(Set(contentSeqs).count, contentSeqs.count, "every content event must own a distinct seq")
+        XCTAssertEqual(contentSeqs.sorted(), contentSeqs, "content events must already be strictly seq-ordered")
+        let minContentSeq = try XCTUnwrap(contentSeqs.min())
+        XCTAssertGreaterThan(minContentSeq, boundaryEvent.seq,
+                            "EVERY new-source content event must land strictly above the ACTUAL boundary seq")
+
+        // Exact earliest live line: totalLines (505) minus the bootstrap
+        // tail window (500) = "new-line-5"; "new-line-4" is the exact
+        // nearest-preceding historical line.
+        let firstLiveFileEvent = try XCTUnwrap(contentEvents.first { $0.text == "new-line-5" }?.seq)
+        XCTAssertTrue(harness.session.backfill(beforeSeq: firstLiveFileEvent, limit: 600))
+        XCTAssertTrue(waitUntil {
+            harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000, beforeSeq: firstLiveFileEvent)
+                .events.contains { $0.text == "new-line-4" }
+        }, "backfill after a competing-producer race must resolve to the EXACT nearest-preceding line using the ACTUAL boundary-derived sequence base")
+        let historicalPage = harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000, beforeSeq: firstLiveFileEvent)
+        XCTAssertTrue(historicalPage.events.allSatisfy { $0.seq < firstLiveFileEvent })
+        XCTAssertFalse(historicalPage.events.contains { $0.text == "new-line-5" },
+                       "the already-live new-line-5 must not also appear as historical")
+    }
+
+    // Round 7D/7G P0: a source identity switch must LIVE-DELIVER a
+    // `.sessionStarted` boundary to an ALREADY-SUBSCRIBED client — a
+    // store-only Hub reset (`beginNewSourceEpoch`/`replaceHistoricalEvents`)
+    // does not, by itself, notify a client mid-turn on the OLD source, which
+    // would otherwise keep showing Working indefinitely (iOS treats a live
+    // `.sessionStarted` as the unconditional Working/expecting-response
+    // reset). Mirrors the existing Codex-side contract
+    // (`CodexTranscriptSession.beginNewSourceEpoch`).
+    //
+    // Round 7G fix: the earlier form of this test subscribed only AFTER
+    // A's content was already bootstrapped, and A carried no `.thinking`
+    // content block at all — so it never proved a genuine Working
+    // true→false transition, only that SOME sessionStarted-shaped event
+    // eventually showed up. This version subscribes BEFORE `session.start()`
+    // so a REAL `thinking` content block (the actual Claude transcript
+    // shape, via `makeClaudeThinkingAssistantLine`) is genuinely
+    // live-delivered, proves the equivalent Working state is true, THEN
+    // proves the switch flips it to false.
+    func testSourceSwitchToBlankNewSourceLiveDeliversSessionStartedBoundary() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        try (makeClaudeThinkingAssistantLine(uuid: "old-thinking", thinking: "considering the request") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        defer { session.stop() }
+
+        let collector = LockedEventCollector()
+        let (subscriptionID, _) = hub.subscribe(workspaceID: "workspace", sessionID: "session") { envelope in
+            collector.append(envelope.event)
+        }
+        defer { hub.unsubscribe(subscriptionID) }
+
+        // Subscribed BEFORE start(): A's own `.thinking` block must be
+        // genuinely LIVE-DELIVERED to this collector, not merely stored.
+        session.start()
+        XCTAssertTrue(waitUntil {
+            hub.drainDeliveriesForTesting()
+            return collector.snapshot().contains { $0.type == .thinking }
+        })
+        hub.drainDeliveriesForTesting()
+
+        let statesAfterA = Self.equivalentWorkingStates(for: collector.snapshot())
+        XCTAssertEqual(statesAfterA.last, true,
+                       "A's live thinking block must actually flip the equivalent Working state to true — the PRE-boundary baseline the true→false transition below must move away from, got states=\(statesAfterA) events=\(collector.snapshot().map { ($0.type, $0.eventID) })")
+
+        // Path switch to a DIFFERENT, currently-nonexistent (blank/delayed)
+        // file — the new source has not resolved/bootstrapped yet. Matched
+        // specifically by its "source-epoch:" eventID prefix — a bare
+        // `.type == .sessionStarted` check would be satisfied IMMEDIATELY
+        // by the INITIAL "session-start:" boundary `session.start()` itself
+        // already published above, never actually waiting for the switch.
+        let newURL = directory.appendingPathComponent("blank-new.jsonl", isDirectory: false)
+        session.update(record: makeRecord(transcriptPath: newURL.path))
+        XCTAssertTrue(waitUntil {
+            hub.drainDeliveriesForTesting()
+            return collector.snapshot().contains { $0.eventID.hasPrefix("source-epoch:") }
+        }, "the path switch must LIVE-DELIVER a sessionStarted boundary to the already-subscribed client")
+        hub.drainDeliveriesForTesting()
+
+        let snapshot = collector.snapshot()
+        let states = Self.equivalentWorkingStates(for: snapshot)
+        XCTAssertEqual(states.last, false,
+                       "the equivalent Working state must transition from the earlier-proven true to false immediately after the source-epoch boundary, got states=\(states) events=\(snapshot.map { ($0.type, $0.eventID) })")
+        // A's own thinking content WAS legitimately live-delivered earlier
+        // (that is the whole point of the true-state proof above) — the
+        // guarantee here is narrower: it must never be RE-delivered AFTER
+        // the switch boundary.
+        let boundaryIndex = try XCTUnwrap(snapshot.firstIndex { $0.eventID.hasPrefix("source-epoch:") })
+        XCTAssertFalse(snapshot[(boundaryIndex + 1)...].contains { $0.text == "considering the request" },
+                       "the old content must never be RE-delivered live after the boundary")
+    }
+
+    // Same-path invalidation (delete, not yet recreated — a genuinely BLANK
+    // window) must ALSO emit the live boundary, not just an explicit path
+    // switch — both call sites share `beginNewSourceEpoch()`.
+    func testSamePathInvalidationWithBlankSourceLiveDeliversSessionStartedBoundary() throws {
+        let harness = try makeBackfillHarness(oldLines: [
+            makeClaudeUserLine(uuid: "old-1", content: "old-message"),
+        ], fillerCount: 4)
+        defer { try? FileManager.default.removeItem(at: harness.directory); harness.session.stop() }
+        XCTAssertTrue(waitUntil {
+            harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                .events.contains { $0.text == "old-message" }
+        })
+
+        let collector = LockedEventCollector()
+        let (subscriptionID, _) = harness.hub.subscribe(workspaceID: "workspace", sessionID: "session") { envelope in
+            collector.append(envelope.event)
+        }
+        defer { harness.hub.unsubscribe(subscriptionID) }
+
+        try FileManager.default.removeItem(at: harness.transcriptURL)
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            harness.hub.drainDeliveriesForTesting()
+            return collector.snapshot().contains { $0.type == .sessionStarted }
+        }, "same-path invalidation with a blank (deleted, not-yet-recreated) source must ALSO live-deliver a boundary")
+    }
+
+    // No stale old-source event survives/reopens state after the boundary:
+    // a line appended to the OLD (now-revoked, tailer-stopped) file after
+    // the switch must never be live-delivered or reach the Hub's store.
+    func testNoStaleOldSourceEventSurvivesOrReopensStateAfterBoundary() throws {
+        let harness = try makeBackfillHarness(oldLines: [
+            makeClaudeUserLine(uuid: "old-1", content: "old-message"),
+        ], fillerCount: 4)
+        defer { try? FileManager.default.removeItem(at: harness.directory); harness.session.stop() }
+        XCTAssertTrue(waitUntil {
+            harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                .events.contains { $0.text == "old-message" }
+        })
+        let oldTranscriptURL = harness.transcriptURL
+
+        let collector = LockedEventCollector()
+        let (subscriptionID, _) = harness.hub.subscribe(workspaceID: "workspace", sessionID: "session") { envelope in
+            collector.append(envelope.event)
+        }
+        defer { harness.hub.unsubscribe(subscriptionID) }
+
+        let newURL = harness.directory.appendingPathComponent("blank-new2.jsonl", isDirectory: false)
+        harness.session.update(record: makeRecord(transcriptPath: newURL.path))
+        XCTAssertTrue(waitUntil {
+            harness.hub.drainDeliveriesForTesting()
+            return collector.snapshot().contains { $0.type == .sessionStarted }
+        })
+        // By the time the live boundary is OBSERVED here, `beginNewSourceEpoch`
+        // has already run `tailer?.stop()` SYNCHRONOUSLY, on the session's
+        // own serial queue, strictly BEFORE the boundary publish that follows
+        // it in the same queue block — so the old tailer is provably already
+        // fully stopped at this point, not merely "probably stopped by now."
+        collector.removeAll()
+
+        // A late append to the OLD (revoked, already-stopped) file — via a
+        // raw FileHandle, bypassing the session's queue entirely, so there
+        // is no in-flight callback for it to race against in the first
+        // place.
+        let handle = try FileHandle(forWritingTo: oldTranscriptURL)
+        handle.seekToEndOfFile()
+        handle.write((makeClaudeUserLine(uuid: "stale-after-boundary", content: "stale-after-boundary") + "\n").data(using: .utf8)!)
+        try handle.close()
+        // Deterministic negative proof, no sleep: `backfill` runs
+        // `queue.sync` internally — a full FIFO round-trip through the
+        // session's OWN serial queue AFTER the append above. Since
+        // JSONLFileTailer schedules its own callbacks on that SAME queue,
+        // this barrier guarantees any (illegitimate) late callback that
+        // COULD have been queued in response to the append has already run
+        // by the time this call returns — not a fixed-duration guess.
+        _ = harness.session.backfill(beforeSeq: 0, limit: 1)
+        harness.hub.drainDeliveriesForTesting()
+        XCTAssertFalse(collector.snapshot().contains { $0.text == "stale-after-boundary" },
+                       "the OLD (revoked) source must never inject after the boundary")
+        XCTAssertFalse(harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+            .events.contains { $0.text == "stale-after-boundary" })
+    }
+
+    // Round 7G P0 (symmetric with Codex's
+    // testDelayedExplicitBNeverFallsBackToAAndResolverAutoAttachesOnceBAppears):
+    // an EXPLICIT B that does not yet exist on disk must be EXCLUSIVE
+    // authority — resolveTranscriptURL must return nil and NEVER fall back
+    // to the `.claude/projects` scan, which (for the SAME sessionID) could
+    // re-discover A's own still-existing file sitting exactly where the
+    // fallback convention expects it, silently reattaching a revoked
+    // source. `projectsDirectoryOverrideForTesting` makes this reproducible
+    // in an isolated directory (not the real ~/.claude/projects) so the
+    // fallback path is genuinely reachable, not merely bypassed.
+    func testClaudeDelayedExplicitBNeverFallsBackToAAndResolverAutoAttachesOnceBAppears() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        // A's file sits EXACTLY where the fallback convention (cwd "/tmp"
+        // sanitized to "-tmp", sessionID "session") would find it — so a
+        // reintroduced fallback bug genuinely CAN rediscover it, not just
+        // fail to find anything.
+        let fallbackCandidateDirectory = directory.appendingPathComponent("-tmp", isDirectory: true)
+        try FileManager.default.createDirectory(at: fallbackCandidateDirectory, withIntermediateDirectories: true)
+        let transcriptA = fallbackCandidateDirectory.appendingPathComponent("session.jsonl", isDirectory: false)
+        let transcriptB = directory.appendingPathComponent("session-b.jsonl", isDirectory: false)
+        try (makeClaudeUserLine(uuid: "old-1", content: "old-message") + "\n")
+            .write(to: transcriptA, atomically: true, encoding: .utf8)
+        // B is named in the record but does NOT exist on disk yet.
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptA.path),
+                                              fileManager: .default,
+                                              hub: hub,
+                                              projectsDirectoryOverrideForTesting: directory)
+        session.start()
+        defer { session.stop() }
+
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50).events.contains { $0.text == "old-message" }
+        })
+        let aMaxSeq = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50).events.map(\.seq).max() ?? 0
+
+        let collector = LockedEventCollector()
+        let (subscriptionID, _) = hub.subscribe(workspaceID: "workspace", sessionID: "session") { envelope in
+            collector.append(envelope.event)
+        }
+        defer { hub.unsubscribe(subscriptionID) }
+
+        session.update(record: makeRecord(transcriptPath: transcriptB.path))
+
+        XCTAssertTrue(waitUntil {
+            hub.drainDeliveriesForTesting()
+            return collector.snapshot().contains { $0.eventID.hasPrefix("source-epoch:") }
+        })
+        let boundaryEvent = try XCTUnwrap(collector.snapshot().first { $0.eventID.hasPrefix("source-epoch:") })
+        XCTAssertGreaterThan(boundaryEvent.seq, aMaxSeq, "the boundary must rebase strictly above A's seq high-water")
+        collector.removeAll()
+
+        // A late append to the OLD (revoked, tailer-stopped) file must
+        // never enter the Hub — proving the resolver did NOT fall back and
+        // reattach A while B is merely missing.
+        let handleA = try FileHandle(forWritingTo: transcriptA)
+        handleA.seekToEndOfFile()
+        handleA.write((makeClaudeUserLine(uuid: "old-late", content: "old-late-content") + "\n").data(using: .utf8)!)
+        try handleA.close()
+
+        // Deterministically wait for several REAL resolver ticks (the
+        // production 1s timer still drives them) using the test hook —
+        // never a blind fixed-duration sleep.
+        let ticksExpectation = XCTestExpectation(description: "resolver ticks while B is missing")
+        ticksExpectation.expectedFulfillmentCount = 3
+        session.setAfterResolveAttemptHookForTesting { ticksExpectation.fulfill() }
+        wait(for: [ticksExpectation], timeout: 5)
+        session.setAfterResolveAttemptHookForTesting(nil)
+
+        hub.drainDeliveriesForTesting()
+        XCTAssertFalse(collector.snapshot().contains { $0.text == "old-late-content" },
+                       "resolveTranscriptURL must never fall back to A while B is merely missing — no reattachment/injection from A")
+        XCTAssertFalse(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+            .events.contains { $0.text == "old-late-content" },
+                       "A's late append must never reach the Hub after the boundary")
+
+        // No further update()/backfill() call — B appears on disk with
+        // enough content to require real pagination, and the
+        // ALREADY-RUNNING resolver timer must auto-attach it.
+        let totalLines = transcriptBootstrapLineLimit + 10
+        var bLines = [String]()
+        for index in 0..<totalLines {
+            bLines.append(makeClaudeUserLine(uuid: "b-\(index)", content: "b-line-\(index)"))
+        }
+        try (bLines.joined(separator: "\n") + "\n").write(to: transcriptB, atomically: true, encoding: .utf8)
+
+        XCTAssertTrue(waitUntil(timeout: 8) {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1).events.first?.text == "b-line-\(totalLines - 1)"
+        }, "the resolver's periodic retry must auto-attach B once it exists, with no further update()/backfill() call")
+
+        let bootstrapped = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+        XCTAssertFalse(bootstrapped.events.contains { $0.text == "b-line-0" },
+                       "only the tail should be bootstrapped live")
+
+        let bContentSeqs = bootstrapped.events.filter { $0.type != .sessionStarted }.map(\.seq)
+        XCTAssertEqual(Set(bContentSeqs).count, bContentSeqs.count, "every bootstrapped B content event must own a distinct seq")
+        XCTAssertEqual(bContentSeqs.sorted(), bContentSeqs, "bootstrapped B content events must already be strictly seq-ordered")
+        let bMinSeq = try XCTUnwrap(bContentSeqs.min())
+        XCTAssertGreaterThan(bMinSeq, boundaryEvent.seq,
+                            "EVERY B content event must land strictly above the ACTUAL boundary seq")
+
+        // Exact tail window: totalLines (510) minus the bootstrap tail
+        // window (500) = 10 excluded lines, so the live window is EXACTLY
+        // b-line-10...b-line-509, in order.
+        let expectedLiveBLines = (10..<totalLines).map { "b-line-\($0)" }
+        let actualLiveBLines = bootstrapped.events
+            .filter { ($0.text ?? "").hasPrefix("b-line-") }
+            .sorted { $0.seq < $1.seq }
+            .map { $0.text ?? "" }
+        XCTAssertEqual(actualLiveBLines, expectedLiveBLines,
+                       "the live-bootstrapped tail window must be EXACTLY the expected b-line range, in order")
+
+        // Exact inverse backfill mapping + no overlap.
+        let oldestLoadedSeq = try XCTUnwrap(bootstrapped.events.first { $0.text == "b-line-10" }?.seq)
+        XCTAssertTrue(session.backfill(beforeSeq: oldestLoadedSeq, limit: 50))
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000, beforeSeq: oldestLoadedSeq)
+                .events.contains { $0.text == "b-line-9" }
+        }, "backfill in the auto-attached B source must correctly locate the EXACT nearest-preceding line")
+        let historicalPage = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000, beforeSeq: oldestLoadedSeq)
+        XCTAssertTrue(historicalPage.events.allSatisfy { $0.seq < oldestLoadedSeq })
+        let expectedHistoricalBLines = (0..<10).map { "b-line-\($0)" }
+        let actualHistoricalBLines = historicalPage.events
+            .filter { ($0.text ?? "").hasPrefix("b-line-") }
+            .sorted { $0.seq < $1.seq }
+            .map { $0.text ?? "" }
+        XCTAssertEqual(actualHistoricalBLines, expectedHistoricalBLines,
+                       "the backfilled historical page must be EXACTLY b-line-0...b-line-9, in order, got \(actualHistoricalBLines)")
+        XCTAssertFalse(historicalPage.events.contains { $0.text == "b-line-10" },
+                       "the already-live b-line-10 must not also appear as historical (no overlap/off-by-one)")
+    }
+
+    // R13 final B-D4: EVERY parser/notification state participates in the
+    // full invalidation reset — each is observably non-empty before the
+    // delete-and-recreate, and each omission is independently killable.
+    func testInvalidationResetsEveryParserAndNotificationState() throws {
+        var unsupported = makeClaudeToolResultLine(uuid: "v3-old", toolCallID: "toolu_VOLD", content: "x")
+        unsupported = unsupported.replacingOccurrences(of: "\"version\":\"2.0.0\"", with: "\"version\":\"3.0.0\"")
+        let harness = try makeBackfillHarness(oldLines: [
+            unsupported,
+            makeClaudeAskUserQuestionAssistantLine(uuid: "ask-open", toolCallID: "toolu_OPEN"),
+            makeClaudeUserLine(uuid: "cmd-pending", content: "<command-name>/context</command-name>"),
+        ], fillerCount: 3)
+        defer { try? FileManager.default.removeItem(at: harness.directory); harness.session.stop() }
+        // Small filler: the whole file bootstraps LIVE. At invalidation time:
+        // the Ask correlation map holds toolu_OPEN (unresolved), the pending
+        // /context command is armed, the unsupported version 3.0.0 is
+        // recorded, and the Ask notification was sent once.
+        XCTAssertTrue(waitUntil {
+            harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                .events.contains { $0.type == .interactivePrompt }
+        })
+        func notifications() -> Int {
+            harness.sender.commands().filter { $0.contains("notification.create") }.count
+        }
+        XCTAssertTrue(waitUntil { notifications() == 1 }, "precondition: the old Ask notified once")
+        XCTAssertTrue(waitUntil {
+            harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                .events.contains { $0.metadata?["reason"] == "unsupported_version" }
+        }, "precondition: the unsupported version was recorded/notified")
+
+        try FileManager.default.removeItem(at: harness.transcriptURL)
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000, beforeSeq: Int.max)
+                .events.contains { $0.type == .interactivePrompt } == false
+        }, "the invalidation revokes the old source")
+
+        // NEW source at the same path: a tool_result-only line for the OLD
+        // Ask correlation, a stdout-only line for the OLD pending command,
+        // the SAME unsupported version, and the SAME Ask delivery again.
+        var lines = [
+            makeClaudeToolResultLine(uuid: "new-result", toolCallID: "toolu_OPEN", content: "orphan"),
+            makeClaudeContextStdoutLine(uuid: "new-stdout"),
+            unsupported,
+            makeClaudeAskUserQuestionAssistantLine(uuid: "ask-open", toolCallID: "toolu_OPEN"),
+        ]
+        for index in 0..<3 {
+            lines.append(makeClaudeUserLine(uuid: "recreate-\(index)", content: "recreate-\(index)"))
+        }
+        try (lines.joined(separator: "\n") + "\n").write(to: harness.transcriptURL, atomically: true, encoding: .utf8)
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                .events.contains { $0.text == "recreate-2" }
+        }, "the recreated source bootstraps")
+
+        let newEvents = harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 100).events
+        // 1. Ask correlation cleared: the tool_result-only line derives NO
+        //    terminal from the OLD map.
+        XCTAssertFalse(newEvents.contains { $0.type == .interactivePromptResolved && $0.metadata?["prompt_id"] == "toolu_OPEN" },
+                       "the OLD Ask correlation must not let a tool_result-only new source emit a terminal")
+        // 2. Pending command cleared: the stdout-only line derives NO
+        //    context summary from the OLD pending /context.
+        XCTAssertFalse(newEvents.contains { $0.metadata?["tidey_generated"] == "claude_context" },
+                       "the OLD pending /context must not let a stdout-only new source derive a summary")
+        // 3. Unsupported versions cleared: the SAME version notifies again
+        //    as a fresh source.
+        XCTAssertTrue(newEvents.contains { $0.metadata?["reason"] == "unsupported_version" },
+                      "the same unsupported version is notified again for the fresh source")
+        // 4. Notification deduper cleared: the reused Ask delivery notifies
+        //    again.
+        XCTAssertTrue(waitUntil { notifications() >= 2 },
+                      "the reused Ask delivery must notify again in the fresh source, got \(harness.sender.commands())")
+    }
+
+    // R13 final B-D5: `~` canonicalization — a `~/...` spelling of the SAME
+    // resolved file is a pure metadata update, never a source reset.
+    func testUpdateRecordTildePathIsNotASourceReset() throws {
+        let homeDirectory = FileManager.default.homeDirectoryForCurrentUser.path
+        let relativeName = "tidey-tilde-test-\(UUID().uuidString)"
+        let directoryPath = homeDirectory + "/" + relativeName
+        try FileManager.default.createDirectory(atPath: directoryPath, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: directoryPath) }
+        let transcriptPath = directoryPath + "/session.jsonl"
+        var lines = [makeClaudeUserLine(uuid: "keep-1", content: "keep-me")]
+        for index in 0..<4 {
+            lines.append(makeClaudeUserLine(uuid: "f-\(index)", content: "line-\(index)"))
+        }
+        try (lines.joined(separator: "\n") + "\n").write(toFile: transcriptPath, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptPath),
+                                              fileManager: .default,
+                                              hub: hub,
+                                              socketClient: RecordingCommandSender())
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50).events.contains { $0.text == "keep-me" }
+        })
+        let before = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50).events.map(\.eventID)
+
+        // The SAME file via a `~/` spelling.
+        session.update(record: makeRecord(transcriptPath: "~/" + relativeName + "/session.jsonl"))
+        _ = session.backfill(beforeSeq: 1, limit: 1) // queue barrier
+        let after = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50).events.map(\.eventID)
+        XCTAssertEqual(after, before, "a resolver-equivalent ~ spelling must not reset the source epoch")
+    }
+
+    // R12 B3: window eviction must never leave HALF a correlated lifecycle —
+    // a resolved Ask cannot revive as active, and a /context command must not
+    // lose its derived context summary, no matter where the eviction boundary
+    // falls.
+    func testEvictionNeverRevivesResolvedAskOrRegressesContext() throws {
+        let harness = try makeBackfillHarness(oldLines: [
+            makeClaudeUserLine(uuid: "old-0", content: "m0"),
+            makeClaudeUserLine(uuid: "old-1", content: "m1"),
+            makeClaudeUserLine(uuid: "old-2", content: "m2"),
+            makeClaudeUserLine(uuid: "old-3", content: "m3"),
+            makeClaudeUserLine(uuid: "old-cmd", content: "<command-name>/context</command-name>"),
+            makeClaudeContextStdoutLine(uuid: "old-stdout"),
+            makeClaudeAskUserQuestionAssistantLine(uuid: "old-ask", toolCallID: "toolu_EV"),
+            makeClaudeToolResultLine(uuid: "old-result", toolCallID: "toolu_EV", content: "picked"),
+        ], windowCapacity: 5)
+        defer { try? FileManager.default.removeItem(at: harness.directory); harness.session.stop() }
+        waitForBootstrap(harness)
+        let boundary = oldestLoadedSeq(harness)
+        func running() -> Int {
+            harness.sender.commands().filter { $0.contains("report_shell_state running") }.count
+        }
+
+        // The initial page covers Ask + terminal (+ command/stdout): resolved.
+        XCTAssertTrue(harness.session.backfill(beforeSeq: boundary, limit: 5))
+        let initialHistory = historyEvents(harness, before: boundary)
+        let promptID = try XCTUnwrap(initialHistory.first { $0.type == .interactivePrompt }?.metadata?["prompt_id"])
+        XCTAssertNil(harness.hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                         sessionID: "session",
+                                                         promptID: promptID))
+
+        // Page deeper one line at a time: every replacement crosses the
+        // eviction boundary at a different point.
+        var cursor = initialHistory.filter { $0.type != .sessionStarted }.map(\.seq).min() ?? boundary
+        for _ in 0..<10 {
+            guard harness.session.backfill(beforeSeq: cursor, limit: 1) else {
+                break
+            }
+            let history = historyEvents(harness, before: boundary)
+            XCTAssertNil(harness.hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                             sessionID: "session",
+                                                             promptID: promptID),
+                         "a resolved Ask must NEVER revive as active across eviction, history=\(history.map(\.eventID))")
+            if history.contains(where: { $0.type == .interactivePrompt && $0.metadata?["prompt_id"] == promptID }) {
+                XCTAssertTrue(history.contains { $0.type == .interactivePromptResolved && $0.metadata?["prompt_id"] == promptID },
+                              "the Ask may only appear together with its terminal")
+            }
+            if history.contains(where: { $0.metadata?["tidey_generated"] == "claude_context_command" }) {
+                XCTAssertTrue(history.contains { $0.metadata?["tidey_generated"] == "claude_context" },
+                              "the /context command must not lose its derived summary")
+            }
+            XCTAssertEqual(running(), 0, "eviction replays must not send sidebar side effects")
+            let next = history.filter { $0.type != .sessionStarted }.map(\.seq).min() ?? cursor
+            guard next < cursor else {
+                break
+            }
+            cursor = next
+        }
+    }
+
+    private func makeBackfillHarness(oldLines: [String],
+                                     fillerCount: Int = transcriptBootstrapLineLimit,
+                                     windowCapacity: Int = 4000,
+                                     hubCapacity: Int = 2000,
+                                     retentionCapacity: Int = 256) throws -> BackfillHarness {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        var lines = oldLines
+        for index in 0..<fillerCount {
+            lines.append(makeClaudeUserLine(uuid: "filler-\(index)", content: "line-\(index)"))
+        }
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub(maxBufferedEvents: hubCapacity, maxSeenEventIDs: 4000)
+        let sender = RecordingCommandSender()
+        let registry = ChatSubmitEchoRegistry()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub,
+                                              socketClient: sender,
+                                              chatSubmitEchoRegistry: registry,
+                                              historicalReplayWindowCapacity: windowCapacity,
+                                              retainedHistoricalClosureCapacity: retentionCapacity)
+        session.start()
+        return BackfillHarness(directory: directory, transcriptURL: transcriptURL, hub: hub, sender: sender, registry: registry, session: session)
+    }
+
+    private func waitForBootstrap(_ harness: BackfillHarness, fillerCount: Int = transcriptBootstrapLineLimit) {
+        XCTAssertTrue(waitUntil {
+            harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1).events.first?.text == "line-\(fillerCount - 1)"
+        })
+    }
+
+    private func oldestLoadedSeq(_ harness: BackfillHarness) -> Int {
+        harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+            .events.filter { ($0.text ?? "").hasPrefix("line-") }.map(\.seq).min() ?? 0
+    }
+
+    private func historyEvents(_ harness: BackfillHarness, before: Int) -> [AgentEvent] {
+        harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000, beforeSeq: before).events
+    }
+
+    private func appendLine(_ harness: BackfillHarness, _ line: String) throws {
+        let handle = try FileHandle(forWritingTo: harness.transcriptURL)
+        handle.seekToEndOfFile()
+        handle.write((line + "\n").data(using: .utf8)!)
+        try handle.close()
+    }
+
+    private func makeClaudeContextStdoutLine(uuid: String) -> String {
+        makeClaudeUserLine(uuid: uuid,
+                           content: "<local-command-stdout>Context Usage\n10k/200k tokens (5%)\nSystem prompt: 2k tokens (1%)</local-command-stdout>")
+    }
+
+    func testClaudeBackfillProducesCompleteDerivedHistoryInSinglePage() throws {
+        // One historical page holding user echo, Ask X, tool_result X,
+        // /context command and its stdout: backfill must produce the FULL
+        // derived history — prompt + matching resolved (active == nil) and
+        // command + context summary — at historically ordered seqs.
+        let harness = try makeBackfillHarness(oldLines: [
+            makeClaudeUserLine(uuid: "old-echo", content: "repeat me"),
+            makeClaudeAskUserQuestionAssistantLine(uuid: "old-ask", toolCallID: "toolu_X"),
+            makeClaudeToolResultLine(uuid: "old-result", toolCallID: "toolu_X", content: "picked"),
+            makeClaudeUserLine(uuid: "old-cmd", content: "<command-name>/context</command-name>"),
+            makeClaudeContextStdoutLine(uuid: "old-stdout"),
+        ])
+        defer { try? FileManager.default.removeItem(at: harness.directory); harness.session.stop() }
+        waitForBootstrap(harness)
+        let boundary = oldestLoadedSeq(harness)
+        XCTAssertTrue(harness.session.backfill(beforeSeq: boundary, limit: 600))
+        XCTAssertTrue(waitUntil { self.historyEvents(harness, before: boundary).isEmpty == false })
+
+        let history = historyEvents(harness, before: boundary)
+        let prompt = history.first { $0.type == .interactivePrompt }
+        let resolved = history.first { $0.type == .interactivePromptResolved }
+        XCTAssertNotNil(prompt, "historical Ask must produce its prompt event")
+        XCTAssertNotNil(resolved, "the historical tool_result must produce the matching resolved terminal")
+        XCTAssertEqual(resolved?.metadata?["prompt_id"], "toolu_X")
+        if let prompt, let resolved {
+            XCTAssertLessThan(prompt.seq, resolved.seq, "derived history keeps prompt < resolved")
+        }
+        XCTAssertNil(harness.hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                         sessionID: "session",
+                                                         promptID: "toolu_X"),
+                     "the historical Ask is resolved WITHIN history")
+        let command = history.first { $0.metadata?["tidey_generated"] == "claude_context_command" }
+        let summary = history.first { $0.metadata?["tidey_generated"] == "claude_context" }
+        XCTAssertNotNil(command)
+        XCTAssertNotNil(summary, "the historical /context stdout must produce the context summary")
+        if let command, let summary {
+            XCTAssertLessThan(command.seq, summary.seq)
+        }
+        XCTAssertTrue(harness.sender.commands().allSatisfy { $0.contains("notification.create") == false },
+                      "history produces no notifications")
+    }
+
+    func testClaudeBackfillCrossPageCorrelationMatchesSinglePageResult() throws {
+        // limit: 1 loads newest-first: result/stdout pages arrive BEFORE the
+        // Ask/command pages. After all pages the derived history must equal
+        // the single-page result.
+        let harness = try makeBackfillHarness(oldLines: [
+            makeClaudeAskUserQuestionAssistantLine(uuid: "old-ask", toolCallID: "toolu_X"),
+            makeClaudeToolResultLine(uuid: "old-result", toolCallID: "toolu_X", content: "picked"),
+            makeClaudeUserLine(uuid: "old-cmd", content: "<command-name>/context</command-name>"),
+            makeClaudeContextStdoutLine(uuid: "old-stdout"),
+        ])
+        defer { try? FileManager.default.removeItem(at: harness.directory); harness.session.stop() }
+        waitForBootstrap(harness)
+        let boundary = oldestLoadedSeq(harness)
+        // Page by page like a production client, newest lines first: each
+        // request anchors before the oldest event already fetched.
+        var pages = 0
+        var cursor = boundary
+        while pages < 600, harness.session.backfill(beforeSeq: cursor, limit: 1) {
+            pages += 1
+            let fetched = historyEvents(harness, before: boundary)
+            let nextCursor = fetched.filter { $0.type != .sessionStarted }.map(\.seq).min() ?? cursor
+            if nextCursor >= cursor {
+                break
+            }
+            cursor = nextCursor
+        }
+        // A page deriving nothing below the anchor is extended within the
+        // same call (so the client cursor always advances) — correlated
+        // pairs still arrive across separate calls.
+        XCTAssertGreaterThanOrEqual(pages, 2, "correlated lines must arrive across separate backfill calls")
+
+        let history = historyEvents(harness, before: boundary)
+        XCTAssertNotNil(history.first { $0.type == .interactivePrompt })
+        XCTAssertNotNil(history.first { $0.type == .interactivePromptResolved },
+                        "cross-page correlation must still produce the resolved terminal")
+        XCTAssertNil(harness.hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                         sessionID: "session",
+                                                         promptID: "toolu_X"))
+        XCTAssertNotNil(history.first { $0.metadata?["tidey_generated"] == "claude_context" },
+                        "cross-page command/stdout must still produce the context summary")
+        // Replays across pages must not duplicate events in the Hub.
+        let promptCount = history.filter { $0.type == .interactivePrompt }.count
+        XCTAssertEqual(promptCount, 1, "window replays must dedupe by original line identity")
+    }
+
+    func testClaudeBackfillDoesNotTouchLiveCorrelationState() throws {
+        // Live Ask B and live pending /context exist; backfill contains
+        // matching historical result/stdout. History must not consume the
+        // live correlation — the true live result/stdout still produce their
+        // terminal/context.
+        let harness = try makeBackfillHarness(oldLines: [
+            makeClaudeToolResultLine(uuid: "old-result-B", toolCallID: "toolu_B", content: "historical answer"),
+            makeClaudeContextStdoutLine(uuid: "old-stdout"),
+        ])
+        defer { try? FileManager.default.removeItem(at: harness.directory); harness.session.stop() }
+        waitForBootstrap(harness)
+
+        // Live Ask B and live /context arm the LIVE correlation state.
+        try appendLine(harness, makeClaudeAskUserQuestionAssistantLine(uuid: "live-ask-B", toolCallID: "toolu_B"))
+        try appendLine(harness, makeClaudeUserLine(uuid: "live-cmd", content: "<command-name>/context</command-name>"))
+        XCTAssertTrue(waitUntil {
+            harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10).events.contains { $0.type == .interactivePrompt }
+        })
+
+        let boundary = oldestLoadedSeq(harness)
+        XCTAssertTrue(harness.session.backfill(beforeSeq: boundary, limit: 600))
+        XCTAssertTrue(waitUntil { self.historyEvents(harness, before: boundary).isEmpty == false })
+
+        // True live result/stdout still correlate.
+        try appendLine(harness, makeClaudeToolResultLine(uuid: "live-result-B", toolCallID: "toolu_B", content: "live answer"))
+        try appendLine(harness, makeClaudeContextStdoutLine(uuid: "live-stdout"))
+        XCTAssertTrue(waitUntil {
+            harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20).events.contains {
+                $0.type == .interactivePromptResolved && $0.metadata?["prompt_id"] == "toolu_B" && $0.eventID.contains("live-result-B")
+            }
+        }, "the LIVE result must still resolve the LIVE Ask after a backfill containing a matching historical result")
+        XCTAssertTrue(waitUntil {
+            harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20).events.contains {
+                $0.metadata?["tidey_generated"] == "claude_context" && $0.eventID.contains("live-stdout")
+            }
+        }, "the LIVE stdout must still pair with the LIVE /context command")
+    }
+
+    func testClaudeBackfillUnresolvedTailStateDoesNotLeakIntoLive() throws {
+        // Historical UNRESOLVED Ask X and a page-tail /context command: they
+        // must not leak correlation into live parsing.
+        let harness = try makeBackfillHarness(oldLines: [
+            makeClaudeAskUserQuestionAssistantLine(uuid: "old-ask", toolCallID: "toolu_X"),
+            makeClaudeUserLine(uuid: "old-cmd", content: "<command-name>/context</command-name>"),
+        ])
+        defer { try? FileManager.default.removeItem(at: harness.directory); harness.session.stop() }
+        waitForBootstrap(harness)
+        let boundary = oldestLoadedSeq(harness)
+        XCTAssertTrue(harness.session.backfill(beforeSeq: boundary, limit: 600))
+        XCTAssertTrue(waitUntil { self.historyEvents(harness, before: boundary).isEmpty == false })
+        let baseline = harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000).events.count
+
+        try appendLine(harness, makeClaudeToolResultLine(uuid: "live-result-X", toolCallID: "toolu_X", content: "late"))
+        try appendLine(harness, makeClaudeContextStdoutLine(uuid: "live-stdout"))
+        XCTAssertTrue(waitUntil {
+            harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000).events.count > baseline
+        })
+        let all = harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000).events
+        XCTAssertFalse(all.contains { $0.type == .interactivePromptResolved && $0.eventID.contains("live-result-X") },
+                       "a live result must not resolve a HISTORICAL unresolved Ask")
+        XCTAssertFalse(all.contains { $0.metadata?["tidey_generated"] == "claude_context" && $0.eventID.contains("live-stdout") },
+                       "a live stdout must not pair with a HISTORICAL page-tail command")
+    }
+
+    func testClaudeHistoricalVersionStatusDoesNotEatLiveStatus() throws {
+        // Historical unsupported version V, then a LIVE event with the SAME
+        // version but a different line identity: the live first-observation
+        // contract must still run.
+        let unsupportedOld = """
+        {"type":"user","uuid":"old-v","sessionId":"session","version":"9.9.9","timestamp":"2026-04-30T00:00:00Z","message":{"role":"user","content":"old"}}
+        """
+        let harness = try makeBackfillHarness(oldLines: [unsupportedOld])
+        defer { try? FileManager.default.removeItem(at: harness.directory); harness.session.stop() }
+        waitForBootstrap(harness)
+        let boundary = oldestLoadedSeq(harness)
+        XCTAssertTrue(harness.session.backfill(beforeSeq: boundary, limit: 600))
+        XCTAssertTrue(waitUntil { self.historyEvents(harness, before: boundary).isEmpty == false })
+        XCTAssertTrue(historyEvents(harness, before: boundary).contains { $0.metadata?["reason"] == "unsupported_version" },
+                      "history itself still derives the unsupported-version status")
+
+        let unsupportedLive = """
+        {"type":"user","uuid":"live-v","sessionId":"session","version":"9.9.9","timestamp":"2026-04-30T00:10:00Z","message":{"role":"user","content":"new"}}
+        """
+        try appendLine(harness, unsupportedLive)
+        XCTAssertTrue(waitUntil {
+            harness.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000, afterSeq: boundary).events.contains {
+                $0.metadata?["reason"] == "unsupported_version" && $0.eventID.contains("unsupported-version")
+            }
+        }, "the LIVE first observation of version V must still publish its status (history must not eat it)")
+    }
+
+    func testClaudeCrossPageVersionStatusIsReconciledToOne() throws {
+        // The SAME unsupported version V on two limit=1 pages: after the
+        // older page loads, the historical replacement must retract the
+        // newer page's status — exactly one status remains.
+        let vLine1 = """
+        {"type":"user","uuid":"old-v1","sessionId":"session","version":"9.9.9","timestamp":"2026-04-30T00:00:00Z","message":{"role":"user","content":"v1"}}
+        """
+        let vLine2 = """
+        {"type":"user","uuid":"old-v2","sessionId":"session","version":"9.9.9","timestamp":"2026-04-30T00:00:01Z","message":{"role":"user","content":"v2"}}
+        """
+        let harness = try makeBackfillHarness(oldLines: [vLine1, vLine2])
+        defer { try? FileManager.default.removeItem(at: harness.directory); harness.session.stop() }
+        waitForBootstrap(harness)
+        let boundary = oldestLoadedSeq(harness)
+        XCTAssertTrue(harness.session.backfill(beforeSeq: boundary, limit: 1))  // newer page first
+        XCTAssertTrue(harness.session.backfill(beforeSeq: boundary, limit: 1))  // older page second
+        let statuses = historyEvents(harness, before: boundary).filter { $0.metadata?["reason"] == "unsupported_version" }
+        XCTAssertEqual(statuses.count, 1,
+                       "cross-page duplicate version statuses must reconcile to one, got \(statuses.map(\.eventID))")
+    }
+
+    private final class RecordingCommandSender: TideyCommandSending {
+        private let lock = NSLock()
+        private var storage = [String]()
+        func send(command: String) throws {
+            lock.lock()
+            storage.append(command)
+            lock.unlock()
+        }
+        func commands() -> [String] {
+            lock.lock()
+            defer { lock.unlock() }
+            return storage
+        }
+    }
+
+    // Lock-protected collector for events delivered from `AgentEventHub`'s
+    // OWN background `deliveryQueue` (see AgentEventHubTests for the queue
+    // split) — appends happen on that queue's thread, while assertions read
+    // from the test's main thread. `drainDeliveriesForTesting()` gives a
+    // proper happens-before barrier for CONTENT already delivered, but a
+    // plain unsynchronized array is still formally a race for any tool that
+    // doesn't reason about GCD queue barriers; this makes it a non-issue.
+    private final class LockedEventCollector {
+        private let lock = NSLock()
+        private var storage = [AgentEvent]()
+        func append(_ event: AgentEvent) {
+            lock.lock()
+            storage.append(event)
+            lock.unlock()
+        }
+        func snapshot() -> [AgentEvent] {
+            lock.lock()
+            defer { lock.unlock() }
+            return storage
+        }
+        func removeAll() {
+            lock.lock()
+            storage.removeAll()
+            lock.unlock()
+        }
+    }
+
+    // A minimal reproduction of the iOS client's Working fold, over events
+    // as actually LIVE-DELIVERED to a subscriber, in order — mirrors
+    // CodexTranscriptSessionTests.equivalentWorkingStates exactly.
+    private static func equivalentWorkingStates(for events: [AgentEvent]) -> [Bool] {
+        var isThinking = false
+        var states = [Bool]()
+        for event in events {
+            switch event.type {
+            case .thinking:
+                isThinking = true
+            case .assistantMessage, .assistantFinal, .interactivePrompt, .interactivePromptResolved,
+                 .toolCall, .sessionStarted, .sessionEnded:
+                isThinking = false
+            default:
+                break
+            }
+            states.append(isThinking)
+        }
+        return states
+    }
+
+    func testClaudeBackfillDoesNotRunSidebarSideEffects() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+
+        var lines = [String]()
+        // OLD region: an AskUserQuestion prompt that would publish sidebar
+        // state if it were treated as live.
+        lines.append(makeClaudeAskUserQuestionAssistantLine(uuid: "old-question", toolCallID: "toolu_old"))
+        for index in 0..<transcriptBootstrapLineLimit {
+            lines.append(makeClaudeUserLine(uuid: "uuid-\(index)", content: "line-\(index)"))
+        }
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let sender = RecordingCommandSender()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub,
+                                              socketClient: sender)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1).events.first?.text == "line-\(transcriptBootstrapLineLimit - 1)"
+        })
+        let commandsBeforeBackfill = sender.commands()
+
+        let initial = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+        let lineEvents = initial.events.filter { ($0.text ?? "").hasPrefix("line-") }
+        let oldestLoadedSeq = lineEvents.map(\.seq).min() ?? 0
+        XCTAssertTrue(session.backfill(beforeSeq: oldestLoadedSeq, limit: 100))
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace",
+                      sessionID: "session",
+                      limit: 5000,
+                      beforeSeq: oldestLoadedSeq).events.isEmpty == false
+        })
+        XCTAssertEqual(sender.commands(), commandsBeforeBackfill,
+                       "Claude backfill must not send sidebar commands, got new: \(sender.commands().dropFirst(commandsBeforeBackfill.count))")
+    }
+
     private func makeClaudeUserLine(uuid: String, content: String) -> String {
         let object: [String: Any] = [
             "type": "user",
@@ -399,6 +2992,32 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
             "message": [
                 "role": "user",
                 "content": content,
+            ],
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        return String(data: data, encoding: .utf8)!
+    }
+
+    // A real `thinking` content block — the ACTUAL Claude transcript shape
+    // that `ClaudeTranscriptSession` maps to an `.thinking` AgentEvent (see
+    // its content-block switch, case "thinking"), not a synthetic
+    // stand-in. Used to genuinely exercise the Working-equivalent
+    // true state, mirroring Codex's task_started `.thinking` anchor.
+    private func makeClaudeThinkingAssistantLine(uuid: String, thinking: String) -> String {
+        let object: [String: Any] = [
+            "type": "assistant",
+            "uuid": uuid,
+            "sessionId": "session",
+            "version": "2.0.0",
+            "timestamp": "2026-04-30T00:00:00Z",
+            "message": [
+                "role": "assistant",
+                "content": [
+                    [
+                        "type": "thinking",
+                        "thinking": thinking,
+                    ],
+                ],
             ],
         ]
         let data = try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
@@ -507,4 +3126,5 @@ private final class StubClaudeCommandSender: TideyCommandSending {
     func send(command: String) throws {
         commands.append(command)
     }
+
 }

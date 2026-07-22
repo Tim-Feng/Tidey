@@ -1,5 +1,68 @@
 import Foundation
 
+// Bridge-side idempotency for prompt submits. A retry that reuses the same
+// client_request_id for the same prompt and decision gets the same recorded
+// status back instead of triggering a second delivery; a conflicting decision
+// under the same identity fails closed. Shared across WebSocket connections
+// so reconnect retries still deduplicate. Bounded LRU.
+final class InteractivePromptSubmitDeduper: @unchecked Sendable {
+    enum Check: Sendable {
+        case new
+        case duplicate([String: JSONValue])
+        case conflict
+    }
+
+    private struct CachedSubmit {
+        let promptID: String
+        let decision: String
+        let result: [String: JSONValue]
+    }
+
+    private let lock = NSLock()
+    private let capacity: Int
+    private var order: [String] = []
+    private var cacheByClientRequestID: [String: CachedSubmit] = [:]
+
+    init(capacity: Int = 128) {
+        self.capacity = max(1, capacity)
+    }
+
+    func check(clientRequestID: String, promptID: String, decision: String) -> Check {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let cached = cacheByClientRequestID[clientRequestID] else {
+            return .new
+        }
+        guard cached.promptID == promptID, cached.decision == decision else {
+            return .conflict
+        }
+        // A cached pending_confirmation is not a final answer: the request
+        // may have been resolved authoritatively or re-delivered since. Pass
+        // the retry through so it reconciles against live state (the
+        // connection store deduplicates in-flight duplicates and returns the
+        // terminal record once one exists).
+        if cached.result["status"]?.stringValue == "pending_confirmation" {
+            return .new
+        }
+        return .duplicate(cached.result)
+    }
+
+    func store(clientRequestID: String, promptID: String, decision: String, result: [String: JSONValue]) {
+        lock.lock()
+        defer { lock.unlock() }
+        if cacheByClientRequestID[clientRequestID] == nil {
+            order.append(clientRequestID)
+        }
+        cacheByClientRequestID[clientRequestID] = CachedSubmit(promptID: promptID,
+                                                               decision: decision,
+                                                               result: result)
+        while order.count > capacity {
+            let evicted = order.removeFirst()
+            cacheByClientRequestID.removeValue(forKey: evicted)
+        }
+    }
+}
+
 struct InteractivePromptActionHandler {
     private let routeResolver: OrdinaryTmuxRouteResolving
     private let adapter: OrdinaryTmuxRouteRefreshing
@@ -9,6 +72,7 @@ struct InteractivePromptActionHandler {
     private let codexApprovalSubmitter: CodexAppServerApprovalSubmitting?
     private let detector: WorkflowConfirmPromptDetector
     private let stateStore: InteractivePromptStateStore
+    private let submitDeduper: InteractivePromptSubmitDeduper
     private let captureLineLimit = 0
     private let resolvedAbsentThreshold = 3
 
@@ -19,7 +83,8 @@ struct InteractivePromptActionHandler {
          inputActionHandler: BridgeInputActionHandler,
          codexApprovalSubmitter: CodexAppServerApprovalSubmitting? = nil,
          detector: WorkflowConfirmPromptDetector = WorkflowConfirmPromptDetector(),
-         stateStore: InteractivePromptStateStore = InteractivePromptStateStore()) {
+         stateStore: InteractivePromptStateStore = InteractivePromptStateStore(),
+         submitDeduper: InteractivePromptSubmitDeduper = InteractivePromptSubmitDeduper()) {
         self.routeResolver = routeResolver
         self.adapter = adapter
         self.sessionResolver = sessionResolver
@@ -28,6 +93,7 @@ struct InteractivePromptActionHandler {
         self.codexApprovalSubmitter = codexApprovalSubmitter
         self.detector = detector
         self.stateStore = stateStore
+        self.submitDeduper = submitDeduper
     }
 
     func handle(_ request: BridgeRequest) throws -> BridgeResponse? {
@@ -113,8 +179,12 @@ struct InteractivePromptActionHandler {
 
     private func submit(_ request: BridgeRequest) throws -> BridgeResponse {
         let submitContext = try submitPromptContext(from: request)
+        // Capability classification is channel OR vendor OR source: any
+        // trusted Codex signal routes to the native fail-closed path (which
+        // rejects on a missing lifecycle token) — never to terminal input.
         if submitContext.submitChannel == InteractivePromptSubmitChannel.codexAppServer ||
-            submitContext.vendor == "codex" {
+            submitContext.vendor == "codex" ||
+            (submitContext.source?.hasPrefix("codex_") == true) {
             return try submitCodexApproval(request, context: submitContext)
         }
 
@@ -129,6 +199,33 @@ struct InteractivePromptActionHandler {
         }
         guard let requestedPromptID = request.params?["prompt_id"]?.stringValue else {
             throw BridgeInternalError.invalidRequest("submit_interactive_prompt requires prompt_id")
+        }
+
+        let decision: String
+        if let targetIndex = request.params?["target_index"]?.intValue {
+            decision = "index:\(targetIndex)"
+        } else if let inputSequence = request.params?["input_sequence"]?.stringValue {
+            decision = "input:\(inputSequence)"
+        } else {
+            throw BridgeInternalError.invalidRequest("submit_interactive_prompt requires target_index or input_sequence")
+        }
+
+        // Idempotency must be checked before the prompt lookup: a retried
+        // submit whose first attempt already resolved the prompt would
+        // otherwise fail with "no longer active" instead of returning the
+        // recorded status.
+        let clientRequestID = request.params?["client_request_id"]?.stringValue
+        if let clientRequestID {
+            switch submitDeduper.check(clientRequestID: clientRequestID,
+                                       promptID: requestedPromptID,
+                                       decision: decision) {
+            case .duplicate(let cachedResult):
+                return BridgeResponse(id: request.id, ok: true, result: cachedResult, error: nil)
+            case .conflict:
+                throw BridgeInternalError.conflict("client_request_id was already used for a different decision")
+            case .new:
+                break
+            }
         }
 
         let prompt = try activePromptForSubmit(context: context, requestedPromptID: requestedPromptID)
@@ -165,6 +262,13 @@ struct InteractivePromptActionHandler {
         result["status"] = .string("resolved")
         result["prompt"] = .null
         result["resolved_event"] = Self.jsonValue(for: resolvedEvent)
+        if let clientRequestID {
+            result["client_request_id"] = .string(clientRequestID)
+            submitDeduper.store(clientRequestID: clientRequestID,
+                                promptID: requestedPromptID,
+                                decision: decision,
+                                result: result)
+        }
         return BridgeResponse(id: request.id, ok: true, result: result, error: nil)
     }
 
@@ -178,24 +282,71 @@ struct InteractivePromptActionHandler {
         guard let targetIndex = request.params?["target_index"]?.intValue else {
             throw BridgeInternalError.invalidRequest("submit_interactive_prompt requires target_index for Codex approval prompts")
         }
-        let resolvedEvent = try codexApprovalSubmitter.submitApproval(promptID: promptID,
-                                                                      targetIndex: targetIndex,
-                                                                      workspaceID: context.workspaceID,
-                                                                      panelID: context.panelID,
-                                                                      sessionID: context.sessionID)
-        let status = resolvedEvent.metadata?["reason"] == "already_resolved"
-            ? "already_resolved"
-            : "resolved"
-        var result: [String: JSONValue] = [
-            "submitted": .bool(true),
-            "status": .string(status),
-            "prompt": .null,
-            "resolved_event": Self.jsonValue(for: resolvedEvent),
-        ]
-        if let panelID = resolvedEvent.metadata?["panel_id"] {
-            result["panel_id"] = .string(panelID)
-        } else {
-            result["panel_id"] = .string(context.panelID)
+        // The server-issued lifecycle capability is mandatory for Codex
+        // native approvals: a submit without it cannot be verified against
+        // the current delivery and must not fall back to "whatever is
+        // active".
+        guard let lifecycleToken = request.params?["lifecycle_token"]?.stringValue else {
+            throw BridgeInternalError.invalidRequest("submit_interactive_prompt requires lifecycle_token for Codex approval prompts")
+        }
+        let clientRequestID = request.params?["client_request_id"]?.stringValue
+        let decision = "index:\(targetIndex)"
+        if let clientRequestID {
+            switch submitDeduper.check(clientRequestID: clientRequestID,
+                                       promptID: promptID,
+                                       decision: decision) {
+            case .duplicate, .new:
+                // Codex duplicates always reconcile against the live store:
+                // it deduplicates in-flight attempts, answers with the
+                // current terminal record, and — crucially — a cached
+                // terminal from an old lifecycle must not mask a
+                // re-delivered (reactivated) attempt of the same logical
+                // prompt. The deduper's job here is only the decision
+                // conflict below.
+                break
+            case .conflict:
+                throw BridgeInternalError.conflict("client_request_id was already used for a different decision")
+            }
+        }
+        let outcome = try codexApprovalSubmitter.submitApproval(promptID: promptID,
+                                                                targetIndex: targetIndex,
+                                                                clientRequestID: clientRequestID,
+                                                                lifecycleToken: lifecycleToken,
+                                                                workspaceID: context.workspaceID,
+                                                                panelID: context.panelID,
+                                                                sessionID: context.sessionID)
+        var result: [String: JSONValue]
+        switch outcome {
+        case .pendingConfirmation:
+            // The response was flushed to the app-server but the request is
+            // only cleared when the server confirms; the card must stay in a
+            // submitting state until the resolved event arrives. The full
+            // transaction context is echoed so the client can verify the
+            // response belongs to exactly this submit.
+            result = [
+                "submitted": .bool(true),
+                "status": .string("pending_confirmation"),
+                "prompt_id": .string(promptID),
+                "workspace_id": .string(context.workspaceID),
+                "panel_id": .string(context.panelID),
+                "session_id": .string(context.sessionID),
+                "lifecycle_token": .string(lifecycleToken),
+            ]
+        case .alreadyResolved(let resolvedEvent):
+            result = [
+                "submitted": .bool(true),
+                "status": .string("already_resolved"),
+                "prompt": .null,
+                "resolved_event": Self.jsonValue(for: resolvedEvent),
+                "panel_id": .string(resolvedEvent.metadata?["panel_id"] ?? context.panelID),
+            ]
+        }
+        if let clientRequestID {
+            result["client_request_id"] = .string(clientRequestID)
+            submitDeduper.store(clientRequestID: clientRequestID,
+                                promptID: promptID,
+                                decision: decision,
+                                result: result)
         }
         return BridgeResponse(id: request.id, ok: true, result: result, error: nil)
     }
@@ -205,7 +356,8 @@ struct InteractivePromptActionHandler {
                                                                       panelID: context.panelID,
                                                                       sessionID: context.sessionID,
                                                                       vendor: context.vendor,
-                                                                      submitChannel: nil))
+                                                                      submitChannel: nil,
+                                                                      source: nil))
     }
 
     private func activePromptForSubmit(context: PromptContext,
@@ -288,6 +440,19 @@ struct InteractivePromptActionHandler {
             throw BridgeInternalError.invalidRequest("\(request.action) requires workspace_id and panel_id")
         }
         let activeSession = sessionResolver.activeSessionForPanel(workspaceID: workspaceID, panelID: panelID)
+        // The server-resolved active session stays the authority, but a
+        // client that names a different session or vendor is talking about a
+        // stale target and must be rejected instead of silently retargeted.
+        if let activeSession {
+            if let requestedSessionID = params["session_id"]?.stringValue,
+               requestedSessionID != activeSession.sessionID {
+                throw BridgeInternalError.conflict("submit_interactive_prompt session_id does not match the active session for this panel")
+            }
+            if let requestedVendor = params["vendor"]?.stringValue,
+               requestedVendor != activeSession.vendor {
+                throw BridgeInternalError.conflict("submit_interactive_prompt vendor does not match the active session for this panel")
+            }
+        }
         let submitChannel = params["submit_channel"]?.stringValue
         let vendor = activeSession?.vendor
             ?? params["vendor"]?.stringValue
@@ -299,7 +464,8 @@ struct InteractivePromptActionHandler {
                                    panelID: panelID,
                                    sessionID: sessionID,
                                    vendor: vendor,
-                                   submitChannel: submitChannel)
+                                   submitChannel: submitChannel,
+                                   source: params["source"]?.stringValue)
     }
 
     private func makePromptEvent(context: PromptContext, prompt: InteractivePrompt) -> AgentEvent {
@@ -454,6 +620,7 @@ struct InteractivePromptActionHandler {
         let sessionID: String
         let vendor: String
         let submitChannel: String?
+        let source: String?
     }
 }
 

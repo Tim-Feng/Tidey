@@ -25,7 +25,7 @@ protocol AgentVendor {
     func makeTranscriptSession(record: AgentSessionRegistryRecord,
                                fileManager: FileManager,
                                hub: AgentEventHub,
-                               socketClient: TideySocketClient?,
+                               socketClient: TideyCommandSending?,
                                chatSubmitEchoRegistry: ChatSubmitEchoRegistry) -> AgentTranscriptSession
 }
 
@@ -62,7 +62,7 @@ private struct ClaudeAgentVendor: AgentVendor {
     func makeTranscriptSession(record: AgentSessionRegistryRecord,
                                fileManager: FileManager,
                                hub: AgentEventHub,
-                               socketClient: TideySocketClient?,
+                               socketClient: TideyCommandSending?,
                                chatSubmitEchoRegistry: ChatSubmitEchoRegistry) -> AgentTranscriptSession {
         ClaudeTranscriptSession(record: record,
                                 fileManager: fileManager,
@@ -90,7 +90,7 @@ private struct CodexAgentVendor: AgentVendor {
     func makeTranscriptSession(record: AgentSessionRegistryRecord,
                                fileManager: FileManager,
                                hub: AgentEventHub,
-                               socketClient: TideySocketClient?,
+                               socketClient: TideyCommandSending?,
                                chatSubmitEchoRegistry: ChatSubmitEchoRegistry) -> AgentTranscriptSession {
         CodexTranscriptSession(record: record,
                                fileManager: fileManager,

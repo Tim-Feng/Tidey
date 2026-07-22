@@ -73,6 +73,11 @@ final class CodexAppServerHeadlessRuntime {
     typealias ThreadIDHandler = (String) -> Void
     typealias TurnLifecycleHandler = (_ threadID: String, _ turnID: String) -> Void
     typealias ThreadStatusHandler = (_ threadID: String) -> Void
+    /// Independent from `AgentEventHandler`. Receiving a control observation
+    /// never implies an `AgentEvent` was constructed and never reserves a
+    /// sequence number — this closure is handed the raw typed observation
+    /// only; sequence minting happens downstream, only after Hub admission.
+    typealias WorkingControlHandler = (CodexAppServerWorkingControlEvent) -> Void
 
     private let context: CodexAppServerRuntimeContext
     private let nextSequence: SequenceProvider
@@ -83,6 +88,7 @@ final class CodexAppServerHeadlessRuntime {
     private let onTurnCompleted: TurnLifecycleHandler
     private let onThreadActive: ThreadStatusHandler
     private let onThreadIdle: ThreadStatusHandler
+    private let onWorkingControl: WorkingControlHandler
 
     var contextSessionID: String {
         context.sessionID
@@ -96,7 +102,8 @@ final class CodexAppServerHeadlessRuntime {
          onTurnStarted: @escaping TurnLifecycleHandler = { _, _ in },
          onTurnCompleted: @escaping TurnLifecycleHandler = { _, _ in },
          onThreadActive: @escaping ThreadStatusHandler = { _ in },
-         onThreadIdle: @escaping ThreadStatusHandler = { _ in }) {
+         onThreadIdle: @escaping ThreadStatusHandler = { _ in },
+         onWorkingControl: @escaping WorkingControlHandler = { _ in }) {
         self.context = context
         self.nextSequence = nextSequence
         self.timestampProvider = timestampProvider
@@ -106,6 +113,7 @@ final class CodexAppServerHeadlessRuntime {
         self.onTurnCompleted = onTurnCompleted
         self.onThreadActive = onThreadActive
         self.onThreadIdle = onThreadIdle
+        self.onWorkingControl = onWorkingControl
     }
 
     @discardableResult
@@ -174,6 +182,7 @@ final class CodexAppServerHeadlessRuntime {
                    cwd: String? = nil,
                    approvalPolicy: String? = nil,
                    sandboxPolicy: JSONValue? = nil,
+                   clientUserMessageID: String? = nil,
                    onResponse: @escaping CodexAppServerConnection.ClientResponseHandler = { _ in }) throws -> Int {
         var params: [String: JSONValue] = [
             "threadId": .string(threadID),
@@ -194,6 +203,9 @@ final class CodexAppServerHeadlessRuntime {
         if let sandboxPolicy {
             params["sandboxPolicy"] = sandboxPolicy
         }
+        if let clientUserMessageID {
+            params["clientUserMessageId"] = .string(clientUserMessageID)
+        }
         BridgeLogger.server.debug("codex app-server diagnostic turn_start request session_id=\(self.context.sessionID, privacy: .public) thread_id=\(threadID, privacy: .public) request_has_approvalsReviewer=\((params["approvalsReviewer"] != nil), privacy: .public) approvalPolicy=\(approvalPolicy ?? "-", privacy: .public) cwd=\(cwd ?? "-", privacy: .public)")
         return try connection.sendClientRequest(method: "turn/start",
                                                 params: params,
@@ -206,8 +218,47 @@ final class CodexAppServerHeadlessRuntime {
                                                 })
     }
 
+    @discardableResult
+    func steerTurn(on connection: CodexAppServerConnection,
+                   threadID: String,
+                   expectedTurnID: String,
+                   text: String,
+                   clientUserMessageID: String? = nil,
+                   onResponse: @escaping CodexAppServerConnection.ClientResponseHandler = { _ in }) throws -> Int {
+        var params: [String: JSONValue] = [
+            "threadId": .string(threadID),
+            "expectedTurnId": .string(expectedTurnID),
+            "input": .array([
+                .object([
+                    "type": .string("text"),
+                    "text": .string(text),
+                    "text_elements": .array([]),
+                ]),
+            ]),
+        ]
+        if let clientUserMessageID {
+            params["clientUserMessageId"] = .string(clientUserMessageID)
+        }
+        BridgeLogger.server.debug("codex app-server diagnostic turn_steer request session_id=\(self.context.sessionID, privacy: .public) thread_id=\(threadID, privacy: .public) expected_turn_id=\(expectedTurnID, privacy: .public)")
+        return try connection.sendClientRequest(method: "turn/steer",
+                                                params: params,
+                                                onResponse: { response in
+                                                    Self.logTurnSteerResponse(response,
+                                                                              sessionID: self.context.sessionID,
+                                                                              threadID: threadID,
+                                                                              expectedTurnID: expectedTurnID)
+                                                    onResponse(response)
+                                                })
+    }
+
+
     func handleNotification(_ notification: CodexAppServerNotification) {
-        if let threadID = Self.threadID(from: notification.params) {
+        // Generic notifications only carry a bare threadId; subagent (child)
+        // threads produce them too, so they can never establish the panel's
+        // root thread binding. Only a thread/started whose thread object is
+        // positively identifiable as a root thread may seed the binding;
+        // rebinding stays reserved for authoritative loaded-list/resume.
+        if let threadID = Self.rootThreadStartedThreadID(from: notification) {
             onThreadID(threadID)
         }
         if notification.method == "turn/started",
@@ -232,10 +283,91 @@ final class CodexAppServerHeadlessRuntime {
                 break
             }
         }
+        // Ordinary makeEvent/onAgentEvent runs FIRST, exactly at its
+        // original position — its own timestamp/seq consumption must be
+        // byte-for-byte identical to before this seam existed. The typed
+        // control seam only ever runs AFTER, so an accepted control
+        // observation's own timestamp tick can never shift the ordinary
+        // path's tick, regardless of notification method.
         guard let event = makeEvent(from: notification) else {
+            emitWorkingControl(for: notification)
             return
         }
         onAgentEvent(event)
+        emitWorkingControl(for: notification)
+    }
+
+    /// Independent seam feeding `onWorkingControl`. Never constructs or
+    /// emits an `AgentEvent`, never calls `nextSequence`, and never affects
+    /// `makeEvent`/`onAgentEvent`'s existing behavior — this function reads
+    /// the same raw notification but has no side effect on the ordinary
+    /// mapping path above or below it.
+    private func emitWorkingControl(for notification: CodexAppServerNotification) {
+        switch notification.method {
+        case "turn/started":
+            guard let threadID = Self.threadID(from: notification.params),
+                  let turnID = Self.turnID(from: notification.params),
+                  let control = CodexAppServerWorkingControlFactory.turnStarted(threadID: threadID,
+                                                                                turnID: turnID,
+                                                                                time: timestampProvider()) else {
+                return
+            }
+            onWorkingControl(control)
+        case "item/started":
+            guard let threadID = Self.threadID(from: notification.params),
+                  let turnID = Self.turnID(from: notification.params),
+                  let item = notification.params["item"]?.objectValue,
+                  let itemType = item["type"]?.stringValue,
+                  let itemID = item["id"]?.stringValue,
+                  let control = CodexAppServerWorkingControlFactory.internalActivityStarted(threadID: threadID,
+                                                                                             turnID: turnID,
+                                                                                             itemID: itemID,
+                                                                                             itemType: itemType,
+                                                                                             time: timestampProvider()) else {
+                return
+            }
+            onWorkingControl(control)
+        case "item/completed":
+            // subAgentActivity has no started edge on the real wire — the
+            // server maps EventMsg::SubAgentActivity directly to
+            // ItemCompleted. This is a continuation pulse ONLY, never a
+            // terminal, and must never clear Working.
+            guard let threadID = Self.threadID(from: notification.params),
+                  let turnID = Self.turnID(from: notification.params),
+                  let item = notification.params["item"]?.objectValue,
+                  let itemType = item["type"]?.stringValue,
+                  let itemID = item["id"]?.stringValue,
+                  let control = CodexAppServerWorkingControlFactory.internalActivityObserved(threadID: threadID,
+                                                                                              turnID: turnID,
+                                                                                              itemID: itemID,
+                                                                                              itemType: itemType,
+                                                                                              time: timestampProvider()) else {
+                return
+            }
+            onWorkingControl(control)
+        case "turn/completed":
+            // Method-authoritative: any turn/completed with a present,
+            // trimmed-nonblank status is a terminal for control purposes,
+            // including an unknown future status string (forward
+            // compatible) — item/completed is a different method and never
+            // reaches here. A missing/blank status is a malformed
+            // notification and fails closed rather than defaulting to
+            // "completed".
+            guard let threadID = Self.threadID(from: notification.params),
+                  let turnID = Self.turnID(from: notification.params),
+                  let rawStatus = Self.nonEmptyString(notification.params["turn"]?.objectValue?["status"]) else {
+                return
+            }
+            guard let control = CodexAppServerWorkingControlFactory.turnTerminal(threadID: threadID,
+                                                                                  turnID: turnID,
+                                                                                  rawStatus: rawStatus,
+                                                                                  time: timestampProvider()) else {
+                return
+            }
+            onWorkingControl(control)
+        default:
+            return
+        }
     }
 
     private func makeEvent(from notification: CodexAppServerNotification) -> AgentEvent? {
@@ -393,6 +525,16 @@ final class CodexAppServerHeadlessRuntime {
         }
         switch itemType {
         case "userMessage":
+            // Map the official userMessage item's clientId back to
+            // metadata.client_request_id — this is the identity Tidey
+            // passed to app-server as clientUserMessageId on turn/start /
+            // turn/steer, echoed back so the client can match this event to
+            // the request it sent, even if it races ahead of the handler's
+            // post-response text-registry registration.
+            var additionalMetadata: [String: String] = [:]
+            if let clientRequestID = Self.nonEmptyString(item["clientId"]) {
+                additionalMetadata["client_request_id"] = clientRequestID
+            }
             return makeEvent(method: notification.method,
                              type: .userMessage,
                              text: Self.userMessageText(from: item),
@@ -401,7 +543,8 @@ final class CodexAppServerHeadlessRuntime {
                              output: nil,
                              toolCallID: item["id"]?.stringValue,
                              payloadKind: "user_message",
-                             params: notification.params)
+                             params: notification.params,
+                             additionalMetadata: additionalMetadata)
         case "commandExecution":
             let command = Self.nonEmptyString(item["command"])
             return makeEvent(method: notification.method,
@@ -481,9 +624,13 @@ final class CodexAppServerHeadlessRuntime {
                            output: String?,
                            toolCallID: String?,
                            payloadKind: String,
-                           params: [String: JSONValue]) -> AgentEvent {
+                           params: [String: JSONValue],
+                           additionalMetadata: [String: String] = [:]) -> AgentEvent {
         let seq = nextSequence(context.sessionID)
-        let metadata = metadata(method: method, params: params)
+        var metadata = metadata(method: method, params: params)
+        for (key, value) in additionalMetadata {
+            metadata[key] = value
+        }
         var payload: [String: JSONValue] = [
             "kind": .string(payloadKind),
             "source": .string("codex_app_server"),
@@ -562,6 +709,37 @@ final class CodexAppServerHeadlessRuntime {
     private static func threadID(from params: [String: JSONValue]) -> String? {
         params["threadId"]?.stringValue
             ?? params["thread"]?.objectValue?["id"]?.stringValue
+    }
+
+    static func rootThreadStartedThreadID(from notification: CodexAppServerNotification) -> String? {
+        guard notification.method == "thread/started",
+              let thread = notification.params["thread"]?.objectValue,
+              let threadID = thread["id"]?.stringValue else {
+            return nil
+        }
+        // Child threads are identified by a parent linkage or an agent
+        // role/nickname on the official thread object.
+        let parentKeys = ["parentThreadId", "parent_thread_id", "parentId", "parent_id"]
+        for key in parentKeys {
+            guard let value = thread[key] ?? notification.params[key] else {
+                continue
+            }
+            if case .null = value {
+                continue
+            }
+            return nil
+        }
+        let agentKeys = ["agentRole", "agent_role", "agentNickname", "agent_nickname"]
+        for key in agentKeys {
+            if let value = thread[key]?.stringValue,
+               value.isEmpty == false {
+                return nil
+            }
+        }
+        if thread["role"]?.stringValue == "subagent" {
+            return nil
+        }
+        return threadID
     }
 
     private static func turnID(from params: [String: JSONValue]) -> String? {
@@ -735,6 +913,19 @@ final class CodexAppServerHeadlessRuntime {
             BridgeLogger.server.debug("codex app-server diagnostic turn_start response status=success session_id=\(sessionID, privacy: .public) thread_id=\(threadID, privacy: .public) request_has_approvalsReviewer=\(requestHasApprovalsReviewer, privacy: .public) approvalsReviewer=\(diagnosticField(object, keys: ["approvalsReviewer", "approvals_reviewer"]), privacy: .public) approvalPolicy=\(diagnosticField(object, keys: ["approvalPolicy", "approval_policy"]), privacy: .public) response_keys=\(diagnosticKeys(object), privacy: .public)")
         case .failure(let error):
             BridgeLogger.server.error("codex app-server diagnostic turn_start response status=failure session_id=\(sessionID, privacy: .public) thread_id=\(threadID, privacy: .public) request_has_approvalsReviewer=\(requestHasApprovalsReviewer, privacy: .public) error=\(String(describing: error), privacy: .public)")
+        }
+    }
+
+    static func logTurnSteerResponse(_ response: Result<JSONValue, CodexAppServerConnectionError>,
+                                     sessionID: String,
+                                     threadID: String,
+                                     expectedTurnID: String) {
+        switch response {
+        case .success(let value):
+            let object = value.objectValue
+            BridgeLogger.server.debug("codex app-server diagnostic turn_steer response status=success session_id=\(sessionID, privacy: .public) thread_id=\(threadID, privacy: .public) expected_turn_id=\(expectedTurnID, privacy: .public) response_keys=\(diagnosticKeys(object), privacy: .public)")
+        case .failure(let error):
+            BridgeLogger.server.error("codex app-server diagnostic turn_steer response status=failure session_id=\(sessionID, privacy: .public) thread_id=\(threadID, privacy: .public) expected_turn_id=\(expectedTurnID, privacy: .public) error=\(String(describing: error), privacy: .public)")
         }
     }
 

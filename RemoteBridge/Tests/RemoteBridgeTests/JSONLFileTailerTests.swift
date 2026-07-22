@@ -96,6 +96,59 @@ final class JSONLFileTailerTests: XCTestCase {
         XCTAssertGreaterThan(captured.last?.0 ?? 0, bootstrapOffsets.max() ?? 0)
     }
 
+    // Round 4: stop() must drain bytes already written to the fd but not
+    // yet delivered by a dispatched .write event. Deterministic BY
+    // CONSTRUCTION, not by timing: the tailer's own serial queue is blocked
+    // with a semaphore BEFORE the line is appended, so the DispatchSource's
+    // event handler is physically incapable of running before stop() is
+    // called — any prior write event is provably still queued behind the
+    // blocker. stop() itself runs on the TEST thread (not on the blocked
+    // queue), so its synchronous readAvailableData() call is the only thing
+    // that can have read the new line by the time this test asserts.
+    func testStopDrainsBytesWrittenWhileTailerQueueIsBlocked() throws {
+        let fileURL = try writeTestFile()
+
+        let queue = DispatchQueue(label: "JSONLFileTailerTests.stop-drain")
+        var captured = [(Int, String)]()
+        let tailer = JSONLFileTailer(fileURL: fileURL,
+                                     queue: queue,
+                                     bootstrapLineLimit: 2,
+                                     lineHandler: { offset, line in
+                                         captured.append((offset, line))
+                                     },
+                                     invalidationHandler: {})
+        try tailer.start()
+
+        let blockerEntered = DispatchSemaphore(value: 0)
+        let releaseBlocker = DispatchSemaphore(value: 0)
+        queue.async {
+            blockerEntered.signal()
+            releaseBlocker.wait()
+        }
+        // Confirm the queue is actually occupied before writing: any file
+        // event fired AFTER this point is guaranteed to enqueue BEHIND the
+        // blocker, not run before it.
+        blockerEntered.wait()
+
+        let handle = try FileHandle(forWritingTo: fileURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("five\n".utf8))
+        try handle.close()
+
+        // Called directly on the TEST thread, NOT on the blocked queue —
+        // the DispatchSource's event handler cannot have run yet.
+        tailer.stop()
+
+        releaseBlocker.signal()
+        // Drain the queue (the cancel handler and any now-stale, harmless
+        // late event) before asserting, so there is no lingering async work
+        // when the test returns.
+        queue.sync {}
+
+        XCTAssertTrue(captured.contains { $0.1 == "five" },
+                     "stop() must drain and process a line written while the tailer's queue was blocked, got \(captured)")
+    }
+
     private func writeTestFile() throws -> URL {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
