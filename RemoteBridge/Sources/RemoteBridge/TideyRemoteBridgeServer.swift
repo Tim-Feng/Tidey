@@ -952,6 +952,18 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                     workspaceReplayEnvelopes: []
                 )
             }
+            guard (1...BridgeAgentEventFetchFlow.maximumRequestLimit).contains(limit) else {
+                return LocalRequestResult(
+                    response: BridgeResponse(
+                        id: request.id,
+                        ok: false,
+                        result: nil,
+                        error: BridgeInternalError.invalidRequest(
+                            "fetch_agent_events limit must be between 1 and \(BridgeAgentEventFetchFlow.maximumRequestLimit)").payload),
+                    agentReplayEnvelopes: [],
+                    workspaceReplayEnvelopes: []
+                )
+            }
 
             let sessionID = canonicalAgentEventSessionID(request.params?["session_id"]?.stringValue)
             let rawBeforeSeq = request.params?["before_seq"]

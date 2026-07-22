@@ -2,6 +2,8 @@
 // cache/backfill/refetch decision here, so tests exercise exactly the gate a
 // real client request goes through.
 enum BridgeAgentEventFetchFlow {
+    static let maximumRequestLimit = 2_000
+
     struct Output {
         let fetchResult: AgentEventHub.FetchResult
         let didBackfill: Bool

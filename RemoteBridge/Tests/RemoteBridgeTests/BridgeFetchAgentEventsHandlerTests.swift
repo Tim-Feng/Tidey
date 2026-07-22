@@ -77,7 +77,7 @@ final class BridgeFetchAgentEventsHandlerTests: XCTestCase {
                        "subscribe_agent_events since_seq requires session_id")
     }
 
-    func testHandlerRejectsMalformedCursorFields() throws {
+    func testHandlerRejectsMalformedCursorFieldsAndOutOfRangeLimits() throws {
         let supportDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("BridgeFetchHandlerTests-\(UUID().uuidString)", isDirectory: true)
         let paths = BridgePaths(supportDirectory: supportDirectory)
@@ -133,6 +133,30 @@ final class BridgeFetchAgentEventsHandlerTests: XCTestCase {
                 ],
                 "fetch_agent_events accepts either before_seq or after_seq, not both"
             ),
+            (
+                "zero-limit",
+                [
+                    "workspace_id": .string("workspace"),
+                    "limit": .number(0),
+                ],
+                "fetch_agent_events limit must be between 1 and 2000"
+            ),
+            (
+                "negative-limit",
+                [
+                    "workspace_id": .string("workspace"),
+                    "limit": .number(-1),
+                ],
+                "fetch_agent_events limit must be between 1 and 2000"
+            ),
+            (
+                "oversized-limit",
+                [
+                    "workspace_id": .string("workspace"),
+                    "limit": .number(2_001),
+                ],
+                "fetch_agent_events limit must be between 1 and 2000"
+            ),
         ]
 
         for testCase in cases {
@@ -144,6 +168,17 @@ final class BridgeFetchAgentEventsHandlerTests: XCTestCase {
             XCTAssertEqual(result.response.error?.code, "invalid_request", testCase.id)
             XCTAssertEqual(result.response.error?.message, testCase.message, testCase.id)
         }
+
+        let boundaryRequest = BridgeRequest(id: "maximum-limit",
+                                            action: "fetch_agent_events",
+                                            params: [
+                                                "workspace_id": .string("workspace"),
+                                                "limit": .number(2_000),
+                                            ])
+        let boundaryResult = try XCTUnwrap(
+            handler.handleLocalRequest(boundaryRequest, context: context)
+        )
+        XCTAssertTrue(boundaryResult.response.ok)
     }
 
     func testHandlerServesRequestedAnchorDespiteDeepCache() throws {
