@@ -7,7 +7,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     private let queue: DispatchQueue
     private let fileManager: FileManager
     private let hub: AgentEventHub
-    private let socketClient: TideySocketClient?
+    private let socketClient: TideyCommandSending?
     private let chatSubmitEchoRegistry: ChatSubmitEchoRegistry
 
     private var record: AgentSessionRegistryRecord
@@ -34,7 +34,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     init(record: AgentSessionRegistryRecord,
          fileManager: FileManager = .default,
          hub: AgentEventHub,
-         socketClient: TideySocketClient? = nil,
+         socketClient: TideyCommandSending? = nil,
          chatSubmitEchoRegistry: ChatSubmitEchoRegistry? = nil) {
         self.record = record
         self.fileManager = fileManager
