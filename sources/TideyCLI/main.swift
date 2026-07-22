@@ -44,9 +44,21 @@ private func sendToSocket(path: String, message: String) {
     }
     guard connectResult == 0 else { close(fd); return }
 
-    let payload = message + "\n"
-    payload.withCString { buf in
-        _ = Darwin.write(fd, buf, strlen(buf))
+    let payload = Array((message + "\n").utf8)
+    _ = TideyCLICommandFormatter.writeAll(payload) { remaining in
+        remaining.withUnsafeBytes { buffer in
+            guard let baseAddress = buffer.baseAddress else {
+                return .stopped
+            }
+            let written = Darwin.write(fd, baseAddress, buffer.count)
+            if written > 0 {
+                return .written(written)
+            }
+            if written < 0, errno == EINTR {
+                return .interrupted
+            }
+            return .stopped
+        }
     }
     close(fd)
 }
