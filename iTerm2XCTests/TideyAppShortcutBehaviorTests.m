@@ -16,6 +16,11 @@
 + (NSArray<NSString *> *)tideyTmuxPaneIdentityCommandsForPane:(int)pane
                                                   workspaceID:(NSString *)workspaceID
                                                       panelID:(NSString *)panelID;
++ (NSArray<NSString *> *)tideyTmuxPaneContextCommandsForPane:(int)pane
+                                                 workspaceID:(NSString *)workspaceID
+                                                     panelID:(NSString *)panelID
+                                                  socketPath:(NSString *)socketPath
+                                                      binDir:(NSString *)binDir;
 + (NSArray<NSString *> *)tideyInputChunksForInput:(NSString *)input
                                    maxChunkLength:(NSUInteger)maxChunkLength;
 + (NSString *)tideySocketPanelTitleForDisplayTitle:(NSString *)displayTitle
@@ -269,6 +274,20 @@
     XCTAssertEqual(commands.count, 2);
     XCTAssertEqualObjects(commands[0], @"set-option -p -t %42 @tidey_workspace_id 'workspace-123'");
     XCTAssertEqualObjects(commands[1], @"set-option -p -t %42 @tidey_panel_id 'panel-456'");
+}
+
+- (void)testTmuxPaneContextCommandIncludesPaneScopedRuntimeOptions {
+    NSArray<NSString *> *commands =
+        [PseudoTerminal tideyTmuxPaneContextCommandsForPane:42
+                                                workspaceID:@"workspace-123"
+                                                    panelID:@"panel-456"
+                                                 socketPath:@"/tmp/Tidey's socket.sock"
+                                                     binDir:@"/Applications/Tidey Preview.app/Contents/Resources/bin"];
+    XCTAssertEqual(commands.count, 4);
+    XCTAssertEqualObjects(commands[0], @"set-option -p -t %42 @tidey_workspace_id 'workspace-123'");
+    XCTAssertEqualObjects(commands[1], @"set-option -p -t %42 @tidey_panel_id 'panel-456'");
+    XCTAssertEqualObjects(commands[2], @"set-option -p -t %42 @tidey_socket_path '/tmp/Tidey'\\''s socket.sock'");
+    XCTAssertEqualObjects(commands[3], @"set-option -p -t %42 @tidey_bin_dir '/Applications/Tidey Preview.app/Contents/Resources/bin'");
 }
 
 - (void)testTmuxPaneIdentityCommandReturnsEmptyWhenPaneOrIdentifiersAreMissing {

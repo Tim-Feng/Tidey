@@ -56,6 +56,7 @@
 #import "SessionView.h"
 #import "SplitPanel.h"
 #import "TemporaryNumberAllocator.h"
+#import "TideySocketServer.h"
 #import "TmuxControllerRegistry.h"
 #import "TmuxDashboardController.h"
 #import "TmuxLayoutParser.h"
@@ -1395,17 +1396,42 @@ ITERM_WEAKLY_REFERENCEABLE
 + (NSArray<NSString *> *)tideyTmuxPaneIdentityCommandsForPane:(int)pane
                                                   workspaceID:(NSString *)workspaceID
                                                       panelID:(NSString *)panelID {
+    return [self tideyTmuxPaneContextCommandsForPane:pane
+                                         workspaceID:workspaceID
+                                             panelID:panelID
+                                          socketPath:nil
+                                              binDir:nil];
+}
+
++ (NSArray<NSString *> *)tideyTmuxPaneContextCommandsForPane:(int)pane
+                                                 workspaceID:(NSString *)workspaceID
+                                                     panelID:(NSString *)panelID
+                                                  socketPath:(NSString *)socketPath
+                                                      binDir:(NSString *)binDir {
     if (pane <= 0 || workspaceID.length == 0 || panelID.length == 0) {
         return @[];
     }
-    return @[
+    NSMutableArray<NSString *> *commands = [NSMutableArray arrayWithArray:@[
         [NSString stringWithFormat:@"set-option -p -t %%%d @tidey_workspace_id %@",
                                    pane,
                                    [self tideySingleQuotedTmuxOptionValue:workspaceID]],
         [NSString stringWithFormat:@"set-option -p -t %%%d @tidey_panel_id %@",
                                    pane,
                                    [self tideySingleQuotedTmuxOptionValue:panelID]],
-    ];
+    ]];
+    if (socketPath.length > 0) {
+        [commands addObject:
+            [NSString stringWithFormat:@"set-option -p -t %%%d @tidey_socket_path %@",
+                                       pane,
+                                       [self tideySingleQuotedTmuxOptionValue:socketPath]]];
+    }
+    if (binDir.length > 0) {
+        [commands addObject:
+            [NSString stringWithFormat:@"set-option -p -t %%%d @tidey_bin_dir %@",
+                                       pane,
+                                       [self tideySingleQuotedTmuxOptionValue:binDir]]];
+    }
+    return commands;
 }
 
 + (BOOL)tideyShouldManagePendingPanelInsertForShowingSidebar:(BOOL)showingSidebar
@@ -1754,10 +1780,14 @@ ITERM_WEAKLY_REFERENCEABLE
               panelID ?: @"-");
         return;
     }
+    NSString *socketPath = [TideySocketServer socketPath];
+    NSString *binDir = [[[NSBundle mainBundle] resourcePath] stringByAppendingPathComponent:@"bin"];
     NSArray<NSString *> *commands =
-        [[self class] tideyTmuxPaneIdentityCommandsForPane:session.tmuxPane
-                                               workspaceID:workspaceID
-                                                   panelID:panelID];
+        [[self class] tideyTmuxPaneContextCommandsForPane:session.tmuxPane
+                                              workspaceID:workspaceID
+                                                  panelID:panelID
+                                               socketPath:socketPath
+                                                   binDir:binDir];
     NSLog(@"[TideyTmuxPanels] identity_set set_option session=%p tmux_controller=%p pane=%d workspace=%@ panel=%@ command_count=%lu",
           session,
           session.tmuxController,
