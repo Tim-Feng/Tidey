@@ -623,6 +623,96 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertFalse(session.canSubmitMessage())
     }
 
+    func testLateRegistryRootDeliveryRearmsParkedSubscription() throws {
+        let (session, transport) = try Self.makeAttachedSession()
+        try Self.acknowledgeInitialize(from: transport)
+        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(listLoaded["id"]), result: .object([
+            "threads": .array([]),
+        ])))
+        XCTAssertEqual(transport.sentLines().count, 3)
+
+        session.setRegistryRootThreadID("thread-root")
+
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
+        let resume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
+        XCTAssertEqual(resume["method"]?.stringValue, "thread/resume")
+        XCTAssertEqual(resume["params"]?.objectValue?["threadId"]?.stringValue, "thread-root")
+    }
+
+    func testLateRootSetterDuringUnresolvedCallbackResumesExactlyOnce() throws {
+        let (session, transport) = try Self.makeAttachedSession()
+        session.loadedThreadUnresolvedHook = { [weak session] in
+            session?.loadedThreadUnresolvedHook = nil
+            session?.setRegistryRootThreadID("thread-root")
+        }
+        try Self.acknowledgeInitialize(from: transport)
+        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(listLoaded["id"]), result: .object([
+            "threads": .array([]),
+        ])))
+
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
+        let resumedThreadIDs = transport.sentLines().compactMap { line -> String? in
+            guard let object = try? Self.object(from: line),
+                  object["method"]?.stringValue == "thread/resume" else {
+                return nil
+            }
+            return object["params"]?.objectValue?["threadId"]?.stringValue
+        }
+        XCTAssertEqual(resumedThreadIDs, ["thread-root"])
+    }
+
+    func testLateAuthoritativeRootStopsConfirmedWrongSubscription() throws {
+        let (session, transport) = try Self.makeAttachedSession()
+        try Self.acknowledgeInitialize(from: transport)
+        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(listLoaded["id"]), result: .object([
+            "data": .array([.string("thread-maybe-child")]),
+        ])))
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
+        let childResume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
+
+        session.setRegistryRootThreadID("thread-root")
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(childResume["id"]), result: .object([
+            "thread": .object(["id": .string("thread-maybe-child")]),
+        ])))
+
+        XCTAssertTrue(Self.waitFor { session.isStopped() })
+    }
+
+    func testRefreshStopsInsteadOfAdditivelyResumingDifferentRoot() throws {
+        let (session, transport) = try Self.makeAttachedSession()
+        try Self.acknowledgeInitialize(from: transport)
+        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(listLoaded["id"]), result: .object([
+            "threads": .array([.object(["id": .string("thread-a")])]),
+        ])))
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
+        let resumeA = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(resumeA["id"]), result: .object([
+            "thread": .object(["id": .string("thread-a")]),
+        ])))
+
+        session.refreshActiveThread()
+        XCTAssertTrue(Self.waitForSentLineCount(5, transport: transport))
+        let refresh = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(4).first))
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(refresh["id"]), result: .object([
+            "threads": .array([.object(["id": .string("thread-b")])]),
+        ])))
+
+        XCTAssertTrue(Self.waitFor { session.isStopped() })
+        let resumedThreadIDs = transport.sentLines().compactMap { line -> String? in
+            guard let object = try? Self.object(from: line),
+                  object["method"]?.stringValue == "thread/resume" else {
+                return nil
+            }
+            return object["params"]?.objectValue?["threadId"]?.stringValue
+        }
+        XCTAssertEqual(resumedThreadIDs, ["thread-a"],
+                       "the old connection must never subscribe to both roots")
+    }
+
     func testSubmitMessageLoadsThreadWhenAttachedRuntimeWasNotReady() throws {
         let runner = FakeCodexAppServerProcessRunner()
         let connector = FakeCodexAppServerTransportConnector()
@@ -1247,6 +1337,18 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
             Thread.sleep(forTimeInterval: 0.01)
         }
         return transport.sentLines().count >= count
+    }
+
+    private static func waitFor(timeout: TimeInterval = 2,
+                                condition: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() {
+                return true
+            }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        return condition()
     }
 }
 

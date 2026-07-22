@@ -228,7 +228,29 @@ final class CodexAppServerRuntimeSession {
         }
         lock.lock()
         registryRootThreadID = threadID
+        let subscriptionState = attachSubscriptionState
         lock.unlock()
+        guard case .ready = initialization.diagnosticStatus() else {
+            return
+        }
+        if case .subscribed(let existingThreadID) = subscriptionState,
+           existingThreadID != threadID {
+            activeThreadStore.setThreadID(threadID)
+            sendThreadResumeForSubscriptionIfNeeded(threadID: threadID,
+                                                    reason: "registry_root_changed")
+            return
+        }
+        guard beginSubscriptionAttempt() else {
+            return
+        }
+        activeThreadStore.setThreadID(threadID)
+        sendThreadResumeForSubscription(threadID: threadID)
+    }
+
+    func isStopped() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return stopped
     }
 
     func ensureThreadSubscription() {
@@ -406,12 +428,22 @@ final class CodexAppServerRuntimeSession {
                                                               registryRootThreadID: knownRootThreadID) else {
                 BridgeLogger.server.debug("codex app-server subscription no loaded thread shape=\(codexAppServerLoadedThreadShapeDescription(from: value), privacy: .public)")
                 if clearSubscriptionOnMissing {
-                    if let knownRootThreadID {
-                        activeThreadStore.setThreadID(knownRootThreadID)
-                        sendThreadResumeForSubscriptionIfNeeded(threadID: knownRootThreadID,
+                    loadedThreadUnresolvedHook?()
+                    lock.lock()
+                    let fallbackThreadID = registryRootThreadID
+                    let previousState = attachSubscriptionState
+                    if fallbackThreadID == nil {
+                        attachSubscriptionState = .noLoadedThread
+                    }
+                    lock.unlock()
+                    if let fallbackThreadID {
+                        activeThreadStore.setThreadID(fallbackThreadID)
+                        sendThreadResumeForSubscriptionIfNeeded(threadID: fallbackThreadID,
                                                                 reason: "registry_root_fallback")
                     } else {
-                        setAttachSubscriptionState(.noLoadedThread, reason: "loaded_thread_missing")
+                        logAttachSubscriptionTransition(from: previousState,
+                                                        to: .noLoadedThread,
+                                                        reason: "loaded_thread_missing")
                     }
                 }
                 return
@@ -430,9 +462,14 @@ final class CodexAppServerRuntimeSession {
             lock.unlock()
             return
         }
-        if case .subscribed(let existingThreadID) = attachSubscriptionState,
-           existingThreadID == threadID {
+        if case .subscribed(let existingThreadID) = attachSubscriptionState {
+            if existingThreadID == threadID {
+                lock.unlock()
+                return
+            }
             lock.unlock()
+            BridgeLogger.server.error("codex app-server subscription root changed while subscribed session_id=\(self.runtime.contextSessionID, privacy: .public) from=\(existingThreadID, privacy: .public) to=\(threadID, privacy: .public) action=stop_for_replacement")
+            stop()
             return
         }
         let previousState = attachSubscriptionState
@@ -458,10 +495,30 @@ final class CodexAppServerRuntimeSession {
                                                                                                       requestHasApprovalsReviewer: false)
                                                 switch response {
                                                 case .success(let payload):
-                                                    self?.setAttachSubscriptionState(.subscribed(threadID: threadID), reason: "thread_resume_success")
-                                                    self?.lifecycleFeed?.applySnapshotResult(payload,
-                                                                                             threadID: threadID,
-                                                                                             barrier: snapshotBarrier)
+                                                    guard let self else {
+                                                        return
+                                                    }
+                                                    self.lock.lock()
+                                                    guard self.stopped == false else {
+                                                        self.lock.unlock()
+                                                        return
+                                                    }
+                                                    let knownRootThreadID = self.registryRootThreadID
+                                                    if let knownRootThreadID,
+                                                       knownRootThreadID != threadID {
+                                                        self.lock.unlock()
+                                                        self.stop()
+                                                        return
+                                                    }
+                                                    let previousState = self.attachSubscriptionState
+                                                    self.attachSubscriptionState = .subscribed(threadID: threadID)
+                                                    self.lock.unlock()
+                                                    self.logAttachSubscriptionTransition(from: previousState,
+                                                                                         to: .subscribed(threadID: threadID),
+                                                                                         reason: "thread_resume_success")
+                                                    self.lifecycleFeed?.applySnapshotResult(payload,
+                                                                                            threadID: threadID,
+                                                                                            barrier: snapshotBarrier)
                                                 case .failure(let error):
                                                     if self?.handleThreadResumeNoRollout(error, threadID: threadID) == true {
                                                         return
@@ -1065,7 +1122,7 @@ func codexAppServerLoadedThreadID(from value: JSONValue,
         return currentCandidates[0].id
     }
     if let registryRootThreadID {
-        if candidates.contains(where: { $0.id == registryRootThreadID }) {
+        if nonChildCandidates.contains(where: { $0.id == registryRootThreadID }) {
             return registryRootThreadID
         }
         if candidates.isEmpty == false,
