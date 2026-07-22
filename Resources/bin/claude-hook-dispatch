@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+# Claude hook dispatch: journals the typed hook event as ONE compact JSONL
+# envelope for the Remote Bridge, then forwards the untouched stdin payload
+# to the tidey CLI (Mac sidebar path).
+#
+# Envelope (v3): {"v":3,"event":…,"ts":…,"epoch":…,"event_id":…,"seq":…,"payload_b64":…}
+#  - payload_b64: base64 of the RAW stdin bytes — pretty-printed/multiline
+#    hook JSON can never break the journal's line framing.
+#  - epoch: one wrapper instance (pid+start time). The Bridge adopts the
+#    newest epoch and rejects a retired wrapper's late events.
+#  - event_id: unique per delivery, for duplicate rejection.
+#  - seq: per-journal monotonic counter. Allocated AND appended inside the
+#    SAME lock-held critical section — the seq order and the file order of
+#    lines are therefore always identical.
+#
+# Implicit-resume support: when the wrapper could not trust an explicit
+# session id ahead of time (`-c`, bare `--resume`, a non-UUID --resume
+# search term, or --fork-session), JOURNAL is passed empty and
+# REGISTRY_ROOT is passed instead. Every Claude Code hook payload carries
+# the CURRENT session_id, so this script discovers it from ITS OWN
+# invocation's stdin and lazily claims the journal (and, the first time,
+# the registry file) at the now-known path — no special-casing of which
+# hook fires first.
+
+set -uo pipefail
+
+EVENT="${1:-}"
+JOURNAL="${2:-}"
+EPOCH="${3:-}"
+REGISTRY_ROOT="${4:-}"
+HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
+TIDEY_BIN="$HOOK_DIR/tidey"
+# shellcheck source=/dev/null
+source "$HOOK_DIR/claude-hook-journal-lifecycle"
+
+if [[ -z "$EVENT" ]]; then
+    exit 0
+fi
+
+PAYLOAD="$(cat 2>/dev/null || true)"
+
+extract_json_string_field() {
+    # Minimal, dependency-free string-field extractor: good enough for the
+    # flat top-level fields Claude Code hook payloads carry (session_id,
+    # cwd). Not a general JSON parser.
+    local json="$1" field="$2"
+    printf '%s' "$json" | sed -n "s/.*\"${field}\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -n1
+}
+
+json_escape_field() {
+    local s="${1-}"
+    s=${s//\\/\\\\}
+    s=${s//\"/\\\"}
+    s=${s//$'\n'/\\n}
+    s=${s//$'\r'/\\r}
+    s=${s//$'\t'/\\t}
+    printf '%s' "$s"
+}
+
+append_journal_line() {
+    # Allocates the next seq and appends the envelope in ONE critical
+    # section (lock directory as mutex): seq order == append order,
+    # always, for every writer. On lock starvation (60 * 5ms ~= 300ms) the
+    # write is skipped rather than risking an out-of-order/torn append —
+    # SessionEnd's hook timeout budget must not be exhausted by a stall.
+    local journal="$1" line="$2"
+    local seq_file="$journal.seq"
+    local lock_dir="$journal.seqlock"
+    local attempt seq
+    for attempt in $(seq 1 60); do
+        if mkdir "$lock_dir" 2>/dev/null; then
+            seq="$(cat "$seq_file" 2>/dev/null || echo 0)"
+            case "$seq" in (*[!0-9]*|'') seq=0 ;; esac
+            seq=$((seq + 1))
+            printf '%s\n' "${line/__SEQ__/$seq}" >> "$journal" 2>/dev/null || true
+            printf '%s' "$seq" > "$seq_file" 2>/dev/null || true
+            rmdir "$lock_dir" 2>/dev/null || true
+            return 0
+        fi
+        sleep 0.005
+    done
+    return 1
+}
+
+# Implicit-resume lazy discovery: derive the journal path (and, if this is
+# the first time the id is seen, the registry file) from THIS payload's
+# session_id.
+if [[ -z "$JOURNAL" && -n "$REGISTRY_ROOT" ]]; then
+    discovered_id="$(extract_json_string_field "$PAYLOAD" "session_id")"
+    if [[ -z "$discovered_id" ]]; then
+        discovered_id="$(extract_json_string_field "$PAYLOAD" "sessionId")"
+    fi
+    if [[ -n "$discovered_id" ]]; then
+        mkdir -p "$REGISTRY_ROOT" 2>/dev/null || true
+        JOURNAL="$REGISTRY_ROOT/claude-hooks-${discovered_id}.jsonl"
+        MARKER="$REGISTRY_ROOT/claude-hooks-${discovered_id}.epoch"
+        claude_hook_journal_claim "$MARKER" "$EPOCH"
+
+        registry_file="$REGISTRY_ROOT/claude-${discovered_id}.json"
+        if [[ -n "${TIDEY_WORKSPACE_ID:-}" && ! -f "$registry_file" ]]; then
+            tmp_registry="$(mktemp "$REGISTRY_ROOT/.claude-registry.XXXXXX" 2>/dev/null || true)"
+            if [[ -n "$tmp_registry" ]]; then
+                cwd_field="$(extract_json_string_field "$PAYLOAD" "cwd")"
+                created_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+                printf '{"version":1,"vendor":"claude","workspace_id":"%s","session_id":"%s","panel_id":"%s","pid":%s,"cwd":"%s","created_at":"%s"}\n' \
+                    "$(json_escape_field "${TIDEY_WORKSPACE_ID:-}")" \
+                    "$(json_escape_field "$discovered_id")" \
+                    "$(json_escape_field "${TIDEY_PANEL_ID:-}")" \
+                    "${TIDEY_CLAUDE_WRAPPER_PID:-0}" \
+                    "$(json_escape_field "${cwd_field:-${TIDEY_CLAUDE_WRAPPER_CWD:-}}")" \
+                    "$created_at" > "$tmp_registry" 2>/dev/null \
+                    && mv -f "$tmp_registry" "$registry_file" 2>/dev/null \
+                    || rm -f "$tmp_registry"
+            fi
+        fi
+    fi
+fi
+
+if [[ -n "$JOURNAL" ]]; then
+    ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    event_id="$(uuidgen 2>/dev/null || echo "$$-$RANDOM")"
+    payload_b64="$(printf '%s' "$PAYLOAD" | base64 2>/dev/null | tr -d '\n')"
+    template="{\"v\":3,\"event\":\"$EVENT\",\"ts\":\"$ts\",\"epoch\":\"${EPOCH:-unknown}\",\"event_id\":\"$event_id\",\"seq\":__SEQ__,\"payload_b64\":\"$payload_b64\"}"
+    append_journal_line "$JOURNAL" "$template" || true
+fi
+
+if [[ -x "$TIDEY_BIN" ]]; then
+    printf '%s' "$PAYLOAD" | "$TIDEY_BIN" claude-hook "$EVENT"
+    exit $?
+fi
+exit 0

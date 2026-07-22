@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Shared journal ownership functions for the Claude wrapper and its tests —
+# a SINGLE source of truth so the test harness exercises the exact code the
+# production wrapper runs, not a duplicate.
+#
+# Durable handoff: a resumed session's new wrapper instance shares the old
+# wrapper's journal PATH (keyed by session id), but claims exclusive
+# ownership via an epoch MARKER file. The marker is written LAST at claim
+# time (so it always reflects the most recent claimant) and checked before
+# cleanup deletes anything — an old wrapper whose session outlives a newer
+# one's start can therefore never delete the newer wrapper's journal,
+# counter, or seqlock directory.
+
+claude_hook_journal_claim() {
+    local marker_path="$1" epoch="$2"
+    printf '%s' "$epoch" > "$marker_path" 2>/dev/null || true
+}
+
+# Deletes the journal artifacts ONLY if the marker still names this epoch
+# (no newer wrapper has claimed it since).
+claude_hook_journal_cleanup() {
+    local journal_path="$1" marker_path="$2" epoch="$3"
+    local current_marker
+    current_marker="$(cat "$marker_path" 2>/dev/null || true)"
+    if [[ -z "$current_marker" || "$current_marker" == "$epoch" ]]; then
+        rm -f "$journal_path" "$journal_path.seq" "$marker_path"
+        rmdir "$journal_path.seqlock" 2>/dev/null || true
+        return 0
+    fi
+    return 1
+}
