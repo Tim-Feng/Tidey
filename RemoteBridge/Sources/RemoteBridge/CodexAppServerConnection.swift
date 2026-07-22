@@ -7,6 +7,7 @@ enum CodexAppServerConnectionError: Error {
     case requestFailed(CodexAppServerJSONRPCError)
     case unknownPrompt(String)
     case responseTimedOut
+    case protocolViolation
 }
 
 extension CodexAppServerConnectionError: LocalizedError {
@@ -24,6 +25,8 @@ extension CodexAppServerConnectionError: LocalizedError {
             return "Codex app-server prompt is unknown: \(promptID)"
         case .responseTimedOut:
             return "Codex app-server did not respond in time."
+        case .protocolViolation:
+            return "Codex app-server violated JSON-RPC request identity."
         }
     }
 }
@@ -102,6 +105,7 @@ final class CodexAppServerConnection {
     private let timestampProvider: TimestampProvider
     private let onInteractivePrompt: InteractivePromptHandler
     private let onInteractivePromptResolved: InteractivePromptResolvedHandler
+    private let onProtocolViolation: () -> Void
     // Serializes admission/publication with lifecycle terminals so observers
     // never receive a terminal before the pending event it terminates.
     private let publicationLock = NSRecursiveLock()
@@ -123,7 +127,8 @@ final class CodexAppServerConnection {
          nextSequence: @escaping SequenceProvider = { _ in 0 },
          timestampProvider: @escaping TimestampProvider = { CodexAppServerConnection.iso8601Now() },
          onInteractivePrompt: @escaping InteractivePromptHandler = { _ in },
-         onInteractivePromptResolved: @escaping InteractivePromptResolvedHandler = { _ in }) {
+         onInteractivePromptResolved: @escaping InteractivePromptResolvedHandler = { _ in },
+         onProtocolViolation: @escaping () -> Void = {}) {
         self.sendLine = sendLine
         self.sendLineConfirmed = sendLineConfirmed
         self.onNotification = onNotification
@@ -133,6 +138,7 @@ final class CodexAppServerConnection {
         self.timestampProvider = timestampProvider
         self.onInteractivePrompt = onInteractivePrompt
         self.onInteractivePromptResolved = onInteractivePromptResolved
+        self.onProtocolViolation = onProtocolViolation
     }
 
     @discardableResult
