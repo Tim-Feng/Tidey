@@ -191,6 +191,54 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                                                   promptID: promptID))
     }
 
+    func testClaudeHistoricalClosureIndexFailsClosedForOversizedUnterminatedRecord() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        let initialLines = (0..<8).map {
+            makeClaudeUserLine(uuid: "initial-\($0)", content: "initial-\($0)")
+        }
+        let initialPayload = initialLines.joined(separator: "\n") + "\n"
+        try initialPayload.write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let partialLineByteLimit = 64
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(
+            record: makeRecord(transcriptPath: transcriptURL.path),
+            fileManager: .default,
+            hub: hub,
+            historicalPartialLineByteLimit: partialLineByteLimit)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20)
+                .events.contains { $0.text == "initial-7" }
+        })
+        let anchor = try XCTUnwrap(
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20)
+                .events.first { $0.text == "initial-7" }?.seq
+        )
+        XCTAssertTrue(session.backfill(beforeSeq: anchor, limit: 2))
+
+        let oversizedPartial = Data(repeating: 0x78, count: partialLineByteLimit + 1)
+        let handle = try FileHandle(forWritingTo: transcriptURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: oversizedPartial)
+        try handle.close()
+
+        XCTAssertFalse(session.backfill(beforeSeq: anchor, limit: 2),
+                       "unknown closure evidence after an oversized partial record must fail closed")
+        let afterOversizedRecord = session.historicalClosureIndexStatsForTesting()
+        XCTAssertEqual(afterOversizedRecord.readByteCount,
+                       initialPayload.utf8.count + oversizedPartial.count)
+
+        XCTAssertFalse(session.backfill(beforeSeq: anchor, limit: 2))
+        XCTAssertEqual(session.historicalClosureIndexStatsForTesting(), afterOversizedRecord,
+                       "a poisoned history index must not retain or reread the oversized suffix")
+    }
+
     func testClaudeHistoricalIndexRejectsSameInodeMutationWhileAdoptingPartial() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
