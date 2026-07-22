@@ -39,8 +39,32 @@ enum JSONLFileReader {
 
     static func readBefore(fileURL: URL,
                            beforeOffset: Int,
-                           limit: Int) throws -> [(offset: Int, line: String)] {
-        try readLines(fileURL: fileURL, beforeOffsetExclusive: beforeOffset, limit: limit)
+                           limit: Int,
+                           includeAnchorLine: Bool = false) throws -> [(offset: Int, line: String)] {
+        let endOffset = includeAnchorLine
+            ? try offsetAfterLine(fileURL: fileURL, lineOffset: beforeOffset)
+            : beforeOffset
+        return try readLines(fileURL: fileURL, beforeOffsetExclusive: endOffset, limit: limit)
+    }
+
+    private static func offsetAfterLine(fileURL: URL, lineOffset: Int) throws -> Int {
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer { try? handle.close() }
+
+        let fileSize = try Int(handle.seekToEnd())
+        var scanOffset = min(max(lineOffset, 0), fileSize)
+        try handle.seek(toOffset: UInt64(scanOffset))
+        while scanOffset < fileSize,
+              let chunk = try handle.read(upToCount: min(chunkSize, fileSize - scanOffset)),
+              chunk.isEmpty == false {
+            if let newlineIndex = chunk.firstIndex(of: 0x0A) {
+                return scanOffset
+                    + chunk.distance(from: chunk.startIndex, to: newlineIndex)
+                    + 1
+            }
+            scanOffset += chunk.count
+        }
+        return fileSize
     }
 
     private static func readLines(fileURL: URL,
