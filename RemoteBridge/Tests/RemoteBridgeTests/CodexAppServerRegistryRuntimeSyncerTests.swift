@@ -418,6 +418,120 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         XCTAssertEqual(runtimeB.submittedMessages, ["newest"])
     }
 
+    func testSubmitInsideReplacementGapWaitsAndReconciles() throws {
+        let newRuntime = FakeRuntimeSession()
+        let resolved = Self.event(sessionID: "app", promptID: "prompt-gap")
+        newRuntime.resolvedEventsByPromptID["prompt-gap"] = resolved
+        let gap = makeReplacementEntryGap(newRuntime: newRuntime)
+        XCTAssertEqual(gap.attachEntered.wait(timeout: .now() + 2), .success)
+
+        let waitEntered = DispatchSemaphore(value: 0)
+        gap.syncer.transitionWaitHook = { _ in waitEntered.signal() }
+        var result: AgentEvent?
+        var submitError: Error?
+        let submitDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                result = try gap.syncer.submitApproval(promptID: "prompt-gap",
+                                                       targetIndex: 0,
+                                                       workspaceID: "workspace-1",
+                                                       panelID: "panel-1",
+                                                       sessionID: "app")
+            } catch {
+                submitError = error
+            }
+            submitDone.signal()
+        }
+        XCTAssertEqual(waitEntered.wait(timeout: .now() + 2), .success,
+                       "a submit in the entry gap must wait for the transition signal")
+
+        gap.releaseAttach.signal()
+        XCTAssertEqual(gap.syncDone.wait(timeout: .now() + 2), .success)
+        XCTAssertEqual(submitDone.wait(timeout: .now() + 2), .success)
+        XCTAssertNil(submitError)
+        XCTAssertEqual(result?.eventID, resolved.eventID)
+        XCTAssertEqual(newRuntime.submitAttempts, ["prompt-gap"])
+    }
+
+    func testStaleSubmitSuccessReconcilesAgainstReplacementGeneration() throws {
+        let oldRuntime = FakeRuntimeSession()
+        let newRuntime = FakeRuntimeSession()
+        let oldResolved = Self.event(sessionID: "app", promptID: "prompt-old")
+        let newResolved = Self.event(sessionID: "app", promptID: "prompt-new")
+        oldRuntime.resolvedEventsByPromptID["prompt-race"] = oldResolved
+        newRuntime.resolvedEventsByPromptID["prompt-race"] = newResolved
+        oldRuntime.submitEntered = DispatchSemaphore(value: 0)
+        oldRuntime.submitBarrier = DispatchSemaphore(value: 0)
+        var attachCount = 0
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: AgentEventHub(), attachHandler: { _, _, _, _, _, _, _ in
+            defer { attachCount += 1 }
+            return attachCount == 0 ? oldRuntime : newRuntime
+        })
+        syncer.sync(records: [
+            Self.record(sessionID: "app", runtime: "codex_app_server", socketPath: "/tmp/app-1.sock"),
+        ])
+
+        var result: AgentEvent?
+        var submitError: Error?
+        let submitDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                result = try syncer.submitApproval(promptID: "prompt-race",
+                                                   targetIndex: 0,
+                                                   workspaceID: "workspace-1",
+                                                   panelID: "panel-1",
+                                                   sessionID: "app")
+            } catch {
+                submitError = error
+            }
+            submitDone.signal()
+        }
+        XCTAssertEqual(oldRuntime.submitEntered?.wait(timeout: .now() + 2), .success)
+
+        syncer.sync(records: [
+            Self.record(sessionID: "app", runtime: "codex_app_server", socketPath: "/tmp/app-2.sock"),
+        ])
+        oldRuntime.submitBarrier?.signal()
+        XCTAssertEqual(submitDone.wait(timeout: .now() + 2), .success)
+
+        XCTAssertNil(submitError)
+        XCTAssertEqual(result?.eventID, newResolved.eventID,
+                       "the retired generation's success must not mask the current generation")
+        XCTAssertEqual(newRuntime.submitAttempts, ["prompt-race"])
+    }
+
+    func testReplacementGapTimeoutFailsClosed() throws {
+        let newRuntime = FakeRuntimeSession()
+        let gap = makeReplacementEntryGap(newRuntime: newRuntime, transitionWaitTimeout: 0.1)
+        XCTAssertEqual(gap.attachEntered.wait(timeout: .now() + 2), .success)
+
+        var result: AgentEvent?
+        var submitError: Error?
+        let submitDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                result = try gap.syncer.submitApproval(promptID: "prompt-timeout",
+                                                       targetIndex: 0,
+                                                       workspaceID: "workspace-1",
+                                                       panelID: "panel-1",
+                                                       sessionID: "app")
+            } catch {
+                submitError = error
+            }
+            submitDone.signal()
+        }
+        XCTAssertEqual(submitDone.wait(timeout: .now() + 2), .success)
+        XCTAssertNil(result)
+        guard case BridgeInternalError.conflict? = submitError else {
+            gap.releaseAttach.signal()
+            _ = gap.syncDone.wait(timeout: .now() + 2)
+            return XCTFail("expected transition conflict, got \(String(describing: submitError))")
+        }
+
+        gap.releaseAttach.signal()
+        XCTAssertEqual(gap.syncDone.wait(timeout: .now() + 2), .success)
+    }
+
     func testSyncStopsStaleAndReplacedRuntimes() {
         let hub = AgentEventHub()
         var runtimes = [FakeRuntimeSession]()
@@ -1012,6 +1126,41 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
             event: interactivePromptEvent(sessionID: sessionID, promptID: prompt.promptID))
     }
 
+    private func makeReplacementEntryGap(
+        newRuntime: FakeRuntimeSession,
+        transitionWaitTimeout: TimeInterval = 5
+    ) -> (syncer: CodexAppServerRegistryRuntimeSyncer,
+          attachEntered: DispatchSemaphore,
+          releaseAttach: DispatchSemaphore,
+          syncDone: DispatchSemaphore) {
+        let attachEntered = DispatchSemaphore(value: 0)
+        let releaseAttach = DispatchSemaphore(value: 0)
+        var attachCount = 0
+        let syncer = CodexAppServerRegistryRuntimeSyncer(
+            eventHub: AgentEventHub(),
+            transitionWaitTimeout: transitionWaitTimeout,
+            attachHandler: { _, _, _, _, _, _, _ in
+                defer { attachCount += 1 }
+                if attachCount == 0 {
+                    return FakeRuntimeSession()
+                }
+                attachEntered.signal()
+                _ = releaseAttach.wait(timeout: .now() + 5)
+                return newRuntime
+            })
+        syncer.sync(records: [
+            Self.record(sessionID: "app", runtime: "codex_app_server", socketPath: "/tmp/app-1.sock"),
+        ])
+        let syncDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            syncer.sync(records: [
+                Self.record(sessionID: "app", runtime: "codex_app_server", socketPath: "/tmp/app-2.sock"),
+            ])
+            syncDone.signal()
+        }
+        return (syncer, attachEntered, releaseAttach, syncDone)
+    }
+
     private static func event(sessionID: String, promptID: String) -> AgentEvent {
         AgentEvent(eventID: "resolved-\(promptID)",
                    seq: 1,
@@ -1133,6 +1282,8 @@ private final class FakeRuntimeSession: CodexAppServerRuntimeSessionControlling 
     var pendingPromptEvents = [AgentEvent]()
     var registryRootThreadIDs = [String]()
     var onStop: (() -> Void)?
+    var submitEntered: DispatchSemaphore?
+    var submitBarrier: DispatchSemaphore?
 
     func canSubmitMessage() -> Bool {
         canSubmit
@@ -1164,6 +1315,10 @@ private final class FakeRuntimeSession: CodexAppServerRuntimeSessionControlling 
 
     func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent {
         submitAttempts.append(promptID)
+        submitEntered?.signal()
+        if let submitBarrier {
+            _ = submitBarrier.wait(timeout: .now() + 5)
+        }
         guard let event = resolvedEventsByPromptID[promptID] else {
             throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
         }

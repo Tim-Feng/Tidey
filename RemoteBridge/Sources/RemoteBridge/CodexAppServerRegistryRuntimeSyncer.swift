@@ -76,6 +76,8 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
     private var entriesBySessionID = [String: RuntimeEntry]()
     private var currentGenerationBySessionID = [String: UUID]()
     private var retiringGenerations = Set<UUID>()
+    private var transitionGroupsBySessionID = [String: DispatchGroup]()
+    private var transitionDepthBySessionID = [String: Int]()
     private var lastAssistantTextBySessionID = [String: String]()
     private var nextActiveThreadRefreshAtBySessionID = [String: Date]()
     var activeThreadHandler: ActiveThreadHandler?
@@ -183,6 +185,14 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
             entriesBySessionID[record.sessionID] != nil &&
                 recordsToAttach.contains(where: { $0.sessionID == record.sessionID }) == false
         }
+        let transitioningSessionIDs = Set(staleEntries.map(\.record.sessionID))
+            .union(recordsToAttach.map(\.sessionID))
+        for sessionID in transitioningSessionIDs {
+            let group = transitionGroupsBySessionID[sessionID] ?? DispatchGroup()
+            group.enter()
+            transitionGroupsBySessionID[sessionID] = group
+            transitionDepthBySessionID[sessionID, default: 0] += 1
+        }
         lock.unlock()
         forwardLock.unlock()
 
@@ -214,8 +224,13 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
             }
         }
 
+        let attachSessionIDs = Set(recordsToAttach.map(\.sessionID))
+        for entry in staleEntries where attachSessionIDs.contains(entry.record.sessionID) == false {
+            leaveGenerationTransition(sessionID: entry.record.sessionID)
+        }
         for record in recordsToAttach {
             attach(record: record)
+            leaveGenerationTransition(sessionID: record.sessionID)
         }
 
         let reusedSessions = lock.withCodexRuntimeSyncerLock {
@@ -269,8 +284,9 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
                                 targetIndex: Int,
                                 workspaceID: String?,
                                 panelID: String?,
-                                sessionID: String?) throws -> AgentEvent {
-        let sessions = lock.withCodexRuntimeSyncerLock {
+                                sessionID: String?,
+                                generationRetriesRemaining: Int = 1) throws -> AgentEvent {
+        let candidates = lock.withCodexRuntimeSyncerLock {
             let entries: [RuntimeEntry]
             if let sessionID {
                 if let matchingEntry = entriesBySessionID[sessionID] {
@@ -281,20 +297,60 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
             } else {
                 entries = Array(entriesBySessionID.values)
             }
-            return entries.map(\.session)
+            return entries.map {
+                (sessionID: $0.record.sessionID,
+                 session: $0.session,
+                 generation: $0.generation)
+            }
         }
         var lastError: Error?
-        for session in sessions {
+        for candidate in candidates {
+            let result: Result<AgentEvent, Error>
             do {
-                return try session.submitApproval(promptID: promptID, targetIndex: targetIndex)
-            } catch BridgeInternalError.notFound {
-                continue
+                result = .success(try candidate.session.submitApproval(promptID: promptID,
+                                                                       targetIndex: targetIndex))
             } catch {
+                result = .failure(error)
+            }
+            let stillCurrent = lock.withCodexRuntimeSyncerLock {
+                entriesBySessionID[candidate.sessionID]?.generation == candidate.generation
+            }
+            if stillCurrent == false, generationRetriesRemaining > 0 {
+                try requireTransitionSettled(awaitGenerationTransition(sessionID: candidate.sessionID))
+                return try submitApproval(promptID: promptID,
+                                          targetIndex: targetIndex,
+                                          workspaceID: workspaceID,
+                                          panelID: panelID,
+                                          sessionID: sessionID,
+                                          generationRetriesRemaining: generationRetriesRemaining - 1)
+            }
+            switch result {
+            case .success(let event):
+                guard stillCurrent else {
+                    throw BridgeInternalError.conflict("Codex runtime was replaced during approval submit; retry.")
+                }
+                return event
+            case .failure(let error):
+                if case BridgeInternalError.notFound = error {
+                    continue
+                }
                 lastError = error
             }
         }
         if let lastError {
             throw lastError
+        }
+        if candidates.isEmpty,
+           let sessionID,
+           generationRetriesRemaining > 0,
+           lock.withCodexRuntimeSyncerLock({ (transitionDepthBySessionID[sessionID] ?? 0) > 0 }) {
+            try requireTransitionSettled(awaitGenerationTransition(sessionID: sessionID))
+            return try submitApproval(promptID: promptID,
+                                      targetIndex: targetIndex,
+                                      workspaceID: workspaceID,
+                                      panelID: panelID,
+                                      sessionID: sessionID,
+                                      generationRetriesRemaining: generationRetriesRemaining - 1)
         }
         if let workspaceID,
            let panelID,
@@ -601,6 +657,55 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
             } catch {
                 BridgeLogger.server.error("codex app-server sidebar message failed session_id=\(sessionID, privacy: .public) message=\(message, privacy: .public) error=\(String(describing: error), privacy: .public)")
             }
+        }
+    }
+
+    private func leaveGenerationTransition(sessionID: String) {
+        let group = lock.withCodexRuntimeSyncerLock { () -> DispatchGroup? in
+            guard let depth = transitionDepthBySessionID[sessionID] else {
+                return nil
+            }
+            if depth <= 1 {
+                transitionDepthBySessionID.removeValue(forKey: sessionID)
+            } else {
+                transitionDepthBySessionID[sessionID] = depth - 1
+            }
+            return transitionGroupsBySessionID[sessionID]
+        }
+        group?.leave()
+    }
+
+    private enum TransitionWaitOutcome {
+        case noTransition
+        case completed
+        case timedOut
+    }
+
+    private func awaitGenerationTransition(sessionID: String?) -> TransitionWaitOutcome {
+        guard let sessionID else {
+            return .noTransition
+        }
+        let group = lock.withCodexRuntimeSyncerLock { () -> DispatchGroup? in
+            guard (transitionDepthBySessionID[sessionID] ?? 0) > 0 else {
+                return nil
+            }
+            return transitionGroupsBySessionID[sessionID]
+        }
+        guard let group else {
+            return .noTransition
+        }
+        transitionWaitHook?(sessionID)
+        switch group.wait(timeout: .now() + transitionWaitTimeout) {
+        case .success:
+            return .completed
+        case .timedOut:
+            return .timedOut
+        }
+    }
+
+    private func requireTransitionSettled(_ outcome: TransitionWaitOutcome) throws {
+        if case .timedOut = outcome {
+            throw BridgeInternalError.conflict("Codex runtime generation transition did not complete in time; retry.")
         }
     }
 
