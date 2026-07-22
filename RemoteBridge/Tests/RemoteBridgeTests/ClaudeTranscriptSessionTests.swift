@@ -747,6 +747,60 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         XCTAssertEqual(history.compactMap(\.text), ["new-old-0", "new-old-1"])
     }
 
+    func testFetchDoesNotReturnOldPageWhenSamePathIsReplacedDuringBackfill() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        let oldLines = (0..<8).map {
+            makeClaudeUserLine(uuid: "old-\($0)", content: "old-\($0)")
+        }
+        try (oldLines.joined(separator: "\n") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20)
+                .events.contains { $0.text == "old-7" }
+        })
+        let beforeSeq = try XCTUnwrap(
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20)
+                .events.last { ($0.text ?? "").hasPrefix("old-") }?.seq
+        )
+        let replacementLines = (0..<4).map {
+            makeClaudeUserLine(uuid: "new-\($0)", content: "new-\($0)")
+        }
+        var replacementError: Error?
+        session.historicalIndexBeforeSourceValidationForTesting = {
+            do {
+                try (replacementLines.joined(separator: "\n") + "\n")
+                    .write(to: transcriptURL, atomically: true, encoding: .utf8)
+            } catch {
+                replacementError = error
+            }
+        }
+
+        let output = BridgeAgentEventFetchFlow.run(eventHub: hub,
+                                                   workspaceID: "workspace",
+                                                   sessionID: "session",
+                                                   limit: 4,
+                                                   beforeSeq: beforeSeq,
+                                                   afterSeq: nil) { _, anchor, limit in
+            return session.backfill(beforeSeq: anchor, limit: limit)
+        }
+
+        XCTAssertNil(replacementError)
+        XCTAssertFalse(output.didBackfill)
+        XCTAssertFalse(output.fetchResult.events.contains { ($0.text ?? "").hasPrefix("old-") },
+                       "a response captured before the source reset must be discarded")
+    }
+
     func testInteractivePromptSidebarTerminalEffectsAreExactlyOnce() {
         let sender = ClaudePromptRecordingCommandSender()
         let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: "/tmp/unused.jsonl"),

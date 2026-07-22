@@ -96,6 +96,37 @@ final class JSONLFileTailerTests: XCTestCase {
         XCTAssertGreaterThan(captured.last?.0 ?? 0, bootstrapOffsets.max() ?? 0)
     }
 
+    func testAppendImmediatelyFollowedByDeleteDrainsFinalCompleteLine() throws {
+        let fileURL = try writeTestFile()
+        let queue = DispatchQueue(label: "JSONLFileTailerTests.append-delete")
+        let finalLineExpectation = expectation(description: "final line delivered")
+        let invalidationExpectation = expectation(description: "source invalidated")
+        var captured = [String]()
+        let tailer = JSONLFileTailer(fileURL: fileURL,
+                                     queue: queue,
+                                     bootstrapLineLimit: 2,
+                                     lineHandler: { _, line in
+                                         captured.append(line)
+                                         if line == "five" {
+                                             finalLineExpectation.fulfill()
+                                         }
+                                     },
+                                     invalidationHandler: {
+                                         invalidationExpectation.fulfill()
+                                     })
+
+        try tailer.start()
+        let handle = try FileHandle(forWritingTo: fileURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("five\n".utf8))
+        try handle.close()
+        try FileManager.default.removeItem(at: fileURL)
+
+        wait(for: [finalLineExpectation, invalidationExpectation], timeout: 2)
+        tailer.stop()
+        XCTAssertEqual(captured.suffix(3), ["three", "four", "five"])
+    }
+
     func testOpenedSourceIdentityStaysBoundToActiveFileDescriptor() throws {
         let fileURL = try writeTestFile()
         let queue = DispatchQueue(label: "JSONLFileTailerTests.source-identity")
@@ -114,6 +145,73 @@ final class JSONLFileTailerTests: XCTestCase {
         try "replacement\n".write(to: fileURL, atomically: true, encoding: .utf8)
 
         XCTAssertEqual(tailer.openedSourceIdentity, openedIdentity)
+    }
+
+    func testBackfillRejectsSamePathReplacementAndTruncationBeforeCallbacks() throws {
+        do {
+            let fileURL = try writeTestFile()
+            let queue = DispatchQueue(label: "JSONLFileTailerTests.replaced-source")
+            var captured = [String]()
+            let tailer = JSONLFileTailer(fileURL: fileURL,
+                                         queue: queue,
+                                         bootstrapLineLimit: 2,
+                                         lineHandler: { _, line in captured.append(line) },
+                                         invalidationHandler: {})
+            try tailer.start()
+            defer { tailer.stop() }
+            queue.suspend()
+            defer { queue.resume() }
+
+            try "replacement-one\nreplacement-two\n".write(to: fileURL,
+                                                               atomically: true,
+                                                               encoding: .utf8)
+
+            XCTAssertThrowsError(try tailer.backfill(beforeOffset: 8, limit: 2))
+            XCTAssertEqual(captured, ["three", "four"])
+        }
+
+        do {
+            let fileURL = try writeTestFile()
+            let queue = DispatchQueue(label: "JSONLFileTailerTests.truncated-source")
+            var captured = [String]()
+            let tailer = JSONLFileTailer(fileURL: fileURL,
+                                         queue: queue,
+                                         bootstrapLineLimit: 2,
+                                         lineHandler: { _, line in captured.append(line) },
+                                         invalidationHandler: {})
+            try tailer.start()
+            defer { tailer.stop() }
+            queue.suspend()
+            defer { queue.resume() }
+            let handle = try FileHandle(forWritingTo: fileURL)
+            try handle.truncate(atOffset: 4)
+            try handle.close()
+
+            XCTAssertThrowsError(try tailer.backfill(beforeOffset: 8, limit: 2))
+            XCTAssertEqual(captured, ["three", "four"])
+        }
+
+        do {
+            let fileURL = try writeTestFile()
+            let queue = DispatchQueue(label: "JSONLFileTailerTests.truncated-regrown-source")
+            var captured = [String]()
+            let tailer = JSONLFileTailer(fileURL: fileURL,
+                                         queue: queue,
+                                         bootstrapLineLimit: 2,
+                                         lineHandler: { _, line in captured.append(line) },
+                                         invalidationHandler: {})
+            try tailer.start()
+            defer { tailer.stop() }
+            queue.suspend()
+            defer { queue.resume() }
+            let handle = try FileHandle(forWritingTo: fileURL)
+            try handle.truncate(atOffset: 0)
+            try handle.write(contentsOf: Data("replacement-one\nreplacement-two\n".utf8))
+            try handle.close()
+
+            XCTAssertThrowsError(try tailer.backfill(beforeOffset: 8, limit: 2))
+            XCTAssertEqual(captured, ["three", "four"])
+        }
     }
 
     private func writeTestFile() throws -> URL {

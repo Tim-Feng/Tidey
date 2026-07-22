@@ -31,27 +31,30 @@ enum BridgeAgentEventFetchFlow {
             let backfilled = backfill(sessionID, beforeSeq, max(limit, transcriptBootstrapLineLimit))
             if backfilled {
                 didBackfill = true
-                fetchResult = eventHub.fetch(workspaceID: workspaceID,
-                                             sessionID: sessionID,
-                                             limit: limit,
-                                             maxBytes: maxBytes,
-                                             beforeSeq: beforeSeq,
-                                             afterSeq: nil)
             }
+            // Backfill may return false because it detected and revoked a
+            // replaced source. Never return the fetch captured before that
+            // session-side transaction; read the Hub again either way.
+            fetchResult = eventHub.fetch(workspaceID: workspaceID,
+                                         sessionID: sessionID,
+                                         limit: limit,
+                                         maxBytes: maxBytes,
+                                         beforeSeq: beforeSeq,
+                                         afterSeq: nil)
         } else if let sessionID, let afterSeq {
             while let earliestBufferedSeq = eventHub.oldestBufferedSeq(sessionID: sessionID),
                   earliestBufferedSeq > afterSeq + 1 {
                 let backfilled = backfill(sessionID, earliestBufferedSeq, max(limit, transcriptBootstrapLineLimit))
-                guard backfilled else {
-                    break
-                }
-                didBackfill = true
+                didBackfill = didBackfill || backfilled
                 fetchResult = eventHub.fetch(workspaceID: workspaceID,
                                              sessionID: sessionID,
                                              limit: limit,
                                              maxBytes: maxBytes,
                                              beforeSeq: nil,
                                              afterSeq: afterSeq)
+                guard backfilled else {
+                    break
+                }
             }
         }
         return Output(fetchResult: fetchResult, didBackfill: didBackfill)

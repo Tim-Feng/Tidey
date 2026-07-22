@@ -548,7 +548,12 @@ final class ClaudeLifecycleFeedTests: XCTestCase {
 
         // Epoch 100 retired by epoch 200.
         try appendHook(event: "session-start", payload: #"{"session_id":"session"}"#, epoch: "100-1000")
+        try appendHook(event: "notification-permission",
+                       payload: #"{"session_id":"session"}"#,
+                       epoch: "100-1000")
+        waitForState(.needsInput)
         try appendHook(event: "session-start", payload: #"{"session_id":"session"}"#, epoch: "200-2000")
+        waitForState(.idle)
         try appendTranscript([userLine(uuid: "u1", text: "task")])
         waitForState(.working)
 
