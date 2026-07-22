@@ -612,6 +612,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
          bridgePort: Int,
          cloudflaredManager: BridgeCloudflaredManager,
          ordinaryTmuxProjectionContext: OrdinaryTmuxProjectionContext = OrdinaryTmuxProjectionContext(),
+         promptSubmitDeduper: InteractivePromptSubmitDeduper = InteractivePromptSubmitDeduper(),
          lifecycleStore: AgentSessionLifecycleStore = AgentSessionLifecycle.store) {
         self.socketClient = socketClient
         self.eventHub = eventHub
@@ -638,7 +639,8 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                                                                             sessionResolver: registryMonitor,
                                                                             eventHub: eventHub,
                                                                             inputActionHandler: inputActionHandler,
-                                                                            codexApprovalSubmitter: codexApprovalSubmitter)
+                                                                            codexApprovalSubmitter: codexApprovalSubmitter,
+                                                                            submitDeduper: promptSubmitDeduper)
         self.imageUploadHandler = BridgeImageUploadHandler(destinationResolver: ApplicationSupportImageUploadDestinationResolver(),
                                                            filenameGenerator: TimestampedImageUploadFilenameGenerator())
     }

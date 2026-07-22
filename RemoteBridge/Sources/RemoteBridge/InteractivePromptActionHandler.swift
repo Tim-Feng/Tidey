@@ -1,5 +1,12 @@
 import Foundation
 
+struct InteractivePromptSubmitScope: Hashable, Sendable {
+    let workspaceID: String
+    let panelID: String
+    let sessionID: String
+    let vendor: String
+}
+
 final class InteractivePromptSubmitDeduper: @unchecked Sendable {
     enum Check: Sendable {
         case new
@@ -13,19 +20,39 @@ final class InteractivePromptSubmitDeduper: @unchecked Sendable {
         let result: [String: JSONValue]
     }
 
+    private enum CacheKey: Hashable {
+        case legacy(clientRequestID: String)
+        case scoped(InteractivePromptSubmitScope, clientRequestID: String)
+    }
+
     private let lock = NSLock()
     private let capacity: Int
-    private var order: [String] = []
-    private var cacheByClientRequestID: [String: CachedSubmit] = [:]
+    private var order: [CacheKey] = []
+    private var cacheByKey: [CacheKey: CachedSubmit] = [:]
 
     init(capacity: Int = 128) {
         self.capacity = max(1, capacity)
     }
 
     func check(clientRequestID: String, promptID: String, decision: String) -> Check {
+        check(key: .legacy(clientRequestID: clientRequestID),
+              promptID: promptID,
+              decision: decision)
+    }
+
+    func check(scope: InteractivePromptSubmitScope,
+               clientRequestID: String,
+               promptID: String,
+               decision: String) -> Check {
+        check(key: .scoped(scope, clientRequestID: clientRequestID),
+              promptID: promptID,
+              decision: decision)
+    }
+
+    private func check(key: CacheKey, promptID: String, decision: String) -> Check {
         lock.lock()
         defer { lock.unlock() }
-        guard let cached = cacheByClientRequestID[clientRequestID] else {
+        guard let cached = cacheByKey[key] else {
             return .new
         }
         guard cached.promptID == promptID, cached.decision == decision else {
@@ -41,16 +68,37 @@ final class InteractivePromptSubmitDeduper: @unchecked Sendable {
                promptID: String,
                decision: String,
                result: [String: JSONValue]) {
+        store(key: .legacy(clientRequestID: clientRequestID),
+              promptID: promptID,
+              decision: decision,
+              result: result)
+    }
+
+    func store(scope: InteractivePromptSubmitScope,
+               clientRequestID: String,
+               promptID: String,
+               decision: String,
+               result: [String: JSONValue]) {
+        store(key: .scoped(scope, clientRequestID: clientRequestID),
+              promptID: promptID,
+              decision: decision,
+              result: result)
+    }
+
+    private func store(key: CacheKey,
+                       promptID: String,
+                       decision: String,
+                       result: [String: JSONValue]) {
         lock.lock()
         defer { lock.unlock() }
-        if cacheByClientRequestID[clientRequestID] == nil {
-            order.append(clientRequestID)
+        if cacheByKey[key] == nil {
+            order.append(key)
         }
-        cacheByClientRequestID[clientRequestID] = CachedSubmit(promptID: promptID,
-                                                               decision: decision,
-                                                               result: result)
+        cacheByKey[key] = CachedSubmit(promptID: promptID,
+                                       decision: decision,
+                                       result: result)
         while order.count > capacity {
-            cacheByClientRequestID.removeValue(forKey: order.removeFirst())
+            cacheByKey.removeValue(forKey: order.removeFirst())
         }
     }
 }
