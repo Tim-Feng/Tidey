@@ -102,6 +102,26 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
         XCTAssertTrue(output.didBackfill)
     }
 
+    func testAfterCursorAtIntMaxReturnsEmptyWithoutBackfill() {
+        let hub = AgentEventHub()
+        hub.publish(makeEvent(seq: 100, text: "live-100"))
+        var backfillCalls = 0
+
+        let output = BridgeAgentEventFetchFlow.run(eventHub: hub,
+                                                   workspaceID: "workspace",
+                                                   sessionID: "session",
+                                                   limit: 3,
+                                                   beforeSeq: nil,
+                                                   afterSeq: Int.max) { _, _, _ in
+            backfillCalls += 1
+            return true
+        }
+
+        XCTAssertTrue(output.fetchResult.events.isEmpty)
+        XCTAssertFalse(output.didBackfill)
+        XCTAssertEqual(backfillCalls, 0)
+    }
+
     func testConcurrentSameSessionHistoryRequestsReturnTheirOwnPages() {
         let hub = AgentEventHub()
         hub.publish(makeEvent(seq: 100, text: "live"))

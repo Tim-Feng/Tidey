@@ -76,8 +76,10 @@ enum BridgeAgentEventFetchFlow {
                                          beforeSeq: beforeSeq,
                                          afterSeq: nil)
         } else if let sessionID, let afterSeq {
-            while let earliestBufferedSeq = eventHub.oldestBufferedSeq(sessionID: sessionID),
-                  earliestBufferedSeq > afterSeq + 1 {
+            let (nextAfterSeq, nextAfterSeqOverflowed) = afterSeq.addingReportingOverflow(1)
+            while nextAfterSeqOverflowed == false,
+                  let earliestBufferedSeq = eventHub.oldestBufferedSeq(sessionID: sessionID),
+                  earliestBufferedSeq > nextAfterSeq {
                 let backfilled = backfill(sessionID, earliestBufferedSeq, max(limit, transcriptBootstrapLineLimit))
                 didBackfill = didBackfill || backfilled
                 fetchResult = eventHub.fetch(workspaceID: workspaceID,
