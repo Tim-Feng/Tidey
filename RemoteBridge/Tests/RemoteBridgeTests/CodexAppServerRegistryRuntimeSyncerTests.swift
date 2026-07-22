@@ -359,6 +359,65 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
                        "report_shell_state running --workspace_id=workspace-1")
     }
 
+    func testConcurrentSyncPassesKeepNewestGeneration() throws {
+        let runtimeA = FakeRuntimeSession()
+        let runtimeB = FakeRuntimeSession()
+        let firstAttachEntered = DispatchSemaphore(value: 0)
+        let releaseFirstAttach = DispatchSemaphore(value: 0)
+        let secondAttachEntered = DispatchSemaphore(value: 0)
+        let attachLock = NSLock()
+        var attachCount = 0
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: AgentEventHub(), attachHandler: { _, _, _, _, _, _, _ in
+            attachLock.lock()
+            attachCount += 1
+            let currentAttach = attachCount
+            attachLock.unlock()
+            if currentAttach == 1 {
+                firstAttachEntered.signal()
+                _ = releaseFirstAttach.wait(timeout: .now() + 5)
+                return runtimeA
+            }
+            secondAttachEntered.signal()
+            return runtimeB
+        })
+
+        let firstSyncDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            syncer.sync(records: [
+                Self.record(sessionID: "app", runtime: "codex_app_server", socketPath: "/tmp/app-1.sock"),
+            ])
+            firstSyncDone.signal()
+        }
+        XCTAssertEqual(firstAttachEntered.wait(timeout: .now() + 2), .success)
+
+        let secondSyncArrived = DispatchSemaphore(value: 0)
+        syncer.syncArrivalHook = { records in
+            if records.first?.appServerSocket == "/tmp/app-2.sock" {
+                secondSyncArrived.signal()
+            }
+        }
+        let secondSyncDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            syncer.sync(records: [
+                Self.record(sessionID: "app", runtime: "codex_app_server", socketPath: "/tmp/app-2.sock"),
+            ])
+            secondSyncDone.signal()
+        }
+        XCTAssertEqual(secondSyncArrived.wait(timeout: .now() + 2), .success)
+        XCTAssertEqual(secondAttachEntered.wait(timeout: .now() + 0.2), .timedOut,
+                       "the second sync must wait outside attach until the first pass completes")
+
+        releaseFirstAttach.signal()
+        XCTAssertEqual(firstSyncDone.wait(timeout: .now() + 2), .success)
+        XCTAssertEqual(secondSyncDone.wait(timeout: .now() + 2), .success)
+        XCTAssertTrue(runtimeA.stopped)
+        XCTAssertFalse(runtimeB.stopped)
+
+        try syncer.submitMessage(sessionID: "app", text: "newest")
+        XCTAssertTrue(runtimeA.submittedMessages.isEmpty)
+        XCTAssertEqual(runtimeB.submittedMessages, ["newest"])
+    }
+
     func testSyncStopsStaleAndReplacedRuntimes() {
         let hub = AgentEventHub()
         var runtimes = [FakeRuntimeSession]()

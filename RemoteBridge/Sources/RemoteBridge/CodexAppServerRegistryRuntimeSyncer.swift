@@ -72,6 +72,7 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
     private let promptNotificationDeduper = AgentInteractivePromptNotificationDeduper()
     private let lock = NSLock()
     private let forwardLock = NSRecursiveLock()
+    private let syncSerialLock = NSLock()
     private var entriesBySessionID = [String: RuntimeEntry]()
     private var currentGenerationBySessionID = [String: UUID]()
     private var retiringGenerations = Set<UUID>()
@@ -127,6 +128,12 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
 
     func sync(records: [AgentSessionRegistryRecord]) {
         syncArrivalHook?(records)
+        syncSerialLock.lock()
+        defer { syncSerialLock.unlock() }
+        syncLockedPass(records: records)
+    }
+
+    private func syncLockedPass(records: [AgentSessionRegistryRecord]) {
         let runtimeRecords = records.filter(Self.isAttachableCodexAppServerRecord(_:))
         let activeSessionIDs = Set(runtimeRecords.map(\.sessionID))
 
