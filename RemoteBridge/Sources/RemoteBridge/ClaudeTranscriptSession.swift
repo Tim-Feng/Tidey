@@ -3140,12 +3140,15 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         guard let index = historicalClosureIndex else {
             return
         }
-        var closureSequences = index.contextConsumerSequenceByOpenerEventID
-        for (openerEventID, closure) in index.closureByOpenerEventID {
-            closureSequences[openerEventID] = closure.seq
+        var resolutions = index.contextConsumerSequenceByOpenerEventID.mapValues {
+            HistoricalOpenerResolution.silentConsumer(sequence: $0)
         }
-        hub.replaceHistoricalOpenerClosureSequences(sessionID: record.sessionID,
-                                                    sequences: closureSequences)
+        for (openerEventID, closure) in index.closureByOpenerEventID {
+            resolutions[openerEventID] = .visibleTerminal(eventID: closure.eventID,
+                                                          sequence: closure.seq)
+        }
+        hub.replaceHistoricalOpenerResolutions(sessionID: record.sessionID,
+                                               resolutions: resolutions)
     }
 
     private func recordHistoricalClosureIndexEvent(_ event: AgentEvent) {

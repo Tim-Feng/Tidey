@@ -2,6 +2,25 @@ import XCTest
 @testable import RemoteBridge
 
 final class AgentEventHubTests: XCTestCase {
+    func testHistoricalOpenerResolutionKindsPreserveCursorFiltering() {
+        let hub = AgentEventHub()
+        hub.publish(makeAssistantEvent(id: "visible-opener", seq: 10))
+        hub.publish(makeAssistantEvent(id: "silent-opener", seq: 11))
+        hub.replaceHistoricalOpenerResolutions(
+            sessionID: "session",
+            resolutions: [
+                "visible-opener": .visibleTerminal(eventID: "terminal", sequence: 20),
+                "silent-opener": .silentConsumer(sequence: 20),
+            ])
+
+        let result = hub.fetch(workspaceID: "workspace",
+                               sessionID: "session",
+                               limit: 20,
+                               beforeSeq: 20)
+
+        XCTAssertTrue(result.events.isEmpty)
+    }
+
     func testSessionStartedStickyReplayUsesReservedSequenceOnlyForFullReplay() {
         let hub = AgentEventHub()
         hub.publish(AgentEvent(eventID: "session-start:test",
