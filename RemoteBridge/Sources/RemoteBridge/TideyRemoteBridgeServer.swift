@@ -17,6 +17,7 @@ final class TideyRemoteBridgeServer {
     private let workspaceEventHub: WorkspaceEventHub
     private let registryMonitor: AgentSessionRegistryMonitor
     private let codexApprovalProvider: CodexAppServerApprovalPromptProviding?
+    private let promptSubmitDeduper = InteractivePromptSubmitDeduper()
     private let observability: BridgeObservabilityCenter
     private let cloudflaredManager: BridgeCloudflaredManager
     private let uploadGarbageCollector: BridgeUploadGarbageCollector
@@ -80,7 +81,7 @@ final class TideyRemoteBridgeServer {
                 }
                 return channel.eventLoop.makeSucceededFuture([:])
             },
-            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub, registryMonitor, codexApprovalProvider, observability, ordinaryTmuxProjectionContext, port, cloudflaredManager] channel, _ in
+            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub, registryMonitor, codexApprovalProvider, promptSubmitDeduper, observability, ordinaryTmuxProjectionContext, port, cloudflaredManager] channel, _ in
                 channel.pipeline.addHandler(WebSocketFrameHandler(socketClient: socketClient,
                                                                   eventHub: eventHub,
                                                                   workspaceEventHub: workspaceEventHub,
@@ -89,7 +90,8 @@ final class TideyRemoteBridgeServer {
                                                                   observability: observability,
                                                                   bridgePort: port,
                                                                   cloudflaredManager: cloudflaredManager,
-                                                                  ordinaryTmuxProjectionContext: ordinaryTmuxProjectionContext))
+                                                                  ordinaryTmuxProjectionContext: ordinaryTmuxProjectionContext,
+                                                                  promptSubmitDeduper: promptSubmitDeduper))
             }
         )
 

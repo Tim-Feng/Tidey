@@ -291,6 +291,65 @@ final class InteractivePromptActionHandlerTests: XCTestCase {
             .objectValue?["reason"]?.stringValue, "server_resolved")
     }
 
+    func testSharedDeduperSurvivesReconnectWithoutCollidingAcrossAgentScopes() throws {
+        let firstRoute = ordinaryRoute()
+        let secondRoute = ordinaryRoute(workspaceID: "workspace-2",
+                                        sessionID: "$8",
+                                        windowID: "@17",
+                                        activePaneID: "%17")
+        let submitter = StubCodexApprovalSubmitter()
+        let deduper = InteractivePromptSubmitDeduper()
+        let firstHandler = makeHandler(route: firstRoute,
+                                       adapter: StubPromptAdapter(outputs: []),
+                                       activeVendor: "codex",
+                                       codexApprovalSubmitter: submitter,
+                                       submitDeduper: deduper)
+        let reconnectedHandler = makeHandler(route: firstRoute,
+                                             adapter: StubPromptAdapter(outputs: []),
+                                             activeVendor: "codex",
+                                             codexApprovalSubmitter: submitter,
+                                             submitDeduper: deduper)
+        let secondScopeHandler = makeHandler(route: secondRoute,
+                                             adapter: StubPromptAdapter(outputs: []),
+                                             activeVendor: "codex",
+                                             codexApprovalSubmitter: submitter,
+                                             submitDeduper: deduper)
+        let firstParams: [String: JSONValue] = [
+            "workspace_id": .string(firstRoute.workspaceID),
+            "panel_id": .string(firstRoute.panelID),
+            "prompt_id": .string("prompt-1"),
+            "lifecycle_token": .string("token-1"),
+            "target_index": .number(1),
+            "client_request_id": .string("client-reused"),
+        ]
+
+        submitter.resolvedEvent = Self.codexResolvedEvent(route: firstRoute,
+                                                          promptID: "prompt-1",
+                                                          reason: "server_resolved")
+        _ = try firstHandler.handle(BridgeRequest(id: "request-1",
+                                                  action: "submit_interactive_prompt",
+                                                  params: firstParams))
+        _ = try reconnectedHandler.handle(BridgeRequest(id: "request-2",
+                                                        action: "submit_interactive_prompt",
+                                                        params: firstParams))
+        XCTAssertEqual(submitter.submissions.count, 1,
+                       "a resolved request must stay deduplicated after reconnect")
+
+        submitter.resolvedEvent = Self.codexResolvedEvent(route: secondRoute,
+                                                          promptID: "prompt-2",
+                                                          reason: "server_resolved")
+        var secondParams = firstParams
+        secondParams["workspace_id"] = .string(secondRoute.workspaceID)
+        secondParams["panel_id"] = .string(secondRoute.panelID)
+        secondParams["prompt_id"] = .string("prompt-2")
+        secondParams["lifecycle_token"] = .string("token-2")
+        _ = try secondScopeHandler.handle(BridgeRequest(id: "request-3",
+                                                        action: "submit_interactive_prompt",
+                                                        params: secondParams))
+        XCTAssertEqual(submitter.submissions.count, 2,
+                       "the same client request id belongs to a separate agent scope")
+    }
+
     func testSubmitClaudeDuplicateIsIdempotentAndDifferentDecisionConflicts() throws {
         let route = ordinaryRoute()
         let router = StubPromptInputRouter(routedPanelIDs: [route.panelID])
@@ -628,7 +687,8 @@ final class InteractivePromptActionHandlerTests: XCTestCase {
                              router: StubPromptInputRouter = StubPromptInputRouter(routedPanelIDs: []),
                              activeVendor: String = "claude",
                              activeSessionOverride: ActiveAgentSessionSnapshot? = nil,
-                             codexApprovalSubmitter: CodexAppServerApprovalSubmitting? = nil) -> InteractivePromptActionHandler {
+                             codexApprovalSubmitter: CodexAppServerApprovalSubmitting? = nil,
+                             submitDeduper: InteractivePromptSubmitDeduper = InteractivePromptSubmitDeduper()) -> InteractivePromptActionHandler {
         let sessionResolver = StubPromptSessionResolver(session: activeSessionOverride ?? route.map { activeSession(route: $0, vendor: activeVendor) })
         let inputHandler = BridgeInputActionHandler(socketSender: StubPromptRequestSender(),
                                                     sessionResolver: sessionResolver,
@@ -638,7 +698,8 @@ final class InteractivePromptActionHandlerTests: XCTestCase {
                                               sessionResolver: sessionResolver,
                                               eventHub: eventHub,
                                               inputActionHandler: inputHandler,
-                                              codexApprovalSubmitter: codexApprovalSubmitter)
+                                              codexApprovalSubmitter: codexApprovalSubmitter,
+                                              submitDeduper: submitDeduper)
     }
 
     private func activeSession(route: OrdinaryTmuxPanelRoute, vendor: String = "claude") -> ActiveAgentSessionSnapshot {
@@ -648,17 +709,20 @@ final class InteractivePromptActionHandlerTests: XCTestCase {
                                    panelID: route.panelID)
     }
 
-    private func ordinaryRoute() -> OrdinaryTmuxPanelRoute {
+    private func ordinaryRoute(workspaceID: String = "workspace-1",
+                               sessionID: String = "$7",
+                               windowID: String = "@16",
+                               activePaneID: String = "%16") -> OrdinaryTmuxPanelRoute {
         let socketPath = "/tmp/tmux-\(getuid())/default"
-        return OrdinaryTmuxPanelRoute(workspaceID: "workspace-1",
-                                      panelID: "ordinary-tmux:\(socketPath):$7:@16",
+        return OrdinaryTmuxPanelRoute(workspaceID: workspaceID,
+                                      panelID: "ordinary-tmux:\(socketPath):\(sessionID):\(windowID)",
                                       carrierPanelID: "carrier-panel",
                                       socket: .path(socketPath),
-                                      sessionID: "$7",
+                                      sessionID: sessionID,
                                       sessionName: "adbrewer-cc",
-                                      windowID: "@16",
+                                      windowID: windowID,
                                       windowIndex: 1,
-                                      activePaneID: "%16",
+                                      activePaneID: activePaneID,
                                       cwd: "/Users/timfeng/GitHub/adbrewer",
                                       currentCommand: "claude")
     }

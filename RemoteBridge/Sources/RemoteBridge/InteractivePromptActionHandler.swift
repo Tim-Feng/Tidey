@@ -247,7 +247,8 @@ struct InteractivePromptActionHandler {
         }
         let clientRequestID = request.params?["client_request_id"]?.stringValue
         if let clientRequestID {
-            switch submitDeduper.check(clientRequestID: clientRequestID,
+            switch submitDeduper.check(scope: context.submitScope,
+                                       clientRequestID: clientRequestID,
                                        promptID: requestedPromptID,
                                        decision: decision) {
             case .duplicate(let result):
@@ -295,7 +296,8 @@ struct InteractivePromptActionHandler {
         result["resolved_event"] = Self.jsonValue(for: resolvedEvent)
         if let clientRequestID {
             result["client_request_id"] = .string(clientRequestID)
-            submitDeduper.store(clientRequestID: clientRequestID,
+            submitDeduper.store(scope: context.submitScope,
+                                clientRequestID: clientRequestID,
                                 promptID: requestedPromptID,
                                 decision: decision,
                                 result: result)
@@ -322,12 +324,15 @@ struct InteractivePromptActionHandler {
         let decision = answers.map { "answers:" + Self.canonicalAnswersDescription($0) }
             ?? "index:\(targetIndex ?? -1)"
         if let clientRequestID {
-            switch submitDeduper.check(clientRequestID: clientRequestID,
+            switch submitDeduper.check(scope: context.submitScope,
+                                       clientRequestID: clientRequestID,
                                        promptID: promptID,
                                        decision: decision) {
             case .conflict:
                 throw BridgeInternalError.conflict("client_request_id was already used for a different decision")
-            case .duplicate, .new:
+            case .duplicate(let result):
+                return BridgeResponse(id: request.id, ok: true, result: result, error: nil)
+            case .new:
                 break
             }
         }
@@ -372,7 +377,8 @@ struct InteractivePromptActionHandler {
         }
         if let clientRequestID {
             result["client_request_id"] = .string(clientRequestID)
-            submitDeduper.store(clientRequestID: clientRequestID,
+            submitDeduper.store(scope: context.submitScope,
+                                clientRequestID: clientRequestID,
                                 promptID: promptID,
                                 decision: decision,
                                 result: result)
@@ -654,6 +660,13 @@ struct InteractivePromptActionHandler {
                                       panelID: panelID,
                                       sessionID: sessionID)
         }
+
+        var submitScope: InteractivePromptSubmitScope {
+            InteractivePromptSubmitScope(workspaceID: workspaceID,
+                                         panelID: panelID,
+                                         sessionID: sessionID,
+                                         vendor: vendor)
+        }
     }
 
     private struct SubmitPromptContext {
@@ -662,6 +675,13 @@ struct InteractivePromptActionHandler {
         let sessionID: String
         let vendor: String
         let submitChannel: String?
+
+        var submitScope: InteractivePromptSubmitScope {
+            InteractivePromptSubmitScope(workspaceID: workspaceID,
+                                         panelID: panelID,
+                                         sessionID: sessionID,
+                                         vendor: vendor)
+        }
     }
 }
 
