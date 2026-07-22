@@ -945,10 +945,10 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
             }
 
             let sessionID = canonicalAgentEventSessionID(request.params?["session_id"]?.stringValue)
-            let beforeSeq = request.params?["before_seq"]?.intValue
-            let afterSeq = request.params?["after_seq"]?.intValue
+            let rawBeforeSeq = request.params?["before_seq"]
+            let rawAfterSeq = request.params?["after_seq"]
             let maxBytes = request.params?["max_bytes"]?.intValue
-            if beforeSeq != nil, afterSeq != nil {
+            if rawBeforeSeq != nil, rawAfterSeq != nil {
                 return LocalRequestResult(
                     response: BridgeResponse(id: request.id,
                                              ok: false,
@@ -958,7 +958,31 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                     workspaceReplayEnvelopes: []
                 )
             }
-            if sessionID == nil, beforeSeq != nil || afterSeq != nil {
+            if let rawBeforeSeq, rawBeforeSeq.intValue == nil {
+                return LocalRequestResult(
+                    response: BridgeResponse(
+                        id: request.id,
+                        ok: false,
+                        result: nil,
+                        error: BridgeInternalError.invalidRequest(
+                            "fetch_agent_events received an unrepresentable before_seq").payload),
+                    agentReplayEnvelopes: [],
+                    workspaceReplayEnvelopes: []
+                )
+            }
+            if let rawAfterSeq, rawAfterSeq.intValue == nil {
+                return LocalRequestResult(
+                    response: BridgeResponse(
+                        id: request.id,
+                        ok: false,
+                        result: nil,
+                        error: BridgeInternalError.invalidRequest(
+                            "fetch_agent_events received an unrepresentable after_seq").payload),
+                    agentReplayEnvelopes: [],
+                    workspaceReplayEnvelopes: []
+                )
+            }
+            if sessionID == nil, rawBeforeSeq != nil || rawAfterSeq != nil {
                 return LocalRequestResult(
                     response: BridgeResponse(
                         id: request.id,
@@ -970,6 +994,8 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                     workspaceReplayEnvelopes: []
                 )
             }
+            let beforeSeq = rawBeforeSeq?.intValue
+            let afterSeq = rawAfterSeq?.intValue
             let flow = BridgeAgentEventFetchFlow.run(eventHub: eventHub,
                                                      workspaceID: workspaceID,
                                                      sessionID: sessionID,
