@@ -586,19 +586,29 @@ final class CodexAppServerTurnStateStore: @unchecked Sendable {
         let origin: TurnOrigin
     }
 
+    private struct PendingSubmit {
+        let claimID: UUID
+        let startedAt: Date
+        // A terminal can race ahead of turn/start's JSON-RPC response. It
+        // cannot safely clear an anonymous pending claim immediately (it
+        // may belong to an older turn), so retain the exact terminal IDs
+        // until this claim's response supplies the authoritative identity.
+        var completedTurnIDs: Set<String> = []
+    }
+
     private struct State {
-        var pendingSubmitStartedAt: Date?
+        var pendingSubmit: PendingSubmit?
         var turn: TurnActivity?
         var threadStatusActiveStartedAt: Date?
 
         var isBusy: Bool {
-            pendingSubmitStartedAt != nil || turn != nil || threadStatusActiveStartedAt != nil
+            pendingSubmit != nil || turn != nil || threadStatusActiveStartedAt != nil
         }
 
         mutating func pruneExpired(now: Date, timeout: TimeInterval) {
-            if let startedAt = pendingSubmitStartedAt,
-               now.timeIntervalSince(startedAt) >= timeout {
-                pendingSubmitStartedAt = nil
+            if let pendingSubmit,
+               now.timeIntervalSince(pendingSubmit.startedAt) >= timeout {
+                self.pendingSubmit = nil
             }
             if let activeTurn = turn,
                now.timeIntervalSince(activeTurn.startedAt) >= timeout {
@@ -615,6 +625,13 @@ final class CodexAppServerTurnStateStore: @unchecked Sendable {
     private let timeout: TimeInterval
     private let now: () -> Date
     private var statesByThreadID = [String: State]()
+    // Order fence for thread/resume's active-turn seeding — separate from
+    // any lifecycle-store barrier, since this store's state (pending
+    // claims, live turn/started-turn/completed edges) advances
+    // independently. Deliberately NEVER cleared when a thread's `State`
+    // entry is removed (goes idle) — a stale resume response must stay
+    // invalidated even across a busy -> idle -> busy transition.
+    private var revisionsByThreadID: [String: Int] = [:]
 
     init(timeout: TimeInterval = 15 * 60,
          now: @escaping () -> Date = Date.init) {
@@ -629,23 +646,204 @@ final class CodexAppServerTurnStateStore: @unchecked Sendable {
         if statesByThreadID[threadID]?.isBusy == true {
             throw BridgeInternalError.invalidRequest("Codex app-server turn is already running.")
         }
-        statesByThreadID[threadID] = State(pendingSubmitStartedAt: now())
+        statesByThreadID[threadID] = State(pendingSubmit: PendingSubmit(claimID: UUID(),
+                                                                        startedAt: now()))
+        bumpRevisionLocked(threadID: threadID)
     }
 
+    // Captured BEFORE sending a thread/resume request; the response
+    // snapshot's active-turn seeding applies only while this thread's
+    // state has not advanced since (see seedActiveTurnFromResumeIfUnchanged).
+    func revisionBarrier(threadID: String) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return revisionsByThreadID[threadID] ?? 0
+    }
+
+    // Seeds the active turn observed in a thread/resume response — ONLY if
+    // this thread's turn state has not advanced (no claim, no turn/started,
+    // no turn/completed, no thread-status edge) since `barrier` was
+    // captured right before the resume request was sent. A stale response
+    // racing a live completion, a newer turn/started, or a remote submit's
+    // own claim must never resurrect/overwrite that newer state — the
+    // revision check and the mutation happen under ONE lock hold, so there
+    // is no TOCTOU window between "barrier looked valid" and "the seed was
+    // actually applied."
+    @discardableResult
+    func seedActiveTurnFromResumeIfUnchanged(threadID: String, turnID: String, barrier: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        pruneExpiredLocked(now: now())
+        guard (revisionsByThreadID[threadID] ?? 0) == barrier else {
+            return false
+        }
+        var state = statesByThreadID[threadID] ?? State()
+        if state.pendingSubmit?.completedTurnIDs.contains(turnID) == true {
+            // The matching terminal arrived before this snapshot exposed
+            // the identity. Retire the claim but never resurrect an already
+            // completed turn or emit a resume-open control for it.
+            state.pendingSubmit = nil
+            if state.turn?.turnID == turnID {
+                state.turn = nil
+            }
+            if state.isBusy {
+                statesByThreadID[threadID] = state
+            } else {
+                statesByThreadID.removeValue(forKey: threadID)
+            }
+            bumpRevisionLocked(threadID: threadID)
+            return false
+        }
+        state.turn = TurnActivity(turnID: turnID, startedAt: now(), origin: .appServer)
+        statesByThreadID[threadID] = state
+        bumpRevisionLocked(threadID: threadID)
+        return true
+    }
+
+    // Same revision-fenced contract as seedActiveTurnFromResumeIfUnchanged,
+    // for the case where a thread/resume snapshot reports the thread as
+    // active/busy but names zero or an ambiguous set of inProgress turns —
+    // there is no turn id to steer into, but the thread must still be
+    // marked busy so routeSubmit() fails closed to .busyWithoutTurnID
+    // instead of wrongly treating it as idle.
+    @discardableResult
+    func markThreadActiveIfUnchanged(threadID: String, barrier: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        pruneExpiredLocked(now: now())
+        guard (revisionsByThreadID[threadID] ?? 0) == barrier else {
+            return false
+        }
+        var state = statesByThreadID[threadID] ?? State()
+        state.threadStatusActiveStartedAt = now()
+        statesByThreadID[threadID] = state
+        bumpRevisionLocked(threadID: threadID)
+        return true
+    }
+
+    // The ONE atomic routing decision for a remote chat submit — replaces
+    // canSubmitMessage() + claimForSubmit() as two separate calls (which
+    // left a TOCTOU window between the gate check and the claim). A
+    // single lock hold both DECIDES the route and, for .start, claims the
+    // pending-submit slot:
+    // - an active turn with a KNOWN turn id -> steer INTO that turn
+    //   (native turn/steer), never a new turn/start;
+    // - no known turn id, but busy (another submit's pending claim, or an
+    //   app-server-reported active thread status with no observed turn id
+    //   yet) -> a typed conflict; the caller must never terminal-fallback
+    //   here (for a codex_app_server record the "terminal" is Tidey's
+    //   headless viewer, which re-submits via chat_submit — falling back
+    //   would create a recursive resubmit loop);
+    // - otherwise idle -> claim the pending-submit slot for a new
+    //   turn/start, exactly like claimForSubmit() did.
+    enum SubmitRoute: Equatable {
+        case start
+        case steer(turnID: String)
+        case busyWithoutTurnID
+    }
+
+    func routeSubmit(threadID: String, claimID: UUID = UUID()) -> SubmitRoute {
+        lock.lock()
+        defer { lock.unlock() }
+        pruneExpiredLocked(now: now())
+        var state = statesByThreadID[threadID] ?? State()
+        if let turn = state.turn {
+            return .steer(turnID: turn.turnID)
+        }
+        if state.pendingSubmit != nil || state.threadStatusActiveStartedAt != nil {
+            return .busyWithoutTurnID
+        }
+        state.pendingSubmit = PendingSubmit(claimID: claimID, startedAt: now())
+        statesByThreadID[threadID] = state
+        bumpRevisionLocked(threadID: threadID)
+        return .start
+    }
+
+    func releasePendingSubmit(threadID: String, claimID: UUID) {
+        lock.lock()
+        defer { lock.unlock() }
+        pruneExpiredLocked(now: now())
+        guard var state = statesByThreadID[threadID],
+              state.pendingSubmit?.claimID == claimID else {
+            return
+        }
+        state.pendingSubmit = nil
+        bumpRevisionLocked(threadID: threadID)
+        if state.isBusy {
+            statesByThreadID[threadID] = state
+        } else {
+            statesByThreadID.removeValue(forKey: threadID)
+        }
+    }
+
+    // Compatibility seam for the current caller. Runtime wiring switches to
+    // exact claim identity in the behavioral step.
     func releasePendingSubmit(threadID: String) {
         lock.lock()
-        updateStateLocked(threadID: threadID) { state in
-            state.pendingSubmitStartedAt = nil
+        defer { lock.unlock() }
+        pruneExpiredLocked(now: now())
+        guard var state = statesByThreadID[threadID], state.pendingSubmit != nil else {
+            return
         }
-        lock.unlock()
+        state.pendingSubmit = nil
+        bumpRevisionLocked(threadID: threadID)
+        if state.isBusy {
+            statesByThreadID[threadID] = state
+        } else {
+            statesByThreadID.removeValue(forKey: threadID)
+        }
+    }
+
+    // Applies an authoritative turn/start success only to the exact pending
+    // claim that issued it. A stale P1 response is a no-op after P1 expires
+    // or P2 owns the slot; the claim check and transition share one lock.
+    func reconcileAcceptedStart(threadID: String, claimID: UUID, turnID: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        pruneExpiredLocked(now: now())
+        guard var state = statesByThreadID[threadID],
+              let pending = state.pendingSubmit,
+              pending.claimID == claimID else {
+            // A live turn/started or another exact recovery path may have
+            // consumed the claim already. Never overwrite newer state.
+            return
+        }
+
+        state.pendingSubmit = nil
+        if pending.completedTurnIDs.contains(turnID) {
+            // completion-before-response: retire the claim without
+            // recreating an already-completed turn.
+            if state.turn?.turnID == turnID {
+                state.turn = nil
+            }
+        } else if let currentTurn = state.turn {
+            if currentTurn.turnID == turnID {
+                state.turn = TurnActivity(turnID: turnID,
+                                          startedAt: currentTurn.startedAt,
+                                          origin: .remoteSubmit)
+            }
+        } else {
+            state.turn = TurnActivity(turnID: turnID,
+                                      startedAt: pending.startedAt,
+                                      origin: .remoteSubmit)
+        }
+
+        bumpRevisionLocked(threadID: threadID)
+        if state.isBusy {
+            statesByThreadID[threadID] = state
+        } else {
+            statesByThreadID.removeValue(forKey: threadID)
+        }
     }
 
     func markStarted(threadID: String, turnID: String) {
         lock.lock()
         updateStateLocked(threadID: threadID) { state in
-            let origin: TurnOrigin = state.pendingSubmitStartedAt == nil ? .appServer : .remoteSubmit
-            state.pendingSubmitStartedAt = nil
-            state.turn = TurnActivity(turnID: turnID, startedAt: now(), origin: origin)
+            let origin: TurnOrigin = state.pendingSubmit == nil ? .appServer : .remoteSubmit
+            state.pendingSubmit = nil
+            state.turn = TurnActivity(turnID: turnID,
+                                      startedAt: now(),
+                                      origin: origin)
         }
         lock.unlock()
     }
@@ -655,6 +853,10 @@ final class CodexAppServerTurnStateStore: @unchecked Sendable {
         updateStateLocked(threadID: threadID) { state in
             if state.turn?.turnID == turnID {
                 state.turn = nil
+                state.pendingSubmit = nil
+            } else if var pending = state.pendingSubmit {
+                pending.completedTurnIDs.insert(turnID)
+                state.pendingSubmit = pending
             }
         }
         lock.unlock()
@@ -679,6 +881,16 @@ final class CodexAppServerTurnStateStore: @unchecked Sendable {
         lock.unlock()
     }
 
+    // Non-mutating peek used by canSubmitMessage() to gate BEFORE
+    // attempting claimForSubmit — expired activity is pruned first so a
+    // long-dead "busy" state (past the timeout) does not wrongly block.
+    func isBusy(threadID: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        pruneExpiredLocked(now: now())
+        return statesByThreadID[threadID]?.isBusy == true
+    }
+
     func diagnosticBusySummary(threadID: String) -> String {
         lock.lock()
         defer { lock.unlock() }
@@ -686,7 +898,7 @@ final class CodexAppServerTurnStateStore: @unchecked Sendable {
             return "idle"
         }
         var parts = [String]()
-        if state.pendingSubmitStartedAt != nil {
+        if state.pendingSubmit != nil {
             parts.append("pending_submit")
         }
         if let turn = state.turn {
@@ -715,11 +927,16 @@ final class CodexAppServerTurnStateStore: @unchecked Sendable {
     private func updateStateLocked(threadID: String, mutate: (inout State) -> Void) {
         var state = statesByThreadID[threadID] ?? State()
         mutate(&state)
+        bumpRevisionLocked(threadID: threadID)
         if state.isBusy {
             statesByThreadID[threadID] = state
         } else {
             statesByThreadID.removeValue(forKey: threadID)
         }
+    }
+
+    private func bumpRevisionLocked(threadID: String) {
+        revisionsByThreadID[threadID, default: 0] += 1
     }
 }
 
