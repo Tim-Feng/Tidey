@@ -1035,6 +1035,18 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                     workspaceReplayEnvelopes: []
                 )
             }
+            if sessionID == nil, request.params?["since_seq"] != nil {
+                return LocalRequestResult(
+                    response: BridgeResponse(
+                        id: request.id,
+                        ok: false,
+                        result: nil,
+                        error: BridgeInternalError.invalidRequest(
+                            "subscribe_agent_events since_seq requires session_id").payload),
+                    agentReplayEnvelopes: [],
+                    workspaceReplayEnvelopes: []
+                )
+            }
             let sinceSeq = request.params?["since_seq"]?.intValue
             let noReplay = request.params?["no_replay"]?.boolLikeValue ?? false
             let liveGate = BridgeAgentEventReplayGate()

@@ -23,7 +23,7 @@ final class BridgeFetchAgentEventsHandlerTests: XCTestCase {
         return condition()
     }
 
-    func testHandlerRejectsWorkspaceCursorWithoutSession() throws {
+    func testHandlerRejectsSessionLocalCursorsWithoutSession() throws {
         let supportDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("BridgeFetchHandlerTests-\(UUID().uuidString)", isDirectory: true)
         let paths = BridgePaths(supportDirectory: supportDirectory)
@@ -61,6 +61,20 @@ final class BridgeFetchAgentEventsHandlerTests: XCTestCase {
         XCTAssertEqual(result.response.error?.code, "invalid_request")
         XCTAssertEqual(result.response.error?.message,
                        "fetch_agent_events cursor requests require session_id")
+
+        let subscribeRequest = BridgeRequest(id: "workspace-replay-cursor",
+                                             action: "subscribe_agent_events",
+                                             params: [
+                                                "workspace_id": .string("workspace"),
+                                                "since_seq": .number(100),
+                                             ])
+        let subscribeResult = try XCTUnwrap(
+            handler.handleLocalRequest(subscribeRequest, context: context)
+        )
+        XCTAssertFalse(subscribeResult.response.ok)
+        XCTAssertEqual(subscribeResult.response.error?.code, "invalid_request")
+        XCTAssertEqual(subscribeResult.response.error?.message,
+                       "subscribe_agent_events since_seq requires session_id")
     }
 
     func testHandlerServesRequestedAnchorDespiteDeepCache() throws {
