@@ -24,6 +24,10 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     private var publishedAssistantTextKeys = Set<String>()
     private var isBackfillingHistory = false
     private var isBootstrappingSidebarState = false
+    private var historicalRawLines: [(offset: Int, line: String)] = []
+    private var historicalReplayProducts: [AgentEvent] = []
+    private var isCollectingBackfillPage = false
+    private var collectedBackfillPage: [(offset: Int, line: String)] = []
     private let historicalReplayWindowCapacity: Int
     private var bootstrappedShellState: CodexSidebarShellState = .prompt
     private var currentShellState: CodexSidebarShellState = .prompt
@@ -31,6 +35,97 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     private var lastStartedTurnID: String?
     private var lastCompletedTurnID: String?
     private var lastAbortedTurnID: String?
+
+    private struct LiveParserStateSnapshot {
+        let unsupportedVersions: Set<String>
+        let resolvedToolCallIDs: Set<String>
+        let publishedAssistantTextKeys: Set<String>
+        let didSeeInteractiveEvent: Bool
+        let lastStartedTurnID: String?
+        let lastCompletedTurnID: String?
+        let lastAbortedTurnID: String?
+        let currentShellState: CodexSidebarShellState
+        let bootstrappedShellState: CodexSidebarShellState
+    }
+
+    private var lastRequestedBackfillAnchorSeq: Int?
+
+    private func captureLiveParserState() -> LiveParserStateSnapshot {
+        LiveParserStateSnapshot(unsupportedVersions: unsupportedVersions,
+                                resolvedToolCallIDs: resolvedToolCallIDs,
+                                publishedAssistantTextKeys: publishedAssistantTextKeys,
+                                didSeeInteractiveEvent: didSeeInteractiveEvent,
+                                lastStartedTurnID: lastStartedTurnID,
+                                lastCompletedTurnID: lastCompletedTurnID,
+                                lastAbortedTurnID: lastAbortedTurnID,
+                                currentShellState: currentShellState,
+                                bootstrappedShellState: bootstrappedShellState)
+    }
+
+    private func resetParserStateForHistoricalReplay() {
+        unsupportedVersions = []
+        resolvedToolCallIDs = []
+        publishedAssistantTextKeys = []
+        didSeeInteractiveEvent = false
+        lastStartedTurnID = nil
+        lastCompletedTurnID = nil
+        lastAbortedTurnID = nil
+        currentShellState = .prompt
+        bootstrappedShellState = .prompt
+    }
+
+    private func restoreLiveParserState(_ snapshot: LiveParserStateSnapshot) {
+        unsupportedVersions = snapshot.unsupportedVersions
+        resolvedToolCallIDs = snapshot.resolvedToolCallIDs
+        publishedAssistantTextKeys = snapshot.publishedAssistantTextKeys
+        didSeeInteractiveEvent = snapshot.didSeeInteractiveEvent
+        lastStartedTurnID = snapshot.lastStartedTurnID
+        lastCompletedTurnID = snapshot.lastCompletedTurnID
+        lastAbortedTurnID = snapshot.lastAbortedTurnID
+        currentShellState = snapshot.currentShellState
+        bootstrappedShellState = snapshot.bootstrappedShellState
+    }
+
+    private func mergeHistoricalPage(_ page: [(offset: Int, line: String)]) {
+        guard let pageMin = page.map(\.offset).min(),
+              let pageMax = page.map(\.offset).max() else {
+            return
+        }
+        var merged = page + historicalRawLines
+        merged.sort { $0.offset < $1.offset }
+        var seenOffsets = Set<Int>()
+        merged = merged.filter { seenOffsets.insert($0.offset).inserted }
+        while merged.count > historicalReplayWindowCapacity {
+            let distanceToOldEnd = pageMin - (merged.first?.offset ?? pageMin)
+            let distanceToNewEnd = (merged.last?.offset ?? pageMax) - pageMax
+            if distanceToNewEnd >= distanceToOldEnd {
+                merged.removeLast()
+            } else {
+                merged.removeFirst()
+            }
+        }
+        historicalRawLines = merged
+    }
+
+    @discardableResult
+    private func replayHistoricalWindow() -> [AgentEvent] {
+        let liveSnapshot = captureLiveParserState()
+        resetParserStateForHistoricalReplay()
+        historicalReplayProducts = []
+        isBackfillingHistory = true
+        for entry in historicalRawLines {
+            consume(line: entry.line, lineOffset: entry.offset)
+        }
+        isBackfillingHistory = false
+        restoreLiveParserState(liveSnapshot)
+
+        let products = historicalReplayProducts
+        hub.replaceHistoricalEvents(sessionID: record.sessionID,
+                                    events: products,
+                                    anchorSeq: lastRequestedBackfillAnchorSeq)
+        historicalReplayProducts = []
+        return products
+    }
 
     init(record: AgentSessionRegistryRecord,
          fileManager: FileManager = .default,
@@ -123,9 +218,29 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             guard beforeOffset > 0 else {
                 return false
             }
-            isBackfillingHistory = true
-            defer { isBackfillingHistory = false }
-            return (try? tailer.backfill(beforeOffset: beforeOffset, limit: limit)) ?? false
+            let effectiveLimit = min(limit, historicalReplayWindowCapacity)
+            lastRequestedBackfillAnchorSeq = beforeSeq
+            var pageAnchorOffset = beforeOffset
+            var loadedAny = false
+            while true {
+                isCollectingBackfillPage = true
+                collectedBackfillPage = []
+                let loaded = (try? tailer.backfill(beforeOffset: pageAnchorOffset,
+                                                   limit: effectiveLimit)) ?? false
+                isCollectingBackfillPage = false
+                guard loaded, collectedBackfillPage.isEmpty == false else {
+                    return loadedAny
+                }
+                loadedAny = true
+                let pageMinOffset = collectedBackfillPage.map(\.offset).min() ?? pageAnchorOffset
+                mergeHistoricalPage(collectedBackfillPage)
+                collectedBackfillPage = []
+                let products = replayHistoricalWindow()
+                if products.contains(where: { $0.seq < beforeSeq }) || pageMinOffset <= 0 {
+                    return true
+                }
+                pageAnchorOffset = pageMinOffset
+            }
         }
     }
 
@@ -180,7 +295,12 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         let tailer = JSONLFileTailer(fileURL: transcriptURL,
                                      queue: queue,
                                      lineHandler: { [weak self] offset, line in
-                                         self?.consume(line: line, lineOffset: offset)
+                                         guard let self else { return }
+                                         if self.isCollectingBackfillPage {
+                                             self.collectedBackfillPage.append((offset: offset, line: line))
+                                             return
+                                         }
+                                         self.consume(line: line, lineOffset: offset)
                                      },
                                      invalidationHandler: { [weak self] in
                                          self?.handleTailerInvalidation()
@@ -212,6 +332,11 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     }
 
     private func switchTranscriptIdentity() {
+        historicalRawLines = []
+        collectedBackfillPage = []
+        historicalReplayProducts = []
+        lastRequestedBackfillAnchorSeq = nil
+        hub.replaceHistoricalEvents(sessionID: record.sessionID, events: [], anchorSeq: nil)
         transcriptSequenceBase = maxObservedSeq
         transcriptURL = nil
         tailer?.stop()
@@ -722,7 +847,11 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                output: output,
                                toolCallID: toolCallID,
                                metadata: baseMetadata(resolvedMetadata))
-        hub.publish(event, deliverToSubscribers: !isBackfillingHistory)
+        if isBackfillingHistory {
+            historicalReplayProducts.append(event)
+            return
+        }
+        hub.publish(event)
     }
 
     private func publishSynthetic(kind: AgentEventKind,
@@ -751,7 +880,11 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                output: output,
                                toolCallID: toolCallID,
                                metadata: metadata)
-        hub.publish(event, deliverToSubscribers: !isBackfillingHistory)
+        if isBackfillingHistory {
+            historicalReplayProducts.append(event)
+            return
+        }
+        hub.publish(event)
     }
 
     private func publishSidebarSessionActivation(force: Bool) {
@@ -767,6 +900,9 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     }
 
     private func publishSidebar(messages: [String]) {
+        guard isBackfillingHistory == false else {
+            return
+        }
         guard let socketClient else {
             log("publishSidebar skipped socketClient=nil messages=\(messages)")
             return
@@ -782,6 +918,9 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     }
 
     private func log(_ message: String) {
+        guard isBackfillingHistory == false else {
+            return
+        }
         let timestamp = ISO8601DateFormatter().string(from: Date())
         let line = "\(timestamp) [\(record.workspaceID)] [\(record.sessionID)] \(message)\n"
         guard let data = line.data(using: .utf8) else {
@@ -829,7 +968,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     private func metadataWithClientRequestID(kind: AgentEventKind,
                                              text: String?,
                                              metadata: [String: String]?) -> [String: String]? {
-        guard kind == .userMessage,
+        guard isBackfillingHistory == false,
+              kind == .userMessage,
               let text,
               let clientRequestID = chatSubmitEchoRegistry.consumeClientRequestID(workspaceID: record.workspaceID,
                                                                                   panelID: record.panelID,
