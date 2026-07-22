@@ -67,6 +67,66 @@ final class CodexAppServerHeadlessRuntimeTests: XCTestCase {
         XCTAssertEqual(input["text_elements"]?.arrayValue?.count, 0)
     }
 
+    func testStartAndSteerTurnPreserveNonblankOpaqueClientUserMessageID() throws {
+        let outbound = LineSink()
+        let runtime = Self.runtime()
+        let connection = CodexAppServerConnection(sendLine: { outbound.append($0) })
+
+        try runtime.startTurn(on: connection,
+                              threadID: "thread-1",
+                              text: "fix the bridge",
+                              clientUserMessageID: "  opaque/start-id  ")
+        try runtime.steerTurn(on: connection,
+                             threadID: "thread-1",
+                             expectedTurnID: "turn-1",
+                             text: "steer this",
+                             clientUserMessageID: "  opaque/steer-id  ")
+
+        let lines = outbound.lines()
+        XCTAssertEqual(lines.count, 2)
+
+        let startTurn = try Self.object(from: lines[0])
+        XCTAssertEqual(startTurn["method"]?.stringValue, "turn/start")
+        XCTAssertEqual(startTurn["params"]?.objectValue?["clientUserMessageId"]?.stringValue,
+                       "  opaque/start-id  ")
+
+        let steerTurn = try Self.object(from: lines[1])
+        XCTAssertEqual(steerTurn["method"]?.stringValue, "turn/steer")
+        let steerParams = try XCTUnwrap(steerTurn["params"]?.objectValue)
+        XCTAssertEqual(steerParams["threadId"]?.stringValue, "thread-1")
+        XCTAssertEqual(steerParams["expectedTurnId"]?.stringValue, "turn-1")
+        XCTAssertEqual(steerParams["clientUserMessageId"]?.stringValue,
+                       "  opaque/steer-id  ")
+        let steerInput = try XCTUnwrap(steerParams["input"]?.arrayValue?.first?.objectValue)
+        XCTAssertEqual(steerInput["type"]?.stringValue, "text")
+        XCTAssertEqual(steerInput["text"]?.stringValue, "steer this")
+    }
+
+    func testStartAndSteerTurnOmitNilEmptyAndWhitespaceClientUserMessageIDs() throws {
+        let outbound = LineSink()
+        let runtime = Self.runtime()
+        let connection = CodexAppServerConnection(sendLine: { outbound.append($0) })
+        let omittedIDs: [String?] = [nil, "", " \t\n "]
+
+        for clientUserMessageID in omittedIDs {
+            try runtime.startTurn(on: connection,
+                                  threadID: "thread-1",
+                                  text: "start",
+                                  clientUserMessageID: clientUserMessageID)
+            try runtime.steerTurn(on: connection,
+                                 threadID: "thread-1",
+                                 expectedTurnID: "turn-1",
+                                 text: "steer",
+                                 clientUserMessageID: clientUserMessageID)
+        }
+
+        let requests = try outbound.lines().map { try Self.object(from: $0) }
+        XCTAssertEqual(requests.count, omittedIDs.count * 2)
+        for request in requests {
+            XCTAssertNil(request["params"]?.objectValue?["clientUserMessageId"])
+        }
+    }
+
     func testServerNotificationsBecomeAgentEvents() throws {
         let events = EventSink()
         let runtime = Self.runtime(events: events)
@@ -186,6 +246,51 @@ final class CodexAppServerHeadlessRuntimeTests: XCTestCase {
         XCTAssertEqual(emitted[1].toolCallID, "cmd-1")
         XCTAssertEqual(emitted[2].output, "ok")
         XCTAssertEqual(emitted[2].metadata?["process_id"], "proc-1")
+    }
+
+    func testUserMessageItemStartedMapsOpaqueClientIDToClientRequestIDMetadata() {
+        let events = EventSink()
+        let runtime = Self.runtime(events: events)
+        let connection = CodexAppServerConnection(sendLine: { _ in },
+                                                  onNotification: runtime.handleNotification)
+
+        connection.receiveLine("""
+        {"method":"item/started","params":{"threadId":"thread-1","turnId":"turn-1","item":{"type":"userMessage","id":"user-1","clientId":"  opaque/client-request-1  ","content":[{"type":"text","text":"run tests","text_elements":[]}]}}}
+        """)
+
+        let emitted = events.events()
+        XCTAssertEqual(emitted.map(\.type), [.userMessage])
+        XCTAssertEqual(emitted[0].text, "run tests")
+        XCTAssertEqual(emitted[0].metadata?["client_request_id"],
+                       "  opaque/client-request-1  ")
+        XCTAssertEqual(emitted[0].payload?.objectValue?["params"]?.objectValue?["item"]?.objectValue?["clientId"]?.stringValue,
+                       "  opaque/client-request-1  ")
+    }
+
+    func testUserMessageItemStartedWithoutNonblankClientIDOmitsMetadataKey() {
+        let events = EventSink()
+        let runtime = Self.runtime(events: events)
+        let connection = CodexAppServerConnection(sendLine: { _ in },
+                                                  onNotification: runtime.handleNotification)
+
+        connection.receiveLine("""
+        {"method":"item/started","params":{"threadId":"thread-1","turnId":"turn-1","item":{"type":"userMessage","id":"user-1","content":[{"type":"text","text":"missing client id","text_elements":[]}]}}}
+        """)
+        connection.receiveLine("""
+        {"method":"item/started","params":{"threadId":"thread-1","turnId":"turn-1","item":{"type":"userMessage","id":"user-2","clientId":null,"content":[{"type":"text","text":"null client id","text_elements":[]}]}}}
+        """)
+        connection.receiveLine("""
+        {"method":"item/started","params":{"threadId":"thread-1","turnId":"turn-1","item":{"type":"userMessage","id":"user-3","clientId":"","content":[{"type":"text","text":"empty client id","text_elements":[]}]}}}
+        """)
+        connection.receiveLine("""
+        {"method":"item/started","params":{"threadId":"thread-1","turnId":"turn-1","item":{"type":"userMessage","id":"user-4","clientId":"   ","content":[{"type":"text","text":"blank client id","text_elements":[]}]}}}
+        """)
+
+        let emitted = events.events()
+        XCTAssertEqual(emitted.map(\.type), [.userMessage, .userMessage, .userMessage, .userMessage])
+        for event in emitted {
+            XCTAssertNil(event.metadata?["client_request_id"])
+        }
     }
 
     private static func runtime() -> CodexAppServerHeadlessRuntime {

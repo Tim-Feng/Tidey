@@ -174,6 +174,7 @@ final class CodexAppServerHeadlessRuntime {
                    cwd: String? = nil,
                    approvalPolicy: String? = nil,
                    sandboxPolicy: JSONValue? = nil,
+                   clientUserMessageID: String? = nil,
                    onResponse: @escaping CodexAppServerConnection.ClientResponseHandler = { _ in }) throws -> Int {
         var params: [String: JSONValue] = [
             "threadId": .string(threadID),
@@ -194,6 +195,9 @@ final class CodexAppServerHeadlessRuntime {
         if let sandboxPolicy {
             params["sandboxPolicy"] = sandboxPolicy
         }
+        if let clientUserMessageID = Self.nonEmptyString(clientUserMessageID) {
+            params["clientUserMessageId"] = .string(clientUserMessageID)
+        }
         BridgeLogger.server.debug("codex app-server diagnostic turn_start request session_id=\(self.context.sessionID, privacy: .public) thread_id=\(threadID, privacy: .public) request_has_approvalsReviewer=\((params["approvalsReviewer"] != nil), privacy: .public) approvalPolicy=\(approvalPolicy ?? "-", privacy: .public) cwd=\(cwd ?? "-", privacy: .public)")
         return try connection.sendClientRequest(method: "turn/start",
                                                 params: params,
@@ -202,6 +206,39 @@ final class CodexAppServerHeadlessRuntime {
                                                                               sessionID: self.context.sessionID,
                                                                               threadID: threadID,
                                                                               requestHasApprovalsReviewer: params["approvalsReviewer"] != nil)
+                                                    onResponse(response)
+                                                })
+    }
+
+    @discardableResult
+    func steerTurn(on connection: CodexAppServerConnection,
+                   threadID: String,
+                   expectedTurnID: String,
+                   text: String,
+                   clientUserMessageID: String? = nil,
+                   onResponse: @escaping CodexAppServerConnection.ClientResponseHandler = { _ in }) throws -> Int {
+        var params: [String: JSONValue] = [
+            "threadId": .string(threadID),
+            "expectedTurnId": .string(expectedTurnID),
+            "input": .array([
+                .object([
+                    "type": .string("text"),
+                    "text": .string(text),
+                    "text_elements": .array([]),
+                ]),
+            ]),
+        ]
+        if let clientUserMessageID = Self.nonEmptyString(clientUserMessageID) {
+            params["clientUserMessageId"] = .string(clientUserMessageID)
+        }
+        BridgeLogger.server.debug("codex app-server diagnostic turn_steer request session_id=\(self.context.sessionID, privacy: .public) thread_id=\(threadID, privacy: .public) expected_turn_id=\(expectedTurnID, privacy: .public)")
+        return try connection.sendClientRequest(method: "turn/steer",
+                                                params: params,
+                                                onResponse: { response in
+                                                    Self.logTurnSteerResponse(response,
+                                                                              sessionID: self.context.sessionID,
+                                                                              threadID: threadID,
+                                                                              expectedTurnID: expectedTurnID)
                                                     onResponse(response)
                                                 })
     }
@@ -393,6 +430,10 @@ final class CodexAppServerHeadlessRuntime {
         }
         switch itemType {
         case "userMessage":
+            var additionalMetadata: [String: String] = [:]
+            if let clientRequestID = Self.nonEmptyString(item["clientId"]) {
+                additionalMetadata["client_request_id"] = clientRequestID
+            }
             return makeEvent(method: notification.method,
                              type: .userMessage,
                              text: Self.userMessageText(from: item),
@@ -401,7 +442,8 @@ final class CodexAppServerHeadlessRuntime {
                              output: nil,
                              toolCallID: item["id"]?.stringValue,
                              payloadKind: "user_message",
-                             params: notification.params)
+                             params: notification.params,
+                             additionalMetadata: additionalMetadata)
         case "commandExecution":
             let command = Self.nonEmptyString(item["command"])
             return makeEvent(method: notification.method,
@@ -481,9 +523,13 @@ final class CodexAppServerHeadlessRuntime {
                            output: String?,
                            toolCallID: String?,
                            payloadKind: String,
-                           params: [String: JSONValue]) -> AgentEvent {
+                           params: [String: JSONValue],
+                           additionalMetadata: [String: String] = [:]) -> AgentEvent {
         let seq = nextSequence(context.sessionID)
-        let metadata = metadata(method: method, params: params)
+        var metadata = metadata(method: method, params: params)
+        for (key, value) in additionalMetadata {
+            metadata[key] = value
+        }
         var payload: [String: JSONValue] = [
             "kind": .string(payloadKind),
             "source": .string("codex_app_server"),
@@ -673,6 +719,15 @@ final class CodexAppServerHeadlessRuntime {
         guard case .string(let text) = value else {
             return nil
         }
+        return nonEmptyString(text)
+    }
+
+    private static func nonEmptyString(_ text: String?) -> String? {
+        guard let text else {
+            return nil
+        }
+        // Client ids are opaque. Trim only to reject an all-whitespace value;
+        // preserve every byte of a usable id on both request and event paths.
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : text
     }
@@ -735,6 +790,19 @@ final class CodexAppServerHeadlessRuntime {
             BridgeLogger.server.debug("codex app-server diagnostic turn_start response status=success session_id=\(sessionID, privacy: .public) thread_id=\(threadID, privacy: .public) request_has_approvalsReviewer=\(requestHasApprovalsReviewer, privacy: .public) approvalsReviewer=\(diagnosticField(object, keys: ["approvalsReviewer", "approvals_reviewer"]), privacy: .public) approvalPolicy=\(diagnosticField(object, keys: ["approvalPolicy", "approval_policy"]), privacy: .public) response_keys=\(diagnosticKeys(object), privacy: .public)")
         case .failure(let error):
             BridgeLogger.server.error("codex app-server diagnostic turn_start response status=failure session_id=\(sessionID, privacy: .public) thread_id=\(threadID, privacy: .public) request_has_approvalsReviewer=\(requestHasApprovalsReviewer, privacy: .public) error=\(String(describing: error), privacy: .public)")
+        }
+    }
+
+    static func logTurnSteerResponse(_ response: Result<JSONValue, CodexAppServerConnectionError>,
+                                     sessionID: String,
+                                     threadID: String,
+                                     expectedTurnID: String) {
+        switch response {
+        case .success(let value):
+            let object = value.objectValue
+            BridgeLogger.server.debug("codex app-server diagnostic turn_steer response status=success session_id=\(sessionID, privacy: .public) thread_id=\(threadID, privacy: .public) expected_turn_id=\(expectedTurnID, privacy: .public) response_keys=\(diagnosticKeys(object), privacy: .public)")
+        case .failure(let error):
+            BridgeLogger.server.error("codex app-server diagnostic turn_steer response status=failure session_id=\(sessionID, privacy: .public) thread_id=\(threadID, privacy: .public) expected_turn_id=\(expectedTurnID, privacy: .public) error=\(String(describing: error), privacy: .public)")
         }
     }
 
