@@ -6,6 +6,7 @@ enum CodexAppServerConnectionError: Error {
     case initializationTimedOut
     case requestFailed(CodexAppServerJSONRPCError)
     case unknownPrompt(String)
+    case responseTimedOut
 }
 
 extension CodexAppServerConnectionError: LocalizedError {
@@ -21,6 +22,8 @@ extension CodexAppServerConnectionError: LocalizedError {
             return "Codex app-server request failed: \(error.message)"
         case .unknownPrompt(let promptID):
             return "Codex app-server prompt is unknown: \(promptID)"
+        case .responseTimedOut:
+            return "Codex app-server did not respond in time."
         }
     }
 }

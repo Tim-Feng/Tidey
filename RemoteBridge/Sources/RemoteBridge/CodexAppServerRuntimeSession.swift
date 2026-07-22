@@ -9,6 +9,19 @@ enum CodexAppServerProcessError: Error {
     case invalidUTF8
 }
 
+// A successful turn/steer response that names another turn has an unknown
+// semantic destination. It is not a definite rejection and must not retry.
+struct CodexAppServerTurnIDMismatchError: Error, Equatable {
+    let expectedTurnID: String
+    let observedTurnID: String?
+}
+
+// A successful turn/start response without a usable turn identity may have
+// accepted the message, but cannot be reconciled safely.
+struct CodexAppServerInvalidTurnStartResponseError: Error, Equatable {
+    let observedTurnID: String?
+}
+
 protocol CodexAppServerManagedProcess: AnyObject {
     var processID: Int32? { get }
     func sendLine(_ line: String) throws
@@ -146,7 +159,14 @@ final class CodexAppServerRuntimeSession {
                       cwd: String?,
                       onResponse: @escaping CodexAppServerConnection.ClientResponseHandler = { _ in }) throws -> Int {
         try initialization.wait()
+        // Order fence captured BEFORE the request goes out: a status
+        // notification accepted after this point invalidates the (older)
+        // response snapshot.
         let snapshotBarrier = lifecycleFeed?.snapshotBarrier()
+        // Separate order fence for the turn-state store: snapshotBarrier
+        // above only protects the LIFECYCLE store (thread status/blockers),
+        // not CodexAppServerTurnStateStore's active-turn seeding below.
+        let turnStateBarrier = turnStateStore.revisionBarrier(threadID: threadID)
         return try runtime.resumeThread(on: connection,
                                         threadID: threadID,
                                         cwd: cwd,
@@ -155,9 +175,75 @@ final class CodexAppServerRuntimeSession {
                                                 self?.lifecycleFeed?.applySnapshotResult(payload,
                                                                                          threadID: threadID,
                                                                                          barrier: snapshotBarrier)
+                                                self?.seedActiveTurnFromResumeSnapshot(payload,
+                                                                                       threadID: threadID,
+                                                                                       barrier: turnStateBarrier)
                                             }
                                             onResponse(response)
                                         })
+    }
+
+    // Seeds the store's active-turn state from a thread/resume response's
+    // `result.thread.turns` — this is the ONLY way a Bridge attach/re-attach
+    // (especially immediately after a Bridge deploy or a new app-server
+    // PID) can learn the exact turn id of an ALREADY-RUNNING turn: nothing
+    // guarantees a historical turn/started notification will ever arrive
+    // for a turn that started before this connection existed. Without this,
+    // routeSubmit() can only see threadStatusActiveStartedAt (busy, no known
+    // turn id) and permanently returns .busyWithoutTurnID until the turn
+    // happens to complete — remote steer is unusable for the entire
+    // duration of that turn.
+    //
+    // Deliberately narrow: only seeds when the snapshot is UNAMBIGUOUS
+    // (response thread.id matches the requested thread, and exactly one
+    // turn has a nonblank id with status == "inProgress") and only when
+    // `barrier` proves nothing has mutated this thread's turn state since
+    // the request was sent (see CodexAppServerTurnStateStore's revision
+    // fence) — a stale response racing a live completion, a newer
+    // turn/started, or a remote submit's own claim must never
+    // resurrect/overwrite that newer state. Any other shape (zero or
+    // multiple in-progress turns, thread id mismatch, or a state that has
+    // advanced) is silently skipped: the existing safe busyWithoutTurnID
+    // fallback still applies — never guess, never terminal-fallback.
+    private func seedActiveTurnFromResumeSnapshot(_ payload: JSONValue, threadID: String, barrier: Int) {
+        guard let thread = payload.objectValue?["thread"]?.objectValue,
+              thread["id"]?.stringValue == threadID else {
+            return
+        }
+        let turns = thread["turns"]?.arrayValue ?? []
+        let inProgressTurnIDs = turns.compactMap { turn -> String? in
+            guard let object = turn.objectValue,
+                  object["status"]?.stringValue == "inProgress" else {
+                return nil
+            }
+            let turnID = object["id"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let turnID, !turnID.isEmpty else {
+                return nil
+            }
+            return turnID
+        }
+        if inProgressTurnIDs.count == 1, let turnID = inProgressTurnIDs.first {
+            turnStateStore.seedActiveTurnFromResumeIfUnchanged(threadID: threadID, turnID: turnID, barrier: barrier)
+            return
+        }
+        // Zero or ambiguous inProgress turns: never guess which one to
+        // steer into. But if the snapshot's own thread.status still says
+        // the thread IS active/busy, the thread-state store must still
+        // learn that — otherwise routeSubmit() would wrongly treat this
+        // thread as IDLE (no pending claim, no turn, no active status) and
+        // issue a colliding turn/start into a thread the app-server already
+        // considers busy. Reuses the SAME status classifier the live
+        // thread/status/changed notification path uses, so "active" here
+        // means exactly what it means there.
+        guard let status = thread["status"]?.objectValue,
+              let statusType = status["type"]?.stringValue,
+              let level = CodexThreadStatusLifecycle.providerLevel(statusType: statusType,
+                                                                   activeFlags: status["activeFlags"]?.arrayValue
+                                                                       .map { $0.compactMap(\.stringValue) }),
+              level.turnActive else {
+            return
+        }
+        turnStateStore.markThreadActiveIfUnchanged(threadID: threadID, barrier: barrier)
     }
 
     @discardableResult
@@ -186,41 +272,204 @@ final class CodexAppServerRuntimeSession {
         connection.pendingApprovalPromptEvents()
     }
 
-    func submitMessage(text: String) throws {
-        try initialization.wait()
-        guard let threadID = try currentThreadIDForSubmit() else {
-            throw BridgeInternalError.invalidRequest("Codex app-server thread is not ready.")
+    private static let submitResponseTimeout: TimeInterval = 10
+
+    // The v2 protocol returns turn/start as { "turn": { "id": ... } }.
+    // turn/steer's top-level turnId is a different response shape and is
+    // validated separately below; accepting it here would hide a protocol
+    // mix-up like the production false-error regression from 2026-07-21.
+    private static func startResponseTurnIDCandidate(from response: JSONValue) -> String? {
+        response.objectValue?["turn"]?.objectValue?["id"]?.stringValue
+    }
+
+    private static func normalizedTurnID(from response: JSONValue) -> String? {
+        guard let rawTurnID = startResponseTurnIDCandidate(from: response) else {
+            return nil
         }
-        try turnStateStore.claimForSubmit(threadID: threadID)
+        let turnID = rawTurnID.trimmingCharacters(in: .whitespacesAndNewlines)
+        return turnID.isEmpty ? nil : turnID
+    }
+
+    func submitMessage(text: String) throws {
+        try submitMessage(text: text, clientRequestID: nil)
+    }
+
+    func submitMessage(text: String, clientRequestID: String?) throws {
+        // Everything up to and including thread-id resolution happens
+        // strictly BEFORE any turn/start or turn/steer request frame for
+        // this text is ever built — a failure here (init not ready/timed
+        // out, or the pre-send thread lookup failing) cannot have touched
+        // the user's message in any way. Zero effect by construction.
         do {
-            try runtime.startTurn(on: connection,
-                                  threadID: threadID,
-                                  text: text) { [turnStateStore] response in
-                if case .failure = response {
-                    turnStateStore.releasePendingSubmit(threadID: threadID)
-                }
-            }
+            try initialization.wait()
         } catch {
-            turnStateStore.releasePendingSubmit(threadID: threadID)
-            throw error
+            throw CodexAppServerSubmitFailure.unavailableBeforeSend("Codex app-server initialization is not ready: \(error)")
+        }
+        let threadID: String?
+        do {
+            threadID = try currentThreadIDForSubmit()
+        } catch {
+            throw CodexAppServerSubmitFailure.unavailableBeforeSend("Codex app-server thread lookup failed: \(error)")
+        }
+        guard let threadID else {
+            throw CodexAppServerSubmitFailure.unavailableBeforeSend("Codex app-server thread is not ready.")
+        }
+        // ONE atomic routing decision — never canSubmitMessage() (a
+        // separate, non-atomic peek) followed by a separate claim. That
+        // two-step gate-then-claim pattern is exactly the TOCTOU this
+        // route replaces.
+        let claimID = UUID()
+        switch turnStateStore.routeSubmit(threadID: threadID, claimID: claimID) {
+        case .start:
+            do {
+                let response = try awaitClientResponse(timeout: Self.submitResponseTimeout) { onResponse in
+                    try runtime.startTurn(on: connection,
+                                          threadID: threadID,
+                                          text: text,
+                                          clientUserMessageID: clientRequestID,
+                                          onResponse: { [turnStateStore] result in
+                                              // Reconcile in the durable connection callback before
+                                              // waking the bounded waiter. This still runs when an
+                                              // authoritative response arrives after the waiter timed out.
+                                              switch result {
+                                              case .success(let payload):
+                                                  if let turnID = Self.normalizedTurnID(from: payload) {
+                                                      turnStateStore.reconcileAcceptedStart(threadID: threadID,
+                                                                                            claimID: claimID,
+                                                                                            turnID: turnID)
+                                                  }
+                                              case .failure(.requestFailed):
+                                                  turnStateStore.releasePendingSubmit(threadID: threadID,
+                                                                                      claimID: claimID)
+                                              default:
+                                                  break
+                                              }
+                                              onResponse(result)
+                                          })
+                }
+                guard Self.normalizedTurnID(from: response) != nil else {
+                    throw CodexAppServerInvalidTurnStartResponseError(observedTurnID: Self.startResponseTurnIDCandidate(from: response))
+                }
+            } catch CodexAppServerConnectionError.requestFailed(let rpcError) {
+                // A DEFINITE JSON-RPC rejection — the app-server refused
+                // the turn/start outright (e.g. it raced into a newly
+                // active turn). Zero semantic effect: safe to release the
+                // claim so a genuine retry can proceed.
+                turnStateStore.releasePendingSubmit(threadID: threadID, claimID: claimID)
+                throw CodexAppServerSubmitFailure.rejected(rpcError.message)
+            }
+            // Every OTHER failure (synchronous write failure, transport
+            // close, or a bounded-wait timeout with no authoritative
+            // response) is UNKNOWN, not zero-effect — the request may still
+            // land server-side. The pending claim is deliberately NOT
+            // released here: releasing it would let a different
+            // client_request_id issue a second turn/start while the first
+            // may still be in flight. A stuck claim still self-heals via
+            // the turn-state store's own timeout/expiry.
+        case .steer(let turnID):
+            // An ACTIVE turn with a KNOWN turn id: native turn/steer INTO
+            // that turn — never a new turn/start, never terminal input.
+            let response: JSONValue
+            do {
+                response = try awaitClientResponse(timeout: Self.submitResponseTimeout) { onResponse in
+                    try runtime.steerTurn(on: connection,
+                                         threadID: threadID,
+                                         expectedTurnID: turnID,
+                                         text: text,
+                                         clientUserMessageID: clientRequestID,
+                                         onResponse: onResponse)
+                }
+            } catch CodexAppServerConnectionError.requestFailed(let rpcError) {
+                // A DEFINITE rejection — e.g. the turn completed or was
+                // replaced before the steer landed, so expectedTurnId no
+                // longer matches. Zero semantic effect: nothing was
+                // accepted into any turn.
+                throw CodexAppServerSubmitFailure.rejected(rpcError.message)
+            }
+            // A successful RPC whose returned turnId does not match what we
+            // asked to steer into is untrustworthy — but it was still a
+            // SUCCESS response, meaning the server may have accepted the
+            // input into SOME turn. This is an unknown semantic
+            // destination, not a definite zero-effect rejection — it must
+            // be indeterminate (never cancelled/retried, never reported as
+            // success), exactly like any other protocol-violation outcome.
+            guard response.objectValue?["turnId"]?.stringValue == turnID else {
+                throw CodexAppServerTurnIDMismatchError(expectedTurnID: turnID,
+                                                        observedTurnID: response.objectValue?["turnId"]?.stringValue)
+            }
+            // Every OTHER failure (transport close, bounded-wait timeout)
+            // is indeterminate — propagates unchanged from awaitClientResponse.
+        case .busyWithoutTurnID:
+            // No known turn id to steer into, and no capacity to claim a
+            // new turn/start either (another submit is already pending, or
+            // the app-server reports the thread active without an
+            // observed turn id yet). Zero side effect — no transport
+            // attempt was made — but this is NEVER safe to terminal-
+            // fallback: for a codex_app_server record, "the terminal" is
+            // Tidey's headless viewer, which immediately re-submits
+            // whatever it reads back through ANOTHER chat_submit, and
+            // falling back here would create a recursive resubmit loop.
+            throw CodexAppServerSubmitFailure.busyWithoutTurnID
         }
     }
 
+    // Bounded wait for the authoritative JSON-RPC response to a client
+    // request, mirroring the existing thread/loaded/list wait in
+    // loadCurrentThreadID(). `send` performs the actual sendClientRequest
+    // call (or throws synchronously if the write itself fails); the
+    // response handler resolves the condition either way.
+    private func awaitClientResponse(timeout: TimeInterval,
+                                     send: (@escaping CodexAppServerConnection.ClientResponseHandler) throws -> Void) throws -> JSONValue {
+        let condition = NSCondition()
+        var result: Result<JSONValue, CodexAppServerConnectionError>?
+        try send { response in
+            condition.lock()
+            result = response
+            condition.broadcast()
+            condition.unlock()
+        }
+
+        let deadline = Date().addingTimeInterval(timeout)
+        condition.lock()
+        defer { condition.unlock() }
+        while result == nil {
+            if condition.wait(until: deadline) == false {
+                throw CodexAppServerConnectionError.responseTimedOut
+            }
+        }
+        return try result!.get()
+    }
+
+    // Non-authoritative availability diagnostic: false while initialization
+    // is unavailable or the thread is busy. Submit callers must not use this
+    // as a gate; submitMessage() makes the only atomic start/steer/busy route
+    // decision and can steer when a known turn is active.
     func canSubmitMessage() -> Bool {
         let initializationStatus = initialization.diagnosticStatus()
         let threadID = activeThreadStore.currentThreadID()
         let busySummary = threadID.map { turnStateStore.diagnosticBusySummary(threadID: $0) } ?? "unknown_thread"
-        let result = threadID != nil
+        let isBusy = threadID.map { turnStateStore.isBusy(threadID: $0) } ?? false
+        let result: Bool
         let falseReason: String
         if case .ready = initializationStatus {
-            falseReason = threadID == nil ? "active_thread_unknown" : "-"
+            result = threadID != nil && !isBusy
+            if threadID == nil {
+                falseReason = "active_thread_unknown"
+            } else if isBusy {
+                falseReason = "busy"
+            } else {
+                falseReason = "-"
+            }
         } else {
+            result = false
             falseReason = "initialization_\(initializationStatus.logValue)"
         }
         BridgeLogger.server.debug("codex app-server diagnostic runtime can_submit result=\(result, privacy: .public) init_status=\(initializationStatus.logValue, privacy: .public) thread_id=\(threadID ?? "-", privacy: .public) busy=\(busySummary, privacy: .public) false_reason=\(falseReason, privacy: .public)")
         return result
     }
 
+    // Fail closed: blank/whitespace identities are never stored, and a nil
+    // or blank update never clears an existing valid binding.
     func setRegistryRootThreadID(_ rawThreadID: String?) {
         guard let threadID = rawThreadID?.trimmingCharacters(in: .whitespacesAndNewlines),
               threadID.isEmpty == false else {
@@ -497,6 +746,7 @@ final class CodexAppServerRuntimeSession {
     private func sendThreadResumeForSubscription(threadID: String) {
         BridgeLogger.server.debug("codex app-server diagnostic resume request session_id=\(self.runtime.contextSessionID, privacy: .public) thread_id=\(threadID, privacy: .public) request_has_approvalsReviewer=false cwd=- source=subscription_ensure")
         let snapshotBarrier = lifecycleFeed?.snapshotBarrier()
+        let turnStateBarrier = turnStateStore.revisionBarrier(threadID: threadID)
         do {
             try connection.sendClientRequest(method: "thread/resume",
                                              params: [
@@ -534,6 +784,9 @@ final class CodexAppServerRuntimeSession {
                                                     self.lifecycleFeed?.applySnapshotResult(payload,
                                                                                             threadID: threadID,
                                                                                             barrier: snapshotBarrier)
+                                                    self.seedActiveTurnFromResumeSnapshot(payload,
+                                                                                        threadID: threadID,
+                                                                                        barrier: turnStateBarrier)
                                                 case .failure(let error):
                                                     if self?.handleThreadResumeNoRollout(error, threadID: threadID) == true {
                                                         return

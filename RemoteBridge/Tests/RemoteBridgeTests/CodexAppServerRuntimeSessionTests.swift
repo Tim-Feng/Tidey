@@ -161,13 +161,198 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertEqual(resumeParams["excludeTurns"]?.boolValue, false)
         XCTAssertEqual(activeThreadIDs, ["thread-live"])
 
-        try session.submitMessage(text: "hello from remote")
-        let turnStart = try Self.object(from: try XCTUnwrap(transport.sentLines().last))
+        let turnStart = try awaitSubmitMessage(session, text: "hello from remote", transport: transport)
         XCTAssertEqual(turnStart["method"]?.stringValue, "turn/start")
         let turnParams = try XCTUnwrap(turnStart["params"]?.objectValue)
         XCTAssertEqual(turnParams["threadId"]?.stringValue, "thread-live")
         XCTAssertEqual(turnParams["input"]?.arrayValue?.first?.objectValue?["text"]?.stringValue, "hello from remote")
     }
+
+    func testThreadResumeWithUnambiguousInProgressTurnSeedsSteerTarget() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in })
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+
+        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        let listLoadedID = try XCTUnwrap(listLoaded["id"])
+        transport.emitLine(try Self.responseText(id: listLoadedID, result: .object([
+            "threads": .array([
+                .object(["id": .string("thread-live"), "preview": .string("Mac TUI Codex"), "updatedAt": .string("2026-06-07T00:00:00.000Z")]),
+            ]),
+        ])))
+
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
+        let resume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
+        XCTAssertEqual(resume["method"]?.stringValue, "thread/resume")
+        let resumeID = try XCTUnwrap(resume["id"])
+
+        // A live, already-working thread: status active plus one inProgress
+        // turn — exactly the shape thread/resume returns when Bridge
+        // (re)attaches mid-turn.
+        transport.emitLine(try Self.responseText(id: resumeID, result: .object([
+            "thread": .object([
+                "id": .string("thread-live"),
+                "status": .object(["type": .string("active"), "activeFlags": .array([.string("turn")])]),
+                "turns": .array([
+                    .object(["id": .string("turn-A"), "status": .string("inProgress")]),
+                ]),
+            ]),
+        ])))
+
+        // The next submit must go straight to turn/steer(expectedTurnId:
+        // "turn-A") — never turn/start, never a busyWithoutTurnID conflict.
+        let steerRequest = try awaitSubmitMessage(session,
+                                                  text: "steer into the already-running turn",
+                                                  transport: transport,
+                                                  respondWithResult: .object(["turnId": .string("turn-A")]))
+        XCTAssertEqual(steerRequest["method"]?.stringValue, "turn/steer")
+        let steerParams = try XCTUnwrap(steerRequest["params"]?.objectValue)
+        XCTAssertEqual(steerParams["threadId"]?.stringValue, "thread-live")
+        XCTAssertEqual(steerParams["expectedTurnId"]?.stringValue, "turn-A")
+    }
+
+    // Required test: a stale thread/resume response naming an inProgress
+    // turn must never resurrect that turn if a LIVE notification (a
+    // completion, or a newer turn/started) landed after the resume request
+    // was sent — the revision barrier must invalidate it.
+    func testStaleThreadResumeCannotResurrectATurnSupersededByALiveNotification() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in })
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+
+        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        let listLoadedID = try XCTUnwrap(listLoaded["id"])
+        transport.emitLine(try Self.responseText(id: listLoadedID, result: .object([
+            "threads": .array([
+                .object(["id": .string("thread-live"), "preview": .string("Mac TUI Codex"), "updatedAt": .string("2026-06-07T00:00:00.000Z")]),
+            ]),
+        ])))
+
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
+        let resume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
+        let resumeID = try XCTUnwrap(resume["id"])
+
+        // A LIVE turn/started for a DIFFERENT turn (B) lands BEFORE the
+        // resume response — the resume's barrier was captured before this,
+        // so it is now stale relative to turn B.
+        transport.emitLine("""
+        {"method":"turn/started","params":{"threadId":"thread-live","turn":{"id":"turn-B","items":[],"itemsView":{"type":"all"},"status":"running","error":null,"startedAt":1,"completedAt":null,"durationMs":null}}}
+        """)
+
+        // The stale resume response now arrives, naming the OLD turn A as
+        // inProgress — this must be discarded, not applied over turn B.
+        transport.emitLine(try Self.responseText(id: resumeID, result: .object([
+            "thread": .object([
+                "id": .string("thread-live"),
+                "status": .object(["type": .string("active"), "activeFlags": .array([.string("turn")])]),
+                "turns": .array([
+                    .object(["id": .string("turn-A"), "status": .string("inProgress")]),
+                ]),
+            ]),
+        ])))
+
+        // The next submit must steer into B (the live turn), never A (the
+        // stale/superseded one the resume response tried to resurrect).
+        let steerRequest = try awaitSubmitMessage(session,
+                                                  text: "steer into the live turn",
+                                                  transport: transport,
+                                                  respondWithResult: .object(["turnId": .string("turn-B")]))
+        XCTAssertEqual(steerRequest["method"]?.stringValue, "turn/steer")
+        XCTAssertEqual(steerRequest["params"]?.objectValue?["expectedTurnId"]?.stringValue, "turn-B")
+
+        // Turn B completes — the thread goes idle again.
+        transport.emitLine("""
+        {"method":"turn/completed","params":{"threadId":"thread-live","turn":{"id":"turn-B","items":[],"itemsView":{"type":"all"},"status":"completed","error":null,"startedAt":1,"completedAt":2,"durationMs":1000}}}
+        """)
+        let turnStart = try awaitSubmitMessage(session, text: "fresh turn after B completes", transport: transport)
+        XCTAssertEqual(turnStart["method"]?.stringValue, "turn/start")
+    }
+
+    // Required test: an active-thread snapshot with zero or ambiguous
+    // inProgress turns must still fail closed as busyWithoutTurnID — never
+    // guess which turn to steer into, and zero submit transport either way.
+    func testThreadResumeWithAmbiguousInProgressTurnsStaysFailClosed() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in })
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+
+        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        let listLoadedID = try XCTUnwrap(listLoaded["id"])
+        transport.emitLine(try Self.responseText(id: listLoadedID, result: .object([
+            "threads": .array([
+                .object(["id": .string("thread-live"), "preview": .string("Mac TUI Codex"), "updatedAt": .string("2026-06-07T00:00:00.000Z")]),
+            ]),
+        ])))
+
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
+        let resume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
+        let resumeID = try XCTUnwrap(resume["id"])
+
+        // TWO inProgress turns — ambiguous, must never guess which one to
+        // steer into.
+        transport.emitLine(try Self.responseText(id: resumeID, result: .object([
+            "thread": .object([
+                "id": .string("thread-live"),
+                "status": .object(["type": .string("active"), "activeFlags": .array([.string("turn")])]),
+                "turns": .array([
+                    .object(["id": .string("turn-A"), "status": .string("inProgress")]),
+                    .object(["id": .string("turn-B"), "status": .string("inProgress")]),
+                ]),
+            ]),
+        ])))
+
+        let sentCountBeforeSubmit = transport.sentLines().count
+        XCTAssertThrowsError(try session.submitMessage(text: "ambiguous", clientRequestID: nil)) { error in
+            guard case CodexAppServerSubmitFailure.busyWithoutTurnID = error else {
+                return XCTFail("expected busyWithoutTurnID, got \(error)")
+            }
+        }
+        XCTAssertEqual(transport.sentLines().count, sentCountBeforeSubmit,
+                       "zero submit transport for an ambiguous snapshot — never guess, never terminal-fallback")
+    }
+
 
     func testLoadedThreadSubscriptionDoesNotBlockInboundLineHandler() throws {
         let runner = FakeCodexAppServerProcessRunner()
@@ -457,8 +642,7 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertEqual(resume["method"]?.stringValue, "thread/resume")
         XCTAssertEqual(resume["params"]?.objectValue?["threadId"]?.stringValue, "thread-current")
 
-        try session.submitMessage(text: "hello current")
-        let turnStart = try Self.object(from: try XCTUnwrap(transport.sentLines().last))
+        let turnStart = try awaitSubmitMessage(session, text: "hello current", transport: transport)
         XCTAssertEqual(turnStart["params"]?.objectValue?["threadId"]?.stringValue, "thread-current")
     }
 
@@ -490,7 +674,7 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         var submitError: Error?
         DispatchQueue.global().async {
             do {
-                try session.submitMessage(text: "must not guess")
+                try session.submitMessage(text: "must not guess", clientRequestID: nil)
             } catch {
                 submitError = error
             }
@@ -504,10 +688,9 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         transport.emitLine(try Self.responseText(id: retryListLoadedID, result: Self.ambiguousLoadedThreadsResult()))
 
         wait(for: [submitCompleted], timeout: 2.0)
-        guard case BridgeInternalError.invalidRequest(let message)? = submitError else {
-            return XCTFail("expected invalid request, got \(String(describing: submitError))")
+        guard let submitError, case CodexAppServerSubmitFailure.unavailableBeforeSend = submitError else {
+            return XCTFail("expected unavailableBeforeSend, got \(String(describing: submitError))")
         }
-        XCTAssertEqual(message, "Codex app-server thread is not ready.")
         XCTAssertEqual(transport.sentLines().count, 4)
     }
 
@@ -741,7 +924,7 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         var submitError: Error?
         DispatchQueue.global().async {
             do {
-                try session.submitMessage(text: "hello after delayed thread")
+                try session.submitMessage(text: "hello after delayed thread", clientRequestID: nil)
             } catch {
                 submitError = error
             }
@@ -759,16 +942,184 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
             "nextCursor": .null,
         ])))
 
-        wait(for: [submitCompleted], timeout: 2.0)
-        XCTAssertNil(submitError)
-
+        // Thread resolution unblocked the .start route, which now bounded-
+        // waits for the app-server's authoritative turn/start response
+        // before submitMessage() returns.
+        XCTAssertTrue(Self.waitForSentLineCount(5, transport: transport))
         let turnStart = try Self.object(from: try XCTUnwrap(transport.sentLines().last))
         XCTAssertEqual(turnStart["method"]?.stringValue, "turn/start")
         let turnParams = try XCTUnwrap(turnStart["params"]?.objectValue)
         XCTAssertEqual(turnParams["threadId"]?.stringValue, "thread-live")
         XCTAssertEqual(turnParams["input"]?.arrayValue?.first?.objectValue?["text"]?.stringValue, "hello after delayed thread")
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(turnStart["id"]),
+                                                 result: .object(["turn": .object(["id": .string("turn-delayed")])])) )
+
+        wait(for: [submitCompleted], timeout: 2.0)
+        XCTAssertNil(submitError)
     }
 
+    // Production regression (Automation, 2026-07-21): Codex can accept a
+    // turn/start and return its authoritative `turn.id` without ever replaying
+    // turn/started to this Bridge attachment. The response alone must
+    // promote the pending claim into a steerable remote-origin turn.
+    func testTurnStartSuccessResponseAloneSeedsSteerTarget() throws {
+        let (session, transport) = try makeLoadedAttachedSession()
+
+        let first = try beginSubmitMessage(session, text: "first", transport: transport)
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(first.request["id"]),
+                                                 result: .object(["turn": .object(["id": .string("turn-response")])])) )
+        wait(for: [first.completion], timeout: 5)
+        XCTAssertNil(first.error.get())
+
+        let steer = try awaitSubmitMessage(session,
+                                           text: "second",
+                                           transport: transport,
+                                           respondWithResult: .object(["turnId": .string("turn-response")]))
+        XCTAssertEqual(steer["method"]?.stringValue, "turn/steer")
+        XCTAssertEqual(steer["params"]?.objectValue?["expectedTurnId"]?.stringValue, "turn-response")
+    }
+
+    func testTurnStartSuccessResponseThenMatchingCompletionReturnsToStart() throws {
+        let (session, transport) = try makeLoadedAttachedSession()
+
+        let first = try awaitSubmitMessage(session,
+                                           text: "first",
+                                           transport: transport,
+                                           respondWithResult: .object(["turn": .object(["id": .string("turn-response")])]))
+        XCTAssertEqual(first["method"]?.stringValue, "turn/start")
+
+        transport.emitLine(#"{"method":"turn/completed","params":{"threadId":"thread-live","turn":{"id":"turn-response","status":"completed"}}}"#)
+
+        let next = try awaitSubmitMessage(session,
+                                          text: "after completion",
+                                          transport: transport,
+                                          respondWithResult: .object(["turn": .object(["id": .string("turn-next")])]))
+        XCTAssertEqual(next["method"]?.stringValue, "turn/start")
+    }
+
+    func testTurnStartedBeforeTurnStartResponseIsIdempotent() throws {
+        let (session, transport) = try makeLoadedAttachedSession()
+
+        let first = try beginSubmitMessage(session, text: "first", transport: transport)
+        transport.emitLine(#"{"method":"turn/started","params":{"threadId":"thread-live","turn":{"id":"turn-live"}}}"#)
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(first.request["id"]),
+                                                 result: .object(["turn": .object(["id": .string("turn-live")])])) )
+        wait(for: [first.completion], timeout: 5)
+        XCTAssertNil(first.error.get())
+
+        let steer = try awaitSubmitMessage(session,
+                                           text: "second",
+                                           transport: transport,
+                                           respondWithResult: .object(["turnId": .string("turn-live")]))
+        XCTAssertEqual(steer["method"]?.stringValue, "turn/steer")
+        XCTAssertEqual(steer["params"]?.objectValue?["expectedTurnId"]?.stringValue, "turn-live")
+    }
+
+    func testResumeSnapshotBeforeTurnStartResponseIsIdempotentAndPreservesRemoteOrigin() throws {
+        let (session, transport) = try makeLoadedAttachedSession()
+
+        let first = try beginSubmitMessage(session, text: "first", transport: transport)
+        let resumeID = try session.resumeThread(threadID: "thread-live", cwd: nil)
+        transport.emitLine(try Self.responseText(id: .number(Double(resumeID)),
+                                                 result: Self.inProgressResumeResult(threadID: "thread-live",
+                                                                                     turnID: "turn-resumed")))
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(first.request["id"]),
+                                                 result: .object(["turn": .object(["id": .string("turn-resumed")])])) )
+        wait(for: [first.completion], timeout: 5)
+        XCTAssertNil(first.error.get())
+
+        transport.emitLine(#"{"method":"thread/status/changed","params":{"threadId":"thread-live","status":{"type":"idle"}}}"#)
+        let steer = try awaitSubmitMessage(session,
+                                           text: "second",
+                                           transport: transport,
+                                           respondWithResult: .object(["turnId": .string("turn-resumed")]))
+        XCTAssertEqual(steer["method"]?.stringValue, "turn/steer")
+        XCTAssertEqual(steer["params"]?.objectValue?["expectedTurnId"]?.stringValue, "turn-resumed")
+    }
+
+    func testMatchingCompletionBeforeTurnStartResponseDoesNotResurrectCompletedTurn() throws {
+        let (session, transport) = try makeLoadedAttachedSession()
+
+        let first = try beginSubmitMessage(session, text: "first", transport: transport)
+        transport.emitLine(#"{"method":"turn/completed","params":{"threadId":"thread-live","turn":{"id":"turn-fast","status":"completed"}}}"#)
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(first.request["id"]),
+                                                 result: .object(["turn": .object(["id": .string("turn-fast")])])) )
+        wait(for: [first.completion], timeout: 5)
+        XCTAssertNil(first.error.get())
+
+        let next = try awaitSubmitMessage(session,
+                                          text: "after fast completion",
+                                          transport: transport,
+                                          respondWithResult: .object(["turn": .object(["id": .string("turn-next")])]))
+        XCTAssertEqual(next["method"]?.stringValue, "turn/start",
+                       "the late success response must retire its claim, never resurrect the already-completed turn")
+    }
+
+    func testLateFirstClaimResponseCannotOverwriteSecondClaimAfterExpiry() throws {
+        var now = Date(timeIntervalSince1970: 100)
+        let store = CodexAppServerTurnStateStore(timeout: 1) { now }
+        let firstClaimID = UUID()
+        let secondClaimID = UUID()
+
+        XCTAssertEqual(store.routeSubmit(threadID: "thread-live", claimID: firstClaimID), .start)
+        now = now.addingTimeInterval(2)
+        XCTAssertEqual(store.routeSubmit(threadID: "thread-live", claimID: secondClaimID), .start)
+
+        store.reconcileAcceptedStart(threadID: "thread-live",
+                                     claimID: firstClaimID,
+                                     turnID: "turn-stale")
+        XCTAssertEqual(store.routeSubmit(threadID: "thread-live"), .busyWithoutTurnID,
+                       "P1's late response must not consume or replace P2's pending claim")
+
+        store.reconcileAcceptedStart(threadID: "thread-live",
+                                     claimID: secondClaimID,
+                                     turnID: "turn-current")
+        XCTAssertEqual(store.routeSubmit(threadID: "thread-live"), .steer(turnID: "turn-current"))
+    }
+
+    func testTurnStartSuccessWithoutNonblankTurnIDFailsClosed() throws {
+        let malformedResults: [JSONValue] = [
+            .object([:]),
+            .object(["turn": .object([:])]),
+            .object(["turn": .object(["id": .string("  \n")])]),
+            .object(["turnId": .string("turn-steer-response-shape")]),
+            .object(["turnId": .string("  \n")]),
+        ]
+
+        for (index, malformedResult) in malformedResults.enumerated() {
+            let (session, transport) = try makeLoadedAttachedSession()
+            let first = try beginSubmitMessage(session,
+                                               text: "malformed-\(index)",
+                                               transport: transport)
+            transport.emitLine(try Self.responseText(id: try XCTUnwrap(first.request["id"]),
+                                                     result: malformedResult))
+            wait(for: [first.completion], timeout: 5)
+
+            guard let error = first.error.get() else {
+                XCTFail("row \(index): missing/blank turn.id must be indeterminate, never success")
+                continue
+            }
+            XCTAssertTrue(error is CodexAppServerInvalidTurnStartResponseError,
+                          "row \(index): expected invalid turn/start response, got \(error)")
+
+            let sentCount = transport.sentLines().count
+            XCTAssertThrowsError(try session.submitMessage(text: "must stay blocked", clientRequestID: nil)) { error in
+                guard case CodexAppServerSubmitFailure.busyWithoutTurnID = error else {
+                    return XCTFail("row \(index): expected fail-closed pending claim, got \(error)")
+                }
+            }
+            XCTAssertEqual(transport.sentLines().count, sentCount,
+                           "row \(index): malformed success must never permit a second wire request")
+        }
+    }
+
+    // Required test: idle with no known active turn — a submit while
+    // pending (claimed but no turn/started observed yet) has no turn id to
+    // steer into, so it must route to .busyWithoutTurnID, a typed conflict.
+    // Once turn/started lands with a known turn id, a further submit must
+    // route to a native turn/steer INTO that turn — never a new turn/start,
+    // never a rejection — and after the turn completes, a submit goes back
+    // to exactly one fresh turn/start.
     func testSubmitMessageRejectsSecondTurnWhileThreadIsBusy() throws {
         let runner = FakeCodexAppServerProcessRunner()
         let connector = FakeCodexAppServerTransportConnector()
@@ -789,37 +1140,234 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         try Self.acknowledgeInitialize(from: transport)
         try Self.loadThread("thread-live", on: transport)
 
-        try session.submitMessage(text: "first")
+        let first = try beginSubmitMessage(session, text: "first", transport: transport)
         let sentCountAfterFirstSubmit = transport.sentLines().count
 
-        XCTAssertThrowsError(try session.submitMessage(text: "second")) { error in
-            guard case BridgeInternalError.invalidRequest(let message) = error else {
-                return XCTFail("expected invalid request, got \(error)")
+        // Pending submit claimed, but turn/started has not arrived yet — no
+        // known turn id to steer into. Typed conflict, zero transport
+        // attempt (no turn/start, no turn/steer).
+        XCTAssertThrowsError(try session.submitMessage(text: "second", clientRequestID: nil)) { error in
+            guard case CodexAppServerSubmitFailure.busyWithoutTurnID = error else {
+                return XCTFail("expected busyWithoutTurnID, got \(error)")
             }
-            XCTAssertEqual(message, "Codex app-server turn is already running.")
         }
         XCTAssertEqual(transport.sentLines().count, sentCountAfterFirstSubmit)
 
+        // The authoritative response supplies the exact turn identity even
+        // if turn/started is delayed or omitted.
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(first.request["id"]),
+                                                 result: .object(["turn": .object(["id": .string("turn-1")])])) )
+        wait(for: [first.completion], timeout: 5)
+        XCTAssertNil(first.error.get())
+
+        // A matching later notification is idempotent and preserves the
+        // response-established remote turn.
         transport.emitLine("""
         {"method":"turn/started","params":{"threadId":"thread-live","turn":{"id":"turn-1","items":[],"itemsView":{"type":"all"},"status":"running","error":null,"startedAt":1,"completedAt":null,"durationMs":null}}}
         """)
-        XCTAssertThrowsError(try session.submitMessage(text: "still busy")) { error in
-            guard case BridgeInternalError.invalidRequest = error else {
-                return XCTFail("expected invalid request, got \(error)")
-            }
-        }
-        XCTAssertEqual(transport.sentLines().count, sentCountAfterFirstSubmit)
+
+        // Now a known active turn id exists — the submit must go out as a
+        // native turn/steer into that exact turn, never a new turn/start.
+        let steerRequest = try awaitSubmitMessage(session,
+                                                  text: "still busy",
+                                                  transport: transport,
+                                                  respondWithResult: .object(["turnId": .string("turn-1")]))
+        XCTAssertEqual(transport.sentLines().count, sentCountAfterFirstSubmit + 1)
+        XCTAssertEqual(steerRequest["method"]?.stringValue, "turn/steer")
+        let steerParams = try XCTUnwrap(steerRequest["params"]?.objectValue)
+        XCTAssertEqual(steerParams["threadId"]?.stringValue, "thread-live")
+        XCTAssertEqual(steerParams["expectedTurnId"]?.stringValue, "turn-1")
+        XCTAssertEqual(steerParams["input"]?.arrayValue?.first?.objectValue?["type"]?.stringValue, "text")
+        XCTAssertEqual(steerParams["input"]?.arrayValue?.first?.objectValue?["text"]?.stringValue, "still busy")
 
         transport.emitLine("""
         {"method":"turn/completed","params":{"threadId":"thread-live","turn":{"id":"turn-1","items":[],"itemsView":{"type":"all"},"status":"completed","error":null,"startedAt":1,"completedAt":2,"durationMs":1000}}}
         """)
 
-        try session.submitMessage(text: "after completion")
-        XCTAssertEqual(transport.sentLines().count, sentCountAfterFirstSubmit + 1)
-        let turnStart = try Self.object(from: try XCTUnwrap(transport.sentLines().last))
+        let turnStart = try awaitSubmitMessage(session, text: "after completion", transport: transport)
         XCTAssertEqual(turnStart["method"]?.stringValue, "turn/start")
         let turnParams = try XCTUnwrap(turnStart["params"]?.objectValue)
         XCTAssertEqual(turnParams["input"]?.arrayValue?.first?.objectValue?["text"]?.stringValue, "after completion")
+    }
+
+    // Required test: a known active turn (A) completes/is replaced before
+    // the steer request lands, so expectedTurnId no longer matches — the
+    // app-server sends a DEFINITE JSON-RPC rejection. This is a typed,
+    // zero-semantic-effect rejection (CodexAppServerSubmitFailure.rejected)
+    // — never a terminal fallback trigger, never a false success.
+    func testSubmitMessageSteerRejectionForCompletedTurnDoesNotFallbackOrSucceed() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in })
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+        try Self.loadThread("thread-live", on: transport)
+
+        try awaitSubmitMessage(session, text: "first", transport: transport)
+        transport.emitLine("""
+        {"method":"turn/started","params":{"threadId":"thread-live","turn":{"id":"turn-A","items":[],"itemsView":{"type":"all"},"status":"running","error":null,"startedAt":1,"completedAt":null,"durationMs":null}}}
+        """)
+
+        let sentCountBeforeSteer = transport.sentLines().count
+        let steerCompleted = expectation(description: "steer rejection surfaces")
+        var steerError: Error?
+        DispatchQueue.global().async {
+            do {
+                try session.submitMessage(text: "steer into A", clientRequestID: nil)
+            } catch {
+                steerError = error
+            }
+            steerCompleted.fulfill()
+        }
+        XCTAssertTrue(Self.waitForSentLineCount(sentCountBeforeSteer + 1, transport: transport))
+        let steerRequest = try Self.object(from: try XCTUnwrap(transport.sentLines().last))
+        XCTAssertEqual(steerRequest["method"]?.stringValue, "turn/steer")
+        let steerRequestID = try XCTUnwrap(steerRequest["id"])
+
+        // The app-server rejects the steer: turn A already completed/was
+        // replaced, so expectedTurnId no longer matches.
+        transport.emitLine(try Self.errorResponseText(id: steerRequestID,
+                                                      code: -32000,
+                                                      message: "expectedTurnId does not match the active turn"))
+        wait(for: [steerCompleted], timeout: 5)
+
+        guard let steerError, case CodexAppServerSubmitFailure.rejected = steerError else {
+            return XCTFail("expected a typed rejection, got \(String(describing: steerError))")
+        }
+        let sentCountAfterRejection = transport.sentLines().count
+
+        // A rejected steer must never trigger an automatic retry, a new
+        // turn/start, or any terminal-input transport — the caller
+        // (BridgeInputActionHandler) is responsible for treating this as a
+        // conflict, never as a fallback trigger or a false success.
+        XCTAssertEqual(sentCountAfterRejection, sentCountBeforeSteer + 1,
+                       "no automatic retry or fallback transport attempt follows a steer rejection")
+
+        // The turn-state store must not be corrupted by the rejection — it
+        // still reflects turn A as the last-known active turn until a real
+        // turn/started or turn/completed notification says otherwise.
+        XCTAssertFalse(session.canSubmitMessage(), "turn A's busy state is unaffected by an out-of-band steer rejection")
+    }
+
+    // Required test (round 4 correction): a SUCCESSFUL turn/steer response
+    // whose turnId doesn't match expectedTurnId is NOT a definite rejection
+    // — the server said success, so it may have accepted the input into
+    // turn-B. This must surface as an indeterminate error (never
+    // CodexAppServerSubmitFailure.rejected), so the handler marks the
+    // reservation indeterminate rather than cancelling/allowing a retry.
+    func testSubmitMessageSteerSuccessWithMismatchedTurnIDIsIndeterminateNotRejected() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in })
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+        try Self.loadThread("thread-live", on: transport)
+
+        try awaitSubmitMessage(session, text: "first", transport: transport)
+        transport.emitLine("""
+        {"method":"turn/started","params":{"threadId":"thread-live","turn":{"id":"turn-A","items":[],"itemsView":{"type":"all"},"status":"running","error":null,"startedAt":1,"completedAt":null,"durationMs":null}}}
+        """)
+
+        // Steer succeeds, but the response names turn-B, not the expected
+        // turn-A — a protocol violation / unknown semantic destination.
+        XCTAssertThrowsError(try awaitSubmitMessage(session,
+                                                    text: "steer into A but landed on B",
+                                                    transport: transport,
+                                                    respondWithResult: .object(["turnId": .string("turn-B")]))) { error in
+            if case CodexAppServerSubmitFailure.rejected = error {
+                XCTFail("a mismatched-but-successful turnId must never be classified as a definite rejection")
+            }
+            if case CodexAppServerSubmitFailure.busyWithoutTurnID = error {
+                XCTFail("a mismatched-but-successful turnId must never be classified as the zero-effect busyWithoutTurnID case")
+            }
+            guard error is CodexAppServerTurnIDMismatchError else {
+                return XCTFail("expected CodexAppServerTurnIDMismatchError, got \(error)")
+            }
+        }
+    }
+
+    // The diagnostic reflects pending and active work. It is not the submit
+    // authority; submitMessage() still owns the atomic start/steer/busy route.
+    func testCanSubmitMessageIsFalseWhileTurnIsBusy() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in })
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+        try Self.loadThread("thread-live", on: transport)
+
+        XCTAssertTrue(session.canSubmitMessage(), "idle thread with no in-flight turn can submit")
+
+        // submitMessage() now bounded-waits for the turn/start response, so
+        // dispatch it in the background to observe the busy state WHILE it
+        // is still in flight (claimed but not yet answered).
+        let firstSentCount = transport.sentLines().count
+        let firstCompleted = expectation(description: "first submit completes")
+        var firstError: Error?
+        DispatchQueue.global().async {
+            do {
+                try session.submitMessage(text: "first", clientRequestID: nil)
+            } catch {
+                firstError = error
+            }
+            firstCompleted.fulfill()
+        }
+        XCTAssertTrue(Self.waitForSentLineCount(firstSentCount + 1, transport: transport))
+        XCTAssertFalse(session.canSubmitMessage(), "a pending submit (claimed, turn/started not yet observed) is busy")
+
+        transport.emitLine("""
+        {"method":"turn/started","params":{"threadId":"thread-live","turn":{"id":"turn-1","items":[],"itemsView":{"type":"all"},"status":"running","error":null,"startedAt":1,"completedAt":null,"durationMs":null}}}
+        """)
+        XCTAssertFalse(session.canSubmitMessage(), "an actively running turn is busy")
+
+        // Unblock the still-pending first submitMessage() bounded wait.
+        let firstRequest = try Self.object(from: try XCTUnwrap(transport.sentLines()[firstSentCount]))
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(firstRequest["id"]),
+                                                 result: .object(["turn": .object(["id": .string("turn-1")])])) )
+        wait(for: [firstCompleted], timeout: 5)
+        XCTAssertNil(firstError)
+
+        transport.emitLine("""
+        {"method":"turn/completed","params":{"threadId":"thread-live","turn":{"id":"turn-1","items":[],"itemsView":{"type":"all"},"status":"completed","error":null,"startedAt":1,"completedAt":2,"durationMs":1000}}}
+        """)
+        XCTAssertTrue(session.canSubmitMessage(), "idle again after the turn completes")
+        try awaitSubmitMessage(session, text: "after completion", transport: transport)
     }
 
     func testTUIThreadStatusActiveBlocksRemoteSubmitUntilIdle() throws {
@@ -847,11 +1395,14 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         """)
         let sentCountAfterActive = transport.sentLines().count
 
-        XCTAssertThrowsError(try session.submitMessage(text: "remote while TUI active")) { error in
-            guard case BridgeInternalError.invalidRequest(let message) = error else {
-                return XCTFail("expected invalid request, got \(error)")
+        // thread/status/changed reports the thread active, but no
+        // turn/started has been observed — there is no known turn id to
+        // steer into. Required behavior: typed conflict, zero transport
+        // attempt (never a new turn/start, never a turn/steer).
+        XCTAssertThrowsError(try session.submitMessage(text: "remote while TUI active", clientRequestID: nil)) { error in
+            guard case CodexAppServerSubmitFailure.busyWithoutTurnID = error else {
+                return XCTFail("expected busyWithoutTurnID, got \(error)")
             }
-            XCTAssertEqual(message, "Codex app-server turn is already running.")
         }
         XCTAssertEqual(transport.sentLines().count, sentCountAfterActive)
 
@@ -859,8 +1410,7 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         {"method":"thread/status/changed","params":{"threadId":"thread-live","status":{"type":"idle"}}}
         """)
 
-        try session.submitMessage(text: "remote after TUI idle")
-        let turnStart = try Self.object(from: try XCTUnwrap(transport.sentLines().last))
+        let turnStart = try awaitSubmitMessage(session, text: "remote after TUI idle", transport: transport)
         XCTAssertEqual(turnStart["method"]?.stringValue, "turn/start")
         XCTAssertEqual(turnStart["params"]?.objectValue?["input"]?.arrayValue?.first?.objectValue?["text"]?.stringValue,
                        "remote after TUI idle")
@@ -925,6 +1475,7 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
                                      turnID: "turn-current")
         XCTAssertEqual(store.routeSubmit(threadID: "thread-live"), .steer(turnID: "turn-current"))
     }
+
 
     func testTurnStateStoreExpiresStuckActiveTurn() throws {
         var now = Date(timeIntervalSince1970: 100)
@@ -1022,17 +1573,139 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         try Self.acknowledgeInitialize(from: transport)
         try Self.loadThread("thread-live", on: transport)
 
-        try session.submitMessage(text: "first")
+        let firstSentCount = transport.sentLines().count
+        let firstCompleted = expectation(description: "first submit fails")
+        var firstError: Error?
+        DispatchQueue.global().async {
+            do {
+                try session.submitMessage(text: "first", clientRequestID: nil)
+            } catch {
+                firstError = error
+            }
+            firstCompleted.fulfill()
+        }
+        XCTAssertTrue(Self.waitForSentLineCount(firstSentCount + 1, transport: transport))
         let firstTurnStart = try Self.object(from: try XCTUnwrap(transport.sentLines().last))
         let firstTurnStartID = try XCTUnwrap(firstTurnStart["id"])
         transport.emitLine(try Self.errorResponseText(id: firstTurnStartID,
                                                       code: -32000,
                                                       message: "turn start failed"))
+        wait(for: [firstCompleted], timeout: 5)
+        guard let firstError, case CodexAppServerSubmitFailure.rejected = firstError else {
+            return XCTFail("expected a typed rejection, got \(String(describing: firstError))")
+        }
 
-        try session.submitMessage(text: "retry after failure")
-        let turnStart = try Self.object(from: try XCTUnwrap(transport.sentLines().last))
+        // The definite rejection released the pending claim — a genuine
+        // retry can proceed straight to a fresh turn/start.
+        let turnStart = try awaitSubmitMessage(session, text: "retry after failure", transport: transport)
         let turnParams = try XCTUnwrap(turnStart["params"]?.objectValue)
         XCTAssertEqual(turnParams["input"]?.arrayValue?.first?.objectValue?["text"]?.stringValue, "retry after failure")
+    }
+
+    // Required test: submitMessage() forwards the caller's client_request_id
+    // as clientUserMessageId on both the turn/start and turn/steer requests
+    // — this preserves client identity through the app-server.
+    func testSubmitMessagePassesClientRequestIDAsClientUserMessageID() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in })
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+        try Self.loadThread("thread-live", on: transport)
+
+        let turnStart = try awaitSubmitMessage(session,
+                                               text: "first",
+                                               clientRequestID: "client-a",
+                                               transport: transport)
+        XCTAssertEqual(turnStart["params"]?.objectValue?["clientUserMessageId"]?.stringValue, "client-a")
+
+        transport.emitLine("""
+        {"method":"turn/started","params":{"threadId":"thread-live","turn":{"id":"turn-1","items":[],"itemsView":{"type":"all"},"status":"running","error":null,"startedAt":1,"completedAt":null,"durationMs":null}}}
+        """)
+
+        let steerRequest = try awaitSubmitMessage(session,
+                                                  text: "steer",
+                                                  clientRequestID: "client-b",
+                                                  transport: transport,
+                                                  respondWithResult: .object(["turnId": .string("turn-1")]))
+        XCTAssertEqual(steerRequest["method"]?.stringValue, "turn/steer")
+        XCTAssertEqual(steerRequest["params"]?.objectValue?["clientUserMessageId"]?.stringValue, "client-b")
+    }
+
+    // Required test: a transport close or bounded-wait timeout before an
+    // authoritative response is indeterminate, never zero-effect — the
+    // pending claim must stay held so a DIFFERENT client_request_id cannot
+    // issue a second turn/start while the first may still be in flight.
+    func testSubmitMessageTransportCloseIsIndeterminateAndKeepsClaimHeld() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in })
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+        try Self.loadThread("thread-live", on: transport)
+
+        let sentCountBeforeFirst = transport.sentLines().count
+        let firstCompleted = expectation(description: "first submit resolves to the transport closing")
+        var firstError: Error?
+        DispatchQueue.global().async {
+            do {
+                try session.submitMessage(text: "first", clientRequestID: "client-a")
+            } catch {
+                firstError = error
+            }
+            firstCompleted.fulfill()
+        }
+        XCTAssertTrue(Self.waitForSentLineCount(sentCountBeforeFirst + 1, transport: transport))
+
+        // WHILE the first request is still in flight (no response yet), the
+        // claim must remain held: a DIFFERENT client_request_id must not be
+        // able to issue a second turn/start.
+        XCTAssertThrowsError(try session.submitMessage(text: "second", clientRequestID: "client-b")) { error in
+            guard case CodexAppServerSubmitFailure.busyWithoutTurnID = error else {
+                return XCTFail("expected busyWithoutTurnID while the first submit's outcome is still unknown, got \(error)")
+            }
+        }
+        XCTAssertEqual(transport.sentLines().count, sentCountBeforeFirst + 1,
+                       "the second submit must never reach the transport while the first is unresolved")
+
+        // The transport closes before any authoritative response arrives —
+        // outcome unknown, not zero-effect. This must NOT be classified as
+        // either zero-effect case (.busyWithoutTurnID or .rejected).
+        transport.close()
+        wait(for: [firstCompleted], timeout: 5)
+        guard let firstError else {
+            return XCTFail("expected the transport close to surface as an error")
+        }
+        if case CodexAppServerSubmitFailure.rejected = firstError {
+            XCTFail("a transport close must not be classified as a definite JSON-RPC rejection")
+        }
+        if case CodexAppServerSubmitFailure.busyWithoutTurnID = firstError {
+            XCTFail("a transport close must not be classified as the zero-effect busyWithoutTurnID case")
+        }
     }
 
     func testSessionConvertsStdoutNotificationsToAgentEvents() throws {
@@ -1395,6 +2068,121 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertTrue(waitForSentLineCount(4, transport: transport), file: file, line: sourceLine)
     }
 
+    private static func inProgressResumeResult(threadID: String, turnID: String) -> JSONValue {
+        .object([
+            "thread": .object([
+                "id": .string(threadID),
+                "status": .object(["type": .string("active"), "activeFlags": .array([.string("turn")])]),
+                "turns": .array([.object(["id": .string(turnID), "status": .string("inProgress")])]),
+            ]),
+        ])
+    }
+
+    private func makeLoadedAttachedSession(threadID: String = "thread-live",
+                                           file: StaticString = #filePath,
+                                           line: UInt = #line) throws -> (CodexAppServerRuntimeSession, FakeCodexAppServerConnectionTransport) {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-07-21T07:38:54.274Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in })
+        let transport = try XCTUnwrap(connector.transport, file: file, line: line)
+        try Self.acknowledgeInitialize(from: transport, file: file, line: line)
+        try Self.loadThread(threadID, on: transport, file: file, line: line)
+        return (session, transport)
+    }
+
+    private func beginSubmitMessage(_ session: CodexAppServerRuntimeSession,
+                                    text: String,
+                                    clientRequestID: String? = nil,
+                                    transport: FakeCodexAppServerConnectionTransport,
+                                    file: StaticString = #filePath,
+                                    line: UInt = #line) throws -> (request: [String: JSONValue], completion: XCTestExpectation, error: ThreadSafeErrorBox) {
+        let startCount = transport.sentLines().count
+        let completion = expectation(description: "submitMessage completes: \(text)")
+        let error = ThreadSafeErrorBox()
+        DispatchQueue.global().async {
+            do {
+                try session.submitMessage(text: text, clientRequestID: clientRequestID)
+            } catch let caught {
+                error.set(caught)
+            }
+            completion.fulfill()
+        }
+        XCTAssertTrue(Self.waitForSentLineCount(startCount + 1, transport: transport), file: file, line: line)
+        let request = try Self.object(from: try XCTUnwrap(transport.sentLines()[startCount], file: file, line: line),
+                                      file: file,
+                                      line: line)
+        return (request, completion, error)
+    }
+
+    // submitMessage() is now a bounded wait for the app-server's
+    // authoritative response (not a fire-and-forget write) — a direct
+    // synchronous call would deadlock a single-threaded test that also
+    // needs to emit that response. This helper dispatches the call to a
+    // background queue, waits for the new outbound request line, emits a
+    // SUCCESS response for it (unless the caller wants to inspect/emit
+    // something different), then waits for submitMessage() to return and
+    // rethrows anything it threw. Returns the outbound request object so
+    // callers can assert on its shape.
+    @discardableResult
+    private func awaitSubmitMessage(_ session: CodexAppServerRuntimeSession,
+                                    text: String,
+                                    clientRequestID: String? = nil,
+                                    transport: FakeCodexAppServerConnectionTransport,
+                                    respondWithResult: JSONValue? = nil,
+                                    file: StaticString = #filePath,
+                                    line: UInt = #line) throws -> [String: JSONValue] {
+        let startCount = transport.sentLines().count
+        let completion = expectation(description: "submitMessage completes")
+        var thrown: Error?
+        DispatchQueue.global().async {
+            do {
+                try session.submitMessage(text: text, clientRequestID: clientRequestID)
+            } catch {
+                thrown = error
+            }
+            completion.fulfill()
+        }
+        XCTAssertTrue(Self.waitForSentLineCount(startCount + 1, transport: transport), file: file, line: line)
+        let requestObject = try Self.object(from: try XCTUnwrap(transport.sentLines()[startCount], file: file, line: line),
+                                            file: file,
+                                            line: line)
+        let effectiveResult: JSONValue
+        if let respondWithResult {
+            effectiveResult = respondWithResult
+        } else {
+            switch requestObject["method"]?.stringValue {
+            case "turn/start":
+                effectiveResult = .object(["turn": .object(["id": .string("turn-1")])])
+            case "turn/steer":
+                effectiveResult = .object(["turnId": .string("turn-1")])
+            default:
+                XCTFail("unexpected submit method \(requestObject["method"]?.stringValue ?? "nil")",
+                        file: file,
+                        line: line)
+                effectiveResult = .object([:])
+            }
+        }
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(requestObject["id"], file: file, line: line),
+                                                 result: effectiveResult))
+        wait(for: [completion], timeout: 5)
+        if let thrown {
+            throw thrown
+        }
+        return requestObject
+    }
+
+
     private static func waitForSentLineCount(_ count: Int,
                                              transport: FakeCodexAppServerConnectionTransport,
                                              timeout: TimeInterval = 2.0,
@@ -1420,6 +2208,23 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
             Thread.sleep(forTimeInterval: 0.01)
         }
         return condition()
+    }
+}
+
+private final class ThreadSafeErrorBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var error: Error?
+
+    func set(_ error: Error) {
+        lock.lock()
+        self.error = error
+        lock.unlock()
+    }
+
+    func get() -> Error? {
+        lock.lock()
+        defer { lock.unlock() }
+        return error
     }
 }
 
