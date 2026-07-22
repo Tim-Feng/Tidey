@@ -604,6 +604,79 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         XCTAssertEqual(sender.commands, commandsBeforeBackfill)
     }
 
+    func testClaudeBackfillFailsClosedForCrossPageAskAndContextClosures() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+
+        let askLine = makeClaudeAskUserQuestionAssistantLine(uuid: "old-ask", toolCallID: "toolu_cross_page")
+        let resultLine = makeClaudeToolResultLine(uuid: "old-result",
+                                                  toolCallID: "toolu_cross_page",
+                                                  content: "answered")
+        let contextCommandLine = makeClaudeUserLine(uuid: "old-context-command",
+                                                    content: "<command-name>/context</command-name>")
+        let contextSummaryLine = makeClaudeContextStdoutLine(uuid: "old-context-summary")
+        let historySpacerLines = (0..<(transcriptBootstrapLineLimit - 1)).map {
+            makeClaudeUserLine(uuid: "history-spacer-\($0)", content: "history-spacer-\($0)")
+        }
+        var lines = [askLine, resultLine] + historySpacerLines + [contextCommandLine, contextSummaryLine]
+        lines.append(contentsOf: (0..<transcriptBootstrapLineLimit).map {
+            makeClaudeUserLine(uuid: "filler-\($0)", content: "filler-\($0)")
+        })
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL,
+                                                            atomically: true,
+                                                            encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1)
+                .events.first?.text == "filler-\(transcriptBootstrapLineLimit - 1)"
+        })
+
+        let resultOffset = (askLine + "\n").utf8.count
+        let resultSeq = transcriptEventSequence(lineOffset: resultOffset, ordinal: 0)
+        let askPage = BridgeAgentEventFetchFlow.run(eventHub: hub,
+                                                    workspaceID: "workspace",
+                                                    sessionID: "session",
+                                                    limit: 20,
+                                                    beforeSeq: resultSeq,
+                                                    afterSeq: nil) { _, beforeSeq, limit in
+            session.backfill(beforeSeq: beforeSeq, limit: limit)
+        }
+        XCTAssertTrue(askPage.didBackfill)
+        XCTAssertFalse(askPage.fetchResult.events.contains {
+            $0.type == .interactivePrompt && $0.metadata?["prompt_id"] == "toolu_cross_page"
+        }, "a terminal outside before_seq must not leave its historical opener looking active")
+        XCTAssertNil(hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                  sessionID: "session",
+                                                  promptID: "toolu_cross_page"))
+
+        let contextSummaryOffset = ([askLine, resultLine] + historySpacerLines + [contextCommandLine])
+            .joined(separator: "\n")
+            .appending("\n")
+            .utf8.count
+        let contextSummarySeq = transcriptEventSequence(lineOffset: contextSummaryOffset, ordinal: 0)
+        let contextPage = BridgeAgentEventFetchFlow.run(eventHub: hub,
+                                                        workspaceID: "workspace",
+                                                        sessionID: "session",
+                                                        limit: 20,
+                                                        beforeSeq: contextSummarySeq,
+                                                        afterSeq: nil) { _, beforeSeq, limit in
+            session.backfill(beforeSeq: beforeSeq, limit: limit)
+        }
+        XCTAssertTrue(contextPage.didBackfill)
+        XCTAssertFalse(contextPage.fetchResult.events.contains {
+            $0.metadata?["tidey_generated"] == "claude_context_command"
+        }, "a summary outside before_seq must not leave a bare /context command in history")
+    }
+
     func testTranscriptSwitchRevokesOldHistoryAndMapsNewSourceCursor() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
