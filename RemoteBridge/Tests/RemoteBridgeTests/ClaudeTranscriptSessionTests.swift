@@ -945,6 +945,63 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         }, "a summary outside before_seq must not leave a bare /context command in history")
     }
 
+    func testClaudeBackfillKeepsRepeatedAskOpenAfterEarlierSameIDWasResolved() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+
+        let promptID = "toolu_reused"
+        let firstAskLine = makeClaudeAskUserQuestionAssistantLine(uuid: "first-ask",
+                                                                  toolCallID: promptID)
+        let firstResultLine = makeClaudeToolResultLine(uuid: "first-result",
+                                                       toolCallID: promptID,
+                                                       content: "answered first lifecycle")
+        let secondAskLine = makeClaudeAskUserQuestionAssistantLine(uuid: "second-ask",
+                                                                   toolCallID: promptID)
+        let fillerLines = (0..<transcriptBootstrapLineLimit).map {
+            makeClaudeUserLine(uuid: "filler-\($0)", content: "filler-\($0)")
+        }
+        let lifecycleLines = [firstAskLine, firstResultLine, secondAskLine]
+        let lines = lifecycleLines + fillerLines
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL,
+                                                            atomically: true,
+                                                            encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1)
+                .events.first?.text == "filler-\(transcriptBootstrapLineLimit - 1)"
+        })
+
+        let firstFillerOffset = (lifecycleLines.joined(separator: "\n") + "\n").utf8.count
+        let secondAskPageAnchor = transcriptEventSequence(lineOffset: firstFillerOffset, ordinal: 0)
+        let secondAskPage = BridgeAgentEventFetchFlow.run(eventHub: hub,
+                                                          workspaceID: "workspace",
+                                                          sessionID: "session",
+                                                          limit: 1,
+                                                          beforeSeq: secondAskPageAnchor,
+                                                          afterSeq: nil) { _, beforeSeq, limit in
+            session.backfill(beforeSeq: beforeSeq, limit: limit)
+        }
+
+        XCTAssertTrue(secondAskPage.didBackfill)
+        XCTAssertEqual(secondAskPage.fetchResult.events.map(\.eventID),
+                       ["second-ask:ask-user-question:\(promptID)"])
+        XCTAssertFalse(secondAskPage.fetchResult.events.contains {
+            $0.type == .interactivePromptResolved && $0.metadata?["prompt_id"] == promptID
+        }, "the first lifecycle's terminal must not close the later reused tool ID")
+        XCTAssertNotNil(hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                     sessionID: "session",
+                                                     promptID: promptID))
+    }
+
     func testTranscriptSwitchRevokesOldHistoryAndMapsNewSourceCursor() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
