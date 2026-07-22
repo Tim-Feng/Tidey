@@ -19,6 +19,38 @@ enum AgentInteractivePromptSidebarMessages {
         }
     }
 
+    static func lifecycleToken(from event: AgentEvent) -> String? {
+        event.metadata?["lifecycle_token"]
+            ?? event.payload?.objectValue?["lifecycle_token"]?.stringValue
+    }
+
+    static func requiresLifecycleCapability(_ event: AgentEvent) -> Bool {
+        if event.vendor == "codex" {
+            return true
+        }
+        let source = event.metadata?["source"]
+            ?? event.payload?.objectValue?["source"]?.stringValue
+        if let source, source.hasPrefix("codex_") {
+            return true
+        }
+        let channel = event.metadata?["submit_channel"]
+            ?? event.payload?.objectValue?["submit_channel"]?.stringValue
+        return channel == "codex_app_server"
+    }
+
+    static func terminalCloses(openerLifecycleToken: String?,
+                               openerRequiresCapability: Bool,
+                               terminal: AgentEvent) -> Bool {
+        let terminalToken = lifecycleToken(from: terminal)
+        if let openerLifecycleToken {
+            return terminalToken == openerLifecycleToken
+        }
+        if openerRequiresCapability {
+            return false
+        }
+        return terminalToken == nil && requiresLifecycleCapability(terminal) == false
+    }
+
     static func promptID(from event: AgentEvent) -> String? {
         let promptID = event.metadata?["prompt_id"]
             ?? event.payload?.objectValue?["prompt_id"]?.stringValue

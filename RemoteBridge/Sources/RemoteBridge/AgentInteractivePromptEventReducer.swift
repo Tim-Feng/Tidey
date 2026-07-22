@@ -9,13 +9,20 @@ enum AgentInteractivePromptEventReducer {
 
     static func pendingEvents(_ pendingEvents: [AgentEvent],
                               excludingResolvedIn replayEvents: [AgentEvent]) -> [AgentEvent] {
-        let resolvedKeys = Set(replayEvents.compactMap { event -> PromptKey? in
-            guard event.type == .interactivePromptResolved else {
-                return nil
+        var resolvedTokensByKey: [PromptKey: Set<String>] = [:]
+        var latestLegacyResolvedSeqByKey: [PromptKey: Int] = [:]
+        for event in replayEvents where event.type == .interactivePromptResolved {
+            guard let key = promptKey(for: event) else {
+                continue
             }
-            return promptKey(for: event)
-        })
-        guard resolvedKeys.isEmpty == false else {
+            if let token = AgentInteractivePromptSidebarMessages.lifecycleToken(from: event) {
+                resolvedTokensByKey[key, default: []].insert(token)
+            } else if AgentInteractivePromptSidebarMessages.requiresLifecycleCapability(event) == false {
+                latestLegacyResolvedSeqByKey[key] = max(latestLegacyResolvedSeqByKey[key] ?? Int.min,
+                                                        event.seq)
+            }
+        }
+        guard resolvedTokensByKey.isEmpty == false || latestLegacyResolvedSeqByKey.isEmpty == false else {
             return pendingEvents
         }
         return pendingEvents.filter { event in
@@ -23,7 +30,16 @@ enum AgentInteractivePromptEventReducer {
                   let key = promptKey(for: event) else {
                 return true
             }
-            return resolvedKeys.contains(key) == false
+            if let token = AgentInteractivePromptSidebarMessages.lifecycleToken(from: event) {
+                return resolvedTokensByKey[key]?.contains(token) != true
+            }
+            if AgentInteractivePromptSidebarMessages.requiresLifecycleCapability(event) {
+                return true
+            }
+            guard let resolvedSeq = latestLegacyResolvedSeqByKey[key] else {
+                return true
+            }
+            return event.seq > resolvedSeq
         }
     }
 

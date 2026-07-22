@@ -262,6 +262,57 @@ final class AgentEventHub {
         }
     }
 
+    private static func droppingOpenersWithTrimmedClosures(kept: [AgentEvent],
+                                                            preTrim: [AgentEvent]) -> [AgentEvent] {
+        let keptIDs = Set(kept.map(\.eventID))
+        var dropIDs = Set<String>()
+        for opener in kept {
+            switch opener.type {
+            case .interactivePrompt:
+                guard let promptID = AgentInteractivePromptSidebarMessages.promptID(from: opener) else {
+                    continue
+                }
+                let openerToken = AgentInteractivePromptSidebarMessages.lifecycleToken(from: opener)
+                let openerRequiresCapability = AgentInteractivePromptSidebarMessages.requiresLifecycleCapability(opener)
+                let closure = preTrim.first { candidate in
+                    guard candidate.type == .interactivePromptResolved,
+                          AgentInteractivePromptSidebarMessages.promptID(from: candidate) == promptID,
+                          candidate.seq > opener.seq else {
+                        return false
+                    }
+                    return AgentInteractivePromptSidebarMessages.terminalCloses(
+                        openerLifecycleToken: openerToken,
+                        openerRequiresCapability: openerRequiresCapability,
+                        terminal: candidate
+                    )
+                }
+                if let closure, keptIDs.contains(closure.eventID) == false {
+                    dropIDs.insert(opener.eventID)
+                }
+
+            default:
+                guard opener.metadata?["tidey_generated"] == "claude_context_command" else {
+                    continue
+                }
+                let nextCommandSeq = preTrim
+                    .filter {
+                        $0.metadata?["tidey_generated"] == "claude_context_command" && $0.seq > opener.seq
+                    }
+                    .map(\.seq)
+                    .min()
+                let closure = preTrim.first { candidate in
+                    candidate.metadata?["tidey_generated"] == "claude_context"
+                        && candidate.seq > opener.seq
+                        && (nextCommandSeq == nil || candidate.seq < nextCommandSeq!)
+                }
+                if let closure, keptIDs.contains(closure.eventID) == false {
+                    dropIDs.insert(opener.eventID)
+                }
+            }
+        }
+        return kept.filter { dropIDs.contains($0.eventID) == false }
+    }
+
     // Test seam for verifying that a session-scoped fetch defends against
     // foreign-session data even if stored state is already corrupt.
     func injectCorruptStoredHistoricalEventForTesting(sessionID: String, event: AgentEvent) {
@@ -297,6 +348,8 @@ final class AgentEventHub {
                 return nil
             }
             var activePrompt: InteractivePrompt?
+            var activeLifecycleToken: String?
+            var activeRequiresCapability = false
             for event in state.allStoredEvents
                 .compactMap({ effectiveEvent($0) })
                 .filter({ $0.workspaceID == workspaceID && $0.sessionID == sessionID })
@@ -307,8 +360,16 @@ final class AgentEventHub {
                 switch event.type {
                 case .interactivePrompt:
                     activePrompt = InteractivePrompt(jsonValue: event.payload)
+                    activeLifecycleToken = AgentInteractivePromptSidebarMessages.lifecycleToken(from: event)
+                    activeRequiresCapability = AgentInteractivePromptSidebarMessages.requiresLifecycleCapability(event)
                 case .interactivePromptResolved:
-                    activePrompt = nil
+                    if AgentInteractivePromptSidebarMessages.terminalCloses(
+                        openerLifecycleToken: activeLifecycleToken,
+                        openerRequiresCapability: activeRequiresCapability,
+                        terminal: event
+                    ) {
+                        activePrompt = nil
+                    }
                 default:
                     break
                 }
@@ -319,7 +380,9 @@ final class AgentEventHub {
 
     func latestInteractivePromptResolvedEvent(workspaceID: String,
                                               sessionID: String,
-                                              promptID: String) -> AgentEvent? {
+                                              promptID: String,
+                                              lifecycleToken: String? = nil,
+                                              openerRequiresCapability: Bool? = nil) -> AgentEvent? {
         queue.sync {
             guard let state = sessions[sessionID] else {
                 return nil
@@ -327,10 +390,23 @@ final class AgentEventHub {
             return state.allStoredEvents
                 .compactMap { effectiveEvent($0) }
                 .filter { event in
-                    event.workspaceID == workspaceID &&
-                        event.sessionID == sessionID &&
-                        event.type == .interactivePromptResolved &&
-                        AgentInteractivePromptSidebarMessages.promptID(from: event) == promptID
+                    guard event.workspaceID == workspaceID,
+                          event.sessionID == sessionID,
+                          event.type == .interactivePromptResolved,
+                          AgentInteractivePromptSidebarMessages.promptID(from: event) == promptID else {
+                        return false
+                    }
+                    if lifecycleToken != nil || openerRequiresCapability != nil {
+                        return AgentInteractivePromptSidebarMessages.terminalCloses(
+                            openerLifecycleToken: lifecycleToken,
+                            openerRequiresCapability: openerRequiresCapability ?? false,
+                            terminal: event
+                        )
+                    }
+                    // Preserve the pre-capability lookup for callers that do
+                    // not yet supply lifecycle identity. Capability-aware
+                    // callers pass the explicit flag and fail closed.
+                    return true
                 }
                 .sorted { lhs, rhs in
                     if lhs.seq == rhs.seq {
@@ -520,6 +596,7 @@ final class AgentEventHub {
 
             accepted.sort { $0.seq < $1.seq }
             if accepted.count > maxBufferedEvents {
+                let preTrim = accepted
                 if let anchorSeq {
                     let belowAnchor = accepted.filter { $0.seq < anchorSeq }
                     let atOrAboveAnchor = accepted.filter { $0.seq >= anchorSeq }
@@ -529,6 +606,8 @@ final class AgentEventHub {
                 } else {
                     accepted.removeFirst(accepted.count - maxBufferedEvents)
                 }
+                accepted = Self.droppingOpenersWithTrimmedClosures(kept: accepted,
+                                                                   preTrim: preTrim)
             }
 
             state.historicalEvents = accepted

@@ -709,6 +709,215 @@ final class AgentEventHubTests: XCTestCase {
         XCTAssertEqual(calls, 1, "after self-unsubscribe no further deliveries arrive")
     }
 
+    // MARK: Prompt lifecycle trim
+
+    func testTokenBoundPromptOnlyClosesOnMatchingLifecycleTerminal() {
+        let hub = AgentEventHub()
+        hub.publish(makePromptEvent(id: "opener-A", seq: 10, promptID: "p1", token: "token-A"))
+        hub.publish(makeResolvedEvent(id: "terminal-B", seq: 20, promptID: "p1", token: "token-B"))
+
+        XCTAssertNotNil(hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                    sessionID: "session",
+                                                    promptID: "p1"))
+
+        hub.publish(makeResolvedEvent(id: "terminal-A", seq: 30, promptID: "p1", token: "token-A"))
+        XCTAssertNil(hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                 sessionID: "session",
+                                                 promptID: "p1"))
+    }
+
+    func testLegacyPromptIgnoresCapabilityTerminalAndClosesOnLegacyTerminal() {
+        let hub = AgentEventHub()
+        hub.publish(makePromptEvent(id: "legacy-opener", seq: 10, promptID: "p1", token: nil,
+                                    vendor: "claude", source: "claude_ask_user_question"))
+        hub.publish(makeResolvedEvent(id: "capability-terminal", seq: 20, promptID: "p1", token: "token-A"))
+
+        XCTAssertNotNil(hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                    sessionID: "session",
+                                                    promptID: "p1"))
+
+        hub.publish(makeResolvedEvent(id: "legacy-terminal", seq: 30, promptID: "p1", token: nil,
+                                      vendor: "claude", source: "claude_ask_user_question"))
+        XCTAssertNil(hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                 sessionID: "session",
+                                                 promptID: "p1"))
+    }
+
+    func testCapabilityTokenlessPromptFailsClosedAgainstLiveTerminals() {
+        let hub = AgentEventHub()
+        hub.publish(makePromptEvent(id: "tokenless-opener", seq: 10, promptID: "p1", token: nil))
+        hub.publish(makeResolvedEvent(id: "legacy-terminal", seq: 20, promptID: "p1", token: nil,
+                                      vendor: "claude", source: "claude_ask_user_question"))
+        hub.publish(makeResolvedEvent(id: "capability-terminal", seq: 30, promptID: "p1", token: "token-X"))
+
+        XCTAssertNotNil(hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                    sessionID: "session",
+                                                    promptID: "p1"))
+    }
+
+    func testLatestResolvedLookupMatchesExactCapabilityLifecycleToken() {
+        let hub = AgentEventHub()
+        hub.publish(makeResolvedEvent(id: "terminal-A", seq: 10, promptID: "p1", token: "token-A"))
+        hub.publish(makeResolvedEvent(id: "terminal-B", seq: 20, promptID: "p1", token: "token-B"))
+
+        XCTAssertEqual(hub.latestInteractivePromptResolvedEvent(workspaceID: "workspace",
+                                                                sessionID: "session",
+                                                                promptID: "p1",
+                                                                lifecycleToken: "token-A",
+                                                                openerRequiresCapability: true)?.eventID,
+                       "terminal-A")
+        XCTAssertNil(hub.latestInteractivePromptResolvedEvent(workspaceID: "workspace",
+                                                              sessionID: "session",
+                                                              promptID: "p1",
+                                                              lifecycleToken: "token-C",
+                                                              openerRequiresCapability: true))
+    }
+
+    func testLatestResolvedLookupFailsClosedForCapabilityTokenlessOpener() {
+        let hub = AgentEventHub()
+        hub.publish(makeResolvedEvent(id: "legacy-terminal", seq: 10, promptID: "p1", token: nil,
+                                      vendor: "claude", source: "claude_ask_user_question"))
+
+        XCTAssertNotNil(hub.latestInteractivePromptResolvedEvent(workspaceID: "workspace",
+                                                                 sessionID: "session",
+                                                                 promptID: "p1",
+                                                                 lifecycleToken: nil,
+                                                                 openerRequiresCapability: false))
+        XCTAssertNil(hub.latestInteractivePromptResolvedEvent(workspaceID: "workspace",
+                                                              sessionID: "session",
+                                                              promptID: "p1",
+                                                              lifecycleToken: nil,
+                                                              openerRequiresCapability: true))
+    }
+
+    func testHistoricalTrimKeepsOpenerWhenTrimmedTerminalTokenDoesNotMatch() {
+        let hub = AgentEventHub(maxBufferedEvents: 1, maxSeenEventIDs: 100)
+        hub.publish(makeAssistantEvent(id: "live-1000", seq: 1000))
+
+        hub.replaceHistoricalEvents(sessionID: "session",
+                                    events: [makePromptEvent(id: "opener-A", seq: 10, promptID: "p1", token: "token-A"),
+                                             makeResolvedEvent(id: "terminal-B", seq: 20, promptID: "p1", token: "token-B")],
+                                    anchorSeq: 12)
+
+        XCTAssertEqual(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 100, beforeSeq: 1000)
+            .events.map(\.eventID), ["opener-A"])
+    }
+
+    func testHistoricalTrimDropsOpenerWhenMatchingTerminalWasTrimmed() {
+        let hub = AgentEventHub(maxBufferedEvents: 1, maxSeenEventIDs: 100)
+        hub.publish(makeAssistantEvent(id: "live-1000", seq: 1000))
+
+        hub.replaceHistoricalEvents(sessionID: "session",
+                                    events: [makePromptEvent(id: "opener-A", seq: 10, promptID: "p1", token: "token-A"),
+                                             makeResolvedEvent(id: "terminal-A", seq: 20, promptID: "p1", token: "token-A")],
+                                    anchorSeq: 12)
+
+        XCTAssertTrue(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 100, beforeSeq: 1000)
+            .events.isEmpty,
+                      "a resolved opener and its trimmed terminal are removed atomically")
+    }
+
+    func testHistoricalTrimPairsContextSummaryWithNearestPrecedingCommand() {
+        let hub = AgentEventHub(maxBufferedEvents: 2, maxSeenEventIDs: 100)
+        hub.publish(makeAssistantEvent(id: "live-1000", seq: 1000))
+        hub.replaceHistoricalEvents(sessionID: "session",
+                                    events: [makeContextEvent(id: "command-1", seq: 10, kind: "claude_context_command"),
+                                             makeContextEvent(id: "command-2", seq: 20, kind: "claude_context_command"),
+                                             makeContextEvent(id: "summary-2", seq: 30, kind: "claude_context")],
+                                    anchorSeq: 22)
+
+        let stored = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 100, beforeSeq: 1000)
+            .events.map(\.eventID)
+        XCTAssertTrue(stored.contains("command-1"),
+                      "the second command's summary must not close the first command")
+        XCTAssertFalse(stored.contains("command-2") && stored.contains("summary-2") == false,
+                       "a context command and its summary must not be trimmed into a partial group")
+    }
+
+    private func makePromptEvent(id: String,
+                                 seq: Int,
+                                 promptID: String,
+                                 token: String?,
+                                 vendor: String = "codex",
+                                 source: String = "codex_command_approval") -> AgentEvent {
+        var metadata = ["prompt_id": promptID, "source": source]
+        if let token {
+            metadata["lifecycle_token"] = token
+        }
+        return AgentEvent(eventID: id,
+                          seq: seq,
+                          vendor: vendor,
+                          workspaceID: "workspace",
+                          sessionID: "session",
+                          timestamp: "2026-01-01T00:00:00Z",
+                          type: .interactivePrompt,
+                          role: "assistant",
+                          text: nil,
+                          name: nil,
+                          input: nil,
+                          output: nil,
+                          toolCallID: nil,
+                          metadata: metadata,
+                          payload: .object([
+                            "prompt_id": .string(promptID),
+                            "vendor": .string(vendor),
+                            "source": .string(source),
+                            "title": .string("Approve?"),
+                            "body": .string("Command: ls"),
+                            "selected_index": .number(0),
+                            "options": .array([
+                                .object([
+                                    "index": .number(0),
+                                    "label": .string("Yes"),
+                                    "input_sequence": .string("accept"),
+                                ]),
+                            ]),
+                          ]))
+    }
+
+    private func makeResolvedEvent(id: String,
+                                   seq: Int,
+                                   promptID: String,
+                                   token: String?,
+                                   vendor: String = "codex",
+                                   source: String = "codex_command_approval") -> AgentEvent {
+        var metadata = ["prompt_id": promptID, "source": source]
+        if let token {
+            metadata["lifecycle_token"] = token
+        }
+        return AgentEvent(eventID: id,
+                          seq: seq,
+                          vendor: vendor,
+                          workspaceID: "workspace",
+                          sessionID: "session",
+                          timestamp: "2026-01-01T00:00:00Z",
+                          type: .interactivePromptResolved,
+                          role: "tool",
+                          text: nil,
+                          name: nil,
+                          input: nil,
+                          output: nil,
+                          toolCallID: nil,
+                          metadata: metadata)
+    }
+
+    private func makeContextEvent(id: String, seq: Int, kind: String) -> AgentEvent {
+        AgentEvent(eventID: id,
+                   seq: seq,
+                   vendor: "claude",
+                   workspaceID: "workspace",
+                   sessionID: "session",
+                   timestamp: "2026-01-01T00:00:00Z",
+                   type: kind == "claude_context" ? .assistantMessage : .userMessage,
+                   role: kind == "claude_context" ? "assistant" : "user",
+                   text: "context",
+                   name: nil,
+                   input: nil,
+                   output: nil,
+                   toolCallID: nil,
+                   metadata: ["tidey_generated": kind])
+    }
+
     private func makeAssistantEvent(id: String, seq: Int, text: String? = nil) -> AgentEvent {
         AgentEvent(eventID: id,
                    seq: seq,

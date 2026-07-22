@@ -32,30 +32,89 @@ final class AgentInteractivePromptEventReducerTests: XCTestCase {
         XCTAssertEqual(merged.map(\.eventID), [second.eventID, first.eventID])
     }
 
-    private static func prompt(sessionID: String, promptID: String, seq: Int) -> AgentEvent {
-        event(type: .interactivePrompt,
-              eventID: "prompt-\(promptID)",
-              sessionID: sessionID,
-              promptID: promptID,
-              seq: seq)
+    func testResolvedLifecycleOnlyFiltersPendingEventWithMatchingToken() {
+        let pendingA = Self.prompt(sessionID: "session-1", promptID: "prompt-1", seq: 1,
+                                   token: "token-A", eventID: "pending-A")
+        let pendingB = Self.prompt(sessionID: "session-1", promptID: "prompt-1", seq: 2,
+                                   token: "token-B", eventID: "pending-B")
+        let resolvedA = Self.resolved(sessionID: "session-1", promptID: "prompt-1", seq: 3, token: "token-A")
+
+        let filtered = AgentInteractivePromptEventReducer.pendingEvents([pendingA, pendingB],
+                                                                        excludingResolvedIn: [resolvedA])
+
+        XCTAssertEqual(filtered.map(\.eventID), [pendingB.eventID])
     }
 
-    private static func resolved(sessionID: String, promptID: String, seq: Int) -> AgentEvent {
+    func testCapabilityTokenlessTerminalDoesNotSuppressPendingPrompt() {
+        let pending = Self.prompt(sessionID: "session-1", promptID: "prompt-1", seq: 1, token: nil)
+        let resolved = Self.resolved(sessionID: "session-1", promptID: "prompt-1", seq: 2, token: nil)
+
+        let filtered = AgentInteractivePromptEventReducer.pendingEvents([pending],
+                                                                        excludingResolvedIn: [resolved])
+
+        XCTAssertEqual(filtered.map(\.eventID), [pending.eventID])
+    }
+
+    func testLegacyResolvedEventOnlySuppressesOlderPendingLifecycle() {
+        let oldPending = Self.prompt(sessionID: "session-1", promptID: "prompt-1", seq: 1,
+                                     token: nil, vendor: "claude", eventID: "legacy-old")
+        let resolved = Self.resolved(sessionID: "session-1", promptID: "prompt-1", seq: 2,
+                                     token: nil, vendor: "claude")
+        let newPending = Self.prompt(sessionID: "session-1", promptID: "prompt-1", seq: 3,
+                                     token: nil, vendor: "claude", eventID: "legacy-new")
+
+        let filtered = AgentInteractivePromptEventReducer.pendingEvents([oldPending, newPending],
+                                                                        excludingResolvedIn: [resolved])
+
+        XCTAssertEqual(filtered.map(\.eventID), [newPending.eventID])
+    }
+
+    private static func prompt(sessionID: String,
+                               promptID: String,
+                               seq: Int,
+                               token: String? = "token-prompt",
+                               vendor: String = "codex",
+                               eventID: String? = nil) -> AgentEvent {
+        event(type: .interactivePrompt,
+              eventID: eventID ?? "prompt-\(promptID)",
+              sessionID: sessionID,
+              promptID: promptID,
+              seq: seq,
+              token: token,
+              vendor: vendor)
+    }
+
+    private static func resolved(sessionID: String,
+                                 promptID: String,
+                                 seq: Int,
+                                 token: String? = "token-prompt",
+                                 vendor: String = "codex") -> AgentEvent {
         event(type: .interactivePromptResolved,
               eventID: "resolved-\(promptID)",
               sessionID: sessionID,
               promptID: promptID,
-              seq: seq)
+              seq: seq,
+              token: token,
+              vendor: vendor)
     }
 
     private static func event(type: AgentEventKind,
                               eventID: String,
                               sessionID: String,
                               promptID: String,
-                              seq: Int) -> AgentEvent {
-        AgentEvent(eventID: eventID,
+                              seq: Int,
+                              token: String?,
+                              vendor: String = "codex") -> AgentEvent {
+        var metadata = [
+            "prompt_id": promptID,
+            "panel_id": "panel-1",
+        ]
+        if let token {
+            metadata["lifecycle_token"] = token
+        }
+        return AgentEvent(eventID: eventID,
                    seq: seq,
-                   vendor: "codex",
+                   vendor: vendor,
                    workspaceID: "workspace-1",
                    sessionID: sessionID,
                    timestamp: "2026-06-07T00:00:00.000Z",
@@ -66,9 +125,6 @@ final class AgentInteractivePromptEventReducerTests: XCTestCase {
                    input: nil,
                    output: nil,
                    toolCallID: nil,
-                   metadata: [
-                    "prompt_id": promptID,
-                    "panel_id": "panel-1",
-                   ])
+                   metadata: metadata)
     }
 }
