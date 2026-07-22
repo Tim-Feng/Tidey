@@ -3,12 +3,17 @@ import Foundation
 private let codexTranscriptMajorVersion = "0."
 private let codexSidebarLogURL = URL(fileURLWithPath: "/tmp/tidey-bridge-codex.log")
 
+typealias CodexTranscriptProcessRunner = (_ executablePath: String,
+                                          _ arguments: [String],
+                                          _ timeout: TimeInterval?) -> BoundedProcessResult?
+
 final class CodexTranscriptSession: AgentTranscriptSession {
     private let queue: DispatchQueue
     private let fileManager: FileManager
     private let hub: AgentEventHub
     private let socketClient: TideyCommandSending?
     private let chatSubmitEchoRegistry: ChatSubmitEchoRegistry
+    private let processRunner: CodexTranscriptProcessRunner
 
     private var record: AgentSessionRegistryRecord
     private var resolverTimer: DispatchSourceTimer?
@@ -132,13 +137,15 @@ final class CodexTranscriptSession: AgentTranscriptSession {
          hub: AgentEventHub,
          socketClient: TideyCommandSending? = nil,
          chatSubmitEchoRegistry: ChatSubmitEchoRegistry? = nil,
-         historicalReplayWindowCapacity: Int = 4000) {
+         historicalReplayWindowCapacity: Int = 4000,
+         processRunner: CodexTranscriptProcessRunner? = nil) {
         self.historicalReplayWindowCapacity = max(1, historicalReplayWindowCapacity)
         self.record = record
         self.fileManager = fileManager
         self.hub = hub
         self.socketClient = socketClient
         self.chatSubmitEchoRegistry = chatSubmitEchoRegistry ?? ChatSubmitEchoRegistry()
+        self.processRunner = processRunner ?? Self.liveProcessRunner
         self.queue = DispatchQueue(label: "com.tidey.remote-bridge.codex-session.\(record.sessionID)")
     }
 
@@ -404,7 +411,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
 
     private func resolveTranscriptURLFromProcessTree() -> URL? {
         for rootPID in transcriptResolutionRootPIDs() {
-            guard let path = Self.rolloutPathForPIDTree(rootPID: rootPID),
+            guard let path = rolloutPathForPIDTree(rootPID: rootPID),
                   !path.isEmpty else {
                 continue
             }
@@ -1050,7 +1057,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         return metadata
     }
 
-    private static func rolloutPathForPIDTree(rootPID: Int32) -> String? {
+    private func rolloutPathForPIDTree(rootPID: Int32) -> String? {
         guard rootPID > 0 else {
             return nil
         }
@@ -1072,26 +1079,15 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         return nil
     }
 
-    private static func rolloutPathForPID(_ pid: Int32) -> String? {
+    private func rolloutPathForPID(_ pid: Int32) -> String? {
         guard pid > 0 else {
             return nil
         }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
-        process.arguments = ["-Fn", "-p", String(pid)]
-        let outputPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = Pipe()
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            return nil
-        }
-
-        guard process.terminationStatus == 0,
-              let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(),
+        guard let result = processRunner("/usr/sbin/lsof",
+                                         ["-Fn", "-p", String(pid)],
+                                         nil),
+              result.terminationStatus == 0,
+              let output = String(data: result.standardOutput,
                                   encoding: .utf8) else {
             return nil
         }
@@ -1113,31 +1109,46 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             .last
     }
 
-    private static func childPIDs(for pid: Int32) -> [Int32] {
+    private func childPIDs(for pid: Int32) -> [Int32] {
         guard pid > 0 else {
             return []
         }
+        guard let result = processRunner("/usr/bin/pgrep",
+                                         ["-P", String(pid)],
+                                         nil),
+              let output = String(data: result.standardOutput,
+                                  encoding: .utf8) else {
+            return []
+        }
+        return output
+            .split(whereSeparator: \.isNewline)
+            .compactMap { Int32($0.trimmingCharacters(in: .whitespaces)) }
+    }
+
+    private static let liveProcessRunner: CodexTranscriptProcessRunner = { executablePath, arguments, timeout in
+        if let timeout {
+            return BoundedProcessRunner.run(executablePath: executablePath,
+                                            arguments: arguments,
+                                            timeout: timeout)
+        }
+
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        process.arguments = ["-P", String(pid)]
+        process.executableURL = URL(fileURLWithPath: executablePath)
+        process.arguments = arguments
         let outputPipe = Pipe()
+        let errorPipe = Pipe()
         process.standardOutput = outputPipe
-        process.standardError = Pipe()
+        process.standardError = errorPipe
 
         do {
             try process.run()
             process.waitUntilExit()
         } catch {
-            return []
+            return nil
         }
 
-        guard let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(),
-                                  encoding: .utf8) else {
-            return []
-        }
-
-        return output
-            .split(whereSeparator: \.isNewline)
-            .compactMap { Int32($0.trimmingCharacters(in: .whitespaces)) }
+        return BoundedProcessResult(terminationStatus: process.terminationStatus,
+                                    standardOutput: outputPipe.fileHandleForReading.readDataToEndOfFile(),
+                                    standardError: errorPipe.fileHandleForReading.readDataToEndOfFile())
     }
 }
