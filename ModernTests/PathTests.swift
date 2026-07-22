@@ -2112,6 +2112,28 @@ final class PathTests: XCTestCase {
         XCTAssertEqual(metadata?["attach_command"], "attach-session")
     }
 
+    func testOrdinaryTmuxAttachDetectorFindsForegroundNewSessionCommands() {
+        let newMetadata = ordinaryTmuxAttachMetadata(commandLine: "tmux new -s video-process-cc")
+        let attachOrCreateMetadata = ordinaryTmuxAttachMetadata(
+            commandLine: "tmux -S /tmp/tmux-501/default new-session -A -s video-process-codex")
+        let attachedSessionValueMetadata = ordinaryTmuxAttachMetadata(
+            commandLine: "tmux new-session -A -svideo-process-data")
+
+        XCTAssertEqual(newMetadata?["target_session"], "video-process-cc")
+        XCTAssertEqual(newMetadata?["attach_command"], "new")
+        XCTAssertEqual(attachOrCreateMetadata?["socket_path"], "/tmp/tmux-501/default")
+        XCTAssertEqual(attachOrCreateMetadata?["target_session"], "video-process-codex")
+        XCTAssertEqual(attachOrCreateMetadata?["attach_command"], "new-session")
+        XCTAssertEqual(attachedSessionValueMetadata?["target_session"], "video-process-data")
+    }
+
+    func testOrdinaryTmuxAttachDetectorIgnoresDetachedNewSessionCommands() {
+        XCTAssertNil(ordinaryTmuxAttachMetadata(commandLine: "tmux new -d -s video-process-cc"))
+        XCTAssertNil(ordinaryTmuxAttachMetadata(commandLine: "tmux new-session -A -d -s video-process-codex"))
+        XCTAssertNil(ordinaryTmuxAttachMetadata(commandLine: "tmux new-session -A -s video-process-codex -d"))
+        XCTAssertNil(ordinaryTmuxAttachMetadata(commandLine: "tmux new-session -Ad -svideo-process-codex"))
+    }
+
     func testOrdinaryTmuxAttachDetectorIgnoresControlModeTmux() {
         let metadata = ordinaryTmuxAttachMetadata(commandLine: "tmux -CC attach -t genesis-extraction")
 

@@ -920,12 +920,64 @@ typedef NS_ENUM(NSUInteger, PTYSessionTurdType) {
         break;
     }
 
-    if (!([command isEqualToString:@"attach"] ||
-          [command isEqualToString:@"attach-session"] ||
-          [command isEqualToString:@"a"])) {
+    const BOOL isAttachCommand =
+        [command isEqualToString:@"attach"] ||
+        [command isEqualToString:@"attach-session"] ||
+        [command isEqualToString:@"a"];
+    const BOOL isNewSessionCommand =
+        [command isEqualToString:@"new"] ||
+        [command isEqualToString:@"new-session"];
+    if (!isAttachCommand && !isNewSessionCommand) {
         return nil;
     }
     metadata[@"attach_command"] = command;
+
+    if (isNewSessionCommand) {
+        while (index < tokens.count) {
+            NSString *token = tokens[index];
+            if ([token isEqualToString:@"--"]) {
+                break;
+            }
+            if (![token hasPrefix:@"-"]) {
+                break;
+            }
+            if ([token isEqualToString:@"-s"] && index + 1 < tokens.count) {
+                metadata[@"target_session"] = tokens[index + 1];
+                index += 2;
+                continue;
+            }
+            if ([token hasPrefix:@"-s"] && token.length > 2) {
+                metadata[@"target_session"] = [token substringFromIndex:2];
+                index++;
+                continue;
+            }
+            // `new-session` attaches by default. A detached session has no
+            // client TTY for the Bridge to project and must not be treated as
+            // an ordinary attach carrier.
+            NSString *combinedShortFlags = token.length > 2 ? [token substringFromIndex:1] : nil;
+            NSCharacterSet *newSessionBooleanFlags = [NSCharacterSet characterSetWithCharactersInString:@"AdDEPX"];
+            const BOOL hasOnlyCombinedBooleanFlags =
+                combinedShortFlags.length > 0 &&
+                [combinedShortFlags rangeOfCharacterFromSet:newSessionBooleanFlags.invertedSet].location == NSNotFound;
+            if ([token isEqualToString:@"-d"] ||
+                (hasOnlyCombinedBooleanFlags && [combinedShortFlags containsString:@"d"])) {
+                return nil;
+            }
+            if (([token isEqualToString:@"-c"] ||
+                 [token isEqualToString:@"-e"] ||
+                 [token isEqualToString:@"-f"] ||
+                 [token isEqualToString:@"-F"] ||
+                 [token isEqualToString:@"-n"] ||
+                 [token isEqualToString:@"-t"] ||
+                 [token isEqualToString:@"-x"] ||
+                 [token isEqualToString:@"-y"]) && index + 1 < tokens.count) {
+                index += 2;
+                continue;
+            }
+            index++;
+        }
+        return metadata;
+    }
 
     while (index < tokens.count) {
         NSString *token = tokens[index];
