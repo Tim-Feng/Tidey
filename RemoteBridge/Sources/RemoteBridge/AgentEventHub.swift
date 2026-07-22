@@ -333,7 +333,10 @@ final class AgentEventHub {
                    sinceSeq == nil {
                     events.append(sessionStarted)
                 }
-                return events
+                return events.filter {
+                    state.historicalClosureCoverageIsComplete
+                        || requiresHistoricalClosureCoverage($0) == false
+                }
             }
             .compactMap { effectiveEvent($0) }
             .filter { event in

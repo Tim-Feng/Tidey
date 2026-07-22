@@ -2,6 +2,25 @@ import XCTest
 @testable import RemoteBridge
 
 final class AgentEventHubTests: XCTestCase {
+    func testReplayHidesPromptWhenHistoricalClosureCoverageIsUnknown() {
+        let hub = AgentEventHub()
+        let prompt = makePromptEvent(id: "poisoned-opener",
+                                     seq: 10,
+                                     promptID: "prompt",
+                                     token: "token",
+                                     vendor: "claude",
+                                     source: "claude_ask_user_question")
+        hub.publish(prompt)
+        hub.setHistoricalClosureCoverage(sessionID: "session", isComplete: false)
+
+        let (subscriptionID, replay) = hub.subscribe(workspaceID: "workspace",
+                                                     sessionID: "session") { _ in }
+        defer { hub.unsubscribe(subscriptionID) }
+
+        XCTAssertFalse(replay.contains { $0.event.eventID == prompt.eventID },
+                       "reconnect replay must not resurrect an opener with unknown closure coverage")
+    }
+
     func testHistoricalOpenerResolutionKindsPreserveCursorFiltering() {
         let hub = AgentEventHub()
         hub.publish(makeAssistantEvent(id: "visible-opener", seq: 10))
