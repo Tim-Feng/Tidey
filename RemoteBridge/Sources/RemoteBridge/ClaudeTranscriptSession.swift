@@ -2660,6 +2660,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         var openerEventIDByClosureEventID: [String: String]
         var contextConsumerSequenceByOpenerEventID: [String: Int]
         var isPoisonedByOversizedPartialLine: Bool
+        var isPoisonedByMalformedRecord: Bool
 
         init(sourceIdentity: HistoricalClosureSourceIdentity,
              indexedThroughByteOffset: Int,
@@ -2672,7 +2673,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
              closureByOpenerEventID: [String: AgentEvent],
              openerEventIDByClosureEventID: [String: String],
              contextConsumerSequenceByOpenerEventID: [String: Int],
-             isPoisonedByOversizedPartialLine: Bool = false) {
+             isPoisonedByOversizedPartialLine: Bool = false,
+             isPoisonedByMalformedRecord: Bool = false) {
             self.sourceIdentity = sourceIdentity
             self.indexedThroughByteOffset = indexedThroughByteOffset
             self.scannedThroughByteOffset = scannedThroughByteOffset
@@ -2685,6 +2687,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             self.openerEventIDByClosureEventID = openerEventIDByClosureEventID
             self.contextConsumerSequenceByOpenerEventID = contextConsumerSequenceByOpenerEventID
             self.isPoisonedByOversizedPartialLine = isPoisonedByOversizedPartialLine
+            self.isPoisonedByMalformedRecord = isPoisonedByMalformedRecord
         }
     }
 
@@ -3117,7 +3120,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                   currentBoundary == existingIndex.scannedBoundary else {
                 throw JSONLFileTailerError.sourceInvalidated
             }
-            guard existingIndex.isPoisonedByOversizedPartialLine == false else {
+            guard existingIndex.isPoisonedByOversizedPartialLine == false,
+                  existingIndex.isPoisonedByMalformedRecord == false else {
                 return false
             }
         } else {
@@ -3175,7 +3179,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             // a moving end forever; the next ensure call consumes the suffix.
             var remainingByteCount = max(0, sourceSize - startingIndex.scannedThroughByteOffset)
             var countedScanPass = false
-            while remainingByteCount > 0,
+            scanLoop: while remainingByteCount > 0,
                   let chunk = try handle.read(upToCount: min(64 * 1024, remainingByteCount)),
                   chunk.isEmpty == false {
                 if countedScanPass == false {
@@ -3197,14 +3201,20 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 }
                 var lineStartIndex = pendingData.startIndex
                 var newlineSearchIndex = min(searchedThroughIndex, pendingData.endIndex)
+                var encounteredMalformedRecord = false
                 while newlineSearchIndex < pendingData.endIndex,
                       let newlineIndex = pendingData[newlineSearchIndex...].firstIndex(of: 0x0a) {
                     historicalIndexCompleteLineCount += 1
                     let lineOffset = pendingDataOffset
                         + pendingData.distance(from: pendingData.startIndex, to: lineStartIndex)
                     let lineData = pendingData[lineStartIndex..<newlineIndex]
-                    if lineData.isEmpty == false,
-                       let line = String(data: Data(lineData), encoding: .utf8) {
+                    if lineData.isEmpty == false {
+                        guard let line = String(data: Data(lineData), encoding: .utf8),
+                              let jsonData = line.data(using: .utf8),
+                              (try? JSONSerialization.jsonObject(with: jsonData)) is [String: Any] else {
+                            encounteredMalformedRecord = true
+                            break
+                        }
                         consume(line: line, lineOffset: lineOffset)
                         if pendingLocalCommand?.name != "/context",
                            let index = historicalClosureIndex,
@@ -3217,6 +3227,11 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                     }
                     lineStartIndex = pendingData.index(after: newlineIndex)
                     newlineSearchIndex = lineStartIndex
+                }
+                if encounteredMalformedRecord {
+                    startingIndex.isPoisonedByMalformedRecord = true
+                    pendingData = Data()
+                    break scanLoop
                 }
                 if lineStartIndex > pendingData.startIndex {
                     let consumedByteCount = pendingData.distance(from: pendingData.startIndex,
@@ -3251,6 +3266,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             }
             historicalClosureIndex?.indexedThroughByteOffset =
                 startingIndex.isPoisonedByOversizedPartialLine
+                    || startingIndex.isPoisonedByMalformedRecord
                     ? scannedThroughByteOffset
                     : pendingDataOffset
             historicalClosureIndex?.scannedThroughByteOffset = scannedThroughByteOffset
@@ -3260,6 +3276,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             completed = true
             synchronizeHistoricalOpenerClosureSequences()
             return startingIndex.isPoisonedByOversizedPartialLine == false
+                && startingIndex.isPoisonedByMalformedRecord == false
         } catch JSONLFileTailerError.sourceInvalidated {
             throw JSONLFileTailerError.sourceInvalidated
         } catch {
