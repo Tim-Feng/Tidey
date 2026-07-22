@@ -96,6 +96,26 @@ final class JSONLFileTailerTests: XCTestCase {
         XCTAssertGreaterThan(captured.last?.0 ?? 0, bootstrapOffsets.max() ?? 0)
     }
 
+    func testOpenedSourceIdentityStaysBoundToActiveFileDescriptor() throws {
+        let fileURL = try writeTestFile()
+        let queue = DispatchQueue(label: "JSONLFileTailerTests.source-identity")
+        let tailer = JSONLFileTailer(fileURL: fileURL,
+                                     queue: queue,
+                                     bootstrapLineLimit: 2,
+                                     lineHandler: { _, _ in },
+                                     invalidationHandler: {})
+
+        try tailer.start()
+        defer { tailer.stop() }
+        let openedIdentity = try XCTUnwrap(tailer.openedSourceIdentity)
+
+        queue.suspend()
+        defer { queue.resume() }
+        try "replacement\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        XCTAssertEqual(tailer.openedSourceIdentity, openedIdentity)
+    }
+
     private func writeTestFile() throws -> URL {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
