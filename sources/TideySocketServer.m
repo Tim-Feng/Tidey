@@ -1277,13 +1277,16 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
 
     TideyStatusStore *store = [TideyStatusStore sharedStore];
     if (command.kind == TideySocketCommandKindClearStatus) {
-        [store clearStatusForWorkspaceID:command.workspaceID key:command.key];
+        [store clearStatusForWorkspaceID:command.workspaceID
+                                     key:command.key
+                                 ownerID:command.statusOwnerID];
     } else {
         [store setStatusForWorkspaceID:command.workspaceID
                                    key:command.key
                                  value:command.value
                                   icon:command.icon
-                              colorHex:command.colorHex];
+                              colorHex:command.colorHex
+                                ownerID:command.statusOwnerID];
     }
 }
 
@@ -1298,7 +1301,8 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
                                                         key:command.key
                                                       value:command.value
                                                        icon:command.icon
-                                                   colorHex:command.colorHex];
+                                                   colorHex:command.colorHex
+                                                    ownerID:command.statusOwnerID];
 }
 
 - (void)handleClearStatus:(NSDictionary *)message {
@@ -1308,7 +1312,9 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
         return;
     }
 
-    [[TideyStatusStore sharedStore] clearStatusForWorkspaceID:command.workspaceID key:command.key];
+    [[TideyStatusStore sharedStore] clearStatusForWorkspaceID:command.workspaceID
+                                                           key:command.key
+                                                       ownerID:command.statusOwnerID];
 }
 
 - (void)handleSetTitle:(NSDictionary *)message {

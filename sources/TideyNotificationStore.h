@@ -89,6 +89,21 @@ extern NSString *const kTideySystemNotificationCategoryIdentifier;
                            icon:(nullable NSString *)icon
                        colorHex:(nullable NSString *)colorHex;
 - (void)clearStatusForWorkspaceID:(NSString *)workspaceID key:(NSString *)key;
+
+// Session/panel-owned status cells: each owner (panel or session id) holds
+// its own entry for the key; reads aggregate across owners with
+// Needs input > Running > Idle. A nil owner is the legacy workspace-scoped
+// writer cell. Clearing without an owner removes EVERY owner's cell for the
+// key (legacy behavior); clearing with an owner removes only that cell.
+- (void)setStatusForWorkspaceID:(NSString *)workspaceID
+                            key:(NSString *)key
+                          value:(NSString *)value
+                           icon:(nullable NSString *)icon
+                       colorHex:(nullable NSString *)colorHex
+                        ownerID:(nullable NSString *)ownerID;
+- (void)clearStatusForWorkspaceID:(NSString *)workspaceID
+                              key:(NSString *)key
+                          ownerID:(nullable NSString *)ownerID;
 - (NSArray<TideyStatusEntry *> *)statusEntriesForWorkspaceID:(NSString *)workspaceID;
 - (BOOL)hasStatusForWorkspaceID:(NSString *)workspaceID;
 - (NSArray<NSString *> *)allWorkspaceIDs;

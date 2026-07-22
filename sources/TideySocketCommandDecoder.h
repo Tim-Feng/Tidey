@@ -20,6 +20,13 @@ typedef NS_ENUM(NSInteger, TideySocketCommandKind) {
 @property(nonatomic, copy, readonly, nullable) NSString *value;
 @property(nonatomic, copy, readonly, nullable) NSString *icon;
 @property(nonatomic, copy, readonly, nullable) NSString *colorHex;
+// Session/panel ownership for shell-state entries: the status store keeps
+// one cell per owner and aggregates, never a workspace-level last-writer.
+@property(nonatomic, copy, readonly, nullable) NSString *panelID;
+@property(nonatomic, copy, readonly, nullable) NSString *sessionID;
+
+// sessionID ?: panelID ?: nil — the status store owner cell for this command.
+@property(nonatomic, copy, readonly, nullable) NSString *statusOwnerID;
 
 - (instancetype)init NS_UNAVAILABLE;
 

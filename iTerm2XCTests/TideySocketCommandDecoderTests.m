@@ -133,4 +133,54 @@
     XCTAssertNil(invalidCommand);
 }
 
+
+- (void)testReportShellStateCarriesSessionPanelOwnerIdentity {
+    TideySocketCommand *command =
+        [TideySocketCommandDecoder reportShellStateCommandFromMessage:@{
+            @"action": @"report_shell_state",
+            @"state": @"needs_input",
+            @"workspace_id": @"workspace-1",
+            @"panel_id": @"panel-7",
+            @"session_id": @"session-42"
+        }];
+
+    XCTAssertNotNil(command);
+    XCTAssertEqualObjects(command.panelID, @"panel-7");
+    XCTAssertEqualObjects(command.sessionID, @"session-42");
+    // SESSION id wins as the owner cell (several sessions can share one
+    // panel); panel id is the fallback.
+    XCTAssertEqualObjects(command.statusOwnerID, @"session-42");
+}
+
+- (void)testStatusOwnerPrefersSessionThenFallsBackToPanelThenNil {
+    TideySocketCommand *sessionOnly =
+        [TideySocketCommandDecoder setStatusCommandFromMessage:@{
+            @"action": @"set_status",
+            @"workspace_id": @"workspace-1",
+            @"key": @"shell_state",
+            @"value": @"Needs input",
+            @"session_id": @"session-42"
+        }];
+    XCTAssertEqualObjects(sessionOnly.statusOwnerID, @"session-42");
+
+    TideySocketCommand *panelOnly =
+        [TideySocketCommandDecoder setStatusCommandFromMessage:@{
+            @"action": @"set_status",
+            @"workspace_id": @"workspace-1",
+            @"key": @"shell_state",
+            @"value": @"Needs input",
+            @"panel_id": @"panel-7"
+        }];
+    XCTAssertEqualObjects(panelOnly.statusOwnerID, @"panel-7");
+
+    TideySocketCommand *legacy =
+        [TideySocketCommandDecoder clearStatusCommandFromMessage:@{
+            @"action": @"clear_status",
+            @"workspace_id": @"workspace-1",
+            @"key": @"shell_state"
+        }];
+    XCTAssertNotNil(legacy);
+    XCTAssertNil(legacy.statusOwnerID);
+}
+
 @end

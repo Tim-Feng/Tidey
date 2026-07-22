@@ -152,4 +152,44 @@
     XCTAssertEqual([store allWorkspaceIDs].count, 0);
 }
 
+
+- (void)testOwnerCellsAggregateNeedsInputOverRunningOverIdle {
+    TideyStatusStore *store = [self freshStore];
+
+    [store setStatusForWorkspaceID:@"workspace-1" key:@"shell_state" value:@"Idle" icon:nil colorHex:nil ownerID:@"panel-a"];
+    [store setStatusForWorkspaceID:@"workspace-1" key:@"shell_state" value:@"Running" icon:nil colorHex:nil ownerID:@"panel-b"];
+
+    NSArray<TideyStatusEntry *> *entries = [store statusEntriesForWorkspaceID:@"workspace-1"];
+    XCTAssertEqual(entries.count, 1);
+    XCTAssertEqualObjects(entries.firstObject.value, @"Running");
+
+    [store setStatusForWorkspaceID:@"workspace-1" key:@"shell_state" value:@"Needs input" icon:@"bell.fill" colorHex:@"#4C8DFF" ownerID:@"panel-c"];
+    XCTAssertEqualObjects([store statusEntriesForWorkspaceID:@"workspace-1"].firstObject.value, @"Needs input");
+
+    // Another owner going Idle must NOT overwrite the waiting owner the way
+    // a workspace-level last-writer would.
+    [store setStatusForWorkspaceID:@"workspace-1" key:@"shell_state" value:@"Idle" icon:nil colorHex:nil ownerID:@"panel-b"];
+    XCTAssertEqualObjects([store statusEntriesForWorkspaceID:@"workspace-1"].firstObject.value, @"Needs input");
+
+    // Resolving the waiting owner falls back to the strongest remainder.
+    [store setStatusForWorkspaceID:@"workspace-1" key:@"shell_state" value:@"Idle" icon:nil colorHex:nil ownerID:@"panel-c"];
+    XCTAssertEqualObjects([store statusEntriesForWorkspaceID:@"workspace-1"].firstObject.value, @"Idle");
+}
+
+- (void)testOwnerScopedClearRemovesOnlyThatOwnersCell {
+    TideyStatusStore *store = [self freshStore];
+
+    [store setStatusForWorkspaceID:@"workspace-1" key:@"shell_state" value:@"Needs input" icon:nil colorHex:nil ownerID:@"session-a"];
+    [store setStatusForWorkspaceID:@"workspace-1" key:@"shell_state" value:@"Running" icon:nil colorHex:nil ownerID:@"session-b"];
+
+    // session-a ends: only its cell disappears; session-b still runs.
+    [store clearStatusForWorkspaceID:@"workspace-1" key:@"shell_state" ownerID:@"session-a"];
+    XCTAssertEqualObjects([store statusEntriesForWorkspaceID:@"workspace-1"].firstObject.value, @"Running");
+
+    // Owner-less legacy clear removes the whole key.
+    [store clearStatusForWorkspaceID:@"workspace-1" key:@"shell_state"];
+    XCTAssertEqual([store statusEntriesForWorkspaceID:@"workspace-1"].count, 0);
+    XCTAssertFalse([store hasStatusForWorkspaceID:@"workspace-1"]);
+}
+
 @end

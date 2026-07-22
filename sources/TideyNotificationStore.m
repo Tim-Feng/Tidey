@@ -385,9 +385,25 @@ NSString *const kTideySystemNotificationCategoryIdentifier = @"TIDEY_WORKSPACE_N
 #pragma mark - TideyStatusStore
 
 @interface TideyStatusStore ()
-// workspaceID -> (key -> TideyStatusEntry)
-@property(nonatomic, strong) NSMutableDictionary<NSString *, NSMutableDictionary<NSString *, TideyStatusEntry *> *> *statusMap;
+// workspaceID -> key -> ownerID -> entry. The owner is a session/panel id;
+// the legacy workspace-scoped writer uses the reserved "" owner cell.
+@property(nonatomic, strong) NSMutableDictionary<NSString *, NSMutableDictionary<NSString *, NSMutableDictionary<NSString *, TideyStatusEntry *> *> *> *statusMap;
 @end
+
+// Aggregate ranking for shell-state style values: an owner waiting on input
+// outranks a running owner, which outranks idle ones.
+static NSInteger TideyStatusValueRank(NSString *value) {
+    if ([value isEqualToString:@"Needs input"]) {
+        return 3;
+    }
+    if ([value isEqualToString:@"Running"]) {
+        return 2;
+    }
+    if ([value isEqualToString:@"Idle"]) {
+        return 1;
+    }
+    return 0;
+}
 
 @implementation TideyStatusStore
 
@@ -413,46 +429,102 @@ NSString *const kTideySystemNotificationCategoryIdentifier = @"TIDEY_WORKSPACE_N
                           value:(NSString *)value
                            icon:(nullable NSString *)icon
                        colorHex:(nullable NSString *)colorHex {
+    [self setStatusForWorkspaceID:workspaceID key:key value:value icon:icon colorHex:colorHex ownerID:nil];
+}
+
+- (void)setStatusForWorkspaceID:(NSString *)workspaceID
+                            key:(NSString *)key
+                          value:(NSString *)value
+                           icon:(nullable NSString *)icon
+                       colorHex:(nullable NSString *)colorHex
+                        ownerID:(nullable NSString *)ownerID {
     if (workspaceID.length == 0 || key.length == 0) {
         return;
     }
-    NSMutableDictionary<NSString *, TideyStatusEntry *> *entries = self.statusMap[workspaceID];
-    if (!entries) {
-        entries = [[NSMutableDictionary alloc] init];
-        self.statusMap[workspaceID] = entries;
+    NSMutableDictionary<NSString *, NSMutableDictionary<NSString *, TideyStatusEntry *> *> *keys = self.statusMap[workspaceID];
+    if (!keys) {
+        keys = [[NSMutableDictionary alloc] init];
+        self.statusMap[workspaceID] = keys;
     }
-    entries[key] = [[TideyStatusEntry alloc] initWithKey:key value:value icon:icon colorHex:colorHex];
+    NSMutableDictionary<NSString *, TideyStatusEntry *> *owners = keys[key];
+    if (!owners) {
+        owners = [[NSMutableDictionary alloc] init];
+        keys[key] = owners;
+    }
+    owners[ownerID.length > 0 ? ownerID : @""] = [[TideyStatusEntry alloc] initWithKey:key value:value icon:icon colorHex:colorHex];
     [self postDidChange];
 }
 
 - (void)clearStatusForWorkspaceID:(NSString *)workspaceID key:(NSString *)key {
+    [self clearStatusForWorkspaceID:workspaceID key:key ownerID:nil];
+}
+
+- (void)clearStatusForWorkspaceID:(NSString *)workspaceID
+                              key:(NSString *)key
+                          ownerID:(nullable NSString *)ownerID {
     if (workspaceID.length == 0 || key.length == 0) {
         return;
     }
-    NSMutableDictionary<NSString *, TideyStatusEntry *> *entries = self.statusMap[workspaceID];
-    if (!entries || !entries[key]) {
+    NSMutableDictionary<NSString *, NSMutableDictionary<NSString *, TideyStatusEntry *> *> *keys = self.statusMap[workspaceID];
+    NSMutableDictionary<NSString *, TideyStatusEntry *> *owners = keys[key];
+    if (!owners.count) {
         return;
     }
-    [entries removeObjectForKey:key];
-    if (entries.count == 0) {
+    if (ownerID.length > 0) {
+        if (!owners[ownerID]) {
+            return;
+        }
+        [owners removeObjectForKey:ownerID];
+    } else {
+        // Legacy owner-less clear removes the whole key: it predates
+        // ownership and callers expect the status gone.
+        [owners removeAllObjects];
+    }
+    if (owners.count == 0) {
+        [keys removeObjectForKey:key];
+    }
+    if (keys.count == 0) {
         [self.statusMap removeObjectForKey:workspaceID];
     }
     [self postDidChange];
+}
+
+// Strongest entry across the key's owners (Needs input > Running > Idle);
+// unranked values fall back to any single entry.
+- (TideyStatusEntry *)aggregatedEntryForOwners:(NSDictionary<NSString *, TideyStatusEntry *> *)owners {
+    TideyStatusEntry *best = nil;
+    NSInteger bestRank = -1;
+    for (NSString *ownerID in [owners.allKeys sortedArrayUsingSelector:@selector(compare:)]) {
+        TideyStatusEntry *entry = owners[ownerID];
+        NSInteger rank = TideyStatusValueRank(entry.value);
+        if (rank > bestRank) {
+            bestRank = rank;
+            best = entry;
+        }
+    }
+    return best;
 }
 
 - (NSArray<TideyStatusEntry *> *)statusEntriesForWorkspaceID:(NSString *)workspaceID {
     if (workspaceID.length == 0) {
         return @[];
     }
-    // Merge workspace-specific entries with broadcast ("*") entries.
+    // Merge workspace-specific entries with broadcast ("*") entries; each
+    // key aggregates across its session/panel owners.
     NSMutableDictionary<NSString *, TideyStatusEntry *> *merged = [NSMutableDictionary dictionary];
-    NSDictionary<NSString *, TideyStatusEntry *> *broadcastEntries = self.statusMap[@"*"];
-    if (broadcastEntries) {
-        [merged addEntriesFromDictionary:broadcastEntries];
+    NSDictionary<NSString *, NSDictionary<NSString *, TideyStatusEntry *> *> *broadcastKeys = self.statusMap[@"*"];
+    for (NSString *key in broadcastKeys) {
+        TideyStatusEntry *entry = [self aggregatedEntryForOwners:broadcastKeys[key]];
+        if (entry) {
+            merged[key] = entry;
+        }
     }
-    NSDictionary<NSString *, TideyStatusEntry *> *entries = self.statusMap[workspaceID];
-    if (entries) {
-        [merged addEntriesFromDictionary:entries];  // workspace-specific overrides broadcast
+    NSDictionary<NSString *, NSDictionary<NSString *, TideyStatusEntry *> *> *workspaceKeys = self.statusMap[workspaceID];
+    for (NSString *key in workspaceKeys) {
+        TideyStatusEntry *entry = [self aggregatedEntryForOwners:workspaceKeys[key]];
+        if (entry) {
+            merged[key] = entry;  // workspace-specific overrides broadcast
+        }
     }
     if (merged.count == 0) {
         return @[];

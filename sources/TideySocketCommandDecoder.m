@@ -17,6 +17,8 @@ static NSString * _Nullable TideySocketStringValue(NSDictionary *message, NSStri
 @property(nonatomic, copy, readwrite, nullable) NSString *value;
 @property(nonatomic, copy, readwrite, nullable) NSString *icon;
 @property(nonatomic, copy, readwrite, nullable) NSString *colorHex;
+@property(nonatomic, copy, readwrite, nullable) NSString *panelID;
+@property(nonatomic, copy, readwrite, nullable) NSString *sessionID;
 - (instancetype)initWithKind:(TideySocketCommandKind)kind;
 @end
 
@@ -30,7 +32,24 @@ static NSString * _Nullable TideySocketStringValue(NSDictionary *message, NSStri
     return self;
 }
 
+- (nullable NSString *)statusOwnerID {
+    // Session identity FIRST: one panel can host several sequential/parallel
+    // sessions, and a panel-keyed cell would let them overwrite each other.
+    if (self.sessionID.length > 0) {
+        return self.sessionID;
+    }
+    if (self.panelID.length > 0) {
+        return self.panelID;
+    }
+    return nil;
+}
+
 @end
+
+static void TideySocketApplyOwnerIdentity(TideySocketCommand *command, NSDictionary *message) {
+    command.panelID = TideySocketStringValue(message, @"panel_id");
+    command.sessionID = TideySocketStringValue(message, @"session_id");
+}
 
 @implementation TideySocketCommandDecoder
 
@@ -71,6 +90,18 @@ static NSString * _Nullable TideySocketStringValue(NSDictionary *message, NSStri
         command.value = @"Running";
         command.icon = @"bolt.fill";
         command.colorHex = @"#007AFF";
+        TideySocketApplyOwnerIdentity(command, message);
+        return command;
+    }
+
+    if ([state isEqualToString:@"needs_input"]) {
+        TideySocketCommand *command = [[TideySocketCommand alloc] initWithKind:TideySocketCommandKindSetStatus];
+        command.workspaceID = targetWorkspaceID;
+        command.key = @"shell_state";
+        command.value = @"Needs input";
+        command.icon = @"bell.fill";
+        command.colorHex = @"#4C8DFF";
+        TideySocketApplyOwnerIdentity(command, message);
         return command;
     }
 
@@ -82,6 +113,7 @@ static NSString * _Nullable TideySocketStringValue(NSDictionary *message, NSStri
         command.value = @"Idle";
         command.icon = @"pause.circle.fill";
         command.colorHex = @"#8E8E93";
+        TideySocketApplyOwnerIdentity(command, message);
         return command;
     }
 
@@ -90,6 +122,7 @@ static NSString * _Nullable TideySocketStringValue(NSDictionary *message, NSStri
         TideySocketCommand *command = [[TideySocketCommand alloc] initWithKind:TideySocketCommandKindClearStatus];
         command.workspaceID = targetWorkspaceID;
         command.key = @"shell_state";
+        TideySocketApplyOwnerIdentity(command, message);
         return command;
     }
 
@@ -110,6 +143,7 @@ static NSString * _Nullable TideySocketStringValue(NSDictionary *message, NSStri
     command.value = value;
     command.icon = TideySocketStringValue(message, @"icon");
     command.colorHex = TideySocketStringValue(message, @"color");
+    TideySocketApplyOwnerIdentity(command, message);
     return command;
 }
 
@@ -123,6 +157,7 @@ static NSString * _Nullable TideySocketStringValue(NSDictionary *message, NSStri
     TideySocketCommand *command = [[TideySocketCommand alloc] initWithKind:TideySocketCommandKindClearStatus];
     command.workspaceID = workspaceID;
     command.key = key;
+    TideySocketApplyOwnerIdentity(command, message);
     return command;
 }
 
