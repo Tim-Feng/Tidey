@@ -159,6 +159,10 @@ final class AgentEventHub {
                                   event.workspaceID == workspaceID else {
                                 return false
                             }
+                            if requiresHistoricalClosureCoverage(event),
+                               state.historicalClosureCoverageIsComplete == false {
+                                return false
+                            }
                             if let beforeSeq {
                                 return event.seq < beforeSeq
                                     && historicalOpenerIsVisible(
@@ -185,6 +189,10 @@ final class AgentEventHub {
                         }.map(\.eventID))
                         return storedEvents
                             .filter { event in
+                                if requiresHistoricalClosureCoverage(event),
+                                   state.historicalClosureCoverageIsComplete == false {
+                                    return false
+                                }
                                 guard let beforeSeq else {
                                     return true
                                 }
@@ -252,9 +260,8 @@ final class AgentEventHub {
         cursorEligibleEventIDs: Set<String>,
         beforeSeq: Int
     ) -> Bool {
-        let requiresClosureCoverage = event.type == .interactivePrompt
-            || event.metadata?["tidey_generated"] == "claude_context_command"
-        if requiresClosureCoverage, state.historicalClosureCoverageIsComplete == false {
+        if requiresHistoricalClosureCoverage(event),
+           state.historicalClosureCoverageIsComplete == false {
             return false
         }
         guard let resolution = state.historicalOpenerResolutions[event.eventID] else {
@@ -266,6 +273,11 @@ final class AgentEventHub {
         case .silentConsumer:
             return false
         }
+    }
+
+    private func requiresHistoricalClosureCoverage(_ event: AgentEvent) -> Bool {
+        event.type == .interactivePrompt
+            || event.metadata?["tidey_generated"] == "claude_context_command"
     }
 
     private func replayEvents(workspaceID: String?, sessionID: String?, sinceSeq: Int?) -> [AgentEvent] {
