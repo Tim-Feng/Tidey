@@ -252,6 +252,108 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
         }
     }
 
+    private final class SequencedBlockingProjectionAdapter: OrdinaryTmuxWindowProjecting, @unchecked Sendable {
+        private let firstPanels: [OrdinaryTmuxProjectedPanel]
+        private let secondPanels: [OrdinaryTmuxProjectedPanel]
+        private let firstEntered = DispatchSemaphore(value: 0)
+        private let secondEntered = DispatchSemaphore(value: 0)
+        private let releaseFirst = DispatchSemaphore(value: 0)
+        private let lock = NSLock()
+        private var callCount = 0
+        private var activeCallCount = 0
+        private var maximumActiveCallCount = 0
+
+        init(firstPanels: [OrdinaryTmuxProjectedPanel],
+             secondPanels: [OrdinaryTmuxProjectedPanel]) {
+            self.firstPanels = firstPanels
+            self.secondPanels = secondPanels
+        }
+
+        func projectedPanels(for metadata: OrdinaryTmuxAttachMetadata) throws -> [OrdinaryTmuxProjectedPanel] {
+            lock.lock()
+            let callIndex = callCount
+            callCount += 1
+            activeCallCount += 1
+            maximumActiveCallCount = max(maximumActiveCallCount, activeCallCount)
+            lock.unlock()
+            defer {
+                lock.lock()
+                activeCallCount -= 1
+                lock.unlock()
+            }
+
+            if callIndex == 0 {
+                firstEntered.signal()
+                guard releaseFirst.wait(timeout: .now() + 5) == .success else {
+                    throw NSError(domain: "OrdinaryTmuxPanelProjectorTests.serialization", code: 1)
+                }
+                return firstPanels
+            }
+            secondEntered.signal()
+            return secondPanels
+        }
+
+        func setPaneIdentity(route: OrdinaryTmuxPanelRoute) throws {}
+
+        func waitUntilFirstProjectionStarts() -> DispatchTimeoutResult {
+            firstEntered.wait(timeout: .now() + 2)
+        }
+
+        func waitUntilSecondProjectionStarts(timeout: TimeInterval) -> DispatchTimeoutResult {
+            secondEntered.wait(timeout: .now() + timeout)
+        }
+
+        func finishFirstProjection() {
+            releaseFirst.signal()
+        }
+
+        var maximumConcurrentProjectionCount: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return maximumActiveCallCount
+        }
+    }
+
+    private final class WorkspaceBlockingProjectionAdapter: OrdinaryTmuxWindowProjecting, @unchecked Sendable {
+        private let blockedPanels: [OrdinaryTmuxProjectedPanel]
+        private let unblockedPanels: [OrdinaryTmuxProjectedPanel]
+        private let blockedEntered = DispatchSemaphore(value: 0)
+        private let unblockedEntered = DispatchSemaphore(value: 0)
+        private let releaseBlocked = DispatchSemaphore(value: 0)
+
+        init(blockedPanels: [OrdinaryTmuxProjectedPanel],
+             unblockedPanels: [OrdinaryTmuxProjectedPanel]) {
+            self.blockedPanels = blockedPanels
+            self.unblockedPanels = unblockedPanels
+        }
+
+        func projectedPanels(for metadata: OrdinaryTmuxAttachMetadata) throws -> [OrdinaryTmuxProjectedPanel] {
+            if metadata.targetSession == "blocked-session" {
+                blockedEntered.signal()
+                guard releaseBlocked.wait(timeout: .now() + 5) == .success else {
+                    throw NSError(domain: "OrdinaryTmuxPanelProjectorTests.workspace-independence", code: 1)
+                }
+                return blockedPanels
+            }
+            unblockedEntered.signal()
+            return unblockedPanels
+        }
+
+        func setPaneIdentity(route: OrdinaryTmuxPanelRoute) throws {}
+
+        func waitUntilBlockedProjectionStarts() -> DispatchTimeoutResult {
+            blockedEntered.wait(timeout: .now() + 2)
+        }
+
+        func waitUntilUnblockedProjectionStarts() -> DispatchTimeoutResult {
+            unblockedEntered.wait(timeout: .now() + 2)
+        }
+
+        func finishBlockedProjection() {
+            releaseBlocked.signal()
+        }
+    }
+
     private final class TestClock: @unchecked Sendable {
         private let lock = NSLock()
         private var date: Date
@@ -295,6 +397,75 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
         XCTAssertEqual(panels?.first?["ordinary_tmux_logical"]?.objectValue?["active_pane_id"]?.stringValue, "%15")
         XCTAssertEqual(panels?.first?["ordinary_tmux_logical"]?.objectValue?["socket_path"]?.stringValue, "/tmp/tmux-501/default")
         XCTAssertEqual(panels?.first?["effective_shell_pid"]?.intValue, 1015)
+    }
+
+    func testConcurrentProjectionsForSameWorkspaceSerializeAndKeepNewestRegistryRoute() {
+        let adapter = SequencedBlockingProjectionAdapter(
+            firstPanels: [projectedPanel(windowID: "@15", index: 0, name: "old", paneID: "%15", current: true)],
+            secondPanels: [projectedPanel(windowID: "@16", index: 0, name: "new", paneID: "%16", current: true)])
+        let registry = OrdinaryTmuxPanelRegistry()
+        let projector = OrdinaryTmuxPanelProjector(adapter: adapter,
+                                                   registry: registry,
+                                                   cacheTTL: 0)
+        let firstInput = panelListResult()
+        let secondInput = panelListResult()
+        let firstDone = DispatchSemaphore(value: 0)
+        let secondRequestStarted = DispatchSemaphore(value: 0)
+        let secondDone = DispatchSemaphore(value: 0)
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            _ = projector.projectPanelListResult(firstInput)
+            firstDone.signal()
+        }
+        XCTAssertEqual(adapter.waitUntilFirstProjectionStarts(), .success)
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            secondRequestStarted.signal()
+            _ = projector.projectPanelListResult(secondInput)
+            secondDone.signal()
+        }
+        XCTAssertEqual(secondRequestStarted.wait(timeout: .now() + 2), .success)
+        let secondEnteredBeforeRelease = adapter.waitUntilSecondProjectionStarts(timeout: 0.5)
+
+        adapter.finishFirstProjection()
+        XCTAssertEqual(firstDone.wait(timeout: .now() + 2), .success)
+        XCTAssertEqual(secondDone.wait(timeout: .now() + 2), .success)
+
+        XCTAssertEqual(secondEnteredBeforeRelease, .timedOut,
+                       "a second projection for the same workspace must wait before entering the adapter")
+        XCTAssertEqual(adapter.maximumConcurrentProjectionCount, 1)
+        XCTAssertEqual(registry.route(forPanelID: "carrier-panel")?.windowID, "@16",
+                       "the later serialized projection must own the final registry route")
+    }
+
+    func testBlockedWorkspaceProjectionDoesNotBlockDifferentWorkspace() {
+        let adapter = WorkspaceBlockingProjectionAdapter(
+            blockedPanels: [projectedPanel(windowID: "@15", index: 0, name: "blocked", paneID: "%15", current: true)],
+            unblockedPanels: [projectedPanel(windowID: "@16", index: 0, name: "free", paneID: "%16", current: true)])
+        let projector = OrdinaryTmuxPanelProjector(adapter: adapter, cacheTTL: 0)
+        let blockedInput = panelListResult(workspaceID: "workspace-blocked",
+                                           targetSession: "blocked-session")
+        let unblockedInput = panelListResult(workspaceID: "workspace-free",
+                                             targetSession: "free-session")
+        let blockedDone = DispatchSemaphore(value: 0)
+        let unblockedDone = DispatchSemaphore(value: 0)
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            _ = projector.projectPanelListResult(blockedInput)
+            blockedDone.signal()
+        }
+        XCTAssertEqual(adapter.waitUntilBlockedProjectionStarts(), .success)
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            _ = projector.projectPanelListResult(unblockedInput)
+            unblockedDone.signal()
+        }
+        XCTAssertEqual(adapter.waitUntilUnblockedProjectionStarts(), .success)
+        XCTAssertEqual(unblockedDone.wait(timeout: .now() + 2), .success,
+                       "a different workspace must finish while the first workspace remains blocked")
+
+        adapter.finishBlockedProjection()
+        XCTAssertEqual(blockedDone.wait(timeout: .now() + 2), .success)
     }
 
     func testProjectionPreservesNonTmuxPanelsAndReindexes() {
@@ -808,14 +979,15 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
                                currentCommand: "zsh")
     }
 
-    private func panelListResult() -> [String: JSONValue] {
+    private func panelListResult(workspaceID: String = "workspace-1",
+                                 targetSession: String = "genesis-extraction") -> [String: JSONValue] {
         [
-            "workspace_id": .string("workspace-1"),
+            "workspace_id": .string(workspaceID),
             "selected_panel_id": .string("carrier-panel"),
             "panels": .array([
                 .object([
                     "panel_id": .string("carrier-panel"),
-                    "workspace_id": .string("workspace-1"),
+                    "workspace_id": .string(workspaceID),
                     "window_guid": .string("window-guid"),
                     "title": .string("tmux"),
                     "subtitle": .string("genesis-extraction"),
@@ -826,7 +998,7 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
                     "workspace_index": .number(0),
                     "ordinary_tmux": .object([
                         "client_tty": .string("/dev/ttys010"),
-                        "target_session": .string("genesis-extraction"),
+                        "target_session": .string(targetSession),
                     ]),
                 ]),
             ]),

@@ -114,12 +114,14 @@ final class OrdinaryTmuxPanelProjector {
     private let registryStaleTTL: TimeInterval
     private let now: @Sendable () -> Date
     private let cacheQueue = DispatchQueue(label: "com.tidey.remote-bridge.ordinary-tmux-panel-projector-cache")
+    private let workspaceProjectionLocksQueue = DispatchQueue(label: "com.tidey.remote-bridge.ordinary-tmux-panel-projector-workspace-locks")
     private let identitySyncQueue = DispatchQueue(label: "com.tidey.remote-bridge.ordinary-tmux-panel-projector-identity",
                                                   qos: .utility)
     private var cache = [String: CacheEntry]()
     private var identityCache = [String: String]()
     private var identityInFlightBatches = [String: [OrdinaryTmuxPaneIdentityReconciliationBatch]]()
     private var projectionCooldownUntilByKey = [String: Date]()
+    private var workspaceProjectionLocks = [String: NSLock]()
 
     init(adapter: OrdinaryTmuxWindowProjecting = OrdinaryTmuxCLIAdapter(),
          registry: OrdinaryTmuxPanelRegistry? = nil,
@@ -157,6 +159,9 @@ final class OrdinaryTmuxPanelProjector {
             reconciliationBatch?.recordFailure()
             return result
         }
+        let projectionLock = workspaceProjectionLock(for: workspaceID)
+        projectionLock.lock()
+        defer { projectionLock.unlock() }
 
         var didProjectCarrier = false
         var nextPanels = [JSONValue]()
@@ -418,6 +423,17 @@ final class OrdinaryTmuxPanelProjector {
                                        timedOutWithoutCache: false,
                                        displayState: nil,
                                        unavailableReason: "error_no_cache")
+        }
+    }
+
+    private func workspaceProjectionLock(for workspaceID: String) -> NSLock {
+        workspaceProjectionLocksQueue.sync {
+            if let existing = workspaceProjectionLocks[workspaceID] {
+                return existing
+            }
+            let lock = NSLock()
+            workspaceProjectionLocks[workspaceID] = lock
+            return lock
         }
     }
 
