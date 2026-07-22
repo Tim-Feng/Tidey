@@ -1271,7 +1271,7 @@ final class CodexTranscriptSessionTests: XCTestCase {
 private struct CodexTranscriptProcessCall: Equatable {
     let executablePath: String
     let arguments: [String]
-    let timeout: TimeInterval?
+    let timeout: TimeInterval
 }
 
 private final class CodexTranscriptProcessCallRecorder {
@@ -1280,7 +1280,7 @@ private final class CodexTranscriptProcessCallRecorder {
 
     func append(executablePath: String,
                 arguments: [String],
-                timeout: TimeInterval?) {
+                timeout: TimeInterval) {
         lock.lock()
         storage.append(CodexTranscriptProcessCall(executablePath: executablePath,
                                                   arguments: arguments,

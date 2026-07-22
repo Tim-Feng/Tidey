@@ -5,7 +5,7 @@ private let codexSidebarLogURL = URL(fileURLWithPath: "/tmp/tidey-bridge-codex.l
 
 typealias CodexTranscriptProcessRunner = (_ executablePath: String,
                                           _ arguments: [String],
-                                          _ timeout: TimeInterval?) -> BoundedProcessResult?
+                                          _ timeout: TimeInterval) -> BoundedProcessResult?
 
 final class CodexTranscriptSession: AgentTranscriptSession {
     private static let processLookupTimeout: TimeInterval = 1
@@ -1129,29 +1129,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     }
 
     private static let liveProcessRunner: CodexTranscriptProcessRunner = { executablePath, arguments, timeout in
-        if let timeout {
-            return BoundedProcessRunner.run(executablePath: executablePath,
-                                            arguments: arguments,
-                                            timeout: timeout)
-        }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executablePath)
-        process.arguments = arguments
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            return nil
-        }
-
-        return BoundedProcessResult(terminationStatus: process.terminationStatus,
-                                    standardOutput: outputPipe.fileHandleForReading.readDataToEndOfFile(),
-                                    standardError: errorPipe.fileHandleForReading.readDataToEndOfFile())
+        BoundedProcessRunner.run(executablePath: executablePath,
+                                 arguments: arguments,
+                                 timeout: timeout)
     }
 }
