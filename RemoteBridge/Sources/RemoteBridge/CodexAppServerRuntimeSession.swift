@@ -55,6 +55,7 @@ final class CodexAppServerRuntimeSession {
     private var stopped = false
     private var attachSubscriptionState = AttachSubscriptionState.noLoadedThread
     private var nextSubscriptionRetryAt: Date?
+    private var registryRootThreadID: String?
     var loadedThreadUnresolvedHook: (() -> Void)?
 
     var attachSubscriptionStateForTesting: String {
@@ -218,6 +219,16 @@ final class CodexAppServerRuntimeSession {
         }
         BridgeLogger.server.debug("codex app-server diagnostic runtime can_submit result=\(result, privacy: .public) init_status=\(initializationStatus.logValue, privacy: .public) thread_id=\(threadID ?? "-", privacy: .public) busy=\(busySummary, privacy: .public) false_reason=\(falseReason, privacy: .public)")
         return result
+    }
+
+    func setRegistryRootThreadID(_ rawThreadID: String?) {
+        guard let threadID = rawThreadID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              threadID.isEmpty == false else {
+            return
+        }
+        lock.lock()
+        registryRootThreadID = threadID
+        lock.unlock()
     }
 
     func ensureThreadSubscription() {
@@ -388,10 +399,20 @@ final class CodexAppServerRuntimeSession {
                                                       reason: String) {
         switch result {
         case .success(let value):
-            guard let threadID = codexAppServerLoadedThreadID(from: value) else {
+            lock.lock()
+            let knownRootThreadID = registryRootThreadID
+            lock.unlock()
+            guard let threadID = codexAppServerLoadedThreadID(from: value,
+                                                              registryRootThreadID: knownRootThreadID) else {
                 BridgeLogger.server.debug("codex app-server subscription no loaded thread shape=\(codexAppServerLoadedThreadShapeDescription(from: value), privacy: .public)")
                 if clearSubscriptionOnMissing {
-                    setAttachSubscriptionState(.noLoadedThread, reason: "loaded_thread_missing")
+                    if let knownRootThreadID {
+                        activeThreadStore.setThreadID(knownRootThreadID)
+                        sendThreadResumeForSubscriptionIfNeeded(threadID: knownRootThreadID,
+                                                                reason: "registry_root_fallback")
+                    } else {
+                        setAttachSubscriptionState(.noLoadedThread, reason: "loaded_thread_missing")
+                    }
                 }
                 return
             }
@@ -1016,7 +1037,8 @@ final class CodexAppServerRuntimeSessionFactory {
     }
 }
 
-func codexAppServerLoadedThreadID(from value: JSONValue) -> String? {
+func codexAppServerLoadedThreadID(from value: JSONValue,
+                                  registryRootThreadID: String? = nil) -> String? {
     if let object = value.objectValue {
         if let thread = object["thread"]?.objectValue,
            let id = thread["id"]?.stringValue ?? thread["threadId"]?.stringValue {
@@ -1042,6 +1064,15 @@ func codexAppServerLoadedThreadID(from value: JSONValue) -> String? {
     if currentCandidates.count == 1 {
         return currentCandidates[0].id
     }
+    if let registryRootThreadID {
+        if candidates.contains(where: { $0.id == registryRootThreadID }) {
+            return registryRootThreadID
+        }
+        if candidates.isEmpty == false,
+           candidates.allSatisfy(\.isBareString) {
+            return nil
+        }
+    }
     if nonChildCandidates.count == 1 {
         return nonChildCandidates[0].id
     }
@@ -1062,11 +1093,15 @@ private struct CodexAppServerLoadedThreadCandidate {
     let id: String
     let isCurrent: Bool
     let isChild: Bool
+    let isBareString: Bool
 }
 
 private func codexAppServerLoadedThreadCandidate(from value: JSONValue) -> CodexAppServerLoadedThreadCandidate? {
     if let id = value.stringValue {
-        return CodexAppServerLoadedThreadCandidate(id: id, isCurrent: false, isChild: false)
+        return CodexAppServerLoadedThreadCandidate(id: id,
+                                                   isCurrent: false,
+                                                   isChild: false,
+                                                   isBareString: true)
     }
     guard let object = value.objectValue else {
         return nil
@@ -1074,7 +1109,8 @@ private func codexAppServerLoadedThreadCandidate(from value: JSONValue) -> Codex
     if let id = object["id"]?.stringValue ?? object["threadId"]?.stringValue {
         return CodexAppServerLoadedThreadCandidate(id: id,
                                                    isCurrent: codexAppServerLoadedThreadIsCurrent(object),
-                                                   isChild: codexAppServerLoadedThreadIsChild(object))
+                                                   isChild: codexAppServerLoadedThreadIsChild(object),
+                                                   isBareString: false)
     }
     if let thread = object["thread"]?.objectValue,
        let id = thread["id"]?.stringValue ?? thread["threadId"]?.stringValue {
@@ -1082,7 +1118,8 @@ private func codexAppServerLoadedThreadCandidate(from value: JSONValue) -> Codex
                                                    isCurrent: codexAppServerLoadedThreadIsCurrent(object)
                                                     || codexAppServerLoadedThreadIsCurrent(thread),
                                                    isChild: codexAppServerLoadedThreadIsChild(object)
-                                                    || codexAppServerLoadedThreadIsChild(thread))
+                                                    || codexAppServerLoadedThreadIsChild(thread),
+                                                   isBareString: false)
     }
     return nil
 }

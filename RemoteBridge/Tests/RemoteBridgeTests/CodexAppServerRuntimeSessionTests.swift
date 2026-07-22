@@ -543,6 +543,86 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertEqual(transport.sentLines().count, 3)
     }
 
+    func testRegistryRootFallbackResumesWhenLoadedListIsEmpty() throws {
+        let (session, transport) = try Self.makeAttachedSession()
+        session.setRegistryRootThreadID("  thread-root  ")
+        try Self.acknowledgeInitialize(from: transport)
+
+        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(listLoaded["id"]), result: .object([
+            "threads": .array([]),
+        ])))
+
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
+        let resume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
+        XCTAssertEqual(resume["method"]?.stringValue, "thread/resume")
+        XCTAssertEqual(resume["params"]?.objectValue?["threadId"]?.stringValue, "thread-root")
+    }
+
+    func testRegistryRootFallbackHandlesAmbiguousPaginatedAndChildOnlyLists() throws {
+        let unresolvedResults: [JSONValue] = [
+            .object([
+                "threads": .array([
+                    .object(["id": .string("thread-a")]),
+                    .object(["id": .string("thread-b")]),
+                ]),
+            ]),
+            .object([
+                "threads": .array([.object(["id": .string("thread-page-1")])]),
+                "nextCursor": .string("cursor-2"),
+            ]),
+            .object([
+                "threads": .array([
+                    .object([
+                        "id": .string("thread-child"),
+                        "parentThreadId": .string("thread-root"),
+                    ]),
+                ]),
+            ]),
+        ]
+
+        for result in unresolvedResults {
+            let (session, transport) = try Self.makeAttachedSession()
+            session.setRegistryRootThreadID("thread-root")
+            try Self.acknowledgeInitialize(from: transport)
+            let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+            transport.emitLine(try Self.responseText(id: try XCTUnwrap(listLoaded["id"]), result: result))
+
+            XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
+            let resume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
+            XCTAssertEqual(resume["method"]?.stringValue, "thread/resume")
+            XCTAssertEqual(resume["params"]?.objectValue?["threadId"]?.stringValue, "thread-root")
+        }
+    }
+
+    func testKnownRegistryRootOutranksUnclassifiableBareLoadedThread() throws {
+        let (session, transport) = try Self.makeAttachedSession()
+        session.setRegistryRootThreadID("thread-root")
+        try Self.acknowledgeInitialize(from: transport)
+        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(listLoaded["id"]), result: .object([
+            "data": .array([.string("thread-maybe-child")]),
+        ])))
+
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
+        let resume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
+        XCTAssertEqual(resume["params"]?.objectValue?["threadId"]?.stringValue, "thread-root",
+                       "a metadata-free loaded id cannot replace the authoritative registry root")
+    }
+
+    func testBlankRegistryRootFailsClosedAndDoesNotResume() throws {
+        let (session, transport) = try Self.makeAttachedSession()
+        session.setRegistryRootThreadID("  \n ")
+        try Self.acknowledgeInitialize(from: transport)
+        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(listLoaded["id"]), result: .object([
+            "threads": .array([]),
+        ])))
+
+        XCTAssertEqual(transport.sentLines().count, 3)
+        XCTAssertFalse(session.canSubmitMessage())
+    }
+
     func testSubmitMessageLoadsThreadWhenAttachedRuntimeWasNotReady() throws {
         let runner = FakeCodexAppServerProcessRunner()
         let connector = FakeCodexAppServerTransportConnector()
@@ -1033,6 +1113,23 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
                                         onInteractivePromptResolved: { prompts.appendResolved($0) })
         prompts.session = session
         return session
+    }
+
+    private static func makeAttachedSession() throws -> (CodexAppServerRuntimeSession, FakeCodexAppServerConnectionTransport) {
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: FakeCodexAppServerProcessRunner(),
+                                                          transportConnector: connector)
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in })
+        return (session, try XCTUnwrap(connector.transport))
     }
 
     private static func object(from line: String,
