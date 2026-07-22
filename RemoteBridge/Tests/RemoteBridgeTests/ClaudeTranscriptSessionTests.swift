@@ -239,6 +239,57 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                        "a poisoned history index must not retain or reread the oversized suffix")
     }
 
+    func testClaudeBackfillReplacesFullHistoricalWindowAtRequestedAnchor() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        let lines = (0..<10).map {
+            makeClaudeUserLine(uuid: "line-\($0)", content: "line-\($0)")
+        }
+        try (lines.joined(separator: "\n") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub(maxBufferedEvents: 2)
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 2)
+                .events.map(\.text) == ["line-8", "line-9"]
+        })
+
+        let line8Anchor = try XCTUnwrap(
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 2)
+                .events.first { $0.text == "line-8" }?.seq
+        )
+        let shallow = BridgeAgentEventFetchFlow.run(eventHub: hub,
+                                                    workspaceID: "workspace",
+                                                    sessionID: "session",
+                                                    limit: 2,
+                                                    beforeSeq: line8Anchor,
+                                                    afterSeq: nil) { _, anchor, limit in
+            session.backfill(beforeSeq: anchor, limit: limit)
+        }
+        XCTAssertEqual(shallow.fetchResult.events.map(\.text), ["line-6", "line-7"])
+
+        let line4Offset = (lines.prefix(4).joined(separator: "\n") + "\n").utf8.count
+        let line4Anchor = transcriptEventSequence(lineOffset: line4Offset, ordinal: 0)
+        let deep = BridgeAgentEventFetchFlow.run(eventHub: hub,
+                                                 workspaceID: "workspace",
+                                                 sessionID: "session",
+                                                 limit: 2,
+                                                 beforeSeq: line4Anchor,
+                                                 afterSeq: nil) { _, anchor, limit in
+            session.backfill(beforeSeq: anchor, limit: limit)
+        }
+        XCTAssertEqual(deep.fetchResult.events.map(\.text), ["line-2", "line-3"],
+                       "a deeper exact-anchor request must displace the newer cached page")
+    }
+
     func testClaudeHistoricalIndexRejectsSameInodeMutationWhileAdoptingPartial() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
