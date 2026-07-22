@@ -17,6 +17,25 @@ final class BridgeAgentEventReplayGateTests: XCTestCase {
         XCTAssertEqual(gate.receive(third)?.event.eventID, "live-3")
     }
 
+    func testOpenSuppressesBufferedEventsAlreadyInjectedByReplay() {
+        let gate = BridgeAgentEventReplayGate()
+        XCTAssertNil(gate.receive(Self.envelope(id: "replayed", seq: 1)))
+        XCTAssertNil(gate.receive(Self.envelope(id: "live-only", seq: 2)))
+
+        let flushed = gate.open(suppressing: ["replayed"])
+
+        XCTAssertEqual(flushed.map(\.event.eventID), ["live-only"])
+    }
+
+    func testOpenSuppressesOneLateLiveDeliveryAlreadyInjectedByReplay() {
+        let gate = BridgeAgentEventReplayGate()
+
+        XCTAssertTrue(gate.open(suppressing: ["replayed"]).isEmpty)
+        XCTAssertNil(gate.receive(Self.envelope(id: "replayed", seq: 1)))
+        XCTAssertEqual(gate.receive(Self.envelope(id: "live-only", seq: 2))?.event.eventID,
+                       "live-only")
+    }
+
     private static func envelope(id: String, seq: Int) -> AgentEventEnvelope {
         AgentEventEnvelope(replay: false,
                            event: AgentEvent(eventID: id,
