@@ -2636,6 +2636,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         var pendingAskOpenerEventIDByPromptID: [String: String]
         var pendingContextOpenerEventID: String?
         var closureByOpenerEventID: [String: AgentEvent]
+        var contextConsumerSequenceByOpenerEventID: [String: Int]
 
         init(sourceIdentity: HistoricalClosureSourceIdentity,
              indexedThroughByteOffset: Int,
@@ -2645,7 +2646,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
              parserState: LiveParserStateSnapshot?,
              pendingAskOpenerEventIDByPromptID: [String: String],
              pendingContextOpenerEventID: String?,
-             closureByOpenerEventID: [String: AgentEvent]) {
+             closureByOpenerEventID: [String: AgentEvent],
+             contextConsumerSequenceByOpenerEventID: [String: Int]) {
             self.sourceIdentity = sourceIdentity
             self.indexedThroughByteOffset = indexedThroughByteOffset
             self.scannedThroughByteOffset = scannedThroughByteOffset
@@ -2655,6 +2657,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             self.pendingAskOpenerEventIDByPromptID = pendingAskOpenerEventIDByPromptID
             self.pendingContextOpenerEventID = pendingContextOpenerEventID
             self.closureByOpenerEventID = closureByOpenerEventID
+            self.contextConsumerSequenceByOpenerEventID = contextConsumerSequenceByOpenerEventID
         }
     }
 
@@ -2988,7 +2991,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 parserState: nil,
                 pendingAskOpenerEventIDByPromptID: [:],
                 pendingContextOpenerEventID: nil,
-                closureByOpenerEventID: [:])
+                closureByOpenerEventID: [:],
+                contextConsumerSequenceByOpenerEventID: [:])
         }
         guard let startingIndex = historicalClosureIndex else {
             return false
@@ -3132,6 +3136,9 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                   let openerEventID = index.pendingAskOpenerEventIDByPromptID.removeValue(forKey: promptID) {
             index.closureByOpenerEventID[openerEventID] = event
         } else if event.metadata?["tidey_generated"] == "claude_context_command" {
+            if let openerEventID = index.pendingContextOpenerEventID {
+                index.contextConsumerSequenceByOpenerEventID[openerEventID] = event.seq
+            }
             index.pendingContextOpenerEventID = event.eventID
         } else if event.metadata?["tidey_generated"] == "claude_context",
                   let openerEventID = index.pendingContextOpenerEventID {
@@ -3140,12 +3147,16 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         }
     }
 
-    private func historicalClosure(forOpener event: AgentEvent) -> AgentEvent? {
+    private func historicalClosureSequence(forOpener event: AgentEvent) -> Int? {
         guard event.type == .interactivePrompt
                 || event.metadata?["tidey_generated"] == "claude_context_command" else {
             return nil
         }
-        return historicalClosureIndex?.closureByOpenerEventID[event.eventID]
+        guard let index = historicalClosureIndex else {
+            return nil
+        }
+        return index.closureByOpenerEventID[event.eventID]?.seq
+            ?? index.contextConsumerSequenceByOpenerEventID[event.eventID]
     }
 
     func stop() {
@@ -3991,8 +4002,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             // fail closed by withholding the already-resolved opener; the
             // caller must never see it revived as an active prompt/command.
             if let anchorSeq = historicalBackfillAnchorSeq,
-               let closure = historicalClosure(forOpener: event),
-               closure.seq >= anchorSeq {
+               let closureSeq = historicalClosureSequence(forOpener: event),
+               closureSeq >= anchorSeq {
                 return
             }
             if event.type == .interactivePrompt

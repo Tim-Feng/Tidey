@@ -1002,6 +1002,54 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                                                      promptID: promptID))
     }
 
+    func testClaudeBackfillTreatsLaterCommandAsContextConsumer() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+
+        let firstContextLine = makeClaudeUserLine(uuid: "first-context",
+                                                  content: "<command-name>/context</command-name>")
+        let secondContextLine = makeClaudeUserLine(uuid: "second-context",
+                                                   content: "<command-name>/context</command-name>")
+        let secondSummaryLine = makeClaudeContextStdoutLine(uuid: "second-summary")
+        let fillerLines = (0..<transcriptBootstrapLineLimit).map {
+            makeClaudeUserLine(uuid: "filler-\($0)", content: "filler-\($0)")
+        }
+        let lines = [firstContextLine, secondContextLine, secondSummaryLine] + fillerLines
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL,
+                                                            atomically: true,
+                                                            encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1)
+                .events.first?.text == "filler-\(transcriptBootstrapLineLimit - 1)"
+        })
+
+        let secondContextOffset = (firstContextLine + "\n").utf8.count
+        let secondContextSeq = transcriptEventSequence(lineOffset: secondContextOffset, ordinal: 0)
+        let firstContextPage = BridgeAgentEventFetchFlow.run(eventHub: hub,
+                                                             workspaceID: "workspace",
+                                                             sessionID: "session",
+                                                             limit: 1,
+                                                             beforeSeq: secondContextSeq,
+                                                             afterSeq: nil) { _, beforeSeq, limit in
+            session.backfill(beforeSeq: beforeSeq, limit: limit)
+        }
+
+        XCTAssertTrue(firstContextPage.didBackfill)
+        XCTAssertFalse(firstContextPage.fetchResult.events.contains {
+            $0.eventID == "first-context:claude-context-command:0"
+        }, "a later command outside before_seq must consume the earlier /context command")
+    }
+
     func testTranscriptSwitchRevokesOldHistoryAndMapsNewSourceCursor() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
