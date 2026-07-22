@@ -1,5 +1,60 @@
 import Foundation
 
+final class InteractivePromptSubmitDeduper: @unchecked Sendable {
+    enum Check: Sendable {
+        case new
+        case duplicate([String: JSONValue])
+        case conflict
+    }
+
+    private struct CachedSubmit {
+        let promptID: String
+        let decision: String
+        let result: [String: JSONValue]
+    }
+
+    private let lock = NSLock()
+    private let capacity: Int
+    private var order: [String] = []
+    private var cacheByClientRequestID: [String: CachedSubmit] = [:]
+
+    init(capacity: Int = 128) {
+        self.capacity = max(1, capacity)
+    }
+
+    func check(clientRequestID: String, promptID: String, decision: String) -> Check {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let cached = cacheByClientRequestID[clientRequestID] else {
+            return .new
+        }
+        guard cached.promptID == promptID, cached.decision == decision else {
+            return .conflict
+        }
+        if cached.result["status"]?.stringValue == "pending_confirmation" {
+            return .new
+        }
+        return .duplicate(cached.result)
+    }
+
+    func store(clientRequestID: String,
+               promptID: String,
+               decision: String,
+               result: [String: JSONValue]) {
+        lock.lock()
+        defer { lock.unlock() }
+        if cacheByClientRequestID[clientRequestID] == nil {
+            order.append(clientRequestID)
+        }
+        cacheByClientRequestID[clientRequestID] = CachedSubmit(promptID: promptID,
+                                                               decision: decision,
+                                                               result: result)
+        while order.count > capacity {
+            cacheByClientRequestID.removeValue(forKey: order.removeFirst())
+        }
+    }
+}
+
 struct InteractivePromptActionHandler {
     private let routeResolver: OrdinaryTmuxRouteResolving
     private let adapter: OrdinaryTmuxRouteRefreshing
@@ -9,6 +64,7 @@ struct InteractivePromptActionHandler {
     private let codexApprovalSubmitter: CodexAppServerApprovalSubmitting?
     private let detector: WorkflowConfirmPromptDetector
     private let stateStore: InteractivePromptStateStore
+    private let submitDeduper: InteractivePromptSubmitDeduper
     private let captureLineLimit = 0
     private let resolvedAbsentThreshold = 3
 
@@ -19,7 +75,8 @@ struct InteractivePromptActionHandler {
          inputActionHandler: BridgeInputActionHandler,
          codexApprovalSubmitter: CodexAppServerApprovalSubmitting? = nil,
          detector: WorkflowConfirmPromptDetector = WorkflowConfirmPromptDetector(),
-         stateStore: InteractivePromptStateStore = InteractivePromptStateStore()) {
+         stateStore: InteractivePromptStateStore = InteractivePromptStateStore(),
+         submitDeduper: InteractivePromptSubmitDeduper = InteractivePromptSubmitDeduper()) {
         self.routeResolver = routeResolver
         self.adapter = adapter
         self.sessionResolver = sessionResolver
@@ -28,6 +85,7 @@ struct InteractivePromptActionHandler {
         self.codexApprovalSubmitter = codexApprovalSubmitter
         self.detector = detector
         self.stateStore = stateStore
+        self.submitDeduper = submitDeduper
     }
 
     func handle(_ request: BridgeRequest) throws -> BridgeResponse? {
@@ -131,6 +189,28 @@ struct InteractivePromptActionHandler {
             throw BridgeInternalError.invalidRequest("submit_interactive_prompt requires prompt_id")
         }
 
+        let decision: String
+        if let targetIndex = request.params?["target_index"]?.intValue {
+            decision = "index:\(targetIndex)"
+        } else if let inputSequence = request.params?["input_sequence"]?.stringValue {
+            decision = "input:\(inputSequence)"
+        } else {
+            throw BridgeInternalError.invalidRequest("submit_interactive_prompt requires target_index or input_sequence")
+        }
+        let clientRequestID = request.params?["client_request_id"]?.stringValue
+        if let clientRequestID {
+            switch submitDeduper.check(clientRequestID: clientRequestID,
+                                       promptID: requestedPromptID,
+                                       decision: decision) {
+            case .duplicate(let result):
+                return BridgeResponse(id: request.id, ok: true, result: result, error: nil)
+            case .conflict:
+                throw BridgeInternalError.conflict("client_request_id was already used for a different decision")
+            case .new:
+                break
+            }
+        }
+
         let prompt = try activePromptForSubmit(context: context, requestedPromptID: requestedPromptID)
         let input: String
         if let targetIndex = request.params?["target_index"]?.intValue {
@@ -165,6 +245,13 @@ struct InteractivePromptActionHandler {
         result["status"] = .string("resolved")
         result["prompt"] = .null
         result["resolved_event"] = Self.jsonValue(for: resolvedEvent)
+        if let clientRequestID {
+            result["client_request_id"] = .string(clientRequestID)
+            submitDeduper.store(clientRequestID: clientRequestID,
+                                promptID: requestedPromptID,
+                                decision: decision,
+                                result: result)
+        }
         return BridgeResponse(id: request.id, ok: true, result: result, error: nil)
     }
 
@@ -175,27 +262,72 @@ struct InteractivePromptActionHandler {
         guard let promptID = request.params?["prompt_id"]?.stringValue else {
             throw BridgeInternalError.invalidRequest("submit_interactive_prompt requires prompt_id")
         }
-        guard let targetIndex = request.params?["target_index"]?.intValue else {
-            throw BridgeInternalError.invalidRequest("submit_interactive_prompt requires target_index for Codex approval prompts")
+        let answers = try Self.userInputAnswers(from: request.params?["answers"])
+        let targetIndex = request.params?["target_index"]?.intValue
+        guard answers != nil || targetIndex != nil else {
+            throw BridgeInternalError.invalidRequest("submit_interactive_prompt requires target_index or answers for Codex approval prompts")
         }
-        let resolvedEvent = try codexApprovalSubmitter.submitApproval(promptID: promptID,
-                                                                      targetIndex: targetIndex,
-                                                                      workspaceID: context.workspaceID,
-                                                                      panelID: context.panelID,
-                                                                      sessionID: context.sessionID)
-        let status = resolvedEvent.metadata?["reason"] == "already_resolved"
-            ? "already_resolved"
-            : "resolved"
+        guard let lifecycleToken = request.params?["lifecycle_token"]?.stringValue else {
+            throw BridgeInternalError.invalidRequest("submit_interactive_prompt requires lifecycle_token for Codex approval prompts")
+        }
+        let clientRequestID = request.params?["client_request_id"]?.stringValue
+        let decision = answers.map { "answers:" + Self.canonicalAnswersDescription($0) }
+            ?? "index:\(targetIndex ?? -1)"
+        if let clientRequestID {
+            switch submitDeduper.check(clientRequestID: clientRequestID,
+                                       promptID: promptID,
+                                       decision: decision) {
+            case .conflict:
+                throw BridgeInternalError.conflict("client_request_id was already used for a different decision")
+            case .duplicate, .new:
+                break
+            }
+        }
+
+        let outcome: CodexAppServerApprovalSubmitOutcome
+        if let answers {
+            outcome = try codexApprovalSubmitter.submitUserInput(promptID: promptID,
+                                                                 answers: answers,
+                                                                 clientRequestID: clientRequestID,
+                                                                 lifecycleToken: lifecycleToken,
+                                                                 workspaceID: context.workspaceID,
+                                                                 panelID: context.panelID,
+                                                                 sessionID: context.sessionID)
+        } else {
+            outcome = try codexApprovalSubmitter.submitApproval(promptID: promptID,
+                                                                targetIndex: targetIndex ?? -1,
+                                                                clientRequestID: clientRequestID,
+                                                                lifecycleToken: lifecycleToken,
+                                                                workspaceID: context.workspaceID,
+                                                                panelID: context.panelID,
+                                                                sessionID: context.sessionID)
+        }
+
         var result: [String: JSONValue] = [
             "submitted": .bool(true),
-            "status": .string(status),
-            "prompt": .null,
-            "resolved_event": Self.jsonValue(for: resolvedEvent),
+            "prompt_id": .string(promptID),
+            "workspace_id": .string(context.workspaceID),
+            "panel_id": .string(context.panelID),
+            "session_id": .string(context.sessionID),
+            "lifecycle_token": .string(lifecycleToken),
         ]
-        if let panelID = resolvedEvent.metadata?["panel_id"] {
-            result["panel_id"] = .string(panelID)
-        } else {
-            result["panel_id"] = .string(context.panelID)
+        switch outcome {
+        case .pendingConfirmation:
+            result["status"] = .string("pending_confirmation")
+        case .alreadyResolved(let resolvedEvent):
+            result["status"] = .string("already_resolved")
+            result["prompt"] = .null
+            result["resolved_event"] = Self.jsonValue(for: resolvedEvent)
+            if let panelID = resolvedEvent.metadata?["panel_id"] {
+                result["panel_id"] = .string(panelID)
+            }
+        }
+        if let clientRequestID {
+            result["client_request_id"] = .string(clientRequestID)
+            submitDeduper.store(clientRequestID: clientRequestID,
+                                promptID: promptID,
+                                decision: decision,
+                                result: result)
         }
         return BridgeResponse(id: request.id, ok: true, result: result, error: nil)
     }
@@ -358,6 +490,34 @@ struct InteractivePromptActionHandler {
                           toolCallID: nil,
                           metadata: metadata,
                           payload: prompt.jsonValue)
+    }
+
+    private static func userInputAnswers(from value: JSONValue?) throws -> [String: [String]]? {
+        guard let value else {
+            return nil
+        }
+        guard let object = value.objectValue else {
+            throw BridgeInternalError.invalidRequest("submit_interactive_prompt answers must map question ids to answer arrays")
+        }
+        var answers: [String: [String]] = [:]
+        for (questionID, entry) in object {
+            guard let array = entry.arrayValue else {
+                throw BridgeInternalError.invalidRequest("submit_interactive_prompt answers must map question ids to answer arrays")
+            }
+            let strings = array.compactMap(\.stringValue)
+            guard strings.count == array.count else {
+                throw BridgeInternalError.invalidRequest("submit_interactive_prompt answers must contain string values only")
+            }
+            answers[questionID] = strings
+        }
+        return answers
+    }
+
+    private static func canonicalAnswersDescription(_ answers: [String: [String]]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: answers, options: [.sortedKeys]) else {
+            return "unencodable:\(UUID().uuidString)"
+        }
+        return String(decoding: data, as: UTF8.self)
     }
 
     private static func activeResult(prompt: InteractivePrompt,
