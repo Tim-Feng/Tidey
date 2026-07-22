@@ -2320,6 +2320,42 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         let lifecycleTurnLineageOrder: [String]
     }
 
+    private struct HistoricalClosureSourceIdentity: Equatable {
+        let canonicalPath: String
+        let device: UInt64
+        let inode: UInt64
+        let epoch: UInt64
+    }
+
+    private final class HistoricalClosureIndexState {
+        let sourceIdentity: HistoricalClosureSourceIdentity
+        var indexedThroughByteOffset: Int
+        var parserState: LiveParserStateSnapshot?
+        var pendingAskOpenerEventIDByPromptID: [String: String]
+        var pendingContextOpenerEventID: String?
+        var closureByOpenerEventID: [String: AgentEvent]
+
+        init(sourceIdentity: HistoricalClosureSourceIdentity,
+             indexedThroughByteOffset: Int,
+             parserState: LiveParserStateSnapshot?,
+             pendingAskOpenerEventIDByPromptID: [String: String],
+             pendingContextOpenerEventID: String?,
+             closureByOpenerEventID: [String: AgentEvent]) {
+            self.sourceIdentity = sourceIdentity
+            self.indexedThroughByteOffset = indexedThroughByteOffset
+            self.parserState = parserState
+            self.pendingAskOpenerEventIDByPromptID = pendingAskOpenerEventIDByPromptID
+            self.pendingContextOpenerEventID = pendingContextOpenerEventID
+            self.closureByOpenerEventID = closureByOpenerEventID
+        }
+    }
+
+    private var historicalClosureSourceEpoch: UInt64 = 0
+    private var historicalClosureIndex: HistoricalClosureIndexState?
+    private var historicalIndexEventSink: ((AgentEvent) -> Void)?
+    private var historicalReplayOpenerEventIDs = Set<String>()
+    private var historicalBackfillAnchorSeq: Int?
+
     private func captureLiveParserState() -> LiveParserStateSnapshot {
         LiveParserStateSnapshot(unsupportedVersions: unsupportedVersions,
                                 pendingLocalCommand: pendingLocalCommand,
@@ -2465,6 +2501,11 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         tailer?.stop()
         tailer = nil
         transcriptSequenceBase = maxObservedSeq
+        historicalClosureSourceEpoch &+= 1
+        historicalClosureIndex = nil
+        historicalIndexEventSink = nil
+        historicalReplayOpenerEventIDs = []
+        historicalBackfillAnchorSeq = nil
         activeAskUserQuestionPromptIDByToolCallID = [:]
         pendingLocalCommand = nil
         unsupportedVersions = []
@@ -2513,15 +2554,189 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                   beforeOffset > 0 else {
                 return false
             }
+            // Closure knowledge is three-state: closed, genuinely open, or
+            // unknown because the source could not be indexed. Unknown must
+            // fail closed; replaying the page would otherwise revive an
+            // opener whose terminal may simply be outside this page.
+            guard ensureHistoricalClosureIndex() else {
+                return false
+            }
             let liveParserState = captureLiveParserState()
             resetParserStateForHistoricalReplay()
+            historicalReplayOpenerEventIDs = []
+            historicalBackfillAnchorSeq = beforeSeq
             isBackfillingHistory = true
             defer {
+                historicalBackfillAnchorSeq = nil
                 isBackfillingHistory = false
                 restoreLiveParserState(liveParserState)
             }
-            return (try? tailer.backfill(beforeOffset: beforeOffset, limit: limit)) ?? false
+            let didLoad = (try? tailer.backfill(beforeOffset: beforeOffset, limit: limit)) ?? false
+            if didLoad, let index = historicalClosureIndex {
+                for openerEventID in historicalReplayOpenerEventIDs {
+                    guard let closure = index.closureByOpenerEventID[openerEventID] else {
+                        continue
+                    }
+                    hub.publish(closure,
+                                deliverToSubscribers: false,
+                                storage: .historicalBackfill)
+                }
+            }
+            historicalReplayOpenerEventIDs = []
+            return didLoad
         }
+    }
+
+    private func ensureHistoricalClosureIndex() -> Bool {
+        guard let transcriptURL,
+              let handle = try? FileHandle(forReadingFrom: transcriptURL) else {
+            return false
+        }
+        defer { try? handle.close() }
+
+        var fileStatus = stat()
+        guard fstat(handle.fileDescriptor, &fileStatus) == 0 else {
+            return false
+        }
+        let sourceIdentity = HistoricalClosureSourceIdentity(
+            canonicalPath: Self.canonicalTranscriptPath(transcriptURL.path),
+            device: UInt64(fileStatus.st_dev),
+            inode: UInt64(fileStatus.st_ino),
+            epoch: historicalClosureSourceEpoch)
+        let sourceSize = Int(fileStatus.st_size)
+
+        if historicalClosureIndex?.sourceIdentity != sourceIdentity
+            || sourceSize < (historicalClosureIndex?.indexedThroughByteOffset ?? 0) {
+            historicalClosureIndex = HistoricalClosureIndexState(
+                sourceIdentity: sourceIdentity,
+                indexedThroughByteOffset: 0,
+                parserState: nil,
+                pendingAskOpenerEventIDByPromptID: [:],
+                pendingContextOpenerEventID: nil,
+                closureByOpenerEventID: [:])
+        }
+        guard let startingIndex = historicalClosureIndex else {
+            return false
+        }
+
+        let liveParserState = captureLiveParserState()
+        if let parserState = startingIndex.parserState {
+            restoreLiveParserState(parserState)
+        } else {
+            resetParserStateForHistoricalReplay()
+        }
+        isBackfillingHistory = true
+        historicalIndexEventSink = { [weak self] event in
+            self?.recordHistoricalClosureIndexEvent(event)
+        }
+        var completed = false
+        defer {
+            historicalIndexEventSink = nil
+            isBackfillingHistory = false
+            if completed == false {
+                historicalClosureIndex = nil
+            }
+            restoreLiveParserState(liveParserState)
+        }
+
+        do {
+            try handle.seek(toOffset: UInt64(startingIndex.indexedThroughByteOffset))
+            var pendingData = Data()
+            var pendingDataOffset = startingIndex.indexedThroughByteOffset
+            var searchedThroughIndex = pendingData.startIndex
+            // Scan a fixed EOF snapshot. A continuously appending Claude
+            // process must not make this synchronous history request chase
+            // a moving end forever; the next ensure call consumes the suffix.
+            var remainingByteCount = max(0, sourceSize - startingIndex.indexedThroughByteOffset)
+            while remainingByteCount > 0,
+                  let chunk = try handle.read(upToCount: min(64 * 1024, remainingByteCount)),
+                  chunk.isEmpty == false {
+                pendingData.append(chunk)
+                remainingByteCount -= chunk.count
+                var lineStartIndex = pendingData.startIndex
+                var newlineSearchIndex = min(searchedThroughIndex, pendingData.endIndex)
+                while newlineSearchIndex < pendingData.endIndex,
+                      let newlineIndex = pendingData[newlineSearchIndex...].firstIndex(of: 0x0a) {
+                    let lineOffset = pendingDataOffset
+                        + pendingData.distance(from: pendingData.startIndex, to: lineStartIndex)
+                    let lineData = pendingData[lineStartIndex..<newlineIndex]
+                    if lineData.isEmpty == false,
+                       let line = String(data: Data(lineData), encoding: .utf8) {
+                        consume(line: line, lineOffset: lineOffset)
+                        if pendingLocalCommand?.name != "/context" {
+                            historicalClosureIndex?.pendingContextOpenerEventID = nil
+                        }
+                    }
+                    lineStartIndex = pendingData.index(after: newlineIndex)
+                    newlineSearchIndex = lineStartIndex
+                }
+                if lineStartIndex > pendingData.startIndex {
+                    let consumedByteCount = pendingData.distance(from: pendingData.startIndex,
+                                                                 to: lineStartIndex)
+                    pendingData.removeSubrange(pendingData.startIndex..<lineStartIndex)
+                    pendingDataOffset += consumedByteCount
+                }
+                // Every remaining byte was searched once and contains no
+                // newline. The next chunk resumes at this frontier instead
+                // of rescanning an arbitrarily long partial JSON record.
+                searchedThroughIndex = pendingData.endIndex
+            }
+
+            guard let currentIdentity = historicalClosureSourceIdentity(at: transcriptURL),
+                  currentIdentity == sourceIdentity else {
+                return false
+            }
+            historicalClosureIndex?.indexedThroughByteOffset = pendingDataOffset
+            historicalClosureIndex?.parserState = captureLiveParserState()
+            completed = true
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func historicalClosureSourceIdentity(at url: URL) -> HistoricalClosureSourceIdentity? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else {
+            return nil
+        }
+        defer { try? handle.close() }
+        var fileStatus = stat()
+        guard fstat(handle.fileDescriptor, &fileStatus) == 0 else {
+            return nil
+        }
+        return HistoricalClosureSourceIdentity(
+            canonicalPath: Self.canonicalTranscriptPath(url.path),
+            device: UInt64(fileStatus.st_dev),
+            inode: UInt64(fileStatus.st_ino),
+            epoch: historicalClosureSourceEpoch)
+    }
+
+    private func recordHistoricalClosureIndexEvent(_ event: AgentEvent) {
+        guard let index = historicalClosureIndex else {
+            return
+        }
+        if event.type == .interactivePrompt,
+           let promptID = event.metadata?["prompt_id"] {
+            index.pendingAskOpenerEventIDByPromptID[promptID] = event.eventID
+        } else if event.type == .interactivePromptResolved,
+                  let promptID = event.metadata?["prompt_id"],
+                  let openerEventID = index.pendingAskOpenerEventIDByPromptID.removeValue(forKey: promptID) {
+            index.closureByOpenerEventID[openerEventID] = event
+        } else if event.metadata?["tidey_generated"] == "claude_context_command" {
+            index.pendingContextOpenerEventID = event.eventID
+        } else if event.metadata?["tidey_generated"] == "claude_context",
+                  let openerEventID = index.pendingContextOpenerEventID {
+            index.closureByOpenerEventID[openerEventID] = event
+            index.pendingContextOpenerEventID = nil
+        }
+    }
+
+    private func historicalClosure(forOpener event: AgentEvent) -> AgentEvent? {
+        guard event.type == .interactivePrompt
+                || event.metadata?["tidey_generated"] == "claude_context_command" else {
+            return nil
+        }
+        return historicalClosureIndex?.closureByOpenerEventID[event.eventID]
     }
 
     func stop() {
@@ -3340,7 +3555,6 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                    metadata: [String: String]?,
                                    payload: JSONValue? = nil) {
         let seq = transcriptSequenceBase + transcriptEventSequence(lineOffset: lineOffset, ordinal: ordinal)
-        maxObservedSeq = max(maxObservedSeq, seq)
         let resolvedMetadata = metadataWithClientRequestID(kind: kind, text: text, metadata: metadata)
         let event = AgentEvent(eventID: eventID,
                                seq: seq,
@@ -3357,7 +3571,25 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                toolCallID: toolCallID,
                                metadata: baseMetadata(resolvedMetadata),
                                payload: payload)
+        if let historicalIndexEventSink {
+            historicalIndexEventSink(event)
+            return
+        }
+        maxObservedSeq = max(maxObservedSeq, seq)
         if isBackfillingHistory {
+            // A before-cursor response cannot include a terminal whose
+            // original sequence is at or above that cursor. In that case,
+            // fail closed by withholding the already-resolved opener; the
+            // caller must never see it revived as an active prompt/command.
+            if let anchorSeq = historicalBackfillAnchorSeq,
+               let closure = historicalClosure(forOpener: event),
+               closure.seq >= anchorSeq {
+                return
+            }
+            if event.type == .interactivePrompt
+                || event.metadata?["tidey_generated"] == "claude_context_command" {
+                historicalReplayOpenerEventIDs.insert(event.eventID)
+            }
             hub.publish(event,
                         deliverToSubscribers: false,
                         storage: .historicalBackfill)
