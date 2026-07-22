@@ -585,6 +585,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     private let eventHub: AgentEventHub
     private let workspaceEventHub: WorkspaceEventHub
     private let registryMonitor: AgentSessionRegistryMonitor
+    private let lifecycleStore: AgentSessionLifecycleStore
     private let codexApprovalProvider: CodexAppServerApprovalPromptProviding?
     private let observability: BridgeObservabilityCenter
     private let bridgePort: Int
@@ -610,11 +611,13 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
          observability: BridgeObservabilityCenter,
          bridgePort: Int,
          cloudflaredManager: BridgeCloudflaredManager,
-         ordinaryTmuxProjectionContext: OrdinaryTmuxProjectionContext = OrdinaryTmuxProjectionContext()) {
+         ordinaryTmuxProjectionContext: OrdinaryTmuxProjectionContext = OrdinaryTmuxProjectionContext(),
+         lifecycleStore: AgentSessionLifecycleStore = AgentSessionLifecycle.store) {
         self.socketClient = socketClient
         self.eventHub = eventHub
         self.workspaceEventHub = workspaceEventHub
         self.registryMonitor = registryMonitor
+        self.lifecycleStore = lifecycleStore
         self.codexApprovalProvider = codexApprovalSubmitter
         self.observability = observability
         self.bridgePort = bridgePort
@@ -1185,7 +1188,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         registryMonitor.replaceLivePanels(workspaceID: extracted.workspaceID, panels: extracted.snapshots)
     }
 
-    private func augmentPanelListResult(_ result: [String: JSONValue]) -> [String: JSONValue] {
+    func augmentPanelListResult(_ result: [String: JSONValue]) -> [String: JSONValue] {
         guard let workspaceID = result["workspace_id"]?.stringValue,
               let panels = result["panels"]?.arrayValue else {
             return result
@@ -1215,7 +1218,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         return augmented
     }
 
-    private func augmentWorkspaceListResult(_ result: [String: JSONValue]) -> [String: JSONValue] {
+    func augmentWorkspaceListResult(_ result: [String: JSONValue]) -> [String: JSONValue] {
         guard let workspaces = result["workspaces"]?.arrayValue else {
             return result
         }
