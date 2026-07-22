@@ -672,10 +672,26 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
             Self.record(sessionID: "second", runtime: "codex_app_server", socketPath: "/tmp/second.sock"),
         ])
 
-        try syncer.submitMessage(sessionID: "second", text: "hello from remote")
+        try syncer.submitMessage(sessionID: "second",
+                                 text: "hello from remote",
+                                 clientRequestID: "client-1")
 
         XCTAssertTrue(firstRuntime.submittedMessages.isEmpty)
         XCTAssertEqual(secondRuntime.submittedMessages, ["hello from remote"])
+        XCTAssertEqual(secondRuntime.submittedClientRequestIDs, ["client-1"])
+    }
+
+    func testSubmitMessageUnknownSessionIsUnavailableBeforeSend() {
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: AgentEventHub())
+
+        XCTAssertThrowsError(try syncer.submitMessage(sessionID: "missing",
+                                                      text: "not sent",
+                                                      clientRequestID: "client-1")) { error in
+            guard case CodexAppServerSubmitFailure.unavailableBeforeSend(let reason) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertTrue(reason.contains("Unknown Codex app-server session"))
+        }
     }
 
     func testSyncTreatsSameThreadRecordsAsSeparateRuntimeInstances() {
@@ -1278,6 +1294,7 @@ private final class FakeRuntimeSession: CodexAppServerRuntimeSessionControlling 
     var refreshActiveThreadCallCount = 0
     var submitAttempts = [String]()
     var submittedMessages = [String]()
+    var submittedClientRequestIDs = [String?]()
     var resolvedEventsByPromptID = [String: AgentEvent]()
     var pendingPromptEvents = [AgentEvent]()
     var registryRootThreadIDs = [String]()
@@ -1326,7 +1343,12 @@ private final class FakeRuntimeSession: CodexAppServerRuntimeSessionControlling 
     }
 
     func submitMessage(text: String) throws {
+        try submitMessage(text: text, clientRequestID: nil)
+    }
+
+    func submitMessage(text: String, clientRequestID: String?) throws {
         submittedMessages.append(text)
+        submittedClientRequestIDs.append(clientRequestID)
     }
 
     func stop() {

@@ -444,7 +444,8 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
             entriesBySessionID[sessionID]?.session
         }
         guard let session else {
-            throw BridgeInternalError.notFound("Unknown Codex app-server session.")
+            throw CodexAppServerSubmitFailure.unavailableBeforeSend(
+                "Unknown Codex app-server session.")
         }
         try session.submitMessage(text: text, clientRequestID: clientRequestID)
     }

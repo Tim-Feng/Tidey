@@ -189,38 +189,33 @@ struct BridgeInputActionHandler {
 
         BridgeLogger.input.info("dispatch action=chat_submit request_id=\(request.id, privacy: .public) workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) session_id=\(activeSession?.sessionID ?? requestedSessionID ?? "-", privacy: .public) vendor=\(vendor.id, privacy: .public) length=\(message.count) has_cr=\(message.contains("\r")) has_lf=\(message.contains("\n")) tail=\(summarizedTail(message), privacy: .public)")
 
-        let activeRecord = activeSession.flatMap { sessionResolver.activeRecord(sessionID: $0.sessionID) }
-        let canSubmitViaAppServer: Bool?
+        let appServerSessionID = activeSession?.sessionID ?? requestedSessionID
+        let activeRecord = appServerSessionID.flatMap { sessionResolver.activeRecord(sessionID: $0) }
         if vendor.id == "codex",
-           let activeSession,
-           activeRecord?.runtime == "codex_app_server",
-           let codexAppServerChatSubmitter {
-            canSubmitViaAppServer = codexAppServerChatSubmitter.canSubmitMessage(sessionID: activeSession.sessionID)
-        } else {
-            canSubmitViaAppServer = nil
-        }
-        if vendor.id == "codex",
-           activeRecord?.runtime == "codex_app_server" {
-            if codexAppServerChatSubmitter != nil,
-               canSubmitViaAppServer == true {
-                BridgeLogger.input.debug("codex app-server submit gate request_id=\(request.id, privacy: .public) workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) session_id=\(activeSession?.sessionID ?? "-", privacy: .public) active_record_runtime=\(activeRecord?.runtime ?? "-", privacy: .public) has_submitter=true can_submit=true")
-            } else {
-                BridgeLogger.input.info("codex app-server submit gate blocked request_id=\(request.id, privacy: .public) workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) session_id=\(activeSession?.sessionID ?? "-", privacy: .public) active_record_runtime=\(activeRecord?.runtime ?? "-", privacy: .public) has_submitter=\((codexAppServerChatSubmitter != nil), privacy: .public) can_submit=\(canSubmitViaAppServer.map(String.init) ?? "-", privacy: .public)")
+           let appServerSessionID,
+           let activeRecord,
+           activeRecord.runtime == "codex_app_server" {
+            guard activeRecord.workspaceID == workspaceID,
+                  activeRecord.panelID == panelID,
+                  activeRecord.vendor == vendor.id else {
+                throw BridgeInternalError.invalidRequest(
+                    "chat_submit session_id does not belong to the requested workspace_id/panel_id/vendor")
             }
-        }
+            guard let codexAppServerChatSubmitter else {
+                BridgeLogger.input.error("codex app-server chat submitter unavailable; failing closed request_id=\(request.id, privacy: .public) session_id=\(appServerSessionID, privacy: .public)")
+                return Self.conflictResponse(for: request,
+                                             vendorID: vendor.id,
+                                             sessionID: appServerSessionID)
+            }
 
-        if vendor.id == "codex",
-           let activeSession,
-           activeRecord?.runtime == "codex_app_server" {
-            if let codexAppServerChatSubmitter,
-               canSubmitViaAppServer == true {
-                finalSubmissionState = .indeterminate
-                try codexAppServerChatSubmitter.submitMessage(sessionID: activeSession.sessionID,
-                                                              text: message)
+            do {
+                try codexAppServerChatSubmitter.submitMessage(sessionID: appServerSessionID,
+                                                              text: message,
+                                                              clientRequestID: clientRequestID)
                 if let clientRequestID {
                     chatSubmitEchoRegistry?.register(workspaceID: workspaceID,
                                                      panelID: panelID,
-                                                     sessionID: activeSession.sessionID,
+                                                     sessionID: appServerSessionID,
                                                      vendor: vendor.id,
                                                      text: message,
                                                      clientRequestID: clientRequestID)
@@ -228,16 +223,24 @@ struct BridgeInputActionHandler {
                 finalSubmissionState = .delivered
                 return Self.submittedResponse(for: request,
                                               vendorID: vendor.id,
-                                              sessionID: activeSession.sessionID,
+                                              sessionID: appServerSessionID,
                                               deduplicated: false)
+            } catch CodexAppServerSubmitFailure.busyWithoutTurnID {
+                return Self.conflictResponse(for: request,
+                                             vendorID: vendor.id,
+                                             sessionID: appServerSessionID)
+            } catch CodexAppServerSubmitFailure.rejected {
+                return Self.conflictResponse(for: request,
+                                             vendorID: vendor.id,
+                                             sessionID: appServerSessionID)
+            } catch CodexAppServerSubmitFailure.unavailableBeforeSend {
+                return Self.conflictResponse(for: request,
+                                             vendorID: vendor.id,
+                                             sessionID: appServerSessionID)
+            } catch {
+                finalSubmissionState = .indeterminate
+                throw error
             }
-            let fallbackReason: String
-            if codexAppServerChatSubmitter == nil {
-                fallbackReason = "missing_submitter"
-            } else {
-                fallbackReason = "can_submit_false"
-            }
-            BridgeLogger.input.info("codex app-server runtime not ready; falling back to terminal input session_id=\(activeSession.sessionID, privacy: .public) reason=\(fallbackReason, privacy: .public)")
         }
 
         var previousStepUsedOrdinaryTmux = false
