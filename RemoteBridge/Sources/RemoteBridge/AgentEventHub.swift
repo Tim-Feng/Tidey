@@ -305,6 +305,13 @@ final class AgentEventHub {
         }
     }
 
+    func sequenceHighWater(sessionID: String) -> Int {
+        queue.sync {
+            max(sessions[sessionID]?.storedSeqHighWater ?? transcriptSessionStartedSequence,
+                reservedSeqBySessionID[sessionID] ?? transcriptSessionStartedSequence)
+        }
+    }
+
     func nextSyntheticSeq(sessionID: String) -> Int {
         queue.sync {
             let stored = sessions[sessionID]?.storedSeqHighWater ?? transcriptSessionStartedSequence
@@ -556,10 +563,12 @@ final class AgentEventHub {
         case historicalBackfill
     }
 
+    @discardableResult
     func publish(_ event: AgentEvent,
                  deliverToSubscribers: Bool = true,
-                 storage: PublishStorage = .liveForward) {
+                 storage: PublishStorage = .liveForward) -> AgentEvent? {
         var event = event
+        var acceptedEvent: AgentEvent?
         let deliveryCompletion: DispatchSemaphore? = queue.sync {
             var state = sessions[event.sessionID] ?? SessionState()
             switch storage {
@@ -606,6 +615,7 @@ final class AgentEventHub {
                     state.historicalEventIDs = Set(state.historicalEvents.map(\.eventID))
                 }
                 sessions[event.sessionID] = state
+                acceptedEvent = event
                 return nil
             }
 
@@ -623,6 +633,7 @@ final class AgentEventHub {
                 break
             }
             sessions[event.sessionID] = state
+            acceptedEvent = event
 
             guard deliverToSubscribers else {
                 return nil
@@ -669,6 +680,7 @@ final class AgentEventHub {
         if deliveryExecutor.isCurrent == false {
             deliveryCompletion?.wait()
         }
+        return acceptedEvent
     }
 
     // Replaces the caller-owned historical window atomically. Live events,

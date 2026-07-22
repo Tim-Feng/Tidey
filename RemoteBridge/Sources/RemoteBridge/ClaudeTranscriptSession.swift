@@ -2701,6 +2701,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private var isCollectingHistoricalBackfillPage = false
     private var collectedHistoricalBackfillPage = [(offset: Int, line: String)]()
     private var historicalBackfillAnchorSeq: Int?
+    private var exactTranscriptPositionByPublicSequence = [Int: TranscriptEventPosition]()
+    private var publicTranscriptSequenceByEventID = [String: Int]()
 
     func historicalClosureIndexStatsForTesting() -> ClaudeHistoricalClosureIndexStats {
         queue.sync {
@@ -2738,6 +2740,9 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     }
 
     private func transcriptEventPositionInCurrentSource(for seq: Int) -> TranscriptEventPosition? {
+        if let exactPosition = exactTranscriptPositionByPublicSequence[seq] {
+            return exactPosition
+        }
         guard seq > transcriptSequenceBase else {
             return nil
         }
@@ -2859,7 +2864,10 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private func beginNewSourceEpoch() {
         tailer?.stop()
         tailer = nil
-        transcriptSequenceBase = maxObservedSeq
+        transcriptSequenceBase = max(maxObservedSeq,
+                                     hub.sequenceHighWater(sessionID: record.sessionID))
+        exactTranscriptPositionByPublicSequence = [:]
+        publicTranscriptSequenceByEventID = [:]
         historicalClosureSourceEpoch &+= 1
         historicalClosureIndex = nil
         historicalIndexEventSink = nil
@@ -4218,7 +4226,10 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                    toolCallID: String?,
                                    metadata: [String: String]?,
                                    payload: JSONValue? = nil) -> AgentEvent {
-        let seq = transcriptSequenceBase + transcriptEventSequence(lineOffset: lineOffset, ordinal: ordinal)
+        let position = TranscriptEventPosition(lineOffset: lineOffset, ordinal: ordinal)
+        let proposedSeq = transcriptSequenceBase
+            + transcriptEventSequence(lineOffset: lineOffset, ordinal: ordinal)
+        let seq = publicTranscriptSequenceByEventID[eventID] ?? proposedSeq
         let resolvedMetadata = metadataWithClientRequestID(kind: kind, text: text, metadata: metadata)
         let event = AgentEvent(eventID: eventID,
                                seq: seq,
@@ -4239,8 +4250,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             historicalIndexEventSink(event)
             return event
         }
-        maxObservedSeq = max(maxObservedSeq, seq)
         if isBackfillingHistory {
+            maxObservedSeq = max(maxObservedSeq, seq)
             if let anchorSeq = historicalBackfillAnchorSeq,
                event.seq >= anchorSeq {
                 return event
@@ -4252,9 +4263,23 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             historicalReplayProducts.append(event)
             return event
         }
-        hub.publish(event)
-        publishInteractivePromptSidebarIfNeeded(event)
-        return event
+        guard let acceptedEvent = hub.publish(event) else {
+            maxObservedSeq = max(maxObservedSeq, seq)
+            return event
+        }
+        maxObservedSeq = max(maxObservedSeq, acceptedEvent.seq)
+        if acceptedEvent.seq != proposedSeq {
+            exactTranscriptPositionByPublicSequence[acceptedEvent.seq] = position
+            publicTranscriptSequenceByEventID[eventID] = acceptedEvent.seq
+            if let index = historicalClosureIndex,
+               let openerEventID = index.openerEventIDByClosureEventID[eventID],
+               let closure = index.closureByOpenerEventID[openerEventID] {
+                index.closureByOpenerEventID[openerEventID] = closure.withSeq(acceptedEvent.seq)
+                synchronizeHistoricalOpenerClosureSequences()
+            }
+        }
+        publishInteractivePromptSidebarIfNeeded(acceptedEvent)
+        return acceptedEvent
     }
 
     private func publishSynthetic(kind: AgentEventKind,
@@ -4268,7 +4293,6 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                   output: String?,
                                   toolCallID: String?,
                                   metadata: [String: String]?) {
-        maxObservedSeq = max(maxObservedSeq, seq)
         let event = AgentEvent(eventID: eventID,
                                seq: seq,
                                vendor: "claude",
@@ -4283,8 +4307,9 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                output: output,
                                toolCallID: toolCallID,
                                metadata: metadata)
-        hub.publish(event, deliverToSubscribers: !isBackfillingHistory)
-        publishInteractivePromptSidebarIfNeeded(event)
+        let acceptedEvent = hub.publish(event, deliverToSubscribers: !isBackfillingHistory) ?? event
+        maxObservedSeq = max(maxObservedSeq, acceptedEvent.seq)
+        publishInteractivePromptSidebarIfNeeded(acceptedEvent)
     }
 
     func publishInteractivePromptSidebarIfNeeded(_ event: AgentEvent) {
