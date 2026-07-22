@@ -1,5 +1,80 @@
 import Foundation
 
+private final class OrdinaryTmuxPaneIdentityReconciliationBatch: @unchecked Sendable {
+    typealias Completion = @Sendable (Bool) -> Void
+
+    private let lock = NSLock()
+    private let allowsNoCarriers: Bool
+    private let completion: Completion
+    private var carrierCount = 0
+    private var pendingTaskCount = 0
+    private var failed = false
+    private var sealed = false
+    private var resolved = false
+
+    init(allowsNoCarriers: Bool,
+         completion: @escaping Completion) {
+        self.allowsNoCarriers = allowsNoCarriers
+        self.completion = completion
+    }
+
+    func recordCarrier() {
+        lock.lock()
+        carrierCount += 1
+        lock.unlock()
+    }
+
+    func recordFailure() {
+        lock.lock()
+        failed = true
+        let resolution = resolveIfReadyLocked()
+        lock.unlock()
+        resolve(resolution)
+    }
+
+    func registerTask() {
+        lock.lock()
+        pendingTaskCount += 1
+        lock.unlock()
+    }
+
+    func completeTask(succeeded: Bool) {
+        lock.lock()
+        if succeeded == false {
+            failed = true
+        }
+        pendingTaskCount = max(0, pendingTaskCount - 1)
+        let resolution = resolveIfReadyLocked()
+        lock.unlock()
+        resolve(resolution)
+    }
+
+    func seal() {
+        lock.lock()
+        sealed = true
+        if carrierCount == 0, allowsNoCarriers == false {
+            failed = true
+        }
+        let resolution = resolveIfReadyLocked()
+        lock.unlock()
+        resolve(resolution)
+    }
+
+    private func resolveIfReadyLocked() -> Bool? {
+        guard sealed, pendingTaskCount == 0, resolved == false else {
+            return nil
+        }
+        resolved = true
+        return failed == false
+    }
+
+    private func resolve(_ result: Bool?) {
+        if let result {
+            completion(result)
+        }
+    }
+}
+
 final class OrdinaryTmuxProjectionContext: @unchecked Sendable {
     let registry: OrdinaryTmuxPanelRegistry
     let projector: OrdinaryTmuxPanelProjector
@@ -11,6 +86,8 @@ final class OrdinaryTmuxProjectionContext: @unchecked Sendable {
 }
 
 final class OrdinaryTmuxPanelProjector {
+    static let projectionCooldownInterval: TimeInterval = 10
+
     private struct CacheEntry {
         let panels: [OrdinaryTmuxProjectedPanel]
         let loadedAt: Date
@@ -41,6 +118,7 @@ final class OrdinaryTmuxPanelProjector {
                                                   qos: .utility)
     private var cache = [String: CacheEntry]()
     private var identityCache = [String: String]()
+    private var identityInFlightBatches = [String: [OrdinaryTmuxPaneIdentityReconciliationBatch]]()
     private var projectionCooldownUntilByKey = [String: Date]()
 
     init(adapter: OrdinaryTmuxWindowProjecting = OrdinaryTmuxCLIAdapter(),
@@ -58,8 +136,25 @@ final class OrdinaryTmuxPanelProjector {
     }
 
     func projectPanelListResult(_ result: [String: JSONValue]) -> [String: JSONValue] {
+        projectPanelListResult(result, reconciliationBatch: nil)
+    }
+
+    @discardableResult
+    func reconcilePaneIdentities(inPanelListResult result: [String: JSONValue],
+                                 allowsNoCarriers: Bool = false,
+                                 completion: @escaping @Sendable (Bool) -> Void) -> [String: JSONValue] {
+        let batch = OrdinaryTmuxPaneIdentityReconciliationBatch(allowsNoCarriers: allowsNoCarriers,
+                                                                completion: completion)
+        let projectedResult = projectPanelListResult(result, reconciliationBatch: batch)
+        batch.seal()
+        return projectedResult
+    }
+
+    private func projectPanelListResult(_ result: [String: JSONValue],
+                                        reconciliationBatch: OrdinaryTmuxPaneIdentityReconciliationBatch?) -> [String: JSONValue] {
         guard let workspaceID = result["workspace_id"]?.stringValue,
               let panels = result["panels"]?.arrayValue else {
+            reconciliationBatch?.recordFailure()
             return result
         }
 
@@ -82,14 +177,17 @@ final class OrdinaryTmuxPanelProjector {
                 continue
             }
             ordinaryCarrierCount += 1
+            reconciliationBatch?.recordCarrier()
             guard let carrierPanelID = carrierPanel["panel_id"]?.stringValue else {
                 everyCarrierProjectionIsAuthoritative = false
+                reconciliationBatch?.recordFailure()
                 BridgeLogger.server.debug("ordinary tmux projection skipped workspace_id=\(workspaceID, privacy: .public) fallback_reason=missing_carrier_panel_id")
                 nextPanels.append(panelValue)
                 continue
             }
             guard let metadata = OrdinaryTmuxAttachMetadata(json: ordinaryTmuxMetadata) else {
                 everyCarrierProjectionIsAuthoritative = false
+                reconciliationBatch?.recordFailure()
                 BridgeLogger.server.debug("ordinary tmux projection skipped workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) fallback_reason=invalid_metadata")
                 nextPanels.append(panelValue)
                 continue
@@ -99,6 +197,7 @@ final class OrdinaryTmuxPanelProjector {
             let socketKey = metadata.preferredSocketSelector.cacheKey
             if timedOutSocketKeys.contains(socketKey) {
                 everyCarrierProjectionIsAuthoritative = false
+                reconciliationBatch?.recordFailure()
                 BridgeLogger.server.info("ordinary tmux projection skipped workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) socket=\(metadata.preferredSocketSelector.logDescription, privacy: .public) reason=socket_timeout_in_request")
                 didProjectCarrier = true
                 nextPanels.append(Self.carrierPanelValue(carrierPanel,
@@ -114,6 +213,7 @@ final class OrdinaryTmuxPanelProjector {
                                                           carrierPanelID: carrierPanelID)
             } catch {
                 everyCarrierProjectionIsAuthoritative = false
+                reconciliationBatch?.recordFailure()
                 BridgeLogger.server.error("ordinary tmux projection failed workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) tty=\(metadata.clientTTY, privacy: .public) target=\(metadata.targetSession ?? "<default>", privacy: .public) fallback_reason=adapter_error error=\(String(describing: error), privacy: .public)")
                 nextPanels.append(panelValue)
                 continue
@@ -137,8 +237,10 @@ final class OrdinaryTmuxPanelProjector {
                                            metadata: metadata,
                                            panelID: carrierPanelID)
                     if projectedLoad.canSetPaneIdentity {
-                        schedulePaneIdentitiesIfNeeded(routes: [route])
+                        schedulePaneIdentitiesIfNeeded(routes: [route],
+                                                       reconciliationBatch: reconciliationBatch)
                     } else {
+                        reconciliationBatch?.recordFailure()
                         BridgeLogger.server.info("ordinary tmux pane identity sync skipped workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) reason=stale_single_window_projection")
                     }
                     BridgeLogger.server.info("ordinary tmux single-window carrier enriched workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) pane_id=\(projectedPanel.activePaneID, privacy: .public) pane_pid=\(projectedPanel.activePanePID.map(String.init) ?? "-", privacy: .public) current_command=\(projectedPanel.currentCommand ?? "-", privacy: .public) socket_path=\(projectedPanel.socketPath ?? "-", privacy: .public)")
@@ -153,12 +255,14 @@ final class OrdinaryTmuxPanelProjector {
                                                              carrierPanelID: carrierPanelID,
                                                              displayState: projectedLoad.displayState))
                 } else if let unavailableReason = projectedLoad.unavailableReason {
+                    reconciliationBatch?.recordFailure()
                     didProjectCarrier = true
                     BridgeLogger.server.info("ordinary tmux projection unavailable workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) reason=\(unavailableReason, privacy: .public)")
                     nextPanels.append(Self.carrierPanelValue(carrierPanel,
                                                              projectionStatus: "unavailable",
                                                              reason: unavailableReason))
                 } else {
+                    reconciliationBatch?.recordFailure()
                     BridgeLogger.server.debug("ordinary tmux projection skipped workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) projected_count=0 fallback_reason=no_windows")
                     if projectedLoad.canReplaceRegistry {
                         didObserveFreshProjection = true
@@ -177,8 +281,10 @@ final class OrdinaryTmuxPanelProjector {
                            metadata: metadata)
             }
             if projectedLoad.canSetPaneIdentity {
-                schedulePaneIdentitiesIfNeeded(routes: projectedRoutes)
+                schedulePaneIdentitiesIfNeeded(routes: projectedRoutes,
+                                               reconciliationBatch: reconciliationBatch)
             } else {
+                reconciliationBatch?.recordFailure()
                 BridgeLogger.server.info("ordinary tmux pane identity sync skipped workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) reason=stale_projection")
             }
             if projectedLoad.canReplaceRegistry {
@@ -290,7 +396,7 @@ final class OrdinaryTmuxPanelProjector {
                                                             reason: "timeout") {
                     return staleLoad
                 }
-                BridgeLogger.server.error("ordinary tmux projection timed out without cache workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) cooldown_seconds=10")
+                BridgeLogger.server.error("ordinary tmux projection timed out without cache workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) cooldown_seconds=\(Self.projectionCooldownInterval, privacy: .public)")
                 return ProjectedPanelsLoad(panels: [],
                                            canSetPaneIdentity: false,
                                            canReplaceRegistry: false,
@@ -337,7 +443,7 @@ final class OrdinaryTmuxPanelProjector {
 
     private func enterProjectionCooldown(for key: String, at currentDate: Date) {
         cacheQueue.sync {
-            projectionCooldownUntilByKey[key] = currentDate.addingTimeInterval(10)
+            projectionCooldownUntilByKey[key] = currentDate.addingTimeInterval(Self.projectionCooldownInterval)
         }
     }
 
@@ -371,44 +477,69 @@ final class OrdinaryTmuxPanelProjector {
         return nil
     }
 
-    private func schedulePaneIdentitiesIfNeeded(routes: [OrdinaryTmuxPanelRoute]) {
-        var routesToSync = [OrdinaryTmuxPanelRoute]()
+    private func schedulePaneIdentitiesIfNeeded(routes: [OrdinaryTmuxPanelRoute],
+                                                reconciliationBatch: OrdinaryTmuxPaneIdentityReconciliationBatch? = nil) {
+        var routesToSync = [(route: OrdinaryTmuxPanelRoute, operationKey: String)]()
         for route in routes {
             let key = Self.identityCacheKey(route: route)
-            let shouldSet = cacheQueue.sync { () -> Bool in
-                guard identityCache[key] != route.panelID else {
-                    return false
+            let operationKey = Self.identityOperationKey(route: route)
+            let decision = cacheQueue.sync { () -> Int in
+                if identityInFlightBatches[operationKey] != nil {
+                    if let reconciliationBatch {
+                        reconciliationBatch.registerTask()
+                        identityInFlightBatches[operationKey, default: []].append(reconciliationBatch)
+                    }
+                    return 1
                 }
-                identityCache[key] = route.panelID
-                return true
+                if identityCache[key] == route.panelID, reconciliationBatch == nil {
+                    return 0
+                }
+                if let reconciliationBatch {
+                    reconciliationBatch.registerTask()
+                    identityInFlightBatches[operationKey] = [reconciliationBatch]
+                } else {
+                    identityInFlightBatches[operationKey] = []
+                }
+                return 2
             }
-            guard shouldSet else {
+
+            if decision == 0 {
                 BridgeLogger.server.info("ordinary tmux pane identity sync skipped workspace_id=\(route.workspaceID, privacy: .public) panel_id=\(route.panelID, privacy: .public) window_id=\(route.windowID, privacy: .public) pane_id=\(route.activePaneID, privacy: .public) reason=already_set")
                 continue
             }
-            routesToSync.append(route)
+            if decision == 1 {
+                BridgeLogger.server.info("ordinary tmux pane identity sync joined workspace_id=\(route.workspaceID, privacy: .public) panel_id=\(route.panelID, privacy: .public) window_id=\(route.windowID, privacy: .public) pane_id=\(route.activePaneID, privacy: .public) reason=write_in_flight")
+                continue
+            }
+            routesToSync.append((route, operationKey))
         }
 
         guard routesToSync.isEmpty == false else {
             return
         }
 
-        identitySyncQueue.async { [weak self] in
-            guard let self else {
-                return
-            }
-            for route in routesToSync {
+        identitySyncQueue.async { [self] in
+            for item in routesToSync {
+                let route = item.route
                 let key = Self.identityCacheKey(route: route)
+                let succeeded: Bool
                 do {
                     try adapter.setPaneIdentity(route: route)
+                    succeeded = true
                     BridgeLogger.server.info("ordinary tmux pane identity sync set workspace_id=\(route.workspaceID, privacy: .public) panel_id=\(route.panelID, privacy: .public) window_id=\(route.windowID, privacy: .public) pane_id=\(route.activePaneID, privacy: .public)")
                 } catch {
-                    self.cacheQueue.sync {
-                        if self.identityCache[key] == route.panelID {
-                            self.identityCache.removeValue(forKey: key)
-                        }
-                    }
+                    succeeded = false
                     BridgeLogger.server.error("ordinary tmux pane identity sync failed workspace_id=\(route.workspaceID, privacy: .public) panel_id=\(route.panelID, privacy: .public) window_id=\(route.windowID, privacy: .public) pane_id=\(route.activePaneID, privacy: .public) error=\(String(describing: error), privacy: .public)")
+                }
+                let batches = cacheQueue.sync { () -> [OrdinaryTmuxPaneIdentityReconciliationBatch] in
+                    let batches = identityInFlightBatches.removeValue(forKey: item.operationKey) ?? []
+                    if succeeded {
+                        identityCache[key] = route.panelID
+                    }
+                    return batches
+                }
+                for batch in batches {
+                    batch.completeTask(succeeded: succeeded)
                 }
             }
         }
@@ -567,6 +698,10 @@ final class OrdinaryTmuxPanelProjector {
             route.windowID,
             route.activePaneID,
         ].joined(separator: "|")
+    }
+
+    private static func identityOperationKey(route: OrdinaryTmuxPanelRoute) -> String {
+        [identityCacheKey(route: route), route.panelID].joined(separator: "|")
     }
 
     private static func isTmuxCommandTimeout(_ error: Error) -> Bool {

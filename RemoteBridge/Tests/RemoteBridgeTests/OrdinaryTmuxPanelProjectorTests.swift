@@ -2,6 +2,23 @@ import XCTest
 @testable import RemoteBridge
 
 final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
+    private final class BoolResultsCapture: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values = [Bool]()
+
+        func append(_ value: Bool) {
+            lock.lock()
+            values.append(value)
+            lock.unlock()
+        }
+
+        var snapshot: [Bool] {
+            lock.lock()
+            defer { lock.unlock() }
+            return values
+        }
+    }
+
     private struct StubAdapter: OrdinaryTmuxWindowProjecting {
         let panels: [OrdinaryTmuxProjectedPanel]
 
@@ -18,6 +35,112 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
         }
 
         func setPaneIdentity(route: OrdinaryTmuxPanelRoute) throws {}
+    }
+
+    private struct IdentityWriteFailingAdapter: OrdinaryTmuxWindowProjecting {
+        let panels: [OrdinaryTmuxProjectedPanel]
+
+        func projectedPanels(for metadata: OrdinaryTmuxAttachMetadata) throws -> [OrdinaryTmuxProjectedPanel] {
+            panels
+        }
+
+        func setPaneIdentity(route: OrdinaryTmuxPanelRoute) throws {
+            throw NSError(domain: "OrdinaryTmuxPanelProjectorTests.identity", code: 1)
+        }
+    }
+
+    private final class BlockingIdentityWriteFailingAdapter: OrdinaryTmuxWindowProjecting, @unchecked Sendable {
+        let panels: [OrdinaryTmuxProjectedPanel]
+        private let started = DispatchSemaphore(value: 0)
+        private let releaseWrite = DispatchSemaphore(value: 0)
+        private let lock = NSLock()
+        private var writeCount = 0
+
+        init(panels: [OrdinaryTmuxProjectedPanel]) {
+            self.panels = panels
+        }
+
+        func projectedPanels(for metadata: OrdinaryTmuxAttachMetadata) throws -> [OrdinaryTmuxProjectedPanel] {
+            panels
+        }
+
+        func setPaneIdentity(route: OrdinaryTmuxPanelRoute) throws {
+            lock.lock()
+            writeCount += 1
+            lock.unlock()
+            started.signal()
+            _ = releaseWrite.wait(timeout: .now() + 1)
+            throw NSError(domain: "OrdinaryTmuxPanelProjectorTests.blocking-identity", code: 1)
+        }
+
+        func waitUntilWriteStarts() -> DispatchTimeoutResult {
+            started.wait(timeout: .now() + 1)
+        }
+
+        func finishWrite() {
+            releaseWrite.signal()
+        }
+
+        var writeCountSnapshot: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return writeCount
+        }
+    }
+
+    private final class MultipleIdentityWriteAdapter: OrdinaryTmuxWindowProjecting, @unchecked Sendable {
+        let panels: [OrdinaryTmuxProjectedPanel]
+        private let firstWriteStarted = DispatchSemaphore(value: 0)
+        private let releaseFirstWrite = DispatchSemaphore(value: 0)
+        private let secondWriteStarted = DispatchSemaphore(value: 0)
+        private let releaseSecondWrite = DispatchSemaphore(value: 0)
+        private let lock = NSLock()
+        private var writtenPaneIDs = [String]()
+
+        init(panels: [OrdinaryTmuxProjectedPanel]) {
+            self.panels = panels
+        }
+
+        func projectedPanels(for metadata: OrdinaryTmuxAttachMetadata) throws -> [OrdinaryTmuxProjectedPanel] {
+            panels
+        }
+
+        func setPaneIdentity(route: OrdinaryTmuxPanelRoute) throws {
+            lock.lock()
+            writtenPaneIDs.append(route.activePaneID)
+            lock.unlock()
+            if route.activePaneID == "%15" {
+                firstWriteStarted.signal()
+                _ = releaseFirstWrite.wait(timeout: .now() + 1)
+            }
+            if route.activePaneID == "%16" {
+                secondWriteStarted.signal()
+                _ = releaseSecondWrite.wait(timeout: .now() + 1)
+                throw NSError(domain: "OrdinaryTmuxPanelProjectorTests.multiple-identity", code: 2)
+            }
+        }
+
+        func waitUntilFirstWriteStarts() -> DispatchTimeoutResult {
+            firstWriteStarted.wait(timeout: .now() + 1)
+        }
+
+        func finishFirstWrite() {
+            releaseFirstWrite.signal()
+        }
+
+        func waitUntilSecondWriteStarts() -> DispatchTimeoutResult {
+            secondWriteStarted.wait(timeout: .now() + 1)
+        }
+
+        func finishSecondWrite() {
+            releaseSecondWrite.signal()
+        }
+
+        var writtenPaneIDsSnapshot: [String] {
+            lock.lock()
+            defer { lock.unlock() }
+            return writtenPaneIDs
+        }
     }
 
     private struct PartialFailureAdapter: OrdinaryTmuxWindowProjecting {
@@ -490,6 +613,125 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
         XCTAssertEqual(waitForIdentityRoutes(adapter, count: 2).count, 2)
     }
 
+    func testReconciliationReportsPaneIdentityWriteFailure() {
+        let projector = OrdinaryTmuxPanelProjector(adapter: IdentityWriteFailingAdapter(panels: [
+            projectedPanel(windowID: "@15", index: 0, name: "priest", paneID: "%15", current: true),
+        ]))
+        let completed = expectation(description: "pane identity reconciliation completes")
+        let results = BoolResultsCapture()
+
+        _ = projector.reconcilePaneIdentities(inPanelListResult: panelListResult()) { result in
+            results.append(result)
+            completed.fulfill()
+        }
+
+        wait(for: [completed], timeout: 1)
+        XCTAssertEqual(results.snapshot, [false],
+                       "an async setPaneIdentity failure must remain observable so the reconciler can retry")
+    }
+
+    func testReconciliationJoinsPendingIdentityWriteAndObservesItsFailure() {
+        let adapter = BlockingIdentityWriteFailingAdapter(panels: [
+            projectedPanel(windowID: "@15", index: 0, name: "priest", paneID: "%15", current: true),
+        ])
+        let projector = OrdinaryTmuxPanelProjector(adapter: adapter)
+        let completed = expectation(description: "joined pending identity write completes")
+        let results = BoolResultsCapture()
+
+        _ = projector.projectPanelListResult(panelListResult())
+        XCTAssertEqual(adapter.waitUntilWriteStarts(), .success)
+
+        _ = projector.reconcilePaneIdentities(inPanelListResult: panelListResult()) { result in
+            results.append(result)
+            completed.fulfill()
+        }
+        adapter.finishWrite()
+
+        wait(for: [completed], timeout: 1)
+        XCTAssertEqual(results.snapshot, [false],
+                       "a reconciliation must join an already pending write instead of treating it as committed")
+        XCTAssertEqual(adapter.writeCountSnapshot, 1,
+                       "joining the in-flight write should not enqueue a duplicate tmux mutation")
+    }
+
+    func testReconciliationRewritesCommittedIdentityForReusedTmuxPaneID() {
+        let adapter = MutableAdapter(panels: [
+            projectedPanel(windowID: "@15", index: 0, name: "priest", paneID: "%15", current: true),
+        ])
+        let projector = OrdinaryTmuxPanelProjector(adapter: adapter)
+        let completed = expectation(description: "committed identity is revalidated")
+
+        _ = projector.projectPanelListResult(panelListResult())
+        XCTAssertEqual(waitForIdentityRoutes(adapter, count: 1).count, 1)
+
+        _ = projector.reconcilePaneIdentities(inPanelListResult: panelListResult()) { succeeded in
+            XCTAssertTrue(succeeded)
+            completed.fulfill()
+        }
+
+        wait(for: [completed], timeout: 1)
+        XCTAssertEqual(waitForIdentityRoutes(adapter, count: 2).count, 2,
+                       "event reconciliation must rewrite options even when tmux reuses the same $/@/% identifiers after kill-server")
+    }
+
+    func testReconciliationWithoutCarriersFailsByDefault() {
+        let projector = OrdinaryTmuxPanelProjector(adapter: StubAdapter(panels: []))
+        let completed = expectation(description: "no-carrier reconciliation completes")
+        let results = BoolResultsCapture()
+
+        _ = projector.reconcilePaneIdentities(inPanelListResult: emptyPanelListResult()) { result in
+            results.append(result)
+            completed.fulfill()
+        }
+
+        wait(for: [completed], timeout: 1)
+        XCTAssertEqual(results.snapshot, [false])
+    }
+
+    func testReconciliationAllowsAuthoritativeNoCarrierResultWhenRequested() {
+        let projector = OrdinaryTmuxPanelProjector(adapter: StubAdapter(panels: []))
+        let completed = expectation(description: "allowed no-carrier reconciliation completes")
+        let results = BoolResultsCapture()
+
+        _ = projector.reconcilePaneIdentities(inPanelListResult: emptyPanelListResult(),
+                                              allowsNoCarriers: true) { result in
+            results.append(result)
+            completed.fulfill()
+        }
+
+        wait(for: [completed], timeout: 1)
+        XCTAssertEqual(results.snapshot, [true])
+    }
+
+    func testReconciliationJoinedToMultipleWritesCompletesExactlyOnceAfterAllCallbacks() {
+        let adapter = MultipleIdentityWriteAdapter(panels: [
+            projectedPanel(windowID: "@15", index: 0, name: "priest", paneID: "%15", current: true),
+            projectedPanel(windowID: "@16", index: 1, name: "mother_nature", paneID: "%16", current: false),
+        ])
+        let projector = OrdinaryTmuxPanelProjector(adapter: adapter)
+        let completed = expectation(description: "joined multi-write reconciliation completes")
+        completed.assertForOverFulfill = true
+        let results = BoolResultsCapture()
+
+        _ = projector.projectPanelListResult(panelListResult())
+        XCTAssertEqual(adapter.waitUntilFirstWriteStarts(), .success)
+
+        _ = projector.reconcilePaneIdentities(inPanelListResult: panelListResult()) { result in
+            results.append(result)
+            completed.fulfill()
+        }
+        adapter.finishFirstWrite()
+        XCTAssertEqual(adapter.waitUntilSecondWriteStarts(), .success)
+        XCTAssertTrue(results.snapshot.isEmpty,
+                      "the first callback may not resolve a batch that is still waiting for another identity write")
+        adapter.finishSecondWrite()
+
+        wait(for: [completed], timeout: 1)
+        XCTAssertEqual(adapter.writtenPaneIDsSnapshot, ["%15", "%16"])
+        XCTAssertEqual(results.snapshot, [false],
+                       "the joined batch must aggregate the later failure and resolve exactly once")
+    }
+
     func testPartialCarrierFailureDoesNotReplaceWorkspaceRegistry() throws {
         let registry = OrdinaryTmuxPanelRegistry()
         let oldRoute = route(panelID: "old-cc-route",
@@ -588,6 +830,13 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
                     ]),
                 ]),
             ]),
+        ]
+    }
+
+    private func emptyPanelListResult() -> [String: JSONValue] {
+        [
+            "workspace_id": .string("workspace-1"),
+            "panels": .array([]),
         ]
     }
 
