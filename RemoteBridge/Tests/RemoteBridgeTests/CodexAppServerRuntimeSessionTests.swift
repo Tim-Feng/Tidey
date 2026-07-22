@@ -1777,6 +1777,123 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertEqual(response["result"]?.objectValue?["decision"]?.stringValue, "accept")
     }
 
+    func testFactoryStartedSocketSessionRoutesLifecycleApprovalThroughConfirmedTransportWrite() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let prompts = PromptSink()
+        let session = try Self.makeSession(
+            configuration: .unixSocket(codexExecutablePath: "/tmp/disposable-codex",
+                                       socketPath: "/tmp/tidey-codex-sidecar/app.sock",
+                                       workingDirectory: "/tmp/tidey-codex-disposable",
+                                       environment: [:]),
+            runner: runner,
+            connector: connector,
+            prompts: prompts
+        )
+        let transport = try XCTUnwrap(connector.transport)
+        transport.emitLine(Self.approvalRequestLine(id: "approval-start"))
+        let envelope = try XCTUnwrap(prompts.envelopes().first)
+
+        _ = try session.submitApproval(promptID: envelope.prompt.promptID,
+                                       targetIndex: 0,
+                                       clientRequestID: "client-start",
+                                       lifecycleToken: envelope.event.eventID)
+
+        let response = try Self.object(from: try XCTUnwrap(transport.confirmedSentLines().last))
+        XCTAssertEqual(response["id"]?.stringValue, "approval-start")
+        XCTAssertFalse(transport.sentLines().contains { line in
+            (try? Self.object(from: line)["id"]?.stringValue) == "approval-start"
+        })
+    }
+
+    func testFactoryAttachedSessionRoutesLifecycleApprovalThroughConfirmedTransportWrite() throws {
+        let connector = FakeCodexAppServerTransportConnector()
+        let prompts = PromptSink()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: FakeCodexAppServerProcessRunner(),
+                                                          transportConnector: connector)
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { prompts.append($0) },
+                                         onInteractivePromptResolved: { prompts.appendResolved($0) })
+        let transport = try XCTUnwrap(connector.transport)
+        transport.emitLine(Self.approvalRequestLine(id: "approval-attach"))
+        let envelope = try XCTUnwrap(prompts.envelopes().first)
+
+        _ = try session.submitApproval(promptID: envelope.prompt.promptID,
+                                       targetIndex: 0,
+                                       clientRequestID: "client-attach",
+                                       lifecycleToken: envelope.event.eventID)
+
+        let response = try Self.object(from: try XCTUnwrap(transport.confirmedSentLines().last))
+        XCTAssertEqual(response["id"]?.stringValue, "approval-attach")
+        XCTAssertFalse(transport.sentLines().contains { line in
+            (try? Self.object(from: line)["id"]?.stringValue) == "approval-attach"
+        })
+    }
+
+    func testStartedStdioSessionDoesNotConfirmApprovalBeforeProcessWriteCompletes() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let prompts = PromptSink()
+        let session = try Self.makeSession(runner: runner, prompts: prompts)
+        let process = try XCTUnwrap(runner.process)
+        process.emitStdout(Self.approvalRequestLine(id: "approval-stdio-blocked"))
+        let envelope = try XCTUnwrap(prompts.envelopes().first)
+        let writeEntered = DispatchSemaphore(value: 0)
+        let releaseWrite = DispatchSemaphore(value: 0)
+        process.setSendLineHook { _ in
+            writeEntered.signal()
+            releaseWrite.wait()
+        }
+        let submit = DispatchGroup()
+        let submitError = ThreadSafeErrorBox()
+        submit.enter()
+        DispatchQueue.global().async {
+            defer { submit.leave() }
+            do {
+                _ = try session.submitApproval(promptID: envelope.prompt.promptID,
+                                               targetIndex: 0,
+                                               clientRequestID: "client-stdio-blocked",
+                                               lifecycleToken: envelope.event.eventID)
+            } catch {
+                submitError.set(error)
+            }
+        }
+
+        XCTAssertEqual(writeEntered.wait(timeout: .now() + 1), .success)
+        XCTAssertEqual(submit.wait(timeout: .now() + 0.05), .timedOut,
+                       "stdio confirmation returned before the process write completed")
+        releaseWrite.signal()
+        XCTAssertEqual(submit.wait(timeout: .now() + 1), .success)
+        XCTAssertNil(submitError.get())
+    }
+
+    func testStartedStdioSessionPropagatesConfirmedProcessWriteFailure() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let prompts = PromptSink()
+        let session = try Self.makeSession(runner: runner, prompts: prompts)
+        let process = try XCTUnwrap(runner.process)
+        process.emitStdout(Self.approvalRequestLine(id: "approval-stdio-failure"))
+        let envelope = try XCTUnwrap(prompts.envelopes().first)
+        process.setSendLineHook { _ in
+            throw CodexAppServerProcessError.closed
+        }
+
+        XCTAssertThrowsError(try session.submitApproval(promptID: envelope.prompt.promptID,
+                                                         targetIndex: 0,
+                                                         clientRequestID: "client-stdio-failure",
+                                                         lifecycleToken: envelope.event.eventID)) { error in
+            guard case CodexAppServerProcessError.closed = error else {
+                return XCTFail("expected process write failure, got \(error)")
+            }
+        }
+    }
+
     func testSessionLifecycleUserInputForwardsStrictStructuredWireShape() throws {
         let runner = FakeCodexAppServerProcessRunner()
         let prompts = PromptSink()
@@ -1963,8 +2080,10 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         let socketPath = socketDirectory.appendingPathComponent("app.sock").path
         let receivedMessage = expectation(description: "server receives websocket text after upgrade")
         let receivedEventLoopMessage = expectation(description: "server receives websocket text sent from event loop")
+        let receivedConfirmedMessage = expectation(description: "server receives confirmed websocket text")
         let requestURI = RequestURIBox()
         let clientFrameMask = ClientFrameMaskBox()
+        let serverChildChannel = ChannelBox()
 
         let upgrader = NIOWebSocketServerUpgrader(
             maxFrameSize: 1 << 20,
@@ -1977,13 +2096,17 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
                 return promise.futureResult
             },
             upgradePipelineHandler: { channel, _ in
-                channel.pipeline.addHandler(ServerTextFrameHandler { text in
+                serverChildChannel.set(channel)
+                return channel.pipeline.addHandler(ServerTextFrameHandler { text in
                     clientFrameMask.setObservedMaskedFrame()
                     if text == "{\"jsonrpc\":\"2.0\"}" {
                         receivedMessage.fulfill()
                     }
                     if text == "{\"fromEventLoop\":true}" {
                         receivedEventLoopMessage.fulfill()
+                    }
+                    if text == "{\"confirmed\":true}" {
+                        receivedConfirmedMessage.fulfill()
                     }
                 })
             }
@@ -2012,9 +2135,33 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertNoThrow(try group.next().submit {
             try transport.sendLine("{\"fromEventLoop\":true}")
         }.wait())
-        wait(for: [receivedMessage, receivedEventLoopMessage], timeout: 2.0)
+        XCTAssertNoThrow(try transport.sendLineAwaitingWrite("{\"confirmed\":true}"))
+        wait(for: [receivedMessage, receivedEventLoopMessage, receivedConfirmedMessage], timeout: 2.0)
         XCTAssertEqual(requestURI.get(), "/")
         XCTAssertEqual(clientFrameMask.didObserveMaskedFrame(), true)
+
+        XCTAssertThrowsError(try group.next().submit {
+            try transport.sendLineAwaitingWrite("{\"confirmedOnEventLoop\":true}")
+        }.wait(), "a confirmed write must fail closed rather than block its own event loop") { error in
+            guard case CodexAppServerTransportError.confirmationUnavailable = error else {
+                return XCTFail("expected confirmationUnavailable, got \(error)")
+            }
+        }
+
+        try XCTUnwrap(serverChildChannel.get()).close().wait()
+        let deadline = Date().addingTimeInterval(2)
+        var closedChannelWriteError: Error?
+        repeat {
+            do {
+                try transport.sendLineAwaitingWrite("{\"afterPeerClose\":true}")
+            } catch {
+                closedChannelWriteError = error
+                break
+            }
+            Thread.sleep(forTimeInterval: 0.02)
+        } while Date() < deadline
+        XCTAssertNotNil(closedChannelWriteError,
+                        "a confirmed write must surface the channel write failure")
     }
 
     func testUnixWebSocketConnectorAcceptsLargeReplayFrames() throws {
@@ -2103,6 +2250,12 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
                                         onInteractivePromptResolved: { prompts.appendResolved($0) })
         prompts.session = session
         return session
+    }
+
+    private static func approvalRequestLine(id: String) -> String {
+        """
+        {"id":"\(id)","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"cmd-1","startedAtMs":1786000000000,"command":"ls"}}
+        """
     }
 
     private static func makeAttachedSession() throws -> (CodexAppServerRuntimeSession, FakeCodexAppServerConnectionTransport) {
@@ -2448,6 +2601,23 @@ private final class RequestURIBox: @unchecked Sendable {
     }
 }
 
+private final class ChannelBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var channel: Channel?
+
+    func set(_ channel: Channel) {
+        lock.lock()
+        self.channel = channel
+        lock.unlock()
+    }
+
+    func get() -> Channel? {
+        lock.lock()
+        defer { lock.unlock() }
+        return channel
+    }
+}
+
 final class FakeCodexAppServerTransportConnector: CodexAppServerTransportConnecting {
     private(set) var connectedModes: [CodexAppServerTransportMode] = []
     private(set) var transport: FakeCodexAppServerConnectionTransport?
@@ -2545,6 +2715,7 @@ final class FakeCodexAppServerProcessRunner: CodexAppServerProcessRunning {
 final class FakeCodexAppServerManagedProcess: CodexAppServerManagedProcess {
     private let lock = NSLock()
     private var lines: [String] = []
+    private var sendLineHook: ((String) throws -> Void)?
     private let onStdoutLine: @Sendable (String) -> Void
     private let onStderrLine: @Sendable (String) -> Void
     private let onExit: @Sendable (Int32) -> Void
@@ -2564,7 +2735,17 @@ final class FakeCodexAppServerManagedProcess: CodexAppServerManagedProcess {
 
     func sendLine(_ line: String) throws {
         lock.lock()
+        let hook = sendLineHook
+        lock.unlock()
+        try hook?(line)
+        lock.lock()
         lines.append(line)
+        lock.unlock()
+    }
+
+    func setSendLineHook(_ hook: @escaping (String) throws -> Void) {
+        lock.lock()
+        sendLineHook = hook
         lock.unlock()
     }
 

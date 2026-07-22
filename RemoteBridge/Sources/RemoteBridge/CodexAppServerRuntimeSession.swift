@@ -39,6 +39,7 @@ enum CodexAppServerTransportError: Error {
     case unsupported(CodexAppServerTransportMode)
     case closed
     case invalidUTF8
+    case confirmationUnavailable
 }
 
 protocol CodexAppServerConnectionTransport: AnyObject {
@@ -1488,6 +1489,9 @@ final class CodexAppServerRuntimeSessionFactory {
         let connection = CodexAppServerConnection(sendLine: { line in
             try transport.sendLine(line)
         },
+                                                   sendLineConfirmed: { line in
+            try transport.sendLineAwaitingWrite(line)
+        },
                                                    onNotification: runtime.handleNotification,
                                                    approvalContext: CodexAppServerApprovalContext(workspaceID: context.workspaceID,
                                                                                                   panelID: context.panelID,
@@ -1585,6 +1589,9 @@ final class CodexAppServerRuntimeSessionFactory {
                                                     onThreadStatusLifecycle: lifecycleFeed.applyStatus)
         let connection = CodexAppServerConnection(sendLine: { line in
             try transport.sendLine(line)
+        },
+                                                   sendLineConfirmed: { line in
+            try transport.sendLineAwaitingWrite(line)
         },
                                                    onNotification: runtime.handleNotification,
                                                    approvalContext: CodexAppServerApprovalContext(workspaceID: context.workspaceID,
@@ -1801,6 +1808,12 @@ private final class CodexAppServerStdioTransport: CodexAppServerConnectionTransp
     }
 
     func sendLine(_ line: String) throws {
+        try process.sendLine(line)
+    }
+
+    func sendLineAwaitingWrite(_ line: String) throws {
+        // Managed-process writes use FileHandle.write(contentsOf:), which
+        // returns only after the complete Data write succeeds or throws.
         try process.sendLine(line)
     }
 
@@ -2024,19 +2037,7 @@ private final class CodexAppServerWebSocketTransport: CodexAppServerConnectionTr
     }
 
     func sendLine(_ line: String) throws {
-        lock.lock()
-        guard closed == false else {
-            lock.unlock()
-            throw CodexAppServerTransportError.closed
-        }
-        lock.unlock()
-
-        let payload = line.hasSuffix("\n") ? String(line.dropLast()) : line
-        let buffer = channel.allocator.buffer(string: payload)
-        let frame = WebSocketFrame(fin: true,
-                                   opcode: .text,
-                                   maskKey: WebSocketMaskingKey.random(),
-                                   data: buffer)
+        let frame = try makeTextFrame(line)
         if channel.eventLoop.inEventLoop {
             let future = channel.writeAndFlush(frame)
             future.whenFailure { error in
@@ -2050,6 +2051,31 @@ private final class CodexAppServerWebSocketTransport: CodexAppServerConnectionTr
                 BridgeLogger.server.error("codex app-server websocket write failed error=\(String(describing: error), privacy: .public)")
             }
         }
+    }
+
+    func sendLineAwaitingWrite(_ line: String) throws {
+        let frame = try makeTextFrame(line)
+        guard channel.eventLoop.inEventLoop == false else {
+            throw CodexAppServerTransportError.confirmationUnavailable
+        }
+        try channel.writeAndFlush(frame).wait()
+    }
+
+    private func makeTextFrame(_ line: String) throws -> WebSocketFrame {
+        lock.lock()
+        guard closed == false else {
+            lock.unlock()
+            throw CodexAppServerTransportError.closed
+        }
+        lock.unlock()
+
+        let payload = line.hasSuffix("\n") ? String(line.dropLast()) : line
+        let buffer = channel.allocator.buffer(string: payload)
+        let frame = WebSocketFrame(fin: true,
+                                   opcode: .text,
+                                   maskKey: WebSocketMaskingKey.random(),
+                                   data: buffer)
+        return frame
     }
 
     func close() {
