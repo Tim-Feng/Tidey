@@ -79,6 +79,7 @@ final class AgentEventHub {
         var bufferedEvents = [AgentEvent]()
         var historicalEvents = [AgentEvent]()
         var historicalEventIDs = Set<String>()
+        var historicalOpenerClosureSequences = [String: Int]()
         var allStoredEvents: [AgentEvent] { historicalEvents + bufferedEvents }
         var latestSessionStarted: AgentEvent?
         var isActive = false
@@ -143,6 +144,10 @@ final class AgentEventHub {
                                 return false
                             }
                             if let beforeSeq {
+                                if let closureSeq = state.historicalOpenerClosureSequences[event.eventID],
+                                   closureSeq >= beforeSeq {
+                                    return false
+                                }
                                 return event.seq < beforeSeq
                             }
                             if let afterSeq {
@@ -156,8 +161,17 @@ final class AgentEventHub {
                 }
             } else {
                 matchingEvents = sessions.values
-                    .flatMap(\.allStoredEvents)
-                    .compactMap { effectiveEvent($0) }
+                    .flatMap { state in
+                        state.allStoredEvents
+                            .compactMap { effectiveEvent($0) }
+                            .filter { event in
+                                guard let beforeSeq,
+                                      let closureSeq = state.historicalOpenerClosureSequences[event.eventID] else {
+                                    return true
+                                }
+                                return closureSeq < beforeSeq
+                            }
+                    }
                     .filter { event in
                         guard event.workspaceID == workspaceID else {
                             return false
@@ -470,7 +484,21 @@ final class AgentEventHub {
             state.bufferedEvents.removeAll()
             state.historicalEvents.removeAll()
             state.historicalEventIDs.removeAll()
+            state.historicalOpenerClosureSequences.removeAll()
             state.seenEventIDs.removeAll()
+            sessions[sessionID] = state
+        }
+    }
+
+    // Closure evidence belongs to the transcript source epoch, not to one
+    // cached page. A before-cursor fetch uses it to suppress an opener whose
+    // exact terminal/consumer sits at or beyond the requested boundary,
+    // including when bootstrap or another client already cached the opener.
+    func replaceHistoricalOpenerClosureSequences(sessionID: String,
+                                                 sequences: [String: Int]) {
+        queue.sync {
+            var state = sessions[sessionID] ?? SessionState()
+            state.historicalOpenerClosureSequences = sequences
             sessions[sessionID] = state
         }
     }

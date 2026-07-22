@@ -945,6 +945,70 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         }, "a summary outside before_seq must not leave a bare /context command in history")
     }
 
+    func testClaudeBackfillFiltersCachedOpenersWhenClosureIsOutsideCursor() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+
+        let promptID = "toolu_cached"
+        let askLine = makeClaudeAskUserQuestionAssistantLine(uuid: "cached-ask", toolCallID: promptID)
+        let resultLine = makeClaudeToolResultLine(uuid: "cached-result",
+                                                  toolCallID: promptID,
+                                                  content: "answered")
+        let contextCommandLine = makeClaudeUserLine(uuid: "cached-context-command",
+                                                    content: "<command-name>/context</command-name>")
+        let contextSummaryLine = makeClaudeContextStdoutLine(uuid: "cached-context-summary")
+        let lines = [askLine, resultLine, contextCommandLine, contextSummaryLine]
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL,
+                                                            atomically: true,
+                                                            encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20).events.contains {
+                $0.eventID == "cached-context-summary:claude-context:0"
+            }
+        })
+
+        let resultOffset = (askLine + "\n").utf8.count
+        let resultSeq = transcriptEventSequence(lineOffset: resultOffset, ordinal: 0)
+        let askPage = BridgeAgentEventFetchFlow.run(eventHub: hub,
+                                                    workspaceID: "workspace",
+                                                    sessionID: "session",
+                                                    limit: 20,
+                                                    beforeSeq: resultSeq,
+                                                    afterSeq: nil) { _, beforeSeq, limit in
+            session.backfill(beforeSeq: beforeSeq, limit: limit)
+        }
+        XCTAssertTrue(askPage.didBackfill)
+        XCTAssertFalse(askPage.fetchResult.events.contains {
+            $0.eventID == "cached-ask:ask-user-question:\(promptID)"
+        }, "an opener cached by bootstrap must still be filtered when its terminal is outside before_seq")
+
+        let contextSummaryOffset = ([askLine, resultLine, contextCommandLine]
+            .joined(separator: "\n") + "\n").utf8.count
+        let contextSummarySeq = transcriptEventSequence(lineOffset: contextSummaryOffset, ordinal: 0)
+        let contextPage = BridgeAgentEventFetchFlow.run(eventHub: hub,
+                                                        workspaceID: "workspace",
+                                                        sessionID: "session",
+                                                        limit: 20,
+                                                        beforeSeq: contextSummarySeq,
+                                                        afterSeq: nil) { _, beforeSeq, limit in
+            session.backfill(beforeSeq: beforeSeq, limit: limit)
+        }
+        XCTAssertTrue(contextPage.didBackfill)
+        XCTAssertFalse(contextPage.fetchResult.events.contains {
+            $0.eventID == "cached-context-command:claude-context-command:0"
+        }, "a cached /context command must be filtered when its summary is outside before_seq")
+    }
+
     func testClaudeBackfillKeepsRepeatedAskOpenAfterEarlierSameIDWasResolved() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)

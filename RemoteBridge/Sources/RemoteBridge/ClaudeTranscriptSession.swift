@@ -3105,6 +3105,14 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             historicalClosureIndex?.pendingPartialLineData = pendingData
             historicalClosureIndex?.parserState = captureLiveParserState()
             completed = true
+            if let index = historicalClosureIndex {
+                var closureSequences = index.contextConsumerSequenceByOpenerEventID
+                for (openerEventID, closure) in index.closureByOpenerEventID {
+                    closureSequences[openerEventID] = closure.seq
+                }
+                hub.replaceHistoricalOpenerClosureSequences(sessionID: record.sessionID,
+                                                            sequences: closureSequences)
+            }
             return true
         } catch JSONLFileTailerError.sourceInvalidated {
             throw JSONLFileTailerError.sourceInvalidated
