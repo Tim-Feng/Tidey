@@ -340,6 +340,21 @@ final class CodexAppServerRuntimeSession {
         lifecycleFeed?.retire()
     }
 
+    func handleTransportClosed(error: Error?) {
+        lock.lock()
+        guard stopped == false else {
+            lock.unlock()
+            return
+        }
+        stopped = true
+        lock.unlock()
+        BridgeLogger.server.error("codex app-server transport closed session_id=\(self.runtime.contextSessionID, privacy: .public) error=\(String(describing: error), privacy: .public)")
+        initialization.fail(CodexAppServerConnectionError.closed)
+        connection.close()
+        transport.close()
+        lifecycleFeed?.retire()
+    }
+
     func whenInitialized(_ callback: @escaping @Sendable (Result<Void, Error>) -> Void) {
         initialization.notify(callback)
     }
@@ -906,6 +921,7 @@ final class CodexAppServerRuntimeSessionFactory {
                onExit: @escaping @Sendable (Int32) -> Void = { _ in }) throws -> CodexAppServerRuntimeSession {
         let stdoutRouter = CodexAppServerConnectionLineRouter()
         let exitRouter = CodexAppServerRuntimeSessionExitRouter(onExit: onExit)
+        let closeRouter = CodexAppServerTransportCloseRouter()
         let process = try processRunner.start(configuration: configuration,
                                               onStdoutLine: { line in
                                                   stdoutRouter.receive(line)
@@ -924,9 +940,7 @@ final class CodexAppServerRuntimeSessionFactory {
                                                            stdoutRouter.receive(line)
                                                        },
                                                        onClose: { error in
-                                                           if let error {
-                                                               BridgeLogger.server.error("codex app-server websocket closed error=\(String(describing: error), privacy: .public)")
-                                                           }
+                                                           closeRouter.receive(error)
                                                        })
         }
         let activeThreadStore = CodexAppServerActiveThreadStore(onChange: onActiveThreadID)
@@ -970,6 +984,7 @@ final class CodexAppServerRuntimeSessionFactory {
                                                           turnStateStore: turnStateStore,
                                                           lifecycleFeed: lifecycleFeed)
         exitRouter.attach(runtimeSession)
+        closeRouter.attach(runtimeSession)
         stdoutRouter.attach(connection)
         try connection.sendClientRequest(method: "initialize",
                                          params: [
@@ -1012,14 +1027,13 @@ final class CodexAppServerRuntimeSessionFactory {
                 onActiveThreadID: @escaping CodexAppServerHeadlessRuntime.ThreadIDHandler = { _ in }) throws -> CodexAppServerRuntimeSession {
         let stdoutRouter = CodexAppServerConnectionLineRouter()
         let process = CodexAppServerExternalProcess(processID: processID)
+        let closeRouter = CodexAppServerTransportCloseRouter()
         let transport = try transportConnector.connect(mode: .unixSocket(path: socketPath),
                                                        onLine: { line in
                                                            stdoutRouter.receive(line)
                                                        },
                                                        onClose: { error in
-                                                           if let error {
-                                                               BridgeLogger.server.error("codex app-server panel socket closed error=\(String(describing: error), privacy: .public)")
-                                                           }
+                                                           closeRouter.receive(error)
                                                        })
         let activeThreadStore = CodexAppServerActiveThreadStore(onChange: onActiveThreadID)
         let turnStateStore = CodexAppServerTurnStateStore()
@@ -1061,6 +1075,7 @@ final class CodexAppServerRuntimeSessionFactory {
                                                           activeThreadStore: activeThreadStore,
                                                           turnStateStore: turnStateStore,
                                                           lifecycleFeed: lifecycleFeed)
+        closeRouter.attach(runtimeSession)
         stdoutRouter.attach(connection)
         try connection.sendClientRequest(method: "initialize",
                                          params: [
@@ -1648,6 +1663,34 @@ private final class CodexAppServerConnectionLineRouter: @unchecked Sendable {
         }
         lock.unlock()
         connection.receiveLine(line)
+    }
+}
+
+private final class CodexAppServerTransportCloseRouter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var session: CodexAppServerRuntimeSession?
+    private var pendingClose: (didClose: Bool, error: Error?) = (false, nil)
+
+    func attach(_ session: CodexAppServerRuntimeSession) {
+        lock.lock()
+        self.session = session
+        let pendingClose = self.pendingClose
+        self.pendingClose = (false, nil)
+        lock.unlock()
+        if pendingClose.didClose {
+            session.handleTransportClosed(error: pendingClose.error)
+        }
+    }
+
+    func receive(_ error: Error?) {
+        lock.lock()
+        guard let session else {
+            pendingClose = (true, error)
+            lock.unlock()
+            return
+        }
+        lock.unlock()
+        session.handleTransportClosed(error: error)
     }
 }
 

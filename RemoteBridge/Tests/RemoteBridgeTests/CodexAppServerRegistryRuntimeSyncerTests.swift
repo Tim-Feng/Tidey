@@ -90,6 +90,25 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         XCTAssertEqual(runtimes[1].registryRootThreadIDs, ["thread-b"])
     }
 
+    func testSyncReattachesStoppedRuntimeWithUnchangedRegistryRecord() {
+        var runtimes = [FakeRuntimeSession]()
+        let syncer = CodexAppServerRegistryRuntimeSyncer(eventHub: AgentEventHub(), attachHandler: { _, _, _, _, _, _, _ in
+            let runtime = FakeRuntimeSession()
+            runtimes.append(runtime)
+            return runtime
+        })
+        let record = Self.record(sessionID: "app", runtime: "codex_app_server", socketPath: "/tmp/app.sock")
+
+        syncer.sync(records: [record])
+        runtimes[0].stopped = true
+        syncer.sync(records: [record])
+
+        guard runtimes.count == 2 else {
+            return XCTFail("expected the stopped runtime to be replaced, got \(runtimes.count) runtime(s)")
+        }
+        XCTAssertFalse(runtimes[1].stopped)
+    }
+
     func testSyncStopsStaleAndReplacedRuntimes() {
         let hub = AgentEventHub()
         var runtimes = [FakeRuntimeSession]()

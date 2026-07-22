@@ -122,6 +122,9 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
             guard let existing = entriesBySessionID[record.sessionID] else {
                 return true
             }
+            if existing.session.isStopped() {
+                return true
+            }
             if existing.record.appServerSocket != record.appServerSocket ||
                 existing.record.appServerPID != record.appServerPID ||
                 existing.record.workspaceID != record.workspaceID ||

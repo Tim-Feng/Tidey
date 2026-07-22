@@ -1030,6 +1030,17 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         }
     }
 
+    func testTransportCloseMarksAttachedRuntimeStopped() throws {
+        let (session, transport) = try Self.makeAttachedSession()
+        try Self.acknowledgeInitialize(from: transport)
+        XCTAssertFalse(session.isStopped())
+
+        transport.emitClose(CodexAppServerTransportError.closed)
+
+        XCTAssertTrue(Self.waitFor { session.isStopped() })
+        XCTAssertFalse(session.canSubmitMessage())
+    }
+
     func testProcessExitClosesPendingClientRequests() throws {
         let runner = FakeCodexAppServerProcessRunner()
         let session = try Self.makeSession(runner: runner)
@@ -1453,6 +1464,10 @@ final class FakeCodexAppServerConnectionTransport: CodexAppServerConnectionTrans
 
     func emitLine(_ line: String) {
         onLine(line)
+    }
+
+    func emitClose(_ error: Error? = nil) {
+        onClose(error)
     }
 
     func sentLines() -> [String] {
