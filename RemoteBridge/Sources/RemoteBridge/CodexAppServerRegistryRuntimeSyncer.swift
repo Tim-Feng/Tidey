@@ -32,12 +32,16 @@ protocol CodexAppServerRuntimeSessionControlling: AnyObject {
     func refreshActiveThread()
     func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent
     func submitMessage(text: String) throws
+    func submitMessage(text: String, clientRequestID: String?) throws
     func stop()
 }
 
 extension CodexAppServerRuntimeSessionControlling {
     func setRegistryRootThreadID(_ rawThreadID: String?) {}
     func isStopped() -> Bool { false }
+    func submitMessage(text: String, clientRequestID: String?) throws {
+        try submitMessage(text: text)
+    }
 }
 
 extension CodexAppServerRuntimeSession: CodexAppServerRuntimeSessionControlling {}
@@ -432,13 +436,17 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
     }
 
     func submitMessage(sessionID: String, text: String) throws {
+        try submitMessage(sessionID: sessionID, text: text, clientRequestID: nil)
+    }
+
+    func submitMessage(sessionID: String, text: String, clientRequestID: String?) throws {
         let session = lock.withCodexRuntimeSyncerLock {
             entriesBySessionID[sessionID]?.session
         }
         guard let session else {
             throw BridgeInternalError.notFound("Unknown Codex app-server session.")
         }
-        try session.submitMessage(text: text)
+        try session.submitMessage(text: text, clientRequestID: clientRequestID)
     }
 
     func canSubmitMessage(sessionID: String) -> Bool {

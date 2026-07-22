@@ -19,6 +19,13 @@ extension AgentSessionRegistryMonitor: ActiveAgentSessionResolving {}
 protocol CodexAppServerChatSubmitting: AnyObject {
     func canSubmitMessage(sessionID: String) -> Bool
     func submitMessage(sessionID: String, text: String) throws
+    func submitMessage(sessionID: String, text: String, clientRequestID: String?) throws
+}
+
+extension CodexAppServerChatSubmitting {
+    func submitMessage(sessionID: String, text: String, clientRequestID: String?) throws {
+        try submitMessage(sessionID: sessionID, text: text)
+    }
 }
 
 struct BridgeInputActionHandler {
