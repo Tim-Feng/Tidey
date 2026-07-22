@@ -413,7 +413,7 @@ final class CodexAppServerConnection {
                 try sendResponseLine(id: entry.request.requestID,
                                      bodyKey: "result",
                                      value: response,
-                                     preferConfirmed: false)
+                                     preferConfirmed: true)
             } catch {
                 _ = approvalStore.failSubmit(promptID: promptID,
                                              lifecycleAttempt: lifecycleAttempt)
