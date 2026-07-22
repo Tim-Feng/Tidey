@@ -2,6 +2,17 @@ import XCTest
 @testable import RemoteBridge
 
 final class ClaudeTranscriptSessionTests: XCTestCase {
+    func testClaudeHistoricalClosureIndexStatsStartAtZero() {
+        let session = ClaudeTranscriptSession(
+            record: makeRecord(transcriptPath: "/tmp/unused-claude-transcript.jsonl"),
+            hub: AgentEventHub())
+
+        XCTAssertEqual(session.historicalClosureIndexStatsForTesting(),
+                       ClaudeHistoricalClosureIndexStats(scanPassCount: 0,
+                                                         readByteCount: 0,
+                                                         completeLineCount: 0))
+    }
+
     func testClaudeLocalCommandEnvelopeUserMessagesAreNotPublished() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
