@@ -425,7 +425,8 @@ final class AgentEventHub {
                                  sessionID: String,
                                  promptID: String) -> InteractivePrompt? {
         queue.sync {
-            guard let state = sessions[sessionID] else {
+            guard let state = sessions[sessionID],
+                  state.historicalClosureCoverageIsComplete else {
                 return nil
             }
             var activePrompt: InteractivePrompt?

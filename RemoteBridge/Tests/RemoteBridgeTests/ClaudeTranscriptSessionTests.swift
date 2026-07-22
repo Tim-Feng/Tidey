@@ -257,6 +257,47 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
             partialLineByteLimit: 1_024)
     }
 
+    func testClaudeMalformedHistoryDisablesBufferedPromptSubmission() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        let promptID = "toolu_buffered_fail_closed"
+        let fillerLines = (0..<(transcriptBootstrapLineLimit - 1)).map {
+            makeClaudeUserLine(uuid: "filler-\($0)", content: "filler-\($0)")
+        }
+        let askLine = makeClaudeAskUserQuestionAssistantLine(uuid: "buffered-ask",
+                                                             toolCallID: promptID)
+        let payload = (fillerLines + [askLine]).joined(separator: "\n") + "\n"
+        try payload.write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.activeInteractivePrompt(workspaceID: "workspace",
+                                        sessionID: "session",
+                                        promptID: promptID) != nil
+        })
+        let askOffset = (fillerLines.joined(separator: "\n") + "\n").utf8.count
+        let askSeq = transcriptEventSequence(lineOffset: askOffset, ordinal: 1)
+
+        let handle = try FileHandle(forWritingTo: transcriptURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("{not-json}\n".utf8))
+        try handle.close()
+
+        XCTAssertFalse(session.backfill(beforeSeq: askSeq, limit: 2))
+        XCTAssertNil(hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                  sessionID: "session",
+                                                  promptID: promptID),
+                     "unknown closure coverage must disable submission of a buffered opener")
+    }
+
     func testClaudeBackfillReplacesFullHistoricalWindowAtRequestedAnchor() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
