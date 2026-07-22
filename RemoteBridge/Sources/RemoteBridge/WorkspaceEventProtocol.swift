@@ -12,6 +12,11 @@ enum WorkspaceEventKind: String, Codable, Sendable {
     case agentSessionStarted = "agent_session_started"
     case agentSessionUpdated = "agent_session_updated"
     case agentSessionEnded = "agent_session_ended"
+    // Typed three-state lifecycle patch: carries ONLY {state, state_revision}
+    // for a panel plus the workspace aggregate — consumers MERGE it into the
+    // model they already hold (never a full-entity replace) and drop any
+    // patch whose revision is not newer than what they applied.
+    case panelStateChanged = "panel_state_changed"
 }
 
 struct WorkspaceEvent: Codable, Sendable {
