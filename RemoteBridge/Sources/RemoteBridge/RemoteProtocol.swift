@@ -2,7 +2,7 @@ import Foundation
 
 let bridgeProtocolVersion = 1
 
-enum JSONValue: Codable, Sendable {
+enum JSONValue: Codable, Sendable, Equatable {
     case string(String)
     case number(Double)
     case bool(Bool)

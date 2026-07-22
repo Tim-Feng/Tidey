@@ -36,6 +36,7 @@ let package = Package(
             dependencies: [
                 "RemoteBridge",
                 "HeadlessCodexTerminalSupport",
+                .product(name: "NIOEmbedded", package: "swift-nio"),
             ]
         ),
     ]
