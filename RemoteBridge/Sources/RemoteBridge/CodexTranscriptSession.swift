@@ -8,6 +8,9 @@ typealias CodexTranscriptProcessRunner = (_ executablePath: String,
                                           _ timeout: TimeInterval?) -> BoundedProcessResult?
 
 final class CodexTranscriptSession: AgentTranscriptSession {
+    private static let processLookupTimeout: TimeInterval = 1
+    private static let rolloutLookupTimeout: TimeInterval = 2
+
     private let queue: DispatchQueue
     private let fileManager: FileManager
     private let hub: AgentEventHub
@@ -1085,7 +1088,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         }
         guard let result = processRunner("/usr/sbin/lsof",
                                          ["-Fn", "-p", String(pid)],
-                                         nil),
+                                         Self.rolloutLookupTimeout),
               result.terminationStatus == 0,
               let output = String(data: result.standardOutput,
                                   encoding: .utf8) else {
@@ -1115,7 +1118,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         }
         guard let result = processRunner("/usr/bin/pgrep",
                                          ["-P", String(pid)],
-                                         nil),
+                                         Self.processLookupTimeout),
               let output = String(data: result.standardOutput,
                                   encoding: .utf8) else {
             return []
