@@ -45,6 +45,11 @@ struct InteractivePrompt: Equatable, Sendable {
     let options: [InteractivePromptOption]
     let selectedIndex: Int
     let submitChannel: String?
+    // Structured question payload for Codex `item/tool/requestUserInput`
+    // cards (nil for every other prompt kind). Carried verbatim so the
+    // client can render multi-question / free-form input and build the
+    // answers map keyed by question id.
+    let questions: JSONValue?
 
     init(promptID: String,
          vendor: String,
@@ -53,7 +58,8 @@ struct InteractivePrompt: Equatable, Sendable {
          body: String,
          options: [InteractivePromptOption],
          selectedIndex: Int,
-         submitChannel: String? = nil) {
+         submitChannel: String? = nil,
+         questions: JSONValue? = nil) {
         self.promptID = promptID
         self.vendor = vendor
         self.source = source
@@ -62,6 +68,7 @@ struct InteractivePrompt: Equatable, Sendable {
         self.options = options
         self.selectedIndex = selectedIndex
         self.submitChannel = submitChannel
+        self.questions = questions
     }
 
     var selectedInputSequence: String {
@@ -90,6 +97,9 @@ struct InteractivePrompt: Equatable, Sendable {
         ]
         if let submitChannel {
             object["submit_channel"] = .string(submitChannel)
+        }
+        if let questions {
+            object["questions"] = questions
         }
         return .object(object)
     }
@@ -128,7 +138,8 @@ struct InteractivePrompt: Equatable, Sendable {
                   body: body,
                   options: options,
                   selectedIndex: selectedIndex,
-                  submitChannel: object["submit_channel"]?.stringValue)
+                  submitChannel: object["submit_channel"]?.stringValue,
+                  questions: object["questions"])
     }
 }
 

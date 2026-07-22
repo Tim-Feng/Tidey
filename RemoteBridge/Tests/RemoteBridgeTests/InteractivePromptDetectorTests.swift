@@ -2,6 +2,38 @@ import XCTest
 @testable import RemoteBridge
 
 final class InteractivePromptDetectorTests: XCTestCase {
+    func testInteractivePromptQuestionsRoundTripWithoutLosingStructuredPayload() throws {
+        let questions: JSONValue = .array([
+            .object([
+                "id": .string("deployment_target"),
+                "header": .string("Target"),
+                "question": .string("Where should this deploy?"),
+                "isOther": .bool(true),
+                "options": .array([
+                    .object([
+                        "label": .string("Staging"),
+                        "description": .string("Deploy to staging"),
+                    ]),
+                ]),
+            ]),
+        ])
+        let prompt = InteractivePrompt(promptID: "prompt-1",
+                                       vendor: "codex",
+                                       source: "codex_user_input",
+                                       title: "Target",
+                                       body: "Where should this deploy?",
+                                       options: [],
+                                       selectedIndex: 0,
+                                       submitChannel: InteractivePromptSubmitChannel.codexAppServer,
+                                       questions: questions)
+
+        let encoded = try XCTUnwrap(prompt.jsonValue.objectValue)
+        XCTAssertEqual(encoded["questions"], questions)
+        let decoded = try XCTUnwrap(InteractivePrompt(jsonValue: prompt.jsonValue))
+        XCTAssertEqual(decoded.questions, questions)
+        XCTAssertEqual(decoded, prompt)
+    }
+
     func testParsesClaudeDynamicWorkflowConfirmPrompt() throws {
         let ansi = """
          \u{1b}[1mRun a dynamic workflow?\u{1b}[22m
