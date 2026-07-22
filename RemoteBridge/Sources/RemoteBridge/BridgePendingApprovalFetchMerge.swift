@@ -15,10 +15,17 @@ enum BridgePendingApprovalFetchMerge {
         let activePending = AgentInteractivePromptEventReducer.pendingEvents(
             pendingEvents,
             excludingResolvedIn: pageEvents)
-        let events = AgentInteractivePromptEventReducer.mergedEvents(pageEvents, activePending)
+        let merged = AgentInteractivePromptEventReducer.mergedEvents(pageEvents, activePending)
+        let events = overlaySnapshots(merged, activePending: activePending)
+        guard pageEvents.isEmpty else {
+            return Merged(events: events,
+                          oldestSeq: pageOldestSeq,
+                          newestSeq: pageNewestSeq)
+        }
+        let cursorFloor = max(pageNewestSeq, requestedAfterSeq ?? Int.min)
         return Merged(events: events,
                       oldestSeq: events.first?.seq ?? pageOldestSeq,
-                      newestSeq: events.last?.seq ?? pageNewestSeq)
+                      newestSeq: max(events.last?.seq ?? cursorFloor, cursorFloor))
     }
 
     static func mergeReplayEnvelopes(_ replayEnvelopes: [AgentEventEnvelope],
@@ -27,15 +34,20 @@ enum BridgePendingApprovalFetchMerge {
         let activePending = AgentInteractivePromptEventReducer.pendingEvents(
             pendingEvents,
             excludingResolvedIn: replayEvents)
-        let events = AgentInteractivePromptEventReducer.mergedEvents(replayEvents, activePending)
-        return events.map { event in
-            replayEnvelopes.first(where: { $0.event.eventID == event.eventID })
-                ?? AgentEventEnvelope(replay: true, event: event)
-        }
+        let merged = AgentInteractivePromptEventReducer.mergedEvents(replayEvents, activePending)
+        let events = overlaySnapshots(merged, activePending: activePending)
+        return events.map { AgentEventEnvelope(replay: true, event: $0) }
     }
 
     static func openLiveGate(_ gate: BridgeAgentEventReplayGate,
                              afterReplaying replayEnvelopes: [AgentEventEnvelope]) -> [AgentEventEnvelope] {
-        gate.open()
+        gate.open(suppressing: Set(replayEnvelopes.map(\.event.eventID)))
+    }
+
+    private static func overlaySnapshots(_ events: [AgentEvent],
+                                         activePending: [AgentEvent]) -> [AgentEvent] {
+        let snapshots = Dictionary(activePending.map { ($0.eventID, $0) },
+                                   uniquingKeysWith: { _, latest in latest })
+        return events.map { snapshots[$0.eventID] ?? $0 }
     }
 }
