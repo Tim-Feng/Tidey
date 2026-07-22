@@ -24,6 +24,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     private var publishedAssistantTextKeys = Set<String>()
     private var isBackfillingHistory = false
     private var isBootstrappingSidebarState = false
+    private let historicalReplayWindowCapacity: Int
     private var bootstrappedShellState: CodexSidebarShellState = .prompt
     private var currentShellState: CodexSidebarShellState = .prompt
     private var didPublishSidebarSessionActivation = false
@@ -35,7 +36,9 @@ final class CodexTranscriptSession: AgentTranscriptSession {
          fileManager: FileManager = .default,
          hub: AgentEventHub,
          socketClient: TideyCommandSending? = nil,
-         chatSubmitEchoRegistry: ChatSubmitEchoRegistry? = nil) {
+         chatSubmitEchoRegistry: ChatSubmitEchoRegistry? = nil,
+         historicalReplayWindowCapacity: Int = 4000) {
+        self.historicalReplayWindowCapacity = max(1, historicalReplayWindowCapacity)
         self.record = record
         self.fileManager = fileManager
         self.hub = hub
