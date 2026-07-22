@@ -867,9 +867,76 @@ struct CodexAppServerApprovalPromptEntry: Sendable {
     let prompt: InteractivePrompt
 }
 
+struct CodexAppServerApprovalSubmitAttempt: Sendable {
+    let clientRequestID: String?
+    let targetIndex: Int
+    let response: JSONValue
+}
+
+enum CodexAppServerApprovalPhase: Sendable {
+    case pending
+    case submitting(CodexAppServerApprovalSubmitAttempt)
+}
+
+struct CodexAppServerApprovalTerminalRecord: Sendable {
+    let entry: CodexAppServerApprovalPromptEntry
+    let reason: String
+    let event: AgentEvent
+    let attempt: Int
+}
+
+// Connection-scoped lifecycle state for app-server approval prompts. All
+// state transitions are atomic under one lock. A local submit never creates a
+// terminal record; only an authoritative lifecycle signal or store retirement
+// does that.
 final class CodexAppServerApprovalPromptStore: @unchecked Sendable {
+    enum RegisterOutcome: Sendable {
+        case recorded(CodexAppServerApprovalPromptEntry, attempt: Int)
+        case reactivated(CodexAppServerApprovalPromptEntry, attempt: Int)
+        case supersededPayloadChanged(terminal: CodexAppServerApprovalTerminalRecord,
+                                      entry: CodexAppServerApprovalPromptEntry,
+                                      attempt: Int)
+        case rejectedRetired
+    }
+
+    enum BeginSubmitOutcome: Sendable {
+        case begin(entry: CodexAppServerApprovalPromptEntry,
+                   response: JSONValue,
+                   lifecycleAttempt: Int)
+        case lifecycleTokenMismatch
+        case duplicateInFlight(CodexAppServerApprovalPromptEntry)
+        case inFlightConflict
+        case optionConflict
+        case terminal(CodexAppServerApprovalTerminalRecord)
+        case unknown
+    }
+
+    enum SubmitCompletionOutcome: Sendable {
+        case awaitingConfirmation
+        case terminal(CodexAppServerApprovalTerminalRecord)
+        case supersededLifecycle
+    }
+
+    private struct ActiveEntry {
+        var entry: CodexAppServerApprovalPromptEntry
+        var phase: CodexAppServerApprovalPhase
+        var attempt: Int
+        var lastAttempt: CodexAppServerApprovalSubmitAttempt?
+        // The exact event published for this delivery. Pending snapshots reuse
+        // it, and its eventID is the capability accepted by submit.
+        var publishedEvent: AgentEvent?
+    }
+
     private let lock = NSLock()
-    private var entriesByPromptID: [String: CodexAppServerApprovalPromptEntry] = [:]
+    private let terminalCapacity: Int
+    private var retired = false
+    private var entriesByPromptID: [String: ActiveEntry] = [:]
+    private var terminalsByPromptID: [String: CodexAppServerApprovalTerminalRecord] = [:]
+    private var terminalOrder: [String] = []
+
+    init(terminalCapacity: Int = 128) {
+        self.terminalCapacity = max(1, terminalCapacity)
+    }
 
     @discardableResult
     func record(_ request: CodexAppServerApprovalRequest) -> InteractivePrompt {
@@ -884,20 +951,226 @@ final class CodexAppServerApprovalPromptStore: @unchecked Sendable {
                 prompt: InteractivePrompt) -> InteractivePrompt {
         let entry = CodexAppServerApprovalPromptEntry(request: request, prompt: prompt)
         lock.withCodexApprovalLock {
-            entriesByPromptID[prompt.promptID] = entry
+            guard !retired else {
+                return
+            }
+            let attempt = entriesByPromptID[prompt.promptID]?.attempt
+                ?? terminalsByPromptID[prompt.promptID]?.attempt
+                ?? 0
+            removeTerminalLocked(promptID: prompt.promptID)
+            entriesByPromptID[prompt.promptID] = ActiveEntry(entry: entry,
+                                                             phase: .pending,
+                                                             attempt: attempt + 1,
+                                                             lastAttempt: nil,
+                                                             publishedEvent: nil)
         }
         return prompt
     }
 
+    func register(
+        entry newEntry: CodexAppServerApprovalPromptEntry,
+        makeTerminalEvent: (CodexAppServerApprovalPromptEntry, String, Int) -> AgentEvent
+    ) -> RegisterOutcome {
+        lock.withCodexApprovalLock {
+            guard !retired else {
+                return .rejectedRetired
+            }
+            let promptID = newEntry.prompt.promptID
+            let newFingerprint = Self.lifecycleFingerprint(for: newEntry)
+
+            if var active = entriesByPromptID[promptID] {
+                let attempt = active.attempt + 1
+                if Self.lifecycleFingerprint(for: active.entry) == newFingerprint {
+                    active.entry = newEntry
+                    active.phase = .pending
+                    active.attempt = attempt
+                    active.publishedEvent = nil
+                    entriesByPromptID[promptID] = active
+                    return .reactivated(newEntry, attempt: attempt)
+                }
+
+                let terminal = CodexAppServerApprovalTerminalRecord(
+                    entry: active.entry,
+                    reason: "superseded",
+                    event: makeTerminalEvent(active.entry, "superseded", active.attempt),
+                    attempt: active.attempt)
+                entriesByPromptID[promptID] = ActiveEntry(entry: newEntry,
+                                                          phase: .pending,
+                                                          attempt: attempt,
+                                                          lastAttempt: nil,
+                                                          publishedEvent: nil)
+                return .supersededPayloadChanged(terminal: terminal,
+                                                  entry: newEntry,
+                                                  attempt: attempt)
+            }
+
+            let attempt = (terminalsByPromptID[promptID]?.attempt ?? 0) + 1
+            removeTerminalLocked(promptID: promptID)
+            entriesByPromptID[promptID] = ActiveEntry(entry: newEntry,
+                                                      phase: .pending,
+                                                      attempt: attempt,
+                                                      lastAttempt: nil,
+                                                      publishedEvent: nil)
+            return .recorded(newEntry, attempt: attempt)
+        }
+    }
+
+    func recordPublishedPromptEvent(promptID: String, event: AgentEvent) {
+        lock.withCodexApprovalLock {
+            guard var active = entriesByPromptID[promptID] else {
+                return
+            }
+            active.publishedEvent = event
+            entriesByPromptID[promptID] = active
+        }
+    }
+
+    func beginSubmit(promptID: String,
+                     targetIndex: Int,
+                     clientRequestID: String?,
+                     lifecycleToken: String? = nil) -> BeginSubmitOutcome {
+        lock.withCodexApprovalLock {
+            if let terminal = terminalsByPromptID[promptID] {
+                return .terminal(terminal)
+            }
+            guard var active = entriesByPromptID[promptID] else {
+                return .unknown
+            }
+            if let lifecycleToken {
+                guard active.publishedEvent?.eventID == lifecycleToken else {
+                    return .lifecycleTokenMismatch
+                }
+            }
+            if case .submitting(let attempt) = active.phase {
+                if let clientRequestID,
+                   attempt.clientRequestID == clientRequestID {
+                    return attempt.targetIndex == targetIndex
+                        ? .duplicateInFlight(active.entry)
+                        : .optionConflict
+                }
+                return .inFlightConflict
+            }
+            if let lastAttempt = active.lastAttempt,
+               lastAttempt.targetIndex != targetIndex {
+                return .optionConflict
+            }
+            guard let response = try? active.entry.request.response(targetIndex: targetIndex) else {
+                return .optionConflict
+            }
+            let attempt = CodexAppServerApprovalSubmitAttempt(clientRequestID: clientRequestID,
+                                                              targetIndex: targetIndex,
+                                                              response: response)
+            active.phase = .submitting(attempt)
+            active.lastAttempt = attempt
+            entriesByPromptID[promptID] = active
+            return .begin(entry: active.entry,
+                          response: response,
+                          lifecycleAttempt: active.attempt)
+        }
+    }
+
+    func beginSubmitUserInput(promptID: String,
+                              answers: [String: [String]],
+                              clientRequestID: String?,
+                              lifecycleToken: String? = nil) -> BeginSubmitOutcome {
+        lock.withCodexApprovalLock {
+            if let terminal = terminalsByPromptID[promptID] {
+                return .terminal(terminal)
+            }
+            guard var active = entriesByPromptID[promptID] else {
+                return .unknown
+            }
+            if let lifecycleToken,
+               active.publishedEvent?.eventID != lifecycleToken {
+                return .lifecycleTokenMismatch
+            }
+            guard let response = try? active.entry.request.userInputResponse(answers: answers) else {
+                return .optionConflict
+            }
+            if case .submitting(let attempt) = active.phase {
+                if let clientRequestID,
+                   attempt.clientRequestID == clientRequestID {
+                    return attempt.response == response
+                        ? .duplicateInFlight(active.entry)
+                        : .optionConflict
+                }
+                return .inFlightConflict
+            }
+            if let lastAttempt = active.lastAttempt,
+               lastAttempt.response != response {
+                return .optionConflict
+            }
+            let attempt = CodexAppServerApprovalSubmitAttempt(clientRequestID: clientRequestID,
+                                                              targetIndex: -1,
+                                                              response: response)
+            active.phase = .submitting(attempt)
+            active.lastAttempt = attempt
+            entriesByPromptID[promptID] = active
+            return .begin(entry: active.entry,
+                          response: response,
+                          lifecycleAttempt: active.attempt)
+        }
+    }
+
+    func completeSubmitFlush(promptID: String,
+                             lifecycleAttempt: Int) -> SubmitCompletionOutcome {
+        lock.withCodexApprovalLock {
+            if let active = entriesByPromptID[promptID],
+               active.attempt != lifecycleAttempt {
+                return .supersededLifecycle
+            }
+            if let terminal = terminalsByPromptID[promptID] {
+                return .terminal(terminal)
+            }
+            guard entriesByPromptID[promptID] != nil else {
+                return .supersededLifecycle
+            }
+            return .awaitingConfirmation
+        }
+    }
+
+    func failSubmit(promptID: String,
+                    lifecycleAttempt: Int) -> SubmitCompletionOutcome {
+        lock.withCodexApprovalLock {
+            if let active = entriesByPromptID[promptID],
+               active.attempt != lifecycleAttempt {
+                return .supersededLifecycle
+            }
+            if let terminal = terminalsByPromptID[promptID] {
+                return .terminal(terminal)
+            }
+            if var active = entriesByPromptID[promptID],
+               case .submitting = active.phase {
+                active.phase = .pending
+                entriesByPromptID[promptID] = active
+                return .awaitingConfirmation
+            }
+            return entriesByPromptID[promptID] == nil
+                ? .supersededLifecycle
+                : .awaitingConfirmation
+        }
+    }
+
     func entry(promptID: String) -> CodexAppServerApprovalPromptEntry? {
         lock.withCodexApprovalLock {
-            entriesByPromptID[promptID]
+            entriesByPromptID[promptID]?.entry
         }
     }
 
     func entries() -> [CodexAppServerApprovalPromptEntry] {
         lock.withCodexApprovalLock {
-            Array(entriesByPromptID.values)
+            entriesByPromptID.values.map(\.entry)
+        }
+    }
+
+    func pendingStates() -> [(entry: CodexAppServerApprovalPromptEntry,
+                              phase: CodexAppServerApprovalPhase,
+                              attempt: Int,
+                              publishedEvent: AgentEvent?)] {
+        lock.withCodexApprovalLock {
+            entriesByPromptID.values.map {
+                ($0.entry, $0.phase, $0.attempt, $0.publishedEvent)
+            }
         }
     }
 
@@ -909,20 +1182,151 @@ final class CodexAppServerApprovalPromptStore: @unchecked Sendable {
     func resolveEntry(promptID: String,
                       targetIndex: Int) throws -> (entry: CodexAppServerApprovalPromptEntry, response: JSONValue) {
         try lock.withCodexApprovalLock {
-            guard let entry = entriesByPromptID[promptID] else {
+            guard let active = entriesByPromptID[promptID] else {
                 throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
             }
-            let response = try entry.request.response(targetIndex: targetIndex)
+            let response = try active.entry.request.response(targetIndex: targetIndex)
             entriesByPromptID.removeValue(forKey: promptID)
-            return (entry, response)
+            return (active.entry, response)
         }
     }
 
     func remove(promptID: String) -> CodexAppServerApprovalPromptEntry? {
         let entry = lock.withCodexApprovalLock {
-            entriesByPromptID.removeValue(forKey: promptID)
+            entriesByPromptID.removeValue(forKey: promptID)?.entry
         }
         return entry
+    }
+
+    func resolveExternally(
+        reason: String,
+        where matches: (CodexAppServerApprovalRequest) -> Bool,
+        makeEvent: (CodexAppServerApprovalPromptEntry, String, Int) -> AgentEvent
+    ) -> [CodexAppServerApprovalTerminalRecord] {
+        lock.withCodexApprovalLock {
+            let matching = entriesByPromptID.values.filter {
+                matches($0.entry.request)
+            }
+            var records: [CodexAppServerApprovalTerminalRecord] = []
+            for active in matching {
+                let promptID = active.entry.prompt.promptID
+                entriesByPromptID.removeValue(forKey: promptID)
+                let record = CodexAppServerApprovalTerminalRecord(
+                    entry: active.entry,
+                    reason: reason,
+                    event: makeEvent(active.entry, reason, active.attempt),
+                    attempt: active.attempt)
+                insertTerminalLocked(record, promptID: promptID)
+                records.append(record)
+            }
+            return records
+        }
+    }
+
+    func resolveAllExternally(
+        reason: String,
+        makeEvent: (CodexAppServerApprovalPromptEntry, String, Int) -> AgentEvent
+    ) -> [CodexAppServerApprovalTerminalRecord] {
+        resolveExternally(reason: reason,
+                          where: { _ in true },
+                          makeEvent: makeEvent)
+    }
+
+    func retireAndResolveAll(
+        reason: String,
+        makeEvent: (CodexAppServerApprovalPromptEntry, String, Int) -> AgentEvent
+    ) -> [CodexAppServerApprovalTerminalRecord] {
+        lock.withCodexApprovalLock {
+            retired = true
+            let activeEntries = Array(entriesByPromptID.values)
+            var records: [CodexAppServerApprovalTerminalRecord] = []
+            for active in activeEntries {
+                let promptID = active.entry.prompt.promptID
+                let record = CodexAppServerApprovalTerminalRecord(
+                    entry: active.entry,
+                    reason: reason,
+                    event: makeEvent(active.entry, reason, active.attempt),
+                    attempt: active.attempt)
+                insertTerminalLocked(record, promptID: promptID)
+                records.append(record)
+            }
+            entriesByPromptID.removeAll()
+            return records
+        }
+    }
+
+    func terminalRecord(promptID: String) -> CodexAppServerApprovalTerminalRecord? {
+        lock.withCodexApprovalLock {
+            terminalsByPromptID[promptID]
+        }
+    }
+
+    func terminalRecordCount() -> Int {
+        lock.withCodexApprovalLock {
+            terminalsByPromptID.count
+        }
+    }
+
+    func isRetired() -> Bool {
+        lock.withCodexApprovalLock {
+            retired
+        }
+    }
+
+    private static func lifecycleFingerprint(
+        for entry: CodexAppServerApprovalPromptEntry
+    ) -> String {
+        let request = entry.request
+        var value: [String: JSONValue] = [
+            "request_id": .string(request.requestID.storageKey),
+            "method": .string(request.method.rawValue),
+            "thread_id": .string(request.threadID),
+            "turn_id": .string(request.turnID),
+            "item_id": .string(request.itemID),
+            "started_at_ms": .string(String(request.startedAtMs)),
+            "command_actions": .array(request.commandActions.map(JSONValue.string)),
+            "network_policy_amendments": .array(request.proposedNetworkPolicyAmendments),
+            "available_decisions": .array(request.availableDecisions),
+            "prompt": entry.prompt.jsonValue,
+        ]
+        if let approvalID = request.approvalID { value["approval_id"] = .string(approvalID) }
+        if let reason = request.reason { value["reason"] = .string(reason) }
+        if let command = request.command { value["command"] = .string(command) }
+        if let cwd = request.cwd { value["cwd"] = .string(cwd) }
+        if let host = request.networkHost { value["network_host"] = .string(host) }
+        if let networkProtocol = request.networkProtocol { value["network_protocol"] = .string(networkProtocol) }
+        if let amendment = request.proposedExecpolicyAmendment { value["execpolicy_amendment"] = amendment }
+        if let grantRoot = request.grantRoot { value["grant_root"] = .string(grantRoot) }
+        if let permissions = request.requestedPermissions { value["permissions"] = permissions }
+        if let additional = request.additionalPermissions { value["additional_permissions"] = additional }
+        if let environmentID = request.environmentID { value["environment_id"] = .string(environmentID) }
+        if let autoResolutionMs = request.autoResolutionMs { value["auto_resolution_ms"] = .string(String(autoResolutionMs)) }
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = (try? encoder.encode(JSONValue.object(value))) ?? Data()
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private func insertTerminalLocked(
+        _ record: CodexAppServerApprovalTerminalRecord,
+        promptID: String
+    ) {
+        if terminalsByPromptID[promptID] == nil {
+            terminalOrder.append(promptID)
+        }
+        terminalsByPromptID[promptID] = record
+        while terminalOrder.count > terminalCapacity {
+            let evicted = terminalOrder.removeFirst()
+            terminalsByPromptID.removeValue(forKey: evicted)
+        }
+    }
+
+    private func removeTerminalLocked(promptID: String) {
+        guard terminalsByPromptID.removeValue(forKey: promptID) != nil else {
+            return
+        }
+        terminalOrder.removeAll { $0 == promptID }
     }
 }
 
