@@ -507,7 +507,7 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                                                               toolCallID: promptID)
         let secondAsk = makeClaudeAskUserQuestionAssistantLine(uuid: "index-first-b",
                                                                toolCallID: promptID)
-        let fillerLines = (0..<transcriptBootstrapLineLimit).map {
+        let fillerLines = (0..<(transcriptBootstrapLineLimit - 1)).map {
             makeClaudeUserLine(uuid: "filler-\($0)", content: "filler-\($0)")
         }
         try (([firstAsk, secondAsk] + fillerLines).joined(separator: "\n") + "\n")
@@ -521,7 +521,7 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         defer { session.stop() }
         XCTAssertTrue(waitUntil {
             hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1)
-                .events.first?.text == "filler-\(transcriptBootstrapLineLimit - 1)"
+                .events.first?.text == "filler-\(transcriptBootstrapLineLimit - 2)"
         })
         let firstFillerOffset = ([firstAsk, secondAsk].joined(separator: "\n") + "\n").utf8.count
         let anchor = transcriptEventSequence(lineOffset: firstFillerOffset, ordinal: 0)
@@ -558,6 +558,62 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         )
         XCTAssertEqual(terminalEvent.metadata?["lifecycle_token"],
                        "index-first-a:ask-user-question:\(promptID)")
+        XCTAssertNotNil(hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                     sessionID: "session",
+                                                     promptID: promptID),
+                        "terminal A must not close the newer same-ID Ask B")
+    }
+
+    func testClaudeLiveFirstRepeatedAskTerminalKeepsNewerLifecycleOpen() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        let promptID = "toolu_live_first_repeated"
+        let firstAsk = makeClaudeAskUserQuestionAssistantLine(uuid: "live-first-a",
+                                                              toolCallID: promptID)
+        let secondAsk = makeClaudeAskUserQuestionAssistantLine(uuid: "live-first-b",
+                                                               toolCallID: promptID)
+        let fillerLines = (0..<(transcriptBootstrapLineLimit - 1)).map {
+            makeClaudeUserLine(uuid: "filler-\($0)", content: "filler-\($0)")
+        }
+        try (([firstAsk, secondAsk] + fillerLines).joined(separator: "\n") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1)
+                .events.first?.text == "filler-\(transcriptBootstrapLineLimit - 2)"
+        })
+        let firstFillerOffset = ([firstAsk, secondAsk].joined(separator: "\n") + "\n").utf8.count
+        let anchor = transcriptEventSequence(lineOffset: firstFillerOffset, ordinal: 0)
+        XCTAssertTrue(session.backfill(beforeSeq: anchor, limit: 20))
+
+        let terminal = makeClaudeToolResultLine(uuid: "live-first-result-a",
+                                                toolCallID: promptID,
+                                                content: "answered A")
+        let handle = try FileHandle(forWritingTo: transcriptURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data((terminal + "\n").utf8))
+        try handle.close()
+
+        let terminalEventID = "live-first-result-a:ask-user-question-resolved:\(promptID)"
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+                .events.contains { $0.eventID == terminalEventID }
+        })
+        let terminalEvent = try XCTUnwrap(
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000)
+                .events.first { $0.eventID == terminalEventID }
+        )
+        XCTAssertEqual(terminalEvent.metadata?["lifecycle_token"],
+                       "live-first-a:ask-user-question:\(promptID)")
         XCTAssertNotNil(hub.activeInteractivePrompt(workspaceID: "workspace",
                                                      sessionID: "session",
                                                      promptID: promptID),

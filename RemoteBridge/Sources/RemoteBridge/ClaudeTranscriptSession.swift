@@ -2341,11 +2341,21 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                    expectedTurnID: sourceTurnID)
     }
 
-    private func lifecycleResolveQuestionBlocker(toolCallID: String) {
+    private func lifecycleResolveQuestionBlocker(toolCallID: String,
+                                                 exactLifecycleToken: String? = nil) {
         guard !isBackfillingHistory else { return }
         var lifecycleTokens = openLifecycleQuestionTokensByToolCallID[toolCallID] ?? []
         guard lifecycleTokens.isEmpty == false else { return }
-        let lifecycleToken = lifecycleTokens.removeFirst()
+        let tokenIndex: Int
+        if let exactLifecycleToken {
+            guard let exactIndex = lifecycleTokens.firstIndex(of: exactLifecycleToken) else {
+                return
+            }
+            tokenIndex = exactIndex
+        } else {
+            tokenIndex = lifecycleTokens.startIndex
+        }
+        let lifecycleToken = lifecycleTokens.remove(at: tokenIndex)
         if lifecycleTokens.isEmpty {
             openLifecycleQuestionTokensByToolCallID.removeValue(forKey: toolCallID)
         } else {
@@ -3817,30 +3827,48 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                   toolCallID: toolCallID,
                                   metadata: metadata)
                 ordinal += 1
-                // A tool_result never opens a turn; it resolves the Ask
-                // blocker by tool_use_id (multiSelect-shaped cards included)
-                // and any permission blocker its existence proves decided
-                // (allow AND deny both produce a tool_result).
-                if let toolCallID {
-                    lifecycleResolveQuestionBlocker(toolCallID: toolCallID)
-                    lifecycleResolvePermissionBlocker(toolCallID: toolCallID)
-                }
                 if let toolCallID {
                     let resolvedEventID = "\(uuid):ask-user-question-resolved:\(toolCallID)"
+                    let exactHistoricalOpenerEventID = historicalClosureIndex?
+                        .openerEventIDByClosureEventID[resolvedEventID]
+                    let historicalOpenerEventID = exactHistoricalOpenerEventID
+                        ?? historicalClosureIndex?
+                            .pendingAskOpenerEventIDsByPromptID[toolCallID]?.first
                     var liveLifecycles = activeAskUserQuestionLifecyclesByToolCallID[toolCallID] ?? []
-                    let liveLifecycle = liveLifecycles.first
+                    let liveLifecycle: ClaudeAskLifecycle?
+                    if let historicalOpenerEventID {
+                        if let exactIndex = liveLifecycles.firstIndex(where: {
+                            $0.token == historicalOpenerEventID
+                        }) {
+                            liveLifecycle = liveLifecycles.remove(at: exactIndex)
+                        } else {
+                            // The full index can own an older same-ID Ask
+                            // while bootstrap owns a newer one. Indexed
+                            // transcript order wins even when the live tailer
+                            // reaches the result before the index does.
+                            liveLifecycle = nil
+                        }
+                    } else {
+                        liveLifecycle = liveLifecycles.first
+                        if liveLifecycle != nil {
+                            liveLifecycles.removeFirst()
+                        }
+                    }
                     if liveLifecycle != nil {
-                        liveLifecycles.removeFirst()
                         if liveLifecycles.isEmpty {
                             activeAskUserQuestionLifecyclesByToolCallID.removeValue(forKey: toolCallID)
                         } else {
                             activeAskUserQuestionLifecyclesByToolCallID[toolCallID] = liveLifecycles
                         }
                     }
-                    let historicalOpenerEventID = liveLifecycle == nil
-                        ? historicalClosureIndex?.openerEventIDByClosureEventID[resolvedEventID]
-                            ?? historicalClosureIndex?.pendingAskOpenerEventIDsByPromptID[toolCallID]?.first
-                        : nil
+                    // A tool_result never opens a turn; it resolves the
+                    // indexed Ask blocker when history has identified it.
+                    // Only use FIFO when no indexed transcript identity is known
+                    // (multiSelect-shaped cards included).
+                    lifecycleResolveQuestionBlocker(
+                        toolCallID: toolCallID,
+                        exactLifecycleToken: historicalOpenerEventID)
+                    lifecycleResolvePermissionBlocker(toolCallID: toolCallID)
                     let promptID = liveLifecycle?.promptID
                         ?? historicalOpenerEventID.map { _ in toolCallID }
                     let lifecycleToken = liveLifecycle?.token ?? historicalOpenerEventID
