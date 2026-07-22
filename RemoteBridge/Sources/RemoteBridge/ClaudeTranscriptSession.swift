@@ -2612,12 +2612,18 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private var unsupportedVersions = Set<String>()
     private var isBackfillingHistory = false
     private var pendingLocalCommand: ClaudeLocalCommand?
-    private var activeAskUserQuestionPromptIDByToolCallID = [String: String]()
+
+    private struct ClaudeAskLifecycle: Equatable {
+        let promptID: String
+        let token: String
+    }
+
+    private var activeAskUserQuestionLifecyclesByToolCallID = [String: [ClaudeAskLifecycle]]()
 
     private struct LiveParserStateSnapshot {
         let unsupportedVersions: Set<String>
         let pendingLocalCommand: ClaudeLocalCommand?
-        let activeAskUserQuestionPromptIDByToolCallID: [String: String]
+        let activeAskUserQuestionLifecyclesByToolCallID: [String: [ClaudeAskLifecycle]]
         let lifecycleTurnLineageByUuid: [String: String]
         let lifecycleTurnLineageOrder: [String]
     }
@@ -2636,7 +2642,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         var scannedBoundary: Data
         var pendingPartialLineData: Data
         var parserState: LiveParserStateSnapshot?
-        var pendingAskOpenerEventIDByPromptID: [String: String]
+        var pendingAskOpenerEventIDsByPromptID: [String: [String]]
         var pendingContextOpenerEventID: String?
         var closureByOpenerEventID: [String: AgentEvent]
         var contextConsumerSequenceByOpenerEventID: [String: Int]
@@ -2647,7 +2653,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
              scannedBoundary: Data,
              pendingPartialLineData: Data,
              parserState: LiveParserStateSnapshot?,
-             pendingAskOpenerEventIDByPromptID: [String: String],
+             pendingAskOpenerEventIDsByPromptID: [String: [String]],
              pendingContextOpenerEventID: String?,
              closureByOpenerEventID: [String: AgentEvent],
              contextConsumerSequenceByOpenerEventID: [String: Int]) {
@@ -2657,7 +2663,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             self.scannedBoundary = scannedBoundary
             self.pendingPartialLineData = pendingPartialLineData
             self.parserState = parserState
-            self.pendingAskOpenerEventIDByPromptID = pendingAskOpenerEventIDByPromptID
+            self.pendingAskOpenerEventIDsByPromptID = pendingAskOpenerEventIDsByPromptID
             self.pendingContextOpenerEventID = pendingContextOpenerEventID
             self.closureByOpenerEventID = closureByOpenerEventID
             self.contextConsumerSequenceByOpenerEventID = contextConsumerSequenceByOpenerEventID
@@ -2687,7 +2693,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private func captureLiveParserState() -> LiveParserStateSnapshot {
         LiveParserStateSnapshot(unsupportedVersions: unsupportedVersions,
                                 pendingLocalCommand: pendingLocalCommand,
-                                activeAskUserQuestionPromptIDByToolCallID: activeAskUserQuestionPromptIDByToolCallID,
+                                activeAskUserQuestionLifecyclesByToolCallID:
+                                    activeAskUserQuestionLifecyclesByToolCallID,
                                 lifecycleTurnLineageByUuid: lifecycleTurnLineageByUuid,
                                 lifecycleTurnLineageOrder: lifecycleTurnLineageOrder)
     }
@@ -2695,7 +2702,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private func resetParserStateForHistoricalReplay() {
         unsupportedVersions = []
         pendingLocalCommand = nil
-        activeAskUserQuestionPromptIDByToolCallID = [:]
+        activeAskUserQuestionLifecyclesByToolCallID = [:]
         lifecycleTurnLineageByUuid = [:]
         lifecycleTurnLineageOrder = []
     }
@@ -2703,7 +2710,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private func restoreLiveParserState(_ snapshot: LiveParserStateSnapshot) {
         unsupportedVersions = snapshot.unsupportedVersions
         pendingLocalCommand = snapshot.pendingLocalCommand
-        activeAskUserQuestionPromptIDByToolCallID = snapshot.activeAskUserQuestionPromptIDByToolCallID
+        activeAskUserQuestionLifecyclesByToolCallID =
+            snapshot.activeAskUserQuestionLifecyclesByToolCallID
         lifecycleTurnLineageByUuid = snapshot.lifecycleTurnLineageByUuid
         lifecycleTurnLineageOrder = snapshot.lifecycleTurnLineageOrder
     }
@@ -2834,7 +2842,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         historicalIndexEventSink = nil
         historicalReplayOpenerEventIDs = []
         historicalBackfillAnchorSeq = nil
-        activeAskUserQuestionPromptIDByToolCallID = [:]
+        activeAskUserQuestionLifecyclesByToolCallID = [:]
         pendingLocalCommand = nil
         unsupportedVersions = []
         // Source switch = new lifecycle epoch: the fresh generation makes
@@ -2995,7 +3003,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 scannedBoundary: Data(),
                 pendingPartialLineData: Data(),
                 parserState: nil,
-                pendingAskOpenerEventIDByPromptID: [:],
+                pendingAskOpenerEventIDsByPromptID: [:],
                 pendingContextOpenerEventID: nil,
                 closureByOpenerEventID: [:],
                 contextConsumerSequenceByOpenerEventID: [:])
@@ -3157,10 +3165,22 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         }
         if event.type == .interactivePrompt,
            let promptID = event.metadata?["prompt_id"] {
-            index.pendingAskOpenerEventIDByPromptID[promptID] = event.eventID
+            index.pendingAskOpenerEventIDsByPromptID[promptID, default: []].append(event.eventID)
         } else if event.type == .interactivePromptResolved,
-                  let promptID = event.metadata?["prompt_id"],
-                  let openerEventID = index.pendingAskOpenerEventIDByPromptID.removeValue(forKey: promptID) {
+                  let promptID = event.metadata?["prompt_id"] {
+            var openerEventIDs = index.pendingAskOpenerEventIDsByPromptID[promptID] ?? []
+            guard openerEventIDs.isEmpty == false else {
+                return
+            }
+            let openerIndex = event.metadata?["lifecycle_token"]
+                .flatMap { openerEventIDs.firstIndex(of: $0) }
+                ?? openerEventIDs.startIndex
+            let openerEventID = openerEventIDs.remove(at: openerIndex)
+            if openerEventIDs.isEmpty {
+                index.pendingAskOpenerEventIDsByPromptID.removeValue(forKey: promptID)
+            } else {
+                index.pendingAskOpenerEventIDsByPromptID[promptID] = openerEventIDs
+            }
             index.closureByOpenerEventID[openerEventID] = event
         } else if event.metadata?["tidey_generated"] == "claude_context_command" {
             if let openerEventID = index.pendingContextOpenerEventID {
@@ -3458,13 +3478,16 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 }
                 if name == "AskUserQuestion",
                    let prompt = Self.askUserQuestionPrompt(from: block, uuid: uuid, index: index) {
+                    let lifecycleToken = "\(uuid):ask-user-question:\(prompt.promptID)"
                     if let toolCallID {
-                        activeAskUserQuestionPromptIDByToolCallID[toolCallID] = prompt.promptID
+                        activeAskUserQuestionLifecyclesByToolCallID[toolCallID, default: []]
+                            .append(ClaudeAskLifecycle(promptID: prompt.promptID,
+                                                       token: lifecycleToken))
                     }
                     publishFileBacked(kind: .interactivePrompt,
                                       lineOffset: lineOffset,
                                       ordinal: ordinal,
-                                      eventID: "\(uuid):ask-user-question:\(prompt.promptID)",
+                                      eventID: lifecycleToken,
                                       timestamp: timestamp,
                                       role: "assistant",
                                       text: prompt.title,
@@ -3475,6 +3498,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                       metadata: [
                                         "source": prompt.source,
                                         "prompt_id": prompt.promptID,
+                                        "lifecycle_token": lifecycleToken,
                                         "submit_channel": InteractivePromptSubmitChannel.terminalInput,
                                         "multi_select": "false",
                                       ],
@@ -3627,12 +3651,23 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                     lifecycleResolvePermissionBlocker(toolCallID: toolCallID)
                 }
                 if let toolCallID {
-                    let livePromptID = activeAskUserQuestionPromptIDByToolCallID
-                        .removeValue(forKey: toolCallID)
-                    let historicalOpenerEventID = livePromptID == nil
-                        ? historicalClosureIndex?.pendingAskOpenerEventIDByPromptID[toolCallID]
+                    var liveLifecycles = activeAskUserQuestionLifecyclesByToolCallID[toolCallID] ?? []
+                    let liveLifecycle = liveLifecycles.first
+                    if liveLifecycle != nil {
+                        liveLifecycles.removeFirst()
+                        if liveLifecycles.isEmpty {
+                            activeAskUserQuestionLifecyclesByToolCallID.removeValue(forKey: toolCallID)
+                        } else {
+                            activeAskUserQuestionLifecyclesByToolCallID[toolCallID] = liveLifecycles
+                        }
+                    }
+                    let historicalOpenerEventID = liveLifecycle == nil
+                        ? historicalClosureIndex?.pendingAskOpenerEventIDsByPromptID[toolCallID]?.first
                         : nil
-                    if let promptID = livePromptID ?? historicalOpenerEventID.map({ _ in toolCallID }) {
+                    let promptID = liveLifecycle?.promptID
+                        ?? historicalOpenerEventID.map { _ in toolCallID }
+                    let lifecycleToken = liveLifecycle?.token ?? historicalOpenerEventID
+                    if let promptID, let lifecycleToken {
                         let resolvedEvent = publishFileBacked(
                             kind: .interactivePromptResolved,
                             lineOffset: lineOffset,
@@ -3648,15 +3683,25 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                             metadata: [
                                 "source": "claude_ask_user_question",
                                 "prompt_id": promptID,
+                                "lifecycle_token": lifecycleToken,
                                 "reason": "tool_result",
                             ],
                             payload: .object([
                                 "prompt_id": .string(promptID),
+                                "lifecycle_token": .string(lifecycleToken),
                                 "reason": .string("tool_result"),
                             ]))
                         if let historicalOpenerEventID,
                            let index = historicalClosureIndex {
-                            index.pendingAskOpenerEventIDByPromptID.removeValue(forKey: toolCallID)
+                            var openerEventIDs = index.pendingAskOpenerEventIDsByPromptID[toolCallID] ?? []
+                            if let openerIndex = openerEventIDs.firstIndex(of: historicalOpenerEventID) {
+                                openerEventIDs.remove(at: openerIndex)
+                            }
+                            if openerEventIDs.isEmpty {
+                                index.pendingAskOpenerEventIDsByPromptID.removeValue(forKey: toolCallID)
+                            } else {
+                                index.pendingAskOpenerEventIDsByPromptID[toolCallID] = openerEventIDs
+                            }
                             index.closureByOpenerEventID[historicalOpenerEventID] = resolvedEvent
                             synchronizeHistoricalOpenerClosureSequences()
                         }
