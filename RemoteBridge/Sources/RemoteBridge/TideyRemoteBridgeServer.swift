@@ -716,7 +716,9 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                         self.send(workspaceEnvelope: envelope, to: context)
                     }
                     if let agentLiveGate {
-                        for envelope in agentLiveGate.open() {
+                        for envelope in BridgePendingApprovalFetchMerge.openLiveGate(
+                            agentLiveGate,
+                            afterReplaying: agentReplayEnvelopes) {
                             self.send(envelope: envelope, to: context)
                         }
                     }
@@ -970,18 +972,19 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                                       returnedCount: fetchResult.events.count,
                                       didBackfill: didBackfill,
                                       durationMs: (CFAbsoluteTimeGetCurrent() - startedAt) * 1000)
-            let pendingEvents = AgentInteractivePromptEventReducer.pendingEvents(
-                pendingCodexApprovalEvents(workspaceID: workspaceID, sessionID: sessionID),
-                excludingResolvedIn: fetchResult.events)
-            let events = AgentInteractivePromptEventReducer.mergedEvents(fetchResult.events,
-                                                                         pendingEvents)
+            let merged = BridgePendingApprovalFetchMerge.merge(
+                pageEvents: fetchResult.events,
+                pageOldestSeq: fetchResult.oldestSeq,
+                pageNewestSeq: fetchResult.newestSeq,
+                pendingEvents: pendingCodexApprovalEvents(workspaceID: workspaceID,
+                                                          sessionID: sessionID))
             return LocalRequestResult(
                 response: BridgeResponse(id: request.id,
                                          ok: true,
                                          result: [
-                                            "events": .array(events.map(Self.jsonValue(for:))),
-                                            "oldest_seq": .number(Double(events.first?.seq ?? fetchResult.oldestSeq)),
-                                            "newest_seq": .number(Double(events.last?.seq ?? fetchResult.newestSeq)),
+                                            "events": .array(merged.events.map(Self.jsonValue(for:))),
+                                            "oldest_seq": .number(Double(merged.oldestSeq)),
+                                            "newest_seq": .number(Double(merged.newestSeq)),
                                             "has_more": .bool(fetchResult.hasMore),
                                          ],
                                          error: nil),
@@ -1134,17 +1137,10 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         guard noReplay == false else {
             return replayEnvelopes
         }
-        let pendingEvents = pendingCodexApprovalEvents(workspaceID: workspaceID, sessionID: sessionID)
-        let replayEvents = replayEnvelopes.map(\.event)
-        let activePendingEvents = AgentInteractivePromptEventReducer.pendingEvents(pendingEvents,
-                                                                                  excludingResolvedIn: replayEvents)
-        let events = AgentInteractivePromptEventReducer.mergedEvents(replayEvents, activePendingEvents)
-        return events.map { event in
-            if let existing = replayEnvelopes.first(where: { $0.event.eventID == event.eventID }) {
-                return existing
-            }
-            return AgentEventEnvelope(replay: true, event: event)
-        }
+        return BridgePendingApprovalFetchMerge.mergeReplayEnvelopes(
+            replayEnvelopes,
+            pendingEvents: pendingCodexApprovalEvents(workspaceID: workspaceID,
+                                                      sessionID: sessionID))
     }
 
     private func augment(response: BridgeResponse, for request: BridgeRequest) -> BridgeResponse {
