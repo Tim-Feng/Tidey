@@ -576,12 +576,26 @@ final class OrdinaryTmuxPanelProjector {
                                    workspaceID: String,
                                    carrierPanelID: String,
                                    displayState: ProjectionDisplayState?) -> JSONValue {
+        // A logical panel's state comes from ITS OWN agent-session
+        // lifecycle, never the carrier panel's: two windows on one carrier
+        // must not share a state. A PLAIN logical terminal (no lifecycle
+        // record) keeps the legacy per-pane activity fallback — its own
+        // foreground command, not the carrier's state.
+        let lifecycleState: JSONValue
+        var lifecycleRevision: JSONValue?
+        if let aggregate = AgentSessionLifecycle.store.panelAggregate(workspaceID: workspaceID,
+                                                                      panelID: projectedPanel.panelID) {
+            lifecycleState = .string(aggregate.state.rawValue)
+            lifecycleRevision = .number(Double(aggregate.revision))
+        } else {
+            lifecycleState = .string(Self.plainTerminalActivityState(currentCommand: projectedPanel.currentCommand))
+        }
         var panel: [String: JSONValue] = [
             "panel_id": .string(projectedPanel.panelID),
             "workspace_id": .string(workspaceID),
             "title": .string(projectedPanel.title),
             "subtitle": .string(projectedPanel.subtitle),
-            "state": carrierPanel["state"] ?? .string("idle"),
+            "state": lifecycleState,
             "selected": .bool(projectedPanel.isCurrentWindow),
             "is_browser": .bool(false),
             "workspace_index": carrierPanel["workspace_index"] ?? .number(0),
@@ -595,6 +609,9 @@ final class OrdinaryTmuxPanelProjector {
                 "active_pane_id": .string(projectedPanel.activePaneID),
             ]),
         ]
+        if let lifecycleRevision {
+            panel["state_revision"] = lifecycleRevision
+        }
 
         if let activePanePID = projectedPanel.activePanePID {
             panel["effective_shell_pid"] = .number(Double(activePanePID))
@@ -615,6 +632,17 @@ final class OrdinaryTmuxPanelProjector {
         }
         applyProjectionDisplayState(displayState, to: &panel)
         return .object(panel)
+    }
+
+    // Legacy activity fallback for logical terminals WITHOUT an agent
+    // session: the pane's own foreground command decides running vs idle.
+    static func plainTerminalActivityState(currentCommand: String?) -> String {
+        let idleCommands: Set<String> = ["", "zsh", "bash", "fish", "sh", "dash", "tcsh", "login", "tmux"]
+        let command = (currentCommand ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let baseName = command.split(separator: "/").last.map(String.init) ?? command
+        let normalized = baseName.hasPrefix("-") ? String(baseName.dropFirst()) : baseName
+        return idleCommands.contains(normalized) ? "idle" : "running"
     }
 
     private static func carrierPanelValue(for projectedPanel: OrdinaryTmuxProjectedPanel,

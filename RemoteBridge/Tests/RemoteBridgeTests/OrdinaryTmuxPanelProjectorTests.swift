@@ -399,6 +399,72 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
         XCTAssertEqual(panels?.first?["effective_shell_pid"]?.intValue, 1015)
     }
 
+    func testProjectedLogicalPanelUsesItsOwnLifecycleAggregate() throws {
+        let workspaceID = "workspace-lifecycle-\(UUID().uuidString)"
+        let projected = projectedPanel(windowID: "@15",
+                                       index: 0,
+                                       name: "agent",
+                                       paneID: "%15",
+                                       current: true)
+        let identity = AgentSessionLifecycleIdentity(workspaceID: workspaceID,
+                                                     panelID: projected.panelID,
+                                                     sessionID: "agent-session")
+        AgentSessionLifecycle.store.openBlocker(identity,
+                                                vendor: "codex",
+                                                generation: 1,
+                                                blockerID: "approval",
+                                                kind: .permission)
+        defer {
+            AgentSessionLifecycle.store.retireSession(identity, generation: 1)
+        }
+        let projector = OrdinaryTmuxPanelProjector(adapter: StubAdapter(panels: [
+            projected,
+            projectedPanel(windowID: "@16",
+                           index: 1,
+                           name: "plain",
+                           paneID: "%16",
+                           current: false),
+        ]))
+
+        let result = projector.projectPanelListResult(panelListResult(workspaceID: workspaceID))
+        let panel = try XCTUnwrap(result["panels"]?.arrayValue?
+            .compactMap(\.objectValue)
+            .first { $0["panel_id"]?.stringValue == projected.panelID })
+        let aggregate = try XCTUnwrap(AgentSessionLifecycle.store.panelAggregate(workspaceID: workspaceID,
+                                                                                 panelID: projected.panelID))
+
+        XCTAssertEqual(panel["state"]?.stringValue, "needs_input")
+        XCTAssertEqual(panel["state_revision"]?.intValue, aggregate.revision)
+    }
+
+    func testProjectedPlainLogicalPanelsUseTheirOwnForegroundCommands() throws {
+        let workspaceID = "workspace-plain-\(UUID().uuidString)"
+        var input = panelListResult(workspaceID: workspaceID)
+        var carrier = try XCTUnwrap(input["panels"]?.arrayValue?.first?.objectValue)
+        carrier["state"] = .string("needs_input")
+        input["panels"] = .array([.object(carrier)])
+        let projector = OrdinaryTmuxPanelProjector(adapter: StubAdapter(panels: [
+            projectedPanel(windowID: "@15",
+                           index: 0,
+                           name: "shell",
+                           paneID: "%15",
+                           current: true,
+                           currentCommand: "zsh"),
+            projectedPanel(windowID: "@16",
+                           index: 1,
+                           name: "editor",
+                           paneID: "%16",
+                           current: false,
+                           currentCommand: "vim"),
+        ]))
+
+        let result = projector.projectPanelListResult(input)
+        let panels = try XCTUnwrap(result["panels"]?.arrayValue?.compactMap(\.objectValue))
+
+        XCTAssertEqual(panels.map { $0["state"]?.stringValue }, ["idle", "running"])
+        XCTAssertTrue(panels.allSatisfy { $0["state_revision"] == nil })
+    }
+
     func testConcurrentProjectionsForSameWorkspaceSerializeAndKeepNewestRegistryRoute() {
         let adapter = SequencedBlockingProjectionAdapter(
             firstPanels: [projectedPanel(windowID: "@15", index: 0, name: "old", paneID: "%15", current: true)],
@@ -1057,7 +1123,8 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
                                 index: Int,
                                 name: String,
                                 paneID: String,
-                                current: Bool) -> OrdinaryTmuxProjectedPanel {
+                                current: Bool,
+                                currentCommand: String = "zsh") -> OrdinaryTmuxProjectedPanel {
         OrdinaryTmuxProjectedPanel(
             panelID: OrdinaryTmuxCLIAdapter.stablePanelID(socketComponent: "/tmp/tmux-501/default",
                                                           sessionID: "$7",
@@ -1072,7 +1139,7 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
             activePaneID: paneID,
             activePanePID: Int32(1000 + index + 15),
             cwd: "/Users/timfeng/GitHub/\(name)",
-            currentCommand: "zsh",
+            currentCommand: currentCommand,
             title: name,
             subtitle: "/Users/timfeng/GitHub/\(name)"
         )

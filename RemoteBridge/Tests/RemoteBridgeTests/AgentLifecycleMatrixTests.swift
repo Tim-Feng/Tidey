@@ -426,4 +426,14 @@ final class AgentLifecycleRound2bTests: XCTestCase {
         XCTAssertEqual(statePatches.first?.event.panel?["state_revision"]?.intValue, 7)
     }
 
+    // P0-5: plain logical terminals keep the per-pane activity fallback.
+    func testPlainTerminalActivityFallback() {
+        XCTAssertEqual(OrdinaryTmuxPanelProjector.plainTerminalActivityState(currentCommand: nil), "idle")
+        XCTAssertEqual(OrdinaryTmuxPanelProjector.plainTerminalActivityState(currentCommand: "zsh"), "idle")
+        XCTAssertEqual(OrdinaryTmuxPanelProjector.plainTerminalActivityState(currentCommand: "-zsh"), "idle")
+        XCTAssertEqual(OrdinaryTmuxPanelProjector.plainTerminalActivityState(currentCommand: "/bin/bash"), "idle")
+        XCTAssertEqual(OrdinaryTmuxPanelProjector.plainTerminalActivityState(currentCommand: "vim"), "running")
+        XCTAssertEqual(OrdinaryTmuxPanelProjector.plainTerminalActivityState(currentCommand: "cargo build"), "running")
+    }
+
 }
