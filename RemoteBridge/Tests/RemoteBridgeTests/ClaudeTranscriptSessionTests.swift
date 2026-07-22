@@ -333,6 +333,66 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                        "raw progress must continue past an eventless page")
     }
 
+    func testClaudeLiveTerminalsPublishWhenHistoryIndexWinsAppendRace() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        let promptID = "toolu_index_first"
+        let askLine = makeClaudeAskUserQuestionAssistantLine(uuid: "index-first-ask",
+                                                             toolCallID: promptID)
+        let contextLine = makeClaudeUserLine(uuid: "index-first-context",
+                                             content: "<command-name>/context</command-name>")
+        let fillerLines = (0..<transcriptBootstrapLineLimit).map {
+            makeClaudeUserLine(uuid: "filler-\($0)", content: "filler-\($0)")
+        }
+        try (([askLine, contextLine] + fillerLines).joined(separator: "\n") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1)
+                .events.first?.text == "filler-\(transcriptBootstrapLineLimit - 1)"
+        })
+        let firstFillerOffset = ([askLine, contextLine].joined(separator: "\n") + "\n").utf8.count
+        let anchor = transcriptEventSequence(lineOffset: firstFillerOffset, ordinal: 0)
+        XCTAssertTrue(session.backfill(beforeSeq: anchor, limit: 20))
+
+        let resultLine = makeClaudeToolResultLine(uuid: "index-first-result",
+                                                  toolCallID: promptID,
+                                                  content: "answered")
+        let stdoutLine = makeClaudeContextStdoutLine(uuid: "index-first-summary")
+        var appendError: Error?
+        var didAppend = false
+        session.historicalIndexBeforeScanForTesting = {
+            guard didAppend == false else { return }
+            didAppend = true
+            do {
+                let handle = try FileHandle(forWritingTo: transcriptURL)
+                try handle.seekToEnd()
+                try handle.write(contentsOf: Data(([resultLine, stdoutLine].joined(separator: "\n") + "\n").utf8))
+                try handle.close()
+            } catch {
+                appendError = error
+            }
+        }
+
+        XCTAssertTrue(session.backfill(beforeSeq: anchor, limit: 20))
+        XCTAssertNil(appendError)
+        XCTAssertTrue(didAppend)
+        XCTAssertTrue(waitUntil {
+            let events = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000).events
+            return events.contains { $0.eventID == "index-first-result:ask-user-question-resolved:\(promptID)" }
+                && events.contains { $0.eventID == "index-first-summary:claude-context:0" }
+        }, "live publication must reconcile against exact closures already consumed by the index")
+    }
+
     func testClaudeHistoricalIndexRejectsSameInodeMutationWhileAdoptingPartial() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)

@@ -2648,6 +2648,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         var pendingAskOpenerEventIDsByPromptID: [String: [String]]
         var pendingContextOpenerEventID: String?
         var closureByOpenerEventID: [String: AgentEvent]
+        var openerEventIDByClosureEventID: [String: String]
         var contextConsumerSequenceByOpenerEventID: [String: Int]
         var isPoisonedByOversizedPartialLine: Bool
 
@@ -2660,6 +2661,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
              pendingAskOpenerEventIDsByPromptID: [String: [String]],
              pendingContextOpenerEventID: String?,
              closureByOpenerEventID: [String: AgentEvent],
+             openerEventIDByClosureEventID: [String: String],
              contextConsumerSequenceByOpenerEventID: [String: Int],
              isPoisonedByOversizedPartialLine: Bool = false) {
             self.sourceIdentity = sourceIdentity
@@ -2671,6 +2673,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             self.pendingAskOpenerEventIDsByPromptID = pendingAskOpenerEventIDsByPromptID
             self.pendingContextOpenerEventID = pendingContextOpenerEventID
             self.closureByOpenerEventID = closureByOpenerEventID
+            self.openerEventIDByClosureEventID = openerEventIDByClosureEventID
             self.contextConsumerSequenceByOpenerEventID = contextConsumerSequenceByOpenerEventID
             self.isPoisonedByOversizedPartialLine = isPoisonedByOversizedPartialLine
         }
@@ -3099,6 +3102,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 pendingAskOpenerEventIDsByPromptID: [:],
                 pendingContextOpenerEventID: nil,
                 closureByOpenerEventID: [:],
+                openerEventIDByClosureEventID: [:],
                 contextConsumerSequenceByOpenerEventID: [:])
         }
         guard let startingIndex = historicalClosureIndex else {
@@ -3288,6 +3292,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 index.pendingAskOpenerEventIDsByPromptID[promptID] = openerEventIDs
             }
             index.closureByOpenerEventID[openerEventID] = event
+            index.openerEventIDByClosureEventID[event.eventID] = openerEventID
         } else if event.metadata?["tidey_generated"] == "claude_context_command" {
             if let openerEventID = index.pendingContextOpenerEventID {
                 index.contextConsumerSequenceByOpenerEventID[openerEventID] = event.seq
@@ -3296,6 +3301,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         } else if event.metadata?["tidey_generated"] == "claude_context",
                   let openerEventID = index.pendingContextOpenerEventID {
             index.closureByOpenerEventID[openerEventID] = event
+            index.openerEventIDByClosureEventID[event.eventID] = openerEventID
             index.pendingContextOpenerEventID = nil
         }
     }
@@ -3763,6 +3769,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                     lifecycleResolvePermissionBlocker(toolCallID: toolCallID)
                 }
                 if let toolCallID {
+                    let resolvedEventID = "\(uuid):ask-user-question-resolved:\(toolCallID)"
                     var liveLifecycles = activeAskUserQuestionLifecyclesByToolCallID[toolCallID] ?? []
                     let liveLifecycle = liveLifecycles.first
                     if liveLifecycle != nil {
@@ -3775,6 +3782,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                     }
                     let historicalOpenerEventID = liveLifecycle == nil
                         ? historicalClosureIndex?.pendingAskOpenerEventIDsByPromptID[toolCallID]?.first
+                            ?? historicalClosureIndex?.openerEventIDByClosureEventID[resolvedEventID]
                         : nil
                     let promptID = liveLifecycle?.promptID
                         ?? historicalOpenerEventID.map { _ in toolCallID }
@@ -3784,7 +3792,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                             kind: .interactivePromptResolved,
                             lineOffset: lineOffset,
                             ordinal: ordinal,
-                            eventID: "\(uuid):ask-user-question-resolved:\(promptID)",
+                            eventID: resolvedEventID,
                             timestamp: timestamp,
                             role: "tool",
                             text: nil,
@@ -3815,6 +3823,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                 index.pendingAskOpenerEventIDsByPromptID[toolCallID] = openerEventIDs
                             }
                             index.closureByOpenerEventID[historicalOpenerEventID] = resolvedEvent
+                            index.openerEventIDByClosureEventID[resolvedEvent.eventID]
+                                = historicalOpenerEventID
                             synchronizeHistoricalOpenerClosureSequences()
                         }
                         ordinal += 1
@@ -3936,6 +3946,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
            isBackfillingHistory == false,
            historicalIndexEventSink == nil {
             historicalOpenerEventID = historicalClosureIndex?.pendingContextOpenerEventID
+                ?? historicalClosureIndex?.openerEventIDByClosureEventID["\(uuid):claude-context:0"]
         } else {
             historicalOpenerEventID = nil
         }
@@ -3973,6 +3984,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
            let index = historicalClosureIndex {
             index.pendingContextOpenerEventID = nil
             index.closureByOpenerEventID[historicalOpenerEventID] = summaryEvent
+            index.openerEventIDByClosureEventID[summaryEvent.eventID] = historicalOpenerEventID
             synchronizeHistoricalOpenerClosureSequences()
         }
         return true
