@@ -92,6 +92,7 @@ final class AgentEventHub {
         var historicalEvents = [AgentEvent]()
         var historicalEventIDs = Set<String>()
         var historicalOpenerResolutions = [String: HistoricalOpenerResolution]()
+        var historicalClosureCoverageIsComplete = true
         var allStoredEvents: [AgentEvent] { historicalEvents + bufferedEvents }
         var latestSessionStarted: AgentEvent?
         var isActive = false
@@ -236,6 +237,11 @@ final class AgentEventHub {
         cursorEligibleEventIDs: Set<String>,
         beforeSeq: Int
     ) -> Bool {
+        let requiresClosureCoverage = event.type == .interactivePrompt
+            || event.metadata?["tidey_generated"] == "claude_context_command"
+        if requiresClosureCoverage, state.historicalClosureCoverageIsComplete == false {
+            return false
+        }
         guard let resolution = state.historicalOpenerResolutions[event.eventID] else {
             return true
         }
@@ -538,6 +544,7 @@ final class AgentEventHub {
             state.historicalEvents.removeAll()
             state.historicalEventIDs.removeAll()
             state.historicalOpenerResolutions.removeAll()
+            state.historicalClosureCoverageIsComplete = true
             state.seenEventIDs.removeAll()
             sessions[sessionID] = state
         }
@@ -554,6 +561,14 @@ final class AgentEventHub {
         queue.sync {
             var state = sessions[sessionID] ?? SessionState()
             state.historicalOpenerResolutions = resolutions
+            sessions[sessionID] = state
+        }
+    }
+
+    func setHistoricalClosureCoverage(sessionID: String, isComplete: Bool) {
+        queue.sync {
+            var state = sessions[sessionID] ?? SessionState()
+            state.historicalClosureCoverageIsComplete = isComplete
             sessions[sessionID] = state
         }
     }
