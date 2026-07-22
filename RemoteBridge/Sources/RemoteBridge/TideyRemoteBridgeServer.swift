@@ -958,6 +958,18 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                     workspaceReplayEnvelopes: []
                 )
             }
+            if sessionID == nil, beforeSeq != nil || afterSeq != nil {
+                return LocalRequestResult(
+                    response: BridgeResponse(
+                        id: request.id,
+                        ok: false,
+                        result: nil,
+                        error: BridgeInternalError.invalidRequest(
+                            "fetch_agent_events cursor requests require session_id").payload),
+                    agentReplayEnvelopes: [],
+                    workspaceReplayEnvelopes: []
+                )
+            }
             let flow = BridgeAgentEventFetchFlow.run(eventHub: eventHub,
                                                      workspaceID: workspaceID,
                                                      sessionID: sessionID,

@@ -23,6 +23,46 @@ final class BridgeFetchAgentEventsHandlerTests: XCTestCase {
         return condition()
     }
 
+    func testHandlerRejectsWorkspaceCursorWithoutSession() throws {
+        let supportDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BridgeFetchHandlerTests-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: .default)
+        defer { try? FileManager.default.removeItem(at: supportDirectory) }
+
+        let hub = AgentEventHub()
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: .default,
+                                                  hub: hub,
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+                                                  parentPIDLookup: { _ in nil })
+        let handler = WebSocketFrameHandler(socketClient: TideySocketClient(locator: TideySocketLocator()),
+                                            eventHub: hub,
+                                            workspaceEventHub: WorkspaceEventHub(),
+                                            registryMonitor: monitor,
+                                            observability: BridgeObservabilityCenter(),
+                                            bridgePort: 0,
+                                            cloudflaredManager: BridgeCloudflaredManager(binaryResolver: { nil }),
+                                            ordinaryTmuxProjectionContext: OrdinaryTmuxProjectionContext())
+        let channel = EmbeddedChannel(handler: handler)
+        defer { _ = try? channel.finish() }
+        let context = try channel.pipeline.syncOperations.context(handler: handler)
+        let request = BridgeRequest(id: "workspace-cursor",
+                                    action: "fetch_agent_events",
+                                    params: [
+                                        "workspace_id": .string("workspace"),
+                                        "limit": .number(20),
+                                        "before_seq": .number(100),
+                                    ])
+
+        let result = try XCTUnwrap(handler.handleLocalRequest(request, context: context))
+
+        XCTAssertFalse(result.response.ok)
+        XCTAssertEqual(result.response.error?.code, "invalid_request")
+        XCTAssertEqual(result.response.error?.message,
+                       "fetch_agent_events cursor requests require session_id")
+    }
+
     func testHandlerServesRequestedAnchorDespiteDeepCache() throws {
         let supportDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("BridgeFetchHandlerTests-\(UUID().uuidString)", isDirectory: true)
