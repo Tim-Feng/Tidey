@@ -3066,8 +3066,13 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                     if lineData.isEmpty == false,
                        let line = String(data: Data(lineData), encoding: .utf8) {
                         consume(line: line, lineOffset: lineOffset)
-                        if pendingLocalCommand?.name != "/context" {
-                            historicalClosureIndex?.pendingContextOpenerEventID = nil
+                        if pendingLocalCommand?.name != "/context",
+                           let index = historicalClosureIndex,
+                           let openerEventID = index.pendingContextOpenerEventID {
+                            index.contextConsumerSequenceByOpenerEventID[openerEventID]
+                                = transcriptSequenceBase
+                                + transcriptEventSequence(lineOffset: lineOffset, ordinal: 0)
+                            index.pendingContextOpenerEventID = nil
                         }
                     }
                     lineStartIndex = pendingData.index(after: newlineIndex)

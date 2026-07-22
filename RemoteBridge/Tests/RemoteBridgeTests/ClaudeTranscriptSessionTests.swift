@@ -1050,6 +1050,57 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         }, "a later command outside before_seq must consume the earlier /context command")
     }
 
+    func testClaudeBackfillTreatsUnparseableStdoutAsContextConsumer() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+
+        let contextLine = makeClaudeUserLine(uuid: "context",
+                                             content: "<command-name>/context</command-name>")
+        let unparseableStdoutLine = makeClaudeUserLine(
+            uuid: "unparseable-stdout",
+            content: "<local-command-stdout>not a context report</local-command-stdout>")
+        let fillerLines = (0..<transcriptBootstrapLineLimit).map {
+            makeClaudeUserLine(uuid: "filler-\($0)", content: "filler-\($0)")
+        }
+        let lines = [contextLine, unparseableStdoutLine] + fillerLines
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL,
+                                                            atomically: true,
+                                                            encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1)
+                .events.first?.text == "filler-\(transcriptBootstrapLineLimit - 1)"
+        })
+
+        let stdoutOffset = (contextLine + "\n").utf8.count
+        let stdoutSeq = transcriptEventSequence(lineOffset: stdoutOffset, ordinal: 0)
+        let contextPage = BridgeAgentEventFetchFlow.run(eventHub: hub,
+                                                        workspaceID: "workspace",
+                                                        sessionID: "session",
+                                                        limit: 1,
+                                                        beforeSeq: stdoutSeq,
+                                                        afterSeq: nil) { _, beforeSeq, limit in
+            session.backfill(beforeSeq: beforeSeq, limit: limit)
+        }
+
+        XCTAssertTrue(contextPage.didBackfill)
+        XCTAssertFalse(contextPage.fetchResult.events.contains {
+            $0.eventID == "context:claude-context-command:0"
+        }, "an unparseable stdout outside before_seq must still consume the pending /context")
+        XCTAssertFalse(contextPage.fetchResult.events.contains {
+            $0.metadata?["tidey_generated"] == "claude_context"
+        }, "an unparseable stdout must not invent a context summary")
+    }
+
     func testTranscriptSwitchRevokesOldHistoryAndMapsNewSourceCursor() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
