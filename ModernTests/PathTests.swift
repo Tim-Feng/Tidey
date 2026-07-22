@@ -2206,6 +2206,34 @@ final class PathTests: XCTestCase {
 }
 
 final class ClaudeHookRegistryTests: XCTestCase {
+    func testTideyCLIWriteAllHandlesShortWritesAndInterruptions() {
+        let payload = Array("abcdef".utf8)
+        var attempts: [TideyCLIWriteAttempt] = [
+            .written(2),
+            .interrupted,
+            .written(3),
+            .written(1),
+        ]
+        var observedRemainingPayloads = [String]()
+
+        let completed = TideyCLICommandFormatter.writeAll(payload) { remaining in
+            observedRemainingPayloads.append(String(decoding: remaining, as: UTF8.self))
+            return attempts.removeFirst()
+        }
+
+        XCTAssertTrue(completed)
+        XCTAssertEqual(observedRemainingPayloads, ["abcdef", "cdef", "cdef", "f"])
+        XCTAssertTrue(attempts.isEmpty)
+
+        var zeroProgressCalls = 0
+        let stopped = TideyCLICommandFormatter.writeAll(payload) { _ in
+            zeroProgressCalls += 1
+            return .written(0)
+        }
+        XCTAssertFalse(stopped)
+        XCTAssertEqual(zeroProgressCalls, 1)
+    }
+
     func testClaudeHookInputContextReadsSessionIDTranscriptPathAndCWD() throws {
         let stdinJSON = """
         {

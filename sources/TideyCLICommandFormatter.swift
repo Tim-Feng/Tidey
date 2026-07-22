@@ -7,8 +7,33 @@ struct ClaudeHookInputContext: Equatable {
     let lastAssistantMessage: String?
 }
 
+enum TideyCLIWriteAttempt: Equatable {
+    case written(Int)
+    case interrupted
+    case stopped
+}
+
 @objc(TideyCLICommandFormatter)
 final class TideyCLICommandFormatter: NSObject {
+    static func writeAll(_ payload: [UInt8],
+                         writeAttempt: (ArraySlice<UInt8>) -> TideyCLIWriteAttempt) -> Bool {
+        var offset = 0
+        while offset < payload.count {
+            switch writeAttempt(payload[offset...]) {
+            case .written(let count):
+                guard count > 0, count <= payload.count - offset else {
+                    return false
+                }
+                offset += count
+            case .interrupted:
+                continue
+            case .stopped:
+                return false
+            }
+        }
+        return true
+    }
+
     @objc(lastAssistantTextInTranscriptContent:)
     static func lastAssistantText(inTranscriptContent transcriptContent: String) -> String? {
         var lastText: String?
