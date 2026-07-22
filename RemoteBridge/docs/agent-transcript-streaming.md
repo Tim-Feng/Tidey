@@ -174,7 +174,7 @@ After subscription, bridge sends:
 - matching buffered events with `"replay": true`, unless `no_replay` is true
 - subsequent live events with `"replay": false`
 
-Cursor filtering applies to the stored transcript page or replay. To preserve actionable UI state, the bridge may additionally include an active Codex approval snapshot whose sequence lies outside that cursor range. Clients must deduplicate by `event_id`; for `before_seq` paging advance from `oldest_seq`, and for `after_seq` polling advance from `newest_seq`. Injected approval snapshots do not alter those stored-page cursor bounds.
+Cursor filtering applies to the stored transcript page or replay. To preserve actionable UI state, the bridge may additionally include an active Codex approval snapshot whose sequence lies outside that cursor range. Clients must deduplicate by `event_id`; for `before_seq` paging advance from `oldest_seq`, and for `after_seq` polling advance from `newest_seq`. Injected approval snapshots do not alter the directional stored-page bound used for that request.
 
 `unsubscribe_agent_events` takes no cursor and ends the connection's current agent-event subscription.
 
