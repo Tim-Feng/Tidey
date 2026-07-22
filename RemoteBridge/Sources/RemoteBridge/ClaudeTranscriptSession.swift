@@ -3,6 +3,17 @@ import Foundation
 
 private let claudeTranscriptMajorVersion = "2."
 
+private func unsupportedClaudeTranscriptVersion(in object: [String: Any]) -> String? {
+    guard object.keys.contains("version") else {
+        // Versionless records are a supported legacy schema.
+        return nil
+    }
+    guard let version = object["version"] as? String else {
+        return "<non-string>"
+    }
+    return version.hasPrefix(claudeTranscriptMajorVersion) ? nil : version
+}
+
 protocol AgentTranscriptSession: AnyObject {
     func start()
     func update(record: AgentSessionRegistryRecord)
@@ -3237,8 +3248,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                             encounteredMalformedRecord = true
                             break
                         }
-                        if let version = object["version"] as? String,
-                           version.hasPrefix(claudeTranscriptMajorVersion) == false {
+                        if unsupportedClaudeTranscriptVersion(in: object) != nil {
                             // A valid future-major record may carry a closure
                             // terminal whose shape this parser cannot know.
                             // Treating it as eventless would make coverage
@@ -3463,6 +3473,9 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                          }
                                          self.consume(line: line, lineOffset: offset)
                                      },
+                                     invalidUTF8Handler: { [weak self] offset in
+                                         self?.failClosedForUnknownTranscriptRecord(lineOffset: offset)
+                                     },
                                      invalidationHandler: { [weak self] in
                                          self?.handleTailerInvalidation()
                                      })
@@ -3525,6 +3538,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private func consume(line: String, lineOffset: Int) {
         guard let data = line.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            failClosedForUnknownTranscriptRecord(lineOffset: lineOffset)
             return
         }
 
@@ -3533,8 +3547,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             return
         }
         let timestamp = (object["timestamp"] as? String) ?? ISO8601DateFormatter().string(from: Date())
-        let version = object["version"] as? String
-        if let version, !version.hasPrefix(claudeTranscriptMajorVersion) {
+        if let version = unsupportedClaudeTranscriptVersion(in: object) {
+            failClosedForUnknownTranscriptRecord(lineOffset: lineOffset)
             if unsupportedVersions.insert(version).inserted {
                 publishFileBacked(kind: .status,
                                   lineOffset: lineOffset,
@@ -3581,6 +3595,10 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         default:
             break
         }
+    }
+
+    private func failClosedForUnknownTranscriptRecord(lineOffset _: Int) {
+        hub.setHistoricalClosureCoverage(sessionID: record.sessionID, isComplete: false)
     }
 
     private func consumeAssistant(object: [String: Any], timestamp: String, lineOffset: Int) {

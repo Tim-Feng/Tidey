@@ -268,6 +268,77 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
             partialLineByteLimit: 1_024)
     }
 
+    func testClaudeNonStringVersionHistoryRecordHidesCachedOpenersFailClosed() throws {
+        let terminal = makeClaudeToolResultLine(
+            uuid: "numeric-history-result",
+            toolCallID: "toolu_fail_closed",
+            content: "unknown schema")
+            .replacingOccurrences(of: "\"version\":\"2.0.0\"", with: "\"version\":3")
+        try assertClaudeHistoryIndexFailureHidesCachedOpener(
+            appendedData: Data((terminal + "\n").utf8),
+            partialLineByteLimit: 1_024)
+    }
+
+    func testClaudeLiveInvalidRecordsHideBufferedPromptFailClosed() throws {
+        let promptID = "toolu_live_invalid"
+        let unsupportedTerminal = makeClaudeToolResultLine(
+            uuid: "unsupported-live-result",
+            toolCallID: promptID,
+            content: "future answer",
+            version: "3.0.0")
+        let numericVersionTerminal = makeClaudeToolResultLine(
+            uuid: "numeric-live-result",
+            toolCallID: promptID,
+            content: "unknown schema")
+            .replacingOccurrences(of: "\"version\":\"2.0.0\"", with: "\"version\":3")
+        let cases: [(name: String, data: Data)] = [
+            ("malformed-json", Data("{not-json}\n".utf8)),
+            ("invalid-utf8", Data([0xff, 0x0a])),
+            ("unsupported-major", Data((unsupportedTerminal + "\n").utf8)),
+            ("non-string-version", Data((numericVersionTerminal + "\n").utf8)),
+        ]
+
+        for testCase in cases {
+            try assertClaudeLiveRecordFailureHidesBufferedOpener(
+                appendedData: testCase.data,
+                promptID: promptID,
+                caseName: testCase.name)
+        }
+    }
+
+    func testClaudeBootstrapInvalidUTF8RecordHidesBufferedPromptFailClosed() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        let promptID = "toolu_bootstrap_invalid"
+        let askLine = makeClaudeAskUserQuestionAssistantLine(uuid: "bootstrap-invalid-ask",
+                                                             toolCallID: promptID)
+        let markerLine = makeClaudeUserLine(uuid: "bootstrap-invalid-marker",
+                                            content: "bootstrap-invalid-ready")
+        var payload = Data((askLine + "\n").utf8)
+        payload.append(contentsOf: [0xff, 0x0a])
+        payload.append(Data((markerLine + "\n").utf8))
+        try payload.write(to: transcriptURL)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20)
+                .events.contains { $0.text == "bootstrap-invalid-ready" }
+        }, "the marker proves bootstrap delivery reached records after the invalid line")
+        XCTAssertFalse(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20)
+            .events.contains { $0.eventID == "bootstrap-invalid-ask:ask-user-question:\(promptID)" })
+        XCTAssertNil(hub.activeInteractivePrompt(workspaceID: "workspace",
+                                                  sessionID: "session",
+                                                  promptID: promptID))
+    }
+
     func testClaudeRepeatedUnsupportedVersionRecordsNeverReachSupportedParser() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
@@ -2427,6 +2498,51 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
             $0.eventID == "fail-closed-ask:ask-user-question:\(promptID)"
         }, "unknown source-wide closure coverage must never expose a cached opener",
                        file: file, line: line)
+    }
+
+    private func assertClaudeLiveRecordFailureHidesBufferedOpener(
+        appendedData: Data,
+        promptID: String,
+        caseName: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        let askLine = makeClaudeAskUserQuestionAssistantLine(uuid: "live-invalid-ask",
+                                                             toolCallID: promptID)
+        try (askLine + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.activeInteractivePrompt(workspaceID: "workspace",
+                                        sessionID: "session",
+                                        promptID: promptID) != nil
+        }, "precondition failed for \(caseName)", file: file, line: line)
+
+        let handle = try FileHandle(forWritingTo: transcriptURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: appendedData)
+        try handle.close()
+
+        XCTAssertTrue(waitUntil {
+            hub.activeInteractivePrompt(workspaceID: "workspace",
+                                        sessionID: "session",
+                                        promptID: promptID) == nil
+        }, "\(caseName) must revoke submission immediately", file: file, line: line)
+        XCTAssertFalse(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20)
+            .events.contains { $0.eventID == "live-invalid-ask:ask-user-question:\(promptID)" },
+                       "\(caseName) must hide the buffered opener from latest fetch",
+                       file: file,
+                       line: line)
     }
 
     private func makeClaudeAssistantTextLine(uuid: String, texts: [String]) -> String {
