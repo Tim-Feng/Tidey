@@ -4,6 +4,11 @@ let transcriptBootstrapLineLimit = 500
 let transcriptLineSequenceMultiplier = 4096
 let transcriptSessionStartedSequence = 0
 
+struct TranscriptEventPosition: Equatable, Sendable {
+    let lineOffset: Int
+    let ordinal: Int
+}
+
 func transcriptEventSequence(lineOffset: Int, ordinal: Int) -> Int {
     precondition(lineOffset >= 0, "lineOffset must be non-negative")
     precondition(ordinal >= 0 && ordinal < transcriptLineSequenceMultiplier,
@@ -12,10 +17,17 @@ func transcriptEventSequence(lineOffset: Int, ordinal: Int) -> Int {
 }
 
 func transcriptLineOffset(for sequence: Int) -> Int {
+    transcriptEventPosition(for: sequence).lineOffset
+}
+
+func transcriptEventPosition(for sequence: Int) -> TranscriptEventPosition {
     guard sequence > transcriptSessionStartedSequence else {
-        return 0
+        return TranscriptEventPosition(lineOffset: 0, ordinal: 0)
     }
-    return (sequence - 1) / transcriptLineSequenceMultiplier
+    let zeroBasedSequence = sequence - 1
+    return TranscriptEventPosition(
+        lineOffset: zeroBasedSequence / transcriptLineSequenceMultiplier,
+        ordinal: zeroBasedSequence % transcriptLineSequenceMultiplier)
 }
 
 enum JSONLFileReader {
