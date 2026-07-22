@@ -94,6 +94,7 @@ final class CodexAppServerConnection {
     private var pendingClientResponses: [String: ClientResponseHandler] = [:]
     private var closed = false
     private let sendLine: SendLine
+    private let sendLineConfirmed: SendLine?
     private let onNotification: NotificationHandler
     private let approvalContext: CodexAppServerApprovalContext?
     private let approvalStore: CodexAppServerApprovalPromptStore
@@ -115,6 +116,7 @@ final class CodexAppServerConnection {
     }
 
     init(sendLine: @escaping SendLine,
+         sendLineConfirmed: SendLine? = nil,
          onNotification: @escaping NotificationHandler = { _ in },
          approvalContext: CodexAppServerApprovalContext? = nil,
          approvalStore: CodexAppServerApprovalPromptStore = CodexAppServerApprovalPromptStore(),
@@ -123,6 +125,7 @@ final class CodexAppServerConnection {
          onInteractivePrompt: @escaping InteractivePromptHandler = { _ in },
          onInteractivePromptResolved: @escaping InteractivePromptResolvedHandler = { _ in }) {
         self.sendLine = sendLine
+        self.sendLineConfirmed = sendLineConfirmed
         self.onNotification = onNotification
         self.approvalContext = approvalContext
         self.approvalStore = approvalStore
@@ -409,7 +412,8 @@ final class CodexAppServerConnection {
             do {
                 try sendResponseLine(id: entry.request.requestID,
                                      bodyKey: "result",
-                                     value: response)
+                                     value: response,
+                                     preferConfirmed: false)
             } catch {
                 _ = approvalStore.failSubmit(promptID: promptID,
                                              lifecycleAttempt: lifecycleAttempt)
@@ -516,7 +520,10 @@ final class CodexAppServerConnection {
     }
 
     func sendResult(id: CodexAppServerRequestID, result: JSONValue) {
-        try? sendResponseLine(id: id, bodyKey: "result", value: result)
+        try? sendResponseLine(id: id,
+                              bodyKey: "result",
+                              value: result,
+                              preferConfirmed: false)
     }
 
     func sendError(id: CodexAppServerRequestID,
@@ -530,12 +537,16 @@ final class CodexAppServerConnection {
         if let data {
             error["data"] = data
         }
-        try? sendResponseLine(id: id, bodyKey: "error", value: .object(error))
+        try? sendResponseLine(id: id,
+                              bodyKey: "error",
+                              value: .object(error),
+                              preferConfirmed: false)
     }
 
     private func sendResponseLine(id: CodexAppServerRequestID,
                                   bodyKey: String,
-                                  value: JSONValue) throws {
+                                  value: JSONValue,
+                                  preferConfirmed: Bool) throws {
         stateLock.lock()
         let isClosed = closed
         stateLock.unlock()
@@ -544,7 +555,12 @@ final class CodexAppServerConnection {
         }
         let data = try JSONEncoder().encode(value)
         let valueJSON = String(decoding: data, as: UTF8.self)
-        try sendLine("{\"id\":\(id.jsonToken),\"\(bodyKey)\":\(valueJSON)}\n")
+        let line = "{\"id\":\(id.jsonToken),\"\(bodyKey)\":\(valueJSON)}\n"
+        if preferConfirmed, let sendLineConfirmed {
+            try sendLineConfirmed(line)
+            return
+        }
+        try sendLine(line)
     }
 
     private func handleClientResponse(id: JSONValue, result: JSONValue?, error: JSONValue?) {
