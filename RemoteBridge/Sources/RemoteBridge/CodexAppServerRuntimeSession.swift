@@ -572,7 +572,11 @@ final class CodexAppServerRuntimeSession {
             condition.lock()
             switch response {
             case .success(let value):
-                let threadID = codexAppServerLoadedThreadID(from: value)
+                self.lock.lock()
+                let knownRootThreadID = self.registryRootThreadID
+                self.lock.unlock()
+                let threadID = codexAppServerLoadedThreadID(from: value,
+                                                            registryRootThreadID: knownRootThreadID)
                 if let threadID {
                     self.activeThreadStore.setThreadID(threadID)
                 } else {

@@ -992,6 +992,59 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertNil(submitError)
     }
 
+    func testSubmitLookupUsesKnownRegistryRootOverAmbiguousBareLoadedThreads() throws {
+        let (session, transport) = try Self.makeAttachedSession()
+        session.setRegistryRootThreadID("thread-root")
+        try Self.acknowledgeInitialize(from: transport)
+
+        let initialListLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(initialListLoaded["id"]), result: .object([
+            "threads": .array([]),
+        ])))
+
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
+        let initialResume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
+        transport.emitLine(try Self.errorResponseText(id: try XCTUnwrap(initialResume["id"]),
+                                                      code: -32600,
+                                                      message: "no rollout found for thread id thread-root"))
+        XCTAssertTrue(Self.waitFor { session.attachSubscriptionStateForTesting == "no_loaded_thread" })
+
+        let submitCompleted = expectation(description: "submitMessage completes after authoritative root lookup")
+        let submitError = ThreadSafeErrorBox()
+        DispatchQueue.global().async {
+            do {
+                try session.submitMessage(text: "route to the root", clientRequestID: nil)
+            } catch {
+                submitError.set(error)
+            }
+            submitCompleted.fulfill()
+        }
+
+        XCTAssertTrue(Self.waitForSentLineCount(5, transport: transport))
+        let submitListLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(4).first))
+        XCTAssertEqual(submitListLoaded["method"]?.stringValue, "thread/loaded/list")
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(submitListLoaded["id"]), result: .object([
+            "data": .array([
+                .string("thread-child"),
+                .string("thread-root"),
+            ]),
+        ])))
+
+        guard Self.waitForSentLineCount(6, transport: transport) else {
+            wait(for: [submitCompleted], timeout: 2)
+            return XCTFail("submit lookup did not resolve the authoritative registry root")
+        }
+        let turnStart = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(5).first))
+        XCTAssertEqual(turnStart["method"]?.stringValue, "turn/start")
+        XCTAssertEqual(turnStart["params"]?.objectValue?["threadId"]?.stringValue, "thread-root")
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(turnStart["id"]), result: .object([
+            "turn": .object(["id": .string("turn-root")]),
+        ])))
+
+        wait(for: [submitCompleted], timeout: 2)
+        XCTAssertNil(submitError.get())
+    }
+
     // Production regression (Automation, 2026-07-21): Codex can accept a
     // turn/start and return its authoritative `turn.id` without ever replaying
     // turn/started to this Bridge attachment. The response alone must
