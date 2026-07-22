@@ -52,7 +52,9 @@ enum BridgeAgentEventFetchFlow {
                                              maxBytes: maxBytes,
                                              beforeSeq: nil,
                                              afterSeq: afterSeq)
-                guard backfilled else {
+                guard backfilled,
+                      let nextEarliestBufferedSeq = eventHub.oldestBufferedSeq(sessionID: sessionID),
+                      nextEarliestBufferedSeq < earliestBufferedSeq else {
                     break
                 }
             }
