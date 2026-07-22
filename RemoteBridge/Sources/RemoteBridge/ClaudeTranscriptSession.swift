@@ -1776,6 +1776,11 @@ final class JSONLFileTailer {
         }
         let events = source.data
         if events.contains(.delete) || events.contains(.rename) || events.contains(.revoke) {
+            // The unlinked file's bytes stay readable through the open fd:
+            // drain the final appends (e.g. a session-end journal line
+            // written just before the wrapper removed the file) BEFORE
+            // tearing the tailer down.
+            readAvailableData()
             stop()
             invalidationHandler()
             return
@@ -1841,6 +1846,498 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private let promptNotificationDeduper = AgentInteractivePromptNotificationDeduper()
 
     private var record: AgentSessionRegistryRecord
+    // Three-state lifecycle feed (single product-semantic truth): the LIVE
+    // tail (bootstrap suffix + appended lines) is linear, so re-tailing
+    // after a Bridge restart converges to the same final state. Historical
+    // backfill NEVER touches the lifecycle (see lifecycle* helpers).
+    var lifecycleStoreForTesting: AgentSessionLifecycleStore?
+    private var lifecycleStore: AgentSessionLifecycleStore {
+        lifecycleStoreForTesting ?? AgentSessionLifecycle.store
+    }
+    private var lifecycleIdentity: AgentSessionLifecycleIdentity {
+        AgentSessionLifecycleIdentity(workspaceID: record.workspaceID,
+                                      panelID: record.panelID ?? "",
+                                      sessionID: record.sessionID)
+    }
+    // One generation per live instance/source epoch — never a constant. A
+    // source switch (delete-and-recreate, registry path change) claims a
+    // fresh generation so the old tail's late events are stale by
+    // construction.
+    private var lifecycleGeneration = AgentSessionLifecycle.nextGeneration()
+    // AskUserQuestion tool calls whose lifecycle blocker is open. Keyed by
+    // tool_use_id; the matching tool_result resolves the blocker even when
+    // the CARD shape is unsupported (e.g. multiSelect).
+    private var openLifecycleQuestionToolCallIDs = Set<String>()
+    // Typed hook journal (wrapper-written JSONL): PermissionRequest PREPARES
+    // the identity; only the actual permission_prompt notification opens the
+    // needs_input blocker (an auto-allowed PermissionRequest never leaves a
+    // false needs_input).
+    private var hookTailer: JSONLFileTailer?
+    var hookJournalURLOverrideForTesting: URL?
+    // FIFO of prepared PermissionRequest tool ids; the matching
+    // permission_prompt notification CONSUMES the head so two sequential
+    // permissions correlate to their own blockers.
+    private var preparedPermissionToolUseIDs: [String] = []
+    // Blocker suffixes ("<tool_use_id>" or the generic "prompt") currently
+    // open from permission_prompt notifications.
+    private var openLifecyclePermissionSuffixes = Set<String>()
+    // Hook journal source-epoch and dedupe state: one wrapper instance is
+    // one epoch; a retired wrapper's late events and duplicate deliveries
+    // are rejected.
+    private var currentHookEpoch: String?
+    private var retiredHookEpochs = Set<String>()
+    private var seenHookEventIDs = Set<String>()
+    private var seenHookEventIDOrder: [String] = []
+    // Turn identity + cross-stream correlation. The transcript stream is
+    // linear; hook events are a SECOND stream. Correlation is EXPLICIT —
+    // never wall-clock: each UserPromptSubmit hook opens a hook-turn token
+    // (in journal order), the transcript opener that follows binds the
+    // newest pending token to its turn id, and a hook terminal/prompt acts
+    // ONLY on the turn its token is bound to. An old turn's late idle or
+    // permission notification can therefore never touch a newer turn —
+    // including two turns inside the same wall-clock second.
+    private var lifecycleActiveTurnID: String?
+    // Hook-turn machine (per journal epoch). Queued prompts are a REAL
+    // production case (Claude Code accepts a second UserPromptSubmit while
+    // the first turn is still processing): openHookTurnTokens is a FIFO —
+    // Claude Code completes queued turns in submission order, so a
+    // terminal/idle/stop always closes the OLDEST still-open token, never
+    // whichever token happens to be most recently opened.
+    private var hookTurnCounter = 0
+    private var openHookTurnTokens: [Int] = []
+    private var pendingHookTurnTokens: [Int] = []
+    private var hookTurnBindings: [Int: String] = [:]
+    private var hookSawPromptSubmit = false
+    private var lastHookSeqByEpoch: [String: Int] = [:]
+    // parentUuid lineage: uuid -> the OWNING USER TURN's uuid. A synchronous
+    // parse can process an assistant line whose owning turn is A (via
+    // parentUuid chain) WHILE a queued turn B has already become the
+    // "current" active turn (Claude Code can process a queued prompt B
+    // before A's own trailing assistant lines are all appended/consumed).
+    // `lifecycleActiveTurnID` at parse time is therefore NOT a reliable
+    // proxy for "which turn does this specific line belong to" — only the
+    // parentUuid chain is. Bounded (LRU-ish by insertion order trim).
+    private var lifecycleTurnLineageByUuid: [String: String] = [:]
+    private var lifecycleTurnLineageOrder: [String] = []
+
+    // Live-only lifecycle feed: every mutation is dropped while a
+    // historical backfill replay is running — paging up may never change
+    // the live three-state status.
+    // `adoptNewTurn` is true for genuine user openers: a new prompt is a
+    // NEW turn identity even while the previous turn is still active (B's
+    // opener before A's terminal must not leave A's identity in place).
+    private func lifecycleBeginTurn(turnID: String, adoptNewTurn: Bool) {
+        guard !isBackfillingHistory else { return }
+        if adoptNewTurn || lifecycleActiveTurnID == nil {
+            // This uuid IS a fresh turn root: it owns itself, overriding
+            // whatever the generic parentUuid inheritance step recorded
+            // (a real new-turn opener's parentUuid points at the PRIOR
+            // turn's last line, which the generic step would otherwise
+            // have inherited).
+            recordLifecycleTurnLineageRoot(turnID)
+            lifecycleActiveTurnID = turnID
+            // The newest pending hook-turn token belongs to this opener;
+            // older pendings were submissions that never opened a
+            // transcript turn (local commands) and stay unbound.
+            if let pending = pendingHookTurnTokens.last {
+                hookTurnBindings[pending] = turnID
+                while hookTurnBindings.count > 16 {
+                    if let oldest = hookTurnBindings.keys.min() {
+                        hookTurnBindings.removeValue(forKey: oldest)
+                    }
+                }
+            }
+            pendingHookTurnTokens = []
+        }
+        lifecycleStore.beginTurn(lifecycleIdentity,
+                                 vendor: record.vendor,
+                                 generation: lifecycleGeneration,
+                                 turnID: lifecycleActiveTurnID)
+    }
+
+    // `expectedTurnID` fences CROSS-STREAM terminals: the terminal acts only
+    // when the turn it was bound to is still the active one. Transcript
+    // terminals pass nil (the stream itself is linear).
+    private func lifecycleEndTurn(expectedTurnID: String? = nil) {
+        guard !isBackfillingHistory else { return }
+        if let expectedTurnID, lifecycleActiveTurnID != expectedTurnID {
+            return  // stale terminal for an older turn
+        }
+        // The store's turn terminal resolves every blocker; the local
+        // tracking must not survive it.
+        openLifecycleQuestionToolCallIDs = []
+        openLifecyclePermissionSuffixes = []
+        preparedPermissionToolUseIDs = []
+        let turnID = lifecycleActiveTurnID
+        lifecycleActiveTurnID = nil
+        // Purge any hook token(s) bound to THIS turn: a transcript-side
+        // terminal (turn_duration, interrupt) ends the turn directly and
+        // must not leave an orphaned hook token in the FIFO queue to
+        // silently steal a LATER turn's idle/stop resolution.
+        if let turnID {
+            let orphaned = hookTurnBindings.filter { $0.value == turnID }.keys
+            for token in orphaned {
+                hookTurnBindings.removeValue(forKey: token)
+                openHookTurnTokens.removeAll { $0 == token }
+            }
+        }
+        // The terminal names the turn it ends (nil ends unconditionally
+        // when no opener was ever seen): turn A's late terminal can never
+        // end turn B in the store either.
+        lifecycleStore.endTurn(lifecycleIdentity,
+                               vendor: record.vendor,
+                               generation: lifecycleGeneration,
+                               turnID: turnID)
+    }
+
+    // Closes the current hook-turn token and returns the transcript turn it
+    // may terminate: the bound turn id, or nil when the token never bound
+    // (a local-command submission — nothing to end). Without ANY observed
+    // prompt-submit this epoch (bootstrap joined mid-turn) the machine runs
+    // in legacy mode and the current turn is the target.
+    // Records uuid -> owning-user-turn lineage for EVERY consumed line
+    // (assistant, user, system alike), inherited via parentUuid. A line
+    // with no resolvable parent is self-owning (a fresh root). Genuine new
+    // turn openers OVERRIDE this via `recordLifecycleTurnLineageRoot`
+    // (called from `lifecycleBeginTurn(adoptNewTurn: true)`), since a new
+    // turn's own parentUuid points at the PRIOR turn's tail and must not
+    // be inherited.
+    private func recordLifecycleTurnLineage(object: [String: Any]) {
+        guard let uuid = object["uuid"] as? String else { return }
+        let parentUuid = object["parentUuid"] as? String
+        // Only record an entry when the parent chain actually RESOLVES to
+        // a known owning turn. Eagerly self-anchoring an unresolvable line
+        // (no parentUuid, or a parent this map has no record of — e.g. a
+        // truncated bootstrap window) would permanently shadow the correct
+        // fallback (`lifecycleOwningTurnID` falling through to the current
+        // `lifecycleActiveTurnID`, the best remaining evidence) with a
+        // wrong self-reference.
+        guard let parentUuid, let owningTurn = lifecycleTurnLineageByUuid[parentUuid] else {
+            return
+        }
+        setLifecycleTurnLineage(uuid: uuid, owningTurn: owningTurn)
+    }
+
+    private func recordLifecycleTurnLineageRoot(_ uuid: String) {
+        setLifecycleTurnLineage(uuid: uuid, owningTurn: uuid)
+    }
+
+    private func setLifecycleTurnLineage(uuid: String, owningTurn: String) {
+        if lifecycleTurnLineageByUuid[uuid] == nil {
+            lifecycleTurnLineageOrder.append(uuid)
+            while lifecycleTurnLineageOrder.count > 4000 {
+                lifecycleTurnLineageByUuid.removeValue(forKey: lifecycleTurnLineageOrder.removeFirst())
+            }
+        }
+        lifecycleTurnLineageByUuid[uuid] = owningTurn
+    }
+
+    // The OWNING USER TURN for a given line's uuid — the correct source
+    // identity for a turn-scoped opener, as opposed to `lifecycleActiveTurnID`
+    // (whatever turn happens to be current AT PARSE TIME, which can already
+    // be a LATER queued turn by the time this line's opener is processed).
+    private func lifecycleOwningTurnID(for uuid: String) -> String? {
+        // Priority: an actually-resolved parentUuid chain (the strongest
+        // evidence) > the current active turn (legacy/truncated-bootstrap
+        // evidence, where no parent chain reaches a known root) > this
+        // line's own uuid as a last resort (only when no turn has ever
+        // been observed at all).
+        lifecycleTurnLineageByUuid[uuid] ?? lifecycleActiveTurnID ?? uuid
+    }
+
+    private func closeHookTurnAndResolveTarget() -> (shouldEnd: Bool, expectedTurnID: String?) {
+        guard hookSawPromptSubmit else {
+            return (true, nil)  // legacy mode: no tokens to correlate with
+        }
+        guard !openHookTurnTokens.isEmpty else {
+            return (false, nil)  // duplicate/late terminal: token already closed
+        }
+        let token = openHookTurnTokens.removeFirst()  // FIFO: oldest first
+        pendingHookTurnTokens.removeAll { $0 == token }
+        guard let boundTurnID = hookTurnBindings.removeValue(forKey: token) else {
+            return (false, nil)  // never opened a transcript turn (local command)
+        }
+        return (true, boundTurnID)
+    }
+
+    private func lifecycleOpenQuestionBlocker(toolCallID: String, sourceTurnID: String?) {
+        guard !isBackfillingHistory else { return }
+        openLifecycleQuestionToolCallIDs.insert(toolCallID)
+        // Fenced to the SOURCE turn the AskUserQuestion event itself
+        // belongs to (the assistant message's own uuid) — NOT a fresh read
+        // of "whatever is current right now", which would trivially always
+        // match itself and fence nothing.
+        lifecycleStore.openBlocker(lifecycleIdentity,
+                                   vendor: record.vendor,
+                                   generation: lifecycleGeneration,
+                                   blockerID: "question:\(toolCallID)",
+                                   kind: .userQuestion,
+                                   expectedTurnID: sourceTurnID)
+    }
+
+    private func lifecycleResolveQuestionBlocker(toolCallID: String) {
+        guard !isBackfillingHistory else { return }
+        guard openLifecycleQuestionToolCallIDs.remove(toolCallID) != nil else { return }
+        lifecycleStore.resolveBlocker(lifecycleIdentity,
+                                      vendor: record.vendor,
+                                      generation: lifecycleGeneration,
+                                      blockerID: "question:\(toolCallID)")
+    }
+
+    private func lifecycleEndSession() {
+        lifecycleStore.endSession(lifecycleIdentity, vendor: record.vendor, generation: lifecycleGeneration)
+    }
+
+    private func lifecycleResolvePermissionBlocker(toolCallID: String) {
+        guard !isBackfillingHistory else { return }
+        var suffixes: [String] = []
+        if openLifecyclePermissionSuffixes.remove(toolCallID) != nil {
+            suffixes.append(toolCallID)
+        }
+        // A generic (id-less) permission blocker is resolved by ANY
+        // tool_result: a result can only exist after the prompt was decided.
+        if openLifecyclePermissionSuffixes.remove("prompt") != nil {
+            suffixes.append("prompt")
+        }
+        for suffix in suffixes {
+            lifecycleStore.resolveBlocker(lifecycleIdentity,
+                                          vendor: record.vendor,
+                                          generation: lifecycleGeneration,
+                                          blockerID: "permission:\(suffix)")
+        }
+    }
+
+    // MARK: - Typed hook journal (A6)
+
+    private func hookJournalURL() -> URL {
+        hookJournalURLOverrideForTesting
+            ?? BridgePaths().claudeAgentSessionsDirectory
+                .appendingPathComponent("claude-hooks-\(record.sessionID).jsonl", isDirectory: false)
+    }
+
+    private func resolveHookJournalIfPossible() {
+        guard hookTailer == nil else {
+            return
+        }
+        let url = hookJournalURL()
+        guard fileManager.fileExists(atPath: url.path) else {
+            return
+        }
+        let tailer = JSONLFileTailer(fileURL: url,
+                                     queue: queue,
+                                     lineHandler: { [weak self] _, line in
+                                         self?.consumeHookLine(line)
+                                     },
+                                     invalidationHandler: { [weak self] in
+                                         guard let self else { return }
+                                         self.hookTailer?.stop()
+                                         self.hookTailer = nil
+                                         // A recreated journal (new wrapper run for the
+                                         // same session) re-resolves on the next tick.
+                                         self.startResolver()
+                                     })
+        do {
+            try tailer.start()
+            hookTailer = tailer
+        } catch {
+            // Journal not readable yet; the resolver keeps retrying.
+        }
+    }
+
+    // Hook journal lines are the wrapper's typed envelopes:
+    //   v2: {"v":2,"event":…,"ts":…,"epoch":…,"event_id":…,"payload_b64":…}
+    //   v1: {"v":1,"event":…,"ts":…,"wrapper_pid":N,"payload":{…}}
+    // Only permission_prompt opens needs_input; PermissionRequest merely
+    // prepares the stable blocker identity (an auto-allow leaves no trace).
+    // Turn terminals stay owned by the transcript (`turn_duration`) and the
+    // idle_prompt notification — the Stop hook is NOT a terminal (a Stop
+    // hook may prevent continuation).
+    private func consumeHookLine(_ line: String) {
+        guard let data = line.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let event = object["event"] as? String else {
+            return
+        }
+        // Duplicate delivery: one envelope, one effect.
+        if let eventID = object["event_id"] as? String {
+            guard seenHookEventIDs.contains(eventID) == false else {
+                return
+            }
+            seenHookEventIDs.insert(eventID)
+            seenHookEventIDOrder.append(eventID)
+            while seenHookEventIDOrder.count > 512 {
+                seenHookEventIDs.remove(seenHookEventIDOrder.removeFirst())
+            }
+        }
+        // Source-epoch gate: one wrapper instance per epoch. Adoption is by
+        // wrapper START TIME, never by message kind alone — a retired
+        // wrapper's LATE session-start can never re-adopt the old epoch.
+        if let epoch = object["epoch"] as? String, epoch != "unknown" {
+            if retiredHookEpochs.contains(epoch) {
+                return
+            }
+            if let current = currentHookEpoch, current != epoch {
+                if Self.hookEpochStart(epoch) >= Self.hookEpochStart(current) {
+                    retiredHookEpochs.insert(current)
+                    currentHookEpoch = epoch
+                    resetHookTurnMachine()
+                } else {
+                    retiredHookEpochs.insert(epoch)
+                    return
+                }
+            } else if currentHookEpoch == nil {
+                currentHookEpoch = epoch
+            }
+            // Per-epoch monotonic sequence: a replayed/duplicated envelope
+            // whose seq does not advance is dropped.
+            if let seq = object["seq"] as? Int, seq > 0 {
+                if let last = lastHookSeqByEpoch[epoch], seq <= last {
+                    return
+                }
+                lastHookSeqByEpoch[epoch] = seq
+            }
+        }
+        let payload: [String: Any]?
+        if let b64 = object["payload_b64"] as? String {
+            payload = Data(base64Encoded: b64)
+                .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        } else {
+            payload = object["payload"] as? [String: Any]
+        }
+        if let payloadSessionID = (payload?["session_id"] as? String) ?? (payload?["sessionId"] as? String),
+           payloadSessionID != record.sessionID {
+            return
+        }
+        switch event {
+        case "prompt-submit":
+            // A user submission opens a hook-turn token. It does NOT begin
+            // Working (local commands submit too); the transcript opener
+            // that follows binds the token to its turn identity.
+            hookSawPromptSubmit = true
+            hookTurnCounter += 1
+            let token = hookTurnCounter
+            openHookTurnTokens.append(token)
+            // A prior token still awaiting its transcript opener (queued
+            // submission whose turn hasn't started yet) stays pending
+            // alongside the new one; the NEXT opener binds the newest.
+            pendingHookTurnTokens.append(token)
+            while openHookTurnTokens.count > 32 {
+                openHookTurnTokens.removeFirst()
+            }
+        case "permission-request":
+            let toolUseID = (payload?["tool_use_id"] as? String) ?? (payload?["toolUseId"] as? String)
+            if let toolUseID, preparedPermissionToolUseIDs.contains(toolUseID) == false {
+                preparedPermissionToolUseIDs.append(toolUseID)
+                while preparedPermissionToolUseIDs.count > 8 {
+                    preparedPermissionToolUseIDs.removeFirst()
+                }
+            }
+        case "notification-permission":
+            // Turn correlation: the prompt belongs to the OPEN hook turn.
+            // Once the machine has tokens, a notification without an open
+            // token — or bound to a turn that is no longer active — is a
+            // previous turn's late prompt and may not block this one.
+            // `owningTurnID` is captured HERE, at the source of truth (the
+            // hook token's binding) — never re-read as "whatever turn is
+            // current" at the point the blocker actually opens below.
+            var owningTurnID: String?
+            if hookSawPromptSubmit {
+                // Claude Code processes queued prompts SERIALLY: at most
+                // one token is ever the CURRENTLY EXECUTING turn, and it is
+                // always the OLDEST still-open one (newer tokens are
+                // queued, unbound, and not yet running).
+                guard let token = openHookTurnTokens.first else {
+                    return
+                }
+                if let boundTurnID = hookTurnBindings[token] {
+                    guard boundTurnID == lifecycleActiveTurnID else {
+                        return
+                    }
+                    owningTurnID = boundTurnID
+                } else if let activeTurnID = lifecycleActiveTurnID {
+                    // Prompt implies the open hook turn IS the active
+                    // transcript turn: bind now (transcript opener lag).
+                    hookTurnBindings[token] = activeTurnID
+                    pendingHookTurnTokens.removeAll { $0 == token }
+                    owningTurnID = activeTurnID
+                }
+            } else {
+                // Legacy mode (bootstrap joined mid-turn, no tokens ever
+                // observed): no captured source exists, so the current
+                // turn is the best available identity.
+                owningTurnID = lifecycleActiveTurnID
+            }
+            let suffix: String
+            if preparedPermissionToolUseIDs.isEmpty == false {
+                // Deterministic correlation: each actual prompt CONSUMES its
+                // prepared request head, so sequential permissions map to
+                // their own blockers and a consumed id is never reused.
+                suffix = preparedPermissionToolUseIDs.removeFirst()
+            } else if openLifecyclePermissionSuffixes.isEmpty == false {
+                // Duplicate notification for the prompt already open: one
+                // card, one blocker.
+                return
+            } else {
+                suffix = "prompt"
+            }
+            openLifecyclePermissionSuffixes.insert(suffix)
+            // Fenced to the CAPTURED owning turn (see above) — a permission
+            // prompt whose owning turn has already ended (or been
+            // superseded) must not attach to a DIFFERENT current turn.
+            lifecycleStore.openBlocker(lifecycleIdentity,
+                                       vendor: record.vendor,
+                                       generation: lifecycleGeneration,
+                                       blockerID: "permission:\(suffix)",
+                                       kind: .permission,
+                                       expectedTurnID: owningTurnID)
+        case "notification-idle":
+            // Claude is WAITING at an idle prompt: the turn this token was
+            // bound to is over (never a newer turn — token fence).
+            let target = closeHookTurnAndResolveTarget()
+            if target.shouldEnd {
+                lifecycleEndTurn(expectedTurnID: target.expectedTurnID)
+            }
+        case "stop":
+            // Stop is a TURN-SCOPED idle edge with the same token fence.
+            // stop_hook_active means a Stop hook is already driving a
+            // continuation — not a terminal. If a Stop hook later prevents
+            // continuation anyway, assistant activity restores Working via
+            // reconciliation.
+            if (payload?["stop_hook_active"] as? Bool) == true {
+                break
+            }
+            let target = closeHookTurnAndResolveTarget()
+            if target.shouldEnd {
+                lifecycleEndTurn(expectedTurnID: target.expectedTurnID)
+            }
+        case "session-start":
+            // Creates the session record so the panel aggregates exist —
+            // conservatively idle until real activity arrives.
+            resetHookTurnMachine()
+            lifecycleEndTurn()
+        case "session-end":
+            lifecycleEndSession()
+        default:
+            break
+        }
+    }
+
+    private func resetHookTurnMachine() {
+        openHookTurnTokens = []
+        pendingHookTurnTokens = []
+        hookTurnBindings = [:]
+        hookSawPromptSubmit = false
+    }
+
+    // Epoch token "pid-startTimestamp"; the wrapper allocates a monotonic
+    // nanosecond-scale suffix and ordering uses that suffix.
+    private static func hookEpochStart(_ epoch: String) -> Int {
+        guard let range = epoch.range(of: "-", options: .backwards),
+              let start = Int(epoch[range.upperBound...]) else {
+            return 0
+        }
+        return start
+    }
     private var resolverTimer: DispatchSourceTimer?
     private var tailer: JSONLFileTailer?
     private var transcriptURL: URL?
@@ -1916,12 +2413,87 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 self.hub.migrateSession(sessionID: previousRecord.sessionID,
                                         toWorkspaceID: record.workspaceID,
                                         panelID: record.panelID)
+                // Lifecycle identity moves with the session: the old
+                // identity is tombstoned (no ghost aggregate) and the live
+                // state carries over under the same generation.
+                let previousIdentity = AgentSessionLifecycleIdentity(workspaceID: previousRecord.workspaceID,
+                                                                     panelID: previousRecord.panelID ?? "",
+                                                                     sessionID: previousRecord.sessionID)
+                let newIdentity = AgentSessionLifecycleIdentity(workspaceID: record.workspaceID,
+                                                                panelID: record.panelID ?? "",
+                                                                sessionID: record.sessionID)
+                // This session is the exclusive writer for its own
+                // generation: fencing on it rejects the migration outright
+                // if some other event already advanced the generation
+                // between reading `previousRecord` and this call.
+                self.lifecycleStore.migrateSession(from: previousIdentity, to: newIdentity,
+                                                   expectedGeneration: self.lifecycleGeneration)
             }
             self.record = record
+            // A registry update pointing at a DIFFERENT transcript is a full
+            // source identity switch — even while the old file still exists.
+            // Identity is the STANDARDIZED resolved path: a nil path later
+            // filled in with the file we already resolved is a pure metadata
+            // update, never a reset.
+            if let currentURL = self.transcriptURL,
+               let newPath = record.transcriptPath,
+               Self.canonicalTranscriptPath(newPath) != Self.canonicalTranscriptPath(currentURL.path) {
+                self.beginNewSourceEpoch()
+                self.resolveTranscriptIfPossible()
+                return
+            }
             if self.transcriptURL == nil {
                 self.resolveTranscriptIfPossible()
             }
         }
+    }
+
+    // Everything that could let the OLD source's live lifecycle leak into
+    // the new one is revoked: the old tailer, parser correlation, and
+    // three-state generation. Hook epoch retirement survives so a retired
+    // wrapper cannot re-enter through a transcript source switch.
+    // The SAME canonicalization the resolver uses: tilde expansion +
+    // standardized file URL — two resolver-equivalent spellings never count
+    // as different sources.
+    static func canonicalTranscriptPath(_ path: String) -> String {
+        URL(fileURLWithPath: NSString(string: path).expandingTildeInPath).standardizedFileURL.path
+    }
+
+    private func beginNewSourceEpoch() {
+        tailer?.stop()
+        tailer = nil
+        activeAskUserQuestionPromptIDByToolCallID = [:]
+        pendingLocalCommand = nil
+        unsupportedVersions = []
+        // Source switch = new lifecycle epoch: the fresh generation makes
+        // every late event from the old tail stale by construction, and the
+        // replay of the new source rebuilds it. The new generation is
+        // CLAIMED IMMEDIATELY (reconciled idle snapshot) — the old source's
+        // needs_input/working must not stay visible until some later
+        // mutation happens to arrive.
+        // Hook-journal identity state (current/retired epochs, seen event
+        // ids, per-epoch sequences) SURVIVES the transcript source switch:
+        // clearing it would let a retired wrapper's late events re-enter
+        // under the fresh generation. Only the turn-correlation machine
+        // resets (the old transcript's turn ids are gone).
+        lifecycleGeneration = AgentSessionLifecycle.nextGeneration()
+        lifecycleActiveTurnID = nil
+        resetHookTurnMachine()
+        preparedPermissionToolUseIDs = []
+        openLifecyclePermissionSuffixes = []
+        // The new source's parentUuid chain starts fresh — a reused uuid
+        // from the OLD transcript (delete-and-recreate at the same path)
+        // must never resolve through the previous source's lineage map.
+        lifecycleTurnLineageByUuid = [:]
+        lifecycleTurnLineageOrder = []
+        // Explicit claim: guarantees a live publish EVEN for a brand-new
+        // identity's very first source epoch (endTurn alone would look
+        // "unchanged" for a fresh idle record and publish nothing).
+        lifecycleStore.claimGeneration(lifecycleIdentity,
+                                       vendor: record.vendor,
+                                       generation: lifecycleGeneration)
+        openLifecycleQuestionToolCallIDs = []
+        transcriptURL = nil
     }
 
     func backfill(beforeSeq: Int, limit: Int) -> Bool {
@@ -1948,8 +2520,18 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             resolverTimer = nil
             tailer?.stop()
             tailer = nil
+            hookTailer?.stop()
+            hookTailer = nil
             if !didPublishEnd {
                 didPublishEnd = true
+                lifecycleEndSession()
+                // The session is DEFINITELY gone (registry/process removal
+                // — the only production caller of `stop()`), not merely a
+                // transient source-epoch switch: retire the identity so
+                // its panel/workspace aggregate excludes it going forward
+                // and the panel can fall back to plain-terminal legacy
+                // activity, rather than an idle "ghost" lingering forever.
+                lifecycleStore.retireSession(lifecycleIdentity, generation: lifecycleGeneration)
                 let seq = nextSyntheticSequence()
                 publishSynthetic(kind: .sessionEnded,
                                  seq: seq,
@@ -1967,18 +2549,30 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     }
 
     private func startResolver() {
-        resolveTranscriptIfPossible()
-        if tailer != nil {
+        attemptSourceResolutions()
+        if tailer != nil && hookTailer != nil {
+            return
+        }
+        guard resolverTimer == nil else {
             return
         }
 
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + .seconds(1), repeating: .seconds(1))
         timer.setEventHandler { [weak self] in
-            self?.resolveTranscriptIfPossible()
+            self?.attemptSourceResolutions()
         }
         timer.resume()
         resolverTimer = timer
+    }
+
+    private func attemptSourceResolutions() {
+        resolveTranscriptIfPossible()
+        resolveHookJournalIfPossible()
+        if tailer != nil && hookTailer != nil {
+            resolverTimer?.cancel()
+            resolverTimer = nil
+        }
     }
 
     private func resolveTranscriptIfPossible() {
@@ -2001,16 +2595,16 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             try tailer.start()
             self.tailer = tailer
             self.transcriptURL = transcriptURL
-            resolverTimer?.cancel()
-            resolverTimer = nil
         } catch {
             self.transcriptURL = nil
         }
     }
 
     private func handleTailerInvalidation() {
-        transcriptURL = nil
-        tailer = nil
+        // The transcript source is gone: a delete-and-recreate at the SAME
+        // path is a new lifecycle source identity exactly like a registry
+        // path change.
+        beginNewSourceEpoch()
         if resolverTimer == nil {
             startResolver()
         }
@@ -2084,6 +2678,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             return
         }
 
+        recordLifecycleTurnLineage(object: object)
+
         guard let type = object["type"] as? String else {
             return
         }
@@ -2094,6 +2690,20 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             consumeUser(object: object, timestamp: timestamp, lineOffset: lineOffset)
         case "attachment":
             consumeAttachment(object: object, timestamp: timestamp, lineOffset: lineOffset)
+        case "system":
+            // The transcript's turn terminal: `turn_duration` is written
+            // once per completed turn (NOT `stop_hook_summary`, which also
+            // appears when a Stop hook blocks continuation). Current-version
+            // schema evidence; used as replay/reconciliation, not the only
+            // edge.
+            if object["subtype"] as? String == "turn_duration" {
+                // Fenced to the OWNING turn resolved via this system line's
+                // own parentUuid lineage — never unconditional — so a
+                // late-arriving turn_duration for an already-superseded
+                // turn A cannot terminate a newer turn B.
+                let owningTurnID = (object["uuid"] as? String).flatMap(lifecycleOwningTurnID(for:))
+                lifecycleEndTurn(expectedTurnID: owningTurnID)
+            }
         default:
             break
         }
@@ -2118,6 +2728,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 guard !text.isEmpty else {
                     continue
                 }
+                lifecycleBeginTurn(turnID: uuid, adoptNewTurn: false)
                 publishFileBacked(kind: .assistantMessage,
                                   lineOffset: lineOffset,
                                   ordinal: ordinal,
@@ -2137,6 +2748,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 guard !thinking.isEmpty else {
                     continue
                 }
+                lifecycleBeginTurn(turnID: uuid, adoptNewTurn: false)
                 publishFileBacked(kind: .thinking,
                                   lineOffset: lineOffset,
                                   ordinal: ordinal,
@@ -2168,6 +2780,22 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                   toolCallID: toolCallID,
                                   metadata: nil)
                 ordinal += 1
+                // Assistant tool activity proves the turn is alive —
+                // reconciliation for a missed/filtered user opener.
+                lifecycleBeginTurn(turnID: uuid, adoptNewTurn: false)
+                if name == "AskUserQuestion", let toolCallID {
+                    // The blocker opens even when the CARD shape is
+                    // unsupported (multiSelect); the tool_result resolves
+                    // it by tool_use_id either way.
+                    // Source turn: resolved via the parentUuid lineage
+                    // chain from THIS assistant line's own uuid — NEVER
+                    // `lifecycleActiveTurnID` read at parse time, which can
+                    // already be a LATER queued turn B by the time A's own
+                    // trailing assistant lines are processed (Claude Code
+                    // can begin processing a queued prompt B before every
+                    // one of A's lines is done appending).
+                    lifecycleOpenQuestionBlocker(toolCallID: toolCallID, sourceTurnID: lifecycleOwningTurnID(for: uuid))
+                }
                 if name == "AskUserQuestion",
                    let prompt = Self.askUserQuestionPrompt(from: block, uuid: uuid, index: index) {
                     if let toolCallID {
@@ -2259,17 +2887,35 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
 
     private func consumeUser(object: [String: Any], timestamp: String, lineOffset: Int) {
         guard let uuid = object["uuid"] as? String,
-              let message = object["message"] as? [String: Any] else {
+              let message = object["message"] as? [String: Any],
+              message["role"] as? String == "user" else {
+            // A type=user record wrapping a non-user message is not a
+            // genuine user message: it derives nothing.
             return
         }
 
         // User messages can have content as a plain string (user input)
         if let text = message["content"] as? String {
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if (object["isMeta"] as? Bool) != true,
+               trimmed.hasPrefix("[Request interrupted") {
+                // The user interrupted: the OWNING turn (and any blocker)
+                // ends — fenced via lineage, not unconditional, so a late
+                // interrupt line for an already-superseded turn cannot
+                // terminate a newer one.
+                lifecycleEndTurn(expectedTurnID: lifecycleOwningTurnID(for: uuid))
+            }
             if consumeLocalCommandEnvelope(trimmed, uuid: uuid, timestamp: timestamp, lineOffset: lineOffset) {
                 return
             }
             if shouldPublishUserMessage(trimmed) {
+                // Only a GENUINE user prompt begins a turn: local commands,
+                // continuation summaries, system-reminder-only strings,
+                // meta records AND interrupt markers never open Working.
+                if (object["isMeta"] as? Bool) != true,
+                   !trimmed.hasPrefix("[Request interrupted") {
+                    lifecycleBeginTurn(turnID: uuid, adoptNewTurn: true)
+                }
                 publishFileBacked(kind: .userMessage,
                                   lineOffset: lineOffset,
                                   ordinal: 0,
@@ -2312,6 +2958,14 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                   toolCallID: toolCallID,
                                   metadata: metadata)
                 ordinal += 1
+                // A tool_result never opens a turn; it resolves the Ask
+                // blocker by tool_use_id (multiSelect-shaped cards included)
+                // and any permission blocker its existence proves decided
+                // (allow AND deny both produce a tool_result).
+                if let toolCallID {
+                    lifecycleResolveQuestionBlocker(toolCallID: toolCallID)
+                    lifecycleResolvePermissionBlocker(toolCallID: toolCallID)
+                }
                 if let toolCallID,
                    let promptID = activeAskUserQuestionPromptIDByToolCallID.removeValue(forKey: toolCallID) {
                     publishFileBacked(kind: .interactivePromptResolved,
@@ -2338,7 +2992,21 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 }
             } else if blockType == "text" {
                 let text = Self.compactString(block["text"])
+                if (object["isMeta"] as? Bool) != true,
+                   text.hasPrefix("[Request interrupted") {
+                    // Array-form interrupt (e.g. with attachments) ends the
+                    // OWNING turn exactly like the string form — fenced via
+                    // lineage, not unconditional.
+                    lifecycleEndTurn(expectedTurnID: lifecycleOwningTurnID(for: uuid))
+                }
                 guard shouldPublishUserMessage(text) else { continue }
+                // A genuine array-form user prompt (text + attachments)
+                // begins Working exactly like the string form; interrupt
+                // markers never do.
+                if (object["isMeta"] as? Bool) != true,
+                   !text.hasPrefix("[Request interrupted") {
+                    lifecycleBeginTurn(turnID: uuid, adoptNewTurn: true)
+                }
                 publishFileBacked(kind: .userMessage,
                                   lineOffset: lineOffset,
                                   ordinal: ordinal,
