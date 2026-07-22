@@ -2369,6 +2369,7 @@ final class FakeCodexAppServerConnectionTransport: CodexAppServerConnectionTrans
     private let lock = NSLock()
     private var lines: [String] = []
     private var closed = false
+    private var closeCount = 0
     private let onLine: @Sendable (String) -> Void
     private let onClose: @Sendable (Error?) -> Void
 
@@ -2387,8 +2388,15 @@ final class FakeCodexAppServerConnectionTransport: CodexAppServerConnectionTrans
     func close() {
         lock.lock()
         closed = true
+        closeCount += 1
         lock.unlock()
         onClose(nil)
+    }
+
+    var closeCallCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return closeCount
     }
 
     func emitLine(_ line: String) {
@@ -2429,7 +2437,7 @@ final class FakeCodexAppServerManagedProcess: CodexAppServerManagedProcess {
     private let onStdoutLine: @Sendable (String) -> Void
     private let onStderrLine: @Sendable (String) -> Void
     private let onExit: @Sendable (Int32) -> Void
-    private(set) var didTerminate = false
+    private var terminationCount = 0
 
     init(onStdoutLine: @escaping @Sendable (String) -> Void,
          onStderrLine: @escaping @Sendable (String) -> Void,
@@ -2450,7 +2458,19 @@ final class FakeCodexAppServerManagedProcess: CodexAppServerManagedProcess {
     }
 
     func terminate() {
-        didTerminate = true
+        lock.lock()
+        terminationCount += 1
+        lock.unlock()
+    }
+
+    var didTerminate: Bool {
+        terminateCallCount > 0
+    }
+
+    var terminateCallCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return terminationCount
     }
 
     func emitStdout(_ line: String) {
@@ -2469,6 +2489,32 @@ final class FakeCodexAppServerManagedProcess: CodexAppServerManagedProcess {
         lock.lock()
         defer { lock.unlock() }
         return lines
+    }
+}
+
+final class FakeCodexAppServerExternalProcess: CodexAppServerManagedProcess {
+    let processID: Int32?
+    private let lock = NSLock()
+    private var terminationCount = 0
+
+    init(processID: Int32?) {
+        self.processID = processID
+    }
+
+    func sendLine(_ line: String) throws {
+        throw CodexAppServerProcessError.closed
+    }
+
+    func terminate() {
+        lock.lock()
+        terminationCount += 1
+        lock.unlock()
+    }
+
+    var terminateCallCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return terminationCount
     }
 }
 

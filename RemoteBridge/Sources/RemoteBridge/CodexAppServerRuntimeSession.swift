@@ -56,6 +56,7 @@ final class CodexAppServerRuntimeSession {
     private static let subscriptionRetryBackoff: TimeInterval = 1.0
 
     private let process: CodexAppServerManagedProcess
+    private let processOwnership: CodexAppServerProcessOwnership
     private let transport: CodexAppServerConnectionTransport
     private let connection: CodexAppServerConnection
     private let runtime: CodexAppServerHeadlessRuntime
@@ -107,6 +108,7 @@ final class CodexAppServerRuntimeSession {
     }
 
     init(process: CodexAppServerManagedProcess,
+         processOwnership: CodexAppServerProcessOwnership,
          transport: CodexAppServerConnectionTransport,
          connection: CodexAppServerConnection,
          runtime: CodexAppServerHeadlessRuntime,
@@ -116,6 +118,7 @@ final class CodexAppServerRuntimeSession {
          lifecycleFeed: CodexLifecycleFeed? = nil,
          callbackQueue: DispatchQueue = DispatchQueue(label: "com.tidey.remote-bridge.codex-app-server-runtime-session")) {
         self.process = process
+        self.processOwnership = processOwnership
         self.transport = transport
         self.connection = connection
         self.runtime = runtime
@@ -598,7 +601,9 @@ final class CodexAppServerRuntimeSession {
         initialization.fail(CodexAppServerConnectionError.closed)
         connection.close()
         transport.close()
-        process.terminate()
+        if processOwnership == .owned {
+            process.terminate()
+        }
         lifecycleFeed?.retire()
     }
 
@@ -1401,11 +1406,16 @@ final class CodexAppServerRuntimeSessionFactory {
 
     private let processRunner: CodexAppServerProcessRunning
     private let transportConnector: CodexAppServerTransportConnecting
+    private let externalProcessFactory: (Int32?) -> CodexAppServerManagedProcess
 
     init(processRunner: CodexAppServerProcessRunning = CodexAppServerProcessRunner(),
-         transportConnector: CodexAppServerTransportConnecting = CodexAppServerWebSocketTransportConnector()) {
+         transportConnector: CodexAppServerTransportConnecting = CodexAppServerWebSocketTransportConnector(),
+         externalProcessFactory: @escaping (Int32?) -> CodexAppServerManagedProcess = {
+             CodexAppServerExternalProcess(processID: $0)
+         }) {
         self.processRunner = processRunner
         self.transportConnector = transportConnector
+        self.externalProcessFactory = externalProcessFactory
     }
 
     func start(configuration: CodexAppServerLaunchConfiguration,
@@ -1475,6 +1485,7 @@ final class CodexAppServerRuntimeSessionFactory {
                                                    onInteractivePromptResolved: onInteractivePromptResolved)
         let initialization = CodexAppServerInitializationState()
         let runtimeSession = CodexAppServerRuntimeSession(process: process,
+                                                          processOwnership: .owned,
                                                           transport: transport,
                                                           connection: connection,
                                                           runtime: runtime,
@@ -1525,7 +1536,7 @@ final class CodexAppServerRuntimeSessionFactory {
                 onInteractivePromptResolved: @escaping CodexAppServerConnection.InteractivePromptResolvedHandler,
                 onActiveThreadID: @escaping CodexAppServerHeadlessRuntime.ThreadIDHandler = { _ in }) throws -> CodexAppServerRuntimeSession {
         let stdoutRouter = CodexAppServerConnectionLineRouter()
-        let process = CodexAppServerExternalProcess(processID: processID)
+        let process = externalProcessFactory(processID)
         let closeRouter = CodexAppServerTransportCloseRouter()
         let transport = try transportConnector.connect(mode: .unixSocket(path: socketPath),
                                                        onLine: { line in
@@ -1567,6 +1578,7 @@ final class CodexAppServerRuntimeSessionFactory {
                                                    onInteractivePromptResolved: onInteractivePromptResolved)
         let initialization = CodexAppServerInitializationState()
         let runtimeSession = CodexAppServerRuntimeSession(process: process,
+                                                          processOwnership: .external,
                                                           transport: transport,
                                                           connection: connection,
                                                           runtime: runtime,

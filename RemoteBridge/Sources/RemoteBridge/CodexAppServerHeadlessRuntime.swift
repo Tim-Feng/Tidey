@@ -18,6 +18,11 @@ enum CodexAppServerTransportMode: Equatable, Sendable {
     }
 }
 
+enum CodexAppServerProcessOwnership: Equatable, Sendable {
+    case owned
+    case external
+}
+
 struct CodexAppServerLaunchConfiguration: Equatable, Sendable {
     let executablePath: String
     let arguments: [String]
