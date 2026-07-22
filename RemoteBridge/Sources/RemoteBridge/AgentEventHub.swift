@@ -148,19 +148,23 @@ final class AgentEventHub {
 
             if let sessionID {
                 if let state = sessions[sessionID] {
-                    matchingEvents = state.allStoredEvents
-                        .compactMap { effectiveEvent($0) }
+                    let storedEvents = state.allStoredEvents.compactMap { effectiveEvent($0) }
+                    let cursorEligibleEventIDs = Set(storedEvents.lazy.filter { event in
+                        beforeSeq.map { event.seq < $0 } ?? true
+                    }.map(\.eventID))
+                    matchingEvents = storedEvents
                         .filter { event in
                             guard event.sessionID == sessionID,
                                   event.workspaceID == workspaceID else {
                                 return false
                             }
                             if let beforeSeq {
-                                if let resolution = state.historicalOpenerResolutions[event.eventID],
-                                   resolution.sequence >= beforeSeq {
-                                    return false
-                                }
                                 return event.seq < beforeSeq
+                                    && historicalOpenerIsVisible(
+                                        event,
+                                        state: state,
+                                        cursorEligibleEventIDs: cursorEligibleEventIDs,
+                                        beforeSeq: beforeSeq)
                             }
                             if let afterSeq {
                                 return event.seq > afterSeq
@@ -174,14 +178,20 @@ final class AgentEventHub {
             } else {
                 matchingEvents = sessions.values
                     .flatMap { state in
-                        state.allStoredEvents
-                            .compactMap { effectiveEvent($0) }
+                        let storedEvents = state.allStoredEvents.compactMap { effectiveEvent($0) }
+                        let cursorEligibleEventIDs = Set(storedEvents.lazy.filter { event in
+                            beforeSeq.map { event.seq < $0 } ?? true
+                        }.map(\.eventID))
+                        return storedEvents
                             .filter { event in
-                                guard let beforeSeq,
-                                      let resolution = state.historicalOpenerResolutions[event.eventID] else {
+                                guard let beforeSeq else {
                                     return true
                                 }
-                                return resolution.sequence < beforeSeq
+                                return historicalOpenerIsVisible(
+                                    event,
+                                    state: state,
+                                    cursorEligibleEventIDs: cursorEligibleEventIDs,
+                                    beforeSeq: beforeSeq)
                             }
                     }
                     .filter { event in
@@ -217,6 +227,23 @@ final class AgentEventHub {
             let newestSeq = slice.last?.seq ?? 0
             let hasMore = matchingEvents.count > slice.count
             return FetchResult(events: slice, oldestSeq: oldestSeq, newestSeq: newestSeq, hasMore: hasMore)
+        }
+    }
+
+    private func historicalOpenerIsVisible(
+        _ event: AgentEvent,
+        state: SessionState,
+        cursorEligibleEventIDs: Set<String>,
+        beforeSeq: Int
+    ) -> Bool {
+        guard let resolution = state.historicalOpenerResolutions[event.eventID] else {
+            return true
+        }
+        switch resolution {
+        case .visibleTerminal(let eventID, let sequence):
+            return sequence < beforeSeq && cursorEligibleEventIDs.contains(eventID)
+        case .silentConsumer:
+            return false
         }
     }
 
@@ -374,6 +401,7 @@ final class AgentEventHub {
                 return nil
             }
             var activePrompt: InteractivePrompt?
+            var activePromptEventID: String?
             var activeLifecycleToken: String?
             var activeRequiresCapability = false
             for event in state.allStoredEvents
@@ -386,6 +414,7 @@ final class AgentEventHub {
                 switch event.type {
                 case .interactivePrompt:
                     activePrompt = InteractivePrompt(jsonValue: event.payload)
+                    activePromptEventID = event.eventID
                     activeLifecycleToken = AgentInteractivePromptSidebarMessages.lifecycleToken(from: event)
                     activeRequiresCapability = AgentInteractivePromptSidebarMessages.requiresLifecycleCapability(event)
                 case .interactivePromptResolved:
@@ -395,10 +424,15 @@ final class AgentEventHub {
                         terminal: event
                     ) {
                         activePrompt = nil
+                        activePromptEventID = nil
                     }
                 default:
                     break
                 }
+            }
+            if let activePromptEventID,
+               case .visibleTerminal? = state.historicalOpenerResolutions[activePromptEventID] {
+                return nil
             }
             return activePrompt
         }

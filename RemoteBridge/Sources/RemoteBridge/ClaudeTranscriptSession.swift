@@ -3174,18 +3174,6 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         }
     }
 
-    private func historicalClosureSequence(forOpener event: AgentEvent) -> Int? {
-        guard event.type == .interactivePrompt
-                || event.metadata?["tidey_generated"] == "claude_context_command" else {
-            return nil
-        }
-        guard let index = historicalClosureIndex else {
-            return nil
-        }
-        return index.closureByOpenerEventID[event.eventID]?.seq
-            ?? index.contextConsumerSequenceByOpenerEventID[event.eventID]
-    }
-
     func stop() {
         queue.sync {
             resolverTimer?.cancel()
@@ -4074,15 +4062,6 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         if isBackfillingHistory {
             if let anchorSeq = historicalBackfillAnchorSeq,
                event.seq >= anchorSeq {
-                return event
-            }
-            // A before-cursor response cannot include a terminal whose
-            // original sequence is at or above that cursor. In that case,
-            // fail closed by withholding the already-resolved opener; the
-            // caller must never see it revived as an active prompt/command.
-            if let anchorSeq = historicalBackfillAnchorSeq,
-               let closureSeq = historicalClosureSequence(forOpener: event),
-               closureSeq >= anchorSeq {
                 return event
             }
             if event.type == .interactivePrompt

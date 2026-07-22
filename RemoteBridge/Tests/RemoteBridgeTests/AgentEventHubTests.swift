@@ -21,6 +21,54 @@ final class AgentEventHubTests: XCTestCase {
         XCTAssertTrue(result.events.isEmpty)
     }
 
+    func testBeforeCursorProjectsVisiblePairsAndSilentConsumersWithoutDeletingStorage() {
+        let hub = AgentEventHub()
+        let prompt = makePromptEvent(id: "visible-opener",
+                                     seq: 10,
+                                     promptID: "prompt",
+                                     token: nil,
+                                     vendor: "claude",
+                                     source: "claude_ask_user_question")
+        let silentContext = makeContextEvent(id: "silent-context",
+                                             seq: 11,
+                                             kind: "claude_context_command")
+        let terminal = makeResolvedEvent(id: "visible-terminal",
+                                         seq: 20,
+                                         promptID: "prompt",
+                                         token: nil,
+                                         vendor: "claude",
+                                         source: "claude_ask_user_question")
+        hub.publish(prompt)
+        hub.publish(silentContext)
+        hub.publish(terminal)
+        hub.replaceHistoricalOpenerResolutions(
+            sessionID: "session",
+            resolutions: [
+                prompt.eventID: .visibleTerminal(eventID: terminal.eventID, sequence: terminal.seq),
+                silentContext.eventID: .silentConsumer(sequence: 15),
+            ])
+
+        let beforeTerminal = hub.fetch(workspaceID: "workspace",
+                                       sessionID: "session",
+                                       limit: 20,
+                                       beforeSeq: terminal.seq)
+        XCTAssertFalse(beforeTerminal.events.contains { $0.eventID == prompt.eventID })
+        XCTAssertFalse(beforeTerminal.events.contains { $0.eventID == silentContext.eventID })
+
+        let afterTerminal = hub.fetch(workspaceID: "workspace",
+                                      sessionID: "session",
+                                      limit: 20,
+                                      beforeSeq: terminal.seq + 1)
+        XCTAssertTrue(afterTerminal.events.contains { $0.eventID == prompt.eventID })
+        XCTAssertTrue(afterTerminal.events.contains { $0.eventID == terminal.eventID })
+        XCTAssertFalse(afterTerminal.events.contains { $0.eventID == silentContext.eventID },
+                       "a silent consumer has no visible partner in any before-history page")
+
+        let latest = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20)
+        XCTAssertTrue(latest.events.contains { $0.eventID == silentContext.eventID },
+                      "history projection must not permanently delete the raw command")
+    }
+
     func testSessionStartedStickyReplayUsesReservedSequenceOnlyForFullReplay() {
         let hub = AgentEventHub()
         hub.publish(AgentEvent(eventID: "session-start:test",
