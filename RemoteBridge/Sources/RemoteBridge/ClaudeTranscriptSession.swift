@@ -3740,6 +3740,16 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                              timestamp: String,
                                              lineOffset: Int) -> Bool {
         if let commandName = Self.localCommandName(in: text) {
+            if isBackfillingHistory == false,
+               historicalIndexEventSink == nil,
+               let index = historicalClosureIndex,
+               let openerEventID = index.pendingContextOpenerEventID {
+                index.contextConsumerSequenceByOpenerEventID[openerEventID]
+                    = transcriptSequenceBase
+                    + transcriptEventSequence(lineOffset: lineOffset, ordinal: 0)
+                index.pendingContextOpenerEventID = nil
+                synchronizeHistoricalOpenerClosureSequences()
+            }
             pendingLocalCommand = ClaudeLocalCommand(name: commandName)
             if commandName == "/context" {
                 publishFileBacked(kind: .userMessage,
@@ -3767,26 +3777,50 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
 
         let command = pendingLocalCommand
         pendingLocalCommand = nil
-        guard command?.name == "/context",
-              let markdown = Self.markdownForClaudeContext(stdout: stdout) else {
+        let historicalOpenerEventID: String?
+        if command == nil,
+           isBackfillingHistory == false,
+           historicalIndexEventSink == nil {
+            historicalOpenerEventID = historicalClosureIndex?.pendingContextOpenerEventID
+        } else {
+            historicalOpenerEventID = nil
+        }
+        guard command?.name == "/context" || historicalOpenerEventID != nil else {
+            return true
+        }
+        guard let markdown = Self.markdownForClaudeContext(stdout: stdout) else {
+            if let historicalOpenerEventID,
+               let index = historicalClosureIndex {
+                index.contextConsumerSequenceByOpenerEventID[historicalOpenerEventID]
+                    = transcriptSequenceBase
+                    + transcriptEventSequence(lineOffset: lineOffset, ordinal: 0)
+                index.pendingContextOpenerEventID = nil
+                synchronizeHistoricalOpenerClosureSequences()
+            }
             return true
         }
 
-        publishFileBacked(kind: .assistantMessage,
-                          lineOffset: lineOffset,
-                          ordinal: 0,
-                          eventID: "\(uuid):claude-context:0",
-                          timestamp: timestamp,
-                          role: "assistant",
-                          text: markdown,
-                          name: nil,
-                          input: nil,
-                          output: nil,
-                          toolCallID: nil,
-                          metadata: [
-                              "slash_command": "/context",
-                              "tidey_generated": "claude_context",
-                          ])
+        let summaryEvent = publishFileBacked(kind: .assistantMessage,
+                                             lineOffset: lineOffset,
+                                             ordinal: 0,
+                                             eventID: "\(uuid):claude-context:0",
+                                             timestamp: timestamp,
+                                             role: "assistant",
+                                             text: markdown,
+                                             name: nil,
+                                             input: nil,
+                                             output: nil,
+                                             toolCallID: nil,
+                                             metadata: [
+                                                 "slash_command": "/context",
+                                                 "tidey_generated": "claude_context",
+                                             ])
+        if let historicalOpenerEventID,
+           let index = historicalClosureIndex {
+            index.pendingContextOpenerEventID = nil
+            index.closureByOpenerEventID[historicalOpenerEventID] = summaryEvent
+            synchronizeHistoricalOpenerClosureSequences()
+        }
         return true
     }
 

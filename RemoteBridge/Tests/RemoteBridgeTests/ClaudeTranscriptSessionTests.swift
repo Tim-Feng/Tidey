@@ -1133,6 +1133,61 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         }, "a live terminal must resolve the exact historical opener already exposed by backfill")
     }
 
+    func testClaudeLiveStdoutSummarizesPreviouslyBackfilledContext() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+
+        let contextLine = makeClaudeUserLine(uuid: "historical-context",
+                                             content: "<command-name>/context</command-name>")
+        let fillerLines = (0..<transcriptBootstrapLineLimit).map {
+            makeClaudeUserLine(uuid: "filler-\($0)", content: "filler-\($0)")
+        }
+        try (([contextLine] + fillerLines).joined(separator: "\n") + "\n").write(to: transcriptURL,
+                                                                                   atomically: true,
+                                                                                   encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 1)
+                .events.first?.text == "filler-\(transcriptBootstrapLineLimit - 1)"
+        })
+
+        let firstFillerOffset = (contextLine + "\n").utf8.count
+        let firstFillerSeq = transcriptEventSequence(lineOffset: firstFillerOffset, ordinal: 0)
+        let commandPage = BridgeAgentEventFetchFlow.run(eventHub: hub,
+                                                        workspaceID: "workspace",
+                                                        sessionID: "session",
+                                                        limit: 1,
+                                                        beforeSeq: firstFillerSeq,
+                                                        afterSeq: nil) { _, beforeSeq, limit in
+            session.backfill(beforeSeq: beforeSeq, limit: limit)
+        }
+        XCTAssertTrue(commandPage.didBackfill)
+        XCTAssertEqual(commandPage.fetchResult.events.map(\.eventID),
+                       ["historical-context:claude-context-command:0"])
+
+        let stdoutLine = makeClaudeContextStdoutLine(uuid: "live-context-summary")
+        let handle = try FileHandle(forWritingTo: transcriptURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data((stdoutLine + "\n").utf8))
+        try handle.close()
+
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000).events.contains {
+                $0.eventID == "live-context-summary:claude-context:0"
+                    && $0.metadata?["tidey_generated"] == "claude_context"
+            }
+        }, "live stdout must retain the historical /context pairing without leaking replay parser state")
+    }
+
     func testClaudeBackfillTreatsLaterCommandAsContextConsumer() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
