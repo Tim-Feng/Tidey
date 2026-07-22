@@ -1,6 +1,17 @@
 import Foundation
 
 final class ChatSubmitEchoRegistry {
+    enum SubmissionState: Equatable {
+        case pending
+        case delivered
+        case indeterminate
+    }
+
+    enum BeginSubmissionOutcome: Equatable {
+        case started
+        case duplicate(SubmissionState)
+    }
+
     struct Record: Equatable {
         let workspaceID: String
         let panelID: String
@@ -18,6 +29,7 @@ final class ChatSubmitEchoRegistry {
         let vendor: String
         let clientRequestID: String
         let submittedAt: Date
+        var state: SubmissionState
     }
 
     private let ttl: TimeInterval
@@ -63,20 +75,20 @@ final class ChatSubmitEchoRegistry {
                          sessionID: String,
                          vendor: String,
                          clientRequestID: String?,
-                         submittedAt: Date? = nil) -> Bool {
+                         submittedAt: Date? = nil) -> BeginSubmissionOutcome {
         guard let clientRequestID else {
-            return true
+            return .started
         }
         let trimmedRequestID = clientRequestID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedRequestID.isEmpty else {
-            return true
+            return .started
         }
 
         return queue.sync {
             let now = submittedAt ?? self.now()
             pruneExpired(now: now)
             let normalizedVendor = vendor.lowercased()
-            if submissionRecords.contains(where: {
+            if let existing = submissionRecords.first(where: {
                 $0.workspaceID == workspaceID
                     && $0.panelID == panelID
                     && $0.sessionID == sessionID
@@ -84,7 +96,7 @@ final class ChatSubmitEchoRegistry {
                     && $0.clientRequestID == trimmedRequestID
             }) {
                 BridgeLogger.input.info("chat submit duplicate suppressed workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) session_id=\(sessionID, privacy: .public) vendor=\(vendor, privacy: .public) client_request_id=\(trimmedRequestID, privacy: .public)")
-                return false
+                return .duplicate(existing.state)
             }
 
             submissionRecords.append(SubmissionRecord(workspaceID: workspaceID,
@@ -92,9 +104,84 @@ final class ChatSubmitEchoRegistry {
                                                       sessionID: sessionID,
                                                       vendor: normalizedVendor,
                                                       clientRequestID: trimmedRequestID,
-                                                      submittedAt: now))
+                                                      submittedAt: now,
+                                                      state: .pending))
             BridgeLogger.input.info("chat submit submission registered workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) session_id=\(sessionID, privacy: .public) vendor=\(vendor, privacy: .public) client_request_id=\(trimmedRequestID, privacy: .public)")
-            return true
+            return .started
+        }
+    }
+
+    func markDelivered(workspaceID: String,
+                       panelID: String,
+                       sessionID: String,
+                       vendor: String,
+                       clientRequestID: String) {
+        setSubmissionState(.delivered,
+                           workspaceID: workspaceID,
+                           panelID: panelID,
+                           sessionID: sessionID,
+                           vendor: vendor,
+                           clientRequestID: clientRequestID)
+    }
+
+    func markIndeterminate(workspaceID: String,
+                           panelID: String,
+                           sessionID: String,
+                           vendor: String,
+                           clientRequestID: String) {
+        setSubmissionState(.indeterminate,
+                           workspaceID: workspaceID,
+                           panelID: panelID,
+                           sessionID: sessionID,
+                           vendor: vendor,
+                           clientRequestID: clientRequestID)
+    }
+
+    func cancelSubmission(workspaceID: String,
+                          panelID: String,
+                          sessionID: String,
+                          vendor: String,
+                          clientRequestID: String) {
+        let trimmedRequestID = clientRequestID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedRequestID.isEmpty else {
+            return
+        }
+
+        queue.sync {
+            let normalizedVendor = vendor.lowercased()
+            submissionRecords.removeAll {
+                $0.workspaceID == workspaceID
+                    && $0.panelID == panelID
+                    && $0.sessionID == sessionID
+                    && $0.vendor == normalizedVendor
+                    && $0.clientRequestID == trimmedRequestID
+            }
+        }
+    }
+
+    private func setSubmissionState(_ state: SubmissionState,
+                                    workspaceID: String,
+                                    panelID: String,
+                                    sessionID: String,
+                                    vendor: String,
+                                    clientRequestID: String) {
+        let trimmedRequestID = clientRequestID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedRequestID.isEmpty else {
+            return
+        }
+
+        queue.sync {
+            let normalizedVendor = vendor.lowercased()
+            guard let index = submissionRecords.firstIndex(where: {
+                $0.workspaceID == workspaceID
+                    && $0.panelID == panelID
+                    && $0.sessionID == sessionID
+                    && $0.vendor == normalizedVendor
+                    && $0.clientRequestID == trimmedRequestID
+            }) else {
+                return
+            }
+            submissionRecords[index].state = state
         }
     }
 

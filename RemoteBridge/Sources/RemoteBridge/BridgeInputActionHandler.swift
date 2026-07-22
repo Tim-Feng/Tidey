@@ -134,15 +134,50 @@ struct BridgeInputActionHandler {
             throw BridgeInternalError.invalidRequest("chat_submit vendor is not supported")
         }
         let resolvedSessionID = activeSession?.sessionID ?? requestedSessionID ?? "-"
-        if chatSubmitEchoRegistry?.beginSubmission(workspaceID: workspaceID,
-                                                   panelID: panelID,
-                                                   sessionID: resolvedSessionID,
-                                                   vendor: vendor.id,
-                                                   clientRequestID: clientRequestID) == false {
+        switch chatSubmitEchoRegistry?.beginSubmission(workspaceID: workspaceID,
+                                                       panelID: panelID,
+                                                       sessionID: resolvedSessionID,
+                                                       vendor: vendor.id,
+                                                       clientRequestID: clientRequestID) {
+        case .none, .some(.started):
+            break
+        case .some(.duplicate(.delivered)):
             return Self.submittedResponse(for: request,
                                           vendorID: vendor.id,
                                           sessionID: activeSession?.sessionID,
                                           deduplicated: true)
+        case .some(.duplicate(.pending)), .some(.duplicate(.indeterminate)):
+            return Self.conflictResponse(for: request,
+                                         vendorID: vendor.id,
+                                         sessionID: activeSession?.sessionID)
+        }
+
+        var finalSubmissionState: ChatSubmitEchoRegistry.SubmissionState?
+        defer {
+            if let clientRequestID {
+                switch finalSubmissionState {
+                case .delivered:
+                    chatSubmitEchoRegistry?.markDelivered(workspaceID: workspaceID,
+                                                          panelID: panelID,
+                                                          sessionID: resolvedSessionID,
+                                                          vendor: vendor.id,
+                                                          clientRequestID: clientRequestID)
+                case .indeterminate:
+                    chatSubmitEchoRegistry?.markIndeterminate(workspaceID: workspaceID,
+                                                              panelID: panelID,
+                                                              sessionID: resolvedSessionID,
+                                                              vendor: vendor.id,
+                                                              clientRequestID: clientRequestID)
+                case nil:
+                    chatSubmitEchoRegistry?.cancelSubmission(workspaceID: workspaceID,
+                                                             panelID: panelID,
+                                                             sessionID: resolvedSessionID,
+                                                             vendor: vendor.id,
+                                                             clientRequestID: clientRequestID)
+                case .some(.pending):
+                    break
+                }
+            }
         }
 
         BridgeLogger.input.info("dispatch action=chat_submit request_id=\(request.id, privacy: .public) workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) session_id=\(activeSession?.sessionID ?? requestedSessionID ?? "-", privacy: .public) vendor=\(vendor.id, privacy: .public) length=\(message.count) has_cr=\(message.contains("\r")) has_lf=\(message.contains("\n")) tail=\(summarizedTail(message), privacy: .public)")
@@ -172,6 +207,7 @@ struct BridgeInputActionHandler {
            activeRecord?.runtime == "codex_app_server" {
             if let codexAppServerChatSubmitter,
                canSubmitViaAppServer == true {
+                finalSubmissionState = .indeterminate
                 try codexAppServerChatSubmitter.submitMessage(sessionID: activeSession.sessionID,
                                                               text: message)
                 if let clientRequestID {
@@ -182,6 +218,7 @@ struct BridgeInputActionHandler {
                                                      text: message,
                                                      clientRequestID: clientRequestID)
                 }
+                finalSubmissionState = .delivered
                 return Self.submittedResponse(for: request,
                                               vendorID: vendor.id,
                                               sessionID: activeSession.sessionID,
@@ -222,6 +259,7 @@ struct BridgeInputActionHandler {
                                                                       allowAmbiguousPasteTimeout: true)
             }
             if routeDecision == .routed {
+                finalSubmissionState = .indeterminate
                 previousStepUsedOrdinaryTmux = true
                 BridgeLogger.input.info("route action=chat_submit request_id=\(request.id, privacy: .public) panel_id=\(panelID, privacy: .public) transport=ordinary_tmux step_index=\(index)")
             } else {
@@ -251,6 +289,7 @@ struct BridgeInputActionHandler {
                                           result: nil,
                                           error: response.error)
                 }
+                finalSubmissionState = .indeterminate
                 previousStepUsedOrdinaryTmux = false
             }
         }
@@ -264,6 +303,7 @@ struct BridgeInputActionHandler {
                                              text: message,
                                              clientRequestID: clientRequestID)
         }
+        finalSubmissionState = .delivered
 
         return Self.submittedResponse(for: request,
                                       vendorID: vendor.id,
@@ -284,6 +324,20 @@ struct BridgeInputActionHandler {
                                 "deduplicated": .bool(deduplicated),
                               ],
                               error: nil)
+    }
+
+    private static func conflictResponse(for request: BridgeRequest,
+                                         vendorID: String,
+                                         sessionID: String?) -> BridgeResponse {
+        BridgeResponse(id: request.id,
+                       ok: false,
+                       result: [
+                        "submitted": .bool(false),
+                        "vendor": .string(vendorID),
+                        "session_id": sessionID.map { .string($0) } ?? .null,
+                       ],
+                       error: BridgeErrorPayload(code: "CONFLICT",
+                                                 message: "A submission for this client_request_id is still pending or has an indeterminate outcome."))
     }
 
     private func summarizedTail(_ input: String) -> String {
