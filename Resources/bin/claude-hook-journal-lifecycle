@@ -5,27 +5,180 @@
 #
 # Durable handoff: a resumed session's new wrapper instance shares the old
 # wrapper's journal PATH (keyed by session id), but claims exclusive
-# ownership via an epoch MARKER file. The marker is written LAST at claim
-# time (so it always reflects the most recent claimant) and checked before
-# cleanup deletes anything — an old wrapper whose session outlives a newer
-# one's start can therefore never delete the newer wrapper's journal,
-# counter, or seqlock directory.
+# ownership via an epoch MARKER file. Epoch allocation is globally
+# monotonic under the registry root, so even a coarse/backward clock cannot
+# give two wrappers an ambiguous ordering. Claim and cleanup serialize on a
+# marker-specific lock and claims never move the marker backwards — an old
+# wrapper whose session outlives a newer one's start can therefore never
+# delete the newer wrapper's journal, counter, or seqlock directory.
+
+_CLAUDE_HOOK_LOCK_TOKEN=""
+
+_claude_hook_lock_acquire() {
+    local lock_dir="$1"
+    local attempt=0
+    local owner=""
+    local owner_pid=""
+    local token=""
+
+    while :; do
+        if mkdir "$lock_dir" 2>/dev/null; then
+            token="$$-${RANDOM:-0}-$attempt"
+            if printf '%s' "$token" > "$lock_dir/owner" 2>/dev/null; then
+                _CLAUDE_HOOK_LOCK_TOKEN="$token"
+                return 0
+            fi
+            rm -rf "$lock_dir" 2>/dev/null || true
+            return 1
+        fi
+
+        attempt=$((attempt + 1))
+        owner="$(cat "$lock_dir/owner" 2>/dev/null || true)"
+        owner_pid="${owner%%-*}"
+        case "$owner_pid" in
+            ''|*[!0-9]*) owner_pid="" ;;
+        esac
+        if [[ -n "$owner_pid" ]] && ! kill -0 "$owner_pid" 2>/dev/null; then
+            rm -rf "$lock_dir" 2>/dev/null || true
+            continue
+        fi
+
+        # The protected regions contain only local reads/atomic renames and
+        # should finish in milliseconds. Recover an ownerless or suspended
+        # lock after ~2 seconds; the owner token prevents a recovered process
+        # from releasing a later claimant's lock.
+        if [[ "$attempt" -ge 400 ]]; then
+            rm -rf "$lock_dir" 2>/dev/null || true
+            attempt=0
+            continue
+        fi
+        sleep 0.005
+    done
+}
+
+_claude_hook_lock_is_owned() {
+    local lock_dir="$1"
+    local owner=""
+    owner="$(cat "$lock_dir/owner" 2>/dev/null || true)"
+    [[ -n "$_CLAUDE_HOOK_LOCK_TOKEN" && "$owner" == "$_CLAUDE_HOOK_LOCK_TOKEN" ]]
+}
+
+_claude_hook_lock_release() {
+    local lock_dir="$1"
+    if _claude_hook_lock_is_owned "$lock_dir"; then
+        rm -f "$lock_dir/owner" 2>/dev/null || true
+        rmdir "$lock_dir" 2>/dev/null || true
+    fi
+    _CLAUDE_HOOK_LOCK_TOKEN=""
+}
+
+_claude_hook_epoch_start() {
+    local epoch="$1"
+    local start="${epoch##*-}"
+    case "$start" in
+        ''|*[!0-9]*) start="0" ;;
+    esac
+    printf '%s' "$start"
+}
+
+# Allocates one sortable "pid-startTimestamp" token. observed_timestamp is
+# normally wall-clock nanoseconds; the persisted counter supplies the strict
+# ordering when that clock is coarse, equal, or moves backwards.
+claude_hook_allocate_epoch() {
+    local registry_root="$1"
+    local wrapper_pid="$2"
+    local observed_timestamp="$3"
+    local counter_path="$registry_root/.claude-hook-epoch.counter"
+    local lock_dir="$registry_root/.claude-hook-epoch.lock"
+    local current=""
+    local candidate="$observed_timestamp"
+    local tmp_path=""
+
+    case "$wrapper_pid" in
+        ''|*[!0-9]*) wrapper_pid="0" ;;
+    esac
+    case "$candidate" in
+        ''|*[!0-9]*) candidate="0" ;;
+    esac
+
+    # If this root is unavailable, its journal is unavailable too. Keep the
+    # wrapper launch non-fatal and return the best parseable token we have.
+    if ! mkdir -p "$registry_root" 2>/dev/null; then
+        printf '%s-%s' "$wrapper_pid" "$candidate"
+        return 0
+    fi
+
+    while :; do
+        _claude_hook_lock_acquire "$lock_dir" || {
+            printf '%s-%s' "$wrapper_pid" "$candidate"
+            return 0
+        }
+
+        current="$(cat "$counter_path" 2>/dev/null || true)"
+        case "$current" in
+            ''|*[!0-9]*) current="" ;;
+        esac
+        if [[ -n "$current" ]] && (( current >= candidate )); then
+            candidate=$((current + 1))
+        fi
+
+        tmp_path="$counter_path.tmp.$$.$RANDOM"
+        if printf '%s' "$candidate" > "$tmp_path" 2>/dev/null &&
+           _claude_hook_lock_is_owned "$lock_dir" &&
+           mv -f "$tmp_path" "$counter_path" 2>/dev/null; then
+            _claude_hook_lock_release "$lock_dir"
+            printf '%s-%s' "$wrapper_pid" "$candidate"
+            return 0
+        fi
+
+        rm -f "$tmp_path" 2>/dev/null || true
+        _claude_hook_lock_release "$lock_dir"
+    done
+}
 
 claude_hook_journal_claim() {
     local marker_path="$1" epoch="$2"
-    printf '%s' "$epoch" > "$marker_path" 2>/dev/null || true
+    local lock_dir="$marker_path.claimlock"
+    local current=""
+    local current_start="0"
+    local incoming_start="0"
+    local tmp_path="$marker_path.tmp.$$.$RANDOM"
+
+    _claude_hook_lock_acquire "$lock_dir" || return 0
+    current="$(cat "$marker_path" 2>/dev/null || true)"
+    current_start="$(_claude_hook_epoch_start "$current")"
+    incoming_start="$(_claude_hook_epoch_start "$epoch")"
+
+    # Repeated hooks from the current wrapper are harmless. A different
+    # claimant may replace it only with a strictly newer allocated suffix;
+    # equality is deliberately not treated as newer.
+    if [[ -z "$current" || "$current" == "$epoch" ]] ||
+       (( incoming_start > current_start )); then
+        if printf '%s' "$epoch" > "$tmp_path" 2>/dev/null &&
+           _claude_hook_lock_is_owned "$lock_dir"; then
+            mv -f "$tmp_path" "$marker_path" 2>/dev/null || true
+        fi
+    fi
+    rm -f "$tmp_path" 2>/dev/null || true
+    _claude_hook_lock_release "$lock_dir"
+    return 0
 }
 
 # Deletes the journal artifacts ONLY if the marker still names this epoch
 # (no newer wrapper has claimed it since).
 claude_hook_journal_cleanup() {
     local journal_path="$1" marker_path="$2" epoch="$3"
-    local current_marker
+    local lock_dir="$marker_path.claimlock"
+    local current_marker=""
+    local status=1
+
+    _claude_hook_lock_acquire "$lock_dir" || return 1
     current_marker="$(cat "$marker_path" 2>/dev/null || true)"
     if [[ -z "$current_marker" || "$current_marker" == "$epoch" ]]; then
         rm -f "$journal_path" "$journal_path.seq" "$marker_path"
         rmdir "$journal_path.seqlock" 2>/dev/null || true
-        return 0
+        status=0
     fi
-    return 1
+    _claude_hook_lock_release "$lock_dir"
+    return "$status"
 }

@@ -288,6 +288,15 @@ final class ClaudeHookDispatchScriptTests: XCTestCase {
             0)
         try "new-line\n".write(to: journal, atomically: false, encoding: .utf8)
 
+        // The old wrapper can be descheduled before its original claim and
+        // resume only after the new wrapper has claimed ownership. Its lower
+        // epoch must not move the marker backwards.
+        XCTAssertEqual(
+            try run("source \(shellQuote(lifecycleScript.path)); claude_hook_journal_claim \(shellQuote(marker.path)) '100-1000'"),
+            0)
+        XCTAssertEqual(try String(contentsOf: marker, encoding: .utf8), "200-2000",
+                       "a delayed old claim replaced the newer epoch marker")
+
         // Old wrapper's DELAYED cleanup (its own epoch, now stale) must not
         // remove the new wrapper's journal or marker.
         let cleanupStatus = try run(
@@ -303,6 +312,91 @@ final class ClaudeHookDispatchScriptTests: XCTestCase {
             "source \(shellQuote(lifecycleScript.path)); claude_hook_journal_cleanup \(shellQuote(journal.path)) \(shellQuote(marker.path)) '200-2000'")
         XCTAssertEqual(newCleanupStatus, 0)
         XCTAssertFalse(FileManager.default.fileExists(atPath: journal.path))
+    }
+
+    func testEpochAllocatorStaysStrictlyMonotonicWhenObservedClockDoesNotAdvance() throws {
+        let lifecycleScript = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Resources/bin/claude-hook-journal-lifecycle", isDirectory: false)
+        let registryRoot = directory.appendingPathComponent("registry", isDirectory: true)
+        try FileManager.default.createDirectory(at: registryRoot, withIntermediateDirectories: true)
+
+        func allocate(pid: Int, observed: String) throws -> String {
+            let result = try runEpochAllocation(lifecycleScript: lifecycleScript,
+                                                registryRoot: registryRoot,
+                                                pid: pid,
+                                                observed: observed)
+            XCTAssertEqual(result.status, 0)
+            return result.output
+        }
+
+        let observed = "1784720284173003000"
+        XCTAssertEqual(try allocate(pid: 100, observed: observed), "100-1784720284173003000")
+        XCTAssertEqual(try allocate(pid: 200, observed: observed), "200-1784720284173003001")
+        XCTAssertEqual(try allocate(pid: 300, observed: "1784720284000000000"),
+                       "300-1784720284173003002",
+                       "a backward/coarse clock must not move epoch ordering backwards")
+    }
+
+    func testConcurrentEpochAllocatorsProduceOneDenseStrictSequence() throws {
+        let lifecycleScript = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Resources/bin/claude-hook-journal-lifecycle", isDirectory: false)
+        let registryRoot = directory.appendingPathComponent("concurrent-registry", isDirectory: true)
+        try FileManager.default.createDirectory(at: registryRoot, withIntermediateDirectories: true)
+
+        let writers = 16
+        let observed = "1784720284173003000"
+        let group = DispatchGroup()
+        let queue = DispatchQueue(label: "claude-epoch-allocators", attributes: .concurrent)
+        let resultLock = NSLock()
+        var results = [(status: Int32, output: String)]()
+        for index in 0..<writers {
+            group.enter()
+            queue.async {
+                defer { group.leave() }
+                let result = (try? self.runEpochAllocation(lifecycleScript: lifecycleScript,
+                                                           registryRoot: registryRoot,
+                                                           pid: 1000 + index,
+                                                           observed: observed)) ?? (-1, "")
+                resultLock.lock()
+                results.append(result)
+                resultLock.unlock()
+            }
+        }
+
+        XCTAssertEqual(group.wait(timeout: .now() + 20), .success)
+        XCTAssertEqual(results.count, writers)
+        XCTAssertTrue(results.allSatisfy { $0.status == 0 }, "allocator results: \(results)")
+
+        let suffixes = results.compactMap { result -> Int64? in
+            guard let separator = result.output.lastIndex(of: "-") else { return nil }
+            return Int64(result.output[result.output.index(after: separator)...])
+        }.sorted()
+        let first = try XCTUnwrap(Int64(observed))
+        XCTAssertEqual(suffixes, (0..<Int64(writers)).map { first + $0 },
+                       "concurrent allocators did not produce one dense monotonic sequence")
+    }
+
+    private func runEpochAllocation(lifecycleScript: URL,
+                                    registryRoot: URL,
+                                    pid: Int,
+                                    observed: String) throws -> (status: Int32, output: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [
+            "-c",
+            "source \(shellQuote(lifecycleScript.path)); claude_hook_allocate_epoch \(shellQuote(registryRoot.path)) '\(pid)' '\(observed)'",
+        ]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        process.waitUntilExit()
+        return (process.terminationStatus,
+                String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
     }
 
     private func shellQuote(_ string: String) -> String {

@@ -142,6 +142,13 @@ env -u TIDEY_WORKSPACE_ID -u TIDEY_PANEL_ID \
 claude_args="$(<"$real_claude_log")"
 [[ "$claude_args" == --settings\ * ]] ||
     fail "interactive invocation did not inject --settings"
+hook_epoch="$(printf '%s\n' "$claude_args" | grep -Eo '[0-9]+-[0-9]{10,}' | head -n 1 || true)"
+if [[ -z "$hook_epoch" ]]; then
+    fail "interactive hook settings did not include a numeric wrapper epoch"
+fi
+hook_epoch_timestamp="${hook_epoch##*-}"
+[[ "${#hook_epoch_timestamp}" -ge 19 ]] ||
+    fail "wrapper epoch timestamp lacks nanosecond precision: $hook_epoch"
 for expected in \
     '"matcher":"permission_prompt"' \
     '"matcher":"idle_prompt"' \

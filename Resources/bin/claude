@@ -166,6 +166,56 @@ shell_quote() {
     printf "'%s'" "$s"
 }
 
+claude_hook_epoch_timestamp() {
+    local timestamp=""
+
+    # Current macOS /bin/date provides nanoseconds. Reject the literal %N
+    # produced by older implementations instead of silently treating it as
+    # a sortable timestamp.
+    timestamp="$(/bin/date +%s%N 2>/dev/null || true)"
+    case "$timestamp" in
+        ''|*[!0-9]*) timestamp="" ;;
+    esac
+    if [[ -n "$timestamp" && "${#timestamp}" -lt 19 ]]; then
+        timestamp=""
+    fi
+
+    # Keep older supported macOS versions high-resolution when their date(1)
+    # lacks %N. These interpreters are fallbacks only, so the common launch
+    # path does not pay their startup cost.
+    if [[ -z "$timestamp" && -x /usr/bin/python3 ]]; then
+        timestamp="$(/usr/bin/python3 -c 'import time; print(time.time_ns())' 2>/dev/null || true)"
+        case "$timestamp" in
+            ''|*[!0-9]*) timestamp="" ;;
+        esac
+        if [[ -n "$timestamp" && "${#timestamp}" -lt 19 ]]; then
+            timestamp=""
+        fi
+    fi
+    if [[ -z "$timestamp" && -x /usr/bin/perl ]]; then
+        timestamp="$(/usr/bin/perl -MTime::HiRes=time -e 'printf "%.0f", time() * 1000000000' 2>/dev/null || true)"
+        case "$timestamp" in
+            ''|*[!0-9]*) timestamp="" ;;
+        esac
+        if [[ -n "$timestamp" && "${#timestamp}" -lt 19 ]]; then
+            timestamp=""
+        fi
+    fi
+
+    # Last-resort compatibility path. The lifecycle helper advances its
+    # persisted monotonic counter when multiple wrappers observe this same
+    # coarse value, so padding does not reintroduce same-second ambiguity.
+    if [[ -z "$timestamp" ]]; then
+        timestamp="$(/bin/date +%s 2>/dev/null || true)"
+        case "$timestamp" in
+            ''|*[!0-9]*) timestamp="0" ;;
+        esac
+        timestamp="${timestamp}000000000"
+    fi
+
+    printf '%s' "$timestamp"
+}
+
 build_hook_command() {
     local event="$1"
     local prefix="${2:-}"
@@ -249,7 +299,7 @@ tidey_hydrate_tmux_pane_identity
 # The epoch token names THIS wrapper run: a resumed session's new wrapper
 # gets a new epoch, so the Bridge can drop the old wrapper's late events.
 HOOK_JOURNAL_FILE=""
-HOOK_JOURNAL_EPOCH="$$-$(date +%s)"
+HOOK_JOURNAL_EPOCH="$(claude_hook_allocate_epoch "$REGISTRY_ROOT" "$$" "$(claude_hook_epoch_timestamp)")"
 HOOK_JOURNAL_EPOCH_MARKER=""
 if [[ -n "$SESSION_ID" ]]; then
     mkdir -p "$REGISTRY_ROOT" 2>/dev/null || true
