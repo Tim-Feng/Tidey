@@ -114,6 +114,53 @@ final class OrdinaryTmuxPanelRegistry: @unchecked Sendable {
         }
     }
 
+    func replaceRoutesAuthoritatively(workspaceID: String,
+                                      routes: [OrdinaryTmuxPanelRoute],
+                                      observedAt: Date = Date()) {
+        queue.sync {
+            routesByPanelID = routesByPanelID.filter { $0.value.workspaceID != workspaceID }
+            authorizedTargets = authorizedTargets.filter { $0.value.workspaceID != workspaceID }
+            for route in routes {
+                routesByPanelID[route.panelID] = route
+                let target = OrdinaryTmuxAuthorizedTarget(workspaceID: route.workspaceID,
+                                                          carrierPanelID: route.carrierPanelID,
+                                                          socket: route.socket,
+                                                          sessionID: route.sessionID,
+                                                          sessionName: route.sessionName,
+                                                          authorizedAt: observedAt)
+                authorizedTargets[Self.authorizedTargetKey(workspaceID: route.workspaceID,
+                                                           socketComponent: route.socket.stablePanelIDComponent,
+                                                           sessionID: route.sessionID)] = target
+            }
+        }
+    }
+
+    func replaceRoutes(workspaceID: String,
+                       carrierPanelID: String,
+                       routes: [OrdinaryTmuxPanelRoute],
+                       observedAt: Date = Date()) {
+        queue.sync {
+            routesByPanelID = routesByPanelID.filter {
+                $0.value.workspaceID != workspaceID || $0.value.carrierPanelID != carrierPanelID
+            }
+            authorizedTargets = authorizedTargets.filter {
+                $0.value.workspaceID != workspaceID || $0.value.carrierPanelID != carrierPanelID
+            }
+            for route in routes {
+                routesByPanelID[route.panelID] = route
+                let target = OrdinaryTmuxAuthorizedTarget(workspaceID: route.workspaceID,
+                                                          carrierPanelID: route.carrierPanelID,
+                                                          socket: route.socket,
+                                                          sessionID: route.sessionID,
+                                                          sessionName: route.sessionName,
+                                                          authorizedAt: observedAt)
+                authorizedTargets[Self.authorizedTargetKey(workspaceID: route.workspaceID,
+                                                           socketComponent: route.socket.stablePanelIDComponent,
+                                                           sessionID: route.sessionID)] = target
+            }
+        }
+    }
+
     func storeRoute(_ route: OrdinaryTmuxPanelRoute, observedAt: Date = Date()) {
         queue.sync {
             routesByPanelID[route.panelID] = route
