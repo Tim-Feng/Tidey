@@ -67,12 +67,34 @@ final class JSONLFileReaderTests: XCTestCase {
         XCTAssertEqual(inclusive.map(\.offset), [0, 2])
     }
 
+    func testReadTailRecordsPreservesInvalidUTF8WithExactOffset() throws {
+        var data = Data("ok\n".utf8)
+        data.append(contentsOf: [0xff, 0x0a])
+        data.append(Data("after\n".utf8))
+        let fileURL = try writeJSONLFile(data: data)
+
+        let records = try JSONLFileReader.readTailRecords(fileURL: fileURL, limit: 3)
+        let legacyLines = try JSONLFileReader.readTail(fileURL: fileURL, limit: 3)
+
+        XCTAssertEqual(records, [
+            .line(offset: 0, value: "ok"),
+            .invalidUTF8(offset: 3),
+            .line(offset: 5, value: "after"),
+        ])
+        XCTAssertEqual(legacyLines.map(\.line), ["ok", "after"])
+        XCTAssertEqual(legacyLines.map(\.offset), [0, 5])
+    }
+
     private func writeJSONLFile(contents: String) throws -> URL {
+        try writeJSONLFile(data: Data(contents.utf8))
+    }
+
+    private func writeJSONLFile(data: Data) throws -> URL {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let fileURL = directory.appendingPathComponent("events.jsonl")
-        try contents.write(to: fileURL, atomically: true, encoding: .utf8)
+        try data.write(to: fileURL, options: .atomic)
         addTeardownBlock {
             try? FileManager.default.removeItem(at: directory)
         }
