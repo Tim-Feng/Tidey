@@ -15,9 +15,79 @@ tidey_tmux_resolve_env_var_from_pane_option() {
         export "$env_name=$pane_value"
         return 0
     fi
+
+    # A tmux pane option is the only authoritative workspace/panel identity.
+    # Session/global environment values can belong to a different pane or to
+    # the last Tidey client that attached to this tmux session.
+    unset "$env_name"
+}
+
+tidey_tmux_resolve_runtime_env_var() {
+    env_name="$1"
+    pane_option="$2"
+    tmux_pane="${TMUX_PANE:-}"
+    pane_value=""
+    session_value=""
+
+    if [ -z "$tmux_pane" ] || ! command -v tmux >/dev/null 2>&1; then
+        return 0
+    fi
+
+    # Pane-scoped context wins. This keeps prod/dev Tidey instances and two
+    # Tidey clients attached to the same tmux session from overwriting one
+    # another through tmux's session environment.
+    pane_value="$(tmux show-options -p -v -t "$tmux_pane" "$pane_option" 2>/dev/null || true)"
+    if [ -n "$pane_value" ]; then
+        export "$env_name=$pane_value"
+        return 0
+    fi
+
+    # A late Tidey attach updates the tmux session environment, but cannot
+    # mutate the already-running shell. Read it explicitly as a compatibility
+    # fallback until the Bridge has projected pane-scoped context.
+    session_value="$(tmux show-environment -t "$tmux_pane" "$env_name" 2>/dev/null || true)"
+    case "$session_value" in
+        "$env_name="*)
+            export "$env_name=${session_value#"$env_name="}"
+            ;;
+        "-$env_name")
+            unset "$env_name"
+            ;;
+    esac
 }
 
 tidey_hydrate_tmux_pane_identity() {
     tidey_tmux_resolve_env_var_from_pane_option "TIDEY_WORKSPACE_ID" "@tidey_workspace_id"
     tidey_tmux_resolve_env_var_from_pane_option "TIDEY_PANEL_ID" "@tidey_panel_id"
+}
+
+tidey_hydrate_tmux_runtime_environment() {
+    tidey_hydrate_tmux_pane_identity
+    tidey_tmux_resolve_runtime_env_var "TIDEY_SOCKET_PATH" "@tidey_socket_path"
+    tidey_tmux_resolve_runtime_env_var "TIDEY_BIN_DIR" "@tidey_bin_dir"
+}
+
+tidey_wait_for_tmux_pane_identity() {
+    attempts="${TIDEY_TMUX_IDENTITY_WAIT_ATTEMPTS:-300}"
+    interval="${TIDEY_TMUX_IDENTITY_WAIT_INTERVAL:-0.05}"
+    attempt=0
+
+    case "$attempts" in
+        ''|*[!0-9]*) attempts=300 ;;
+    esac
+    if [ "$attempts" -lt 1 ]; then
+        attempts=1
+    fi
+
+    while [ "$attempt" -lt "$attempts" ]; do
+        tidey_hydrate_tmux_pane_identity
+        if [ -n "${TIDEY_WORKSPACE_ID:-}" ] && [ -n "${TIDEY_PANEL_ID:-}" ]; then
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        if [ "$attempt" -lt "$attempts" ]; then
+            sleep "$interval"
+        fi
+    done
+    return 1
 }
