@@ -1,7 +1,8 @@
 import Foundation
 
 if CommandLine.arguments.contains("--cloudflared-supervisor") {
-    BridgeCloudflaredSupervisor().run()
+    let supervisor = BridgeCloudflaredSupervisor()
+    supervisor.run()
 }
 
 let tokenStore = PairTokenStore()
