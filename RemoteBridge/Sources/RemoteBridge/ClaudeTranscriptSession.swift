@@ -2686,6 +2686,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private var historicalIndexCompleteLineCount = 0
     private var historicalReplayOpenerEventIDs = Set<String>()
     private var historicalReplayProducts = [AgentEvent]()
+    private var isCollectingHistoricalBackfillPage = false
+    private var collectedHistoricalBackfillPage = [(offset: Int, line: String)]()
     private var historicalBackfillAnchorSeq: Int?
 
     func historicalClosureIndexStatsForTesting() -> ClaudeHistoricalClosureIndexStats {
@@ -2851,6 +2853,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         historicalIndexEventSink = nil
         historicalReplayOpenerEventIDs = []
         historicalReplayProducts = []
+        isCollectingHistoricalBackfillPage = false
+        collectedHistoricalBackfillPage = []
         historicalBackfillAnchorSeq = nil
         activeAskUserQuestionLifecyclesByToolCallID = [:]
         pendingLocalCommand = nil
@@ -2943,6 +2947,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             isBackfillingHistory = true
             var sourceWasInvalidated = false
             defer {
+                isCollectingHistoricalBackfillPage = false
+                collectedHistoricalBackfillPage = []
                 historicalBackfillAnchorSeq = nil
                 historicalReplayProducts = []
                 isBackfillingHistory = false
@@ -2952,19 +2958,52 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                     startResolver()
                 }
             }
-            let didLoad: Bool
-            do {
-                didLoad = try tailer.backfill(
-                    beforeOffset: beforePosition.lineOffset,
-                    limit: limit,
-                    includeAnchorLine: beforePosition.ordinal > 0)
-            } catch JSONLFileTailerError.sourceInvalidated {
-                sourceWasInvalidated = true
-                return false
-            } catch {
-                return false
-            }
-            if didLoad, let index = historicalClosureIndex {
+            var pageAnchorOffset = beforePosition.lineOffset
+            var includeAnchorLine = beforePosition.ordinal > 0
+            var loadedAnyRawPage = false
+            while pageAnchorOffset > 0 || includeAnchorLine {
+                isCollectingHistoricalBackfillPage = true
+                collectedHistoricalBackfillPage = []
+                let didLoad: Bool
+                do {
+                    didLoad = try tailer.backfill(
+                        beforeOffset: pageAnchorOffset,
+                        limit: limit,
+                        includeAnchorLine: includeAnchorLine)
+                } catch JSONLFileTailerError.sourceInvalidated {
+                    sourceWasInvalidated = true
+                    return false
+                } catch {
+                    return false
+                }
+                isCollectingHistoricalBackfillPage = false
+                let rawPage = collectedHistoricalBackfillPage
+                collectedHistoricalBackfillPage = []
+                guard didLoad, rawPage.isEmpty == false else {
+                    hub.replaceHistoricalEvents(sessionID: record.sessionID,
+                                                events: [],
+                                                anchorSeq: beforeSeq)
+                    return loadedAnyRawPage
+                }
+                loadedAnyRawPage = true
+
+                resetParserStateForHistoricalReplay()
+                historicalReplayOpenerEventIDs = []
+                historicalReplayProducts = []
+                for entry in rawPage {
+                    consume(line: entry.line, lineOffset: entry.offset)
+                }
+                do {
+                    try tailer.validateCurrentSource()
+                } catch JSONLFileTailerError.sourceInvalidated {
+                    sourceWasInvalidated = true
+                    return false
+                } catch {
+                    return false
+                }
+                guard let index = historicalClosureIndex else {
+                    return false
+                }
                 for openerEventID in historicalReplayOpenerEventIDs {
                     guard let closure = index.closureByOpenerEventID[openerEventID],
                           closure.seq < beforeSeq else {
@@ -2976,12 +3015,45 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 let products = historicalReplayProducts.filter {
                     seenEventIDs.insert($0.eventID).inserted
                 }
-                hub.replaceHistoricalEvents(sessionID: record.sessionID,
-                                            events: products,
-                                            anchorSeq: beforeSeq)
+                let productEventIDs = Set(products.map(\.eventID))
+                let hasVisibleProduct = products.contains { event in
+                    guard event.seq < beforeSeq else {
+                        return false
+                    }
+                    let isOpener = event.type == .interactivePrompt
+                        || event.metadata?["tidey_generated"] == "claude_context_command"
+                    guard isOpener else {
+                        return true
+                    }
+                    if let closure = index.closureByOpenerEventID[event.eventID] {
+                        return closure.seq < beforeSeq
+                            && productEventIDs.contains(closure.eventID)
+                    }
+                    return index.contextConsumerSequenceByOpenerEventID[event.eventID] == nil
+                }
+                if hasVisibleProduct {
+                    hub.replaceHistoricalEvents(sessionID: record.sessionID,
+                                                events: products,
+                                                anchorSeq: beforeSeq)
+                    historicalReplayOpenerEventIDs = []
+                    return true
+                }
+
+                guard let pageMinOffset = rawPage.map(\.offset).min(),
+                      pageMinOffset > 0,
+                      pageMinOffset < pageAnchorOffset || includeAnchorLine else {
+                    hub.replaceHistoricalEvents(sessionID: record.sessionID,
+                                                events: [],
+                                                anchorSeq: beforeSeq)
+                    return loadedAnyRawPage
+                }
+                pageAnchorOffset = pageMinOffset
+                includeAnchorLine = false
             }
-            historicalReplayOpenerEventIDs = []
-            return didLoad
+            hub.replaceHistoricalEvents(sessionID: record.sessionID,
+                                        events: [],
+                                        anchorSeq: beforeSeq)
+            return loadedAnyRawPage
         }
     }
 
@@ -3300,7 +3372,13 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         let tailer = JSONLFileTailer(fileURL: transcriptURL,
                                      queue: queue,
                                      lineHandler: { [weak self] offset, line in
-                                         self?.consume(line: line, lineOffset: offset)
+                                         guard let self else { return }
+                                         if self.isCollectingHistoricalBackfillPage {
+                                             self.collectedHistoricalBackfillPage.append((offset: offset,
+                                                                                          line: line))
+                                             return
+                                         }
+                                         self.consume(line: line, lineOffset: offset)
                                      },
                                      invalidationHandler: { [weak self] in
                                          self?.handleTailerInvalidation()

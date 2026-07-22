@@ -290,6 +290,49 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                        "a deeper exact-anchor request must displace the newer cached page")
     }
 
+    func testClaudeBackfillSkipsRawPagesWithoutVisibleEvents() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        let oldVisible = makeClaudeUserLine(uuid: "old-visible", content: "old-visible")
+        let ignoredLines = (0...transcriptBootstrapLineLimit).map {
+            #"{"type":"system","subtype":"api_retry","uuid":"ignored-\#($0)"}"#
+        }
+        let liveAnchor = makeClaudeUserLine(uuid: "live-anchor", content: "live-anchor")
+        try (([oldVisible] + ignoredLines + [liveAnchor]).joined(separator: "\n") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10)
+                .events.contains { $0.text == "live-anchor" }
+        })
+        let anchor = try XCTUnwrap(
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10)
+                .events.first { $0.text == "live-anchor" }?.seq
+        )
+
+        let output = BridgeAgentEventFetchFlow.run(eventHub: hub,
+                                                   workspaceID: "workspace",
+                                                   sessionID: "session",
+                                                   limit: 10,
+                                                   beforeSeq: anchor,
+                                                   afterSeq: nil) { _, beforeSeq, limit in
+            session.backfill(beforeSeq: beforeSeq, limit: limit)
+        }
+
+        XCTAssertTrue(output.didBackfill)
+        XCTAssertEqual(output.fetchResult.events.compactMap(\.text), ["old-visible"],
+                       "raw progress must continue past an eventless page")
+    }
+
     func testClaudeHistoricalIndexRejectsSameInodeMutationWhileAdoptingPartial() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
