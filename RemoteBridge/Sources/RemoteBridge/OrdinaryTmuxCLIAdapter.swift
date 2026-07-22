@@ -583,6 +583,18 @@ final class OrdinaryTmuxCLIAdapter {
         _ = try commandRunner(route.socket,
                               ["set-option", "-p", "-t", paneID, "@tidey_panel_id", route.panelID],
                               nil)
+        // `tmux attach` updates the session environment, but cannot mutate an
+        // already-running pane shell created earlier by SSH/Termius. Project
+        // the current Tidey runtime into pane-scoped options so shell hooks and
+        // wrappers can hydrate it without cross-pane/prod-dev last-writer bugs.
+        _ = try commandRunner(route.socket,
+                              ["set-option", "-p", "-F", "-t", paneID,
+                               "@tidey_socket_path", "#{E:TIDEY_SOCKET_PATH}"],
+                              nil)
+        _ = try commandRunner(route.socket,
+                              ["set-option", "-p", "-F", "-t", paneID,
+                               "@tidey_bin_dir", "#{E:TIDEY_BIN_DIR}"],
+                              nil)
     }
 
     private func windowExists(_ windowID: String,
