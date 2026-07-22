@@ -13,6 +13,74 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                                                          completeLineCount: 0))
     }
 
+    func testClaudeHistoricalClosureIndexOnlyScansAppendedSuffix() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        let initialLines = (0..<8).map {
+            makeClaudeUserLine(uuid: "initial-\($0)", content: "initial-\($0)")
+        }
+        let initialPayload = initialLines.joined(separator: "\n") + "\n"
+        try initialPayload.write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20)
+                .events.contains { $0.text == "initial-7" }
+        })
+        let initialAnchor = try XCTUnwrap(
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20)
+                .events.first { $0.text == "initial-7" }?.seq
+        )
+
+        XCTAssertTrue(session.backfill(beforeSeq: initialAnchor, limit: 2))
+        let afterInitialScan = session.historicalClosureIndexStatsForTesting()
+        XCTAssertEqual(afterInitialScan,
+                       ClaudeHistoricalClosureIndexStats(scanPassCount: 1,
+                                                         readByteCount: initialPayload.utf8.count,
+                                                         completeLineCount: initialLines.count))
+
+        XCTAssertTrue(session.backfill(beforeSeq: initialAnchor, limit: 2))
+        XCTAssertEqual(session.historicalClosureIndexStatsForTesting(), afterInitialScan,
+                       "a repeated page request without an append must read no transcript bytes")
+
+        let appendedLines = (0..<3).map {
+            makeClaudeUserLine(uuid: "appended-\($0)", content: "appended-\($0)")
+        }
+        let appendedPayload = appendedLines.joined(separator: "\n") + "\n"
+        let handle = try FileHandle(forWritingTo: transcriptURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(appendedPayload.utf8))
+        try handle.close()
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20)
+                .events.contains { $0.text == "appended-2" }
+        })
+        let appendedAnchor = try XCTUnwrap(
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20)
+                .events.first { $0.text == "appended-2" }?.seq
+        )
+
+        XCTAssertTrue(session.backfill(beforeSeq: appendedAnchor, limit: 2))
+        let afterSuffixScan = session.historicalClosureIndexStatsForTesting()
+        XCTAssertEqual(afterSuffixScan,
+                       ClaudeHistoricalClosureIndexStats(
+                           scanPassCount: 2,
+                           readByteCount: initialPayload.utf8.count + appendedPayload.utf8.count,
+                           completeLineCount: initialLines.count + appendedLines.count))
+
+        XCTAssertTrue(session.backfill(beforeSeq: appendedAnchor, limit: 2))
+        XCTAssertEqual(session.historicalClosureIndexStatsForTesting(), afterSuffixScan,
+                       "an indexed suffix must not be scanned again")
+    }
+
     func testClaudeLocalCommandEnvelopeUserMessagesAreNotPublished() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)

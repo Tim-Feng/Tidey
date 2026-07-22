@@ -2992,15 +2992,20 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             // process must not make this synchronous history request chase
             // a moving end forever; the next ensure call consumes the suffix.
             var remainingByteCount = max(0, sourceSize - startingIndex.indexedThroughByteOffset)
+            if remainingByteCount > 0 {
+                historicalIndexScanPassCount += 1
+            }
             while remainingByteCount > 0,
                   let chunk = try handle.read(upToCount: min(64 * 1024, remainingByteCount)),
                   chunk.isEmpty == false {
                 pendingData.append(chunk)
                 remainingByteCount -= chunk.count
+                historicalIndexReadByteCount += chunk.count
                 var lineStartIndex = pendingData.startIndex
                 var newlineSearchIndex = min(searchedThroughIndex, pendingData.endIndex)
                 while newlineSearchIndex < pendingData.endIndex,
                       let newlineIndex = pendingData[newlineSearchIndex...].firstIndex(of: 0x0a) {
+                    historicalIndexCompleteLineCount += 1
                     let lineOffset = pendingDataOffset
                         + pendingData.distance(from: pendingData.startIndex, to: lineStartIndex)
                     let lineData = pendingData[lineStartIndex..<newlineIndex]
