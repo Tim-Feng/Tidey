@@ -79,6 +79,11 @@ final class AgentEventHub {
         }
     }
 
+    private final class HistoricalRequestGate {
+        let lock = NSLock()
+        var referenceCount = 0
+    }
+
     private struct Subscriber {
         let workspaceID: String?
         let sessionID: String?
@@ -108,9 +113,12 @@ final class AgentEventHub {
 
     private let queue = DispatchQueue(label: "com.tidey.remote-bridge.agent-event-hub")
     private let deliveryExecutor = DeliveryExecutor()
+    private let historicalRequestGateRegistryLock = NSLock()
+    private var historicalRequestGates = [String: HistoricalRequestGate]()
     var postStoreDeliveryHook: ((AgentEvent) -> Void)?
     var preInvokeDeliveryHook: (() -> Void)?
     var unsubscribeCancelWaitHook: (() -> Void)?
+    var historicalRequestContentionHookForTesting: ((String) -> Void)?
     private var subscribers = [UUID: Subscriber]()
     private var sessions = [String: SessionState]()
     private var sessionBindings = [String: SessionBinding]()
@@ -121,6 +129,34 @@ final class AgentEventHub {
     init(maxBufferedEvents: Int = 2000, maxSeenEventIDs: Int = 4000) {
         self.maxBufferedEvents = max(1, maxBufferedEvents)
         self.maxSeenEventIDs = max(1, maxSeenEventIDs)
+    }
+
+    func withHistoricalRequestTransaction<T>(
+        sessionID: String,
+        _ body: () throws -> T
+    ) rethrows -> T {
+        historicalRequestGateRegistryLock.lock()
+        let gate = historicalRequestGates[sessionID] ?? HistoricalRequestGate()
+        historicalRequestGates[sessionID] = gate
+        gate.referenceCount += 1
+        let contentionHook = historicalRequestContentionHookForTesting
+        historicalRequestGateRegistryLock.unlock()
+
+        if gate.lock.try() == false {
+            contentionHook?(sessionID)
+            gate.lock.lock()
+        }
+        defer {
+            gate.lock.unlock()
+            historicalRequestGateRegistryLock.lock()
+            gate.referenceCount -= 1
+            if gate.referenceCount == 0,
+               historicalRequestGates[sessionID] === gate {
+                historicalRequestGates.removeValue(forKey: sessionID)
+            }
+            historicalRequestGateRegistryLock.unlock()
+        }
+        return try body()
     }
 
     func subscribe(workspaceID: String?,
