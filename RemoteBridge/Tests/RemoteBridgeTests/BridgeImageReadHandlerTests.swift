@@ -511,6 +511,9 @@ final class BridgeImageReadHandlerTests: XCTestCase {
         try fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: homeURL, withIntermediateDirectories: true)
         _ = createUploadsDirectory
+        addTeardownBlock {
+            try? fileManager.removeItem(at: tempDirectory)
+        }
         let handler = BridgeImageReadHandler(rootResolver: StubImageRootResolver(rootPath: rootURL.path),
                                              fileManager: fileManager,
                                              homeDirectoryURL: homeURL,

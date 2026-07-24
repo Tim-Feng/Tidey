@@ -280,6 +280,9 @@ final class BridgePanelFileTargetResolverTests: XCTestCase {
         let homeURL = tempDirectory.appendingPathComponent("home", isDirectory: true)
         try fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: homeURL, withIntermediateDirectories: true)
+        addTeardownBlock {
+            try? fileManager.removeItem(at: tempDirectory)
+        }
         let resolver = BridgePanelFileTargetResolver(rootResolver: StubRootResolver(rootPath: rootURL.path),
                                                      fileManager: fileManager,
                                                      homeDirectoryURL: homeURL)
