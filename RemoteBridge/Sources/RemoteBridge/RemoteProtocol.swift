@@ -190,6 +190,9 @@ enum BridgeInternalError: Error {
     case conflict(String)
     case fileNeedsConfirmation(String)
     case fileTooLarge(String)
+    case imageFormatUnsupported(String)
+    case imageDecodeFailed(String)
+    case imageDimensionsTooLarge(String)
     case invalidResponse
     case socketUnavailable
 }
@@ -221,6 +224,12 @@ extension BridgeInternalError {
             return BridgeErrorPayload(code: "file_needs_confirmation", message: message)
         case .fileTooLarge(let message):
             return BridgeErrorPayload(code: "file_too_large", message: message)
+        case .imageFormatUnsupported(let message):
+            return BridgeErrorPayload(code: "image_format_unsupported", message: message)
+        case .imageDecodeFailed(let message):
+            return BridgeErrorPayload(code: "image_decode_failed", message: message)
+        case .imageDimensionsTooLarge(let message):
+            return BridgeErrorPayload(code: "image_dimensions_too_large", message: message)
         case .invalidResponse:
             return BridgeErrorPayload(code: "invalid_response", message: "Bridge received an invalid response from Tidey.")
         case .socketUnavailable:
@@ -260,6 +269,29 @@ struct BridgeFileReadRequest: Sendable {
         self.panelID = panelID
         self.path = path
         self.allowLargeRead = params["allow_large_read"]?.boolLikeValue ?? false
+    }
+}
+
+struct BridgeImageReadRequest: Sendable {
+    let workspaceID: String
+    let panelID: String
+    let path: String
+    let maxPixelDimension: Int?
+
+    init(params: [String: JSONValue]?) throws {
+        guard let params,
+              let workspaceID = params["workspace_id"]?.stringValue,
+              let panelID = params["panel_id"]?.stringValue,
+              let path = params["path"]?.stringValue,
+              !workspaceID.isEmpty,
+              !panelID.isEmpty,
+              !path.isEmpty else {
+            throw BridgeInternalError.invalidRequest("image_read requires workspace_id, panel_id, and path")
+        }
+        self.workspaceID = workspaceID
+        self.panelID = panelID
+        self.path = path
+        self.maxPixelDimension = params["max_pixel_dimension"]?.intValue
     }
 }
 

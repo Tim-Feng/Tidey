@@ -601,6 +601,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     private let ordinaryTmuxRecentOutputHandler: OrdinaryTmuxRecentOutputHandler
     private let interactivePromptActionHandler: InteractivePromptActionHandler
     private let imageUploadHandler: BridgeImageUploadHandler
+    private let imageReadHandler: BridgeImageReadHandler
     private let ordinaryTmuxPanelProjector: OrdinaryTmuxPanelProjector
     private var agentSubscriptions = BridgeAgentSubscriptionSlots()
     private var workspaceSubscriptionID: UUID?
@@ -645,6 +646,8 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                                                                             submitDeduper: promptSubmitDeduper)
         self.imageUploadHandler = BridgeImageUploadHandler(destinationResolver: ApplicationSupportImageUploadDestinationResolver(),
                                                            filenameGenerator: TimestampedImageUploadFilenameGenerator())
+        self.imageReadHandler = BridgeImageReadHandler(rootResolver: TideyPanelFileRootResolver(socketSender: socketClient,
+                                                                                                ordinaryTmuxRouteResolver: routeResolver))
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
@@ -780,6 +783,11 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                                           agentReplayEnvelopes: [],
                                           workspaceReplayEnvelopes: [])
             }
+            if let response = try imageReadHandler.handle(request) {
+                return LocalRequestResult(response: response,
+                                          agentReplayEnvelopes: [],
+                                          workspaceReplayEnvelopes: [])
+            }
         } catch let bridgeError as BridgeInternalError {
             if request.action == "image_upload" {
                 BridgeImageUploadDiagnostics.log("local dispatch bridge_error request_id=\(request.id) code=\(bridgeError.payload.code) message=\(bridgeError.payload.message)")
@@ -815,6 +823,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                                             "tailscale_endpoint": tailscaleEndpoint.map(Self.jsonValue(for:)) ?? .null,
                                             "tunnel_endpoint": tunnelEndpoint.map(Self.jsonValue(for:)) ?? .null,
                                             "resolver_endpoint": .string(BridgeResolverConfiguration.resolverBaseURL().absoluteString),
+                                            "capabilities": .array([.string("image_read_v1")]),
                                          ],
                                          error: nil),
                 agentReplayEnvelopes: [],
