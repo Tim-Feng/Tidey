@@ -1734,6 +1734,13 @@ final class JSONLFileTailer {
             }
             pendingData.removeAll(keepingCapacity: false)
             pendingLineOffset = nil
+            // The bytes between the last newline and the initial EOF are an
+            // unterminated record whose suffix will be appended later. They
+            // are buffered (never published) so the eventual newline
+            // reassembles ONE record at its original offset — the same
+            // single-buffer exposure the live tail already has for a growing
+            // unterminated record; no second copy is kept.
+            try seedPendingTailFragment()
 
             let bootstrappedRecords = try JSONLFileReader.readBeforeRecords(
                 fileURL: fileURL,
@@ -1999,6 +2006,64 @@ final class JSONLFileTailer {
             return true
         }
         return false
+    }
+
+    private func seedPendingTailFragment() throws {
+        guard nextReadOffset > 0 else {
+            return
+        }
+        var searchEnd = nextReadOffset
+        var fragmentStart = 0
+        let chunkSize = 8192
+        while searchEnd > 0 {
+            let start = max(0, searchEnd - chunkSize)
+            guard let chunk = Self.readRange(fileDescriptor: fd,
+                                             offset: start,
+                                             count: searchEnd - start) else {
+                throw JSONLFileTailerError.sourceInvalidated
+            }
+            if let newlineIndex = chunk.lastIndex(of: 0x0a) {
+                fragmentStart = start + chunk.distance(from: chunk.startIndex, to: newlineIndex) + 1
+                break
+            }
+            searchEnd = start
+        }
+        guard fragmentStart < nextReadOffset else {
+            // The file ends with a newline: nothing unterminated to keep.
+            return
+        }
+        guard let fragment = Self.readRange(fileDescriptor: fd,
+                                            offset: fragmentStart,
+                                            count: nextReadOffset - fragmentStart) else {
+            throw JSONLFileTailerError.sourceInvalidated
+        }
+        pendingData = fragment
+        pendingLineOffset = fragmentStart
+    }
+
+    private static func readRange(fileDescriptor: Int32, offset: Int, count: Int) -> Data? {
+        guard count > 0 else {
+            return Data()
+        }
+        var bytes = [UInt8](repeating: 0, count: count)
+        var totalBytesRead = 0
+        while totalBytesRead < count {
+            let bytesRead = bytes.withUnsafeMutableBytes { buffer in
+                pread(fileDescriptor,
+                      buffer.baseAddress?.advanced(by: totalBytesRead),
+                      count - totalBytesRead,
+                      off_t(offset + totalBytesRead))
+            }
+            if bytesRead > 0 {
+                totalBytesRead += bytesRead
+                continue
+            }
+            if bytesRead < 0, errno == EINTR {
+                continue
+            }
+            return nil
+        }
+        return Data(bytes)
     }
 
     private func refreshValidatedBoundary() -> Bool {

@@ -96,6 +96,89 @@ final class JSONLFileTailerTests: XCTestCase {
         XCTAssertGreaterThan(captured.last?.0 ?? 0, bootstrapOffsets.max() ?? 0)
     }
 
+    func testPartialRecordAtStartupIsReassembledWithLaterSuffix() throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("events.jsonl")
+        // "one\n" is complete; "par" is an unterminated record at startup.
+        try "one\npar".write(to: fileURL, atomically: false, encoding: .utf8)
+
+        let queue = DispatchQueue(label: "JSONLFileTailerTests.partial")
+        let reassembled = expectation(description: "partial record reassembled")
+        var captured = [(Int, String)]()
+        let tailer = JSONLFileTailer(fileURL: fileURL,
+                                     queue: queue,
+                                     bootstrapLineLimit: 10,
+                                     lineHandler: { offset, line in
+                                         captured.append((offset, line))
+                                         if line.hasSuffix("tial") {
+                                             reassembled.fulfill()
+                                         }
+                                     },
+                                     invalidationHandler: {})
+
+        try tailer.start()
+        XCTAssertEqual(captured.map(\.1), ["one"],
+                       "bootstrap must publish only complete records, never the partial")
+
+        let handle = try FileHandle(forWritingTo: fileURL)
+        try handle.seekToEnd()
+        handle.write(Data("tial\n".utf8))
+        try handle.close()
+
+        wait(for: [reassembled], timeout: 2.0)
+        tailer.stop()
+
+        XCTAssertEqual(captured.map(\.1), ["one", "partial"],
+                       "the pre-EOF fragment must be reassembled with its later suffix exactly once")
+        XCTAssertEqual(captured.map(\.0), [0, 4],
+                       "the reassembled record must carry the fragment's original offset")
+    }
+
+    func testPartialMultibyteUTF8SplitAcrossStartupIsReassembled() throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("events.jsonl")
+        // “圖” is E5 9C 96; split after its first byte at startup EOF.
+        let fullLine = Data("圖片\n".utf8)
+        var initial = Data("ok\n".utf8)
+        initial.append(fullLine.prefix(1))
+        try initial.write(to: fileURL)
+
+        let queue = DispatchQueue(label: "JSONLFileTailerTests.multibyte")
+        let reassembled = expectation(description: "multibyte record reassembled")
+        var captured = [(Int, String)]()
+        let tailer = JSONLFileTailer(fileURL: fileURL,
+                                     queue: queue,
+                                     bootstrapLineLimit: 10,
+                                     lineHandler: { offset, line in
+                                         captured.append((offset, line))
+                                         if line == "圖片" {
+                                             reassembled.fulfill()
+                                         }
+                                     },
+                                     invalidationHandler: {})
+
+        try tailer.start()
+        XCTAssertEqual(captured.map(\.1), ["ok"])
+
+        let handle = try FileHandle(forWritingTo: fileURL)
+        try handle.seekToEnd()
+        handle.write(fullLine.dropFirst(1))
+        try handle.close()
+
+        wait(for: [reassembled], timeout: 2.0)
+        tailer.stop()
+
+        XCTAssertEqual(captured.map(\.1), ["ok", "圖片"],
+                       "a code point split at the startup EOF must decode once reassembled")
+        XCTAssertEqual(captured.map(\.0), [0, 3])
+    }
+
     func testAppendImmediatelyFollowedByDeleteDrainsFinalCompleteLine() throws {
         let fileURL = try writeTestFile()
         let queue = DispatchQueue(label: "JSONLFileTailerTests.append-delete")
