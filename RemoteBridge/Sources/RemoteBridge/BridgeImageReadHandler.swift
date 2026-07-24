@@ -51,9 +51,14 @@ struct BridgeImageFilePolicy: BridgeLocalFileContentPolicy {
         }
         // The Bridge's own uploads directory lives under ~/Library, which the
         // general home scope blocks. Its exact subtree is Bridge-owned image
-        // attachments, so previewing there is safe.
-        let normalizedUploadsURL = uploadsDirectoryURL.standardizedFileURL.resolvingSymlinksInPath()
-        if isDescendant(fileURL, of: normalizedUploadsURL) {
+        // attachments, so previewing there is safe. The comparison is purely
+        // lexical (standardized, symlinks NOT resolved): if the uploads
+        // directory were swapped for a symlink, a target reached through it
+        // canonicalizes elsewhere and fails this compare, and the
+        // O_NOFOLLOW_ANY open of the granted lexical path refuses any
+        // symlink component that appears afterwards.
+        let lexicalUploadsURL = uploadsDirectoryURL.standardizedFileURL
+        if isDescendant(fileURL, of: lexicalUploadsURL) {
             return true
         }
         guard isDescendant(fileURL, of: homeDirectoryURL),
@@ -93,27 +98,71 @@ struct BridgeImageFilePolicy: BridgeLocalFileContentPolicy {
     }
 }
 
+/// Non-blocking admission gate shared across every image_read: a decode can
+/// pin hundreds of MB of RAM, so excess concurrent requests are refused
+/// immediately instead of queueing on the global worker pool.
+final class BridgeImageReadAdmission {
+    static let shared = BridgeImageReadAdmission(limit: 1)
+
+    private let limit: Int
+    private let lock = NSLock()
+    private var inFlight = 0
+
+    init(limit: Int) {
+        self.limit = limit
+    }
+
+    func tryAcquire() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard inFlight < limit else {
+            return false
+        }
+        inFlight += 1
+        return true
+    }
+
+    func release() {
+        lock.lock()
+        defer { lock.unlock() }
+        inFlight = max(0, inFlight - 1)
+    }
+}
+
 struct BridgeImageReadHandler {
     private let targetResolver: BridgePanelFileTargetResolver
     private let policy: BridgeImageFilePolicy
     private let limits: BridgeImageReadLimits
+    private let admission: BridgeImageReadAdmission
+    /// Test seam: runs inside the admitted section so concurrency tests can
+    /// hold a request open deterministically. Never set in production.
+    private let admittedWorkHookForTesting: (() -> Void)?
 
     init(rootResolver: PanelFileRootResolving,
          fileManager: FileManager = .default,
          homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser,
          uploadsDirectoryURL: URL = BridgePaths().uploadsDirectory,
-         limits: BridgeImageReadLimits = .production) {
+         limits: BridgeImageReadLimits = .production,
+         admission: BridgeImageReadAdmission = .shared,
+         admittedWorkHookForTesting: (() -> Void)? = nil) {
         self.targetResolver = BridgePanelFileTargetResolver(rootResolver: rootResolver,
                                                             fileManager: fileManager,
                                                             homeDirectoryURL: homeDirectoryURL)
         self.policy = BridgeImageFilePolicy(uploadsDirectoryURL: uploadsDirectoryURL)
         self.limits = limits
+        self.admission = admission
+        self.admittedWorkHookForTesting = admittedWorkHookForTesting
     }
 
     func handle(_ request: BridgeRequest) throws -> BridgeResponse? {
         guard request.action == "image_read" else {
             return nil
         }
+        guard admission.tryAcquire() else {
+            throw BridgeInternalError.resourceBusy("目前正在處理另一張圖片，請稍後再試。")
+        }
+        defer { admission.release() }
+        admittedWorkHookForTesting?()
         let params = try BridgeImageReadRequest(params: request.params)
         let requestedDimension = clampRequestedDimension(params.maxPixelDimension)
         let resolved = try targetResolver.resolve(path: params.path,
@@ -153,6 +202,11 @@ struct BridgeImageReadHandler {
         guard let matchedType = [UTType.png, UTType.jpeg].first(where: { sourceType.conforms(to: $0) }) else {
             throw BridgeInternalError.imageFormatUnsupported("這個圖片格式目前不支援預覽。")
         }
+        // Exactly one frame: an APNG or other multi-frame container must not
+        // slip through on its first frame's properties.
+        guard CGImageSourceGetCount(imageSource) == 1 else {
+            throw BridgeInternalError.imageFormatUnsupported("這個圖片格式目前不支援預覽。")
+        }
 
         guard let properties = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, noCacheOptions) as? [CFString: Any],
               let pixelWidth = properties[kCGImagePropertyPixelWidth] as? Int,
@@ -165,17 +219,12 @@ struct BridgeImageReadHandler {
             throw BridgeInternalError.imageDimensionsTooLarge("圖片像素尺寸太大，無法產生預覽。")
         }
 
-        let preview: EncodedPreview
-        if max(pixelWidth, pixelHeight) <= requestedDimension, sourceData.count <= limits.maximumEncodedPreviewBytes {
-            preview = EncodedPreview(data: sourceData,
-                                     type: matchedType,
-                                     pixelWidth: pixelWidth,
-                                     pixelHeight: pixelHeight)
-        } else {
-            preview = try makeBoundedPreview(from: imageSource,
+        // Always decode and re-encode — never pass source bytes through.
+        // A truncated raster or animated payload must not reach the iPhone
+        // just because its header parsed.
+        let preview = try makeBoundedPreview(from: imageSource,
                                              sourceType: matchedType,
                                              requestedDimension: requestedDimension)
-        }
 
         let result: [String: JSONValue] = [
             "normalized_path": .string(resolved.targetURL.path),

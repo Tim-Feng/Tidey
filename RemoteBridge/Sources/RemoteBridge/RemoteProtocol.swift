@@ -193,6 +193,7 @@ enum BridgeInternalError: Error {
     case imageFormatUnsupported(String)
     case imageDecodeFailed(String)
     case imageDimensionsTooLarge(String)
+    case resourceBusy(String)
     case invalidResponse
     case socketUnavailable
 }
@@ -230,6 +231,8 @@ extension BridgeInternalError {
             return BridgeErrorPayload(code: "image_decode_failed", message: message)
         case .imageDimensionsTooLarge(let message):
             return BridgeErrorPayload(code: "image_dimensions_too_large", message: message)
+        case .resourceBusy(let message):
+            return BridgeErrorPayload(code: "resource_busy", message: message)
         case .invalidResponse:
             return BridgeErrorPayload(code: "invalid_response", message: "Bridge received an invalid response from Tidey.")
         case .socketUnavailable:

@@ -39,17 +39,182 @@ final class BridgeImageReadHandlerTests: XCTestCase {
         _ = try Self.decodePreview(response)
     }
 
-    func testSmallSourcePassesThroughUnmodified() throws {
+    func testSmallSourceIsReEncodedWithDimensionsPreserved() throws {
         let fixture = try makeFixture()
         let original = Self.makeImageData(width: 64, height: 48, type: .png)
         try original.write(to: fixture.rootURL.appendingPathComponent("small.png"))
 
         let response = try XCTUnwrap(fixture.handler.handle(Self.request(path: "small.png")))
 
-        let base64 = try XCTUnwrap(response.result?["data_base64"]?.stringValue)
-        XCTAssertEqual(Data(base64Encoded: base64), original)
-        XCTAssertEqual(response.result?["preview_size"]?.intValue, original.count)
+        XCTAssertEqual(response.result?["pixel_width"]?.intValue, 64)
+        XCTAssertEqual(response.result?["pixel_height"]?.intValue, 48)
         XCTAssertEqual(response.result?["source_size"]?.intValue, original.count)
+        let decoded = try Self.decodePreview(response)
+        XCTAssertEqual(decoded.width, 64)
+        XCTAssertEqual(decoded.height, 48)
+    }
+
+    func testJPEGSourceIsNeverPassedThroughVerbatim() throws {
+        let fixture = try makeFixture()
+        let original = Self.makeImageData(width: 64, height: 48, type: .jpeg)
+        try original.write(to: fixture.rootURL.appendingPathComponent("photo.jpg"))
+
+        let response = try XCTUnwrap(fixture.handler.handle(Self.request(path: "photo.jpg")))
+
+        let base64 = try XCTUnwrap(response.result?["data_base64"]?.stringValue)
+        XCTAssertNotEqual(Data(base64Encoded: base64), original,
+                          "source bytes must be re-encoded, never passed through")
+        _ = try Self.decodePreview(response)
+    }
+
+    func testTruncatedJPEGIsNeverPassedThrough() throws {
+        let fixture = try makeFixture()
+        let full = Self.makeImageData(width: 200, height: 150, type: .jpeg)
+        let truncated = full.prefix(full.count * 2 / 5)
+        try Data(truncated).write(to: fixture.rootURL.appendingPathComponent("cut.jpg"))
+
+        // Either outcome is contractual: a decode failure, or a freshly
+        // re-encoded single frame. The truncated source bytes must never be
+        // returned verbatim.
+        do {
+            guard let response = try fixture.handler.handle(Self.request(path: "cut.jpg")) else {
+                return XCTFail("handler must handle image_read")
+            }
+            let base64 = try XCTUnwrap(response.result?["data_base64"]?.stringValue)
+            XCTAssertNotEqual(Data(base64Encoded: base64), Data(truncated))
+            _ = try Self.decodePreview(response)
+        } catch BridgeInternalError.imageDecodeFailed {
+            // acceptable
+        }
+    }
+
+    func testMultiFramePNGIsRejected() throws {
+        let fixture = try makeFixture()
+        let apngData = try XCTSkipUnlessMultiFramePNG()
+        try apngData.write(to: fixture.rootURL.appendingPathComponent("animated-frames.png"))
+
+        XCTAssertThrowsError(try fixture.handler.handle(Self.request(path: "animated-frames.png"))) { error in
+            guard case BridgeInternalError.imageFormatUnsupported = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    private func XCTSkipUnlessMultiFramePNG() throws -> Data {
+        let frame = Self.makeImageData(width: 16, height: 16, type: .png)
+        let source = CGImageSourceCreateWithData(frame as CFData, nil)!
+        let image = CGImageSourceCreateImageAtIndex(source, 0, nil)!
+        let data = NSMutableData()
+        let destination = CGImageDestinationCreateWithData(data as CFMutableData,
+                                                           UTType.png.identifier as CFString,
+                                                           2,
+                                                           nil)!
+        let frameProperties = [
+            kCGImagePropertyPNGDictionary: [kCGImagePropertyAPNGDelayTime: 0.1],
+        ] as CFDictionary
+        CGImageDestinationAddImage(destination, image, frameProperties)
+        CGImageDestinationAddImage(destination, image, frameProperties)
+        CGImageDestinationFinalize(destination)
+        let written = data as Data
+        let readBack = CGImageSourceCreateWithData(written as CFData, nil)
+        // The fixture is only valid if ImageIO actually produced a
+        // multi-frame PNG; a collapsed single-frame file would test nothing.
+        XCTAssertEqual(readBack.map(CGImageSourceGetCount), 2,
+                       "fixture must be a real multi-frame PNG")
+        return written
+    }
+
+    func testAdmissionLimitRefusesConcurrentSecondRequestAndReleases() throws {
+        let admission = BridgeImageReadAdmission(limit: 1)
+        let entered = DispatchSemaphore(value: 0)
+        let proceed = DispatchSemaphore(value: 0)
+        let blockingFixture = try makeFixture(admission: admission, admittedWorkHook: {
+            entered.signal()
+            proceed.wait()
+        })
+        try Self.makeImageData(width: 16, height: 16, type: .png)
+            .write(to: blockingFixture.rootURL.appendingPathComponent("held.png"))
+
+        var firstResult: Result<BridgeResponse?, Error> = .success(nil)
+        let firstDone = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            firstResult = Result { try blockingFixture.handler.handle(Self.request(path: "held.png")) }
+            firstDone.signal()
+        }
+        XCTAssertEqual(entered.wait(timeout: .now() + 2), .success, "first request must enter the admitted section")
+
+        let secondFixture = try makeFixture(admission: admission)
+        XCTAssertThrowsError(try secondFixture.handler.handle(Self.request(path: "held.png"))) { error in
+            guard case BridgeInternalError.resourceBusy = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+
+        proceed.signal()
+        XCTAssertEqual(firstDone.wait(timeout: .now() + 5), .success)
+        XCTAssertNoThrow(try firstResult.get())
+
+        XCTAssertTrue(admission.tryAcquire(), "slot must be released after completion")
+        admission.release()
+    }
+
+    func testAdmissionSlotIsReleasedWhenHandlerThrows() throws {
+        let admission = BridgeImageReadAdmission(limit: 1)
+        let fixture = try makeFixture(admission: admission)
+
+        XCTAssertThrowsError(try fixture.handler.handle(Self.request(path: "missing.png")))
+
+        XCTAssertTrue(admission.tryAcquire(), "slot must be released after an error")
+        admission.release()
+    }
+
+    func testUploadsDirectoryAsSymlinkToOutsideIsRejected() throws {
+        let fixture = try makeFixture(createUploadsDirectory: false)
+        let externalURL = fixture.tempDirectory.appendingPathComponent("external", isDirectory: true)
+        try FileManager.default.createDirectory(at: externalURL, withIntermediateDirectories: true)
+        try Self.makeImageData(width: 16, height: 16, type: .png)
+            .write(to: externalURL.appendingPathComponent("leak.png"))
+        try FileManager.default.createDirectory(at: fixture.uploadsURL.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: fixture.uploadsURL, withDestinationURL: externalURL)
+
+        XCTAssertThrowsError(try fixture.handler.handle(Self.request(path: fixture.uploadsURL.appendingPathComponent("leak.png").path))) { error in
+            guard case BridgeInternalError.fileOutsideRoot = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testUploadsIntermediateSymlinkComponentIsRejected() throws {
+        let fixture = try makeFixture()
+        try FileManager.default.createDirectory(at: fixture.uploadsURL, withIntermediateDirectories: true)
+        let externalURL = fixture.tempDirectory.appendingPathComponent("elsewhere", isDirectory: true)
+        try FileManager.default.createDirectory(at: externalURL, withIntermediateDirectories: true)
+        try Self.makeImageData(width: 16, height: 16, type: .png)
+            .write(to: externalURL.appendingPathComponent("leak.png"))
+        let linkedSubdirectory = fixture.uploadsURL.appendingPathComponent("sub", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: linkedSubdirectory, withDestinationURL: externalURL)
+
+        XCTAssertThrowsError(try fixture.handler.handle(Self.request(path: linkedSubdirectory.appendingPathComponent("leak.png").path))) { error in
+            guard case BridgeInternalError.fileOutsideRoot = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testUploadsFinalSymlinkTargetIsRejected() throws {
+        let fixture = try makeFixture()
+        try FileManager.default.createDirectory(at: fixture.uploadsURL, withIntermediateDirectories: true)
+        let externalFile = fixture.tempDirectory.appendingPathComponent("secret.png")
+        try Self.makeImageData(width: 16, height: 16, type: .png).write(to: externalFile)
+        let linkURL = fixture.uploadsURL.appendingPathComponent("alias.png")
+        try FileManager.default.createSymbolicLink(at: linkURL, withDestinationURL: externalFile)
+
+        XCTAssertThrowsError(try fixture.handler.handle(Self.request(path: linkURL.path))) { error in
+            guard case BridgeInternalError.fileOutsideRoot = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
     }
 
     func testJPEGBytesNamedPNGReturnsTruthfulMime() throws {
@@ -332,7 +497,10 @@ final class BridgeImageReadHandlerTests: XCTestCase {
         let handler: BridgeImageReadHandler
     }
 
-    private func makeFixture(limits: BridgeImageReadLimits = BridgeImageReadHandlerTests.testLimits) throws -> ImageHandlerFixture {
+    private func makeFixture(limits: BridgeImageReadLimits = BridgeImageReadHandlerTests.testLimits,
+                             admission: BridgeImageReadAdmission = BridgeImageReadAdmission(limit: 1),
+                             admittedWorkHook: (() -> Void)? = nil,
+                             createUploadsDirectory: Bool = true) throws -> ImageHandlerFixture {
         let fileManager = FileManager.default
         let tempDirectory = fileManager.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -342,11 +510,14 @@ final class BridgeImageReadHandlerTests: XCTestCase {
                                                         isDirectory: true)
         try fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: homeURL, withIntermediateDirectories: true)
+        _ = createUploadsDirectory
         let handler = BridgeImageReadHandler(rootResolver: StubImageRootResolver(rootPath: rootURL.path),
                                              fileManager: fileManager,
                                              homeDirectoryURL: homeURL,
                                              uploadsDirectoryURL: uploadsURL,
-                                             limits: limits)
+                                             limits: limits,
+                                             admission: admission,
+                                             admittedWorkHookForTesting: admittedWorkHook)
         return ImageHandlerFixture(tempDirectory: tempDirectory,
                                    rootURL: rootURL,
                                    homeURL: homeURL,
