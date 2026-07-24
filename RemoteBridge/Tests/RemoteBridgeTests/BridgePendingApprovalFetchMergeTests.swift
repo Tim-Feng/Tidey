@@ -46,7 +46,27 @@ final class BridgePendingApprovalFetchMergeTests: XCTestCase {
                                                            pendingEvents: [pending])
 
         XCTAssertEqual(merged.events.map(\.eventID), ["prompt-5"])
-        XCTAssertGreaterThanOrEqual(merged.newestSeq, 14)
+        XCTAssertEqual(merged.newestSeq, 14,
+                       "an injected pending snapshot must not move the directional bound in either direction")
+    }
+
+    func testEmptyAfterPagePendingAboveCursorDoesNotAdvanceNewestSeq() {
+        // The pending snapshot's seq (100) is far above the requested
+        // cursor (14). Advancing newest_seq to 100 would make the next
+        // poll start at 100 and permanently skip 15...99 appended between
+        // the Hub fetch and the pending lookup.
+        let pending = prompt(id: "prompt-100", seq: 100, submitState: "pending")
+
+        let merged = BridgePendingApprovalFetchMerge.merge(pageEvents: [],
+                                                           pageOldestSeq: 14,
+                                                           pageNewestSeq: 14,
+                                                           requestedAfterSeq: 14,
+                                                           pendingEvents: [pending])
+
+        XCTAssertEqual(merged.events.map(\.eventID), ["prompt-100"],
+                       "the pending event itself must still be injected")
+        XCTAssertEqual(merged.newestSeq, 14,
+                       "newest_seq must stay at the stored page/request cursor bound, exactly")
     }
 
     func testEmptyBeforePageKeepsStoredBoundsWhenInjectingPendingSnapshot() {

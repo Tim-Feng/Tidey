@@ -311,4 +311,109 @@ final class BridgeFetchAgentEventsHandlerTests: XCTestCase {
         XCTAssertEqual(Set(union), Set(expectedUnion), "no gap in B's union, got \(union)")
         XCTAssertEqual(union.count, expectedUnion.count, "no duplicate in B's union, got \(union)")
     }
+
+    // Production-flow contract for the Hub-fetch + pending-merge pair: an
+    // injected pending approval far above the requested after cursor must
+    // ride along in the payload without advancing the response's
+    // newest_seq — the next poll must still start where the STORED page
+    // ended, or events appended between the two reads are skipped forever.
+    func testEmptyAfterPageWithHighPendingApprovalKeepsCursorBound() throws {
+        let paths = BridgePaths(supportDirectory: FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true))
+        let hub = AgentEventHub()
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: .default,
+                                                  hub: hub,
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+                                                  parentPIDLookup: { _ in nil })
+        let approvalProvider = StubPendingApprovalProvider(pendingEvents: [
+            AgentEvent(eventID: "prompt-100",
+                       seq: 100,
+                       vendor: "codex",
+                       workspaceID: "workspace-1",
+                       sessionID: "session-1",
+                       timestamp: "2026-07-25T12:00:00Z",
+                       type: .interactivePrompt,
+                       role: nil,
+                       text: nil,
+                       name: nil,
+                       input: nil,
+                       output: nil,
+                       toolCallID: nil,
+                       metadata: ["submit_state": "pending"]),
+        ])
+        let handler = WebSocketFrameHandler(socketClient: TideySocketClient(locator: TideySocketLocator()),
+                                            eventHub: hub,
+                                            workspaceEventHub: WorkspaceEventHub(),
+                                            registryMonitor: monitor,
+                                            codexApprovalSubmitter: approvalProvider,
+                                            observability: BridgeObservabilityCenter(),
+                                            bridgePort: 0,
+                                            cloudflaredManager: BridgeCloudflaredManager(binaryResolver: { nil }),
+                                            ordinaryTmuxProjectionContext: OrdinaryTmuxProjectionContext())
+        let channel = EmbeddedChannel(handler: handler)
+        defer { _ = try? channel.finish() }
+        let context = try channel.pipeline.syncOperations.context(handler: handler)
+
+        let request = BridgeRequest(id: "fetch-1",
+                                    action: "fetch_agent_events",
+                                    params: [
+                                        "workspace_id": .string("workspace-1"),
+                                        "session_id": .string("session-1"),
+                                        "limit": .number(50),
+                                        "after_seq": .number(14),
+                                    ])
+        let result = try XCTUnwrap(handler.handleLocalRequest(request, context: context))
+
+        XCTAssertEqual(result.response.ok, true)
+        let events = try XCTUnwrap(result.response.result?["events"]?.arrayValue)
+        XCTAssertEqual(events.compactMap { $0.objectValue?["event_id"]?.stringValue }, ["prompt-100"],
+                       "the pending approval must still be injected")
+        XCTAssertEqual(result.response.result?["newest_seq"]?.intValue, 14,
+                       "newest_seq must stay exactly at the request cursor bound")
+    }
+}
+
+private final class StubPendingApprovalProvider: CodexAppServerApprovalPromptProviding {
+    private let pendingEvents: [AgentEvent]
+
+    init(pendingEvents: [AgentEvent]) {
+        self.pendingEvents = pendingEvents
+    }
+
+    func pendingApprovalPromptEvents(workspaceID: String, sessionID: String?) -> [AgentEvent] {
+        pendingEvents
+    }
+
+    func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent {
+        throw BridgeInternalError.invalidRequest("not used in this test")
+    }
+
+    func submitApproval(promptID: String,
+                        targetIndex: Int,
+                        workspaceID: String,
+                        panelID: String,
+                        sessionID: String?) throws -> AgentEvent {
+        throw BridgeInternalError.invalidRequest("not used in this test")
+    }
+
+    func submitApproval(promptID: String,
+                        targetIndex: Int,
+                        clientRequestID: String?,
+                        lifecycleToken: String?,
+                        workspaceID: String,
+                        panelID: String,
+                        sessionID: String?) throws -> CodexAppServerApprovalSubmitOutcome {
+        throw BridgeInternalError.invalidRequest("not used in this test")
+    }
+
+    func submitUserInput(promptID: String,
+                         answers: [String: [String]],
+                         clientRequestID: String?,
+                         lifecycleToken: String?,
+                         workspaceID: String,
+                         panelID: String,
+                         sessionID: String?) throws -> CodexAppServerApprovalSubmitOutcome {
+        throw BridgeInternalError.invalidRequest("not used in this test")
+    }
 }
