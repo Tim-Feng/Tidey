@@ -559,11 +559,11 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
     }
 }
 
-private final class WebSocketFrameHandler: ChannelInboundHandler {
+final class WebSocketFrameHandler: ChannelInboundHandler {
     typealias InboundIn = WebSocketFrame
     typealias OutboundOut = WebSocketFrame
 
-    private struct LocalRequestResult {
+    struct LocalRequestResult {
         let response: BridgeResponse
         let agentReplayEnvelopes: [AgentEventEnvelope]
         let workspaceReplayEnvelopes: [WorkspaceEventEnvelope]
@@ -733,8 +733,8 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
         context.fireChannelInactive()
     }
 
-    private func handleLocalRequest(_ request: BridgeRequest,
-                                    context: ChannelHandlerContext) -> LocalRequestResult? {
+    func handleLocalRequest(_ request: BridgeRequest,
+                            context: ChannelHandlerContext) -> LocalRequestResult? {
         do {
             if request.action == "image_upload" {
                 BridgeImageUploadDiagnostics.log("local dispatch enter request_id=\(request.id)")
@@ -949,46 +949,19 @@ private final class WebSocketFrameHandler: ChannelInboundHandler {
                     workspaceReplayEnvelopes: []
                 )
             }
-            var fetchResult = eventHub.fetch(workspaceID: workspaceID,
-                                             sessionID: sessionID,
-                                             limit: limit,
-                                             maxBytes: maxBytes,
-                                             beforeSeq: beforeSeq,
-                                             afterSeq: afterSeq)
-            var didBackfill = false
-            if let sessionID,
-               let beforeSeq,
-               !fetchResult.hasMore {
-                let backfilled = registryMonitor.backfillSession(sessionID: sessionID,
-                                                                 beforeSeq: beforeSeq,
-                                                                 limit: max(limit, transcriptBootstrapLineLimit))
-                if backfilled {
-                    didBackfill = true
-                    fetchResult = eventHub.fetch(workspaceID: workspaceID,
-                                                 sessionID: sessionID,
-                                                 limit: limit,
-                                                 maxBytes: maxBytes,
+            let flow = BridgeAgentEventFetchFlow.run(eventHub: eventHub,
+                                                     workspaceID: workspaceID,
+                                                     sessionID: sessionID,
+                                                     limit: limit,
+                                                     maxBytes: maxBytes,
+                                                     beforeSeq: beforeSeq,
+                                                     afterSeq: afterSeq) { [registryMonitor] sessionID, beforeSeq, limit in
+                registryMonitor.backfillSession(sessionID: sessionID,
                                                  beforeSeq: beforeSeq,
-                                                 afterSeq: nil)
-                }
-            } else if let sessionID, let afterSeq {
-                while let earliestBufferedSeq = eventHub.oldestBufferedSeq(sessionID: sessionID),
-                      earliestBufferedSeq > afterSeq + 1 {
-                    let backfilled = registryMonitor.backfillSession(sessionID: sessionID,
-                                                                     beforeSeq: earliestBufferedSeq,
-                                                                     limit: max(limit, transcriptBootstrapLineLimit))
-                    guard backfilled else {
-                        break
-                    }
-                    didBackfill = true
-                    fetchResult = eventHub.fetch(workspaceID: workspaceID,
-                                                 sessionID: sessionID,
-                                                 limit: limit,
-                                                 maxBytes: maxBytes,
-                                                 beforeSeq: nil,
-                                                 afterSeq: afterSeq)
-                }
+                                                 limit: limit)
             }
+            let fetchResult = flow.fetchResult
+            let didBackfill = flow.didBackfill
             observability.recordFetch(workspaceID: workspaceID,
                                       sessionID: sessionID,
                                       limit: limit,
