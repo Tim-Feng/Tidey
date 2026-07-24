@@ -153,4 +153,100 @@ final class BridgeFetchAgentEventsHandlerTests: XCTestCase {
         XCTAssertEqual(Set(union), Set(expectedUnion), "no gap in B's union, got \(union)")
         XCTAssertEqual(union.count, expectedUnion.count, "no duplicate in B's union, got \(union)")
     }
+
+    // Server-level guard for the empty after-page cursor bound: a pending
+    // approval far above the cursor must ride the response WITHOUT advancing
+    // newest_seq past events the client has never seen.
+    func testEmptyAfterPageWithHighPendingApprovalKeepsCursorBound() throws {
+        let supportDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BridgeFetchHandlerTests-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: .default)
+        defer { try? FileManager.default.removeItem(at: supportDirectory) }
+
+        let hub = AgentEventHub(maxBufferedEvents: 100, maxSeenEventIDs: 100)
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: .default,
+                                                  hub: hub,
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+                                                  parentPIDLookup: { _ in nil })
+        try monitor.start()
+
+        let pendingApproval = AgentEvent(eventID: "prompt-100",
+                                         seq: 100,
+                                         vendor: "codex",
+                                         workspaceID: "workspace",
+                                         sessionID: "session",
+                                         timestamp: "2026-07-22T12:00:00.000Z",
+                                         type: .interactivePrompt,
+                                         role: nil,
+                                         text: "Approve?",
+                                         name: nil,
+                                         input: nil,
+                                         output: nil,
+                                         toolCallID: nil,
+                                         metadata: ["submit_state": "pending"],
+                                         payload: nil)
+        let handler = WebSocketFrameHandler(socketClient: TideySocketClient(locator: TideySocketLocator()),
+                                            eventHub: hub,
+                                            workspaceEventHub: WorkspaceEventHub(),
+                                            registryMonitor: monitor,
+                                            codexApprovalSubmitter: StubPendingApprovalProvider(events: [pendingApproval]),
+                                            observability: BridgeObservabilityCenter(),
+                                            bridgePort: 0,
+                                            cloudflaredManager: BridgeCloudflaredManager(binaryResolver: { nil }),
+                                            ordinaryTmuxProjectionContext: OrdinaryTmuxProjectionContext())
+        let channel = EmbeddedChannel(handler: handler)
+        defer { _ = try? channel.finish() }
+        let context = try channel.pipeline.syncOperations.context(handler: handler)
+
+        let request = BridgeRequest(id: UUID().uuidString,
+                                    action: "fetch_agent_events",
+                                    params: [
+                                        "workspace_id": .string("workspace"),
+                                        "session_id": .string("session"),
+                                        "limit": .number(50),
+                                        "after_seq": .number(14),
+                                    ])
+        let result = try XCTUnwrap(handler.handleLocalRequest(request, context: context))
+        XCTAssertEqual(result.response.ok, true)
+        let events = try XCTUnwrap(result.response.result?["events"]?.arrayValue)
+        XCTAssertEqual(events.compactMap { $0.objectValue?["event_id"]?.stringValue }, ["prompt-100"],
+                       "the pending approval snapshot still rides the empty page")
+        XCTAssertEqual(result.response.result?["newest_seq"]?.intValue, 14,
+                       "newest_seq must stay at the after cursor, not jump to the pending approval seq")
+    }
+}
+
+private final class StubPendingApprovalProvider: CodexAppServerApprovalPromptProviding {
+    let events: [AgentEvent]
+    init(events: [AgentEvent]) {
+        self.events = events
+    }
+
+    func pendingApprovalPromptEvents(workspaceID: String, sessionID: String?) -> [AgentEvent] {
+        events
+    }
+
+    func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent {
+        throw BridgeInternalError.invalidRequest("unexpected submit in test")
+    }
+
+    func submitApproval(promptID: String,
+                        targetIndex: Int,
+                        workspaceID: String,
+                        panelID: String,
+                        sessionID: String?) throws -> AgentEvent {
+        throw BridgeInternalError.invalidRequest("unexpected submit in test")
+    }
+
+    func submitApproval(promptID: String,
+                        targetIndex: Int,
+                        clientRequestID: String?,
+                        lifecycleToken: String?,
+                        workspaceID: String,
+                        panelID: String,
+                        sessionID: String?) throws -> AgentEvent {
+        throw BridgeInternalError.invalidRequest("unexpected submit in test")
+    }
 }

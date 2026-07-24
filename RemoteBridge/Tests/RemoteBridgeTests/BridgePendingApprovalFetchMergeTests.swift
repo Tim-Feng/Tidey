@@ -46,7 +46,55 @@ final class BridgePendingApprovalFetchMergeTests: XCTestCase {
                                                            pendingEvents: [pending])
 
         XCTAssertEqual(merged.events.map(\.eventID), ["prompt-5"])
-        XCTAssertGreaterThanOrEqual(merged.newestSeq, 14)
+        XCTAssertEqual(merged.newestSeq, 14)
+    }
+
+    func testEmptyBeforePagePendingSnapshotDoesNotReplaceStoredBounds() {
+        let pending = prompt(id: "prompt-500", seq: 500, submitState: "pending")
+
+        let merged = BridgePendingApprovalFetchMerge.merge(pageEvents: [],
+                                                           pageOldestSeq: 0,
+                                                           pageNewestSeq: 0,
+                                                           requestedBeforeSeq: 100,
+                                                           pendingEvents: [pending])
+
+        // Before-direction paging: the pending snapshot rides the payload,
+        // but the stored-page bounds are the client's paging authority — a
+        // pending approval's 500/500 would corrupt the backward cursor.
+        XCTAssertEqual(merged.events.map(\.eventID), ["prompt-500"])
+        XCTAssertEqual(merged.oldestSeq, 0)
+        XCTAssertEqual(merged.newestSeq, 0)
+    }
+
+    func testEmptyAfterPagePendingAboveCursorDoesNotAdvanceNewestSeq() {
+        let pending = prompt(id: "prompt-100", seq: 100, submitState: "pending")
+
+        let merged = BridgePendingApprovalFetchMerge.merge(pageEvents: [],
+                                                           pageOldestSeq: 0,
+                                                           pageNewestSeq: 0,
+                                                           requestedAfterSeq: 14,
+                                                           pendingEvents: [pending])
+
+        // The pending snapshot still rides the page, but the CURSOR must not
+        // move past events the client has never seen: seq 15...99 would be
+        // skipped forever if newest_seq jumped to the pending approval's 100.
+        XCTAssertEqual(merged.events.map(\.eventID), ["prompt-100"])
+        XCTAssertEqual(merged.newestSeq, 14)
+    }
+
+    func testEmptyCursorlessPageKeepsLatestSnapshotBounds() {
+        let pending = prompt(id: "prompt-100", seq: 100, submitState: "pending")
+
+        let merged = BridgePendingApprovalFetchMerge.merge(pageEvents: [],
+                                                           pageOldestSeq: 0,
+                                                           pageNewestSeq: 0,
+                                                           pendingEvents: [pending])
+
+        // Cursorless latest-snapshot fetch keeps the historical semantics:
+        // bounds follow the injected snapshot, never an inverted 100/0 pair.
+        XCTAssertEqual(merged.events.map(\.eventID), ["prompt-100"])
+        XCTAssertEqual(merged.oldestSeq, 100)
+        XCTAssertEqual(merged.newestSeq, 100)
     }
 
     func testReplaySnapshotMetadataWinsAndLiveDuplicateIsSuppressed() {

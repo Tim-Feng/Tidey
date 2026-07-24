@@ -992,6 +992,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                 pageEvents: fetchResult.events,
                 pageOldestSeq: fetchResult.oldestSeq,
                 pageNewestSeq: fetchResult.newestSeq,
+                requestedBeforeSeq: beforeSeq,
                 requestedAfterSeq: afterSeq,
                 pendingEvents: pendingCodexApprovalEvents(workspaceID: workspaceID,
                                                           sessionID: sessionID))
