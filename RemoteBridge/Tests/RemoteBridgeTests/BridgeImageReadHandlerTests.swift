@@ -412,6 +412,47 @@ final class BridgeImageReadHandlerTests: XCTestCase {
         }
     }
 
+    // Policy-level lexical check with SYNTHETIC unresolved URLs: the shared
+    // resolver happens to canonicalize casing for existing files on this
+    // runtime, so these are the URLs the policy must reject on its own.
+    func testPolicyRejectsLibraryCasingVariantsWithoutResolverCanonicalization() {
+        let home = URL(fileURLWithPath: "/synthetic-home")
+        let uploads = home.appendingPathComponent("Library/Application Support/Tidey Remote Bridge/uploads")
+        let policy = BridgeImageFilePolicy(uploadsDirectoryURL: uploads)
+
+        for variant in ["Library", "library", "LIBRARY", "LiBrArY"] {
+            let url = home.appendingPathComponent("\(variant)/shot.png")
+            XCTAssertFalse(policy.allowsReadOnlyHomeScope(url, homeDirectoryURL: home), variant)
+        }
+        XCTAssertTrue(policy.allowsReadOnlyHomeScope(home.appendingPathComponent("Pictures/shot.png"),
+                                                     homeDirectoryURL: home))
+        XCTAssertTrue(policy.allowsReadOnlyHomeScope(uploads.appendingPathComponent("a.png"),
+                                                     homeDirectoryURL: home),
+                      "the exact uploads subtree exception must survive the hardening")
+    }
+
+    func testLibraryCasingVariantsRejected() throws {
+        let fixture = try makeFixture()
+        let pngURL = fixture.homeURL.appendingPathComponent("Library/casing.png")
+        let jpgURL = fixture.homeURL.appendingPathComponent("Library/casing.jpg")
+        for url in [pngURL, jpgURL] {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            try Self.makeImageData(width: 16, height: 16, type: .png).write(to: url)
+        }
+
+        // Default APFS is case-insensitive: ~/library and ~/LIBRARY open the
+        // real ~/Library, so a casing variant must not slip past the block.
+        for path in [fixture.homeURL.path + "/library/casing.png",
+                     fixture.homeURL.path + "/LIBRARY/casing.jpg"] {
+            XCTAssertThrowsError(try fixture.handler.handle(Self.request(path: path)), path) { error in
+                guard case BridgeInternalError.fileOutsideRoot = error else {
+                    return XCTFail("Unexpected error for \(path): \(error)")
+                }
+            }
+        }
+    }
+
     func testPlainHomeImageReadableOutsideRoot() throws {
         let fixture = try makeFixture()
         let fileURL = fixture.homeURL.appendingPathComponent("Pictures/shot.png")

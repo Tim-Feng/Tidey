@@ -256,7 +256,13 @@ struct BridgeDocumentFilePolicy: BridgeLocalFileContentPolicy {
         guard fileComponents.count > rootComponents.count else {
             return false
         }
-        let relativeComponents = Array(fileComponents.dropFirst(rootComponents.count))
-        return relativeComponents.first == "Library"
+        // Default APFS is case-insensitive (~/library opens ~/Library) and
+        // URL symlink resolution does not GUARANTEE canonical component
+        // casing, so the compare must be ASCII case-insensitive (not a
+        // locale-sensitive lowercasing).
+        guard let first = fileComponents.dropFirst(rootComponents.count).first else {
+            return false
+        }
+        return first.caseInsensitiveCompare("Library") == .orderedSame
     }
 }

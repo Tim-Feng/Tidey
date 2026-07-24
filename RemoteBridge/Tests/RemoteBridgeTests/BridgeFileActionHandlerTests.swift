@@ -241,6 +241,49 @@ final class BridgeFileActionHandlerTests: XCTestCase {
         }
     }
 
+    // Policy-level lexical check with SYNTHETIC unresolved URLs (see the
+    // image policy counterpart): both policies must agree without relying
+    // on resolver casing canonicalization.
+    func testDocumentPolicyRejectsLibraryCasingVariantsWithoutResolverCanonicalization() {
+        let home = URL(fileURLWithPath: "/synthetic-home")
+        let policy = BridgeDocumentFilePolicy.poc
+
+        for variant in ["Library", "library", "LIBRARY", "LiBrArY"] {
+            let url = home.appendingPathComponent("\(variant)/Keychains/notes.md")
+            XCTAssertFalse(policy.allowsReadOnlyHomeScope(url, homeDirectoryURL: home), variant)
+        }
+        XCTAssertTrue(policy.allowsReadOnlyHomeScope(home.appendingPathComponent("GitHub/notes/a.md"),
+                                                     homeDirectoryURL: home))
+    }
+
+    func testFileReadRejectsSensitiveHomePathCasingVariants() throws {
+        let fixture = try makeFixture(cleanupWith: self)
+        let fileURL = fixture.homeURL.appendingPathComponent("Library/Keychains/notes.md")
+        try fixture.fileManager.createDirectory(at: fileURL.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try "secret".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let handler = BridgeFileActionHandler(rootResolver: fixture.rootResolver,
+                                              fileManager: fixture.fileManager,
+                                              homeDirectoryURL: fixture.homeURL)
+
+        // Case-insensitive APFS resolves ~/library to the real ~/Library;
+        // both policies must reject casing variants identically.
+        for requestPath in ["~/library/Keychains/notes.md", "~/LIBRARY/Keychains/notes.md"] {
+            XCTAssertThrowsError(try handler.handle(BridgeRequest(id: "request-1",
+                                                                  action: "file_read",
+                                                                  params: [
+                                                                    "workspace_id": .string("workspace-1"),
+                                                                    "panel_id": .string("panel-1"),
+                                                                    "path": .string(requestPath),
+                                                                  ])), requestPath) { error in
+                guard case BridgeInternalError.fileOutsideRoot = error else {
+                    return XCTFail("Unexpected error for \(requestPath): \(error)")
+                }
+            }
+        }
+    }
+
     func testFileWriteRejectsEditableDocumentOutsideRootUnderHome() throws {
         let fixture = try makeFixture(cleanupWith: self)
         let fileURL = fixture.homeURL.appendingPathComponent("GitHub/notes/outside.md")
