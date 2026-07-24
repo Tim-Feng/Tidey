@@ -93,25 +93,35 @@ struct BridgePanelFileTargetResolver {
 
 /// Metadata captured from `fstat` on an already-opened descriptor, so every
 /// later read observes the same file object that passed the scope checks.
+/// Seconds and nanoseconds stay separate — combining them into one Int64 of
+/// nanoseconds can overflow for mtimes near the APFS range limit.
 struct BridgeSafeOpenedFile {
     let fileHandle: FileHandle
     let size: Int64
-    let modificationDate: Date
+    let modificationTimeSeconds: Int64
     let modificationTimeNanoseconds: Int64
+
+    var revisionToken: String {
+        "\(modificationTimeSeconds):\(modificationTimeNanoseconds):\(size)"
+    }
 
     func close() {
         try? fileHandle.close()
     }
 }
 
-/// Opens the already-resolved target with `O_NOFOLLOW` and verifies it is a
-/// regular file via `fstat`, eliminating the symlink-swap window between the
-/// resolver's checks and the read.
+/// Opens the already-resolved target refusing symlinks in EVERY path
+/// component (`O_NOFOLLOW_ANY`; the kernel rejects combining it with
+/// `O_NOFOLLOW`), without blocking on special files (`O_NONBLOCK`), and
+/// verifies via `fstat` that the opened object is a regular file. The
+/// descriptor is the only read source afterwards — the path string is never
+/// re-opened.
 enum BridgeSafeFileOpener {
     static func openRegularFile(at fileURL: URL,
                                 notFoundMessage: String,
                                 outsideScopeMessage: String) throws -> BridgeSafeOpenedFile {
-        let descriptor = fileURL.path.withCString { open($0, O_RDONLY | O_NOFOLLOW) }
+        let path = privatePrefixNormalized(fileURL.path)
+        let descriptor = path.withCString { open($0, O_RDONLY | O_NOFOLLOW_ANY | O_NONBLOCK) }
         guard descriptor >= 0 else {
             switch errno {
             case ELOOP:
@@ -133,10 +143,36 @@ enum BridgeSafeFileOpener {
             throw BridgeInternalError.fileOutsideRoot(outsideScopeMessage)
         }
 
-        let mtimeNanoseconds = Int64(status.st_mtimespec.tv_sec) * 1_000_000_000 + Int64(status.st_mtimespec.tv_nsec)
         return BridgeSafeOpenedFile(fileHandle: FileHandle(fileDescriptor: descriptor, closeOnDealloc: true),
                                     size: Int64(status.st_size),
-                                    modificationDate: Date(timeIntervalSince1970: TimeInterval(mtimeNanoseconds) / 1_000_000_000),
-                                    modificationTimeNanoseconds: mtimeNanoseconds)
+                                    modificationTimeSeconds: Int64(status.st_mtimespec.tv_sec),
+                                    modificationTimeNanoseconds: Int64(status.st_mtimespec.tv_nsec))
+    }
+
+    /// Foundation's `resolvingSymlinksInPath` strips the `/private` prefix,
+    /// handing back paths whose first component is the `/var`, `/tmp`, or
+    /// `/etc` symlink — which `O_NOFOLLOW_ANY` would then refuse. Restore the
+    /// prefix textually; no symlink is ever followed to do so.
+    private static func privatePrefixNormalized(_ path: String) -> String {
+        for prefix in ["/var/", "/tmp/", "/etc/"] where path.hasPrefix(prefix) {
+            return "/private" + path
+        }
+        return path
+    }
+
+    /// Reads at most `maximumBytes + 1` bytes from the descriptor. Returning
+    /// one byte over the cap lets the caller reject a file that grew after
+    /// `fstat` without ever buffering an unbounded amount.
+    static func readBounded(from fileHandle: FileHandle, maximumBytes: Int) throws -> Data {
+        var data = Data()
+        while data.count <= maximumBytes {
+            let remaining = maximumBytes + 1 - data.count
+            guard let chunk = try fileHandle.read(upToCount: min(1_048_576, remaining)),
+                  !chunk.isEmpty else {
+                break
+            }
+            data.append(chunk)
+        }
+        return data
     }
 }
