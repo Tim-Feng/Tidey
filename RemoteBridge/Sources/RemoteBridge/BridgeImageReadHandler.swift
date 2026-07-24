@@ -132,7 +132,14 @@ struct BridgeImageReadHandler {
         guard opened.size <= limits.maximumSourceBytes else {
             throw BridgeInternalError.fileTooLarge("圖片檔案太大，無法產生預覽。")
         }
-        guard let sourceData = try opened.fileHandle.readToEnd(), !sourceData.isEmpty else {
+        // Bounded read from the same descriptor: a file that grows between
+        // fstat and the read is rejected instead of buffered without limit.
+        let sourceData = try BridgeSafeFileOpener.readBounded(from: opened.fileHandle,
+                                                              maximumBytes: Int(limits.maximumSourceBytes))
+        guard Int64(sourceData.count) <= limits.maximumSourceBytes else {
+            throw BridgeInternalError.fileTooLarge("圖片檔案太大，無法產生預覽。")
+        }
+        guard !sourceData.isEmpty else {
             throw BridgeInternalError.imageDecodeFailed("這個檔案無法解讀為圖片。")
         }
 
@@ -176,14 +183,14 @@ struct BridgeImageReadHandler {
             "source_mime_type": .string(Self.mimeType(for: matchedType)),
             "preview_mime_type": .string(Self.mimeType(for: preview.type)),
             "data_base64": .string(preview.data.base64EncodedString()),
-            "source_size": .number(Double(opened.size)),
+            "source_size": .number(Double(sourceData.count)),
             "preview_size": .number(Double(preview.data.count)),
             "pixel_width": .number(Double(preview.pixelWidth)),
             "pixel_height": .number(Double(preview.pixelHeight)),
-            "revision_token": .string("\(opened.modificationTimeNanoseconds):\(opened.size)"),
+            "revision_token": .string(opened.revisionToken),
             "read_only": .bool(true),
         ]
-        BridgeImageReadDiagnostics.log("success request_id=\(request.id) file=\(displayName) source_bytes=\(opened.size) preview_bytes=\(preview.data.count) dimensions=\(preview.pixelWidth)x\(preview.pixelHeight) mime=\(Self.mimeType(for: preview.type))")
+        BridgeImageReadDiagnostics.log("success request_id=\(request.id) file=\(displayName) source_bytes=\(sourceData.count) preview_bytes=\(preview.data.count) dimensions=\(preview.pixelWidth)x\(preview.pixelHeight) mime=\(Self.mimeType(for: preview.type))")
         return BridgeResponse(id: request.id, ok: true, result: result, error: nil)
     }
 
