@@ -121,7 +121,7 @@ enum BridgeSafeFileOpener {
                                 notFoundMessage: String,
                                 outsideScopeMessage: String) throws -> BridgeSafeOpenedFile {
         let path = privatePrefixNormalized(fileURL.path)
-        let descriptor = path.withCString { open($0, O_RDONLY | O_NOFOLLOW_ANY | O_NONBLOCK) }
+        let descriptor = path.withCString { open($0, O_RDONLY | O_NOFOLLOW_ANY | O_NONBLOCK | O_CLOEXEC) }
         guard descriptor >= 0 else {
             switch errno {
             case ELOOP:
