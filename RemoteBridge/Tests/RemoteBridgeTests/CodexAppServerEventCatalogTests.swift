@@ -118,10 +118,13 @@ final class CodexAppServerEventCatalogTests: XCTestCase {
         XCTAssertEqual(envelope.prompt.source, "codex_command_approval")
         XCTAssertEqual(envelope.prompt.options.map(\.inputSequence), ["accept", "decline"])
 
-        let resolved = try connection.submitApproval(promptID: envelope.prompt.promptID,
-                                                     targetIndex: 1)
-        XCTAssertEqual(resolved.type, .interactivePromptResolved)
-        XCTAssertEqual(resolvedEvent?.eventID, resolved.eventID)
+        guard case .pendingConfirmation = try connection.submitApproval(promptID: envelope.prompt.promptID,
+                                                                        targetIndex: 1,
+                                                                        clientRequestID: nil) else {
+            return XCTFail("expected pendingConfirmation")
+        }
+        // A flushed decision reply is not a resolution yet.
+        XCTAssertNil(resolvedEvent)
 
         let response = try Self.object(from: outbound.lines()[0])
         XCTAssertEqual(response["id"]?.stringValue, "approval-1")

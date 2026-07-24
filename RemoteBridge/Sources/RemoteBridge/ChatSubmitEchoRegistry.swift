@@ -1,17 +1,6 @@
 import Foundation
 
 final class ChatSubmitEchoRegistry {
-    enum SubmissionState: Equatable {
-        case pending
-        case delivered
-        case indeterminate
-    }
-
-    enum BeginSubmissionOutcome: Equatable {
-        case started
-        case duplicate(SubmissionState)
-    }
-
     struct Record: Equatable {
         let workspaceID: String
         let panelID: String
@@ -20,6 +9,37 @@ final class ChatSubmitEchoRegistry {
         let normalizedText: String
         let clientRequestID: String
         let submittedAt: Date
+    }
+
+    // A reservation is never just "exists / doesn't exist" — a duplicate
+    // arriving while the ORIGINAL is still in flight, or whose outcome is
+    // unknown/partial, must NOT be told "submitted: true" (that would be a
+    // false success echoed back for a message that may never have reached
+    // any transport, or that may have been double-sent). Only a
+    // DEFINITELY-delivered original may safely dedupe a duplicate as
+    // success.
+    enum SubmissionState: Equatable {
+        // In flight: no transport has confirmed or ruled out delivery yet.
+        case pending
+        // Confirmed reached a transport (app-server accepted the turn, or
+        // every terminal-fallback step completed) — safe to dedupe as a
+        // success echo.
+        case delivered
+        // Partial/unknown: SOME step of the delivery attempt may have had
+        // an externally observable effect (e.g. the message text step
+        // succeeded but the Enter step failed), so it can be neither
+        // trusted as delivered NOR safely discarded/retried as if nothing
+        // happened.
+        case indeterminate
+    }
+
+    // The outcome of a beginSubmission() call — replaces the old bare Bool,
+    // which could only distinguish "new" from "duplicate" and therefore
+    // could not tell a caller that a duplicate arrived while its original
+    // was still unresolved or in an unknown state.
+    enum BeginSubmissionOutcome: Equatable {
+        case started
+        case duplicate(SubmissionState)
     }
 
     private struct SubmissionRecord: Equatable {
@@ -95,7 +115,7 @@ final class ChatSubmitEchoRegistry {
                     && $0.vendor == normalizedVendor
                     && $0.clientRequestID == trimmedRequestID
             }) {
-                BridgeLogger.input.info("chat submit duplicate suppressed workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) session_id=\(sessionID, privacy: .public) vendor=\(vendor, privacy: .public) client_request_id=\(trimmedRequestID, privacy: .public)")
+                BridgeLogger.input.info("chat submit duplicate suppressed workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) session_id=\(sessionID, privacy: .public) vendor=\(vendor, privacy: .public) client_request_id=\(trimmedRequestID, privacy: .public) existing_state=\(String(describing: existing.state))")
                 return .duplicate(existing.state)
             }
 
@@ -111,32 +131,15 @@ final class ChatSubmitEchoRegistry {
         }
     }
 
-    func markDelivered(workspaceID: String,
-                       panelID: String,
-                       sessionID: String,
-                       vendor: String,
-                       clientRequestID: String) {
-        setSubmissionState(.delivered,
-                           workspaceID: workspaceID,
-                           panelID: panelID,
-                           sessionID: sessionID,
-                           vendor: vendor,
-                           clientRequestID: clientRequestID)
-    }
-
-    func markIndeterminate(workspaceID: String,
-                           panelID: String,
-                           sessionID: String,
-                           vendor: String,
-                           clientRequestID: String) {
-        setSubmissionState(.indeterminate,
-                           workspaceID: workspaceID,
-                           panelID: panelID,
-                           sessionID: sessionID,
-                           vendor: vendor,
-                           clientRequestID: clientRequestID)
-    }
-
+    // Rolls back a beginSubmission() reservation that PROVABLY had zero
+    // side effect (e.g. an atomic app-server claim rejected before any
+    // transport attempt, or a terminal-fallback attempt whose very FIRST
+    // step never reached the transport). Without this, a network retry of
+    // the SAME client_request_id would be wrongly dedup-suppressed as if
+    // the message had already been sent, even though nothing ever reached
+    // app-server or the terminal — the message would silently vanish. Only
+    // call this when NO step of the delivery attempt could have had an
+    // externally observable effect; otherwise use markIndeterminate.
     func cancelSubmission(workspaceID: String,
                           panelID: String,
                           sessionID: String,
@@ -146,9 +149,9 @@ final class ChatSubmitEchoRegistry {
         guard !trimmedRequestID.isEmpty else {
             return
         }
-
         queue.sync {
             let normalizedVendor = vendor.lowercased()
+            let beforeCount = submissionRecords.count
             submissionRecords.removeAll {
                 $0.workspaceID == workspaceID
                     && $0.panelID == panelID
@@ -156,20 +159,50 @@ final class ChatSubmitEchoRegistry {
                     && $0.vendor == normalizedVendor
                     && $0.clientRequestID == trimmedRequestID
             }
+            if submissionRecords.count != beforeCount {
+                BridgeLogger.input.info("chat submit submission rolled back workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) session_id=\(sessionID, privacy: .public) vendor=\(vendor, privacy: .public) client_request_id=\(trimmedRequestID, privacy: .public)")
+            }
         }
     }
 
-    private func setSubmissionState(_ state: SubmissionState,
-                                    workspaceID: String,
-                                    panelID: String,
-                                    sessionID: String,
-                                    vendor: String,
-                                    clientRequestID: String) {
+    // Marks a reservation as DEFINITELY delivered — only a duplicate of a
+    // submission in THIS state may be told "submitted: true" instead of a
+    // conflict.
+    func markDelivered(workspaceID: String,
+                       panelID: String,
+                       sessionID: String,
+                       vendor: String,
+                       clientRequestID: String) {
+        setState(.delivered, workspaceID: workspaceID, panelID: panelID, sessionID: sessionID,
+                vendor: vendor, clientRequestID: clientRequestID)
+    }
+
+    // Marks a reservation as partial/unknown — some step of the delivery
+    // attempt may have had an externally observable effect (a terminal
+    // message-text step that succeeded before its Enter step failed, or a
+    // generic direct-submit error whose transport-level outcome cannot be
+    // proven zero-effect). A duplicate of a submission in this state must
+    // get a conflict response, never a silent resend and never a false
+    // success.
+    func markIndeterminate(workspaceID: String,
+                           panelID: String,
+                           sessionID: String,
+                           vendor: String,
+                           clientRequestID: String) {
+        setState(.indeterminate, workspaceID: workspaceID, panelID: panelID, sessionID: sessionID,
+                vendor: vendor, clientRequestID: clientRequestID)
+    }
+
+    private func setState(_ state: SubmissionState,
+                          workspaceID: String,
+                          panelID: String,
+                          sessionID: String,
+                          vendor: String,
+                          clientRequestID: String) {
         let trimmedRequestID = clientRequestID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedRequestID.isEmpty else {
             return
         }
-
         queue.sync {
             let normalizedVendor = vendor.lowercased()
             guard let index = submissionRecords.firstIndex(where: {
@@ -182,6 +215,7 @@ final class ChatSubmitEchoRegistry {
                 return
             }
             submissionRecords[index].state = state
+            BridgeLogger.input.info("chat submit submission state updated workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) session_id=\(sessionID, privacy: .public) vendor=\(vendor, privacy: .public) client_request_id=\(trimmedRequestID, privacy: .public) state=\(String(describing: state), privacy: .public)")
         }
     }
 

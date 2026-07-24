@@ -24,6 +24,11 @@ enum AgentInteractivePromptSidebarMessages {
             ?? event.payload?.objectValue?["lifecycle_token"]?.stringValue
     }
 
+    // Capability classification: ANY trusted Codex-native signal (vendor,
+    // approval source, or the app-server submit channel) marks the lifecycle
+    // as capability-bound. A capability-bound prompt/terminal missing its
+    // token fails closed — it never degrades to the legacy promptID-only
+    // contract.
     static func requiresLifecycleCapability(_ event: AgentEvent) -> Bool {
         if event.vendor == "codex" {
             return true
@@ -38,6 +43,11 @@ enum AgentInteractivePromptSidebarMessages {
         return channel == "codex_app_server"
     }
 
+    // THE single lifecycle-matching contract, shared by the Hub's active
+    // lookup, the historical trim and the latest-resolved lookup: a token-
+    // bound opener is closed only by ITS token; a capability-bound tokenless
+    // opener is closed by no live terminal; a legacy opener is closed only by
+    // a TOKENLESS NON-CAPABILITY terminal.
     static func terminalCloses(openerLifecycleToken: String?,
                                openerRequiresCapability: Bool,
                                terminal: AgentEvent) -> Bool {
@@ -142,22 +152,22 @@ enum AgentInteractivePromptSidebarMessages {
 }
 
 final class AgentInteractivePromptNotificationDeduper: @unchecked Sendable {
-    private enum NotifiedLifecycle: Equatable {
+    // The notified lifecycle for a promptID. Identity rules:
+    // - capability prompt WITH token: session + promptID + exact token;
+    // - capability prompt MISSING its token: fail closed — it never degrades
+    //   to an eventID-based lifecycle, and no live terminal can clear it;
+    // - legacy tokenless prompt: session + promptID (eventID changes before
+    //   the terminal are duplicates).
+    enum NotifiedLifecycle: Equatable {
         case token(String)
         case capabilityTokenless
         case legacy
     }
 
-    enum ResolveOutcome: Equatable {
-        case clearedNotified
-        case noneNotified
-        case staleMismatch
-    }
-
     private let queue = DispatchQueue(label: "com.tidey.remote-bridge.interactive-prompt-notification-deduper")
-    private var notifiedLifecyclesBySessionID = [String: [String: NotifiedLifecycle]]()
+    private var notifiedLifecycleByPromptIDBySessionID = [String: [String: NotifiedLifecycle]]()
 
-    private static func lifecycle(for event: AgentEvent) -> NotifiedLifecycle {
+    private static func incomingLifecycle(for event: AgentEvent) -> NotifiedLifecycle {
         if let token = AgentInteractivePromptSidebarMessages.lifecycleToken(from: event) {
             return .token(token)
         }
@@ -171,60 +181,91 @@ final class AgentInteractivePromptNotificationDeduper: @unchecked Sendable {
         guard let promptID = AgentInteractivePromptSidebarMessages.promptID(from: event) else {
             return true
         }
-        let incoming = Self.lifecycle(for: event)
+        let incoming = Self.incomingLifecycle(for: event)
         return queue.sync {
-            var notified = notifiedLifecyclesBySessionID[sessionID] ?? [:]
-            if let current = notified[promptID] {
-                switch (current, incoming) {
-                case (.token(let currentToken), .token(let incomingToken)):
-                    guard currentToken != incomingToken else {
+            var notified = notifiedLifecycleByPromptIDBySessionID[sessionID] ?? [:]
+            if let recorded = notified[promptID] {
+                switch (recorded, incoming) {
+                case (.token(let recordedToken), .token(let incomingToken)):
+                    // Only the EXACT same delivery dedupes; a different token
+                    // is a NEW lifecycle and becomes current.
+                    guard recordedToken != incomingToken else {
                         return false
                     }
-                case (.token, .capabilityTokenless),
-                     (.capabilityTokenless, .capabilityTokenless),
+                case (.token, .capabilityTokenless):
+                    // A malformed (tokenless) capability duplicate can never
+                    // replace or re-notify a token-bound lifecycle.
+                    return false
+                case (.capabilityTokenless, .capabilityTokenless),
                      (.legacy, .legacy):
+                    // Same promptID before the terminal: a duplicate, even
+                    // with a different eventID.
                     return false
                 default:
                     break
                 }
             }
             notified[promptID] = incoming
-            notifiedLifecyclesBySessionID[sessionID] = notified
+            notifiedLifecycleByPromptIDBySessionID[sessionID] = notified
             return true
         }
     }
 
+    enum ResolveOutcome {
+        // The terminal ended the delivery currently notified for this prompt.
+        case clearedNotified
+        // No notified state existed for this prompt.
+        case noneNotified
+        // The terminal belongs to a DIFFERENT (stale) lifecycle than the one
+        // currently notified: nothing may be cleared and no state-restoring
+        // side effect may run for it.
+        case staleMismatch
+    }
+
     @discardableResult
+    // Source identity switch: the session's notified lifecycles belong to
+    // the old source and must not suppress the new source's deliveries.
+    func clearSession(_ sessionID: String) {
+        queue.sync {
+            _ = notifiedLifecycleByPromptIDBySessionID.removeValue(forKey: sessionID)
+        }
+    }
+
     func markResolved(_ event: AgentEvent, sessionID: String) -> ResolveOutcome {
         guard let promptID = AgentInteractivePromptSidebarMessages.promptID(from: event) else {
             return .noneNotified
         }
-        let terminalToken = AgentInteractivePromptSidebarMessages.lifecycleToken(from: event)
-        let terminalRequiresCapability = AgentInteractivePromptSidebarMessages.requiresLifecycleCapability(event)
+        let token = AgentInteractivePromptSidebarMessages.lifecycleToken(from: event)
+        let terminalIsCapabilityBound = AgentInteractivePromptSidebarMessages.requiresLifecycleCapability(event)
         return queue.sync {
-            guard let current = notifiedLifecyclesBySessionID[sessionID]?[promptID] else {
+            guard let recorded = notifiedLifecycleByPromptIDBySessionID[sessionID]?[promptID] else {
                 return .noneNotified
             }
             let matches: Bool
-            switch current {
-            case .token(let currentToken):
-                matches = terminalToken == currentToken
+            switch recorded {
+            case .token(let recordedToken):
+                matches = token == recordedToken
             case .capabilityTokenless:
+                // No live terminal can prove it ends a tokenless capability
+                // lifecycle; only an authoritative replacement may.
                 matches = false
             case .legacy:
-                matches = terminalToken == nil && terminalRequiresCapability == false
+                // Legacy lifecycles only accept the legacy tokenless
+                // contract; a tokenful or capability-bound terminal is a
+                // different domain.
+                matches = token == nil && terminalIsCapabilityBound == false
             }
             guard matches else {
                 return .staleMismatch
             }
-            notifiedLifecyclesBySessionID[sessionID]?.removeValue(forKey: promptID)
+            notifiedLifecycleByPromptIDBySessionID[sessionID]?.removeValue(forKey: promptID)
             return .clearedNotified
         }
     }
 
     func remove(sessionID: String) {
         _ = queue.sync {
-            notifiedLifecyclesBySessionID.removeValue(forKey: sessionID)
+            notifiedLifecycleByPromptIDBySessionID.removeValue(forKey: sessionID)
         }
     }
 }

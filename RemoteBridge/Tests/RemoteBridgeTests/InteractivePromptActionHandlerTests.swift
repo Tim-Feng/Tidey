@@ -208,13 +208,76 @@ final class InteractivePromptActionHandlerTests: XCTestCase {
         XCTAssertEqual(submitter.submissions.map(\.workspaceID), [route.workspaceID])
         XCTAssertEqual(submitter.submissions.map(\.panelID), [route.panelID])
         XCTAssertEqual(submitter.submissions.map(\.sessionID), [route.sessionID])
+        // A flushed response is only pending confirmation: submitted, no
+        // resolved_event, card stays visible.
+        XCTAssertEqual(response.result?["submitted"]?.boolValue, true)
         XCTAssertEqual(response.result?["status"]?.stringValue, "pending_confirmation")
         XCTAssertNil(response.result?["resolved_event"])
-        XCTAssertEqual(response.result?["lifecycle_token"]?.stringValue, "token-1")
         XCTAssertEqual(response.result?["client_request_id"]?.stringValue, "client-1")
+        // The pending echo must include the lifecycle capability the client
+        // presented, so strict clients can verify the transaction identity.
+        XCTAssertEqual(response.result?["lifecycle_token"]?.stringValue, "token-1")
     }
 
-    func testSubmitCodexApprovalRequiresLifecycleCapability() {
+    func testChannelOnlyCodexSubmitRoutesToNativeFailClosedPath() {
+        // ONLY submit_channel signals Codex (no vendor param, no Codex
+        // source, no active session): still the native fail-closed path.
+        let route = ordinaryRoute()
+        let submitter = StubCodexApprovalSubmitter()
+        submitter.pendingConfirmation = true
+        let handler = makeHandler(route: route,
+                                  adapter: StubPromptAdapter(outputs: []),
+                                  codexApprovalSubmitter: submitter)
+
+        XCTAssertThrowsError(try handler.handle(BridgeRequest(id: "request-1",
+                                                              action: "submit_interactive_prompt",
+                                                              params: [
+                                                                "workspace_id": .string(route.workspaceID),
+                                                                "panel_id": .string(route.panelID),
+                                                                "prompt_id": .string("prompt-1"),
+                                                                "submit_channel": .string("codex_app_server"),
+                                                                "target_index": .number(0),
+                                                              ]))) { error in
+            guard case BridgeInternalError.invalidRequest(let message) = error,
+                  message.contains("lifecycle_token") else {
+                return XCTFail("expected the Codex native lifecycle_token rejection, got \(error)")
+            }
+        }
+        XCTAssertTrue(submitter.submissions.isEmpty)
+    }
+
+    func testSourceOnlyCodexSubmitRoutesToNativeFailClosedPath() {
+        // ONLY the source signals Codex (no vendor param, no submit_channel,
+        // no active session): the submit must still take the Codex native
+        // fail-closed path and be rejected for the missing lifecycle token —
+        // never the Claude/terminal-input path.
+        let route = ordinaryRoute()
+        let submitter = StubCodexApprovalSubmitter()
+        submitter.pendingConfirmation = true
+        let handler = makeHandler(route: route,
+                                  adapter: StubPromptAdapter(outputs: []),
+                                  codexApprovalSubmitter: submitter)
+
+        XCTAssertThrowsError(try handler.handle(BridgeRequest(id: "request-1",
+                                                              action: "submit_interactive_prompt",
+                                                              params: [
+                                                                "workspace_id": .string(route.workspaceID),
+                                                                "panel_id": .string(route.panelID),
+                                                                "prompt_id": .string("prompt-1"),
+                                                                "source": .string("codex_command_approval"),
+                                                                "target_index": .number(0),
+                                                              ]))) { error in
+            guard case BridgeInternalError.invalidRequest(let message) = error,
+                  message.contains("lifecycle_token") else {
+                return XCTFail("expected the Codex native lifecycle_token rejection, got \(error)")
+            }
+        }
+        XCTAssertTrue(submitter.submissions.isEmpty)
+    }
+
+    func testSubmitCodexApprovalWithoutLifecycleTokenIsRejectedNotFallback() {
+        // A submit that cannot present the server-issued lifecycle capability
+        // must not fall back to whatever lifecycle is currently active.
         let route = ordinaryRoute()
         let submitter = StubCodexApprovalSubmitter()
         submitter.pendingConfirmation = true
@@ -232,15 +295,14 @@ final class InteractivePromptActionHandlerTests: XCTestCase {
                                                                 "target_index": .number(1),
                                                                 "client_request_id": .string("client-1"),
                                                               ]))) { error in
-            guard case BridgeInternalError.invalidRequest(let message) = error else {
+            guard case BridgeInternalError.invalidRequest = error else {
                 return XCTFail("unexpected error: \(error)")
             }
-            XCTAssertTrue(message.contains("lifecycle_token"))
         }
         XCTAssertTrue(submitter.submissions.isEmpty)
     }
 
-    func testSubmitCodexApprovalDuplicateReconcilesPendingThenTerminalAndConflictingDecisionFails() throws {
+    func testSubmitCodexApprovalDuplicateClientRequestIDReconcilesAgainstLiveState() throws {
         let route = ordinaryRoute()
         let submitter = StubCodexApprovalSubmitter()
         submitter.pendingConfirmation = true
@@ -260,14 +322,21 @@ final class InteractivePromptActionHandlerTests: XCTestCase {
         let first = try XCTUnwrap(handler.handle(BridgeRequest(id: "request-1",
                                                                action: "submit_interactive_prompt",
                                                                params: params)))
-        let duplicate = try XCTUnwrap(handler.handle(BridgeRequest(id: "request-2",
-                                                                   action: "submit_interactive_prompt",
-                                                                   params: params)))
         XCTAssertEqual(first.result?["status"]?.stringValue, "pending_confirmation")
-        XCTAssertEqual(duplicate.result?["status"]?.stringValue, "pending_confirmation")
-        XCTAssertEqual(submitter.submissions.count, 2,
-                       "pending duplicates reconcile against the live submitter")
 
+        // A retry with the same client request identity while the request is
+        // still pending is passed through to the live state (the connection
+        // store deduplicates the in-flight attempt) instead of being answered
+        // from a stale cache forever.
+        let second = try XCTUnwrap(handler.handle(BridgeRequest(id: "request-2",
+                                                                action: "submit_interactive_prompt",
+                                                                params: params)))
+        XCTAssertEqual(second.result?["status"]?.stringValue, "pending_confirmation")
+        XCTAssertEqual(submitter.submissions.count, 2)
+        XCTAssertEqual(submitter.submissions.map(\.clientRequestID), ["client-1", "client-1"])
+
+        // Same client request identity with a conflicting decision fails
+        // closed without reaching the submitter.
         var conflicting = params
         conflicting["target_index"] = .number(0)
         XCTAssertThrowsError(try handler.handle(BridgeRequest(id: "request-3",
@@ -278,233 +347,12 @@ final class InteractivePromptActionHandlerTests: XCTestCase {
             }
         }
         XCTAssertEqual(submitter.submissions.count, 2)
-
-        submitter.pendingConfirmation = false
-        submitter.resolvedEvent = Self.codexResolvedEvent(route: route,
-                                                          promptID: "prompt-1",
-                                                          reason: "server_resolved")
-        let terminal = try XCTUnwrap(handler.handle(BridgeRequest(id: "request-4",
-                                                                  action: "submit_interactive_prompt",
-                                                                  params: params)))
-        XCTAssertEqual(terminal.result?["status"]?.stringValue, "already_resolved")
-        XCTAssertEqual(terminal.result?["resolved_event"]?.objectValue?["metadata"]?
-            .objectValue?["reason"]?.stringValue, "server_resolved")
     }
 
-    func testSharedDeduperSurvivesReconnectWithoutCollidingAcrossAgentScopes() throws {
-        let firstRoute = ordinaryRoute()
-        let secondRoute = ordinaryRoute(workspaceID: "workspace-2",
-                                        sessionID: "$8",
-                                        windowID: "@17",
-                                        activePaneID: "%17")
-        let submitter = StubCodexApprovalSubmitter()
-        let deduper = InteractivePromptSubmitDeduper()
-        let firstHandler = makeHandler(route: firstRoute,
-                                       adapter: StubPromptAdapter(outputs: []),
-                                       activeVendor: "codex",
-                                       codexApprovalSubmitter: submitter,
-                                       submitDeduper: deduper)
-        let reconnectedHandler = makeHandler(route: firstRoute,
-                                             adapter: StubPromptAdapter(outputs: []),
-                                             activeVendor: "codex",
-                                             codexApprovalSubmitter: submitter,
-                                             submitDeduper: deduper)
-        let secondScopeHandler = makeHandler(route: secondRoute,
-                                             adapter: StubPromptAdapter(outputs: []),
-                                             activeVendor: "codex",
-                                             codexApprovalSubmitter: submitter,
-                                             submitDeduper: deduper)
-        let firstParams: [String: JSONValue] = [
-            "workspace_id": .string(firstRoute.workspaceID),
-            "panel_id": .string(firstRoute.panelID),
-            "prompt_id": .string("prompt-1"),
-            "lifecycle_token": .string("token-1"),
-            "target_index": .number(1),
-            "client_request_id": .string("client-reused"),
-        ]
-
-        submitter.resolvedEvent = Self.codexResolvedEvent(route: firstRoute,
-                                                          promptID: "prompt-1",
-                                                          reason: "server_resolved")
-        _ = try firstHandler.handle(BridgeRequest(id: "request-1",
-                                                  action: "submit_interactive_prompt",
-                                                  params: firstParams))
-        _ = try reconnectedHandler.handle(BridgeRequest(id: "request-2",
-                                                        action: "submit_interactive_prompt",
-                                                        params: firstParams))
-        XCTAssertEqual(submitter.submissions.count, 1,
-                       "a resolved request must stay deduplicated after reconnect")
-
-        submitter.resolvedEvent = Self.codexResolvedEvent(route: secondRoute,
-                                                          promptID: "prompt-2",
-                                                          reason: "server_resolved")
-        var secondParams = firstParams
-        secondParams["workspace_id"] = .string(secondRoute.workspaceID)
-        secondParams["panel_id"] = .string(secondRoute.panelID)
-        secondParams["prompt_id"] = .string("prompt-2")
-        secondParams["lifecycle_token"] = .string("token-2")
-        _ = try secondScopeHandler.handle(BridgeRequest(id: "request-3",
-                                                        action: "submit_interactive_prompt",
-                                                        params: secondParams))
-        XCTAssertEqual(submitter.submissions.count, 2,
-                       "the same client request id belongs to a separate agent scope")
-    }
-
-    func testSubmitClaudeDuplicateIsIdempotentAndDifferentDecisionConflicts() throws {
-        let route = ordinaryRoute()
-        let router = StubPromptInputRouter(routedPanelIDs: [route.panelID])
-        let handler = makeHandler(route: route,
-                                  adapter: StubPromptAdapter(outputs: [
-                                    Self.workflowConfirmOutput(selectedOption: 1),
-                                    Self.workflowConfirmOutput(selectedOption: 1),
-                                  ]),
-                                  router: router)
-        let promptID = try promptID(for: route)
-        let params: [String: JSONValue] = [
-            "workspace_id": .string(route.workspaceID),
-            "panel_id": .string(route.panelID),
-            "prompt_id": .string(promptID),
-            "target_index": .number(0),
-            "client_request_id": .string("client-claude"),
-        ]
-
-        let first = try XCTUnwrap(handler.handle(BridgeRequest(id: "request-1",
-                                                               action: "submit_interactive_prompt",
-                                                               params: params)))
-        let duplicate = try XCTUnwrap(handler.handle(BridgeRequest(id: "request-2",
-                                                                   action: "submit_interactive_prompt",
-                                                                   params: params)))
-        XCTAssertEqual(first.result?["status"]?.stringValue, "resolved")
-        XCTAssertEqual(duplicate.result?["status"]?.stringValue, "resolved")
-        XCTAssertEqual(router.sentInputs.count, 1)
-
-        var conflicting = params
-        conflicting["target_index"] = .number(1)
-        XCTAssertThrowsError(try handler.handle(BridgeRequest(id: "request-3",
-                                                              action: "submit_interactive_prompt",
-                                                              params: conflicting))) { error in
-            guard case BridgeInternalError.conflict = error else {
-                return XCTFail("expected conflict, got \(error)")
-            }
-        }
-        XCTAssertEqual(router.sentInputs.count, 1)
-    }
-
-    func testSubmitCodexUserInputForwardsAnswersAndReturnsCompletePendingContext() throws {
+    func testSubmitCodexApprovalRetryAfterServerResolutionReturnsAuthoritativeTerminal() throws {
         let route = ordinaryRoute()
         let submitter = StubCodexApprovalSubmitter()
         submitter.pendingConfirmation = true
-        let handler = makeHandler(route: route,
-                                  adapter: StubPromptAdapter(outputs: []),
-                                  activeVendor: "codex",
-                                  codexApprovalSubmitter: submitter)
-        let params: [String: JSONValue] = [
-            "workspace_id": .string(route.workspaceID),
-            "panel_id": .string(route.panelID),
-            "prompt_id": .string("prompt-input"),
-            "lifecycle_token": .string("token-input"),
-            "client_request_id": .string("client-input"),
-            "answers": .object([
-                "format": .array([.string("PNG")]),
-                "note": .array([.string("先驗證 migration"), .string("保留 alpha")]),
-            ]),
-        ]
-
-        let response = try XCTUnwrap(handler.handle(BridgeRequest(id: "request-1",
-                                                                  action: "submit_interactive_prompt",
-                                                                  params: params)))
-
-        let submission = try XCTUnwrap(submitter.userInputSubmissions.first)
-        XCTAssertEqual(submission.promptID, "prompt-input")
-        XCTAssertEqual(submission.answers["format"], ["PNG"])
-        XCTAssertEqual(submission.answers["note"], ["先驗證 migration", "保留 alpha"])
-        XCTAssertEqual(submission.clientRequestID, "client-input")
-        XCTAssertEqual(submission.lifecycleToken, "token-input")
-        XCTAssertEqual(submission.workspaceID, route.workspaceID)
-        XCTAssertEqual(submission.panelID, route.panelID)
-        XCTAssertEqual(submission.sessionID, route.sessionID)
-        XCTAssertEqual(response.result?["status"]?.stringValue, "pending_confirmation")
-        XCTAssertEqual(response.result?["prompt_id"]?.stringValue, "prompt-input")
-        XCTAssertEqual(response.result?["workspace_id"]?.stringValue, route.workspaceID)
-        XCTAssertEqual(response.result?["panel_id"]?.stringValue, route.panelID)
-        XCTAssertEqual(response.result?["session_id"]?.stringValue, route.sessionID)
-        XCTAssertEqual(response.result?["lifecycle_token"]?.stringValue, "token-input")
-        XCTAssertEqual(response.result?["client_request_id"]?.stringValue, "client-input")
-        XCTAssertNil(response.result?["resolved_event"])
-    }
-
-    func testSubmitCodexUserInputCanonicalDecisionDedupesKeyOrderAndRejectsDifferentAnswers() throws {
-        let route = ordinaryRoute()
-        let submitter = StubCodexApprovalSubmitter()
-        submitter.pendingConfirmation = true
-        let handler = makeHandler(route: route,
-                                  adapter: StubPromptAdapter(outputs: []),
-                                  activeVendor: "codex",
-                                  codexApprovalSubmitter: submitter)
-        var params: [String: JSONValue] = [
-            "workspace_id": .string(route.workspaceID),
-            "panel_id": .string(route.panelID),
-            "prompt_id": .string("prompt-input"),
-            "lifecycle_token": .string("token-input"),
-            "client_request_id": .string("client-input"),
-            "answers": .object(["b": .array([.string("2")]),
-                                "a": .array([.string("1")])]),
-        ]
-        _ = try handler.handle(BridgeRequest(id: "request-1",
-                                             action: "submit_interactive_prompt",
-                                             params: params))
-        params["answers"] = .object(["a": .array([.string("1")]),
-                                     "b": .array([.string("2")])])
-        _ = try handler.handle(BridgeRequest(id: "request-2",
-                                             action: "submit_interactive_prompt",
-                                             params: params))
-        XCTAssertEqual(submitter.userInputSubmissions.count, 2)
-
-        params["answers"] = .object(["a": .array([.string("different")]),
-                                     "b": .array([.string("2")])])
-        XCTAssertThrowsError(try handler.handle(BridgeRequest(id: "request-3",
-                                                              action: "submit_interactive_prompt",
-                                                              params: params))) { error in
-            guard case BridgeInternalError.conflict = error else {
-                return XCTFail("expected conflict, got \(error)")
-            }
-        }
-        XCTAssertEqual(submitter.userInputSubmissions.count, 2)
-    }
-
-    func testSubmitCodexUserInputRejectsMalformedAnswerMapBeforeSubmit() {
-        let route = ordinaryRoute()
-        let submitter = StubCodexApprovalSubmitter()
-        submitter.pendingConfirmation = true
-        let handler = makeHandler(route: route,
-                                  adapter: StubPromptAdapter(outputs: []),
-                                  activeVendor: "codex",
-                                  codexApprovalSubmitter: submitter)
-
-        XCTAssertThrowsError(try handler.handle(BridgeRequest(id: "request-1",
-                                                              action: "submit_interactive_prompt",
-                                                              params: [
-                                                                "workspace_id": .string(route.workspaceID),
-                                                                "panel_id": .string(route.panelID),
-                                                                "prompt_id": .string("prompt-input"),
-                                                                "lifecycle_token": .string("token-input"),
-                                                                "client_request_id": .string("client-input"),
-                                                                "answers": .object([
-                                                                    "format": .array([.string("PNG"), .number(1)]),
-                                                                ]),
-                                                              ]))) { error in
-            guard case BridgeInternalError.invalidRequest(let message) = error else {
-                return XCTFail("unexpected error: \(error)")
-            }
-            XCTAssertTrue(message.contains("string values"))
-        }
-        XCTAssertTrue(submitter.userInputSubmissions.isEmpty)
-    }
-
-    func testSubmitCodexFailureDoesNotManufacturePendingOrTerminalAndCanRetry() throws {
-        let route = ordinaryRoute()
-        let submitter = StubCodexApprovalSubmitter()
-        submitter.submitError = StubCodexApprovalSubmitError.definiteFailure
         let handler = makeHandler(route: route,
                                   adapter: StubPromptAdapter(outputs: []),
                                   activeVendor: "codex",
@@ -518,17 +366,219 @@ final class InteractivePromptActionHandlerTests: XCTestCase {
             "client_request_id": .string("client-1"),
         ]
 
+        let first = try XCTUnwrap(handler.handle(BridgeRequest(id: "request-1",
+                                                               action: "submit_interactive_prompt",
+                                                               params: params)))
+        XCTAssertEqual(first.result?["status"]?.stringValue, "pending_confirmation")
+
+        // serverRequest/resolved lands: the live state now has the terminal.
+        submitter.pendingConfirmation = false
+        submitter.resolvedEvent = AgentEvent(eventID: "resolved-prompt-1",
+                                             seq: 10,
+                                             vendor: "codex",
+                                             workspaceID: route.workspaceID,
+                                             sessionID: route.sessionID,
+                                             timestamp: "2026-07-15T00:00:00.000Z",
+                                             type: .interactivePromptResolved,
+                                             role: nil,
+                                             text: nil,
+                                             name: nil,
+                                             input: nil,
+                                             output: nil,
+                                             toolCallID: nil,
+                                             metadata: [
+                                                "panel_id": route.panelID,
+                                                "prompt_id": "prompt-1",
+                                                "source": "codex_command_approval",
+                                                "reason": "server_resolved",
+                                             ])
+
+        // The same client request identity now reconciles to the
+        // authoritative terminal instead of a stale pending answer.
+        let retry = try XCTUnwrap(handler.handle(BridgeRequest(id: "request-2",
+                                                               action: "submit_interactive_prompt",
+                                                               params: params)))
+        XCTAssertEqual(retry.result?["status"]?.stringValue, "already_resolved")
+        XCTAssertEqual(retry.result?["resolved_event"]?.objectValue?["metadata"]?.objectValue?["reason"]?.stringValue,
+                       "server_resolved")
+    }
+
+    func testSubmitClaudePromptDuplicateClientRequestIDDoesNotResendInput() throws {
+        let route = ordinaryRoute()
+        let eventHub = AgentEventHub()
+        let router = StubPromptInputRouter(routedPanelIDs: [route.panelID])
+        let handler = makeHandler(route: route,
+                                  adapter: StubPromptAdapter(outputs: [
+                                      Self.workflowConfirmOutput(selectedOption: 1),
+                                      Self.workflowConfirmOutput(selectedOption: 1),
+                                  ]),
+                                  eventHub: eventHub,
+                                  router: router)
+        let promptID = try promptID(for: route)
+        let params: [String: JSONValue] = [
+            "workspace_id": .string(route.workspaceID),
+            "panel_id": .string(route.panelID),
+            "prompt_id": .string(promptID),
+            "target_index": .number(0),
+            "client_request_id": .string("client-1"),
+        ]
+
+        let first = try XCTUnwrap(handler.handle(BridgeRequest(id: "request-1",
+                                                               action: "submit_interactive_prompt",
+                                                               params: params)))
+        XCTAssertTrue(first.ok)
+        XCTAssertEqual(router.sentInputs.count, 1)
+
+        // Retry after an ambiguous failure/reconnect with the same identity:
+        // same recorded status, no second terminal input.
+        let second = try XCTUnwrap(handler.handle(BridgeRequest(id: "request-2",
+                                                                action: "submit_interactive_prompt",
+                                                                params: params)))
+        XCTAssertTrue(second.ok)
+        XCTAssertEqual(second.result?["status"]?.stringValue, first.result?["status"]?.stringValue)
+        XCTAssertEqual(router.sentInputs.count, 1)
+    }
+
+    func testSubmitCodexApprovalPendingResultEchoesFullTransactionContext() throws {
+        let route = ordinaryRoute()
+        let submitter = StubCodexApprovalSubmitter()
+        submitter.pendingConfirmation = true
+        let handler = makeHandler(route: route,
+                                  adapter: StubPromptAdapter(outputs: []),
+                                  activeVendor: "codex",
+                                  codexApprovalSubmitter: submitter)
+
+        let response = try XCTUnwrap(handler.handle(BridgeRequest(id: "request-1",
+                                                                  action: "submit_interactive_prompt",
+                                                                  params: [
+                                                                    "workspace_id": .string(route.workspaceID),
+                                                                    "panel_id": .string(route.panelID),
+                                                                    "prompt_id": .string("prompt-1"),
+                                                                    "lifecycle_token": .string("token-1"),
+                                                                    "target_index": .number(1),
+                                                                    "client_request_id": .string("client-1"),
+                                                                  ])))
+
+        let result = try XCTUnwrap(response.result)
+        XCTAssertEqual(result["submitted"]?.boolValue, true)
+        XCTAssertEqual(result["status"]?.stringValue, "pending_confirmation")
+        XCTAssertEqual(result["prompt_id"]?.stringValue, "prompt-1")
+        XCTAssertEqual(result["workspace_id"]?.stringValue, route.workspaceID)
+        XCTAssertEqual(result["panel_id"]?.stringValue, route.panelID)
+        XCTAssertEqual(result["session_id"]?.stringValue, route.sessionID)
+        XCTAssertEqual(result["client_request_id"]?.stringValue, "client-1")
+    }
+
+    func testSubmitFailsClosedOnSessionOrVendorMismatchWithActiveContext() throws {
+        let route = ordinaryRoute()
+        let submitter = StubCodexApprovalSubmitter()
+        submitter.pendingConfirmation = true
+        let handler = makeHandler(route: route,
+                                  adapter: StubPromptAdapter(outputs: []),
+                                  activeVendor: "codex",
+                                  codexApprovalSubmitter: submitter)
+
+        // A client naming a stale session must be rejected, not silently
+        // retargeted at the active session.
         XCTAssertThrowsError(try handler.handle(BridgeRequest(id: "request-1",
                                                               action: "submit_interactive_prompt",
-                                                              params: params)))
-        submitter.submitError = nil
+                                                              params: [
+                                                                "workspace_id": .string(route.workspaceID),
+                                                                "panel_id": .string(route.panelID),
+                                                                "session_id": .string("stale-session"),
+                                                                "prompt_id": .string("prompt-1"),
+                                                                "lifecycle_token": .string("token-1"),
+                                                                "target_index": .number(1),
+                                                              ]))) { error in
+            guard case BridgeInternalError.conflict = error else {
+                return XCTFail("expected conflict, got \(error)")
+            }
+        }
+        // Same for a mismatched vendor.
+        XCTAssertThrowsError(try handler.handle(BridgeRequest(id: "request-2",
+                                                              action: "submit_interactive_prompt",
+                                                              params: [
+                                                                "workspace_id": .string(route.workspaceID),
+                                                                "panel_id": .string(route.panelID),
+                                                                "vendor": .string("claude"),
+                                                                "prompt_id": .string("prompt-1"),
+                                                                "lifecycle_token": .string("token-1"),
+                                                                "target_index": .number(1),
+                                                              ]))) { error in
+            guard case BridgeInternalError.conflict = error else {
+                return XCTFail("expected conflict, got \(error)")
+            }
+        }
+        XCTAssertTrue(submitter.submissions.isEmpty)
+
+        // Matching context still goes through.
+        let matching = try XCTUnwrap(handler.handle(BridgeRequest(id: "request-3",
+                                                                  action: "submit_interactive_prompt",
+                                                                  params: [
+                                                                    "workspace_id": .string(route.workspaceID),
+                                                                    "panel_id": .string(route.panelID),
+                                                                    "session_id": .string(route.sessionID),
+                                                                    "vendor": .string("codex"),
+                                                                    "prompt_id": .string("prompt-1"),
+                                                                    "lifecycle_token": .string("token-1"),
+                                                                    "target_index": .number(1),
+                                                                  ])))
+        XCTAssertTrue(matching.ok)
+    }
+
+    func testSubmitCodexApprovalCachedTerminalDoesNotMaskReactivatedLifecycle() throws {
+        let route = ordinaryRoute()
+        let submitter = StubCodexApprovalSubmitter()
+        // First lifecycle ends expired; the handler caches the terminal for
+        // this client request identity.
+        submitter.resolvedEvent = AgentEvent(eventID: "resolved-prompt-1-expired",
+                                             seq: 10,
+                                             vendor: "codex",
+                                             workspaceID: route.workspaceID,
+                                             sessionID: route.sessionID,
+                                             timestamp: "2026-07-15T00:00:00.000Z",
+                                             type: .interactivePromptResolved,
+                                             role: nil,
+                                             text: nil,
+                                             name: nil,
+                                             input: nil,
+                                             output: nil,
+                                             toolCallID: nil,
+                                             metadata: [
+                                                "panel_id": route.panelID,
+                                                "prompt_id": "prompt-1",
+                                                "source": "codex_command_approval",
+                                                "reason": "expired",
+                                             ])
+        let handler = makeHandler(route: route,
+                                  adapter: StubPromptAdapter(outputs: []),
+                                  activeVendor: "codex",
+                                  codexApprovalSubmitter: submitter)
+        let params: [String: JSONValue] = [
+            "workspace_id": .string(route.workspaceID),
+            "panel_id": .string(route.panelID),
+            "prompt_id": .string("prompt-1"),
+            "lifecycle_token": .string("token-1"),
+            "target_index": .number(1),
+            "client_request_id": .string("client-1"),
+        ]
+
+        let first = try XCTUnwrap(handler.handle(BridgeRequest(id: "request-1",
+                                                               action: "submit_interactive_prompt",
+                                                               params: params)))
+        XCTAssertEqual(first.result?["status"]?.stringValue, "already_resolved")
+
+        // The same app-server process re-delivers (reactivates) the logical
+        // prompt: the live store is pending again. The cached old terminal
+        // must not answer for the new attempt.
+        submitter.resolvedEvent = nil
         submitter.pendingConfirmation = true
         let retry = try XCTUnwrap(handler.handle(BridgeRequest(id: "request-2",
                                                                action: "submit_interactive_prompt",
                                                                params: params)))
         XCTAssertEqual(retry.result?["status"]?.stringValue, "pending_confirmation")
-        XCTAssertEqual(submitter.submissions.count, 2,
-                       "a definite zero-effect failure must not be cached as success")
+        XCTAssertNil(retry.result?["resolved_event"])
+        XCTAssertEqual(submitter.submissions.count, 2)
     }
 
     func testSubmitCodexApprovalReturnsAlreadyResolvedStatus() throws {
@@ -687,8 +737,7 @@ final class InteractivePromptActionHandlerTests: XCTestCase {
                              router: StubPromptInputRouter = StubPromptInputRouter(routedPanelIDs: []),
                              activeVendor: String = "claude",
                              activeSessionOverride: ActiveAgentSessionSnapshot? = nil,
-                             codexApprovalSubmitter: CodexAppServerApprovalSubmitting? = nil,
-                             submitDeduper: InteractivePromptSubmitDeduper = InteractivePromptSubmitDeduper()) -> InteractivePromptActionHandler {
+                             codexApprovalSubmitter: CodexAppServerApprovalSubmitting? = nil) -> InteractivePromptActionHandler {
         let sessionResolver = StubPromptSessionResolver(session: activeSessionOverride ?? route.map { activeSession(route: $0, vendor: activeVendor) })
         let inputHandler = BridgeInputActionHandler(socketSender: StubPromptRequestSender(),
                                                     sessionResolver: sessionResolver,
@@ -698,8 +747,7 @@ final class InteractivePromptActionHandlerTests: XCTestCase {
                                               sessionResolver: sessionResolver,
                                               eventHub: eventHub,
                                               inputActionHandler: inputHandler,
-                                              codexApprovalSubmitter: codexApprovalSubmitter,
-                                              submitDeduper: submitDeduper)
+                                              codexApprovalSubmitter: codexApprovalSubmitter)
     }
 
     private func activeSession(route: OrdinaryTmuxPanelRoute, vendor: String = "claude") -> ActiveAgentSessionSnapshot {
@@ -709,20 +757,17 @@ final class InteractivePromptActionHandlerTests: XCTestCase {
                                    panelID: route.panelID)
     }
 
-    private func ordinaryRoute(workspaceID: String = "workspace-1",
-                               sessionID: String = "$7",
-                               windowID: String = "@16",
-                               activePaneID: String = "%16") -> OrdinaryTmuxPanelRoute {
+    private func ordinaryRoute() -> OrdinaryTmuxPanelRoute {
         let socketPath = "/tmp/tmux-\(getuid())/default"
-        return OrdinaryTmuxPanelRoute(workspaceID: workspaceID,
-                                      panelID: "ordinary-tmux:\(socketPath):\(sessionID):\(windowID)",
+        return OrdinaryTmuxPanelRoute(workspaceID: "workspace-1",
+                                      panelID: "ordinary-tmux:\(socketPath):$7:@16",
                                       carrierPanelID: "carrier-panel",
                                       socket: .path(socketPath),
-                                      sessionID: sessionID,
+                                      sessionID: "$7",
                                       sessionName: "adbrewer-cc",
-                                      windowID: windowID,
+                                      windowID: "@16",
                                       windowIndex: 1,
-                                      activePaneID: activePaneID,
+                                      activePaneID: "%16",
                                       cwd: "/Users/timfeng/GitHub/adbrewer",
                                       currentCommand: "claude")
     }
@@ -830,30 +875,6 @@ final class InteractivePromptActionHandlerTests: XCTestCase {
                     "reason": .string("tool_result"),
                    ]))
     }
-
-    private static func codexResolvedEvent(route: OrdinaryTmuxPanelRoute,
-                                           promptID: String,
-                                           reason: String) -> AgentEvent {
-        AgentEvent(eventID: "resolved-\(promptID)",
-                   seq: 10,
-                   vendor: "codex",
-                   workspaceID: route.workspaceID,
-                   sessionID: route.sessionID,
-                   timestamp: "2026-07-15T00:00:00.000Z",
-                   type: .interactivePromptResolved,
-                   role: nil,
-                   text: nil,
-                   name: nil,
-                   input: nil,
-                   output: nil,
-                   toolCallID: nil,
-                   metadata: [
-                    "panel_id": route.panelID,
-                    "prompt_id": promptID,
-                    "source": "codex_command_approval",
-                    "reason": reason,
-                   ])
-    }
 }
 
 private struct StubPromptRouteResolver: OrdinaryTmuxRouteResolving {
@@ -940,59 +961,23 @@ private final class StubPromptInputRouter: OrdinaryTmuxInputRouting, @unchecked 
     }
 }
 
-private enum StubCodexApprovalSubmitError: Error {
-    case definiteFailure
-}
-
 private final class StubCodexApprovalSubmitter: CodexAppServerApprovalSubmitting {
     var resolvedEvent: AgentEvent?
     var pendingConfirmation = false
-    var submitError: Error?
-    private(set) var submissions = [(promptID: String,
-                                     targetIndex: Int,
-                                     clientRequestID: String?,
-                                     lifecycleToken: String?,
-                                     workspaceID: String?,
-                                     panelID: String?,
-                                     sessionID: String?)]()
-    private(set) var userInputSubmissions = [(promptID: String,
-                                              answers: [String: [String]],
-                                              clientRequestID: String?,
-                                              lifecycleToken: String?,
-                                              workspaceID: String,
-                                              panelID: String,
-                                              sessionID: String?)]()
-
-    func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent {
-        submissions.append((promptID: promptID,
-                            targetIndex: targetIndex,
-                            clientRequestID: nil,
-                            lifecycleToken: nil,
-                            workspaceID: nil,
-                            panelID: nil,
-                            sessionID: nil))
-        guard let resolvedEvent else {
-            throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
-        }
-        return resolvedEvent
-    }
+    private(set) var submissions = [(promptID: String, targetIndex: Int, clientRequestID: String?, lifecycleToken: String?, workspaceID: String?, panelID: String?, sessionID: String?)]()
 
     func submitApproval(promptID: String,
                         targetIndex: Int,
-                        workspaceID: String,
-                        panelID: String,
-                        sessionID: String?) throws -> AgentEvent {
+                        clientRequestID: String?,
+                        lifecycleToken: String?) throws -> CodexAppServerApprovalSubmitOutcome {
         submissions.append((promptID: promptID,
                             targetIndex: targetIndex,
-                            clientRequestID: nil,
-                            lifecycleToken: nil,
-                            workspaceID: workspaceID,
-                            panelID: panelID,
-                            sessionID: sessionID))
-        guard let resolvedEvent else {
-            throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
-        }
-        return resolvedEvent
+                            clientRequestID: clientRequestID,
+                            lifecycleToken: lifecycleToken,
+                            workspaceID: nil,
+                            panelID: nil,
+                            sessionID: nil))
+        return try outcome(promptID: promptID)
     }
 
     func submitApproval(promptID: String,
@@ -1012,27 +997,7 @@ private final class StubCodexApprovalSubmitter: CodexAppServerApprovalSubmitting
         return try outcome(promptID: promptID)
     }
 
-    func submitUserInput(promptID: String,
-                         answers: [String: [String]],
-                         clientRequestID: String?,
-                         lifecycleToken: String?,
-                         workspaceID: String,
-                         panelID: String,
-                         sessionID: String?) throws -> CodexAppServerApprovalSubmitOutcome {
-        userInputSubmissions.append((promptID: promptID,
-                                     answers: answers,
-                                     clientRequestID: clientRequestID,
-                                     lifecycleToken: lifecycleToken,
-                                     workspaceID: workspaceID,
-                                     panelID: panelID,
-                                     sessionID: sessionID))
-        return try outcome(promptID: promptID)
-    }
-
     private func outcome(promptID: String) throws -> CodexAppServerApprovalSubmitOutcome {
-        if let submitError {
-            throw submitError
-        }
         if pendingConfirmation {
             return .pendingConfirmation(promptID: promptID)
         }

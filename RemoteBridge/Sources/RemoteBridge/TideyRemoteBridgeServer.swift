@@ -561,6 +561,8 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
     }
 }
 
+// Internal (not private): tests dispatch real BridgeRequests through the
+// SAME handler production uses — no parallel test-only flow.
 final class WebSocketFrameHandler: ChannelInboundHandler {
     typealias InboundIn = WebSocketFrame
     typealias OutboundOut = WebSocketFrame
@@ -959,16 +961,17 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                 )
             }
             let flow = BridgeAgentEventFetchFlow.run(eventHub: eventHub,
-                                                     workspaceID: workspaceID,
-                                                     sessionID: sessionID,
-                                                     limit: limit,
-                                                     maxBytes: maxBytes,
-                                                     beforeSeq: beforeSeq,
-                                                     afterSeq: afterSeq) { [registryMonitor] sessionID, beforeSeq, limit in
-                registryMonitor.backfillSession(sessionID: sessionID,
-                                                 beforeSeq: beforeSeq,
-                                                 limit: limit)
-            }
+                                                      workspaceID: workspaceID,
+                                                      sessionID: sessionID,
+                                                      limit: limit,
+                                                      maxBytes: maxBytes,
+                                                      beforeSeq: beforeSeq,
+                                                      afterSeq: afterSeq,
+                                                      backfill: { [registryMonitor] sessionID, beforeSeq, limit in
+                                                          registryMonitor.backfillSession(sessionID: sessionID,
+                                                                                          beforeSeq: beforeSeq,
+                                                                                          limit: limit)
+                                                      })
             let fetchResult = flow.fetchResult
             let didBackfill = flow.didBackfill
             observability.recordFetch(workspaceID: workspaceID,
@@ -979,13 +982,12 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                                       returnedCount: fetchResult.events.count,
                                       didBackfill: didBackfill,
                                       durationMs: (CFAbsoluteTimeGetCurrent() - startedAt) * 1000)
-            let merged = BridgePendingApprovalFetchMerge.merge(
-                pageEvents: fetchResult.events,
-                pageOldestSeq: fetchResult.oldestSeq,
-                pageNewestSeq: fetchResult.newestSeq,
-                requestedAfterSeq: afterSeq,
-                pendingEvents: pendingCodexApprovalEvents(workspaceID: workspaceID,
-                                                          sessionID: sessionID))
+            let merged = BridgePendingApprovalFetchMerge.merge(pageEvents: fetchResult.events,
+                                                               pageOldestSeq: fetchResult.oldestSeq,
+                                                               pageNewestSeq: fetchResult.newestSeq,
+                                                               requestedAfterSeq: afterSeq,
+                                                               pendingEvents: pendingCodexApprovalEvents(workspaceID: workspaceID,
+                                                                                                         sessionID: sessionID))
             return LocalRequestResult(
                 response: BridgeResponse(id: request.id,
                                          ok: true,
@@ -1089,6 +1091,11 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                                          result: [
                                             "subscribed": .bool(true),
                                             "workspace_id": workspaceID.map(JSONValue.string) ?? .null,
+                                            // Buffered panel_state_changed patches ARE replayed
+                                            // to close the list -> subscribe gap (see
+                                            // WorkspaceEventHub.subscribe) — the count must
+                                            // reflect what is ACTUALLY being sent, not a
+                                            // hardcoded zero.
                                             "replay_count": .number(Double(replayEnvelopes.count)),
                                          ],
                                          error: nil),
@@ -1145,10 +1152,9 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         guard noReplay == false else {
             return replayEnvelopes
         }
-        return BridgePendingApprovalFetchMerge.mergeReplayEnvelopes(
-            replayEnvelopes,
-            pendingEvents: pendingCodexApprovalEvents(workspaceID: workspaceID,
-                                                      sessionID: sessionID))
+        return BridgePendingApprovalFetchMerge.mergeReplayEnvelopes(replayEnvelopes,
+                                                                    pendingEvents: pendingCodexApprovalEvents(workspaceID: workspaceID,
+                                                                                                              sessionID: sessionID))
     }
 
     private func augment(response: BridgeResponse, for request: BridgeRequest) -> BridgeResponse {
@@ -1216,6 +1222,8 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                 ])
                 hasAgentSession = true
             }
+            // Authoritative three-state lifecycle for agent panels; plain
+            // terminals keep the legacy carrier state.
             panel = AgentLifecycleListAugmenter.augmentPanel(panel,
                                                              workspaceID: workspaceID,
                                                              panelID: panelID,

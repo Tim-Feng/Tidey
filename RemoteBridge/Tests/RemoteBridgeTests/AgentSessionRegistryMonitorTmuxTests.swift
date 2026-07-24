@@ -2058,6 +2058,7 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
                                output: nil,
                                toolCallID: nil,
                                metadata: ["panel_id": "panel-current"]))
+        hub.drainDeliveriesForTesting()
 
         XCTAssertEqual(canonicalSessionID, instanceSessionID)
         XCTAssertEqual(receivedEvents.map(\.sessionID), [instanceSessionID])
@@ -2831,6 +2832,8 @@ private struct RegistryMonitorOrdinaryTmuxProjectionStub: OrdinaryTmuxWindowProj
 }
 
 private final class RegistryMonitorFakeRuntimeSession: CodexAppServerRuntimeSessionControlling {
+    func setRegistryRootThreadID(_ rawThreadID: String?) {}
+
     func canSubmitMessage() -> Bool {
         true
     }
@@ -2839,15 +2842,22 @@ private final class RegistryMonitorFakeRuntimeSession: CodexAppServerRuntimeSess
 
     func refreshActiveThread() {}
 
+    func isStopped() -> Bool {
+        false
+    }
+
     func pendingApprovalPromptEvents() -> [AgentEvent] {
         []
     }
 
-    func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent {
+    func submitApproval(promptID: String,
+                        targetIndex: Int,
+                        clientRequestID: String?,
+                        lifecycleToken: String?) throws -> CodexAppServerApprovalSubmitOutcome {
         throw BridgeInternalError.notFound("No prompts in registry monitor fake runtime.")
     }
 
-    func submitMessage(text: String) throws {}
+    func submitMessage(text: String, clientRequestID: String?) throws {}
 
     func stop() {}
 }

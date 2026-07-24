@@ -18,11 +18,6 @@ enum CodexAppServerTransportMode: Equatable, Sendable {
     }
 }
 
-enum CodexAppServerProcessOwnership: Equatable, Sendable {
-    case owned
-    case external
-}
-
 struct CodexAppServerLaunchConfiguration: Equatable, Sendable {
     let executablePath: String
     let arguments: [String]
@@ -253,9 +248,11 @@ final class CodexAppServerHeadlessRuntime {
     }
 
     func handleNotification(_ notification: CodexAppServerNotification) {
-        // Bare threadId notifications also come from subagents. Only a
-        // positively identified root thread/started may establish the root
-        // binding; loaded-list/resume remain authoritative thereafter.
+        // Generic notifications only carry a bare threadId; subagent (child)
+        // threads produce them too, so they can never establish the panel's
+        // root thread binding. Only a thread/started whose thread object is
+        // positively identifiable as a root thread may seed the binding;
+        // rebinding stays reserved for authoritative loaded-list/resume.
         if let threadID = Self.rootThreadStartedThreadID(from: notification) {
             onThreadID(threadID)
         }
@@ -280,6 +277,10 @@ final class CodexAppServerHeadlessRuntime {
             default:
                 break
             }
+            // Full provider level (with activeFlags) for the three-state
+            // lifecycle: waitingOnApproval / waitingOnUserInput are the
+            // needs_input blockers; unknown flags are preserved verbatim to
+            // the handler which must not guess.
             let activeFlags: [String]? = notification.params["status"]?.objectValue?["activeFlags"]?.arrayValue
                 .map { $0.compactMap(\.stringValue) }
             onThreadStatusLifecycle(threadID, status, activeFlags)
@@ -631,6 +632,8 @@ final class CodexAppServerHeadlessRuntime {
               let threadID = thread["id"]?.stringValue else {
             return nil
         }
+        // Child threads are identified by a parent linkage or an agent
+        // role/nickname on the official thread object.
         let parentKeys = ["parentThreadId", "parent_thread_id", "parentId", "parent_id"]
         for key in parentKeys {
             guard let value = thread[key] ?? notification.params[key] else {
@@ -642,8 +645,11 @@ final class CodexAppServerHeadlessRuntime {
             return nil
         }
         let agentKeys = ["agentRole", "agent_role", "agentNickname", "agent_nickname"]
-        for key in agentKeys where thread[key]?.stringValue?.isEmpty == false {
-            return nil
+        for key in agentKeys {
+            if let value = thread[key]?.stringValue,
+               value.isEmpty == false {
+                return nil
+            }
         }
         if thread["role"]?.stringValue == "subagent" {
             return nil

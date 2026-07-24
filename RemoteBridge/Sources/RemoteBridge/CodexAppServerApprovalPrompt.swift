@@ -4,24 +4,19 @@ import Foundation
 enum CodexAppServerApprovalMethod: String, Equatable, Sendable {
     case commandExecution = "item/commandExecution/requestApproval"
     case fileChange = "item/fileChange/requestApproval"
-}
-
-// The typed request path supports the complete app-server approval surface.
-// Keep the legacy two-method enum below for callers that still opt into the
-// permissive command/file compatibility initializer.
-enum CodexAppServerApprovalRequestMethod: String, Equatable, Sendable {
-    case commandExecution = "item/commandExecution/requestApproval"
-    case fileChange = "item/fileChange/requestApproval"
     case permissions = "item/permissions/requestApproval"
     case requestUserInput = "item/tool/requestUserInput"
 }
 
-// JSON-RPC RequestId is `string | int64`. Keep the type so "1" and 1 do
-// not collide and integer ids can be written back without a Double roundtrip.
+// Codex JSON-RPC RequestId is `string | int64`. The two spaces must never
+// collide ("1" vs 1) and int64 values must be echoed back bit-exact, so the
+// id is kept typed instead of passing through Double-backed JSONValue.
 enum CodexAppServerRequestID: Hashable, Sendable {
     case string(String)
     case integer(Int64)
 
+    // Key used for prompt identity and store matching. Prefixed so the string
+    // "1" and the integer 1 stay distinct.
     var storageKey: String {
         switch self {
         case .string(let value):
@@ -31,6 +26,7 @@ enum CodexAppServerRequestID: Hashable, Sendable {
         }
     }
 
+    // Exact JSON token for the wire (`"1"` vs `1`), preserving int64 range.
     var jsonToken: String {
         switch self {
         case .string(let value):
@@ -42,17 +38,20 @@ enum CodexAppServerRequestID: Hashable, Sendable {
         }
     }
 
+    // Parses a JSONSerialization-produced id value (String or NSNumber).
     init?(rawJSONObjectValue value: Any?) {
         if let text = value as? String {
             self = .string(text)
             return
         }
         if let number = value as? NSNumber {
-            guard CFGetTypeID(number) != CFBooleanGetTypeID() else {
+            // Reject booleans; JSONSerialization models true/false as NSNumber.
+            if CFGetTypeID(number) == CFBooleanGetTypeID() {
                 return nil
             }
             let objCType = String(cString: number.objCType)
             if objCType == "d" || objCType == "f" {
+                // Fractional ids are not valid RequestId values.
                 let doubleValue = number.doubleValue
                 guard doubleValue.rounded(.towardZero) == doubleValue,
                       let exact = Int64(exactly: doubleValue) else {
@@ -70,6 +69,7 @@ enum CodexAppServerRequestID: Hashable, Sendable {
         return nil
     }
 
+    // Fallback for values that only exist as JSONValue (already Double-backed).
     init?(jsonValue: JSONValue?) {
         switch jsonValue {
         case .string(let value):
@@ -85,15 +85,6 @@ enum CodexAppServerRequestID: Hashable, Sendable {
             return nil
         }
     }
-
-    var legacyJSONValue: JSONValue {
-        switch self {
-        case .string(let value):
-            return .string(value)
-        case .integer(let value):
-            return .number(Double(value))
-        }
-    }
 }
 
 enum CodexAppServerApprovalPromptSource {
@@ -103,6 +94,9 @@ enum CodexAppServerApprovalPromptSource {
     static let userInput = "codex_user_input_request"
 }
 
+// 0.144.1 `item/tool/requestUserInput` question shapes. Required fields per
+// the official schema: id, header, question; options entries require label
+// AND description. `options` may be null (free-form input).
 struct CodexAppServerUserInputOption: Equatable, Sendable {
     let label: String
     let description: String
@@ -131,8 +125,7 @@ struct CodexAppServerApprovalOption: Sendable {
 
 struct CodexAppServerApprovalRequest: Sendable {
     let requestID: CodexAppServerRequestID
-    let requestIDValue: JSONValue
-    let method: CodexAppServerApprovalRequestMethod
+    let method: CodexAppServerApprovalMethod
     let threadID: String
     let turnID: String
     let itemID: String
@@ -151,95 +144,90 @@ struct CodexAppServerApprovalRequest: Sendable {
     let requestedPermissions: JSONValue?
     let additionalPermissions: JSONValue?
     let environmentID: String?
+    // Non-empty exactly when method == .requestUserInput.
     let userInputQuestions: [CodexAppServerUserInputQuestion]
     let autoResolutionMs: Int?
-    let wireFingerprint: String
 
     var requestIDKey: String {
         requestID.storageKey
     }
 
-    // Compatibility path for older callers. It intentionally keeps the
-    // pre-existing permissive command/file schema; the connection uses the
-    // strict typed RequestId initializer below.
-    init?(method methodName: String, requestID: JSONValue, params: [String: JSONValue]) {
-        guard CodexAppServerApprovalMethod(rawValue: methodName) != nil,
-              let method = CodexAppServerApprovalRequestMethod(rawValue: methodName),
-              let typedRequestID = CodexAppServerRequestID(jsonValue: requestID) else {
+    // Wire collision identity: canonical method + COMPLETE raw params (all
+    // fields, preserved JSON types, sorted keys, int64-exact). The security
+    // gate must never be derived from the lossy presentation subset — any
+    // field change under the same RequestId is a changed payload. When the
+    // raw JSON object is unavailable (direct in-process construction), the
+    // canonical form of the parsed params is the fallback.
+    let wireFingerprint: String
+
+    static func canonicalRawJSON(_ object: Any?) -> String? {
+        guard let object, JSONSerialization.isValidJSONObject(object),
+              let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else {
             return nil
         }
-        self.init(method: method,
-                  requestID: typedRequestID,
-                  requestIDValue: requestID,
-                  params: params,
-                  strictSchema: false,
-                  wireFingerprint: CodexAppServerRequestFingerprint.make(
-                    method: methodName,
-                    params: params))
+        return String(decoding: data, as: UTF8.self)
     }
 
-    // Strict typed model path. The distinct label avoids making legacy
-    // `.string(...)` call sites ambiguous.
+    // Fragment-capable canonicalization of the raw `params` value: objects,
+    // arrays, strings, numbers (int64-exact via NSNumber), bools, null AND
+    // the missing-vs-present distinction all produce distinct canonical
+    // forms; only object key order is normalized.
+    static func canonicalRawParamsFragment(rawObject: [String: Any]?) -> String? {
+        guard let rawObject else {
+            return nil
+        }
+        guard rawObject.keys.contains("params") else {
+            return "absent"
+        }
+        let value = rawObject["params"] ?? NSNull()
+        guard let data = try? JSONSerialization.data(withJSONObject: value,
+                                                     options: [.sortedKeys, .fragmentsAllowed]) else {
+            return nil
+        }
+        return String(decoding: data, as: UTF8.self)
+    }
+
     init?(method methodName: String,
-          typedRequestID requestID: CodexAppServerRequestID,
+          requestID: CodexAppServerRequestID,
           params: [String: JSONValue],
-          wireFingerprint: String? = nil) {
-        guard let method = CodexAppServerApprovalRequestMethod(rawValue: methodName) else {
-            return nil
-        }
-        self.init(method: method,
-                  requestID: requestID,
-                  requestIDValue: requestID.legacyJSONValue,
-                  params: params,
-                  strictSchema: true,
-                  wireFingerprint: wireFingerprint
-                    ?? CodexAppServerRequestFingerprint.make(
-                        method: methodName,
-                        params: params))
-    }
-
-    private init?(method: CodexAppServerApprovalRequestMethod,
-                  requestID: CodexAppServerRequestID,
-                  requestIDValue: JSONValue,
-                  params: [String: JSONValue],
-                  strictSchema: Bool,
-                  wireFingerprint: String) {
-        guard let threadID = params["threadId"]?.stringValue,
+          rawParamsCanonical: String? = nil) {
+        guard let method = CodexAppServerApprovalMethod(rawValue: methodName),
+              let threadID = params["threadId"]?.stringValue,
               let turnID = params["turnId"]?.stringValue,
               let itemID = params["itemId"]?.stringValue else {
             return nil
         }
-
         let startedAtMs: Int
-        let questions: [CodexAppServerUserInputQuestion]
-        if strictSchema {
-            if method == .requestUserInput {
-                guard let parsedQuestions = Self.userInputQuestions(from: params["questions"]),
-                      !parsedQuestions.isEmpty else {
-                    return nil
-                }
-                questions = parsedQuestions
-                startedAtMs = params["startedAtMs"]?.intValue ?? 0
-            } else {
-                guard let requiredStartedAtMs = params["startedAtMs"]?.intValue else {
-                    return nil
-                }
-                questions = []
-                startedAtMs = requiredStartedAtMs
+        if method == .requestUserInput {
+            // Official 0.144.1 required fields: threadId, turnId, itemId,
+            // questions. startedAtMs is not part of this request.
+            guard let questions = Self.userInputQuestions(from: params["questions"]),
+                  questions.isEmpty == false else {
+                return nil
             }
-            if method == .permissions {
-                guard params["permissions"]?.objectValue != nil,
-                      Self.nonEmptyString(params["cwd"]) != nil else {
-                    return nil
-                }
-            }
-        } else {
-            questions = []
+            userInputQuestions = questions
             startedAtMs = params["startedAtMs"]?.intValue ?? 0
+        } else {
+            // startedAtMs is required by the official 0.144.1 schema for
+            // commandExecution, fileChange, and permissions alike.
+            guard let requiredStartedAtMs = params["startedAtMs"]?.intValue else {
+                return nil
+            }
+            userInputQuestions = []
+            startedAtMs = requiredStartedAtMs
+        }
+        autoResolutionMs = params["autoResolutionMs"]?.intValue
+        if method == .permissions {
+            // The official schema additionally requires cwd and permissions;
+            // a partial approval must be rejected instead of being presented
+            // incomplete.
+            guard params["permissions"]?.objectValue != nil,
+                  Self.nonEmptyString(params["cwd"]) != nil else {
+                return nil
+            }
         }
 
         self.requestID = requestID
-        self.requestIDValue = requestIDValue
         self.method = method
         self.threadID = threadID
         self.turnID = turnID
@@ -261,11 +249,22 @@ struct CodexAppServerApprovalRequest: Sendable {
         requestedPermissions = params["permissions"]
         additionalPermissions = params["additionalPermissions"]
         environmentID = Self.nonEmptyString(params["environmentId"])
-        userInputQuestions = questions
-        autoResolutionMs = params["autoResolutionMs"]?.intValue
-        self.wireFingerprint = wireFingerprint
+        wireFingerprint = "approval:\(methodName)\n" + (rawParamsCanonical ?? Self.canonicalParsedParams(params))
     }
 
+    // Compatibility label used by the isolated pure-model tests. Keeping it
+    // distinct avoids ambiguous `.string(...)` call sites while the wired
+    // connection uses the canonical typed `requestID:` initializer above.
+    init?(method methodName: String,
+          typedRequestID requestID: CodexAppServerRequestID,
+          params: [String: JSONValue]) {
+        self.init(method: methodName,
+                  requestID: requestID,
+                  params: params)
+    }
+
+    // Strict 0.144.1 question parsing: any malformed question or option makes
+    // the whole request invalid (-32602), never a partially presented card.
     private static func userInputQuestions(from value: JSONValue?) -> [CodexAppServerUserInputQuestion]? {
         guard let array = value?.arrayValue else {
             return nil
@@ -274,56 +273,48 @@ struct CodexAppServerApprovalRequest: Sendable {
         var seenIDs = Set<String>()
         for entry in array {
             guard let object = entry.objectValue,
-                  let id = object["id"]?.stringValue,
-                  !id.isEmpty,
+                  let id = object["id"]?.stringValue, !id.isEmpty,
                   let header = object["header"]?.stringValue,
                   let question = object["question"]?.stringValue,
                   seenIDs.insert(id).inserted else {
                 return nil
             }
-
+            // A PRESENT but non-bool isOther/isSecret must reject the whole
+            // request rather than silently default to false — a wrong-type
+            // isSecret defaulting to "not secret" would downgrade a secret
+            // answer to plain text end to end.
             let isOther: Bool
             switch object["isOther"] {
-            case .none:
-                isOther = false
+            case .none: isOther = false
             case .some(let value):
-                guard let bool = value.boolValue else {
-                    return nil
-                }
+                guard let bool = value.boolValue else { return nil }
                 isOther = bool
             }
-
             let isSecret: Bool
             switch object["isSecret"] {
-            case .none:
-                isSecret = false
+            case .none: isSecret = false
             case .some(let value):
-                guard let bool = value.boolValue else {
-                    return nil
-                }
+                guard let bool = value.boolValue else { return nil }
                 isSecret = bool
             }
-
-            let options: [CodexAppServerUserInputOption]?
+            var options: [CodexAppServerUserInputOption]?
             switch object["options"] {
             case .none, .some(.null):
                 options = nil
             case .some(.array(let values)):
                 var parsed: [CodexAppServerUserInputOption] = []
-                for option in values {
-                    guard let optionObject = option.objectValue,
+                for optionValue in values {
+                    guard let optionObject = optionValue.objectValue,
                           let label = optionObject["label"]?.stringValue,
                           let description = optionObject["description"]?.stringValue else {
                         return nil
                     }
-                    parsed.append(CodexAppServerUserInputOption(label: label,
-                                                                description: description))
+                    parsed.append(CodexAppServerUserInputOption(label: label, description: description))
                 }
                 options = parsed
             default:
                 return nil
             }
-
             questions.append(CodexAppServerUserInputQuestion(id: id,
                                                              header: header,
                                                              question: question,
@@ -334,6 +325,41 @@ struct CodexAppServerApprovalRequest: Sendable {
         return questions
     }
 
+    private static func canonicalParsedParams(_ params: [String: JSONValue]) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = (try? encoder.encode(JSONValue.object(params))) ?? Data()
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    // Canonical fingerprint of all security-relevant content. A re-delivery
+    // whose fingerprint changed under the same request identity must never be
+    // silently merged into an existing lifecycle.
+    var securityFingerprint: String {
+        var payload: [String: JSONValue] = [
+            "method": .string(method.rawValue),
+        ]
+        if let reason { payload["reason"] = .string(reason) }
+        if let command { payload["command"] = .string(command) }
+        if let cwd { payload["cwd"] = .string(cwd) }
+        if !commandActions.isEmpty { payload["command_actions"] = .array(commandActions.map(JSONValue.string)) }
+        if let networkHost { payload["network_host"] = .string(networkHost) }
+        if let networkProtocol { payload["network_protocol"] = .string(networkProtocol) }
+        if let proposedExecpolicyAmendment { payload["execpolicy_amendment"] = proposedExecpolicyAmendment }
+        if !proposedNetworkPolicyAmendments.isEmpty { payload["network_policy_amendments"] = .array(proposedNetworkPolicyAmendments) }
+        if !availableDecisions.isEmpty { payload["available_decisions"] = .array(availableDecisions) }
+        if let grantRoot { payload["grant_root"] = .string(grantRoot) }
+        if let requestedPermissions { payload["permissions"] = requestedPermissions }
+        if let additionalPermissions { payload["additional_permissions"] = additionalPermissions }
+        if let environmentID { payload["environment_id"] = .string(environmentID) }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = (try? encoder.encode(JSONValue.object(payload))) ?? Data()
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    // The no-epoch identity preserves the prompt IDs used by the legacy
+    // command/file connection path.
     var promptID: String {
         let requestIDText: String
         switch requestID {
@@ -352,6 +378,10 @@ struct CodexAppServerApprovalRequest: Sendable {
         ])
     }
 
+    // The epoch identifies one app-server process instance. Including it in
+    // the prompt identity keeps re-delivered requests on the same card across
+    // reconnects to the same process, while a restarted process can never
+    // collide with records from the previous one.
     func promptID(epoch: String) -> String {
         Self.promptID(seedParts: [
             method.rawValue,
@@ -410,36 +440,44 @@ struct CodexAppServerApprovalRequest: Sendable {
             throw BridgeInternalError.invalidRequest("Unknown Codex approval option index.")
         }
         switch method {
-        case .commandExecution, .fileChange:
-            return .object(["decision": options[targetIndex].decision])
         case .permissions:
             return try permissionsResponse(inputSequence: options[targetIndex].inputSequence)
+        case .commandExecution, .fileChange:
+            return .object(["decision": options[targetIndex].decision])
         case .requestUserInput:
+            // Option-index submit is only well-defined for the single
+            // predefined-options question; everything else uses the
+            // answers-map submit path.
             guard userInputQuestions.count == 1,
                   let question = userInputQuestions.first else {
                 throw BridgeInternalError.invalidRequest("Codex user input request requires answers")
             }
-            return try userInputResponse(answers: [
-                question.id: [options[targetIndex].inputSequence],
-            ])
+            return try userInputResponse(answers: [question.id: [options[targetIndex].inputSequence]])
         }
     }
 
+    // Exact 0.144.1 response shape: {answers: {questionId: {answers: [..]}}}
+    // — map keyed by question id, every value an inner `answers` string
+    // array (single answers and free-form input included). Official
+    // semantics (codex-rs/tui/src/bottom_pane/request_user_input/mod.rs
+    // `submit_answers`): EVERY question gets an entry, even an empty array
+    // for a question the user explicitly left unanswered (after the TUI's
+    // own "submit with unanswered questions?" confirmation) — an empty
+    // array is not itself invalid, only an unknown question id is.
     func userInputResponse(answers: [String: [String]]) throws -> JSONValue {
         guard method == .requestUserInput else {
             throw BridgeInternalError.invalidRequest("answers are only valid for Codex user input requests")
         }
         let questionIDs = Set(userInputQuestions.map(\.id))
-        for key in answers.keys where !questionIDs.contains(key) {
+        for key in answers.keys where questionIDs.contains(key) == false {
             throw BridgeInternalError.invalidRequest("Unknown Codex user input question id: \(key)")
         }
-        var encoded: [String: JSONValue] = [:]
+        var answersObject: [String: JSONValue] = [:]
         for question in userInputQuestions {
-            encoded[question.id] = .object([
-                "answers": .array((answers[question.id] ?? []).map(JSONValue.string)),
-            ])
+            let values = answers[question.id] ?? []
+            answersObject[question.id] = .object(["answers": .array(values.map(JSONValue.string))])
         }
-        return .object(["answers": .object(encoded)])
+        return .object(["answers": .object(answersObject)])
     }
 
     private var userInputQuestionsJSON: JSONValue? {
@@ -455,11 +493,8 @@ struct CodexAppServerApprovalRequest: Sendable {
                 "is_secret": .bool(question.isSecret),
             ]
             if let options = question.options {
-                object["options"] = .array(options.map { option in
-                    .object([
-                        "label": .string(option.label),
-                        "description": .string(option.description),
-                    ])
+                object["options"] = .array(options.map {
+                    .object(["label": .string($0.label), "description": .string($0.description)])
                 })
             }
             return .object(object)
@@ -499,7 +534,7 @@ struct CodexAppServerApprovalRequest: Sendable {
             return "Approve Codex permissions?"
         case .requestUserInput:
             if let header = userInputQuestions.first?.header,
-               !header.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+               header.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
                 return header
             }
             return "Codex needs your input"
@@ -525,9 +560,7 @@ struct CodexAppServerApprovalRequest: Sendable {
             lines.append(question.question)
             for option in question.options ?? [] {
                 let description = option.description.trimmingCharacters(in: .whitespacesAndNewlines)
-                lines.append(description.isEmpty
-                    ? "- \(option.label)"
-                    : "- \(option.label): \(description)")
+                lines.append(description.isEmpty ? "- \(option.label)" : "- \(option.label): \(description)")
             }
         }
         if lines.isEmpty {
@@ -558,6 +591,8 @@ struct CodexAppServerApprovalRequest: Sendable {
             lines.append("Actions:")
             lines.append(contentsOf: commandActions.map { "- \($0)" })
         }
+        // additionalPermissions grants extra sandbox capabilities alongside
+        // the command; the user must see the full profile before approving.
         let additionalLines = Self.permissionProfileLines(additionalPermissions)
         if !additionalLines.isEmpty {
             lines.append("Additional permissions:")
@@ -594,14 +629,15 @@ struct CodexAppServerApprovalRequest: Sendable {
         if let environmentID {
             lines.append("Environment: \(environmentID)")
         }
-        lines.append(contentsOf: Self.permissionProfileLines(requestedPermissions,
-                                                             includeFileSystemHeader: true))
+        lines.append(contentsOf: Self.permissionProfileLines(requestedPermissions, includeFileSystemHeader: true))
         if lines.isEmpty {
             lines.append("Codex is asking for additional permissions.")
         }
         return lines.joined(separator: "\n")
     }
 
+    // Renders a RequestPermissionProfile (network + fileSystem entries and
+    // legacy read/write lists) into display lines.
     static func permissionProfileLines(_ value: JSONValue?,
                                        includeFileSystemHeader: Bool = true) -> [String] {
         guard let profile = value?.objectValue else {
@@ -614,7 +650,6 @@ struct CodexAppServerApprovalRequest: Sendable {
                 ? "Network: allow outbound network access"
                 : "Network: outbound network access disabled")
         }
-
         let fileSystem = profile["fileSystem"]?.objectValue
         var fileSystemLines: [String] = []
         for entry in fileSystem?["entries"]?.arrayValue ?? [] {
@@ -651,6 +686,9 @@ struct CodexAppServerApprovalRequest: Sendable {
         case "special":
             let special = object["value"]?.objectValue
             let kind = special?["kind"]?.stringValue ?? "special"
+            // Official schema: kind "unknown" always carries the actual
+            // filesystem path being granted; hiding it behind the kind label
+            // would let the user approve an undisclosed path.
             if kind == "unknown",
                let actualPath = special?["path"]?.stringValue,
                !actualPath.isEmpty {
@@ -672,14 +710,17 @@ struct CodexAppServerApprovalRequest: Sendable {
 
     private var approvalOptions: [CodexAppServerApprovalOption] {
         if method == .requestUserInput {
+            // A single predefined-options question maps onto the standard
+            // option card (submit by index); other shapes have no index
+            // options and submit through the answers map.
             guard userInputQuestions.count == 1,
                   let question = userInputQuestions.first,
-                  !question.isOther,
-                  let questionOptions = question.options,
-                  !questionOptions.isEmpty else {
+                  question.isOther == false,
+                  let options = question.options,
+                  options.isEmpty == false else {
                 return []
             }
-            return questionOptions.map { option in
+            return options.map { option in
                 CodexAppServerApprovalOption(decision: .string(option.label),
                                              label: option.label,
                                              inputSequence: option.label)
@@ -687,18 +728,15 @@ struct CodexAppServerApprovalRequest: Sendable {
         }
         if method == .permissions {
             return [
-                CodexAppServerApprovalOption(
-                    decision: .string(CodexAppServerPermissionsDecision.allowTurn),
-                    label: "Yes, allow for this turn (y)",
-                    inputSequence: CodexAppServerPermissionsDecision.allowTurn),
-                CodexAppServerApprovalOption(
-                    decision: .string(CodexAppServerPermissionsDecision.allowSession),
-                    label: "Yes, allow for this session (p)",
-                    inputSequence: CodexAppServerPermissionsDecision.allowSession),
-                CodexAppServerApprovalOption(
-                    decision: .string(CodexAppServerPermissionsDecision.deny),
-                    label: "No, and tell Codex what to do differently (esc)",
-                    inputSequence: CodexAppServerPermissionsDecision.deny),
+                CodexAppServerApprovalOption(decision: .string(CodexAppServerPermissionsDecision.allowTurn),
+                                             label: "Yes, allow for this turn (y)",
+                                             inputSequence: CodexAppServerPermissionsDecision.allowTurn),
+                CodexAppServerApprovalOption(decision: .string(CodexAppServerPermissionsDecision.allowSession),
+                                             label: "Yes, allow for this session (p)",
+                                             inputSequence: CodexAppServerPermissionsDecision.allowSession),
+                CodexAppServerApprovalOption(decision: .string(CodexAppServerPermissionsDecision.deny),
+                                             label: "No, and tell Codex what to do differently (esc)",
+                                             inputSequence: CodexAppServerPermissionsDecision.deny),
             ]
         }
         if !availableDecisions.isEmpty {
@@ -733,7 +771,7 @@ struct CodexAppServerApprovalRequest: Sendable {
         }
     }
 
-    private static func option(for decision: JSONValue, method: CodexAppServerApprovalRequestMethod) -> CodexAppServerApprovalOption {
+    private static func option(for decision: JSONValue, method: CodexAppServerApprovalMethod) -> CodexAppServerApprovalOption {
         let inputSequence = decisionIdentifier(decision)
         return CodexAppServerApprovalOption(decision: decision,
                                             label: label(for: decision, method: method),
@@ -751,7 +789,7 @@ struct CodexAppServerApprovalRequest: Sendable {
         return "decision"
     }
 
-    private static func label(for decision: JSONValue, method: CodexAppServerApprovalRequestMethod) -> String {
+    private static func label(for decision: JSONValue, method: CodexAppServerApprovalMethod) -> String {
         switch decision {
         case .string(let value):
             return label(forDecisionName: value, method: method)
@@ -773,7 +811,7 @@ struct CodexAppServerApprovalRequest: Sendable {
         }
     }
 
-    private static func label(forDecisionName decision: String, method: CodexAppServerApprovalRequestMethod) -> String {
+    private static func label(forDecisionName decision: String, method: CodexAppServerApprovalMethod) -> String {
         switch decision {
         case "accept":
             switch method {
@@ -879,9 +917,19 @@ struct CodexAppServerApprovalPromptEntry: Sendable {
 }
 
 struct CodexAppServerApprovalSubmitAttempt: Sendable {
+    enum WireState: Sendable {
+        // Response computed, no bytes on the wire yet.
+        case preparing
+        // Response is being written; it may reach the app-server.
+        case writing
+        // Response was flushed to the transport.
+        case flushed
+    }
+
     let clientRequestID: String?
     let targetIndex: Int
     let response: JSONValue
+    var wireState: WireState = .preparing
 }
 
 enum CodexAppServerApprovalPhase: Sendable {
@@ -893,30 +941,63 @@ struct CodexAppServerApprovalTerminalRecord: Sendable {
     let entry: CodexAppServerApprovalPromptEntry
     let reason: String
     let event: AgentEvent
+    // Delivery attempt this terminal belongs to; a re-delivered request gets
+    // a higher attempt and therefore fresh event identities.
     let attempt: Int
 }
 
-// Connection-scoped lifecycle state for app-server approval prompts. All
-// state transitions are atomic under one lock. A local submit never creates a
-// terminal record; only an authoritative lifecycle signal or store retirement
-// does that.
+// State machine for one connection's approval requests. Every transition is a
+// single atomic step under one lock so that a request identity has exactly one
+// terminal transition:
+//
+//   pending -> submitting -> (serverRequest/resolved | turn terminal | expiry) -> terminal
+//
+// A local response flush never terminates an entry; only authoritative
+// lifecycle notifications (or connection expiry) do.
 final class CodexAppServerApprovalPromptStore: @unchecked Sendable {
     enum RegisterOutcome: Sendable {
+        // Fresh prompt (or a re-delivery that replaced a stale terminal
+        // record): present it.
         case recorded(CodexAppServerApprovalPromptEntry, attempt: Int)
+        // The server re-delivered a request we still consider active with an
+        // unchanged security payload. Any in-flight local response was
+        // evidently not accepted, so the entry (now backed by the newly
+        // delivered request) is reset to pending and re-presented.
         case reactivated(CodexAppServerApprovalPromptEntry, attempt: Int)
+        // Same request identity but the security-relevant payload changed:
+        // the old lifecycle is terminated (fail closed; its decisions and
+        // conflict guards cannot carry over) and a fresh lifecycle starts
+        // from the new request, keeping display and response atomic.
         case supersededPayloadChanged(terminal: CodexAppServerApprovalTerminalRecord,
                                       entry: CodexAppServerApprovalPromptEntry,
                                       attempt: Int)
+        // The connection generation is retiring/closed: no new prompt may be
+        // admitted or published.
         case rejectedRetired
+        // JSON-RPC protocol violation: a request whose RequestId already has
+        // a response in flight/flushed changed its content (fingerprint,
+        // item, or method). The RequestId is poisoned for this connection's
+        // lifetime — no prompt, no further response bytes with that id, and
+        // the transport must be aborted. `isNewViolation` is true only for
+        // the first observation; redeliveries of a poisoned id stay rejected
+        // without re-aborting.
+        case rejectedPoisonedRequestID(terminals: [CodexAppServerApprovalTerminalRecord], isNewViolation: Bool)
     }
 
     enum BeginSubmitOutcome: Sendable {
-        case begin(entry: CodexAppServerApprovalPromptEntry,
-                   response: JSONValue,
-                   lifecycleAttempt: Int)
+        // The lifecycle attempt token is a capability: every later wire/state
+        // transition for this submit must present it, so a submit from an
+        // older lifecycle can never complete/fail/flush into a newer one.
+        case begin(entry: CodexAppServerApprovalPromptEntry, response: JSONValue, lifecycleAttempt: Int)
+        // The submit presented a lifecycle capability token from a different
+        // (older) delivery: zero bytes may be written for it.
         case lifecycleTokenMismatch
+        // Same client request is already in flight with the same option.
         case duplicateInFlight(CodexAppServerApprovalPromptEntry)
+        // A different submit is in flight for this prompt.
         case inFlightConflict
+        // A different option was already attempted for this prompt; a second
+        // decision must fail closed.
         case optionConflict
         case terminal(CodexAppServerApprovalTerminalRecord)
         case unknown
@@ -925,17 +1006,36 @@ final class CodexAppServerApprovalPromptStore: @unchecked Sendable {
     enum SubmitCompletionOutcome: Sendable {
         case awaitingConfirmation
         case terminal(CodexAppServerApprovalTerminalRecord)
+        // The lifecycle this submit belonged to no longer exists (superseded
+        // by a newer delivery); its completion must not touch current state.
         case supersededLifecycle
     }
 
     private struct ActiveEntry {
         var entry: CodexAppServerApprovalPromptEntry
         var phase: CodexAppServerApprovalPhase
+        // Delivery attempt (1-based); bumped on every re-delivery so events
+        // for a new lifecycle are not deduplicated away downstream.
         var attempt: Int
+        // Remembered across failures so a conflicting second decision can be
+        // rejected even after the first attempt errored.
         var lastAttempt: CodexAppServerApprovalSubmitAttempt?
-        // The exact event published for this delivery. Pending snapshots reuse
-        // it, and its eventID is the capability accepted by submit.
+        // The exact event published for this delivery. Pending snapshots must
+        // reuse it (identity, seq, timestamp) instead of allocating new,
+        // unretained sequence numbers.
         var publishedEvent: AgentEvent?
+    }
+
+    // Connection-scoped wire ledger entry keyed by the normalized JSON-RPC
+    // RequestId, independent of promptID: whatever fields change (item,
+    // method, payload), the same RequestId lands in the same collision
+    // domain.
+    private struct WireOwner {
+        var promptID: String
+        var fingerprint: String
+        // A response (for `fingerprint`) is being written or was flushed.
+        var responseOnWire: Bool
+        var poisoned: Bool
     }
 
     private let lock = NSLock()
@@ -944,85 +1044,264 @@ final class CodexAppServerApprovalPromptStore: @unchecked Sendable {
     private var entriesByPromptID: [String: ActiveEntry] = [:]
     private var terminalsByPromptID: [String: CodexAppServerApprovalTerminalRecord] = [:]
     private var terminalOrder: [String] = []
+    private var wireOwnersByRequestKey: [String: WireOwner] = [:]
 
     init(terminalCapacity: Int = 128) {
         self.terminalCapacity = max(1, terminalCapacity)
     }
 
+    // Compatibility seam retained for the connection-only slice. The mutable
+    // lifecycle connection uses register(entry:makeTerminalEvent:) so it can
+    // publish supersession terminals; callers of this legacy API get the
+    // original record-and-return behavior with the caller-supplied prompt ID.
     @discardableResult
     func record(_ request: CodexAppServerApprovalRequest) -> InteractivePrompt {
         let prompt = request.makePrompt()
         return record(request, prompt: prompt)
     }
 
-    // The connection owns process-epoch identity. Accept its prebuilt prompt
-    // so the ID published to clients is exactly the ID later used for submit.
     @discardableResult
     func record(_ request: CodexAppServerApprovalRequest,
                 prompt: InteractivePrompt) -> InteractivePrompt {
         let entry = CodexAppServerApprovalPromptEntry(request: request, prompt: prompt)
         lock.withCodexApprovalLock {
-            guard !retired else {
+            guard retired == false else {
                 return
             }
-            let attempt = entriesByPromptID[prompt.promptID]?.attempt
+            let previousAttempt = entriesByPromptID[prompt.promptID]?.attempt
                 ?? terminalsByPromptID[prompt.promptID]?.attempt
                 ?? 0
             removeTerminalLocked(promptID: prompt.promptID)
             entriesByPromptID[prompt.promptID] = ActiveEntry(entry: entry,
                                                              phase: .pending,
-                                                             attempt: attempt + 1,
+                                                             attempt: previousAttempt + 1,
                                                              lastAttempt: nil,
                                                              publishedEvent: nil)
         }
         return prompt
     }
 
-    func register(
-        entry newEntry: CodexAppServerApprovalPromptEntry,
-        makeTerminalEvent: (CodexAppServerApprovalPromptEntry, String, Int) -> AgentEvent
-    ) -> RegisterOutcome {
+    func register(entry newEntry: CodexAppServerApprovalPromptEntry,
+                  makeTerminalEvent: (CodexAppServerApprovalPromptEntry, String, Int) -> AgentEvent) -> RegisterOutcome {
         lock.withCodexApprovalLock {
-            guard !retired else {
+            // Closed-admission gate: once the generation started retiring, no
+            // request may create or revive an active prompt.
+            guard retired == false else {
                 return .rejectedRetired
             }
             let promptID = newEntry.prompt.promptID
-            let newFingerprint = Self.lifecycleFingerprint(for: newEntry)
+            let requestKey = newEntry.request.requestIDKey
+            let fingerprint = newEntry.request.wireFingerprint
+
+            // Wire ledger first: the collision domain is the JSON-RPC
+            // RequestId itself, regardless of which prompt identity fields
+            // (item, method, payload) changed.
+            if let owner = wireOwnersByRequestKey[requestKey] {
+                if owner.poisoned {
+                    // Poison is permanent for this connection: no terminal
+                    // branch may resurrect the identity.
+                    return .rejectedPoisonedRequestID(terminals: [], isNewViolation: false)
+                }
+                if owner.fingerprint != fingerprint || owner.promptID != promptID {
+                    if owner.responseOnWire {
+                        // A response for different content may already be on
+                        // the wire under this id: protocol violation. Poison
+                        // the id, terminalize whatever lifecycle owned it,
+                        // publish nothing actionable, write no further bytes.
+                        wireOwnersByRequestKey[requestKey] = WireOwner(promptID: owner.promptID,
+                                                                       fingerprint: owner.fingerprint,
+                                                                       responseOnWire: owner.responseOnWire,
+                                                                       poisoned: true)
+                        var terminals: [CodexAppServerApprovalTerminalRecord] = []
+                        if let active = entriesByPromptID.removeValue(forKey: owner.promptID) {
+                            let terminal = CodexAppServerApprovalTerminalRecord(entry: active.entry,
+                                                                                reason: "superseded",
+                                                                                event: makeTerminalEvent(active.entry, "superseded", active.attempt),
+                                                                                attempt: active.attempt)
+                            insertTerminalLocked(terminal, promptID: owner.promptID)
+                            terminals.append(terminal)
+                        }
+                        return .rejectedPoisonedRequestID(terminals: terminals, isNewViolation: true)
+                    }
+                    // Pre-wire: the server replaced the outstanding request.
+                    // The old owner's lifecycle terminates (its pre-wire
+                    // submits fail the wire gate) and ownership transfers.
+                    if owner.promptID != promptID,
+                       let previousActive = entriesByPromptID.removeValue(forKey: owner.promptID) {
+                        let terminal = CodexAppServerApprovalTerminalRecord(entry: previousActive.entry,
+                                                                            reason: "superseded",
+                                                                            event: makeTerminalEvent(previousActive.entry, "superseded", previousActive.attempt),
+                                                                            attempt: previousActive.attempt)
+                        insertTerminalLocked(terminal, promptID: owner.promptID)
+                        // Fall through: the new request registers below and a
+                        // fresh lifecycle starts; the superseded terminal is
+                        // carried on the outcome via supersededPayloadChanged
+                        // when identities matched, or handled here for
+                        // cross-identity replacement.
+                        let attempt = registerFreshLocked(newEntry, promptID: promptID)
+                        wireOwnersByRequestKey[requestKey] = WireOwner(promptID: promptID,
+                                                                       fingerprint: fingerprint,
+                                                                       responseOnWire: false,
+                                                                       poisoned: false)
+                        return .supersededPayloadChanged(terminal: terminal, entry: newEntry, attempt: attempt)
+                    }
+                }
+            }
 
             if var active = entriesByPromptID[promptID] {
-                let attempt = active.attempt + 1
-                if Self.lifecycleFingerprint(for: active.entry) == newFingerprint {
+                if active.entry.request.wireFingerprint == fingerprint {
+                    // Equivalent payload: the stored entry is replaced by the
+                    // newly delivered request so display and response always
+                    // come from the same request object. The server re-asked,
+                    // so any earlier response was not accepted: the wire
+                    // ownership resets for the new delivery.
                     active.entry = newEntry
                     active.phase = .pending
-                    active.attempt = attempt
+                    active.attempt += 1
                     active.publishedEvent = nil
                     entriesByPromptID[promptID] = active
-                    return .reactivated(newEntry, attempt: attempt)
+                    // Wire taint is connection-level history, not attempt
+                    // state: once a response for this RequestId was begun or
+                    // enqueued, the taint survives identical re-deliveries
+                    // until the request is authoritatively resolved. Only the
+                    // active attempt re-arms.
+                    wireOwnersByRequestKey[requestKey] = WireOwner(promptID: promptID,
+                                                                   fingerprint: fingerprint,
+                                                                   responseOnWire: wireOwnersByRequestKey[requestKey]?.responseOnWire ?? false,
+                                                                   poisoned: false)
+                    return .reactivated(newEntry, attempt: active.attempt)
                 }
-
-                let terminal = CodexAppServerApprovalTerminalRecord(
-                    entry: active.entry,
-                    reason: "superseded",
-                    event: makeTerminalEvent(active.entry, "superseded", active.attempt),
-                    attempt: active.attempt)
+                // Payload changed under the same identity. If a response for
+                // the OLD payload is being written or was already flushed
+                // (wire ledger), this was caught above as a violation; here
+                // the phase-level wire state is the belt-and-braces check.
+                if case .submitting(let attempt) = active.phase,
+                   attempt.wireState != .preparing {
+                    entriesByPromptID.removeValue(forKey: promptID)
+                    let terminal = CodexAppServerApprovalTerminalRecord(entry: active.entry,
+                                                                        reason: "superseded",
+                                                                        event: makeTerminalEvent(active.entry, "superseded", active.attempt),
+                                                                        attempt: active.attempt)
+                    insertTerminalLocked(terminal, promptID: promptID)
+                    wireOwnersByRequestKey[requestKey] = WireOwner(promptID: promptID,
+                                                                   fingerprint: active.entry.request.wireFingerprint,
+                                                                   responseOnWire: true,
+                                                                   poisoned: true)
+                    return .rejectedPoisonedRequestID(terminals: [terminal], isNewViolation: true)
+                }
+                // No bytes can reach the wire for the old lifecycle any more:
+                // a pre-wire submit fails its beginWire check against the new
+                // attempt. Terminate the old lifecycle atomically and start a
+                // clean one; old submit attempts and conflict guards must not
+                // carry over.
+                entriesByPromptID.removeValue(forKey: promptID)
+                let terminal = CodexAppServerApprovalTerminalRecord(entry: active.entry,
+                                                                    reason: "superseded",
+                                                                    event: makeTerminalEvent(active.entry, "superseded", active.attempt),
+                                                                    attempt: active.attempt)
+                let attempt = active.attempt + 1
                 entriesByPromptID[promptID] = ActiveEntry(entry: newEntry,
                                                           phase: .pending,
                                                           attempt: attempt,
                                                           lastAttempt: nil,
                                                           publishedEvent: nil)
-                return .supersededPayloadChanged(terminal: terminal,
-                                                  entry: newEntry,
-                                                  attempt: attempt)
+                wireOwnersByRequestKey[requestKey] = WireOwner(promptID: promptID,
+                                                               fingerprint: fingerprint,
+                                                               responseOnWire: false,
+                                                               poisoned: false)
+                return .supersededPayloadChanged(terminal: terminal, entry: newEntry, attempt: attempt)
             }
-
-            let attempt = (terminalsByPromptID[promptID]?.attempt ?? 0) + 1
-            removeTerminalLocked(promptID: promptID)
-            entriesByPromptID[promptID] = ActiveEntry(entry: newEntry,
-                                                      phase: .pending,
-                                                      attempt: attempt,
-                                                      lastAttempt: nil,
-                                                      publishedEvent: nil)
+            // A re-delivered request supersedes any terminal record for the
+            // same identity: the server is authoritative that it still wants
+            // an answer. The attempt counter keeps rising so the new
+            // lifecycle produces fresh event identities.
+            let attempt = registerFreshLocked(newEntry, promptID: promptID)
+            wireOwnersByRequestKey[requestKey] = WireOwner(promptID: promptID,
+                                                           fingerprint: fingerprint,
+                                                           responseOnWire: wireOwnersByRequestKey[requestKey]?.responseOnWire ?? false,
+                                                           poisoned: false)
             return .recorded(newEntry, attempt: attempt)
+        }
+    }
+
+    private func registerFreshLocked(_ newEntry: CodexAppServerApprovalPromptEntry, promptID: String) -> Int {
+        let attempt = (terminalsByPromptID[promptID]?.attempt ?? 0) + 1
+        removeTerminalLocked(promptID: promptID)
+        entriesByPromptID[promptID] = ActiveEntry(entry: newEntry,
+                                                  phase: .pending,
+                                                  attempt: attempt,
+                                                  lastAttempt: nil,
+                                                  publishedEvent: nil)
+        return attempt
+    }
+
+    // Claims the right to write a non-approval (error) response for a
+    // server-initiated RequestId. ALL server-initiated frames share one
+    // connection-scoped collision domain: a malformed or unsupported request
+    // reusing an id whose response is already on the wire is the same
+    // protocol violation as a changed approval.
+    enum ServerErrorResponseClaim {
+        case allowed(terminals: [CodexAppServerApprovalTerminalRecord])
+        case rejectedPoisoned(terminals: [CodexAppServerApprovalTerminalRecord], isNewViolation: Bool)
+    }
+
+    func claimServerErrorResponse(requestIDKey: String,
+                                  fingerprint: String,
+                                  makeTerminalEvent: (CodexAppServerApprovalPromptEntry, String, Int) -> AgentEvent) -> ServerErrorResponseClaim {
+        lock.withCodexApprovalLock {
+            guard let owner = wireOwnersByRequestKey[requestIDKey] else {
+                wireOwnersByRequestKey[requestIDKey] = WireOwner(promptID: "",
+                                                                 fingerprint: fingerprint,
+                                                                 responseOnWire: true,
+                                                                 poisoned: false)
+                return .allowed(terminals: [])
+            }
+            if owner.poisoned {
+                return .rejectedPoisoned(terminals: [], isNewViolation: false)
+            }
+            if owner.fingerprint == fingerprint {
+                // Identical redelivery of the same malformed/unsupported
+                // request: re-sending the equivalent error is fine.
+                wireOwnersByRequestKey[requestIDKey] = WireOwner(promptID: owner.promptID,
+                                                                 fingerprint: owner.fingerprint,
+                                                                 responseOnWire: true,
+                                                                 poisoned: false)
+                return .allowed(terminals: [])
+            }
+            // Changed content under the same id.
+            var terminals: [CodexAppServerApprovalTerminalRecord] = []
+            if owner.responseOnWire {
+                // A response for different content may already be on the
+                // wire: poison, terminalize the owning lifecycle, zero bytes.
+                if let active = entriesByPromptID.removeValue(forKey: owner.promptID) {
+                    let terminal = CodexAppServerApprovalTerminalRecord(entry: active.entry,
+                                                                        reason: "superseded",
+                                                                        event: makeTerminalEvent(active.entry, "superseded", active.attempt),
+                                                                        attempt: active.attempt)
+                    insertTerminalLocked(terminal, promptID: owner.promptID)
+                    terminals.append(terminal)
+                }
+                wireOwnersByRequestKey[requestIDKey] = WireOwner(promptID: owner.promptID,
+                                                                 fingerprint: owner.fingerprint,
+                                                                 responseOnWire: owner.responseOnWire,
+                                                                 poisoned: true)
+                return .rejectedPoisoned(terminals: terminals, isNewViolation: true)
+            }
+            // Pre-wire replacement: the previous owner's lifecycle ends and
+            // the error response claims the wire.
+            if let active = entriesByPromptID.removeValue(forKey: owner.promptID) {
+                let terminal = CodexAppServerApprovalTerminalRecord(entry: active.entry,
+                                                                    reason: "superseded",
+                                                                    event: makeTerminalEvent(active.entry, "superseded", active.attempt),
+                                                                    attempt: active.attempt)
+                insertTerminalLocked(terminal, promptID: owner.promptID)
+                terminals.append(terminal)
+            }
+            wireOwnersByRequestKey[requestIDKey] = WireOwner(promptID: "",
+                                                             fingerprint: fingerprint,
+                                                             responseOnWire: true,
+                                                             poisoned: false)
+            return .allowed(terminals: terminals)
         }
     }
 
@@ -1048,7 +1327,11 @@ final class CodexAppServerApprovalPromptStore: @unchecked Sendable {
                 return .unknown
             }
             if let lifecycleToken {
-                guard active.publishedEvent?.eventID == lifecycleToken else {
+                // Server-issued lifecycle capability: a card from an older
+                // delivery (or changed payload) presents a stale token and
+                // must not decide the current lifecycle.
+                guard let published = active.publishedEvent,
+                      published.eventID == lifecycleToken else {
                     return .lifecycleTokenMismatch
                 }
             }
@@ -1063,6 +1346,8 @@ final class CodexAppServerApprovalPromptStore: @unchecked Sendable {
             }
             if let lastAttempt = active.lastAttempt,
                lastAttempt.targetIndex != targetIndex {
+                // An earlier (possibly delivered) attempt chose another
+                // option; do not blindly send a second decision.
                 return .optionConflict
             }
             guard let response = try? active.entry.request.response(targetIndex: targetIndex) else {
@@ -1074,12 +1359,13 @@ final class CodexAppServerApprovalPromptStore: @unchecked Sendable {
             active.phase = .submitting(attempt)
             active.lastAttempt = attempt
             entriesByPromptID[promptID] = active
-            return .begin(entry: active.entry,
-                          response: response,
-                          lifecycleAttempt: active.attempt)
+            return .begin(entry: active.entry, response: response, lifecycleAttempt: active.attempt)
         }
     }
 
+    // Answers-map submit for `item/tool/requestUserInput`. Shares the exact
+    // lifecycle/wire state machine with option submits; the decision
+    // identity for conflict detection is the computed response payload.
     func beginSubmitUserInput(promptID: String,
                               answers: [String: [String]],
                               clientRequestID: String?,
@@ -1091,9 +1377,11 @@ final class CodexAppServerApprovalPromptStore: @unchecked Sendable {
             guard var active = entriesByPromptID[promptID] else {
                 return .unknown
             }
-            if let lifecycleToken,
-               active.publishedEvent?.eventID != lifecycleToken {
-                return .lifecycleTokenMismatch
+            if let lifecycleToken {
+                guard let published = active.publishedEvent,
+                      published.eventID == lifecycleToken else {
+                    return .lifecycleTokenMismatch
+                }
             }
             guard let response = try? active.entry.request.userInputResponse(answers: answers) else {
                 return .optionConflict
@@ -1109,6 +1397,8 @@ final class CodexAppServerApprovalPromptStore: @unchecked Sendable {
             }
             if let lastAttempt = active.lastAttempt,
                lastAttempt.response != response {
+                // A different decision (different answers or an earlier
+                // option submit) was already attempted; fail closed.
                 return .optionConflict
             }
             let attempt = CodexAppServerApprovalSubmitAttempt(clientRequestID: clientRequestID,
@@ -1117,17 +1407,56 @@ final class CodexAppServerApprovalPromptStore: @unchecked Sendable {
             active.phase = .submitting(attempt)
             active.lastAttempt = attempt
             entriesByPromptID[promptID] = active
-            return .begin(entry: active.entry,
-                          response: response,
-                          lifecycleAttempt: active.attempt)
+            return .begin(entry: active.entry, response: response, lifecycleAttempt: active.attempt)
         }
     }
 
-    func completeSubmitFlush(promptID: String,
-                             lifecycleAttempt: Int) -> SubmitCompletionOutcome {
+    // Marks the response as entering the wire. Returns false when the
+    // lifecycle attempt is no longer current (superseded/terminalized): the
+    // caller must NOT write any bytes, because they could be interpreted as
+    // an approval of a different (changed) payload under the same JSON-RPC
+    // request id.
+    func beginWire(promptID: String, lifecycleAttempt: Int) -> Bool {
         lock.withCodexApprovalLock {
-            if let active = entriesByPromptID[promptID],
-               active.attempt != lifecycleAttempt {
+            guard var active = entriesByPromptID[promptID],
+                  active.attempt == lifecycleAttempt,
+                  case .submitting(var attempt) = active.phase else {
+                return false
+            }
+            let requestKey = active.entry.request.requestIDKey
+            if let owner = wireOwnersByRequestKey[requestKey],
+               owner.poisoned || owner.promptID != promptID {
+                return false
+            }
+            attempt.wireState = .writing
+            active.phase = .submitting(attempt)
+            entriesByPromptID[promptID] = active
+            // The ledger marks the wire as owned by this lifecycle BEFORE any
+            // byte is enqueued.
+            wireOwnersByRequestKey[requestKey] = WireOwner(promptID: promptID,
+                                                           fingerprint: active.entry.request.wireFingerprint,
+                                                           responseOnWire: true,
+                                                           poisoned: false)
+            return true
+        }
+    }
+
+    func endWireFlushed(promptID: String, lifecycleAttempt: Int) {
+        lock.withCodexApprovalLock {
+            guard var active = entriesByPromptID[promptID],
+                  active.attempt == lifecycleAttempt,
+                  case .submitting(var attempt) = active.phase else {
+                return
+            }
+            attempt.wireState = .flushed
+            active.phase = .submitting(attempt)
+            entriesByPromptID[promptID] = active
+        }
+    }
+
+    func completeSubmitFlush(promptID: String, lifecycleAttempt: Int) -> SubmitCompletionOutcome {
+        lock.withCodexApprovalLock {
+            if let active = entriesByPromptID[promptID], active.attempt != lifecycleAttempt {
                 return .supersededLifecycle
             }
             if let terminal = terminalsByPromptID[promptID] {
@@ -1136,15 +1465,18 @@ final class CodexAppServerApprovalPromptStore: @unchecked Sendable {
             guard entriesByPromptID[promptID] != nil else {
                 return .supersededLifecycle
             }
+            // Entry stays in submitting phase: the flush only proves the
+            // transport accepted the frame, not that the app-server cleared
+            // the request.
             return .awaitingConfirmation
         }
     }
 
-    func failSubmit(promptID: String,
-                    lifecycleAttempt: Int) -> SubmitCompletionOutcome {
+    func failSubmit(promptID: String, lifecycleAttempt: Int) -> SubmitCompletionOutcome {
         lock.withCodexApprovalLock {
-            if let active = entriesByPromptID[promptID],
-               active.attempt != lifecycleAttempt {
+            if let active = entriesByPromptID[promptID], active.attempt != lifecycleAttempt {
+                // A newer lifecycle owns this prompt; the failed old attempt
+                // must not disturb it.
                 return .supersededLifecycle
             }
             if let terminal = terminalsByPromptID[promptID] {
@@ -1156,9 +1488,10 @@ final class CodexAppServerApprovalPromptStore: @unchecked Sendable {
                 entriesByPromptID[promptID] = active
                 return .awaitingConfirmation
             }
-            return entriesByPromptID[promptID] == nil
-                ? .supersededLifecycle
-                : .awaitingConfirmation
+            guard entriesByPromptID[promptID] != nil else {
+                return .supersededLifecycle
+            }
+            return .awaitingConfirmation
         }
     }
 
@@ -1174,95 +1507,34 @@ final class CodexAppServerApprovalPromptStore: @unchecked Sendable {
         }
     }
 
-    func pendingStates() -> [(entry: CodexAppServerApprovalPromptEntry,
-                              phase: CodexAppServerApprovalPhase,
-                              attempt: Int,
-                              publishedEvent: AgentEvent?)] {
-        lock.withCodexApprovalLock {
-            entriesByPromptID.values.map {
-                ($0.entry, $0.phase, $0.attempt, $0.publishedEvent)
-            }
-        }
-    }
-
     func resolve(promptID: String, targetIndex: Int) throws -> JSONValue {
-        let (_, response) = try resolveEntry(promptID: promptID, targetIndex: targetIndex)
+        let (_, response) = try resolveEntry(promptID: promptID,
+                                             targetIndex: targetIndex)
         return response
     }
 
-    func resolveEntry(promptID: String,
-                      targetIndex: Int) throws -> (entry: CodexAppServerApprovalPromptEntry, response: JSONValue) {
+    func resolveEntry(
+        promptID: String,
+        targetIndex: Int
+    ) throws -> (entry: CodexAppServerApprovalPromptEntry, response: JSONValue) {
         try lock.withCodexApprovalLock {
             guard let active = entriesByPromptID[promptID] else {
                 throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
             }
             let response = try active.entry.request.response(targetIndex: targetIndex)
             entriesByPromptID.removeValue(forKey: promptID)
+            wireOwnersByRequestKey.removeValue(forKey: active.entry.request.requestIDKey)
             return (active.entry, response)
         }
     }
 
     func remove(promptID: String) -> CodexAppServerApprovalPromptEntry? {
-        let entry = lock.withCodexApprovalLock {
-            entriesByPromptID.removeValue(forKey: promptID)?.entry
-        }
-        return entry
-    }
-
-    func resolveExternally(
-        reason: String,
-        where matches: (CodexAppServerApprovalRequest) -> Bool,
-        makeEvent: (CodexAppServerApprovalPromptEntry, String, Int) -> AgentEvent
-    ) -> [CodexAppServerApprovalTerminalRecord] {
         lock.withCodexApprovalLock {
-            let matching = entriesByPromptID.values.filter {
-                matches($0.entry.request)
+            guard let active = entriesByPromptID.removeValue(forKey: promptID) else {
+                return nil
             }
-            var records: [CodexAppServerApprovalTerminalRecord] = []
-            for active in matching {
-                let promptID = active.entry.prompt.promptID
-                entriesByPromptID.removeValue(forKey: promptID)
-                let record = CodexAppServerApprovalTerminalRecord(
-                    entry: active.entry,
-                    reason: reason,
-                    event: makeEvent(active.entry, reason, active.attempt),
-                    attempt: active.attempt)
-                insertTerminalLocked(record, promptID: promptID)
-                records.append(record)
-            }
-            return records
-        }
-    }
-
-    func resolveAllExternally(
-        reason: String,
-        makeEvent: (CodexAppServerApprovalPromptEntry, String, Int) -> AgentEvent
-    ) -> [CodexAppServerApprovalTerminalRecord] {
-        resolveExternally(reason: reason,
-                          where: { _ in true },
-                          makeEvent: makeEvent)
-    }
-
-    func retireAndResolveAll(
-        reason: String,
-        makeEvent: (CodexAppServerApprovalPromptEntry, String, Int) -> AgentEvent
-    ) -> [CodexAppServerApprovalTerminalRecord] {
-        lock.withCodexApprovalLock {
-            retired = true
-            let activeEntries = Array(entriesByPromptID.values)
-            var records: [CodexAppServerApprovalTerminalRecord] = []
-            for active in activeEntries {
-                let promptID = active.entry.prompt.promptID
-                let record = CodexAppServerApprovalTerminalRecord(
-                    entry: active.entry,
-                    reason: reason,
-                    event: makeEvent(active.entry, reason, active.attempt),
-                    attempt: active.attempt)
-                insertTerminalLocked(record, promptID: promptID)
-                records.append(record)
-            }
-            entriesByPromptID.removeAll()
-            return records
+            wireOwnersByRequestKey.removeValue(forKey: active.entry.request.requestIDKey)
+            return active.entry
         }
     }
 
@@ -1272,9 +1544,65 @@ final class CodexAppServerApprovalPromptStore: @unchecked Sendable {
         }
     }
 
-    func terminalRecordCount() -> Int {
+    func pendingStates() -> [(entry: CodexAppServerApprovalPromptEntry, phase: CodexAppServerApprovalPhase, attempt: Int, publishedEvent: AgentEvent?)] {
         lock.withCodexApprovalLock {
-            terminalsByPromptID.count
+            entriesByPromptID.values.map { ($0.entry, $0.phase, $0.attempt, $0.publishedEvent) }
+        }
+    }
+
+    // Atomically removes matching active entries and records their terminal
+    // state. `makeEvent` runs under the lock so no submit can interleave
+    // between removal and the terminal record becoming visible.
+    func resolveExternally(reason: String,
+                           where matches: (CodexAppServerApprovalRequest) -> Bool,
+                           makeEvent: (CodexAppServerApprovalPromptEntry, String, Int) -> AgentEvent) -> [CodexAppServerApprovalTerminalRecord] {
+        lock.withCodexApprovalLock {
+            let matching = entriesByPromptID.values.filter { matches($0.entry.request) }
+            var records: [CodexAppServerApprovalTerminalRecord] = []
+            for active in matching {
+                let promptID = active.entry.prompt.promptID
+                entriesByPromptID.removeValue(forKey: promptID)
+                // Authoritative resolution ends the request's wire history:
+                // the server acknowledged this RequestId, so a future reuse
+                // (which a correct server never does) starts clean.
+                wireOwnersByRequestKey.removeValue(forKey: active.entry.request.requestIDKey)
+                let record = CodexAppServerApprovalTerminalRecord(entry: active.entry,
+                                                                  reason: reason,
+                                                                  event: makeEvent(active.entry, reason, active.attempt),
+                                                                  attempt: active.attempt)
+                insertTerminalLocked(record, promptID: promptID)
+                records.append(record)
+            }
+            return records
+        }
+    }
+
+    func resolveAllExternally(reason: String,
+                              makeEvent: (CodexAppServerApprovalPromptEntry, String, Int) -> AgentEvent) -> [CodexAppServerApprovalTerminalRecord] {
+        resolveExternally(reason: reason, where: { _ in true }, makeEvent: makeEvent)
+    }
+
+    // Atomically retires the generation and terminalizes everything that was
+    // admitted before. Requests racing with close either land before this
+    // (and are terminalized here) or after (and are rejected by the
+    // closed-admission gate); a retired generation can never end up with an
+    // active prompt.
+    func retireAndResolveAll(reason: String,
+                             makeEvent: (CodexAppServerApprovalPromptEntry, String, Int) -> AgentEvent) -> [CodexAppServerApprovalTerminalRecord] {
+        lock.withCodexApprovalLock {
+            retired = true
+            var records: [CodexAppServerApprovalTerminalRecord] = []
+            for active in entriesByPromptID.values {
+                let promptID = active.entry.prompt.promptID
+                let record = CodexAppServerApprovalTerminalRecord(entry: active.entry,
+                                                                  reason: reason,
+                                                                  event: makeEvent(active.entry, reason, active.attempt),
+                                                                  attempt: active.attempt)
+                insertTerminalLocked(record, promptID: promptID)
+                records.append(record)
+            }
+            entriesByPromptID.removeAll()
+            return records
         }
     }
 
@@ -1284,45 +1612,13 @@ final class CodexAppServerApprovalPromptStore: @unchecked Sendable {
         }
     }
 
-    private static func lifecycleFingerprint(
-        for entry: CodexAppServerApprovalPromptEntry
-    ) -> String {
-        let request = entry.request
-        var value: [String: JSONValue] = [
-            "request_id": .string(request.requestID.storageKey),
-            "method": .string(request.method.rawValue),
-            "thread_id": .string(request.threadID),
-            "turn_id": .string(request.turnID),
-            "item_id": .string(request.itemID),
-            "started_at_ms": .string(String(request.startedAtMs)),
-            "command_actions": .array(request.commandActions.map(JSONValue.string)),
-            "network_policy_amendments": .array(request.proposedNetworkPolicyAmendments),
-            "available_decisions": .array(request.availableDecisions),
-            "prompt": entry.prompt.jsonValue,
-        ]
-        if let approvalID = request.approvalID { value["approval_id"] = .string(approvalID) }
-        if let reason = request.reason { value["reason"] = .string(reason) }
-        if let command = request.command { value["command"] = .string(command) }
-        if let cwd = request.cwd { value["cwd"] = .string(cwd) }
-        if let host = request.networkHost { value["network_host"] = .string(host) }
-        if let networkProtocol = request.networkProtocol { value["network_protocol"] = .string(networkProtocol) }
-        if let amendment = request.proposedExecpolicyAmendment { value["execpolicy_amendment"] = amendment }
-        if let grantRoot = request.grantRoot { value["grant_root"] = .string(grantRoot) }
-        if let permissions = request.requestedPermissions { value["permissions"] = permissions }
-        if let additional = request.additionalPermissions { value["additional_permissions"] = additional }
-        if let environmentID = request.environmentID { value["environment_id"] = .string(environmentID) }
-        if let autoResolutionMs = request.autoResolutionMs { value["auto_resolution_ms"] = .string(String(autoResolutionMs)) }
-
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        let data = (try? encoder.encode(JSONValue.object(value))) ?? Data()
-        return String(decoding: data, as: UTF8.self)
+    func terminalRecordCount() -> Int {
+        lock.withCodexApprovalLock {
+            terminalsByPromptID.count
+        }
     }
 
-    private func insertTerminalLocked(
-        _ record: CodexAppServerApprovalTerminalRecord,
-        promptID: String
-    ) {
+    private func insertTerminalLocked(_ record: CodexAppServerApprovalTerminalRecord, promptID: String) {
         if terminalsByPromptID[promptID] == nil {
             terminalOrder.append(promptID)
         }

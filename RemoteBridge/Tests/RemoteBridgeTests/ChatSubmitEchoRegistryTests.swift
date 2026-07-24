@@ -13,6 +13,8 @@ final class ChatSubmitEchoRegistryTests: XCTestCase {
                                                 clientRequestID: "local-1"), .started)
 
         now = Date(timeIntervalSince1970: 105)
+        // The original is still in flight (pending) — a duplicate must not
+        // be told success.
         XCTAssertEqual(registry.beginSubmission(workspaceID: "workspace-1",
                                                 panelID: "panel-1",
                                                 sessionID: "session-1",
@@ -20,19 +22,15 @@ final class ChatSubmitEchoRegistryTests: XCTestCase {
                                                 clientRequestID: "local-1"), .duplicate(.pending))
     }
 
-    func testDeliveredSubmissionReportsDeliveredDuplicate() {
+    func testBeginSubmissionDuplicateAfterDeliveredIsReportedAsDelivered() {
         let registry = ChatSubmitEchoRegistry()
         XCTAssertEqual(registry.beginSubmission(workspaceID: "workspace-1",
                                                 panelID: "panel-1",
                                                 sessionID: "session-1",
                                                 vendor: "codex",
                                                 clientRequestID: "local-1"), .started)
-
-        registry.markDelivered(workspaceID: "workspace-1",
-                               panelID: "panel-1",
-                               sessionID: "session-1",
-                               vendor: "codex",
-                               clientRequestID: "local-1")
+        registry.markDelivered(workspaceID: "workspace-1", panelID: "panel-1",
+                               sessionID: "session-1", vendor: "codex", clientRequestID: "local-1")
 
         XCTAssertEqual(registry.beginSubmission(workspaceID: "workspace-1",
                                                 panelID: "panel-1",
@@ -41,19 +39,15 @@ final class ChatSubmitEchoRegistryTests: XCTestCase {
                                                 clientRequestID: "local-1"), .duplicate(.delivered))
     }
 
-    func testIndeterminateSubmissionReportsIndeterminateDuplicate() {
+    func testBeginSubmissionDuplicateAfterIndeterminateIsReportedAsIndeterminate() {
         let registry = ChatSubmitEchoRegistry()
         XCTAssertEqual(registry.beginSubmission(workspaceID: "workspace-1",
                                                 panelID: "panel-1",
                                                 sessionID: "session-1",
                                                 vendor: "codex",
                                                 clientRequestID: "local-1"), .started)
-
-        registry.markIndeterminate(workspaceID: "workspace-1",
-                                   panelID: "panel-1",
-                                   sessionID: "session-1",
-                                   vendor: "codex",
-                                   clientRequestID: "local-1")
+        registry.markIndeterminate(workspaceID: "workspace-1", panelID: "panel-1",
+                                   sessionID: "session-1", vendor: "codex", clientRequestID: "local-1")
 
         XCTAssertEqual(registry.beginSubmission(workspaceID: "workspace-1",
                                                 panelID: "panel-1",
@@ -62,25 +56,22 @@ final class ChatSubmitEchoRegistryTests: XCTestCase {
                                                 clientRequestID: "local-1"), .duplicate(.indeterminate))
     }
 
-    func testCancelledSubmissionCanBeginAgain() {
+    func testCancelSubmissionFreesTheIDForAGenuineRetry() {
         let registry = ChatSubmitEchoRegistry()
         XCTAssertEqual(registry.beginSubmission(workspaceID: "workspace-1",
                                                 panelID: "panel-1",
                                                 sessionID: "session-1",
                                                 vendor: "codex",
                                                 clientRequestID: "local-1"), .started)
-
-        registry.cancelSubmission(workspaceID: "workspace-1",
-                                  panelID: "panel-1",
-                                  sessionID: "session-1",
-                                  vendor: "codex",
-                                  clientRequestID: "local-1")
+        registry.cancelSubmission(workspaceID: "workspace-1", panelID: "panel-1",
+                                  sessionID: "session-1", vendor: "codex", clientRequestID: "local-1")
 
         XCTAssertEqual(registry.beginSubmission(workspaceID: "workspace-1",
                                                 panelID: "panel-1",
                                                 sessionID: "session-1",
                                                 vendor: "codex",
-                                                clientRequestID: "local-1"), .started)
+                                                clientRequestID: "local-1"), .started,
+                       "a cancelled reservation must allow a genuinely fresh attempt")
     }
 
     func testBeginSubmissionAllowsSameClientRequestIDAcrossDifferentPanelSessionOrVendor() {

@@ -1689,14 +1689,23 @@ final class JSONLFileTailer {
         self.source = source
     }
 
+    // Test observability at the CALLEE: records every beforeOffset this
+    // tailer actually RECEIVED — a call-site mutation cannot fake it.
+    private(set) var receivedBackfillOffsetsForTesting: [Int] = []
+
+    func resetBackfillObservationForTesting() {
+        receivedBackfillOffsetsForTesting = []
+    }
+
     func backfill(beforeOffset: Int, limit: Int) throws -> Bool {
+        receivedBackfillOffsetsForTesting.append(beforeOffset)
         guard beforeOffset > 0, limit > 0 else {
             return false
         }
-        // Honor the caller's anchor. A fresh client may request a newer range
-        // than the deepest page another client already read; neither the
-        // earliest observed offset nor a sticky start-of-file marker may
-        // redirect or block that request.
+        // Honor the CALLER's anchor: a fresh client may legitimately request
+        // a NEWER range than the deepest page another client already read —
+        // neither `earliestLoadedOffset` nor a sticky EOF marker may redirect
+        // or block that request.
         let lines = try JSONLFileReader.readBefore(fileURL: fileURL,
                                                    beforeOffset: beforeOffset,
                                                    limit: limit)
@@ -1710,8 +1719,7 @@ final class JSONLFileTailer {
         for (offset, line) in lines {
             lineHandler(offset, line)
         }
-        earliestLoadedOffset = min(earliestLoadedOffset ?? Int.max,
-                                   lines.first?.offset ?? Int.max)
+        earliestLoadedOffset = min(earliestLoadedOffset ?? Int.max, lines.first?.offset ?? Int.max)
         reachedStartOfFile = (lines.first?.offset ?? 0) == 0
         return true
     }
@@ -2301,9 +2309,9 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private var tailer: JSONLFileTailer?
     private var transcriptURL: URL?
     private var maxObservedSeq = transcriptSessionStartedSequence
-    // File offsets restart at zero for each transcript source. This base
-    // keeps the public cursor monotonic across source switches while still
-    // allowing an exact inverse mapping to the current file.
+    // Per-source sequence base (Codex-style): a NEW source epoch emits every
+    // file-backed seq above the previous stream, keeping the Hub cursor
+    // monotonic while raw offsets stay local to the new file.
     private var transcriptSequenceBase = transcriptSessionStartedSequence
     private var didPublishStart = false
     private var didPublishEnd = false
@@ -2311,6 +2319,15 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private var isBackfillingHistory = false
     private var pendingLocalCommand: ClaudeLocalCommand?
     private var activeAskUserQuestionPromptIDByToolCallID = [String: String]()
+    // Historical replay transaction: raw historical lines (offset-sorted,
+    // capacity-limited) are re-parsed with a FRESH parser state on every
+    // page, so cross-page correlations (Ask across pages, /context pairs)
+    // derive complete history without touching live parser state.
+    private var historicalRawLines: [(offset: Int, line: String)] = []
+    private var historicalReplayProducts: [AgentEvent] = []
+    private var isCollectingBackfillPage = false
+    private var collectedBackfillPage: [(offset: Int, line: String)] = []
+    private let historicalReplayWindowCapacity: Int
 
     private struct LiveParserStateSnapshot {
         let unsupportedVersions: Set<String>
@@ -2332,6 +2349,11 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         unsupportedVersions = []
         pendingLocalCommand = nil
         activeAskUserQuestionPromptIDByToolCallID = [:]
+        // The historical replay is an ISOLATED transaction with its own
+        // fresh parentUuid chain: it must not inherit (or pollute) the
+        // live lineage map, and a page that never reaches back to a real
+        // user-turn root must not misattribute lines to whatever the LIVE
+        // map happened to have cached for a reused uuid.
         lifecycleTurnLineageByUuid = [:]
         lifecycleTurnLineageOrder = []
     }
@@ -2344,11 +2366,94 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         lifecycleTurnLineageOrder = snapshot.lifecycleTurnLineageOrder
     }
 
+    private func transcriptEventSequenceAnchor(forLineOffset lineOffset: Int) -> Int {
+        transcriptSequenceBase + transcriptEventSequence(lineOffset: lineOffset, ordinal: 0)
+    }
+
+    // Reverse seq→line-offset mapping for the CURRENT source: fails closed
+    // for cursors at/below the base (they belong to a previous source).
     private func transcriptLineOffsetInCurrentSource(for seq: Int) -> Int? {
         guard seq > transcriptSequenceBase else {
             return nil
         }
         return transcriptLineOffset(for: seq - transcriptSequenceBase)
+    }
+
+    private var lastBackfillPageOffsets: ClosedRange<Int>?
+    private var lastRequestedBackfillAnchorSeq: Int?
+    // Test observability: the EXACT first beforeOffset the tailer RECEIVED
+    // during the last backfill call — recorded at the callee entry.
+    var lastBackfillStartOffsetForTesting: Int? {
+        queue.sync { tailer?.receivedBackfillOffsetsForTesting.first }
+    }
+    // Correlation-closure retention: derived terminals / context summaries
+    // whose OPENER may outlive them in the bounded raw window. Eviction must
+    // never leave half a lifecycle — a window that still shows the opener
+    // gets its retained closure re-added to the replacement.
+    private var retainedHistoricalClosuresByKey: [String: AgentEvent] = [:]
+    private var retainedHistoricalClosureKeyOrder: [String] = []
+    let retainedHistoricalClosureCapacity: Int
+    // Resolution safety is derived from the FILE (the source of truth), not
+    // from an evictable in-memory ledger or a fixed line budget: any finite
+    // in-memory threshold just moves the semantic-eviction bug. The forward
+    // probe scans to EOF (bounded by the transcript itself).
+
+    private func mergeHistoricalPage(_ page: [(offset: Int, line: String)]) {
+        guard let pageMin = page.map(\.offset).min(),
+              let pageMax = page.map(\.offset).max() else {
+            return
+        }
+        lastBackfillPageOffsets = pageMin...pageMax
+        var merged = page + historicalRawLines
+        merged.sort { $0.offset < $1.offset }
+        var seenOffsets = Set<Int>()
+        merged = merged.filter { seenOffsets.insert($0.offset).inserted }
+        // Direction-aware eviction: the JUST-REQUESTED page always stays; the
+        // window sheds whichever end is farther from it, so deep old-paging
+        // sheds the newest end while a fresh newer-range request sheds the
+        // oldest end. The Hub's historical replacement scope follows the
+        // window exactly.
+        while merged.count > historicalReplayWindowCapacity {
+            let distanceToOldEnd = pageMin - (merged.first?.offset ?? pageMin)
+            let distanceToNewEnd = (merged.last?.offset ?? pageMax) - pageMax
+            if distanceToNewEnd >= distanceToOldEnd {
+                merged.removeLast()
+            } else {
+                merged.removeFirst()
+            }
+        }
+        historicalRawLines = merged
+    }
+
+    // The historical parse is an isolated transaction: fresh parser state,
+    // full replay of the window in offset order, storage-only publication
+    // (the Hub dedupes replays by original line identity), then the live
+    // parser state is restored untouched.
+    @discardableResult
+    private func replayHistoricalWindow() -> [AgentEvent] {
+        let liveSnapshot = captureLiveParserState()
+        resetParserStateForHistoricalReplay()
+        historicalReplayProducts = []
+        isBackfillingHistory = true
+        for entry in historicalRawLines {
+            consume(line: entry.line, lineOffset: entry.offset)
+        }
+        isBackfillingHistory = false
+        restoreLiveParserState(liveSnapshot)
+        // Atomic replacement: the Hub's historical state becomes EXACTLY the
+        // window's derived set — retracting derivations (newer duplicates,
+        // cross-page statuses) that this replay proved wrong. The anchor
+        // marks the just-requested page so capacity trims never drop it.
+        // The trim anchor is the REQUESTED before-seq: when the Hub bound is
+        // smaller than the window, the retained interval stays adjacent to
+        // the caller's anchor so its next cursor advances without a gap.
+        let anchorSeq = lastRequestedBackfillAnchorSeq
+        let products = reconcileHistoricalCorrelationClosures(historicalReplayProducts)
+        hub.replaceHistoricalEvents(sessionID: record.sessionID,
+                                    events: products,
+                                    anchorSeq: anchorSeq)
+        historicalReplayProducts = []
+        return products
     }
 
     private struct ClaudeLocalCommand {
@@ -2372,11 +2477,210 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         let breakdown: [ClaudeContextMetric]
     }
 
+    private func retainClosure(key: String, event: AgentEvent) {
+        if retainedHistoricalClosuresByKey[key] == nil {
+            retainedHistoricalClosureKeyOrder.append(key)
+            while retainedHistoricalClosureKeyOrder.count > retainedHistoricalClosureCapacity {
+                let evicted = retainedHistoricalClosureKeyOrder.removeFirst()
+                retainedHistoricalClosuresByKey.removeValue(forKey: evicted)
+            }
+        }
+        retainedHistoricalClosuresByKey[key] = event
+    }
+
+    private func fileProvesClosureExists(afterLineOffset offset: Int,
+                                         matching predicate: (String) -> Bool,
+                                         terminatedBy terminator: ((String) -> Bool)? = nil) -> Bool {
+        guard let transcriptURL,
+              let handle = try? FileHandle(forReadingFrom: transcriptURL) else {
+            return false
+        }
+        defer { try? handle.close() }
+        guard offset >= 0, (try? handle.seek(toOffset: UInt64(offset))) != nil else {
+            return false
+        }
+        var buffer = Data()
+        var skippedOpenerLine = false
+        func check(_ lineData: Data) -> Bool? {
+            guard skippedOpenerLine else {
+                skippedOpenerLine = true
+                return nil
+            }
+            guard let line = String(data: lineData, encoding: .utf8) else {
+                return nil
+            }
+            // Production recognizes a NEW local command before treating
+            // content as stdout: the terminator is checked FIRST so a line
+            // carrying both a command tag and parseable stdout ends the
+            // previous search instead of closing it.
+            if let terminator, terminator(line) {
+                return false
+            }
+            if predicate(line) {
+                return true
+            }
+            return nil
+        }
+        while true {
+            guard let chunk = try? handle.read(upToCount: 64 * 1024), chunk.isEmpty == false else {
+                break
+            }
+            buffer.append(chunk)
+            while let newlineIndex = buffer.firstIndex(of: UInt8(ascii: "\n")) {
+                let lineData = buffer.subdata(in: buffer.startIndex..<newlineIndex)
+                buffer.removeSubrange(buffer.startIndex...newlineIndex)
+                if let verdict = check(lineData) {
+                    return verdict
+                }
+            }
+        }
+        // The transcript's LAST line may not have its newline yet: the
+        // residual buffer is still a complete record for closure purposes.
+        if buffer.isEmpty == false, let verdict = check(buffer) {
+            return verdict
+        }
+        return false
+    }
+
+    // The probe mirrors the production parser's OUTER admission: a record
+    // only counts when consume() itself would accept and derive from it —
+    // correct outer type, user path, and this session's identity.
+    private func probeAdmittedUserObject(_ line: String) -> [String: Any]? {
+        guard let data = line.data(using: .utf8),
+              let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return nil
+        }
+        if let sessionID = object["sessionId"] as? String, sessionID != record.sessionID {
+            return nil
+        }
+        if let version = object["version"] as? String, !version.hasPrefix(claudeTranscriptMajorVersion) {
+            return nil
+        }
+        guard (object["type"] as? String) == "user",
+              object["uuid"] is String,
+              let message = object["message"] as? [String: Any],
+              message["role"] as? String == "user" else {
+            return nil
+        }
+        return object
+    }
+
+    // Exact closure recognition: only a REAL tool_result whose tool_use_id
+    // equals the prompt id, on a record the production parser would accept.
+    private func lineProvesAskClosure(_ line: String, promptID: String) -> Bool {
+        guard let object = probeAdmittedUserObject(line),
+              let message = object["message"] as? [String: Any],
+              let content = message["content"] as? [[String: Any]] else {
+            return false
+        }
+        return content.contains { block in
+            (block["type"] as? String) == "tool_result" && (block["tool_use_id"] as? String) == promptID
+        }
+    }
+
+    // Exact context closure: production only treats STRING-content user
+    // records as local command envelopes, and the summary must actually be
+    // parseable by the production context-summary parser.
+    private func lineProvesContextClosure(_ line: String) -> Bool {
+        guard let object = probeAdmittedUserObject(line),
+              let message = object["message"] as? [String: Any],
+              let content = message["content"] as? String else {
+            return false
+        }
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let stdout = Self.localCommandStdout(in: trimmed) else {
+            return false
+        }
+        return Self.markdownForClaudeContext(stdout: stdout) != nil
+    }
+
+    // A later context COMMAND ends the previous command's closure search: a
+    // summary belongs to the nearest preceding unmatched command.
+    private func lineIsContextCommand(_ line: String) -> Bool {
+        guard let object = probeAdmittedUserObject(line),
+              let message = object["message"] as? [String: Any],
+              let content = message["content"] as? String else {
+            return false
+        }
+        return Self.localCommandName(in: content.trimmingCharacters(in: .whitespacesAndNewlines)) != nil
+    }
+
+    private func reconcileHistoricalCorrelationClosures(_ products: [AgentEvent]) -> [AgentEvent] {
+        // 1. Record closures visible in THIS window, keyed by their SPECIFIC
+        //    opener event (a later lifecycle reusing the same promptID must
+        //    never inherit an old terminal).
+        for event in products {
+            if event.type == .interactivePromptResolved,
+               let promptID = event.metadata?["prompt_id"] {
+                let opener = products.last { candidate in
+                    candidate.type == .interactivePrompt
+                        && candidate.metadata?["prompt_id"] == promptID
+                        && candidate.seq < event.seq
+                }
+                if let opener {
+                    retainClosure(key: "ask:\(opener.eventID)", event: event)
+                }
+            }
+            if event.metadata?["tidey_generated"] == "claude_context" {
+                let opener = products.last { candidate in
+                    candidate.metadata?["tidey_generated"] == "claude_context_command" && candidate.seq < event.seq
+                }
+                if let opener {
+                    retainClosure(key: "context:\(opener.eventID)", event: event)
+                }
+            }
+        }
+        // 2. Re-add retained closures whose opener is in the window but whose
+        //    closing event was evicted; when the bounded retention has lost
+        //    the closure of a KNOWN-resolved opener, the opener is withdrawn
+        //    (fail closed) instead of reviving.
+        var reconciled = products
+        var presentIDs = Set(products.map(\.eventID))
+        var withdrawnOpenerIDs = Set<String>()
+        for event in products {
+            if event.type == .interactivePrompt,
+               let promptID = event.metadata?["prompt_id"],
+               products.contains(where: { $0.type == .interactivePromptResolved && $0.metadata?["prompt_id"] == promptID && $0.seq > event.seq }) == false {
+                if let retained = retainedHistoricalClosuresByKey["ask:\(event.eventID)"] {
+                    if presentIDs.insert(retained.eventID).inserted {
+                        reconciled.append(retained)
+                    }
+                } else if let promptID = event.metadata?["prompt_id"],
+                          let openerOffset = transcriptLineOffsetInCurrentSource(for: event.seq),
+                          fileProvesClosureExists(afterLineOffset: openerOffset,
+                                                  matching: { self.lineProvesAskClosure($0, promptID: promptID) }) {
+                    withdrawnOpenerIDs.insert(event.eventID)
+                }
+            }
+            if event.metadata?["tidey_generated"] == "claude_context_command",
+               products.contains(where: { $0.metadata?["tidey_generated"] == "claude_context" && $0.seq > event.seq }) == false {
+                if let retained = retainedHistoricalClosuresByKey["context:\(event.eventID)"] {
+                    if presentIDs.insert(retained.eventID).inserted {
+                        reconciled.append(retained)
+                    }
+                } else if let openerOffset = transcriptLineOffsetInCurrentSource(for: event.seq),
+                          fileProvesClosureExists(afterLineOffset: openerOffset,
+                                                  matching: { self.lineProvesContextClosure($0) },
+                                                  terminatedBy: { self.lineIsContextCommand($0) }) {
+                    withdrawnOpenerIDs.insert(event.eventID)
+                }
+            }
+        }
+        if withdrawnOpenerIDs.isEmpty == false {
+            reconciled.removeAll { withdrawnOpenerIDs.contains($0.eventID) }
+        }
+        return reconciled.sorted { $0.seq < $1.seq }
+    }
+
     init(record: AgentSessionRegistryRecord,
          fileManager: FileManager = .default,
          hub: AgentEventHub,
          socketClient: TideyCommandSending? = nil,
-         chatSubmitEchoRegistry: ChatSubmitEchoRegistry? = nil) {
+         chatSubmitEchoRegistry: ChatSubmitEchoRegistry? = nil,
+         historicalReplayWindowCapacity: Int = 4000,
+         retainedHistoricalClosureCapacity: Int = 256) {
+        self.historicalReplayWindowCapacity = max(1, historicalReplayWindowCapacity)
+        self.retainedHistoricalClosureCapacity = max(1, retainedHistoricalClosureCapacity)
         self.record = record
         self.fileManager = fileManager
         self.hub = hub
@@ -2450,10 +2754,12 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         }
     }
 
-    // Everything that could let the OLD source's live lifecycle leak into
-    // the new one is revoked: the old tailer, parser correlation, and
-    // three-state generation. Hook epoch retirement survives so a retired
-    // wrapper cannot re-enter through a transcript source switch.
+    // Everything that could let the OLD source suppress or leak into the new
+    // one is revoked: the old tailer (no late injection), the historical
+    // window/retention, the Hub's stored products AND idempotency sets (a
+    // reused eventID must be re-acceptable), and the parser correlation /
+    // notification state. Seq high-water and reservations survive so
+    // subscriber cursors stay monotonic.
     // The SAME canonicalization the resolver uses: tilde expansion +
     // standardized file URL — two resolver-equivalent spellings never count
     // as different sources.
@@ -2464,7 +2770,16 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private func beginNewSourceEpoch() {
         tailer?.stop()
         tailer = nil
+        // New-source file offsets restart at 0: rebase every future emitted
+        // seq above everything this session has already published.
         transcriptSequenceBase = maxObservedSeq
+        historicalRawLines = []
+        collectedBackfillPage = []
+        historicalReplayProducts = []
+        lastBackfillPageOffsets = nil
+        lastRequestedBackfillAnchorSeq = nil
+        retainedHistoricalClosuresByKey = [:]
+        retainedHistoricalClosureKeyOrder = []
         activeAskUserQuestionPromptIDByToolCallID = [:]
         pendingLocalCommand = nil
         unsupportedVersions = []
@@ -2496,8 +2811,9 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                        vendor: record.vendor,
                                        generation: lifecycleGeneration)
         openLifecycleQuestionToolCallIDs = []
-        promptNotificationDeduper.remove(sessionID: record.sessionID)
+        promptNotificationDeduper.clearSession(record.sessionID)
         hub.beginNewSourceEpoch(sessionID: record.sessionID)
+        hub.replaceHistoricalEvents(sessionID: record.sessionID, events: [], anchorSeq: nil)
         transcriptURL = nil
     }
 
@@ -2513,14 +2829,36 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                   beforeOffset > 0 else {
                 return false
             }
-            let liveParserState = captureLiveParserState()
-            resetParserStateForHistoricalReplay()
-            isBackfillingHistory = true
-            defer {
-                isBackfillingHistory = false
-                restoreLiveParserState(liveParserState)
+            // The requested anchor is honored exactly; when the page derives
+            // no event visible below the anchor (so the client's oldest_seq
+            // cursor could never advance), keep reading deeper within this
+            // same transaction until progress is visible or the file starts.
+            // A read never exceeds the raw window capacity: reading more and
+            // then evicting would skip lines before their FIRST parse. The
+            // caller pages onward from the returned oldest_seq instead.
+            let effectiveLimit = min(limit, historicalReplayWindowCapacity)
+            lastRequestedBackfillAnchorSeq = beforeSeq
+            var pageAnchorOffset = beforeOffset
+            var loadedAny = false
+            tailer.resetBackfillObservationForTesting()
+            while true {
+                isCollectingBackfillPage = true
+                collectedBackfillPage = []
+                let loaded = (try? tailer.backfill(beforeOffset: pageAnchorOffset, limit: effectiveLimit)) ?? false
+                isCollectingBackfillPage = false
+                guard loaded, collectedBackfillPage.isEmpty == false else {
+                    return loadedAny
+                }
+                loadedAny = true
+                let pageMinOffset = collectedBackfillPage.map(\.offset).min() ?? pageAnchorOffset
+                mergeHistoricalPage(collectedBackfillPage)
+                collectedBackfillPage = []
+                let products = replayHistoricalWindow()
+                if products.contains(where: { $0.seq < beforeSeq }) || pageMinOffset <= 0 {
+                    return true
+                }
+                pageAnchorOffset = pageMinOffset
             }
-            return (try? tailer.backfill(beforeOffset: beforeOffset, limit: limit)) ?? false
         }
     }
 
@@ -2596,7 +2934,12 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         let tailer = JSONLFileTailer(fileURL: transcriptURL,
                                      queue: queue,
                                      lineHandler: { [weak self] offset, line in
-                                         self?.consume(line: line, lineOffset: offset)
+                                         guard let self else { return }
+                                         if self.isCollectingBackfillPage {
+                                             self.collectedBackfillPage.append((offset: offset, line: line))
+                                             return
+                                         }
+                                         self.consume(line: line, lineOffset: offset)
                                      },
                                      invalidationHandler: { [weak self] in
                                          self?.handleTailerInvalidation()
@@ -2612,8 +2955,9 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
 
     private func handleTailerInvalidation() {
         // The transcript source is gone: a delete-and-recreate at the SAME
-        // path is a new lifecycle source identity exactly like a registry
-        // path change.
+        // path is a new source identity exactly like a registry path change —
+        // the FULL epoch reset applies (history, Hub live/seen, parser
+        // correlation, notification state), not a historical-only clear.
         beginNewSourceEpoch()
         if resolverTimer == nil {
             startResolver()
@@ -2669,22 +3013,25 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         }
         let timestamp = (object["timestamp"] as? String) ?? ISO8601DateFormatter().string(from: Date())
         let version = object["version"] as? String
-        if let version,
-           !version.hasPrefix(claudeTranscriptMajorVersion),
-           !unsupportedVersions.contains(version) {
-            unsupportedVersions.insert(version)
-            publishFileBacked(kind: .status,
-                              lineOffset: lineOffset,
-                              ordinal: 0,
-                              eventID: "status:\(record.sessionID):unsupported-version:\(version)",
-                              timestamp: timestamp,
-                              role: nil,
-                              text: "Unsupported Claude transcript version \(version)",
-                              name: nil,
-                              input: nil,
-                              output: nil,
-                              toolCallID: nil,
-                              metadata: ["reason": "unsupported_version"])
+        if let version, !version.hasPrefix(claudeTranscriptMajorVersion) {
+            // EVERY unsupported record is rejected; only the status
+            // notification is deduped — a second same-version record must
+            // not silently continue parsing.
+            if !unsupportedVersions.contains(version) {
+                unsupportedVersions.insert(version)
+                publishFileBacked(kind: .status,
+                                  lineOffset: lineOffset,
+                                  ordinal: 0,
+                                  eventID: "status:\(record.sessionID):\(lineOffset):unsupported-version:\(version)",
+                                  timestamp: timestamp,
+                                  role: nil,
+                                  text: "Unsupported Claude transcript version \(version)",
+                                  name: nil,
+                                  input: nil,
+                                  output: nil,
+                                  toolCallID: nil,
+                                  metadata: ["reason": "unsupported_version"])
+            }
             return
         }
 
@@ -3358,9 +3705,9 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                metadata: baseMetadata(resolvedMetadata),
                                payload: payload)
         if isBackfillingHistory {
-            hub.publish(event,
-                        deliverToSubscribers: false,
-                        storage: .historicalBackfill)
+            // Historical replay is a transaction: products are collected and
+            // applied to the Hub as one atomic replacement afterwards.
+            historicalReplayProducts.append(event)
             return
         }
         hub.publish(event)
@@ -3393,10 +3740,21 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                output: output,
                                toolCallID: toolCallID,
                                metadata: metadata)
-        hub.publish(event, deliverToSubscribers: !isBackfillingHistory)
+        if isBackfillingHistory {
+            // Historical replay is a transaction: products are collected and
+            // applied to the Hub as one atomic replacement afterwards.
+            historicalReplayProducts.append(event)
+            return
+        }
+        hub.publish(event)
         publishInteractivePromptSidebarIfNeeded(event)
     }
 
+    // THE production interactive-prompt seam: both normal publish paths
+    // (publishFileBacked / publishSynthetic) route every constructed event
+    // through here. Internal (not private) so tests can inject synthetic
+    // unknown/duplicate terminals through the exact caller production uses —
+    // the ResolveOutcome guard below is what they lock.
     func publishInteractivePromptSidebarIfNeeded(_ event: AgentEvent) {
         guard !isBackfillingHistory,
               event.type == .interactivePrompt || event.type == .interactivePromptResolved else {
@@ -3408,8 +3766,11 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 return
             }
         case .interactivePromptResolved:
-            guard promptNotificationDeduper.markResolved(event,
-                                                         sessionID: record.sessionID) == .clearedNotified else {
+            // Shared outcome contract with the Codex path: only a terminal
+            // that ACTUALLY ended the currently notified lifecycle may send
+            // running; unknown/duplicate/stale terminals are zero sidebar
+            // side effects.
+            guard promptNotificationDeduper.markResolved(event, sessionID: record.sessionID) == .clearedNotified else {
                 return
             }
         default:
@@ -3447,6 +3808,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private func metadataWithClientRequestID(kind: AgentEventKind,
                                              text: String?,
                                              metadata: [String: String]?) -> [String: String]? {
+        // Backfill is storage-only: history must NOT consume the live submit
+        // echo registry — the true live echo still needs its correlation.
         guard isBackfillingHistory == false,
               kind == .userMessage,
               let text,

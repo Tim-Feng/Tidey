@@ -3,20 +3,12 @@ import Foundation
 private let codexTranscriptMajorVersion = "0."
 private let codexSidebarLogURL = URL(fileURLWithPath: "/tmp/tidey-bridge-codex.log")
 
-typealias CodexTranscriptProcessRunner = (_ executablePath: String,
-                                          _ arguments: [String],
-                                          _ timeout: TimeInterval) -> BoundedProcessResult?
-
 final class CodexTranscriptSession: AgentTranscriptSession {
-    private static let processLookupTimeout: TimeInterval = 1
-    private static let rolloutLookupTimeout: TimeInterval = 2
-
     private let queue: DispatchQueue
     private let fileManager: FileManager
     private let hub: AgentEventHub
     private let socketClient: TideyCommandSending?
     private let chatSubmitEchoRegistry: ChatSubmitEchoRegistry
-    private let processRunner: CodexTranscriptProcessRunner
 
     private var record: AgentSessionRegistryRecord
     private var resolverTimer: DispatchSourceTimer?
@@ -32,6 +24,9 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     private var publishedAssistantTextKeys = Set<String>()
     private var isBackfillingHistory = false
     private var isBootstrappingSidebarState = false
+    // Historical replay transaction (see ClaudeTranscriptSession): raw
+    // historical lines are re-parsed offset-ascending with a FRESH parser
+    // state on every page; live parser state is untouched.
     private var historicalRawLines: [(offset: Int, line: String)] = []
     private var historicalReplayProducts: [AgentEvent] = []
     private var isCollectingBackfillPage = false
@@ -55,8 +50,6 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         let currentShellState: CodexSidebarShellState
         let bootstrappedShellState: CodexSidebarShellState
     }
-
-    private var lastRequestedBackfillAnchorSeq: Int?
 
     private func captureLiveParserState() -> LiveParserStateSnapshot {
         LiveParserStateSnapshot(unsupportedVersions: unsupportedVersions,
@@ -94,15 +87,24 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         bootstrappedShellState = snapshot.bootstrappedShellState
     }
 
+    private var lastBackfillPageOffsets: ClosedRange<Int>?
+    private var lastRequestedBackfillAnchorSeq: Int?
+
     private func mergeHistoricalPage(_ page: [(offset: Int, line: String)]) {
         guard let pageMin = page.map(\.offset).min(),
               let pageMax = page.map(\.offset).max() else {
             return
         }
+        lastBackfillPageOffsets = pageMin...pageMax
         var merged = page + historicalRawLines
         merged.sort { $0.offset < $1.offset }
         var seenOffsets = Set<Int>()
         merged = merged.filter { seenOffsets.insert($0.offset).inserted }
+        // Direction-aware eviction: the JUST-REQUESTED page always stays; the
+        // window sheds whichever end is farther from it, so deep old-paging
+        // sheds the newest end while a fresh newer-range request sheds the
+        // oldest end. The Hub's historical replacement scope follows the
+        // window exactly.
         while merged.count > historicalReplayWindowCapacity {
             let distanceToOldEnd = pageMin - (merged.first?.offset ?? pageMin)
             let distanceToNewEnd = (merged.last?.offset ?? pageMax) - pageMax
@@ -126,11 +128,18 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         }
         isBackfillingHistory = false
         restoreLiveParserState(liveSnapshot)
-
+        // Atomic replacement: the Hub's historical state becomes EXACTLY the
+        // window's derived set — retracting derivations (newer duplicates,
+        // cross-page statuses) that this replay proved wrong. The anchor
+        // marks the just-requested page so capacity trims never drop it.
+        // The trim anchor is the REQUESTED before-seq: when the Hub bound is
+        // smaller than the window, the retained interval stays adjacent to
+        // the caller's anchor so its next cursor advances without a gap.
+        let anchorSeq = lastRequestedBackfillAnchorSeq
         let products = historicalReplayProducts
         hub.replaceHistoricalEvents(sessionID: record.sessionID,
                                     events: products,
-                                    anchorSeq: lastRequestedBackfillAnchorSeq)
+                                    anchorSeq: anchorSeq)
         historicalReplayProducts = []
         return products
     }
@@ -140,15 +149,13 @@ final class CodexTranscriptSession: AgentTranscriptSession {
          hub: AgentEventHub,
          socketClient: TideyCommandSending? = nil,
          chatSubmitEchoRegistry: ChatSubmitEchoRegistry? = nil,
-         historicalReplayWindowCapacity: Int = 4000,
-         processRunner: CodexTranscriptProcessRunner? = nil) {
+         historicalReplayWindowCapacity: Int = 4000) {
         self.historicalReplayWindowCapacity = max(1, historicalReplayWindowCapacity)
         self.record = record
         self.fileManager = fileManager
         self.hub = hub
         self.socketClient = socketClient
         self.chatSubmitEchoRegistry = chatSubmitEchoRegistry ?? ChatSubmitEchoRegistry()
-        self.processRunner = processRunner ?? Self.liveProcessRunner
         self.queue = DispatchQueue(label: "com.tidey.remote-bridge.codex-session.\(record.sessionID)")
     }
 
@@ -228,6 +235,13 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             guard beforeOffset > 0 else {
                 return false
             }
+            // The requested anchor is honored exactly; when the page derives
+            // no event visible below the anchor (so the client's oldest_seq
+            // cursor could never advance), keep reading deeper within this
+            // same transaction until progress is visible or the file starts.
+            // A read never exceeds the raw window capacity: reading more and
+            // then evicting would skip lines before their FIRST parse. The
+            // caller pages onward from the returned oldest_seq instead.
             let effectiveLimit = min(limit, historicalReplayWindowCapacity)
             lastRequestedBackfillAnchorSeq = beforeSeq
             var pageAnchorOffset = beforeOffset
@@ -235,8 +249,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             while true {
                 isCollectingBackfillPage = true
                 collectedBackfillPage = []
-                let loaded = (try? tailer.backfill(beforeOffset: pageAnchorOffset,
-                                                   limit: effectiveLimit)) ?? false
+                let loaded = (try? tailer.backfill(beforeOffset: pageAnchorOffset, limit: effectiveLimit)) ?? false
                 isCollectingBackfillPage = false
                 guard loaded, collectedBackfillPage.isEmpty == false else {
                     return loadedAny
@@ -342,9 +355,13 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     }
 
     private func switchTranscriptIdentity() {
+        // A new transcript identity REVOKES the previous identity's history
+        // immediately — the ownership boundary must not wait for a future
+        // (possibly never-happening) successful backfill of the new file.
         historicalRawLines = []
         collectedBackfillPage = []
         historicalReplayProducts = []
+        lastBackfillPageOffsets = nil
         lastRequestedBackfillAnchorSeq = nil
         hub.replaceHistoricalEvents(sessionID: record.sessionID, events: [], anchorSeq: nil)
         transcriptSequenceBase = maxObservedSeq
@@ -414,7 +431,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
 
     private func resolveTranscriptURLFromProcessTree() -> URL? {
         for rootPID in transcriptResolutionRootPIDs() {
-            guard let path = rolloutPathForPIDTree(rootPID: rootPID),
+            guard let path = Self.rolloutPathForPIDTree(rootPID: rootPID),
                   !path.isEmpty else {
                 continue
             }
@@ -621,6 +638,10 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     }
 
     private func consumeTaskStarted(payload: [String: Any]) {
+        // During a historical replay this mutates the ISOLATED historical
+        // parser state (dedupe by turn id still applies); the sidebar
+        // publication below is gated separately and the live state is
+        // restored after the replay.
         guard let turnID = payload["turn_id"] as? String,
               !turnID.isEmpty,
               turnID != lastStartedTurnID else {
@@ -641,6 +662,10 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     }
 
     private func consumeTaskComplete(payload: [String: Any]) {
+        // During a historical replay this mutates the ISOLATED historical
+        // parser state (dedupe by turn id still applies); the sidebar
+        // publication below is gated separately and the live state is
+        // restored after the replay.
         guard let turnID = payload["turn_id"] as? String,
               !turnID.isEmpty,
               turnID != lastCompletedTurnID else {
@@ -667,6 +692,10 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     }
 
     private func consumeTurnAborted(payload: [String: Any]) {
+        // During a historical replay this mutates the ISOLATED historical
+        // parser state (dedupe by turn id still applies); the sidebar
+        // publication below is gated separately and the live state is
+        // restored after the replay.
         guard let turnID = payload["turn_id"] as? String,
               !turnID.isEmpty,
               turnID != lastAbortedTurnID else {
@@ -858,6 +887,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                toolCallID: toolCallID,
                                metadata: baseMetadata(resolvedMetadata))
         if isBackfillingHistory {
+            // Historical replay is a transaction: products are collected and
+            // applied to the Hub as one atomic replacement afterwards.
             historicalReplayProducts.append(event)
             return
         }
@@ -891,6 +922,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                toolCallID: toolCallID,
                                metadata: metadata)
         if isBackfillingHistory {
+            // Historical replay is a transaction: products are collected and
+            // applied to the Hub as one atomic replacement afterwards.
             historicalReplayProducts.append(event)
             return
         }
@@ -910,6 +943,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     }
 
     private func publishSidebar(messages: [String]) {
+        // Historical replay never reaches the sidebar.
         guard isBackfillingHistory == false else {
             return
         }
@@ -928,6 +962,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     }
 
     private func log(_ message: String) {
+        // Historical replay's only side effect is historical storage.
         guard isBackfillingHistory == false else {
             return
         }
@@ -955,6 +990,10 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         return maxObservedSeq
     }
 
+    private func transcriptEventSequenceAnchor(forLineOffset lineOffset: Int) -> Int {
+        transcriptSequenceBase + transcriptEventSequence(lineOffset: lineOffset, ordinal: 0)
+    }
+
     private func fileBackedSequence(lineOffset: Int, ordinal: Int) -> Int {
         transcriptSequenceBase + transcriptEventSequence(lineOffset: lineOffset, ordinal: ordinal)
     }
@@ -978,6 +1017,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     private func metadataWithClientRequestID(kind: AgentEventKind,
                                              text: String?,
                                              metadata: [String: String]?) -> [String: String]? {
+        // Backfill is storage-only: history must NOT consume the live submit
+        // echo registry — the true live echo still needs its correlation.
         guard isBackfillingHistory == false,
               kind == .userMessage,
               let text,
@@ -1060,7 +1101,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         return metadata
     }
 
-    private func rolloutPathForPIDTree(rootPID: Int32) -> String? {
+    private static func rolloutPathForPIDTree(rootPID: Int32) -> String? {
         guard rootPID > 0 else {
             return nil
         }
@@ -1082,13 +1123,13 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         return nil
     }
 
-    private func rolloutPathForPID(_ pid: Int32) -> String? {
+    private static func rolloutPathForPID(_ pid: Int32) -> String? {
         guard pid > 0 else {
             return nil
         }
-        guard let result = processRunner("/usr/sbin/lsof",
-                                         ["-Fn", "-p", String(pid)],
-                                         Self.rolloutLookupTimeout),
+        guard let result = BoundedProcessRunner.run(executablePath: "/usr/sbin/lsof",
+                                                    arguments: ["-Fn", "-p", String(pid)],
+                                                    timeout: 2),
               result.terminationStatus == 0,
               let output = String(data: result.standardOutput,
                                   encoding: .utf8) else {
@@ -1112,25 +1153,21 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             .last
     }
 
-    private func childPIDs(for pid: Int32) -> [Int32] {
+    private static func childPIDs(for pid: Int32) -> [Int32] {
         guard pid > 0 else {
             return []
         }
-        guard let result = processRunner("/usr/bin/pgrep",
-                                         ["-P", String(pid)],
-                                         Self.processLookupTimeout),
+        guard let result = BoundedProcessRunner.run(executablePath: "/usr/bin/pgrep",
+                                                    arguments: ["-P", String(pid)],
+                                                    timeout: 1),
+              result.terminationStatus == 0,
               let output = String(data: result.standardOutput,
                                   encoding: .utf8) else {
             return []
         }
+
         return output
             .split(whereSeparator: \.isNewline)
             .compactMap { Int32($0.trimmingCharacters(in: .whitespaces)) }
-    }
-
-    private static let liveProcessRunner: CodexTranscriptProcessRunner = { executablePath, arguments, timeout in
-        BoundedProcessRunner.run(executablePath: executablePath,
-                                 arguments: arguments,
-                                 timeout: timeout)
     }
 }

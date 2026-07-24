@@ -36,7 +36,7 @@ final class CodexAppServerApprovalRequestModelTests: XCTestCase {
 
         let legacy = try XCTUnwrap(CodexAppServerApprovalRequest(
             method: "item/commandExecution/requestApproval",
-            requestID: JSONValue.string("req-1"),
+            requestID: CodexAppServerRequestID.string("req-1"),
             params: Self.baseParams()))
         XCTAssertEqual(legacy.makePrompt().promptID, legacy.promptID,
                        "the compatibility path must retain its pre-epoch identity")

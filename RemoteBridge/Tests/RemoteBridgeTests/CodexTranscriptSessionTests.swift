@@ -2,76 +2,6 @@ import XCTest
 @testable import RemoteBridge
 
 final class CodexTranscriptSessionTests: XCTestCase {
-    func testProcessTreeResolutionUsesBoundedCommandTimeouts() throws {
-        let rootDirectory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
-        let directory = rootDirectory
-            .appendingPathComponent(".codex/sessions/2026/07/22", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: rootDirectory) }
-
-        let rolloutURL = directory.appendingPathComponent("rollout-child.jsonl", isDirectory: false)
-        try (makeCodexMessageLine(role: "assistant", content: "resolved through child process") + "\n")
-            .write(to: rolloutURL, atomically: true, encoding: .utf8)
-
-        let rootPID: Int32 = 41_001
-        let childPID: Int32 = 41_002
-        let recorder = CodexTranscriptProcessCallRecorder()
-        let processRunner: CodexTranscriptProcessRunner = { executablePath, arguments, timeout in
-            recorder.append(executablePath: executablePath,
-                            arguments: arguments,
-                            timeout: timeout)
-            switch (executablePath, arguments) {
-            case ("/usr/sbin/lsof", ["-Fn", "-p", String(rootPID)]):
-                return BoundedProcessResult(terminationStatus: 0,
-                                            standardOutput: Data(),
-                                            standardError: Data())
-            case ("/usr/bin/pgrep", ["-P", String(rootPID)]):
-                return BoundedProcessResult(terminationStatus: 0,
-                                            standardOutput: Data("\(childPID)\n".utf8),
-                                            standardError: Data())
-            case ("/usr/sbin/lsof", ["-Fn", "-p", String(childPID)]):
-                return BoundedProcessResult(terminationStatus: 0,
-                                            standardOutput: Data("n\(rolloutURL.path)\n".utf8),
-                                            standardError: Data())
-            default:
-                return nil
-            }
-        }
-        let record = AgentSessionRegistryRecord(version: 1,
-                                                vendor: "codex",
-                                                workspaceID: "workspace",
-                                                sessionID: "session",
-                                                panelID: "panel",
-                                                pid: rootPID,
-                                                cwd: "/tmp",
-                                                createdAt: "2026-05-15T00:00:00Z",
-                                                transcriptPath: nil)
-        let hub = AgentEventHub()
-        let session = CodexTranscriptSession(record: record,
-                                             fileManager: .default,
-                                             hub: hub,
-                                             processRunner: processRunner)
-        session.start()
-        defer { session.stop() }
-
-        XCTAssertTrue(waitUntil {
-            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10)
-                .events.contains { $0.text == "resolved through child process" }
-        })
-        XCTAssertEqual(recorder.calls, [
-            CodexTranscriptProcessCall(executablePath: "/usr/sbin/lsof",
-                                       arguments: ["-Fn", "-p", String(rootPID)],
-                                       timeout: 2),
-            CodexTranscriptProcessCall(executablePath: "/usr/bin/pgrep",
-                                       arguments: ["-P", String(rootPID)],
-                                       timeout: 1),
-            CodexTranscriptProcessCall(executablePath: "/usr/sbin/lsof",
-                                       arguments: ["-Fn", "-p", String(childPID)],
-                                       timeout: 2),
-        ])
-    }
-
     func testCodexBootstrapContextUserMessagesAreAlwaysFiltered() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
@@ -1265,32 +1195,5 @@ final class CodexTranscriptSessionTests: XCTestCase {
             RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
         }
         return condition()
-    }
-}
-
-private struct CodexTranscriptProcessCall: Equatable {
-    let executablePath: String
-    let arguments: [String]
-    let timeout: TimeInterval
-}
-
-private final class CodexTranscriptProcessCallRecorder {
-    private let lock = NSLock()
-    private var storage = [CodexTranscriptProcessCall]()
-
-    func append(executablePath: String,
-                arguments: [String],
-                timeout: TimeInterval) {
-        lock.lock()
-        storage.append(CodexTranscriptProcessCall(executablePath: executablePath,
-                                                  arguments: arguments,
-                                                  timeout: timeout))
-        lock.unlock()
-    }
-
-    var calls: [CodexTranscriptProcessCall] {
-        lock.lock()
-        defer { lock.unlock() }
-        return storage
     }
 }

@@ -1,12 +1,10 @@
 import Foundation
 
-struct InteractivePromptSubmitScope: Hashable, Sendable {
-    let workspaceID: String
-    let panelID: String
-    let sessionID: String
-    let vendor: String
-}
-
+// Bridge-side idempotency for prompt submits. A retry that reuses the same
+// client_request_id for the same prompt and decision gets the same recorded
+// status back instead of triggering a second delivery; a conflicting decision
+// under the same identity fails closed. Shared across WebSocket connections
+// so reconnect retries still deduplicate. Bounded LRU.
 final class InteractivePromptSubmitDeduper: @unchecked Sendable {
     enum Check: Sendable {
         case new
@@ -20,85 +18,47 @@ final class InteractivePromptSubmitDeduper: @unchecked Sendable {
         let result: [String: JSONValue]
     }
 
-    private enum CacheKey: Hashable {
-        case legacy(clientRequestID: String)
-        case scoped(InteractivePromptSubmitScope, clientRequestID: String)
-    }
-
     private let lock = NSLock()
     private let capacity: Int
-    private var order: [CacheKey] = []
-    private var cacheByKey: [CacheKey: CachedSubmit] = [:]
+    private var order: [String] = []
+    private var cacheByClientRequestID: [String: CachedSubmit] = [:]
 
     init(capacity: Int = 128) {
         self.capacity = max(1, capacity)
     }
 
     func check(clientRequestID: String, promptID: String, decision: String) -> Check {
-        check(key: .legacy(clientRequestID: clientRequestID),
-              promptID: promptID,
-              decision: decision)
-    }
-
-    func check(scope: InteractivePromptSubmitScope,
-               clientRequestID: String,
-               promptID: String,
-               decision: String) -> Check {
-        check(key: .scoped(scope, clientRequestID: clientRequestID),
-              promptID: promptID,
-              decision: decision)
-    }
-
-    private func check(key: CacheKey, promptID: String, decision: String) -> Check {
         lock.lock()
         defer { lock.unlock() }
-        guard let cached = cacheByKey[key] else {
+        guard let cached = cacheByClientRequestID[clientRequestID] else {
             return .new
         }
         guard cached.promptID == promptID, cached.decision == decision else {
             return .conflict
         }
+        // A cached pending_confirmation is not a final answer: the request
+        // may have been resolved authoritatively or re-delivered since. Pass
+        // the retry through so it reconciles against live state (the
+        // connection store deduplicates in-flight duplicates and returns the
+        // terminal record once one exists).
         if cached.result["status"]?.stringValue == "pending_confirmation" {
             return .new
         }
         return .duplicate(cached.result)
     }
 
-    func store(clientRequestID: String,
-               promptID: String,
-               decision: String,
-               result: [String: JSONValue]) {
-        store(key: .legacy(clientRequestID: clientRequestID),
-              promptID: promptID,
-              decision: decision,
-              result: result)
-    }
-
-    func store(scope: InteractivePromptSubmitScope,
-               clientRequestID: String,
-               promptID: String,
-               decision: String,
-               result: [String: JSONValue]) {
-        store(key: .scoped(scope, clientRequestID: clientRequestID),
-              promptID: promptID,
-              decision: decision,
-              result: result)
-    }
-
-    private func store(key: CacheKey,
-                       promptID: String,
-                       decision: String,
-                       result: [String: JSONValue]) {
+    func store(clientRequestID: String, promptID: String, decision: String, result: [String: JSONValue]) {
         lock.lock()
         defer { lock.unlock() }
-        if cacheByKey[key] == nil {
-            order.append(key)
+        if cacheByClientRequestID[clientRequestID] == nil {
+            order.append(clientRequestID)
         }
-        cacheByKey[key] = CachedSubmit(promptID: promptID,
-                                       decision: decision,
-                                       result: result)
+        cacheByClientRequestID[clientRequestID] = CachedSubmit(promptID: promptID,
+                                                               decision: decision,
+                                                               result: result)
         while order.count > capacity {
-            cacheByKey.removeValue(forKey: order.removeFirst())
+            let evicted = order.removeFirst()
+            cacheByClientRequestID.removeValue(forKey: evicted)
         }
     }
 }
@@ -219,8 +179,12 @@ struct InteractivePromptActionHandler {
 
     private func submit(_ request: BridgeRequest) throws -> BridgeResponse {
         let submitContext = try submitPromptContext(from: request)
+        // Capability classification is channel OR vendor OR source: any
+        // trusted Codex signal routes to the native fail-closed path (which
+        // rejects on a missing lifecycle token) — never to terminal input.
         if submitContext.submitChannel == InteractivePromptSubmitChannel.codexAppServer ||
-            submitContext.vendor == "codex" {
+            submitContext.vendor == "codex" ||
+            (submitContext.source?.hasPrefix("codex_") == true) {
             return try submitCodexApproval(request, context: submitContext)
         }
 
@@ -245,14 +209,18 @@ struct InteractivePromptActionHandler {
         } else {
             throw BridgeInternalError.invalidRequest("submit_interactive_prompt requires target_index or input_sequence")
         }
+
+        // Idempotency must be checked before the prompt lookup: a retried
+        // submit whose first attempt already resolved the prompt would
+        // otherwise fail with "no longer active" instead of returning the
+        // recorded status.
         let clientRequestID = request.params?["client_request_id"]?.stringValue
         if let clientRequestID {
-            switch submitDeduper.check(scope: context.submitScope,
-                                       clientRequestID: clientRequestID,
+            switch submitDeduper.check(clientRequestID: clientRequestID,
                                        promptID: requestedPromptID,
                                        decision: decision) {
-            case .duplicate(let result):
-                return BridgeResponse(id: request.id, ok: true, result: result, error: nil)
+            case .duplicate(let cachedResult):
+                return BridgeResponse(id: request.id, ok: true, result: cachedResult, error: nil)
             case .conflict:
                 throw BridgeInternalError.conflict("client_request_id was already used for a different decision")
             case .new:
@@ -296,8 +264,7 @@ struct InteractivePromptActionHandler {
         result["resolved_event"] = Self.jsonValue(for: resolvedEvent)
         if let clientRequestID {
             result["client_request_id"] = .string(clientRequestID)
-            submitDeduper.store(scope: context.submitScope,
-                                clientRequestID: clientRequestID,
+            submitDeduper.store(clientRequestID: clientRequestID,
                                 promptID: requestedPromptID,
                                 decision: decision,
                                 result: result)
@@ -312,31 +279,45 @@ struct InteractivePromptActionHandler {
         guard let promptID = request.params?["prompt_id"]?.stringValue else {
             throw BridgeInternalError.invalidRequest("submit_interactive_prompt requires prompt_id")
         }
+        // Two Codex submit shapes: option approvals decide by target_index;
+        // `item/tool/requestUserInput` cards submit an answers map keyed by
+        // question id ({question_id: [answer, ...]}).
         let answers = try Self.userInputAnswers(from: request.params?["answers"])
         let targetIndex = request.params?["target_index"]?.intValue
-        guard answers != nil || targetIndex != nil else {
+        if answers == nil && targetIndex == nil {
             throw BridgeInternalError.invalidRequest("submit_interactive_prompt requires target_index or answers for Codex approval prompts")
         }
+        // The server-issued lifecycle capability is mandatory for Codex
+        // native approvals: a submit without it cannot be verified against
+        // the current delivery and must not fall back to "whatever is
+        // active".
         guard let lifecycleToken = request.params?["lifecycle_token"]?.stringValue else {
             throw BridgeInternalError.invalidRequest("submit_interactive_prompt requires lifecycle_token for Codex approval prompts")
         }
         let clientRequestID = request.params?["client_request_id"]?.stringValue
-        let decision = answers.map { "answers:" + Self.canonicalAnswersDescription($0) }
-            ?? "index:\(targetIndex ?? -1)"
+        let decision: String
+        if let answers {
+            decision = "answers:" + Self.canonicalAnswersDescription(answers)
+        } else {
+            decision = "index:\(targetIndex ?? -1)"
+        }
         if let clientRequestID {
-            switch submitDeduper.check(scope: context.submitScope,
-                                       clientRequestID: clientRequestID,
+            switch submitDeduper.check(clientRequestID: clientRequestID,
                                        promptID: promptID,
                                        decision: decision) {
+            case .duplicate, .new:
+                // Codex duplicates always reconcile against the live store:
+                // it deduplicates in-flight attempts, answers with the
+                // current terminal record, and — crucially — a cached
+                // terminal from an old lifecycle must not mask a
+                // re-delivered (reactivated) attempt of the same logical
+                // prompt. The deduper's job here is only the decision
+                // conflict below.
+                break
             case .conflict:
                 throw BridgeInternalError.conflict("client_request_id was already used for a different decision")
-            case .duplicate(let result):
-                return BridgeResponse(id: request.id, ok: true, result: result, error: nil)
-            case .new:
-                break
             }
         }
-
         let outcome: CodexAppServerApprovalSubmitOutcome
         if let answers {
             outcome = try codexApprovalSubmitter.submitUserInput(promptID: promptID,
@@ -355,30 +336,35 @@ struct InteractivePromptActionHandler {
                                                                 panelID: context.panelID,
                                                                 sessionID: context.sessionID)
         }
-
-        var result: [String: JSONValue] = [
-            "submitted": .bool(true),
-            "prompt_id": .string(promptID),
-            "workspace_id": .string(context.workspaceID),
-            "panel_id": .string(context.panelID),
-            "session_id": .string(context.sessionID),
-            "lifecycle_token": .string(lifecycleToken),
-        ]
+        var result: [String: JSONValue]
         switch outcome {
         case .pendingConfirmation:
-            result["status"] = .string("pending_confirmation")
+            // The response was flushed to the app-server but the request is
+            // only cleared when the server confirms; the card must stay in a
+            // submitting state until the resolved event arrives. The full
+            // transaction context is echoed so the client can verify the
+            // response belongs to exactly this submit.
+            result = [
+                "submitted": .bool(true),
+                "status": .string("pending_confirmation"),
+                "prompt_id": .string(promptID),
+                "workspace_id": .string(context.workspaceID),
+                "panel_id": .string(context.panelID),
+                "session_id": .string(context.sessionID),
+                "lifecycle_token": .string(lifecycleToken),
+            ]
         case .alreadyResolved(let resolvedEvent):
-            result["status"] = .string("already_resolved")
-            result["prompt"] = .null
-            result["resolved_event"] = Self.jsonValue(for: resolvedEvent)
-            if let panelID = resolvedEvent.metadata?["panel_id"] {
-                result["panel_id"] = .string(panelID)
-            }
+            result = [
+                "submitted": .bool(true),
+                "status": .string("already_resolved"),
+                "prompt": .null,
+                "resolved_event": Self.jsonValue(for: resolvedEvent),
+                "panel_id": .string(resolvedEvent.metadata?["panel_id"] ?? context.panelID),
+            ]
         }
         if let clientRequestID {
             result["client_request_id"] = .string(clientRequestID)
-            submitDeduper.store(scope: context.submitScope,
-                                clientRequestID: clientRequestID,
+            submitDeduper.store(clientRequestID: clientRequestID,
                                 promptID: promptID,
                                 decision: decision,
                                 result: result)
@@ -391,7 +377,8 @@ struct InteractivePromptActionHandler {
                                                                       panelID: context.panelID,
                                                                       sessionID: context.sessionID,
                                                                       vendor: context.vendor,
-                                                                      submitChannel: nil))
+                                                                      submitChannel: nil,
+                                                                      source: nil))
     }
 
     private func activePromptForSubmit(context: PromptContext,
@@ -474,6 +461,19 @@ struct InteractivePromptActionHandler {
             throw BridgeInternalError.invalidRequest("\(request.action) requires workspace_id and panel_id")
         }
         let activeSession = sessionResolver.activeSessionForPanel(workspaceID: workspaceID, panelID: panelID)
+        // The server-resolved active session stays the authority, but a
+        // client that names a different session or vendor is talking about a
+        // stale target and must be rejected instead of silently retargeted.
+        if let activeSession {
+            if let requestedSessionID = params["session_id"]?.stringValue,
+               requestedSessionID != activeSession.sessionID {
+                throw BridgeInternalError.conflict("submit_interactive_prompt session_id does not match the active session for this panel")
+            }
+            if let requestedVendor = params["vendor"]?.stringValue,
+               requestedVendor != activeSession.vendor {
+                throw BridgeInternalError.conflict("submit_interactive_prompt vendor does not match the active session for this panel")
+            }
+        }
         let submitChannel = params["submit_channel"]?.stringValue
         let vendor = activeSession?.vendor
             ?? params["vendor"]?.stringValue
@@ -485,7 +485,8 @@ struct InteractivePromptActionHandler {
                                    panelID: panelID,
                                    sessionID: sessionID,
                                    vendor: vendor,
-                                   submitChannel: submitChannel)
+                                   submitChannel: submitChannel,
+                                   source: params["source"]?.stringValue)
     }
 
     private func makePromptEvent(context: PromptContext, prompt: InteractivePrompt) -> AgentEvent {
@@ -546,6 +547,8 @@ struct InteractivePromptActionHandler {
                           payload: prompt.jsonValue)
     }
 
+    // Strict answers parsing: {question_id: [string, ...]} — anything else
+    // is an invalid request, never a partially-submitted answer set.
     private static func userInputAnswers(from value: JSONValue?) throws -> [String: [String]]? {
         guard let value else {
             return nil
@@ -567,8 +570,14 @@ struct InteractivePromptActionHandler {
         return answers
     }
 
+    // Collision-safe canonical decision string: real JSON encoding with
+    // sorted keys, not a delimited join. A question id or free-form answer
+    // value containing a delimiter character (e.g. a user note pasted with
+    // U+001E/U+001F) must never collide with a different decision.
     private static func canonicalAnswersDescription(_ answers: [String: [String]]) -> String {
         guard let data = try? JSONSerialization.data(withJSONObject: answers, options: [.sortedKeys]) else {
+            // Fail-closed: an unencodable answers map must never produce a
+            // canonical string that could collide with a different one.
             return "unencodable:\(UUID().uuidString)"
         }
         return String(decoding: data, as: UTF8.self)
@@ -660,13 +669,6 @@ struct InteractivePromptActionHandler {
                                       panelID: panelID,
                                       sessionID: sessionID)
         }
-
-        var submitScope: InteractivePromptSubmitScope {
-            InteractivePromptSubmitScope(workspaceID: workspaceID,
-                                         panelID: panelID,
-                                         sessionID: sessionID,
-                                         vendor: vendor)
-        }
     }
 
     private struct SubmitPromptContext {
@@ -675,13 +677,7 @@ struct InteractivePromptActionHandler {
         let sessionID: String
         let vendor: String
         let submitChannel: String?
-
-        var submitScope: InteractivePromptSubmitScope {
-            InteractivePromptSubmitScope(workspaceID: workspaceID,
-                                         panelID: panelID,
-                                         sessionID: sessionID,
-                                         vendor: vendor)
-        }
+        let source: String?
     }
 }
 

@@ -52,10 +52,14 @@ final class CodexAppServerConnectionRequestModelTests: XCTestCase {
         XCTAssertEqual(promptEnvelope.prompt.promptID,
                        promptEnvelope.request.promptID(epoch: "epoch-questions"))
 
-        let event = try connection.submitUserInput(promptID: promptEnvelope.prompt.promptID,
-                                                   answers: ["format": ["PNG"]])
-        XCTAssertEqual(event.type, .interactivePromptResolved)
-        XCTAssertEqual(resolved?.eventID, event.eventID)
+        let outcome = try connection.submitUserInput(promptID: promptEnvelope.prompt.promptID,
+                                                     answers: ["format": ["PNG"]])
+        guard case .pendingConfirmation(let pendingPromptID) = outcome else {
+            return XCTFail("a flushed response must await authoritative resolution")
+        }
+        XCTAssertEqual(pendingPromptID, promptEnvelope.prompt.promptID)
+        XCTAssertNil(resolved,
+                     "a local response flush must not synthesize a terminal event")
 
         let response = try Self.object(from: sink.lines()[0])
         XCTAssertEqual(response["id"]?.stringValue, "ask-17")

@@ -18,14 +18,7 @@ extension AgentSessionRegistryMonitor: ActiveAgentSessionResolving {}
 
 protocol CodexAppServerChatSubmitting: AnyObject {
     func canSubmitMessage(sessionID: String) -> Bool
-    func submitMessage(sessionID: String, text: String) throws
     func submitMessage(sessionID: String, text: String, clientRequestID: String?) throws
-}
-
-extension CodexAppServerChatSubmitting {
-    func submitMessage(sessionID: String, text: String, clientRequestID: String?) throws {
-        try submitMessage(sessionID: sessionID, text: text)
-    }
 }
 
 struct BridgeInputActionHandler {
@@ -149,65 +142,102 @@ struct BridgeInputActionHandler {
         case .none, .some(.started):
             break
         case .some(.duplicate(.delivered)):
+            // Only a DEFINITELY-delivered original may safely dedupe a
+            // duplicate as success.
             return Self.submittedResponse(for: request,
                                           vendorID: vendor.id,
                                           sessionID: activeSession?.sessionID,
                                           deduplicated: true)
         case .some(.duplicate(.pending)), .some(.duplicate(.indeterminate)):
+            // The original is still in flight, or its outcome is unknown/
+            // partial — telling the caller "submitted: true" here could be
+            // a false success (nothing may have been delivered) or mask an
+            // already-partial delivery. Fail closed with a conflict rather
+            // than guess.
             return Self.conflictResponse(for: request,
                                          vendorID: vendor.id,
                                          sessionID: activeSession?.sessionID)
         }
-
-        var finalSubmissionState: ChatSubmitEchoRegistry.SubmissionState?
+        // Reservation finalization: exactly one of delivered/indeterminate/
+        // (nil ->) cancelled applies when this function returns, covering
+        // every exit path (throw included, since `defer` runs on throws).
+        // - delivered: app-server accepted the turn, or every terminal step
+        //   completed — the ONLY state a duplicate may see as success.
+        // - indeterminate: some step may have had an externally observable
+        //   effect (a text step succeeded before Enter failed; a generic
+        //   direct-submit error whose transport outcome is unprovable) — a
+        //   duplicate must get a conflict, never a resend, never a false
+        //   success.
+        // - nil (cancelled): PROVABLY zero effect — safe to free the id so
+        //   a retry is a genuinely fresh attempt.
+        var finalState: ChatSubmitEchoRegistry.SubmissionState?
         defer {
             if let clientRequestID {
-                switch finalSubmissionState {
+                switch finalState {
                 case .delivered:
-                    chatSubmitEchoRegistry?.markDelivered(workspaceID: workspaceID,
-                                                          panelID: panelID,
-                                                          sessionID: resolvedSessionID,
-                                                          vendor: vendor.id,
+                    chatSubmitEchoRegistry?.markDelivered(workspaceID: workspaceID, panelID: panelID,
+                                                          sessionID: resolvedSessionID, vendor: vendor.id,
                                                           clientRequestID: clientRequestID)
                 case .indeterminate:
-                    chatSubmitEchoRegistry?.markIndeterminate(workspaceID: workspaceID,
-                                                              panelID: panelID,
-                                                              sessionID: resolvedSessionID,
-                                                              vendor: vendor.id,
+                    chatSubmitEchoRegistry?.markIndeterminate(workspaceID: workspaceID, panelID: panelID,
+                                                              sessionID: resolvedSessionID, vendor: vendor.id,
                                                               clientRequestID: clientRequestID)
                 case nil:
-                    chatSubmitEchoRegistry?.cancelSubmission(workspaceID: workspaceID,
-                                                             panelID: panelID,
-                                                             sessionID: resolvedSessionID,
-                                                             vendor: vendor.id,
+                    chatSubmitEchoRegistry?.cancelSubmission(workspaceID: workspaceID, panelID: panelID,
+                                                             sessionID: resolvedSessionID, vendor: vendor.id,
                                                              clientRequestID: clientRequestID)
                 case .some(.pending):
-                    break
+                    break // never explicitly set — pending is the pre-finalization default
                 }
             }
         }
 
         BridgeLogger.input.info("dispatch action=chat_submit request_id=\(request.id, privacy: .public) workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) session_id=\(activeSession?.sessionID ?? requestedSessionID ?? "-", privacy: .public) vendor=\(vendor.id, privacy: .public) length=\(message.count) has_cr=\(message.contains("\r")) has_lf=\(message.contains("\n")) tail=\(summarizedTail(message), privacy: .public)")
 
+        // Resolve the record from whichever session id is actually known —
+        // NOT only via activeSession. If the panel snapshot is briefly
+        // missing but the request carries a valid session_id, looking the
+        // record up ONLY through activeSession would miss a
+        // codex_app_server record and fall through into terminal
+        // injection, which is the exact recursive HeadlessCodexTerminal
+        // path this whole fix exists to close.
         let appServerSessionID = activeSession?.sessionID ?? requestedSessionID
         let activeRecord = appServerSessionID.flatMap { sessionResolver.activeRecord(sessionID: $0) }
+
+        // A codex_app_server record's paired "terminal" is Tidey's headless
+        // Codex viewer (HeadlessCodexTerminal), which reads any injected
+        // line straight back out and re-submits it as a BRAND NEW
+        // chat_submit — terminal fallback for this runtime is a recursive
+        // resubmit loop, not a safe degraded path. So this branch must fail
+        // closed (never fall through to the terminal loop below) on every
+        // outcome except a genuine app-server accept.
         if vendor.id == "codex",
            let appServerSessionID,
            let activeRecord,
            activeRecord.runtime == "codex_app_server" {
+            // The session id may have come from requestedSessionID alone
+            // (no activeSession to vouch for it) — never trust it without
+            // checking that the record it resolves to actually BELONGS to
+            // this request's workspace/panel/vendor. Without this check a
+            // request for panel X could supply a session id that happens to
+            // belong to panel Y and submit into Y's Codex thread.
             guard activeRecord.workspaceID == workspaceID,
                   activeRecord.panelID == panelID,
                   activeRecord.vendor == vendor.id else {
-                throw BridgeInternalError.invalidRequest(
-                    "chat_submit session_id does not belong to the requested workspace_id/panel_id/vendor")
+                throw BridgeInternalError.invalidRequest("chat_submit session_id does not belong to the requested workspace_id/panel_id/vendor")
             }
             guard let codexAppServerChatSubmitter else {
-                BridgeLogger.input.error("codex app-server chat submitter unavailable; failing closed request_id=\(request.id, privacy: .public) session_id=\(appServerSessionID, privacy: .public)")
+                BridgeLogger.input.error("codex app-server chat submitter missing for a codex_app_server record; failing closed (no terminal fallback) request_id=\(request.id, privacy: .public) session_id=\(appServerSessionID, privacy: .public)")
                 return Self.conflictResponse(for: request,
                                              vendorID: vendor.id,
                                              sessionID: appServerSessionID)
             }
-
+            // No canSubmitMessage() pre-check here: that was a separate,
+            // non-atomic peek that left a TOCTOU window between "checked
+            // busy" and "claimed". submitMessage() now performs ONE atomic
+            // route decision (start / steer(activeTurnID) / busyWithoutTurnID)
+            // internally and always attempts it directly, then bounded-waits
+            // for the app-server's authoritative accept/reject.
             do {
                 try codexAppServerChatSubmitter.submitMessage(sessionID: appServerSessionID,
                                                               text: message,
@@ -220,88 +250,136 @@ struct BridgeInputActionHandler {
                                                      text: message,
                                                      clientRequestID: clientRequestID)
                 }
-                finalSubmissionState = .delivered
+                finalState = .delivered
                 return Self.submittedResponse(for: request,
                                               vendorID: vendor.id,
                                               sessionID: appServerSessionID,
                                               deduplicated: false)
             } catch CodexAppServerSubmitFailure.busyWithoutTurnID {
+                // No known active turn id to steer into, and no capacity to
+                // claim a new turn/start (another submit already pending, or
+                // the thread reports active with no observed turn id yet).
+                // Zero side effect — but NEVER safe to terminal-fallback for
+                // this runtime. Typed conflict, retryable by the caller.
+                BridgeLogger.input.info("codex app-server busy with no known active turn id; returning conflict (no terminal fallback for codex_app_server) request_id=\(request.id, privacy: .public) session_id=\(appServerSessionID, privacy: .public)")
                 return Self.conflictResponse(for: request,
                                              vendorID: vendor.id,
                                              sessionID: appServerSessionID)
-            } catch CodexAppServerSubmitFailure.rejected {
+            } catch CodexAppServerSubmitFailure.rejected(let rejectionMessage) {
+                // The app-server sent a DEFINITE JSON-RPC rejection — the
+                // request reached it and was authoritatively refused
+                // (turn/start raced into a newly active turn, or
+                // turn/steer's expectedTurnId no longer matched). Zero
+                // semantic effect: nothing was accepted, so the reservation
+                // is safe to cancel for a genuine retry — but still NEVER
+                // safe to terminal-fallback for this runtime.
+                BridgeLogger.input.info("codex app-server submit definitively rejected; returning conflict (no terminal fallback for codex_app_server) request_id=\(request.id, privacy: .public) session_id=\(appServerSessionID, privacy: .public) reason=\(rejectionMessage, privacy: .public)")
                 return Self.conflictResponse(for: request,
                                              vendorID: vendor.id,
                                              sessionID: appServerSessionID)
-            } catch CodexAppServerSubmitFailure.unavailableBeforeSend {
+            } catch CodexAppServerSubmitFailure.unavailableBeforeSend(let reason) {
+                // The submit could not even be ATTEMPTED — no registry entry
+                // for the session, app-server initialization failed/timed
+                // out, or the pre-send thread-id lookup failed. All of this
+                // happens strictly before any turn/start or turn/steer
+                // request frame for the user's text is built. Zero effect
+                // by construction — safe to cancel for a genuine retry once
+                // the runtime recovers, but still NEVER safe to
+                // terminal-fallback for this runtime.
+                BridgeLogger.input.info("codex app-server unavailable before any send attempt; returning conflict (no terminal fallback for codex_app_server) request_id=\(request.id, privacy: .public) session_id=\(appServerSessionID, privacy: .public) reason=\(reason, privacy: .public)")
                 return Self.conflictResponse(for: request,
                                              vendorID: vendor.id,
                                              sessionID: appServerSessionID)
             } catch {
-                finalSubmissionState = .indeterminate
+                // Every OTHER failure — a synchronous write failure, the
+                // transport closing, or a bounded-wait timeout with no
+                // authoritative response — is UNKNOWN, not zero-effect: the
+                // request may still land server-side. Must NEVER fall back
+                // and must NEVER be reported as success.
+                finalState = .indeterminate
+                BridgeLogger.input.error("codex app-server submit failed with an indeterminate outcome; NOT falling back request_id=\(request.id, privacy: .public) session_id=\(appServerSessionID, privacy: .public) error=\(String(describing: error), privacy: .public)")
                 throw error
             }
         }
-
         var previousStepUsedOrdinaryTmux = false
         var forceMacSocketForRemainingSteps = false
-        for (index, step) in vendor.submitMessagePlan(text: message).enumerated() {
-            let effectiveDelay = Self.effectiveDelay(for: step,
-                                                     previousStepUsedOrdinaryTmux: previousStepUsedOrdinaryTmux)
-            if index > 0 {
-                try sleep(effectiveDelay)
-            }
-            BridgeLogger.input.info("step action=send_input request_id=\(request.id, privacy: .public) vendor=\(vendor.id, privacy: .public) step_index=\(index) delay_ns=\(effectiveDelay) length=\(step.input.count) has_cr=\(step.input.contains("\r")) has_lf=\(step.input.contains("\n")) tail=\(summarizedTail(step.input), privacy: .public)")
-            let routeDecision: OrdinaryTmuxRouteDecision
-            if forceMacSocketForRemainingSteps {
-                routeDecision = .macSocketFallback
-            } else {
-                // The step ROLE (declared by the vendor plan) decides the
-                // semantics: the message step is literal chat text even when
-                // its payload happens to be an enter-only sequence; only the
-                // submit step keeps raw key semantics.
-                routeDecision = try routeOrdinaryTmuxInputIfAvailable(step.input,
-                                                                      panelID: panelID,
-                                                                      requestID: request.id,
-                                                                      action: "chat_submit",
-                                                                      stepIndex: index,
-                                                                      mode: step.role == .submitEnter ? .rawTerminalInput : .literalChatText,
-                                                                      allowAmbiguousPasteTimeout: true)
-            }
-            if routeDecision == .routed {
-                finalSubmissionState = .indeterminate
-                previousStepUsedOrdinaryTmux = true
-                BridgeLogger.input.info("route action=chat_submit request_id=\(request.id, privacy: .public) panel_id=\(panelID, privacy: .public) transport=ordinary_tmux step_index=\(index)")
-            } else {
-                if routeDecision == .macSocketFallback {
-                    forceMacSocketForRemainingSteps = true
+        // Zero-effect provability: no step has reached ANY transport yet.
+        // Only while this stays false may a failure cancel the reservation
+        // outright; once ANY step is confirmed sent, a later failure is
+        // indeterminate (partial delivery), never cancellable.
+        var anyStepConfirmedSent = false
+        do {
+            for (index, step) in vendor.submitMessagePlan(text: message).enumerated() {
+                let effectiveDelay = Self.effectiveDelay(for: step,
+                                                         previousStepUsedOrdinaryTmux: previousStepUsedOrdinaryTmux)
+                if index > 0 {
+                    try sleep(effectiveDelay)
                 }
-                let stepRequest: BridgeRequest
-                if step.role == .submitEnter {
-                    stepRequest = BridgeRequest(id: UUID().uuidString,
-                                                action: "send_key",
-                                                params: [
-                                                    "panel_id": .string(panelID),
-                                                    "key": .string("enter"),
-                                                ])
+                BridgeLogger.input.info("step action=send_input request_id=\(request.id, privacy: .public) vendor=\(vendor.id, privacy: .public) step_index=\(index) delay_ns=\(effectiveDelay) length=\(step.input.count) has_cr=\(step.input.contains("\r")) has_lf=\(step.input.contains("\n")) tail=\(summarizedTail(step.input), privacy: .public)")
+                let routeDecision: OrdinaryTmuxRouteDecision
+                if forceMacSocketForRemainingSteps {
+                    routeDecision = .macSocketFallback
                 } else {
-                    stepRequest = BridgeRequest(id: UUID().uuidString,
-                                                action: "send_input",
-                                                params: [
-                                                    "panel_id": .string(panelID),
-                                                    "input": .string(step.input),
-                                                ])
+                    // The step ROLE (declared by the vendor plan) decides the
+                    // semantics: the message step is literal chat text even when
+                    // its payload happens to be an enter-only sequence; only the
+                    // submit step keeps raw key semantics.
+                    routeDecision = try routeOrdinaryTmuxInputIfAvailable(step.input,
+                                                                          panelID: panelID,
+                                                                          requestID: request.id,
+                                                                          action: "chat_submit",
+                                                                          stepIndex: index,
+                                                                          mode: step.role == .submitEnter ? .rawTerminalInput : .literalChatText,
+                                                                          allowAmbiguousPasteTimeout: true)
                 }
-                let response = try socketSender.send(stepRequest)
-                guard response.ok else {
-                    return BridgeResponse(id: request.id,
-                                          ok: false,
-                                          result: nil,
-                                          error: response.error)
+                if routeDecision == .routed {
+                    previousStepUsedOrdinaryTmux = true
+                    anyStepConfirmedSent = true
+                    BridgeLogger.input.info("route action=chat_submit request_id=\(request.id, privacy: .public) panel_id=\(panelID, privacy: .public) transport=ordinary_tmux step_index=\(index)")
+                } else {
+                    if routeDecision == .macSocketFallback {
+                        forceMacSocketForRemainingSteps = true
+                    }
+                    let stepRequest: BridgeRequest
+                    if step.role == .submitEnter {
+                        stepRequest = BridgeRequest(id: UUID().uuidString,
+                                                    action: "send_key",
+                                                    params: [
+                                                        "panel_id": .string(panelID),
+                                                        "key": .string("enter"),
+                                                    ])
+                    } else {
+                        stepRequest = BridgeRequest(id: UUID().uuidString,
+                                                    action: "send_input",
+                                                    params: [
+                                                        "panel_id": .string(panelID),
+                                                        "input": .string(step.input),
+                                                    ])
+                    }
+                    let response = try socketSender.send(stepRequest)
+                    guard response.ok else {
+                        // NOT ok: this exact step was refused by the transport.
+                        // If a PRIOR step already succeeded, that step's effect
+                        // is real and unretractable — indeterminate. Otherwise
+                        // nothing has been sent at all yet — provably safe to
+                        // cancel and let a retry start completely fresh.
+                        if anyStepConfirmedSent {
+                            finalState = .indeterminate
+                        }
+                        return BridgeResponse(id: request.id,
+                                              ok: false,
+                                              result: nil,
+                                              error: response.error)
+                    }
+                    anyStepConfirmedSent = true
+                    previousStepUsedOrdinaryTmux = false
                 }
-                finalSubmissionState = .indeterminate
-                previousStepUsedOrdinaryTmux = false
             }
+        } catch {
+            if anyStepConfirmedSent {
+                finalState = .indeterminate
+            }
+            throw error
         }
 
         if let clientRequestID,
@@ -313,8 +391,8 @@ struct BridgeInputActionHandler {
                                              text: message,
                                              clientRequestID: clientRequestID)
         }
-        finalSubmissionState = .delivered
 
+        finalState = .delivered
         return Self.submittedResponse(for: request,
                                       vendorID: vendor.id,
                                       sessionID: activeSession?.sessionID,
@@ -336,18 +414,24 @@ struct BridgeInputActionHandler {
                               error: nil)
     }
 
+    // A duplicate client_request_id whose original submission is still
+    // in-flight (pending) or ended in an unknown/partial state
+    // (indeterminate) must NEVER get "submitted: true" — that would either
+    // be a false success (nothing may have been delivered) or mask an
+    // already-partial delivery a caller should surface, not silently
+    // treat as done.
     private static func conflictResponse(for request: BridgeRequest,
                                          vendorID: String,
                                          sessionID: String?) -> BridgeResponse {
-        BridgeResponse(id: request.id,
-                       ok: false,
-                       result: [
-                        "submitted": .bool(false),
-                        "vendor": .string(vendorID),
-                        "session_id": sessionID.map { .string($0) } ?? .null,
-                       ],
-                       error: BridgeErrorPayload(code: "CONFLICT",
-                                                 message: "A submission for this client_request_id is still pending or has an indeterminate outcome."))
+        return BridgeResponse(id: request.id,
+                              ok: false,
+                              result: [
+                                "submitted": .bool(false),
+                                "vendor": .string(vendorID),
+                                "session_id": sessionID.map { .string($0) } ?? .null,
+                              ],
+                              error: BridgeErrorPayload(code: "CONFLICT",
+                                                        message: "A submission for this client_request_id is already in flight or ended in an unknown state."))
     }
 
     private func summarizedTail(_ input: String) -> String {

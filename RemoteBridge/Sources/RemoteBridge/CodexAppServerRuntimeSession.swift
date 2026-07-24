@@ -9,15 +9,24 @@ enum CodexAppServerProcessError: Error {
     case invalidUTF8
 }
 
-// A successful turn/steer response that names another turn has an unknown
-// semantic destination. It is not a definite rejection and must not retry.
+// A turn/steer response was a JSON-RPC SUCCESS whose turnId doesn't match
+// what was requested — a protocol violation / unknown semantic destination,
+// NOT a definite zero-effect rejection (the server returned success, so it
+// may have accepted the input somewhere). Deliberately NOT a
+// CodexAppServerSubmitFailure case: it must fall into the generic
+// "indeterminate" handling alongside transport close/timeout, never the
+// safe-to-cancel/retry paths.
 struct CodexAppServerTurnIDMismatchError: Error, Equatable {
     let expectedTurnID: String
     let observedTurnID: String?
 }
 
-// A successful turn/start response without a usable turn identity may have
-// accepted the message, but cannot be reconciled safely.
+// A successful turn/start response without a usable turnId cannot be
+// treated as delivery success: the app-server may have accepted the input,
+// but the Bridge has no authoritative identity with which to steer or
+// reconcile its lifecycle. This is intentionally an indeterminate protocol
+// error (not a definite zero-effect rejection), so callers never retry it
+// automatically and the pending claim stays held fail-closed.
 struct CodexAppServerInvalidTurnStartResponseError: Error, Equatable {
     let observedTurnID: String?
 }
@@ -39,11 +48,16 @@ enum CodexAppServerTransportError: Error {
     case unsupported(CodexAppServerTransportMode)
     case closed
     case invalidUTF8
+    // The transport cannot confirm this write without blocking its own event
+    // loop; confirmed sends must fail closed instead of pretending success.
     case confirmationUnavailable
 }
 
 protocol CodexAppServerConnectionTransport: AnyObject {
     func sendLine(_ line: String) throws
+    // Like sendLine, but does not return until the transport has accepted the
+    // write (or throws when the write fails). Used for approval responses that
+    // must not be treated as delivered on a best-effort enqueue.
     func sendLineAwaitingWrite(_ line: String) throws
     func close()
 }
@@ -64,22 +78,30 @@ final class CodexAppServerRuntimeSession {
     private static let subscriptionRetryBackoff: TimeInterval = 1.0
 
     private let process: CodexAppServerManagedProcess
-    private let processOwnership: CodexAppServerProcessOwnership
     private let transport: CodexAppServerConnectionTransport
     private let connection: CodexAppServerConnection
     private let runtime: CodexAppServerHeadlessRuntime
     private let initialization: CodexAppServerInitializationState
     private let activeThreadStore: CodexAppServerActiveThreadStore
     private let turnStateStore: CodexAppServerTurnStateStore
-    private let lifecycleFeed: CodexLifecycleFeed?
+    // Root-gated three-state lifecycle feed for this connection generation.
+    // nil only in tests that construct the session without factory wiring.
+    let lifecycleFeed: CodexLifecycleFeed?
     private let callbackQueue: DispatchQueue
     private let lock = NSLock()
     private var stopped = false
     private var attachSubscriptionState = AttachSubscriptionState.noLoadedThread
     private var nextSubscriptionRetryAt: Date?
+    // The registry's AUTHORITATIVE root thread for this session, provided at
+    // attach time. Used only as a subscription fallback when the app-server
+    // cannot uniquely resolve a loaded root itself. Never written from
+    // app-server notifications — a subagent thread can never rebind it.
     private var registryRootThreadID: String?
+    // Test seam: invoked while an unresolved loaded-list callback is being
+    // processed, before the subscription state transition commits.
     var loadedThreadUnresolvedHook: (() -> Void)?
 
+    // Test seam: observe the subscription state machine directly.
     var attachSubscriptionStateForTesting: String {
         lock.lock()
         defer { lock.unlock() }
@@ -116,7 +138,6 @@ final class CodexAppServerRuntimeSession {
     }
 
     init(process: CodexAppServerManagedProcess,
-         processOwnership: CodexAppServerProcessOwnership,
          transport: CodexAppServerConnectionTransport,
          connection: CodexAppServerConnection,
          runtime: CodexAppServerHeadlessRuntime,
@@ -126,7 +147,6 @@ final class CodexAppServerRuntimeSession {
          lifecycleFeed: CodexLifecycleFeed? = nil,
          callbackQueue: DispatchQueue = DispatchQueue(label: "com.tidey.remote-bridge.codex-app-server-runtime-session")) {
         self.process = process
-        self.processOwnership = processOwnership
         self.transport = transport
         self.connection = connection
         self.runtime = runtime
@@ -275,11 +295,6 @@ final class CodexAppServerRuntimeSession {
     }
 
     @discardableResult
-    func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent {
-        try connection.submitApproval(promptID: promptID, targetIndex: targetIndex)
-    }
-
-    @discardableResult
     func submitApproval(promptID: String,
                         targetIndex: Int,
                         clientRequestID: String?,
@@ -305,6 +320,14 @@ final class CodexAppServerRuntimeSession {
         connection.pendingApprovalPromptEvents()
     }
 
+    // A request write is not acceptance: sendClientRequest returns as soon
+    // as the request is encoded/written, but the AUTHORITATIVE outcome
+    // (accepted, or a JSON-RPC error response) arrives later via
+    // handleClientResponse. A bounded wait here is what lets this function
+    // distinguish "app-server accepted the turn" from "app-server
+    // definitively rejected it" from "no answer arrived in time" —
+    // returning immediately after the write would report false success for
+    // an app-server that goes on to reject the request.
     private static let submitResponseTimeout: TimeInterval = 10
 
     // The v2 protocol returns turn/start as { "turn": { "id": ... } }.
@@ -321,10 +344,6 @@ final class CodexAppServerRuntimeSession {
         }
         let turnID = rawTurnID.trimmingCharacters(in: .whitespacesAndNewlines)
         return turnID.isEmpty ? nil : turnID
-    }
-
-    func submitMessage(text: String) throws {
-        try submitMessage(text: text, clientRequestID: nil)
     }
 
     func submitMessage(text: String, clientRequestID: String?) throws {
@@ -473,10 +492,14 @@ final class CodexAppServerRuntimeSession {
         return try result!.get()
     }
 
-    // Non-authoritative availability diagnostic: false while initialization
-    // is unavailable or the thread is busy. Submit callers must not use this
-    // as a gate; submitMessage() makes the only atomic start/steer/busy route
-    // decision and can steer when a known turn is active.
+    // A busy turn (working/active) must gate false here — otherwise
+    // submitMessage() proceeds straight to claimForSubmit(), which throws
+    // for a condition the caller could have fallen back on cleanly instead
+    // of losing the message. Initialization-ready is included too (defense
+    // in depth to keep this gate as accurate as possible), but the ATOMIC
+    // claim inside submitMessage() remains the final race authority — this
+    // gate can still be stale between the check and the claim, which is
+    // exactly the busyBeforeSend path above exists to catch safely.
     func canSubmitMessage() -> Bool {
         let initializationStatus = initialization.diagnosticStatus()
         let threadID = activeThreadStore.currentThreadID()
@@ -504,35 +527,50 @@ final class CodexAppServerRuntimeSession {
     // Fail closed: blank/whitespace identities are never stored, and a nil
     // or blank update never clears an existing valid binding.
     func setRegistryRootThreadID(_ rawThreadID: String?) {
-        guard let threadID = rawThreadID?.trimmingCharacters(in: .whitespacesAndNewlines),
-              threadID.isEmpty == false else {
+        guard let trimmed = rawThreadID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              trimmed.isEmpty == false else {
             return
         }
         lock.lock()
-        registryRootThreadID = threadID
-        let subscriptionState = attachSubscriptionState
+        registryRootThreadID = trimmed
+        let currentState = attachSubscriptionState
         lock.unlock()
         guard case .ready = initialization.diagnosticStatus() else {
             return
         }
-        if case .subscribed(let existingThreadID) = subscriptionState,
-           existingThreadID != threadID {
-            activeThreadStore.setThreadID(threadID)
-            sendThreadResumeForSubscriptionIfNeeded(threadID: threadID,
-                                                    reason: "registry_root_changed")
+        // CORRECTION path: the loaded-list heuristic (a bare-string
+        // thread/loaded/list response cannot positively distinguish child
+        // from root) already got a resume CONFIRMED for a DIFFERENT thread
+        // before this authoritative root arrived. That binding must be
+        // corrected — not silently left in place — reusing the same
+        // fail-closed "root changed while subscribed" path (stop for
+        // replacement) additive-resume already requires elsewhere.
+        if case .subscribed(let existingThreadID) = currentState, existingThreadID != trimmed {
+            activeThreadStore.setThreadID(trimmed)
+            sendThreadResumeForSubscriptionIfNeeded(threadID: trimmed, reason: "registry_root_authoritative_correction")
             return
         }
+        // A LATE root delivery re-arms the subscription by itself: the
+        // attach-time loaded/list may already have come back unresolvable
+        // and parked the session on no_loaded_thread before this setter ran.
+        // Timing safety: initialization pending -> the first attempt after
+        // ready sees the stored root; a list request in flight
+        // (resumePending) -> declines here — NOT stashed separately; the
+        // in-flight resume's own completion re-reads `registryRootThreadID`
+        // (this write) under the SAME lock at the exact moment it is about
+        // to confirm, so there is no TOCTOU window between "read state
+        // here" and "the child's response lands" (see
+        // `sendThreadResumeForSubscription`'s completion handler); no_loaded
+        // _thread/failed -> resume the root now (backoff honored).
         guard beginSubscriptionAttempt() else {
             return
         }
-        activeThreadStore.setThreadID(threadID)
-        sendThreadResumeForSubscription(threadID: threadID)
-    }
-
-    func isStopped() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return stopped
+        // The re-armed subscription is about to resume this root: bind it as
+        // the active thread too, exactly like the loaded-list path does —
+        // otherwise approvals would flow while submitMessage still reports
+        // "thread not ready".
+        activeThreadStore.setThreadID(trimmed)
+        sendThreadResumeForSubscription(threadID: trimmed)
     }
 
     func ensureThreadSubscription() {
@@ -573,10 +611,9 @@ final class CodexAppServerRuntimeSession {
             switch response {
             case .success(let value):
                 self.lock.lock()
-                let knownRootThreadID = self.registryRootThreadID
+                let knownRoot = self.registryRootThreadID
                 self.lock.unlock()
-                let threadID = codexAppServerLoadedThreadID(from: value,
-                                                            registryRootThreadID: knownRootThreadID)
+                let threadID = codexAppServerLoadedThreadID(from: value, registryRootThreadID: knownRoot)
                 if let threadID {
                     self.activeThreadStore.setThreadID(threadID)
                 } else {
@@ -613,9 +650,10 @@ final class CodexAppServerRuntimeSession {
         initialization.fail(CodexAppServerConnectionError.closed)
         connection.close()
         transport.close()
-        if processOwnership == .owned {
-            process.terminate()
-        }
+        process.terminate()
+        // The connection generation ends here: its lifecycle identity is
+        // tombstoned so late events cannot rebuild it; the syncer's
+        // replacement attach claims a fresh generation and rebuilds state.
         lifecycleFeed?.retire()
     }
 
@@ -628,6 +666,21 @@ final class CodexAppServerRuntimeSession {
         lifecycleFeed?.retire()
     }
 
+    func isStopped() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return stopped
+    }
+
+    // The app-server process may still be alive while this client channel
+    // died. Tear the session down exactly once: connection.close() expires
+    // the pending approvals (visible on Remote), and the syncer re-attaches
+    // to the same still-living app-server epoch on its next registry scan.
+    // A JSON-RPC protocol violation must stop this runtime GENERATION for
+    // real: connection retired, transport aborted, and — for an owned stdio
+    // process, whose transport cannot be closed separately — the process
+    // terminated. For attached external processes `process.terminate()` is a
+    // no-op by construction, so the server itself is never killed.
     func handleProtocolViolation() {
         BridgeLogger.server.error("codex app-server protocol violation: stopping runtime session session_id=\(self.runtime.contextSessionID, privacy: .public)")
         stop()
@@ -730,13 +783,22 @@ final class CodexAppServerRuntimeSession {
         switch result {
         case .success(let value):
             lock.lock()
-            let knownRootThreadID = registryRootThreadID
+            let knownRoot = registryRootThreadID
             lock.unlock()
-            guard let threadID = codexAppServerLoadedThreadID(from: value,
-                                                              registryRootThreadID: knownRootThreadID) else {
+            guard let threadID = codexAppServerLoadedThreadID(from: value, registryRootThreadID: knownRoot) else {
                 BridgeLogger.server.debug("codex app-server subscription no loaded thread shape=\(codexAppServerLoadedThreadShapeDescription(from: value), privacy: .public)")
                 if clearSubscriptionOnMissing {
+                    // The app-server could not present a UNIQUE loaded root
+                    // (empty, paginated, ambiguous) — but the registry may
+                    // already hold this session's authoritative root thread.
+                    // Resume that instead of parking on loaded_thread_missing
+                    // forever while approvals stay invisible to Remote.
                     loadedThreadUnresolvedHook?()
+                    // Atomic [fallback read + park]: a late setter either
+                    // landed BEFORE this lock (visible here, resumed below)
+                    // or lands AFTER the park (sees no_loaded_thread and
+                    // re-arms itself). No interleaving loses the wakeup, and
+                    // only one side ever sends the resume.
                     lock.lock()
                     let fallbackThreadID = registryRootThreadID
                     let previousState = attachSubscriptionState
@@ -745,14 +807,15 @@ final class CodexAppServerRuntimeSession {
                     }
                     lock.unlock()
                     if let fallbackThreadID {
+                        BridgeLogger.server.info("codex app-server subscription falling back to registry root thread session_id=\(self.runtime.contextSessionID, privacy: .public) thread_id=\(fallbackThreadID, privacy: .public)")
                         activeThreadStore.setThreadID(fallbackThreadID)
                         sendThreadResumeForSubscriptionIfNeeded(threadID: fallbackThreadID,
                                                                 reason: "registry_root_fallback")
-                    } else {
-                        logAttachSubscriptionTransition(from: previousState,
-                                                        to: .noLoadedThread,
-                                                        reason: "loaded_thread_missing")
+                        return
                     }
+                    logAttachSubscriptionTransition(from: previousState,
+                                                    to: .noLoadedThread,
+                                                    reason: "loaded_thread_missing")
                 }
                 return
             }
@@ -776,7 +839,13 @@ final class CodexAppServerRuntimeSession {
                 return
             }
             lock.unlock()
-            BridgeLogger.server.error("codex app-server subscription root changed while subscribed session_id=\(self.runtime.contextSessionID, privacy: .public) from=\(existingThreadID, privacy: .public) to=\(threadID, privacy: .public) action=stop_for_replacement")
+            // Codex 0.144.1 thread/resume is ADDITIVE (no unsubscribe): a
+            // resume(B) on a connection already subscribed to A would keep
+            // BOTH threads' approvals flowing into this session. Fail closed:
+            // stop this runtime — the syncer's isStopped() replacement path
+            // attaches a fresh generation that subscribes only the new root.
+            // The new root is already recorded via the active-thread store.
+            BridgeLogger.server.error("codex app-server subscription root changed while subscribed session_id=\(self.runtime.contextSessionID, privacy: .public) from=\(existingThreadID, privacy: .public) to=\(threadID, privacy: .public) reason=\(reason, privacy: .public) action=stop_for_replacement")
             stop()
             return
         }
@@ -789,7 +858,10 @@ final class CodexAppServerRuntimeSession {
 
     private func sendThreadResumeForSubscription(threadID: String) {
         BridgeLogger.server.debug("codex app-server diagnostic resume request session_id=\(self.runtime.contextSessionID, privacy: .public) thread_id=\(threadID, privacy: .public) request_has_approvalsReviewer=false cwd=- source=subscription_ensure")
+        // Order fence for the response snapshot (see resumeThread).
         let snapshotBarrier = lifecycleFeed?.snapshotBarrier()
+        // Order fence for the turn-state store's active-turn seeding (see
+        // resumeThread / seedActiveTurnFromResumeSnapshot).
         let turnStateBarrier = turnStateStore.revisionBarrier(threadID: threadID)
         do {
             try connection.sendClientRequest(method: "thread/resume",
@@ -804,33 +876,46 @@ final class CodexAppServerRuntimeSession {
                                                                                                       requestHasApprovalsReviewer: false)
                                                 switch response {
                                                 case .success(let payload):
-                                                    guard let self else {
+                                                    // FULLY atomic: reading the CURRENT
+                                                    // `registryRootThreadID` and (when it agrees)
+                                                    // transitioning resumePending -> subscribed
+                                                    // happen inside ONE lock hold. A
+                                                    // `setRegistryRootThreadID` call that runs
+                                                    // strictly after this unlocks is GUARANTEED to
+                                                    // observe `.subscribed(threadID)` already —
+                                                    // never a residual `.resumePending` — so it
+                                                    // always takes the "already subscribed,
+                                                    // different root" correction branch instead of
+                                                    // silently declining. Snapshot application
+                                                    // happens AFTER unlock, only once the decision
+                                                    // (accept vs. stop-for-replacement) is settled.
+                                                    guard let session = self else { return }
+                                                    session.lock.lock()
+                                                    let knownRoot = session.registryRootThreadID
+                                                    let shouldStop = knownRoot != nil && knownRoot != threadID
+                                                    var previousState = session.attachSubscriptionState
+                                                    if !shouldStop {
+                                                        previousState = session.attachSubscriptionState
+                                                        session.attachSubscriptionState = .subscribed(threadID: threadID)
+                                                    }
+                                                    session.lock.unlock()
+                                                    if shouldStop {
+                                                        BridgeLogger.server.error("codex app-server subscription confirmed thread disagrees with known registry root; stopping for replacement session_id=\(session.runtime.contextSessionID, privacy: .public) confirmed=\(threadID, privacy: .public) registry_root=\(knownRoot ?? "-", privacy: .public)")
+                                                        session.stop()
                                                         return
                                                     }
-                                                    self.lock.lock()
-                                                    guard self.stopped == false else {
-                                                        self.lock.unlock()
-                                                        return
-                                                    }
-                                                    let knownRootThreadID = self.registryRootThreadID
-                                                    if let knownRootThreadID,
-                                                       knownRootThreadID != threadID {
-                                                        self.lock.unlock()
-                                                        self.stop()
-                                                        return
-                                                    }
-                                                    let previousState = self.attachSubscriptionState
-                                                    self.attachSubscriptionState = .subscribed(threadID: threadID)
-                                                    self.lock.unlock()
-                                                    self.logAttachSubscriptionTransition(from: previousState,
-                                                                                         to: .subscribed(threadID: threadID),
-                                                                                         reason: "thread_resume_success")
-                                                    self.lifecycleFeed?.applySnapshotResult(payload,
-                                                                                            threadID: threadID,
-                                                                                            barrier: snapshotBarrier)
-                                                    self.seedActiveTurnFromResumeSnapshot(payload,
-                                                                                        threadID: threadID,
-                                                                                        barrier: turnStateBarrier)
+                                                    session.logAttachSubscriptionTransition(from: previousState,
+                                                                                            to: .subscribed(threadID: threadID),
+                                                                                            reason: "thread_resume_success")
+                                                    // Reconnect/bootstrap truth: apply the
+                                                    // `result.thread.status` snapshot directly —
+                                                    // no follow-up notification is required.
+                                                    session.lifecycleFeed?.applySnapshotResult(payload,
+                                                                                               threadID: threadID,
+                                                                                               barrier: snapshotBarrier)
+                                                    session.seedActiveTurnFromResumeSnapshot(payload,
+                                                                                             threadID: threadID,
+                                                                                             barrier: turnStateBarrier)
                                                 case .failure(let error):
                                                     if self?.handleThreadResumeNoRollout(error, threadID: threadID) == true {
                                                         return
@@ -1073,24 +1158,6 @@ final class CodexAppServerTurnStateStore: @unchecked Sendable {
         }
     }
 
-    // Compatibility seam for the current caller. Runtime wiring switches to
-    // exact claim identity in the behavioral step.
-    func releasePendingSubmit(threadID: String) {
-        lock.lock()
-        defer { lock.unlock() }
-        pruneExpiredLocked(now: now())
-        guard var state = statesByThreadID[threadID], state.pendingSubmit != nil else {
-            return
-        }
-        state.pendingSubmit = nil
-        bumpRevisionLocked(threadID: threadID)
-        if state.isBusy {
-            statesByThreadID[threadID] = state
-        } else {
-            statesByThreadID.removeValue(forKey: threadID)
-        }
-    }
-
     // Applies an authoritative turn/start success only to the exact pending
     // claim that issued it. A stale P1 response is a no-op after P1 expires
     // or P2 owns the slot; the claim check and transition share one lock.
@@ -1265,8 +1332,10 @@ final class CodexAppServerActiveThreadStore: @unchecked Sendable {
         return changed
     }
 
-    // Passive notification observations may seed an empty binding but may
-    // never replace an already-authoritative loaded-list/resume root.
+    // Passive observations (thread ids seen on arbitrary notifications, which
+    // include subagent threads) may only fill an empty binding. Rebinding an
+    // existing root thread requires an authoritative source such as
+    // thread/loaded/list or thread/resume, which call setThreadID directly.
     @discardableResult
     func noteObservedThreadID(_ threadID: String) -> Bool {
         lock.lock()
@@ -1413,6 +1482,12 @@ final class CodexAppServerInitializationState: @unchecked Sendable {
 }
 
 final class CodexAppServerRuntimeSessionFactory {
+    // Codex thread status -> shared three-state lifecycle. One feed per
+    // connection: it atomically claims a fresh generation (an old
+    // connection's late replay can never regress the newer world) and gates
+    // EVERY status on the session's authoritative root thread binding —
+    // child/subagent threads share the sessionId but can never modify the
+    // root panel state.
     static func makeLifecycleFeed(context: CodexAppServerRuntimeContext,
                                   activeThreadStore: CodexAppServerActiveThreadStore) -> CodexLifecycleFeed {
         CodexLifecycleFeed(identity: AgentSessionLifecycleIdentity(workspaceID: context.workspaceID,
@@ -1421,6 +1496,10 @@ final class CodexAppServerRuntimeSessionFactory {
                            rootThreadID: { activeThreadStore.currentThreadID() })
     }
 
+    // Explicit blocking-request lifecycle: every published approval /
+    // requestUserInput card opens a blocker (needs_input) and every
+    // authoritative terminal (serverRequest/resolved, turn terminal,
+    // expiry) resolves it — independent of thread/status notifications.
     static func wrapPromptHandlers(feed: CodexLifecycleFeed,
                                    onInteractivePrompt: @escaping CodexAppServerConnection.InteractivePromptHandler,
                                    onInteractivePromptResolved: @escaping CodexAppServerConnection.InteractivePromptResolvedHandler)
@@ -1428,43 +1507,37 @@ final class CodexAppServerRuntimeSessionFactory {
             resolved: CodexAppServerConnection.InteractivePromptResolvedHandler) {
         let prompt: CodexAppServerConnection.InteractivePromptHandler = { envelope in
             feed.openPrompt(promptID: envelope.prompt.promptID,
-                            attempt: Self.promptAttempt(from: envelope.event) ?? 1,
+                            attempt: Self.promptAttempt(from: envelope.event),
                             kind: envelope.request.method == .requestUserInput ? .userQuestion : .permission,
                             turnID: envelope.request.turnID)
             onInteractivePrompt(envelope)
         }
         let resolved: CodexAppServerConnection.InteractivePromptResolvedHandler = { event in
-            if let promptID = event.metadata?["prompt_id"],
-               let attempt = Self.promptAttempt(from: event) {
+            if let promptID = event.metadata?["prompt_id"] {
                 feed.resolvePrompt(promptID: promptID,
-                                   attempt: attempt)
+                                   attempt: Self.promptAttempt(from: event))
             }
             onInteractivePromptResolved(event)
         }
         return (prompt, resolved)
     }
 
-    private static func promptAttempt(from event: AgentEvent) -> Int? {
-        Int(event.metadata?["attempt"] ?? "")
+    private static func promptAttempt(from event: AgentEvent) -> Int {
+        Int(event.metadata?["attempt"] ?? "") ?? 1
     }
 
     private let processRunner: CodexAppServerProcessRunning
     private let transportConnector: CodexAppServerTransportConnecting
-    private let externalProcessFactory: (Int32?) -> CodexAppServerManagedProcess
 
     init(processRunner: CodexAppServerProcessRunning = CodexAppServerProcessRunner(),
-         transportConnector: CodexAppServerTransportConnecting = CodexAppServerWebSocketTransportConnector(),
-         externalProcessFactory: @escaping (Int32?) -> CodexAppServerManagedProcess = {
-             CodexAppServerExternalProcess(processID: $0)
-         }) {
+         transportConnector: CodexAppServerTransportConnecting = CodexAppServerWebSocketTransportConnector()) {
         self.processRunner = processRunner
         self.transportConnector = transportConnector
-        self.externalProcessFactory = externalProcessFactory
     }
 
     func start(configuration: CodexAppServerLaunchConfiguration,
                context: CodexAppServerRuntimeContext,
-               epoch: String = "",
+               epoch: String = UUID().uuidString,
                nextSequence: @escaping CodexAppServerConnection.SequenceProvider,
                timestampProvider: @escaping CodexAppServerConnection.TimestampProvider,
                onAgentEvent: @escaping CodexAppServerHeadlessRuntime.AgentEventHandler,
@@ -1475,8 +1548,6 @@ final class CodexAppServerRuntimeSessionFactory {
                onExit: @escaping @Sendable (Int32) -> Void = { _ in }) throws -> CodexAppServerRuntimeSession {
         let stdoutRouter = CodexAppServerConnectionLineRouter()
         let exitRouter = CodexAppServerRuntimeSessionExitRouter(onExit: onExit)
-        let closeRouter = CodexAppServerTransportCloseRouter()
-        let protocolViolationRouter = CodexAppServerProtocolViolationRouter()
         let process = try processRunner.start(configuration: configuration,
                                               onStdoutLine: { line in
                                                   stdoutRouter.receive(line)
@@ -1485,6 +1556,8 @@ final class CodexAppServerRuntimeSessionFactory {
                                               onExit: { exitCode in
                                                   exitRouter.receive(exitCode)
                                               })
+        let closeRouter = CodexAppServerTransportCloseRouter()
+        let violationRouter = CodexAppServerProtocolViolationRouter()
         let transport: CodexAppServerConnectionTransport
         switch configuration.transport {
         case .stdio:
@@ -1537,11 +1610,14 @@ final class CodexAppServerRuntimeSessionFactory {
                                                    onInteractivePrompt: promptHandlers.prompt,
                                                    onInteractivePromptResolved: promptHandlers.resolved,
                                                    onProtocolViolation: {
-                                                       protocolViolationRouter.trigger()
+                                                       // Stop the runtime generation for real: connection
+                                                       // retired, transport aborted (fail-closed writes),
+                                                       // owned process terminated. The syncer re-attaches
+                                                       // a fresh generation on its next registry scan.
+                                                       violationRouter.trigger()
                                                    })
         let initialization = CodexAppServerInitializationState()
         let runtimeSession = CodexAppServerRuntimeSession(process: process,
-                                                          processOwnership: .owned,
                                                           transport: transport,
                                                           connection: connection,
                                                           runtime: runtime,
@@ -1551,8 +1627,9 @@ final class CodexAppServerRuntimeSessionFactory {
                                                           lifecycleFeed: lifecycleFeed)
         exitRouter.attach(runtimeSession)
         closeRouter.attach(runtimeSession)
-        protocolViolationRouter.attach(runtimeSession)
+        violationRouter.attach(runtimeSession)
         stdoutRouter.attach(connection)
+        do {
         try connection.sendClientRequest(method: "initialize",
                                          params: [
                                             "clientInfo": .object([
@@ -1580,6 +1657,12 @@ final class CodexAppServerRuntimeSessionFactory {
                 BridgeLogger.server.error("codex app-server initialize failed error=\(String(describing: error), privacy: .public)")
             }
         }
+        } catch {
+            // Roll the half-built session back: the caller never receives it
+            // and could not release its resources otherwise.
+            runtimeSession.stop()
+            throw error
+        }
         return runtimeSession
     }
 
@@ -1594,9 +1677,9 @@ final class CodexAppServerRuntimeSessionFactory {
                 onInteractivePromptResolved: @escaping CodexAppServerConnection.InteractivePromptResolvedHandler,
                 onActiveThreadID: @escaping CodexAppServerHeadlessRuntime.ThreadIDHandler = { _ in }) throws -> CodexAppServerRuntimeSession {
         let stdoutRouter = CodexAppServerConnectionLineRouter()
-        let process = externalProcessFactory(processID)
+        let process = CodexAppServerExternalProcess(processID: processID)
         let closeRouter = CodexAppServerTransportCloseRouter()
-        let protocolViolationRouter = CodexAppServerProtocolViolationRouter()
+        let violationRouter = CodexAppServerProtocolViolationRouter()
         let transport = try transportConnector.connect(mode: .unixSocket(path: socketPath),
                                                        onLine: { line in
                                                            stdoutRouter.receive(line)
@@ -1643,11 +1726,14 @@ final class CodexAppServerRuntimeSessionFactory {
                                                    onInteractivePrompt: promptHandlers.prompt,
                                                    onInteractivePromptResolved: promptHandlers.resolved,
                                                    onProtocolViolation: {
-                                                       protocolViolationRouter.trigger()
+                                                       // Stop the runtime generation for real: connection
+                                                       // retired, transport aborted (fail-closed writes),
+                                                       // owned process terminated. The syncer re-attaches
+                                                       // a fresh generation on its next registry scan.
+                                                       violationRouter.trigger()
                                                    })
         let initialization = CodexAppServerInitializationState()
         let runtimeSession = CodexAppServerRuntimeSession(process: process,
-                                                          processOwnership: .external,
                                                           transport: transport,
                                                           connection: connection,
                                                           runtime: runtime,
@@ -1656,8 +1742,9 @@ final class CodexAppServerRuntimeSessionFactory {
                                                           turnStateStore: turnStateStore,
                                                           lifecycleFeed: lifecycleFeed)
         closeRouter.attach(runtimeSession)
-        protocolViolationRouter.attach(runtimeSession)
+        violationRouter.attach(runtimeSession)
         stdoutRouter.attach(connection)
+        do {
         try connection.sendClientRequest(method: "initialize",
                                          params: [
                                             "clientInfo": .object([
@@ -1686,12 +1773,24 @@ final class CodexAppServerRuntimeSessionFactory {
                 BridgeLogger.server.error("codex app-server panel initialize failed error=\(String(describing: error), privacy: .public)")
             }
         }
+        } catch {
+            // Roll the half-built session back: transport closed, external
+            // process untouched (its terminate is a no-op).
+            runtimeSession.stop()
+            throw error
+        }
         return runtimeSession
     }
 }
 
-func codexAppServerLoadedThreadID(from value: JSONValue,
-                                  registryRootThreadID: String? = nil) -> String? {
+// Internal (not private) for direct contract tests of root/child selection.
+// `registryRootThreadID`, when the caller already knows it, is AUTHORITATIVE
+// and takes priority over any loaded-list heuristic: 0.144.1's real
+// `thread/loaded/list` response is often bare `data: string[]` IDs with NO
+// parent/role metadata to classify child vs root, so a lone bare id must
+// never be assumed root when a known registry root disagrees (or is simply
+// absent from the list) — that would silently bind a child as root.
+func codexAppServerLoadedThreadID(from value: JSONValue, registryRootThreadID: String? = nil) -> String? {
     if let object = value.objectValue {
         if let thread = object["thread"]?.objectValue,
            let id = thread["id"]?.stringValue ?? thread["threadId"]?.stringValue {
@@ -1712,20 +1811,42 @@ func codexAppServerLoadedThreadID(from value: JSONValue,
         ?? value.arrayValue
         ?? []
     let candidates = threads.compactMap(codexAppServerLoadedThreadCandidate(from:))
+    // Child/subagent threads can never bind the root.
     let nonChildCandidates = candidates.filter { $0.isChild == false }
+
+    // STRONGEST signal first: an explicit `isCurrent` flag on exactly one
+    // non-child candidate is POSITIVE evidence straight from the
+    // app-server — it wins outright and may even UPDATE a stale known
+    // registry root (e.g. a resumed session whose registry record still
+    // names an older thread while the app-server has since moved on).
     let currentCandidates = nonChildCandidates.filter(\.isCurrent)
     if currentCandidates.count == 1 {
         return currentCandidates[0].id
     }
+
     if let registryRootThreadID {
+        // Authoritative knowledge wins when no stronger signal existed
+        // above and it's literally present in the list (even as an
+        // unclassifiable bare string).
         if nonChildCandidates.contains(where: { $0.id == registryRootThreadID }) {
             return registryRootThreadID
         }
-        if candidates.isEmpty == false,
-           candidates.allSatisfy(\.isBareString) {
+        // Known root, not present, and every candidate is an unclassifiable
+        // BARE STRING (the real 0.144.1 `data: string[]` shape carries no
+        // metadata at all): do not guess an alternative — fail closed so
+        // the caller's registry-root fallback applies directly instead of
+        // possibly binding a child.
+        if !candidates.isEmpty, candidates.allSatisfy(\.isBareString) {
             return nil
         }
+        // Object-shaped candidates (with at least SOME metadata surface,
+        // even if this particular one lacks child-identifying keys) fall
+        // through to the ordinary heuristic below.
     }
+
+    // A child-only list resolves to nothing (the registry root fallback
+    // stays authoritative) unless no better information exists at all, in
+    // which case a UNIQUE non-child candidate is the best available answer.
     if nonChildCandidates.count == 1 {
         return nonChildCandidates[0].id
     }
@@ -1746,15 +1867,15 @@ private struct CodexAppServerLoadedThreadCandidate {
     let id: String
     let isCurrent: Bool
     let isChild: Bool
+    // True for the REAL 0.144.1 `result.data: string[]` shape: a bare id
+    // carries NO parent/role metadata at all, so `isChild` is a default,
+    // not a verified fact — it must never outrank a KNOWN registry root.
     let isBareString: Bool
 }
 
 private func codexAppServerLoadedThreadCandidate(from value: JSONValue) -> CodexAppServerLoadedThreadCandidate? {
     if let id = value.stringValue {
-        return CodexAppServerLoadedThreadCandidate(id: id,
-                                                   isCurrent: false,
-                                                   isChild: false,
-                                                   isBareString: true)
+        return CodexAppServerLoadedThreadCandidate(id: id, isCurrent: false, isChild: false, isBareString: true)
     }
     guard let object = value.objectValue else {
         return nil
@@ -1777,14 +1898,21 @@ private func codexAppServerLoadedThreadCandidate(from value: JSONValue) -> Codex
     return nil
 }
 
+// 0.144.1 Thread: `parentThreadId` is set only for subagents; AgentControl
+// children may carry agentNickname/agentRole; `source` can be a subAgent
+// shape. `sessionId` is shared across the tree and is NOT a discriminator.
 private func codexAppServerLoadedThreadIsChild(_ object: [String: JSONValue]) -> Bool {
     let parentKeys = ["parentThreadId", "parent_thread_id", "parentId", "parent_id"]
-    for key in parentKeys where object[key]?.stringValue != nil {
-        return true
+    for key in parentKeys {
+        if let value = object[key], value.stringValue != nil {
+            return true
+        }
     }
     let agentKeys = ["agentRole", "agent_role", "agentNickname", "agent_nickname"]
-    for key in agentKeys where object[key]?.stringValue?.isEmpty == false {
-        return true
+    for key in agentKeys {
+        if let value = object[key]?.stringValue, value.isEmpty == false {
+            return true
+        }
     }
     if object["role"]?.stringValue == "subagent" {
         return true
@@ -1827,6 +1955,45 @@ private func codexAppServerLoadedThreadShapeDescription(from value: JSONValue) -
     return "scalar"
 }
 
+// Routes a protocol violation to the runtime session's teardown. The session
+// does not exist yet when the connection is constructed, so the router holds
+// the trigger until attach; it fires at most once.
+final class CodexAppServerProtocolViolationRouter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var session: CodexAppServerRuntimeSession?
+    private var pendingTrigger = false
+    private var delivered = false
+
+    func attach(_ session: CodexAppServerRuntimeSession) {
+        lock.lock()
+        self.session = session
+        let fire = pendingTrigger && delivered == false
+        if fire {
+            delivered = true
+        }
+        lock.unlock()
+        if fire {
+            session.handleProtocolViolation()
+        }
+    }
+
+    func trigger() {
+        lock.lock()
+        guard delivered == false else {
+            lock.unlock()
+            return
+        }
+        guard let session else {
+            pendingTrigger = true
+            lock.unlock()
+            return
+        }
+        delivered = true
+        lock.unlock()
+        session.handleProtocolViolation()
+    }
+}
+
 private final class CodexAppServerExternalProcess: CodexAppServerManagedProcess {
     let processID: Int32?
 
@@ -1842,6 +2009,8 @@ private final class CodexAppServerExternalProcess: CodexAppServerManagedProcess 
 }
 
 private final class CodexAppServerStdioTransport: CodexAppServerConnectionTransport {
+    private let lock = NSLock()
+    private var closed = false
     private let process: CodexAppServerManagedProcess
 
     init(process: CodexAppServerManagedProcess) {
@@ -1849,16 +2018,23 @@ private final class CodexAppServerStdioTransport: CodexAppServerConnectionTransp
     }
 
     func sendLine(_ line: String) throws {
+        lock.lock()
+        let isClosed = closed
+        lock.unlock()
+        guard isClosed == false else {
+            throw CodexAppServerTransportError.closed
+        }
         try process.sendLine(line)
     }
 
-    func sendLineAwaitingWrite(_ line: String) throws {
-        // Managed-process writes use FileHandle.write(contentsOf:), which
-        // returns only after the complete Data write succeeds or throws.
-        try process.sendLine(line)
+    // stdio has no separately closable client channel; closing the transport
+    // fail-closes all further writes. Actually stopping the app-server is
+    // the owned process's terminate().
+    func close() {
+        lock.lock()
+        closed = true
+        lock.unlock()
     }
-
-    func close() {}
 }
 
 final class CodexAppServerWebSocketTransportConnector: CodexAppServerTransportConnecting {
@@ -2026,12 +2202,14 @@ private final class CodexAppServerWebSocketUpgradeRequestHandler: ChannelInbound
     }
 }
 
-private final class CodexAppServerWebSocketFrameHandler: ChannelInboundHandler, Sendable {
+final class CodexAppServerWebSocketFrameHandler: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = WebSocketFrame
     typealias OutboundOut = WebSocketFrame
 
     private let onText: @Sendable (String) -> Void
     private let onClose: @Sendable (Error?) -> Void
+    private let closeLock = NSLock()
+    private var closeDelivered = false
 
     init(onText: @escaping @Sendable (String) -> Void,
          onClose: @escaping @Sendable (Error?) -> Void) {
@@ -2055,7 +2233,7 @@ private final class CodexAppServerWebSocketFrameHandler: ChannelInboundHandler, 
                                       data: data)
             context.writeAndFlush(Self.wrapOutboundOut(pong), promise: nil)
         case .connectionClose:
-            onClose(nil)
+            deliverCloseOnce(nil)
             context.close(promise: nil)
         default:
             break
@@ -2063,12 +2241,32 @@ private final class CodexAppServerWebSocketFrameHandler: ChannelInboundHandler, 
     }
 
     func errorCaught(context: ChannelHandlerContext, error: Error) {
-        onClose(error)
+        deliverCloseOnce(error)
         context.close(promise: nil)
+    }
+
+    // A dying channel (peer close, error, TCP/unix socket teardown) must
+    // reach onClose exactly once so the session can expire its pending
+    // approvals and be re-attached; close frame, error, and inactive can all
+    // fire for the same channel.
+    func channelInactive(context: ChannelHandlerContext) {
+        deliverCloseOnce(nil)
+        context.fireChannelInactive()
+    }
+
+    private func deliverCloseOnce(_ error: Error?) {
+        closeLock.lock()
+        let shouldDeliver = closeDelivered == false
+        closeDelivered = true
+        closeLock.unlock()
+        guard shouldDeliver else {
+            return
+        }
+        onClose(error)
     }
 }
 
-private final class CodexAppServerWebSocketTransport: CodexAppServerConnectionTransport {
+final class CodexAppServerWebSocketTransport: CodexAppServerConnectionTransport {
     private let channel: Channel
     private let lock = NSLock()
     private var closed = false
@@ -2097,6 +2295,10 @@ private final class CodexAppServerWebSocketTransport: CodexAppServerConnectionTr
     func sendLineAwaitingWrite(_ line: String) throws {
         let frame = try makeTextFrame(line)
         guard channel.eventLoop.inEventLoop == false else {
+            // Waiting here would deadlock the loop that must perform the
+            // write, and a best-effort enqueue cannot be reported as a
+            // confirmed submission. Fail closed; the caller keeps the prompt
+            // pending and surfaces a retryable error.
             throw CodexAppServerTransportError.confirmationUnavailable
         }
         try channel.writeAndFlush(frame).wait()
@@ -2112,11 +2314,10 @@ private final class CodexAppServerWebSocketTransport: CodexAppServerConnectionTr
 
         let payload = line.hasSuffix("\n") ? String(line.dropLast()) : line
         let buffer = channel.allocator.buffer(string: payload)
-        let frame = WebSocketFrame(fin: true,
-                                   opcode: .text,
-                                   maskKey: WebSocketMaskingKey.random(),
-                                   data: buffer)
-        return frame
+        return WebSocketFrame(fin: true,
+                              opcode: .text,
+                              maskKey: WebSocketMaskingKey.random(),
+                              data: buffer)
     }
 
     func close() {
@@ -2266,69 +2467,37 @@ private final class CodexAppServerConnectionLineRouter: @unchecked Sendable {
     }
 }
 
+// Routes transport onClose callbacks (which are wired before the session
+// object exists) to the session, buffering an early close.
 private final class CodexAppServerTransportCloseRouter: @unchecked Sendable {
     private let lock = NSLock()
     private var session: CodexAppServerRuntimeSession?
-    private var pendingClose: (didClose: Bool, error: Error?) = (false, nil)
+    private var pendingError: Error?
+    private var pendingClose = false
 
     func attach(_ session: CodexAppServerRuntimeSession) {
         lock.lock()
         self.session = session
-        let pendingClose = self.pendingClose
-        self.pendingClose = (false, nil)
+        let shouldDeliver = pendingClose
+        let error = pendingError
+        pendingClose = false
+        pendingError = nil
         lock.unlock()
-        if pendingClose.didClose {
-            session.handleTransportClosed(error: pendingClose.error)
+        if shouldDeliver {
+            session.handleTransportClosed(error: error)
         }
     }
 
     func receive(_ error: Error?) {
         lock.lock()
         guard let session else {
-            pendingClose = (true, error)
+            pendingClose = true
+            pendingError = error
             lock.unlock()
             return
         }
         lock.unlock()
         session.handleTransportClosed(error: error)
-    }
-}
-
-private final class CodexAppServerProtocolViolationRouter: @unchecked Sendable {
-    private let lock = NSLock()
-    private weak var session: CodexAppServerRuntimeSession?
-    private var pendingTrigger = false
-    private var delivered = false
-
-    func attach(_ session: CodexAppServerRuntimeSession) {
-        lock.lock()
-        self.session = session
-        let shouldDeliver = pendingTrigger && delivered == false
-        if shouldDeliver {
-            delivered = true
-        }
-        lock.unlock()
-
-        if shouldDeliver {
-            session.handleProtocolViolation()
-        }
-    }
-
-    func trigger() {
-        lock.lock()
-        guard delivered == false else {
-            lock.unlock()
-            return
-        }
-        guard let session else {
-            pendingTrigger = true
-            lock.unlock()
-            return
-        }
-        delivered = true
-        lock.unlock()
-
-        session.handleProtocolViolation()
     }
 }
 

@@ -17,6 +17,11 @@ final class AgentEventHub {
         let hasMore: Bool
     }
 
+    // Per-subscriber cancellation gate: once cancel() RETURNED, no further
+    // invocation of this subscriber's sink may START (even if a drain already
+    // resolved the sink to a local). A sink unsubscribing ITSELF must not
+    // deadlock: cancel() only waits for an in-flight invocation on another
+    // thread.
     final class SubscriberGate: @unchecked Sendable {
         private let condition = NSCondition()
         private var cancelled = false
@@ -46,6 +51,9 @@ final class AgentEventHub {
             while let thread = invokingThread, thread !== Thread.current {
                 if signalledWait == false {
                     signalledWait = true
+                    // Test-only observation: cancel() ARRIVED at its wait
+                    // window (an invocation is in flight on another thread)
+                    // and has NOT returned yet.
                     waitHook?()
                 }
                 condition.wait()
@@ -76,14 +84,27 @@ final class AgentEventHub {
 
     private struct SessionState {
         var seenEventIDs = Set<String>()
+        // Live-forward window: capacity trims only evict within this class.
         var bufferedEvents = [AgentEvent]()
+        // Historical backfill storage: fills BELOW the live cursor, its own
+        // capacity, never evicts live events and never live-delivers.
         var historicalEvents = [AgentEvent]()
+        // Historical identity is OWNED by the replacement lifecycle (see
+        // replaceHistoricalEvents): live idempotency and historical dedupe
+        // are separate sets, so an evicted historical ID can never suppress
+        // a later legitimate reconcile.
         var historicalEventIDs = Set<String>()
+        // Single read contract for fetch/replay/queries: history + live.
         var allStoredEvents: [AgentEvent] { historicalEvents + bufferedEvents }
         var latestSessionStarted: AgentEvent?
         var isActive = false
-        // Persists beyond buffer eviction so a late unseen event cannot fall
-        // behind a cursor that clients have already advanced.
+        // Single cursor sequence authority: the high-water of every seq an
+        // event was STORED under. Uniqueness alone is not enough — a late
+        // unseen event with a LOWER seq is invisible to any cursor that has
+        // already advanced past it, so storage is publish-monotonic: an
+        // unseen event claiming a seq at or below the high-water is rebased
+        // above it. nil until the session's first event, so a first low/zero
+        // seq keeps its original meaning.
         var storedSeqHighWater: Int?
     }
 
@@ -93,14 +114,25 @@ final class AgentEventHub {
     }
 
     private let queue = DispatchQueue(label: "com.tidey.remote-bridge.agent-event-hub")
+    // Delivery serialization: sinks are NEVER invoked while holding the
+    // state queue (reentrancy/deadlock), but the delivery order is fixed by
+    // enqueueing FROM INSIDE the state queue onto this serial queue — so
+    // subscriber delivery follows the hub's accepted/store order exactly,
+    // across concurrent producers.
     private let deliveryExecutor = DeliveryExecutor()
+    // Test-only: fires on the publisher thread AFTER the event was stored
+    // (and its delivery position fixed), before publish() returns.
     var postStoreDeliveryHook: ((AgentEvent) -> Void)?
+    // Test-only: fires on the delivery queue after a drain resolved its
+    // sinks, before invoking them.
     var preInvokeDeliveryHook: (() -> Void)?
+    // Test-only: fires when unsubscribe's cancel is WAITING for an in-flight
+    // invocation on another thread (before it returns).
     var unsubscribeCancelWaitHook: (() -> Void)?
     private var subscribers = [UUID: Subscriber]()
     private var sessions = [String: SessionState]()
     private var sessionBindings = [String: SessionBinding]()
-    private var reservedSeqBySessionID = [String: Int]()
+    private var reservedSeqBySessionID: [String: Int] = [:]
     private let maxBufferedEvents: Int
     private let maxSeenEventIDs: Int
 
@@ -241,6 +273,8 @@ final class AgentEventHub {
         let removed = queue.sync {
             subscribers.removeValue(forKey: subscriberID)
         }
+        // Linearize: after this returns, no invocation of the removed sink
+        // may start; an in-flight invocation on another thread is awaited.
         removed?.gate.cancel(waitHook: unsubscribeCancelWaitHook)
     }
 
@@ -252,6 +286,12 @@ final class AgentEventHub {
         }
     }
 
+    // Reserves and returns the next synthetic sequence number for a session.
+    // Reservation is a high-water mark: several events can be created before
+    // any of them is published (e.g. a batch of terminal events from one
+    // turn/close) and must still get unique, monotonically increasing seqs.
+    // A later native publish with a larger seq lifts the next reservation
+    // above the persisted live high-water.
     func nextSyntheticSeq(sessionID: String) -> Int {
         queue.sync {
             let stored = sessions[sessionID]?.storedSeqHighWater ?? transcriptSessionStartedSequence
@@ -272,6 +312,12 @@ final class AgentEventHub {
                 guard let promptID = AgentInteractivePromptSidebarMessages.promptID(from: opener) else {
                     continue
                 }
+                // Closure identity follows the EXACT lifecycle contract of
+                // activeInteractivePrompt: a token-bound opener is only
+                // closed by ITS token; a capability-bound tokenless opener is
+                // closed by no live terminal at all; legacy openers keep the
+                // promptID contract. A mismatched terminal being trimmed must
+                // never drop a genuinely active opener.
                 let openerToken = AgentInteractivePromptSidebarMessages.lifecycleToken(from: opener)
                 let openerRequiresCapability = AgentInteractivePromptSidebarMessages.requiresLifecycleCapability(opener)
                 let closure = preTrim.first { candidate in
@@ -280,24 +326,21 @@ final class AgentEventHub {
                           candidate.seq > opener.seq else {
                         return false
                     }
-                    return AgentInteractivePromptSidebarMessages.terminalCloses(
-                        openerLifecycleToken: openerToken,
-                        openerRequiresCapability: openerRequiresCapability,
-                        terminal: candidate
-                    )
+                    return AgentInteractivePromptSidebarMessages.terminalCloses(openerLifecycleToken: openerToken,
+                                                                                openerRequiresCapability: openerRequiresCapability,
+                                                                                terminal: candidate)
                 }
                 if let closure, keptIDs.contains(closure.eventID) == false {
                     dropIDs.insert(opener.eventID)
                 }
-
             default:
                 guard opener.metadata?["tidey_generated"] == "claude_context_command" else {
                     continue
                 }
+                // A summary belongs to the NEAREST preceding unmatched
+                // command: a later command's summary never closes this one.
                 let nextCommandSeq = preTrim
-                    .filter {
-                        $0.metadata?["tidey_generated"] == "claude_context_command" && $0.seq > opener.seq
-                    }
+                    .filter { $0.metadata?["tidey_generated"] == "claude_context_command" && $0.seq > opener.seq }
                     .map(\.seq)
                     .min()
                 let closure = preTrim.first { candidate in
@@ -310,11 +353,15 @@ final class AgentEventHub {
                 }
             }
         }
+        guard dropIDs.isEmpty == false else {
+            return kept
+        }
         return kept.filter { dropIDs.contains($0.eventID) == false }
     }
 
-    // Test seam for verifying that a session-scoped fetch defends against
-    // foreign-session data even if stored state is already corrupt.
+    // Minimal test seam: builds the corrupt state the fetch defense guards
+    // against (a foreign-session event stored inside another session's
+    // state). Bypasses the replacement ownership guard ON PURPOSE.
     func injectCorruptStoredHistoricalEventForTesting(sessionID: String, event: AgentEvent) {
         queue.sync {
             var state = sessions[sessionID] ?? SessionState()
@@ -363,11 +410,12 @@ final class AgentEventHub {
                     activeLifecycleToken = AgentInteractivePromptSidebarMessages.lifecycleToken(from: event)
                     activeRequiresCapability = AgentInteractivePromptSidebarMessages.requiresLifecycleCapability(event)
                 case .interactivePromptResolved:
-                    if AgentInteractivePromptSidebarMessages.terminalCloses(
-                        openerLifecycleToken: activeLifecycleToken,
-                        openerRequiresCapability: activeRequiresCapability,
-                        terminal: event
-                    ) {
+                    // Single lifecycle-matching contract (shared with the
+                    // trim and the latest-resolved lookup): a legacy opener
+                    // is closed ONLY by a tokenless non-capability terminal.
+                    if AgentInteractivePromptSidebarMessages.terminalCloses(openerLifecycleToken: activeLifecycleToken,
+                                                                            openerRequiresCapability: activeRequiresCapability,
+                                                                            terminal: event) {
                         activePrompt = nil
                     }
                 default:
@@ -375,6 +423,23 @@ final class AgentEventHub {
                 }
             }
             return activePrompt
+        }
+    }
+
+    // Source identity switch: every stored product and idempotency set of
+    // the session's OLD source is revoked; the seq high-water and synthetic
+    // reservations survive so subscriber cursors stay monotonic (new
+    // products rebase above the old stream).
+    func beginNewSourceEpoch(sessionID: String) {
+        queue.sync {
+            guard var state = sessions[sessionID] else {
+                return
+            }
+            state.bufferedEvents.removeAll()
+            state.historicalEvents.removeAll()
+            state.historicalEventIDs.removeAll()
+            state.seenEventIDs.removeAll()
+            sessions[sessionID] = state
         }
     }
 
@@ -458,31 +523,17 @@ final class AgentEventHub {
         }
     }
 
-    // A transcript source switch revokes the old source's stored products
-    // and idempotency state. Cursor authority survives so events from the
-    // replacement source continue above every cursor already observed by a
-    // client.
-    func beginNewSourceEpoch(sessionID: String) {
-        queue.sync {
-            guard var state = sessions[sessionID] else {
-                return
-            }
-            state.bufferedEvents.removeAll()
-            state.historicalEvents.removeAll()
-            state.historicalEventIDs.removeAll()
-            state.seenEventIDs.removeAll()
-            sessions[sessionID] = state
-        }
-    }
-
+    // Storage policy for publish. Live/forward events own the cursor: unseen
+    // events at or below the high-water are rebased above it. Historical
+    // backfill (transcript pages older than what is already stored) must keep
+    // its ORIGINAL cursor position, never reach live subscribers, and never
+    // appear in an already-advanced after_seq catch-up.
     enum PublishStorage {
         case liveForward
         case historicalBackfill
     }
 
-    func publish(_ event: AgentEvent,
-                 deliverToSubscribers: Bool = true,
-                 storage: PublishStorage = .liveForward) {
+    func publish(_ event: AgentEvent, deliverToSubscribers: Bool = true, storage: PublishStorage = .liveForward) {
         var event = event
         let deliveryCompletion: DispatchSemaphore? = queue.sync {
             var state = sessions[event.sessionID] ?? SessionState()
@@ -498,7 +549,13 @@ final class AgentEventHub {
                     state.seenEventIDs.insert(event.eventID)
                 }
 
-                // Historical storage never changes live cursor authority.
+                // Publish-monotonic single authority: an unseen event whose
+                // claimed seq is not ABOVE the stored high-water (collision
+                // with an outstanding reservation, an out-of-order reserved
+                // batch, or a late native producer) is rebased above
+                // everything stored or reserved, keeping its event identity.
+                // The high-water survives buffer trims, so evictions can
+                // never resurrect old cursor positions.
                 if let highWater = state.storedSeqHighWater, event.seq <= highWater {
                     let reserved = reservedSeqBySessionID[event.sessionID] ?? transcriptSessionStartedSequence
                     let rebased = max(highWater, reserved) + 1
@@ -506,11 +563,15 @@ final class AgentEventHub {
                     reservedSeqBySessionID[event.sessionID] = rebased
                 }
                 state.storedSeqHighWater = max(state.storedSeqHighWater ?? event.seq, event.seq)
-
             case .historicalBackfill:
-                // Backfill must remain strictly behind an established live
-                // cursor. It keeps its source sequence and never delivers.
+                // Historical pages keep their ORIGINAL cursor position: they
+                // fill in below the live window for before_seq pagination and
+                // must never move past an already-advanced after_seq cursor.
+                // The contract is ENFORCED here: history must sit strictly
+                // below the live high-water; anything else is rejected (the
+                // live cursor and high-water never move for history).
                 guard let highWater = state.storedSeqHighWater, event.seq < highWater else {
+                    BridgeLogger.server.error("agent event hub rejected historical event at/above live high-water event_id=\(event.eventID, privacy: .public) seq=\(event.seq, privacy: .public)")
                     return nil
                 }
                 state.historicalEventIDs.insert(event.eventID)
@@ -539,6 +600,8 @@ final class AgentEventHub {
             }
             sessions[event.sessionID] = state
 
+            // Historical storage NEVER reaches live subscribers, regardless
+            // of the delivery flag.
             guard deliverToSubscribers else {
                 return nil
             }
@@ -558,6 +621,9 @@ final class AgentEventHub {
                 return nil
             }
 
+            // The ordered drain: the enqueue happens inside the state queue,
+            // so delivery order equals store order. Resolve sinks again at
+            // drain time so an already-queued delivery observes unsubscribe.
             let envelope = AgentEventEnvelope(replay: false, event: effectiveEvent)
             let completion = DispatchSemaphore(value: 0)
             deliveryExecutor.queue.async { [weak self] in
@@ -586,22 +652,28 @@ final class AgentEventHub {
         }
     }
 
-    // Replaces the caller-owned historical window atomically. Live events,
-    // live cursor authority, reservations and subscribers remain untouched.
-    func replaceHistoricalEvents(sessionID: String,
-                                 events: [AgentEvent],
-                                 anchorSeq: Int? = nil) {
+    // Atomic historical replacement: the session/source that OWNS a
+    // historical window replaces the Hub's historical state with the
+    // window's freshly derived set — derivations that no longer hold (a
+    // newer duplicate suppressed by an older line, a cross-page status)
+    // are retracted, not merely appended around. Live storage, the live
+    // high-water and subscribers are untouched.
+    func replaceHistoricalEvents(sessionID: String, events: [AgentEvent], anchorSeq: Int? = nil) {
         queue.sync {
             var state = sessions[sessionID] ?? SessionState()
+            // The replacement OWNS historical identity: dedupe is live
+            // collision + THIS desired set — stale (possibly evicted)
+            // historical IDs can never suppress a legitimate reconcile.
             let liveIDs = Set(state.bufferedEvents.map(\.eventID))
             var replacementIDs = Set<String>()
             var accepted = [AgentEvent]()
-
             for event in events {
                 guard event.sessionID == sessionID else {
+                    BridgeLogger.server.error("agent event hub rejected historical replacement event for foreign session event_id=\(event.eventID, privacy: .public) event_session=\(event.sessionID, privacy: .public) owner=\(sessionID, privacy: .public)")
                     continue
                 }
                 guard let highWater = state.storedSeqHighWater, event.seq < highWater else {
+                    BridgeLogger.server.error("agent event hub rejected historical replacement event at/above live high-water event_id=\(event.eventID, privacy: .public) seq=\(event.seq, privacy: .public)")
                     continue
                 }
                 guard liveIDs.contains(event.eventID) == false,
@@ -610,29 +682,42 @@ final class AgentEventHub {
                 }
                 accepted.append(event)
             }
-
             accepted.sort { $0.seq < $1.seq }
+            // The Hub's historical bound holds across replacements — and the
+            // just-requested page (marked by the anchor) survives the trim:
+            // the window sheds the end farther from the anchor.
             if accepted.count > maxBufferedEvents {
                 let preTrim = accepted
                 if let anchorSeq {
-                    let belowAnchor = accepted.filter { $0.seq < anchorSeq }
-                    let atOrAboveAnchor = accepted.filter { $0.seq >= anchorSeq }
-                    let keptBelow = belowAnchor.suffix(maxBufferedEvents)
-                    let remainingCapacity = maxBufferedEvents - keptBelow.count
-                    accepted = Array(keptBelow) + Array(atOrAboveAnchor.prefix(remainingCapacity))
+                    // The requested direction wins: keep the NEWEST events
+                    // BELOW the anchor first (the page adjacent to the
+                    // caller's cursor, so its next cursor advances without a
+                    // gap), then fill any remaining room with events at or
+                    // above the anchor.
+                    let below = accepted.filter { $0.seq < anchorSeq }
+                    let atOrAbove = accepted.filter { $0.seq >= anchorSeq }
+                    let keptBelow = below.suffix(maxBufferedEvents)
+                    let keptAbove = atOrAbove.prefix(maxBufferedEvents - keptBelow.count)
+                    accepted = Array(keptBelow) + Array(keptAbove)
                 } else {
                     accepted.removeFirst(accepted.count - maxBufferedEvents)
                 }
-                accepted = Self.droppingOpenersWithTrimmedClosures(kept: accepted,
-                                                                   preTrim: preTrim)
+                // Correlation safety: the trim never leaves HALF a lifecycle.
+                // A kept opener whose closing event existed before the trim
+                // but was dropped is dropped too (fail closed within the hard
+                // bound) — a resolved prompt must not revive as active and a
+                // command must not lose its derived summary.
+                accepted = Self.droppingOpenersWithTrimmedClosures(kept: accepted, preTrim: preTrim)
+                BridgeLogger.server.info("agent event hub bounded historical replacement session_id=\(sessionID, privacy: .public) kept=\(accepted.count, privacy: .public)")
             }
-
             state.historicalEvents = accepted
             state.historicalEventIDs = Set(accepted.map(\.eventID))
             sessions[sessionID] = state
         }
     }
 
+    // Test-only: synchronously drains the ordered delivery queue so tests
+    // can assert on delivered state without sleeping.
     func drainDeliveriesForTesting() {
         guard deliveryExecutor.isCurrent == false else {
             return
@@ -767,8 +852,8 @@ final class AgentEventHub {
 }
 
 private extension AgentEvent {
-    // Rebasing changes only cursor position; event identity remains stable
-    // so ordinary event-id deduplication still applies.
+    // Identity-preserving seq rebase: the eventID (and therefore dedupe,
+    // snapshot overlay, and lifecycle-token semantics) stays the same.
     func withSeq(_ seq: Int) -> AgentEvent {
         AgentEvent(eventID: eventID,
                    seq: seq,

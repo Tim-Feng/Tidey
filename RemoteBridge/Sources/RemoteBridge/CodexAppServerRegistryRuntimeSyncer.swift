@@ -1,12 +1,10 @@
 import Foundation
 
 protocol CodexAppServerApprovalSubmitting: AnyObject {
-    func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent
     func submitApproval(promptID: String,
                         targetIndex: Int,
-                        workspaceID: String,
-                        panelID: String,
-                        sessionID: String?) throws -> AgentEvent
+                        clientRequestID: String?,
+                        lifecycleToken: String?) throws -> CodexAppServerApprovalSubmitOutcome
     func submitApproval(promptID: String,
                         targetIndex: Int,
                         clientRequestID: String?,
@@ -26,30 +24,19 @@ protocol CodexAppServerApprovalSubmitting: AnyObject {
 extension CodexAppServerApprovalSubmitting {
     func submitApproval(promptID: String,
                         targetIndex: Int,
-                        workspaceID: String,
-                        panelID: String,
-                        sessionID: String?) throws -> AgentEvent {
-        try submitApproval(promptID: promptID, targetIndex: targetIndex)
-    }
-
-    func submitApproval(promptID: String,
-                        targetIndex: Int,
                         clientRequestID: String?,
                         lifecycleToken: String?,
                         workspaceID: String,
                         panelID: String,
                         sessionID: String?) throws -> CodexAppServerApprovalSubmitOutcome {
-        let event = try submitApproval(promptID: promptID,
-                                       targetIndex: targetIndex,
-                                       workspaceID: workspaceID,
-                                       panelID: panelID,
-                                       sessionID: sessionID)
-        if let reason = event.metadata?["reason"], reason != "submit" {
-            return .alreadyResolved(event)
-        }
-        return .pendingConfirmation(promptID: promptID)
+        try submitApproval(promptID: promptID,
+                           targetIndex: targetIndex,
+                           clientRequestID: clientRequestID,
+                           lifecycleToken: lifecycleToken)
     }
 
+    // Answers-map submit for `item/tool/requestUserInput` cards. Default
+    // implementation fails closed for conformers without a Codex runtime.
     func submitUserInput(promptID: String,
                          answers: [String: [String]],
                          clientRequestID: String?,
@@ -72,7 +59,6 @@ protocol CodexAppServerRuntimeSessionControlling: AnyObject {
     func isStopped() -> Bool
     func pendingApprovalPromptEvents() -> [AgentEvent]
     func refreshActiveThread()
-    func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent
     func submitApproval(promptID: String,
                         targetIndex: Int,
                         clientRequestID: String?,
@@ -81,32 +67,18 @@ protocol CodexAppServerRuntimeSessionControlling: AnyObject {
                          answers: [String: [String]],
                          clientRequestID: String?,
                          lifecycleToken: String?) throws -> CodexAppServerApprovalSubmitOutcome
-    func submitMessage(text: String) throws
     func submitMessage(text: String, clientRequestID: String?) throws
     func stop()
 }
 
 extension CodexAppServerRuntimeSessionControlling {
-    func setRegistryRootThreadID(_ rawThreadID: String?) {}
-    func isStopped() -> Bool { false }
-    func submitApproval(promptID: String,
-                        targetIndex: Int,
-                        clientRequestID: String?,
-                        lifecycleToken: String?) throws -> CodexAppServerApprovalSubmitOutcome {
-        let event = try submitApproval(promptID: promptID, targetIndex: targetIndex)
-        if let reason = event.metadata?["reason"], reason != "submit" {
-            return .alreadyResolved(event)
-        }
-        return .pendingConfirmation(promptID: promptID)
-    }
+    // Back-compat default for test doubles predating requestUserInput; the
+    // real runtime session forwards to its connection.
     func submitUserInput(promptID: String,
                          answers: [String: [String]],
                          clientRequestID: String?,
                          lifecycleToken: String?) throws -> CodexAppServerApprovalSubmitOutcome {
         throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
-    }
-    func submitMessage(text: String, clientRequestID: String?) throws {
-        try submitMessage(text: text)
     }
 }
 
@@ -127,7 +99,13 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
     private struct RuntimeEntry {
         let record: AgentSessionRegistryRecord
         let session: CodexAppServerRuntimeSessionControlling
+        // Identity of this attach generation. Late callbacks and in-flight
+        // submits from a replaced (retired) generation must be ignored so
+        // they cannot mask or overwrite the current generation's state.
         let generation: UUID
+        // LAST-KNOWN-GOOD effective registry root: a record whose root field
+        // momentarily goes blank must not reset the replacement identity —
+        // B -> blank -> B never rebuilds; A -> blank -> B still does.
         let effectiveRootThreadID: String?
     }
 
@@ -137,24 +115,47 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
     private let timestampProvider: CodexAppServerConnection.TimestampProvider
     private let dateProvider: DateProvider
     private let activeThreadRefreshInterval: TimeInterval
-    private let transitionWaitTimeout: TimeInterval
     private let attachHandler: AttachHandler
     private let promptNotificationDeduper = AgentInteractivePromptNotificationDeduper()
     private let lock = NSLock()
-    private let forwardLock = NSRecursiveLock()
-    private let syncSerialLock = NSLock()
     private var entriesBySessionID = [String: RuntimeEntry]()
+    // The generation is registered here BEFORE the attach handler runs so a
+    // runtime that reports callbacks synchronously during attach is already
+    // "current"; replacement installs the new generation first, making every
+    // late callback from the old one stale.
     private var currentGenerationBySessionID = [String: UUID]()
+    // Generations being torn down: their stop()-driven terminal cleanup may
+    // still publish resolved events, but nothing else. Membership is removed
+    // once stop() returned.
     private var retiringGenerations = Set<UUID>()
+    // In-progress generation transitions (entry gap between old-entry removal
+    // and new-attach commit). Submits observing stale evidence wait here —
+    // bounded — instead of treating the gap as "no runtime".
     private var transitionGroupsBySessionID = [String: DispatchGroup]()
     private var transitionDepthBySessionID = [String: Int]()
+    private let transitionWaitTimeout: TimeInterval
+    // Serializes whole sync passes (see the sync() concurrency contract).
+    private let syncSerialLock = NSLock()
+    // Serializes [generation check + side-effect commit] against generation
+    // transitions (install/retire), closing the check-then-act window.
+    private let forwardLock = NSRecursiveLock()
     private var lastAssistantTextBySessionID = [String: String]()
     private var nextActiveThreadRefreshAtBySessionID = [String: Date]()
     var activeThreadHandler: ActiveThreadHandler?
+    // Test-only: fires after a callback passed its initial generation check
+    // but before the check-and-commit critical section, so tests can complete
+    // a replacement in that window.
     var generationRecheckHook: (() -> Void)?
+    // Test-only: fires when a submit decided to wait for an in-progress
+    // generation transition (entry gap) before reconciling.
     var transitionWaitHook: ((String) -> Void)?
+    // Test-only: fires after a dequeued sidebar work item passed its initial
+    // generation check but before the locked recheck + send.
     var sidebarDequeueRecheckHook: (() -> Void)?
+    // Test-only: fires when a caller ARRIVES at sync() (before the internal
+    // serialization), so tests can prove a concurrent sync waited.
     var syncArrivalHook: (([AgentSessionRegistryRecord]) -> Void)?
+    // Test-only: observes each attach's staging transaction.
     var attachStageHook: ((CodexAppServerAttachStage) -> Void)?
 
     init(eventHub: AgentEventHub,
@@ -167,8 +168,8 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
          transitionWaitTimeout: TimeInterval = 5.0,
          attachHandler: AttachHandler? = nil) {
         self.eventHub = eventHub
-        self.sidebarQueue = sidebarQueue
         self.transitionWaitTimeout = transitionWaitTimeout
+        self.sidebarQueue = sidebarQueue
         self.sidebarMessageSender = sidebarMessageSender
         self.timestampProvider = timestampProvider
         self.dateProvider = dateProvider
@@ -188,7 +189,7 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
                                           context: CodexAppServerRuntimeContext(workspaceID: record.workspaceID,
                                                                                panelID: panelID,
                                                                                sessionID: record.sessionID),
-                                          epoch: Self.appServerEpoch(record: record),
+                                          epoch: CodexAppServerRegistryRuntimeSyncer.appServerEpoch(record: record),
                                           nextSequence: nextSequence,
                                           timestampProvider: timestampProvider,
                                           onAgentEvent: onAgentEvent,
@@ -199,6 +200,10 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
         }
     }
 
+    // Concurrency contract: sync passes are serialized INSIDE the syncer.
+    // Interleaved syncs would otherwise split entry vs current-generation
+    // state (a stale attach result overwriting a newer generation's entry).
+    // The caller's queue is not relied upon.
     func sync(records: [AgentSessionRegistryRecord]) {
         syncArrivalHook?(records)
         syncSerialLock.lock()
@@ -217,6 +222,8 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
             guard let entry = entriesBySessionID.removeValue(forKey: sessionID) else {
                 return nil
             }
+            // The generation moves to `retiring` BEFORE stop() runs: the
+            // stop()-driven expired terminals must still flow to the hub.
             if currentGenerationBySessionID[sessionID] == entry.generation {
                 currentGenerationBySessionID.removeValue(forKey: sessionID)
                 retiringGenerations.insert(entry.generation)
@@ -227,6 +234,9 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
             guard let existing = entriesBySessionID[record.sessionID] else {
                 return true
             }
+            // A session whose transport died must not be reused forever: the
+            // app-server (same epoch) may still be alive, so re-attach and
+            // let it replay its pending requests.
             if existing.session.isStopped() {
                 return true
             }
@@ -236,8 +246,14 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
                 existing.record.panelID != record.panelID {
                 return true
             }
-            if let rootThreadID = Self.registryRootThreadID(from: record),
-               rootThreadID != existing.effectiveRootThreadID {
+            // Codex 0.144.1 thread/resume ADDS the connection to the thread;
+            // there is no unsubscribe. Resuming B on a connection that already
+            // subscribed A would keep delivering A's approvals into this
+            // session. A CHANGED effective root therefore replaces the whole
+            // runtime generation. A root that merely disappears (blank) keeps
+            // the reuse — fail closed on registry hiccups.
+            if let newRoot = Self.registryRootThreadID(from: record),
+               newRoot != existing.effectiveRootThreadID {
                 return true
             }
             return false
@@ -274,19 +290,25 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
         for entry in staleEntries + replacedEntries {
             entry.session.stop()
         }
+        // The retiring tokens are removed ON the sidebar queue, BEHIND any
+        // terminal cleanup the stop() calls enqueued: the cleanup thus always
+        // finds its generation still retiring and completes. Per-session maps
+        // are cleaned immediately; deduper state for replaced sessions is
+        // per-lifecycle-token, so the new generation is unaffected.
         let retiredEntries = staleEntries + replacedEntries
-        lock.withCodexRuntimeSyncerLock {
-            for entry in retiredEntries {
-                lastAssistantTextBySessionID.removeValue(forKey: entry.record.sessionID)
-                nextActiveThreadRefreshAtBySessionID.removeValue(forKey: entry.record.sessionID)
+        forwardLock.withCodexRuntimeSyncerLock {
+            lock.withCodexRuntimeSyncerLock {
+                for entry in retiredEntries {
+                    lastAssistantTextBySessionID.removeValue(forKey: entry.record.sessionID)
+                    nextActiveThreadRefreshAtBySessionID.removeValue(forKey: entry.record.sessionID)
+                }
             }
         }
         if retiredEntries.isEmpty == false {
-            // stop() may synchronously enqueue the retiring lifecycle's terminal.
-            // Clear its notification state behind that work and before callbacks
-            // from the replacement attach can enqueue their new lifecycle.
             sidebarQueue.async { [weak self] in
-                guard let self else { return }
+                guard let self else {
+                    return
+                }
                 self.forwardLock.withCodexRuntimeSyncerLock {
                     self.lock.withCodexRuntimeSyncerLock {
                         for entry in retiredEntries {
@@ -311,12 +333,11 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
             let now = dateProvider()
             for record in reusedRecords {
                 if let entry = entriesBySessionID[record.sessionID] {
-                    entriesBySessionID[record.sessionID] = RuntimeEntry(
-                        record: record,
-                        session: entry.session,
-                        generation: entry.generation,
-                        effectiveRootThreadID: Self.registryRootThreadID(from: record)
-                            ?? entry.effectiveRootThreadID)
+                    entriesBySessionID[record.sessionID] = RuntimeEntry(record: record,
+                                                                        session: entry.session,
+                                                                        generation: entry.generation,
+                                                                        effectiveRootThreadID: Self.registryRootThreadID(from: record)
+                                                                            ?? entry.effectiveRootThreadID)
                 }
             }
             return reusedRecords.compactMap { record -> (session: CodexAppServerRuntimeSessionControlling, shouldRefresh: Bool)? in
@@ -326,6 +347,9 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
                 return (session, shouldRefreshActiveThreadLocked(sessionID: record.sessionID, now: now))
             }
         }
+        // A reused record's effective root is by construction UNCHANGED (a
+        // changed root goes through generation replacement above), so there
+        // is no in-place root update here.
         for (session, shouldRefresh) in reusedSessions {
             session.ensureThreadSubscription()
             if shouldRefresh {
@@ -334,24 +358,22 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
         }
     }
 
-    func submitApproval(promptID: String, targetIndex: Int) throws -> AgentEvent {
-        try submitApproval(promptID: promptID,
-                           targetIndex: targetIndex,
-                           workspaceID: nil,
-                           panelID: nil,
-                           sessionID: nil)
-    }
-
     func submitApproval(promptID: String,
                         targetIndex: Int,
-                        workspaceID: String,
-                        panelID: String,
-                        sessionID: String?) throws -> AgentEvent {
-        try submitApproval(promptID: promptID,
-                           targetIndex: targetIndex,
-                           workspaceID: Optional(workspaceID),
-                           panelID: Optional(panelID),
-                           sessionID: sessionID)
+                        clientRequestID: String?,
+                        lifecycleToken: String?) throws -> CodexAppServerApprovalSubmitOutcome {
+        try convertingTransitionTimeout {
+            try performPromptSubmit(promptID: promptID,
+                                    lifecycleToken: lifecycleToken,
+                                    workspaceID: nil,
+                                    panelID: nil,
+                                    sessionID: nil) { session in
+                try session.submitApproval(promptID: promptID,
+                                           targetIndex: targetIndex,
+                                           clientRequestID: clientRequestID,
+                                           lifecycleToken: lifecycleToken)
+            }
+        }
     }
 
     func submitApproval(promptID: String,
@@ -361,15 +383,17 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
                         workspaceID: String,
                         panelID: String,
                         sessionID: String?) throws -> CodexAppServerApprovalSubmitOutcome {
-        try performLifecyclePromptSubmit(promptID: promptID,
-                                         lifecycleToken: lifecycleToken,
-                                         workspaceID: workspaceID,
-                                         panelID: panelID,
-                                         sessionID: sessionID) { session in
-            try session.submitApproval(promptID: promptID,
-                                       targetIndex: targetIndex,
-                                       clientRequestID: clientRequestID,
-                                       lifecycleToken: lifecycleToken)
+        try convertingTransitionTimeout {
+            try performPromptSubmit(promptID: promptID,
+                                    lifecycleToken: lifecycleToken,
+                                    workspaceID: Optional(workspaceID),
+                                    panelID: Optional(panelID),
+                                    sessionID: sessionID) { session in
+                try session.submitApproval(promptID: promptID,
+                                           targetIndex: targetIndex,
+                                           clientRequestID: clientRequestID,
+                                           lifecycleToken: lifecycleToken)
+            }
         }
     }
 
@@ -380,24 +404,35 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
                          workspaceID: String,
                          panelID: String,
                          sessionID: String?) throws -> CodexAppServerApprovalSubmitOutcome {
-        try performLifecyclePromptSubmit(promptID: promptID,
-                                         lifecycleToken: lifecycleToken,
-                                         workspaceID: workspaceID,
-                                         panelID: panelID,
-                                         sessionID: sessionID) { session in
-            try session.submitUserInput(promptID: promptID,
-                                        answers: answers,
-                                        clientRequestID: clientRequestID,
-                                        lifecycleToken: lifecycleToken)
+        try convertingTransitionTimeout {
+            try performPromptSubmit(promptID: promptID,
+                                    lifecycleToken: lifecycleToken,
+                                    workspaceID: Optional(workspaceID),
+                                    panelID: Optional(panelID),
+                                    sessionID: sessionID) { session in
+                try session.submitUserInput(promptID: promptID,
+                                            answers: answers,
+                                            clientRequestID: clientRequestID,
+                                            lifecycleToken: lifecycleToken)
+            }
         }
     }
 
-    private func submitApproval(promptID: String,
-                                targetIndex: Int,
-                                workspaceID: String?,
-                                panelID: String?,
-                                sessionID: String?,
-                                generationRetriesRemaining: Int = 1) throws -> AgentEvent {
+    private func convertingTransitionTimeout<T>(_ body: () throws -> T) throws -> T {
+        do {
+            return try body()
+        } catch is GenerationTransitionTimedOut {
+            throw BridgeInternalError.conflict("Codex runtime generation transition did not complete in time; retry.")
+        }
+    }
+
+    private func performPromptSubmit(promptID: String,
+                                     lifecycleToken: String?,
+                                     workspaceID: String?,
+                                     panelID: String?,
+                                     sessionID: String?,
+                                     generationRetriesRemaining: Int = 1,
+                                     using submit: (CodexAppServerRuntimeSessionControlling) throws -> CodexAppServerApprovalSubmitOutcome) throws -> CodexAppServerApprovalSubmitOutcome {
         let candidates = lock.withCodexRuntimeSyncerLock {
             let entries: [RuntimeEntry]
             if let sessionID {
@@ -409,42 +444,79 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
             } else {
                 entries = Array(entriesBySessionID.values)
             }
-            return entries.map {
-                (sessionID: $0.record.sessionID,
-                 session: $0.session,
-                 generation: $0.generation)
-            }
+            return entries.filter { entry in
+                if let workspaceID, entry.record.workspaceID != workspaceID {
+                    return false
+                }
+                if let panelID, let recordPanelID = entry.record.panelID, recordPanelID != panelID {
+                    return false
+                }
+                return true
+            }.map { (sessionID: $0.record.sessionID, session: $0.session, generation: $0.generation) }
         }
         var lastError: Error?
         for candidate in candidates {
-            let result: Result<AgentEvent, Error>
             do {
-                result = .success(try candidate.session.submitApproval(promptID: promptID,
-                                                                       targetIndex: targetIndex))
-            } catch {
-                result = .failure(error)
-            }
-            let stillCurrent = lock.withCodexRuntimeSyncerLock {
-                entriesBySessionID[candidate.sessionID]?.generation == candidate.generation
-            }
-            if stillCurrent == false, generationRetriesRemaining > 0 {
-                try requireTransitionSettled(awaitGenerationTransition(sessionID: candidate.sessionID))
-                return try submitApproval(promptID: promptID,
-                                          targetIndex: targetIndex,
-                                          workspaceID: workspaceID,
-                                          panelID: panelID,
-                                          sessionID: sessionID,
-                                          generationRetriesRemaining: generationRetriesRemaining - 1)
-            }
-            switch result {
-            case .success(let event):
-                guard stillCurrent else {
+                let outcome = try submit(candidate.session)
+                // The result is only trustworthy if this session is still the
+                // current generation: a session replaced mid-submit may
+                // answer with a stale terminal (e.g. expired) that must not
+                // mask the replayed prompt on the new generation.
+                let stillCurrent = lock.withCodexRuntimeSyncerLock {
+                    entriesBySessionID[candidate.sessionID]?.generation == candidate.generation
+                }
+                if stillCurrent {
+                    return outcome
+                }
+                guard generationRetriesRemaining > 0 else {
                     throw BridgeInternalError.conflict("Codex runtime was replaced during approval submit; retry.")
                 }
-                return event
-            case .failure(let error):
-                if case BridgeInternalError.notFound = error {
-                    continue
+                try requireTransitionSettled(awaitGenerationTransition(sessionID: candidate.sessionID))
+                return try performPromptSubmit(promptID: promptID,
+                                               lifecycleToken: lifecycleToken,
+                                               workspaceID: workspaceID,
+                                               panelID: panelID,
+                                               sessionID: sessionID,
+                                               generationRetriesRemaining: generationRetriesRemaining - 1,
+                                               using: submit)
+            } catch BridgeInternalError.notFound {
+                // A replaced runtime answering notFound is stale evidence: the
+                // new generation may hold the (re-delivered) prompt.
+                let stillCurrent = lock.withCodexRuntimeSyncerLock {
+                    entriesBySessionID[candidate.sessionID]?.generation == candidate.generation
+                }
+                if stillCurrent == false, generationRetriesRemaining > 0 {
+                    try requireTransitionSettled(awaitGenerationTransition(sessionID: candidate.sessionID))
+                    return try performPromptSubmit(promptID: promptID,
+                                                   lifecycleToken: lifecycleToken,
+                                                   workspaceID: workspaceID,
+                                                   panelID: panelID,
+                                                   sessionID: sessionID,
+                                                   generationRetriesRemaining: generationRetriesRemaining - 1,
+                                                   using: submit)
+                }
+                continue
+            } catch {
+                // A transition timeout is NOT candidate evidence: it must
+                // pass through untouched and fail the submit closed.
+                if error is GenerationTransitionTimedOut {
+                    throw error
+                }
+                // Same for hard errors (e.g. closed): a stale generation's
+                // error must not be surfaced when the current generation can
+                // answer.
+                let stillCurrent = lock.withCodexRuntimeSyncerLock {
+                    entriesBySessionID[candidate.sessionID]?.generation == candidate.generation
+                }
+                if stillCurrent == false, generationRetriesRemaining > 0 {
+                    try requireTransitionSettled(awaitGenerationTransition(sessionID: candidate.sessionID))
+                    return try performPromptSubmit(promptID: promptID,
+                                                   lifecycleToken: lifecycleToken,
+                                                   workspaceID: workspaceID,
+                                                   panelID: panelID,
+                                                   sessionID: sessionID,
+                                                   generationRetriesRemaining: generationRetriesRemaining - 1,
+                                                   using: submit)
                 }
                 lastError = error
             }
@@ -452,178 +524,40 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
         if let lastError {
             throw lastError
         }
-        if candidates.isEmpty,
-           let sessionID,
-           generationRetriesRemaining > 0,
+        // Empty candidates during an in-progress transition is the entry gap,
+        // not an authoritative "no runtime": wait for the commit and retry.
+        if candidates.isEmpty, let sessionID, generationRetriesRemaining > 0,
            lock.withCodexRuntimeSyncerLock({ (transitionDepthBySessionID[sessionID] ?? 0) > 0 }) {
             try requireTransitionSettled(awaitGenerationTransition(sessionID: sessionID))
-            return try submitApproval(promptID: promptID,
-                                      targetIndex: targetIndex,
-                                      workspaceID: workspaceID,
-                                      panelID: panelID,
-                                      sessionID: sessionID,
-                                      generationRetriesRemaining: generationRetriesRemaining - 1)
+            return try performPromptSubmit(promptID: promptID,
+                                           lifecycleToken: lifecycleToken,
+                                           workspaceID: workspaceID,
+                                           panelID: panelID,
+                                           sessionID: sessionID,
+                                           generationRetriesRemaining: generationRetriesRemaining - 1,
+                                           using: submit)
         }
+        // Only an exact terminal record for the same prompt identity may
+        // answer idempotently. Prompt ids embed the app-server epoch, so a
+        // restarted process can never match records from the previous run.
+        // If a newer delivery attempt of the same request is active in the
+        // hub (prompt event after the last resolved), the old terminal must
+        // not answer for it.
         if let workspaceID,
-           let panelID,
-           let sessionID {
-            if let resolvedEvent = eventHub.latestInteractivePromptResolvedEvent(workspaceID: workspaceID,
-                                                                                sessionID: sessionID,
-                                                                                promptID: promptID) {
-                return resolvedEvent
+           let sessionID,
+           let resolvedEvent = eventHub.latestInteractivePromptResolvedEvent(workspaceID: workspaceID,
+                                                                             sessionID: sessionID,
+                                                                             promptID: promptID,
+                                                                             lifecycleToken: lifecycleToken,
+                                                                             openerRequiresCapability: true) {
+            if eventHub.activeInteractivePrompt(workspaceID: workspaceID,
+                                                sessionID: sessionID,
+                                                promptID: promptID) != nil {
+                throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
             }
-            return alreadyResolvedApprovalEvent(promptID: promptID,
-                                                workspaceID: workspaceID,
-                                                panelID: panelID,
-                                                sessionID: sessionID)
-        }
-        throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
-    }
-
-    private func performLifecyclePromptSubmit(
-        promptID: String,
-        lifecycleToken: String?,
-        workspaceID: String,
-        panelID: String,
-        sessionID: String?,
-        generationRetriesRemaining: Int = 1,
-        using submit: (CodexAppServerRuntimeSessionControlling) throws -> CodexAppServerApprovalSubmitOutcome
-    ) throws -> CodexAppServerApprovalSubmitOutcome {
-        guard let sessionID,
-              sessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
-            throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
-        }
-
-        let candidate = lock.withCodexRuntimeSyncerLock { () -> (session: CodexAppServerRuntimeSessionControlling, generation: UUID)? in
-            guard let entry = entriesBySessionID[sessionID],
-                  entry.record.workspaceID == workspaceID,
-                  entry.record.panelID == panelID else {
-                return nil
-            }
-            return (entry.session, entry.generation)
-        }
-
-        if let candidate {
-            let result: Result<CodexAppServerApprovalSubmitOutcome, Error>
-            do {
-                result = .success(try submit(candidate.session))
-            } catch {
-                result = .failure(error)
-            }
-            let stillCurrent = lock.withCodexRuntimeSyncerLock {
-                entriesBySessionID[sessionID]?.generation == candidate.generation
-            }
-            if stillCurrent == false {
-                guard generationRetriesRemaining > 0 else {
-                    throw BridgeInternalError.conflict("Codex runtime was replaced during approval submit; retry.")
-                }
-                try requireTransitionSettled(awaitGenerationTransition(sessionID: sessionID))
-                return try performLifecyclePromptSubmit(
-                    promptID: promptID,
-                    lifecycleToken: lifecycleToken,
-                    workspaceID: workspaceID,
-                    panelID: panelID,
-                    sessionID: sessionID,
-                    generationRetriesRemaining: generationRetriesRemaining - 1,
-                    using: submit)
-            }
-
-            switch result {
-            case .success(let outcome):
-                return try validatedLifecycleOutcome(outcome,
-                                                     promptID: promptID,
-                                                     lifecycleToken: lifecycleToken,
-                                                     workspaceID: workspaceID,
-                                                     panelID: panelID,
-                                                     sessionID: sessionID)
-            case .failure(let error):
-                if case BridgeInternalError.notFound = error {
-                    break
-                }
-                throw error
-            }
-        }
-
-        if candidate == nil,
-           generationRetriesRemaining > 0,
-           lock.withCodexRuntimeSyncerLock({ (transitionDepthBySessionID[sessionID] ?? 0) > 0 }) {
-            try requireTransitionSettled(awaitGenerationTransition(sessionID: sessionID))
-            return try performLifecyclePromptSubmit(
-                promptID: promptID,
-                lifecycleToken: lifecycleToken,
-                workspaceID: workspaceID,
-                panelID: panelID,
-                sessionID: sessionID,
-                generationRetriesRemaining: generationRetriesRemaining - 1,
-                using: submit)
-        }
-
-        if let resolvedEvent = eventHub.latestInteractivePromptResolvedEvent(
-            workspaceID: workspaceID,
-            sessionID: sessionID,
-            promptID: promptID,
-            lifecycleToken: lifecycleToken,
-            openerRequiresCapability: true),
-           isMatchingLifecycleTerminal(resolvedEvent,
-                                       promptID: promptID,
-                                       lifecycleToken: lifecycleToken,
-                                       workspaceID: workspaceID,
-                                       panelID: panelID,
-                                       sessionID: sessionID),
-           eventHub.activeInteractivePrompt(workspaceID: workspaceID,
-                                            sessionID: sessionID,
-                                            promptID: promptID) == nil {
             return .alreadyResolved(resolvedEvent)
         }
         throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
-    }
-
-    private func validatedLifecycleOutcome(
-        _ outcome: CodexAppServerApprovalSubmitOutcome,
-        promptID: String,
-        lifecycleToken: String?,
-        workspaceID: String,
-        panelID: String,
-        sessionID: String
-    ) throws -> CodexAppServerApprovalSubmitOutcome {
-        switch outcome {
-        case .pendingConfirmation(let returnedPromptID):
-            guard returnedPromptID == promptID else {
-                throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
-            }
-        case .alreadyResolved(let event):
-            guard isMatchingLifecycleTerminal(event,
-                                              promptID: promptID,
-                                              lifecycleToken: lifecycleToken,
-                                              workspaceID: workspaceID,
-                                              panelID: panelID,
-                                              sessionID: sessionID) else {
-                throw BridgeInternalError.notFound("Unknown Codex approval prompt.")
-            }
-        }
-        return outcome
-    }
-
-    private func isMatchingLifecycleTerminal(
-        _ event: AgentEvent,
-        promptID: String,
-        lifecycleToken: String?,
-        workspaceID: String,
-        panelID: String,
-        sessionID: String
-    ) -> Bool {
-        let eventPanelID = event.metadata?["panel_id"]
-            ?? event.payload?.objectValue?["panel_id"]?.stringValue
-        return event.vendor == "codex"
-            && event.workspaceID == workspaceID
-            && event.sessionID == sessionID
-            && event.type == .interactivePromptResolved
-            && AgentInteractivePromptSidebarMessages.promptID(from: event) == promptID
-            && eventPanelID == panelID
-            && AgentInteractivePromptSidebarMessages.terminalCloses(
-                openerLifecycleToken: lifecycleToken,
-                openerRequiresCapability: true,
-                terminal: event)
     }
 
     func pendingApprovalPromptEvents(workspaceID: String, sessionID: String? = nil) -> [AgentEvent] {
@@ -663,43 +597,15 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
         }
     }
 
-    private func alreadyResolvedApprovalEvent(promptID: String,
-                                              workspaceID: String,
-                                              panelID: String,
-                                              sessionID: String) -> AgentEvent {
-        AgentEvent(eventID: "codex-app-server-prompt-resolved:\(promptID):already_resolved",
-                   seq: eventHub.nextSyntheticSeq(sessionID: sessionID),
-                   vendor: "codex",
-                   workspaceID: workspaceID,
-                   sessionID: sessionID,
-                   timestamp: timestampProvider(),
-                   type: .interactivePromptResolved,
-                   role: nil,
-                   text: nil,
-                   name: nil,
-                   input: nil,
-                   output: nil,
-                   toolCallID: nil,
-                   metadata: [
-                    "panel_id": panelID,
-                    "source": "codex_app_server",
-                    "prompt_id": promptID,
-                    "reason": "already_resolved",
-                    "submit_channel": InteractivePromptSubmitChannel.codexAppServer,
-                   ])
-    }
-
-    func submitMessage(sessionID: String, text: String) throws {
-        try submitMessage(sessionID: sessionID, text: text, clientRequestID: nil)
-    }
-
     func submitMessage(sessionID: String, text: String, clientRequestID: String?) throws {
         let session = lock.withCodexRuntimeSyncerLock {
             entriesBySessionID[sessionID]?.session
         }
         guard let session else {
-            throw CodexAppServerSubmitFailure.unavailableBeforeSend(
-                "Unknown Codex app-server session.")
+            // No registry entry for this session at all — strictly before
+            // any turn/start or turn/steer request frame could ever be
+            // built. Zero effect by construction.
+            throw CodexAppServerSubmitFailure.unavailableBeforeSend("Unknown Codex app-server session.")
         }
         try session.submitMessage(text: text, clientRequestID: clientRequestID)
     }
@@ -715,22 +621,19 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
 
     static func registryRootThreadID(from record: AgentSessionRegistryRecord) -> String? {
         for candidate in [record.threadID, record.resumeThreadID] {
-            if let threadID = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
-               threadID.isEmpty == false {
-                return threadID
+            if let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
+               trimmed.isEmpty == false {
+                return trimmed
             }
         }
         return nil
     }
 
-    static func appServerEpoch(record: AgentSessionRegistryRecord) -> String {
-        let processID = record.appServerPID.map(String.init) ?? "-"
-        let socketPath = record.appServerSocket ?? "-"
-        return "pid:\(processID)|sock:\(socketPath)"
-    }
-
     private func attach(record: AgentSessionRegistryRecord) {
         let generation = UUID()
+        // Install the generation BEFORE the attach handler runs: a runtime
+        // that reports its first thread/events synchronously during attach is
+        // legitimate and must not be dropped as stale.
         forwardLock.withCodexRuntimeSyncerLock {
             lock.withCodexRuntimeSyncerLock {
                 currentGenerationBySessionID[record.sessionID] = generation
@@ -750,6 +653,8 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
                                                 }
                                             },
                                             { [weak self, eventHub, sessionID = record.sessionID, generation] envelope in
+                                                // A retired generation's late prompt must not be
+                                                // published to the hub.
                                                 stage.run {
                                                     self?.forwardIfCurrent(sessionID: sessionID, generation: generation) {
                                                         eventHub.publish(envelope.event)
@@ -759,6 +664,8 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
                                                 }
                                             },
                                             { [weak self, eventHub, sessionID = record.sessionID, generation] event in
+                                                // Terminal cleanup is also legitimate from a
+                                                // RETIRING generation (stop()-driven expiry).
                                                 stage.run {
                                                     self?.forwardIfCurrentOrRetiring(sessionID: sessionID, generation: generation) {
                                                         eventHub.publish(event)
@@ -767,19 +674,25 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
                                                 }
                                             },
                                             { [weak self, sessionID = record.sessionID, generation] threadID in
+                                                // Retired generations must not rebind the
+                                                // current registry thread state.
                                                 stage.run {
                                                     self?.forwardIfCurrent(sessionID: sessionID, generation: generation) {
                                                         self?.activeThreadHandler?(sessionID, threadID)
                                                     }
                                                 }
                                             })
-            let rootThreadID = Self.registryRootThreadID(from: record)
-            session.setRegistryRootThreadID(rootThreadID)
+            // The registry already knows this session's authoritative root
+            // thread: hand it to the runtime as the subscription fallback for
+            // the cases where thread/loaded/list cannot resolve a unique root
+            // (empty, paginated, ambiguous). Prefer the resolved threadID and
+            // fall back to resumeThreadID; the setter fail-closes on blanks.
+            session.setRegistryRootThreadID(Self.registryRootThreadID(from: record))
             lock.withCodexRuntimeSyncerLock {
                 entriesBySessionID[record.sessionID] = RuntimeEntry(record: record,
                                                                     session: session,
                                                                     generation: generation,
-                                                                    effectiveRootThreadID: rootThreadID)
+                                                                    effectiveRootThreadID: Self.registryRootThreadID(from: record))
                 nextActiveThreadRefreshAtBySessionID[record.sessionID] = dateProvider().addingTimeInterval(activeThreadRefreshInterval)
             }
             stage.commit()
@@ -797,6 +710,10 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
         }
     }
 
+    // Atomic [generation re-check + side-effect commit]: the recheck and the
+    // publish happen under forwardLock, the same lock generation transitions
+    // take, so a replacement that completed after the caller's initial check
+    // invalidates the commit.
     private func forwardIfCurrent(sessionID: String, generation: UUID, _ commit: () -> Void) {
         guard isCurrentGeneration(sessionID: sessionID, generation: generation) else {
             return
@@ -823,34 +740,38 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
         }
     }
 
-    private func isCurrentGeneration(sessionID: String, generation: UUID) -> Bool {
-        lock.withCodexRuntimeSyncerLock {
-            currentGenerationBySessionID[sessionID] == generation
-        }
-    }
-
     private func isCurrentOrRetiringGeneration(sessionID: String, generation: UUID) -> Bool {
         lock.withCodexRuntimeSyncerLock {
             currentGenerationBySessionID[sessionID] == generation || retiringGenerations.contains(generation)
         }
     }
 
-    private func handleSidebarEvent(_ event: AgentEvent,
-                                    record: AgentSessionRegistryRecord,
-                                    generation: UUID) {
+    private func handleSidebarEvent(_ event: AgentEvent, record: AgentSessionRegistryRecord, generation: UUID) {
+        // Queued work carries its generation and is re-validated when it
+        // executes. Terminal cleanup (resolved) is also legitimate from a
+        // RETIRING generation — its removal is ordered BEHIND this work on
+        // the same serial queue, so the cleanup always completes.
         sidebarQueue.async { [weak self] in
-            guard let self else { return }
+            guard let self else {
+                return
+            }
             let mayExecute: () -> Bool = {
                 if event.type == .interactivePromptResolved {
-                    return self.isCurrentOrRetiringGeneration(sessionID: record.sessionID,
-                                                              generation: generation)
+                    return self.isCurrentOrRetiringGeneration(sessionID: record.sessionID, generation: generation)
                 }
                 return self.isCurrentGeneration(sessionID: record.sessionID, generation: generation)
             }
-            guard mayExecute() else { return }
+            guard mayExecute() else {
+                return
+            }
             self.sidebarDequeueRecheckHook?()
+            // The recheck and the external send are atomic with generation
+            // transitions: a replacement either completes before this work
+            // (and the recheck drops it) or waits until the send finished.
             self.forwardLock.withCodexRuntimeSyncerLock {
-                guard mayExecute() else { return }
+                guard mayExecute() else {
+                    return
+                }
                 self.handleSidebarEventOnQueue(event, record: record)
             }
         }
@@ -901,13 +822,22 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
                                sessionID: record.sessionID)
 
         case (.interactivePromptResolved, _):
-            guard promptNotificationDeduper.markResolved(event,
-                                                         sessionID: record.sessionID) == .clearedNotified else {
-                return
+            // A terminal may only restore the running shell state when it
+            // actually ended the delivery the sidebar is showing: a stale
+            // terminal for a superseded lifecycle must neither clear the
+            // notification gate nor flip the prompt state back to running.
+            switch promptNotificationDeduper.markResolved(event, sessionID: record.sessionID) {
+            case .clearedNotified:
+                // Only a terminal that ACTUALLY ended the currently notified
+                // delivery restores the running state — stale mismatches,
+                // unknown prompts, and duplicate terminals are all zero side
+                // effects (exactly-once).
+                sendSidebarOnQueue(messages: AgentInteractivePromptSidebarMessages.messages(for: event,
+                                                                                           workspaceID: record.workspaceID),
+                                   sessionID: record.sessionID)
+            case .staleMismatch, .noneNotified:
+                break
             }
-            sendSidebarOnQueue(messages: AgentInteractivePromptSidebarMessages.messages(for: event,
-                                                                                       workspaceID: record.workspaceID),
-                               sessionID: record.sessionID)
 
         default:
             break
@@ -943,12 +873,17 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
         group?.leave()
     }
 
-    private enum TransitionWaitOutcome {
+    enum TransitionWaitOutcome {
         case noTransition
         case completed
         case timedOut
     }
 
+    // Bounded wait for an in-progress transition; a no-op when none is in
+    // flight. Never a poll/sleep: the group is signalled by the transition
+    // commit (or failure) itself. The outcome MUST be propagated: a timed-out
+    // wait means the runtime state is still unknown and no old fallback may
+    // answer.
     private func awaitGenerationTransition(sessionID: String?) -> TransitionWaitOutcome {
         guard let sessionID else {
             return .noTransition
@@ -971,9 +906,20 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
         }
     }
 
+    // Internal marker so a transition timeout can pass THROUGH the candidate
+    // submit error handling untouched: any first `.timedOut` fails closed —
+    // no retry, no second wait, no Hub fallback.
+    struct GenerationTransitionTimedOut: Error {}
+
     private func requireTransitionSettled(_ outcome: TransitionWaitOutcome) throws {
         if case .timedOut = outcome {
-            throw BridgeInternalError.conflict("Codex runtime generation transition did not complete in time; retry.")
+            throw GenerationTransitionTimedOut()
+        }
+    }
+
+    private func isCurrentGeneration(sessionID: String, generation: UUID) -> Bool {
+        lock.withCodexRuntimeSyncerLock {
+            currentGenerationBySessionID[sessionID] == generation
         }
     }
 
@@ -987,6 +933,15 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
         }
         nextActiveThreadRefreshAtBySessionID[sessionID] = now.addingTimeInterval(activeThreadRefreshInterval)
         return true
+    }
+
+    // Stable identity of one app-server process instance: same process across
+    // Bridge reconnects keeps its epoch, a restarted process gets a new PID
+    // and therefore a new epoch.
+    static func appServerEpoch(record: AgentSessionRegistryRecord) -> String {
+        let pid = record.appServerPID.map(String.init) ?? "-"
+        let socket = record.appServerSocket ?? "-"
+        return "pid:\(pid)|sock:\(socket)"
     }
 
     private static func isAttachableCodexAppServerRecord(_ record: AgentSessionRegistryRecord) -> Bool {
@@ -1003,26 +958,39 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
     }
 }
 
-// Test seam for attach-time callback transactionality. The pass-through
-// implementation preserves existing behavior until the behavioral change
-// wires staging into attach().
-final class CodexAppServerAttachStage: @unchecked Sendable {
-    private enum Mode {
-        case staging
-        case committing
-        case committed
-        case discarded
+private extension NSLock {
+    func withCodexRuntimeSyncerLock<T>(_ body: () throws -> T) rethrows -> T {
+        lock()
+        defer { unlock() }
+        return try body()
     }
+}
 
+private extension NSRecursiveLock {
+    func withCodexRuntimeSyncerLock<T>(_ body: () throws -> T) rethrows -> T {
+        lock()
+        defer { unlock() }
+        return try body()
+    }
+}
+
+
+// Attach transaction staging: callbacks arriving while the attach handler is
+// still running are buffered; they publish (in FIFO arrival order) only if
+// the attach commits, and are discarded on failure so a failed attach leaves
+// no hub/sidebar/thread side effects.
+final class CodexAppServerAttachStage: @unchecked Sendable {
+    private enum Mode { case staging, committing, committed, discarded }
     private let lock = NSLock()
-    private var mode = Mode.staging
-    private var buffered = [() -> Void]()
-    var commitDrainHook: (() -> Void)?
+    private var mode: Mode = .staging
+    private var buffered: [() -> Void] = []
 
     func run(_ work: @escaping () -> Void) {
         lock.lock()
         switch mode {
         case .staging, .committing:
+            // While the single drain executor is still flushing staged work,
+            // new arrivals queue at the tail so FIFO arrival order holds.
             buffered.append(work)
             lock.unlock()
         case .committed:
@@ -1033,6 +1001,10 @@ final class CodexAppServerAttachStage: @unchecked Sendable {
         }
     }
 
+    // Test-only: fires after an item was dequeued for execution (mode is
+    // .committing, the tail may still hold undrained work), outside the lock.
+    var commitDrainHook: (() -> Void)?
+
     func commit() {
         lock.lock()
         guard mode == .staging else {
@@ -1040,6 +1012,9 @@ final class CodexAppServerAttachStage: @unchecked Sendable {
             return
         }
         mode = .committing
+        // Single drain executor: work runs WITHOUT the stage lock (callbacks
+        // may take other locks), but only this loop dequeues, and the mode
+        // flips to committed only once the tail is empty.
         while buffered.isEmpty == false {
             let next = buffered.removeFirst()
             lock.unlock()
@@ -1056,21 +1031,5 @@ final class CodexAppServerAttachStage: @unchecked Sendable {
         mode = .discarded
         buffered = []
         lock.unlock()
-    }
-}
-
-private extension NSLock {
-    func withCodexRuntimeSyncerLock<T>(_ body: () throws -> T) rethrows -> T {
-        lock()
-        defer { unlock() }
-        return try body()
-    }
-}
-
-private extension NSRecursiveLock {
-    func withCodexRuntimeSyncerLock<T>(_ body: () throws -> T) rethrows -> T {
-        lock()
-        defer { unlock() }
-        return try body()
     }
 }

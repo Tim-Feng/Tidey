@@ -153,6 +153,8 @@ final class TideyWorkspaceEventMonitor {
         }
     }
 
+    /// Internal so the event-to-reconciliation contract can be tested without
+    /// opening a Unix socket or running the monitor's reconnect loop.
     func process(event: WorkspaceEvent) {
         hub.publish(event)
         paneIdentityReconciler?.observe(event)

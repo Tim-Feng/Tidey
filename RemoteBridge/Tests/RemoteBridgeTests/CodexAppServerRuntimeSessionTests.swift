@@ -1,4 +1,5 @@
 import NIOCore
+import NIOEmbedded
 import NIOHTTP1
 import NIOPosix
 import NIOWebSocket
@@ -123,40 +124,6 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertEqual(startThread["method"]?.stringValue, "thread/start")
     }
 
-    func testFactoryCarriesExplicitAppServerEpochIntoApprovalContext() throws {
-        let connector = FakeCodexAppServerTransportConnector()
-        let factory = CodexAppServerRuntimeSessionFactory(
-            processRunner: FakeCodexAppServerProcessRunner(),
-            transportConnector: connector)
-        let prompts = PromptSink()
-        let epoch = "pid:9001|sock:/tmp/tidey-real-panel/app.sock"
-        let session = try factory.attach(
-            socketPath: "/tmp/tidey-real-panel/app.sock",
-            processID: 9001,
-            context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
-                                                  panelID: "panel-1",
-                                                  sessionID: "session-1"),
-            epoch: epoch,
-            nextSequence: { _ in 1 },
-            timestampProvider: { "2026-06-07T00:00:00.000Z" },
-            onAgentEvent: { _ in },
-            onInteractivePrompt: { prompts.append($0) },
-            onInteractivePromptResolved: { _ in })
-
-        let transport = try XCTUnwrap(connector.transport)
-        transport.emitLine("""
-        {"id":"approval-epoch","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"cmd-1","startedAtMs":1786000000000,"command":"ls"}}
-        """)
-
-        let envelope = try XCTUnwrap(prompts.envelopes().first)
-        XCTAssertEqual(envelope.event.metadata?["app_server_epoch"], epoch)
-        XCTAssertEqual(envelope.prompt.promptID,
-                       envelope.request.makePrompt(epoch: epoch).promptID)
-        XCTAssertNotEqual(envelope.prompt.promptID,
-                          envelope.request.makePrompt().promptID)
-        withExtendedLifetime(session) {}
-    }
-
     func testFactoryAttachesExistingUnixSocketResumesLoadedThread() throws {
         let runner = FakeCodexAppServerProcessRunner()
         let connector = FakeCodexAppServerTransportConnector()
@@ -202,6 +169,12 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertEqual(turnParams["input"]?.arrayValue?.first?.objectValue?["text"]?.stringValue, "hello from remote")
     }
 
+    // Required test: a thread/resume response naming exactly one
+    // inProgress turn must seed that turn as the known active turn —
+    // otherwise a Bridge attach/re-attach while the thread is already
+    // working (e.g. immediately after a deploy or a new app-server PID)
+    // can never learn the turn id, and every remote submit routes to
+    // .busyWithoutTurnID until the turn happens to complete on its own.
     func testThreadResumeWithUnambiguousInProgressTurnSeedsSteerTarget() throws {
         let runner = FakeCodexAppServerProcessRunner()
         let connector = FakeCodexAppServerTransportConnector()
@@ -387,6 +360,225 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
                        "zero submit transport for an ambiguous snapshot — never guess, never terminal-fallback")
     }
 
+    func testActiveThreadStoreObservedThreadOnlyFillsEmptyBinding() {
+        var changes = [String]()
+        let store = CodexAppServerActiveThreadStore(onChange: { changes.append($0) })
+
+        XCTAssertTrue(store.noteObservedThreadID("thread-root"))
+        XCTAssertFalse(store.noteObservedThreadID("thread-subagent"))
+        XCTAssertEqual(store.currentThreadID(), "thread-root")
+
+        XCTAssertTrue(store.setThreadID("thread-rotated"))
+        XCTAssertEqual(store.currentThreadID(), "thread-rotated")
+        XCTAssertEqual(changes, ["thread-root", "thread-rotated"])
+    }
+
+    func testRootThreadStartedObservationExcludesChildThreads() {
+        func notification(method: String, thread: [String: JSONValue], extraParams: [String: JSONValue] = [:]) -> CodexAppServerNotification {
+            var params = extraParams
+            params["thread"] = .object(thread)
+            return CodexAppServerNotification(method: method, params: params)
+        }
+
+        // Plain root thread (null parent) is accepted.
+        XCTAssertEqual(CodexAppServerHeadlessRuntime.rootThreadStartedThreadID(
+            from: notification(method: "thread/started",
+                               thread: ["id": .string("thread-root"), "parentThreadId": .null])),
+            "thread-root")
+        // Parent linkage marks a child thread.
+        XCTAssertNil(CodexAppServerHeadlessRuntime.rootThreadStartedThreadID(
+            from: notification(method: "thread/started",
+                               thread: ["id": .string("thread-child"), "parentThreadId": .string("thread-root")])))
+        // Agent nickname/role mark subagent threads.
+        XCTAssertNil(CodexAppServerHeadlessRuntime.rootThreadStartedThreadID(
+            from: notification(method: "thread/started",
+                               thread: ["id": .string("thread-child"), "agentNickname": .string("explorer")])))
+        XCTAssertNil(CodexAppServerHeadlessRuntime.rootThreadStartedThreadID(
+            from: notification(method: "thread/started",
+                               thread: ["id": .string("thread-child"), "role": .string("subagent")])))
+        // Non-thread/started notifications never seed the binding.
+        XCTAssertNil(CodexAppServerHeadlessRuntime.rootThreadStartedThreadID(
+            from: CodexAppServerNotification(method: "turn/started",
+                                             params: ["threadId": .string("thread-child")])))
+    }
+
+    func testChildThreadNotificationsBeforeAuthoritativeRootDoNotBind() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        var activeThreadIDs = [String]()
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-07-15T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in },
+                                         onActiveThreadID: { activeThreadIDs.append($0) })
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+
+        // Child/subagent activity arrives BEFORE any authoritative root
+        // identity. None of it may seed the binding, or a Remote submit
+        // would target the child thread.
+        transport.emitLine(#"{"method":"thread/started","params":{"thread":{"id":"thread-subagent","parentThreadId":"thread-root"}}}"#)
+        transport.emitLine(#"{"method":"turn/started","params":{"threadId":"thread-subagent","turnId":"turn-sub"}}"#)
+        transport.emitLine(#"{"method":"item/started","params":{"threadId":"thread-subagent","turnId":"turn-sub","item":{"id":"item-sub","type":"commandExecution","command":"ls"}}}"#)
+        XCTAssertTrue(activeThreadIDs.isEmpty)
+
+        // Authoritative root identity arrives afterwards and wins.
+        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        XCTAssertEqual(listLoaded["method"]?.stringValue, "thread/loaded/list")
+        let listLoadedID = try XCTUnwrap(listLoaded["id"])
+        let listLoadedIDData = try JSONEncoder().encode(listLoadedID)
+        let listLoadedIDText = String(decoding: listLoadedIDData, as: UTF8.self)
+        transport.emitLine("""
+        {"id":\(listLoadedIDText),"result":{"threads":[{"id":"thread-root","preview":"Mac TUI Codex","updatedAt":"2026-07-15T00:00:00.000Z"}]}}
+        """)
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
+        XCTAssertEqual(activeThreadIDs, ["thread-root"])
+
+        let turnStart = try awaitSubmitMessage(session, text: "hello root thread", transport: transport)
+        XCTAssertEqual(turnStart["method"]?.stringValue, "turn/start")
+        XCTAssertEqual(turnStart["params"]?.objectValue?["threadId"]?.stringValue, "thread-root")
+    }
+
+    func testWebSocketTransportConfirmedWriteFailsClosedOnItsOwnEventLoop() throws {
+        let channel = EmbeddedChannel()
+        defer { _ = try? channel.finish() }
+        let transport = CodexAppServerWebSocketTransport(channel: channel)
+
+        // EmbeddedChannel's event loop reports inEventLoop == true from the
+        // test thread: a confirmed write cannot be awaited there and must
+        // fail closed rather than report a best-effort enqueue as success.
+        XCTAssertThrowsError(try transport.sendLineAwaitingWrite("{\"id\":1,\"result\":{}}\n")) { error in
+            guard case CodexAppServerTransportError.confirmationUnavailable = error else {
+                return XCTFail("expected confirmationUnavailable, got \(error)")
+            }
+        }
+        // The best-effort path is still allowed for non-confirmed traffic.
+        XCTAssertNoThrow(try transport.sendLine("{\"method\":\"initialized\"}\n"))
+    }
+
+    func testWebSocketFrameHandlerDeliversCloseExactlyOnce() throws {
+        final class CloseCounter: @unchecked Sendable {
+            private let lock = NSLock()
+            private var count = 0
+            func increment() {
+                lock.lock()
+                count += 1
+                lock.unlock()
+            }
+            var value: Int {
+                lock.lock()
+                defer { lock.unlock() }
+                return count
+            }
+        }
+        struct ChannelFailure: Error {}
+        let counter = CloseCounter()
+        let handler = CodexAppServerWebSocketFrameHandler(onText: { _ in },
+                                                          onClose: { _ in counter.increment() })
+        let channel = EmbeddedChannel(handler: handler)
+
+        // Error, close frame handling, and inactive can all fire for the same
+        // dying channel; the session teardown must be delivered exactly once.
+        channel.pipeline.fireErrorCaught(ChannelFailure())
+        channel.pipeline.fireChannelInactive()
+        _ = try? channel.finish()
+
+        XCTAssertEqual(counter.value, 1)
+    }
+
+    func testTransportCloseTearsDownSessionExpiresPendingAndAllowsReattach() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        var promptEnvelopes = [CodexAppServerInteractivePromptEnvelope]()
+        var resolvedEvents = [AgentEvent]()
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         epoch: "pid:9001|sock:/tmp/tidey-real-panel/app.sock",
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-07-15T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { promptEnvelopes.append($0) },
+                                         onInteractivePromptResolved: { resolvedEvents.append($0) },
+                                         onActiveThreadID: { _ in })
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+
+        transport.emitLine("""
+        {"id":"approval-1","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","startedAtMs":1786000000000,"command":"ls"}}
+        """)
+        XCTAssertEqual(promptEnvelopes.count, 1)
+        XCTAssertFalse(session.isStopped())
+
+        // The client channel dies while the app-server (same epoch) stays
+        // alive: the session must tear down, the pending approval becomes a
+        // visible expired terminal, and the syncer can re-attach.
+        transport.emitClose(nil)
+
+        XCTAssertTrue(session.isStopped())
+        XCTAssertEqual(resolvedEvents.map { $0.metadata?["reason"] }, ["expired"])
+        XCTAssertTrue(session.pendingApprovalPromptEvents().isEmpty)
+
+        // Duplicate close callbacks stay exactly-once.
+        transport.emitClose(nil)
+        XCTAssertEqual(resolvedEvents.count, 1)
+    }
+
+    func testSubagentNotificationDoesNotRebindActiveThread() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        var activeThreadIDs = [String]()
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-07-15T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in },
+                                         onActiveThreadID: { activeThreadIDs.append($0) })
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+
+        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        XCTAssertEqual(listLoaded["method"]?.stringValue, "thread/loaded/list")
+        let listLoadedID = try XCTUnwrap(listLoaded["id"])
+        let listLoadedIDData = try JSONEncoder().encode(listLoadedID)
+        let listLoadedIDText = String(decoding: listLoadedIDData, as: UTF8.self)
+        transport.emitLine("""
+        {"id":\(listLoadedIDText),"result":{"threads":[{"id":"thread-root","preview":"Mac TUI Codex","updatedAt":"2026-07-15T00:00:00.000Z"}]}}
+        """)
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
+        XCTAssertEqual(activeThreadIDs, ["thread-root"])
+
+        transport.emitLine(#"{"method":"item/started","params":{"threadId":"thread-subagent","turnId":"turn-sub","item":{"id":"item-sub","type":"commandExecution","command":"ls"}}}"#)
+        transport.emitLine(#"{"method":"turn/started","params":{"threadId":"thread-subagent","turnId":"turn-sub"}}"#)
+
+        XCTAssertEqual(activeThreadIDs, ["thread-root"])
+
+        let turnStart = try awaitSubmitMessage(session, text: "hello root thread", transport: transport)
+        XCTAssertEqual(turnStart["method"]?.stringValue, "turn/start")
+        XCTAssertEqual(turnStart["params"]?.objectValue?["threadId"]?.stringValue, "thread-root")
+    }
 
     func testLoadedThreadSubscriptionDoesNotBlockInboundLineHandler() throws {
         let runner = FakeCodexAppServerProcessRunner()
@@ -636,6 +828,574 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertEqual(transport.sentLines().count, 6)
     }
 
+    // R13 root-thread fallback: the registry already holds the authoritative
+    // root thread; an EMPTY thread/loaded/list must fall back to resuming it
+    // instead of parking on loaded_thread_missing forever.
+    func testRegistryRootFallbackResumesWhenLoadedListIsEmpty() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let prompts = PromptSink()
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { prompts.append($0) },
+                                         onInteractivePromptResolved: { _ in })
+        prompts.session = session
+        session.setRegistryRootThreadID("019f5c3e-dafc-7102-80c5-d905869a66ef")
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+
+        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        XCTAssertEqual(listLoaded["method"]?.stringValue, "thread/loaded/list")
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(listLoaded["id"]), result: .object([
+            "threads": .array([]),
+        ])))
+
+        // Fallback: the registry root is resumed instead of loaded_thread_missing.
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
+        let resume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
+        XCTAssertEqual(resume["method"]?.stringValue, "thread/resume")
+        let resumeParams = try XCTUnwrap(resume["params"]?.objectValue)
+        XCTAssertEqual(resumeParams["threadId"]?.stringValue, "019f5c3e-dafc-7102-80c5-d905869a66ef")
+        XCTAssertEqual(resumeParams["excludeTurns"]?.boolValue, false)
+        XCTAssertNil(resumeParams["approvalsReviewer"])
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(resume["id"]), result: .object([
+            "thread": .object(["id": .string("019f5c3e-dafc-7102-80c5-d905869a66ef")]),
+        ])))
+
+        // Subscribed: no further subscription traffic.
+        session.ensureThreadSubscription()
+        XCTAssertEqual(transport.sentLines().count, 4)
+
+        // The native approval server request on the resumed root thread
+        // reaches the prompt handler and the pending snapshot.
+        transport.emitLine("""
+        {"id":"approval-1","method":"item/commandExecution/requestApproval","params":{"threadId":"019f5c3e-dafc-7102-80c5-d905869a66ef","turnId":"turn-1","itemId":"cmd-1","startedAtMs":1786000000000,"command":"rm -rf build","reason":"Needs escalation."}}
+        """)
+        let envelope = try XCTUnwrap(prompts.envelopes().first, "approval request must reach the prompt handler")
+        XCTAssertEqual(envelope.prompt.source, "codex_command_approval")
+        let pending = try XCTUnwrap(session.pendingApprovalPromptEvents().first,
+                                    "the pending snapshot exposes the card event for Remote fetch")
+        // Identity: the event carries THIS session's context, the right
+        // channel/source and a live lifecycle token.
+        XCTAssertEqual(pending.workspaceID, "workspace-1")
+        XCTAssertEqual(pending.sessionID, "session-1")
+        XCTAssertEqual(pending.metadata?["panel_id"], "panel-1")
+        let payload = pending.payload?.objectValue
+        XCTAssertEqual(payload?["source"]?.stringValue, "codex_command_approval")
+        XCTAssertEqual(payload?["submit_channel"]?.stringValue, "codex_app_server")
+        // The lifecycle token is carried INSIDE the prompt payload (the card
+        // itself holds the capability) and equals the delivery event ID.
+        let token = payload?["lifecycle_token"]?.stringValue ?? ""
+        XCTAssertFalse(token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                       "a live approval carries a non-blank lifecycle token")
+        XCTAssertEqual(token, pending.eventID)
+    }
+
+    // Ambiguous loaded list (multiple candidates, none current): the registry
+    // root must not be lost.
+    func testRegistryRootFallbackResumesWhenLoadedListIsAmbiguous() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in })
+        session.setRegistryRootThreadID("thread-root")
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(listLoaded["id"]), result: .object([
+            "threads": .array([
+                .object(["id": .string("thread-a")]),
+                .object(["id": .string("thread-b")]),
+            ]),
+        ])))
+
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
+        let resume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
+        XCTAssertEqual(resume["method"]?.stringValue, "thread/resume")
+        XCTAssertEqual(resume["params"]?.objectValue?["threadId"]?.stringValue, "thread-root")
+    }
+
+    func testLoadedThreadSelectorNeverTreatsMatchingChildAsRegistryRoot() {
+        let loaded = JSONValue.object([
+            "threads": .array([
+                .object([
+                    "id": .string("thread-root"),
+                    "parentThreadId": .string("parent-thread"),
+                ]),
+            ]),
+        ])
+
+        XCTAssertNil(codexAppServerLoadedThreadID(from: loaded,
+                                                  registryRootThreadID: "thread-root"),
+                     "an explicitly child-shaped candidate can never bind the root")
+    }
+
+    // Fail closed: no valid registry root (blank) + unresolvable loaded list
+    // keeps the safe no-loaded-thread behavior — never a made-up resume.
+    func testBlankRegistryRootKeepsSafeNoLoadedThreadBehavior() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in })
+        session.setRegistryRootThreadID("   \n")
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(listLoaded["id"]), result: .object([
+            "threads": .array([]),
+        ])))
+        XCTAssertEqual(transport.sentLines().count, 3, "no resume without a valid root")
+
+        // The retry loop keeps polling loaded/list, not resuming blindly.
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport, poll: {
+            session.ensureThreadSubscription()
+        }))
+        let retry = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
+        XCTAssertEqual(retry["method"]?.stringValue, "thread/loaded/list")
+    }
+
+    // A subagent thread notification after the fallback subscribe must not
+    // rebind the root: submits still target the registry root thread.
+    func testSubagentNotificationDoesNotRebindFallbackRoot() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in })
+        session.setRegistryRootThreadID("thread-root")
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(listLoaded["id"]), result: .object([
+            "threads": .array([]),
+        ])))
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
+        let resume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(resume["id"]), result: .object([
+            "thread": .object(["id": .string("thread-root")]),
+        ])))
+        session.ensureThreadSubscription()
+        XCTAssertEqual(transport.sentLines().count, 4)
+
+        transport.emitLine(#"{"method":"thread/started","params":{"thread":{"id":"thread-subagent","parentThreadId":"thread-root"}}}"#)
+        session.ensureThreadSubscription()
+        XCTAssertEqual(transport.sentLines().count, 4, "no rebind/resubscribe from a subagent notification")
+
+        let turnStart = try awaitSubmitMessage(session, text: "hello", transport: transport)
+        XCTAssertEqual(turnStart["params"]?.objectValue?["threadId"]?.stringValue, "thread-root",
+                       "submits still target the ROOT thread")
+    }
+
+    // Fallback resume hitting "no rollout found" keeps the bounded backoff —
+    // no tight resume storm.
+    func testRegistryRootFallbackNoRolloutKeepsBoundedBackoff() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in })
+        session.setRegistryRootThreadID("thread-root")
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(listLoaded["id"]), result: .object([
+            "threads": .array([]),
+        ])))
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
+        let resume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
+        transport.emitLine(try Self.errorResponseText(id: try XCTUnwrap(resume["id"]),
+                                                      code: -32600,
+                                                      message: "no rollout found for thread id thread-root"))
+
+        // Inside the backoff window: NOTHING is re-sent (no tight loop).
+        session.ensureThreadSubscription()
+        session.ensureThreadSubscription()
+        XCTAssertEqual(transport.sentLines().count, 4)
+
+        // After the bounded backoff, the cycle resumes once.
+        Thread.sleep(forTimeInterval: 1.1)
+        XCTAssertTrue(Self.waitForSentLineCount(5, transport: transport, poll: {
+            session.ensureThreadSubscription()
+        }))
+        let retryList = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(4).first))
+        XCTAssertEqual(retryList["method"]?.stringValue, "thread/loaded/list")
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(retryList["id"]), result: .object([
+            "threads": .array([]),
+        ])))
+        XCTAssertTrue(Self.waitForSentLineCount(6, transport: transport))
+        let retryResume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(5).first))
+        XCTAssertEqual(retryResume["method"]?.stringValue, "thread/resume")
+        XCTAssertEqual(retryResume["params"]?.objectValue?["threadId"]?.stringValue, "thread-root")
+    }
+
+    // Follow-up 2: the registry root can arrive AFTER the attach-time
+    // loaded/list already came back empty. The late delivery itself must
+    // re-arm the subscription — no waiting for the next external sync.
+    func testLateRegistryRootDeliveryTriggersResumeWithoutExternalSync() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in })
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(listLoaded["id"]), result: .object([
+            "threads": .array([]),
+        ])))
+        XCTAssertEqual(transport.sentLines().count, 3, "precondition: parked with NO resume and no root yet")
+
+        // Late root delivery — with NO external ensure call afterwards.
+        session.setRegistryRootThreadID("thread-root")
+
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport),
+                      "the late delivery re-arms the subscription by itself")
+        let resume = try Self.object(from: try XCTUnwrap(transport.sentLines().last))
+        XCTAssertEqual(resume["method"]?.stringValue, "thread/resume")
+        XCTAssertEqual(resume["params"]?.objectValue?["threadId"]?.stringValue, "thread-root")
+
+        // Resume success establishes the ACTIVE binding too: Remote messages
+        // must reach the root thread, not "thread not ready".
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(resume["id"]), result: .object([
+            "thread": .object(["id": .string("thread-root")]),
+        ])))
+        XCTAssertTrue(session.canSubmitMessage(), "the root is the active thread after the late re-arm")
+        let turnStart = try awaitSubmitMessage(session, text: "hello root", transport: transport)
+        XCTAssertEqual(turnStart["params"]?.objectValue?["threadId"]?.stringValue, "thread-root",
+                       "submits target the fallback ROOT thread")
+    }
+
+    // Final review 3: a PAGINATED loaded list (nextCursor set) cannot vouch
+    // for a unique root — the registry fallback applies.
+    func testPaginatedLoadedListUsesRegistryRootFallback() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in })
+        session.setRegistryRootThreadID("thread-root")
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(listLoaded["id"]), result: .object([
+            "threads": .array([
+                .object(["id": .string("thread-page-1")]),
+            ]),
+            "nextCursor": .string("cursor-2"),
+        ])))
+
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
+        let resume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
+        XCTAssertEqual(resume["method"]?.stringValue, "thread/resume")
+        XCTAssertEqual(resume["params"]?.objectValue?["threadId"]?.stringValue, "thread-root",
+                       "a paginated page never vouches for a unique root — the registry root wins")
+    }
+
+    // P1: thread/resume is ADDITIVE — a refresh that resolves a DIFFERENT
+    // unique root B while this connection is subscribed to A must never send
+    // resume(B) on the same connection (A+B double subscription). Fail
+    // closed: stop the runtime so the syncer's isStopped() replacement path
+    // attaches a fresh generation that subscribes only B.
+    func testRefreshNeverAdditivelyResumesDifferentRootOnSubscribedConnection() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        var observedThreadIDs = [String]()
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in },
+                                         onActiveThreadID: { observedThreadIDs.append($0) })
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(listLoaded["id"]), result: .object([
+            "threads": .array([.object(["id": .string("thread-A")])]),
+        ])))
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
+        let resumeA = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
+        XCTAssertEqual(resumeA["params"]?.objectValue?["threadId"]?.stringValue, "thread-A")
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(resumeA["id"]), result: .object([
+            "thread": .object(["id": .string("thread-A")]),
+        ])))
+
+        // Subscribed(A). The refresh now resolves a DIFFERENT unique root B.
+        session.refreshActiveThread()
+        XCTAssertTrue(Self.waitForSentLineCount(5, transport: transport))
+        let refreshList = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(4).first))
+        XCTAssertEqual(refreshList["method"]?.stringValue, "thread/loaded/list")
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(refreshList["id"]), result: .object([
+            "threads": .array([.object(["id": .string("thread-B")])]),
+        ])))
+
+        // Deterministic settle: the callback queue processed the result.
+        XCTAssertTrue(Self.waitFor { session.isStopped() },
+                      "fail closed: the old runtime is STOPPED so the syncer replaces the generation")
+        let resumeBLines = transport.sentLines().compactMap { line -> String? in
+            guard let object = try? Self.object(from: line),
+                  object["method"]?.stringValue == "thread/resume" else {
+                return nil
+            }
+            return object["params"]?.objectValue?["threadId"]?.stringValue
+        }
+        XCTAssertEqual(resumeBLines, ["thread-A"],
+                       "NO additive resume(B) on the connection that already subscribed A")
+        XCTAssertGreaterThan(transport.closeCallCount, 0, "the old connection is closed")
+        XCTAssertEqual(observedThreadIDs.last, "thread-B",
+                       "B is still recorded via the existing active-thread callback for the registry")
+    }
+
+    // P2: the LATE setter must not be lost when it interleaves with an
+    // unresolved loaded-list callback that has not committed its state
+    // transition yet — any interleaving ends with EXACTLY ONE resume(root).
+    func testLateSetterDuringUnresolvedListCallbackStillResumesExactlyOnce() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in })
+        // The setter lands EXACTLY while the callback is processing the
+        // unresolved list, before the state transition commits.
+        session.loadedThreadUnresolvedHook = { [weak session] in
+            session?.loadedThreadUnresolvedHook = nil
+            session?.setRegistryRootThreadID("thread-root")
+        }
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(listLoaded["id"]), result: .object([
+            "threads": .array([]),
+        ])))
+
+        // NO external ensure: the interleaving itself must produce the resume.
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport),
+                      "the late setter is not lost")
+        let resumes = transport.sentLines().compactMap { line -> String? in
+            guard let object = try? Self.object(from: line),
+                  object["method"]?.stringValue == "thread/resume" else {
+                return nil
+            }
+            return object["params"]?.objectValue?["threadId"]?.stringValue
+        }
+        XCTAssertEqual(resumes, ["thread-root"], "exactly ONE resume, no duplicates")
+    }
+
+    // Codex production review follow-up: a bare-string loaded-list child-
+    // first race binds and CONFIRMS a subscription to the wrong (child)
+    // thread before the authoritative registry root arrives. The late
+    // registry root must CORRECT the confirmed binding, not leave it.
+    func testLateAuthoritativeRegistryRootCorrectsAConfirmedChildBinding() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in })
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+
+        // Bare-string loaded-list response (no registry root known yet):
+        // the ONLY candidate is trusted as a best-effort root.
+        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(listLoaded["id"]), result: .object([
+            "data": .array([.string("thread-child")]),
+        ])))
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
+        let firstResume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
+        XCTAssertEqual(firstResume["params"]?.objectValue?["threadId"]?.stringValue, "thread-child")
+        XCTAssertEqual(session.attachSubscriptionStateForTesting, "resume_pending")
+
+        // CRITICAL timing: the authoritative registry root arrives WHILE
+        // the wrong resume(child) request is still resumePending — BEFORE
+        // its response is seen. A correction limited to the already-
+        // `.subscribed` case would silently decline here and never revisit
+        // it (no second `setRegistryRootThreadID` call is guaranteed).
+        session.setRegistryRootThreadID("thread-root")
+        XCTAssertEqual(session.attachSubscriptionStateForTesting, "resume_pending",
+                       "setter must not have raced its own resume send while one is already in flight")
+
+        // The in-flight (wrong) resume NOW confirms.
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(firstResume["id"]), result: .object([
+            "thread": .object(["id": .string("thread-child"), "status": .object(["type": .string("idle")])]),
+        ])))
+
+        // The confirmation must immediately trigger the stashed correction.
+        // 0.144.1 thread/resume is ADDITIVE (no unsubscribe): correcting a
+        // CONFIRMED wrong subscription cannot safely re-resume in place
+        // (that would leave both threads' approvals flowing) — the fail-
+        // closed correction is to stop this runtime generation so the
+        // syncer reattaches a fresh one, which subscribes ONLY to the
+        // (by-then-known) authoritative root.
+        XCTAssertTrue(Self.waitFor { session.isStopped() },
+                      "the confirmed wrong binding (learned mid-flight) was never corrected")
+    }
+
+    // Follow-up 3: loaded-list authoritative precedence — a uniquely
+    // resolved loaded root B WINS over an existing fallback A.
+    func testLoadedListUniqueRootTakesPrecedenceOverFallback() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in })
+        session.setRegistryRootThreadID("thread-A")
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(listLoaded["id"]), result: .object([
+            "threads": .array([
+                .object(["id": .string("thread-B")]),
+            ]),
+        ])))
+
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
+        let resume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
+        XCTAssertEqual(resume["method"]?.stringValue, "thread/resume")
+        XCTAssertEqual(resume["params"]?.objectValue?["threadId"]?.stringValue, "thread-B",
+                       "the app-server's uniquely resolved root is authoritative over the fallback")
+    }
+
+    // Follow-up 1 semantics: a later nil/blank update never CLEARS a valid
+    // fallback — fail closed keeps the last known-good root.
+    func testBlankRootUpdateKeepsExistingValidFallback() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in })
+        session.setRegistryRootThreadID("thread-root")
+        session.setRegistryRootThreadID("   ")
+        session.setRegistryRootThreadID(nil)
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(listLoaded["id"]), result: .object([
+            "threads": .array([]),
+        ])))
+
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
+        let resume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
+        XCTAssertEqual(resume["params"]?.objectValue?["threadId"]?.stringValue, "thread-root",
+                       "blank updates never clear the last valid fallback")
+    }
+
     func testFactoryAttachesExplicitCurrentLoadedThread() throws {
         let runner = FakeCodexAppServerProcessRunner()
         let connector = FakeCodexAppServerTransportConnector()
@@ -722,6 +1482,11 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         transport.emitLine(try Self.responseText(id: retryListLoadedID, result: Self.ambiguousLoadedThreadsResult()))
 
         wait(for: [submitCompleted], timeout: 2.0)
+        // Thread-not-ready happens strictly before any turn/start or
+        // turn/steer request frame is built — zero effect by construction,
+        // so this is the typed unavailableBeforeSend case (fail-closed
+        // conflict at the handler, never a terminal fallback, and a
+        // same-id retry can genuinely re-attempt once the thread resolves).
         guard let submitError, case CodexAppServerSubmitFailure.unavailableBeforeSend = submitError else {
             return XCTFail("expected unavailableBeforeSend, got \(String(describing: submitError))")
         }
@@ -758,176 +1523,6 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
 
         XCTAssertFalse(session.canSubmitMessage())
         XCTAssertEqual(transport.sentLines().count, 3)
-    }
-
-    func testRegistryRootFallbackResumesWhenLoadedListIsEmpty() throws {
-        let (session, transport) = try Self.makeAttachedSession()
-        session.setRegistryRootThreadID("  thread-root  ")
-        try Self.acknowledgeInitialize(from: transport)
-
-        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
-        transport.emitLine(try Self.responseText(id: try XCTUnwrap(listLoaded["id"]), result: .object([
-            "threads": .array([]),
-        ])))
-
-        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
-        let resume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
-        XCTAssertEqual(resume["method"]?.stringValue, "thread/resume")
-        XCTAssertEqual(resume["params"]?.objectValue?["threadId"]?.stringValue, "thread-root")
-    }
-
-    func testRegistryRootFallbackHandlesAmbiguousPaginatedAndChildOnlyLists() throws {
-        let unresolvedResults: [JSONValue] = [
-            .object([
-                "threads": .array([
-                    .object(["id": .string("thread-a")]),
-                    .object(["id": .string("thread-b")]),
-                ]),
-            ]),
-            .object([
-                "threads": .array([.object(["id": .string("thread-page-1")])]),
-                "nextCursor": .string("cursor-2"),
-            ]),
-            .object([
-                "threads": .array([
-                    .object([
-                        "id": .string("thread-child"),
-                        "parentThreadId": .string("thread-root"),
-                    ]),
-                ]),
-            ]),
-        ]
-
-        for result in unresolvedResults {
-            let (session, transport) = try Self.makeAttachedSession()
-            session.setRegistryRootThreadID("thread-root")
-            try Self.acknowledgeInitialize(from: transport)
-            let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
-            transport.emitLine(try Self.responseText(id: try XCTUnwrap(listLoaded["id"]), result: result))
-
-            XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
-            let resume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
-            XCTAssertEqual(resume["method"]?.stringValue, "thread/resume")
-            XCTAssertEqual(resume["params"]?.objectValue?["threadId"]?.stringValue, "thread-root")
-        }
-    }
-
-    func testKnownRegistryRootOutranksUnclassifiableBareLoadedThread() throws {
-        let (session, transport) = try Self.makeAttachedSession()
-        session.setRegistryRootThreadID("thread-root")
-        try Self.acknowledgeInitialize(from: transport)
-        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
-        transport.emitLine(try Self.responseText(id: try XCTUnwrap(listLoaded["id"]), result: .object([
-            "data": .array([.string("thread-maybe-child")]),
-        ])))
-
-        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
-        let resume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
-        XCTAssertEqual(resume["params"]?.objectValue?["threadId"]?.stringValue, "thread-root",
-                       "a metadata-free loaded id cannot replace the authoritative registry root")
-    }
-
-    func testBlankRegistryRootFailsClosedAndDoesNotResume() throws {
-        let (session, transport) = try Self.makeAttachedSession()
-        session.setRegistryRootThreadID("  \n ")
-        try Self.acknowledgeInitialize(from: transport)
-        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
-        transport.emitLine(try Self.responseText(id: try XCTUnwrap(listLoaded["id"]), result: .object([
-            "threads": .array([]),
-        ])))
-
-        XCTAssertEqual(transport.sentLines().count, 3)
-        XCTAssertFalse(session.canSubmitMessage())
-    }
-
-    func testLateRegistryRootDeliveryRearmsParkedSubscription() throws {
-        let (session, transport) = try Self.makeAttachedSession()
-        try Self.acknowledgeInitialize(from: transport)
-        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
-        transport.emitLine(try Self.responseText(id: try XCTUnwrap(listLoaded["id"]), result: .object([
-            "threads": .array([]),
-        ])))
-        XCTAssertEqual(transport.sentLines().count, 3)
-
-        session.setRegistryRootThreadID("thread-root")
-
-        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
-        let resume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
-        XCTAssertEqual(resume["method"]?.stringValue, "thread/resume")
-        XCTAssertEqual(resume["params"]?.objectValue?["threadId"]?.stringValue, "thread-root")
-    }
-
-    func testLateRootSetterDuringUnresolvedCallbackResumesExactlyOnce() throws {
-        let (session, transport) = try Self.makeAttachedSession()
-        session.loadedThreadUnresolvedHook = { [weak session] in
-            session?.loadedThreadUnresolvedHook = nil
-            session?.setRegistryRootThreadID("thread-root")
-        }
-        try Self.acknowledgeInitialize(from: transport)
-        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
-        transport.emitLine(try Self.responseText(id: try XCTUnwrap(listLoaded["id"]), result: .object([
-            "threads": .array([]),
-        ])))
-
-        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
-        let resumedThreadIDs = transport.sentLines().compactMap { line -> String? in
-            guard let object = try? Self.object(from: line),
-                  object["method"]?.stringValue == "thread/resume" else {
-                return nil
-            }
-            return object["params"]?.objectValue?["threadId"]?.stringValue
-        }
-        XCTAssertEqual(resumedThreadIDs, ["thread-root"])
-    }
-
-    func testLateAuthoritativeRootStopsConfirmedWrongSubscription() throws {
-        let (session, transport) = try Self.makeAttachedSession()
-        try Self.acknowledgeInitialize(from: transport)
-        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
-        transport.emitLine(try Self.responseText(id: try XCTUnwrap(listLoaded["id"]), result: .object([
-            "data": .array([.string("thread-maybe-child")]),
-        ])))
-        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
-        let childResume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
-
-        session.setRegistryRootThreadID("thread-root")
-        transport.emitLine(try Self.responseText(id: try XCTUnwrap(childResume["id"]), result: .object([
-            "thread": .object(["id": .string("thread-maybe-child")]),
-        ])))
-
-        XCTAssertTrue(Self.waitFor { session.isStopped() })
-    }
-
-    func testRefreshStopsInsteadOfAdditivelyResumingDifferentRoot() throws {
-        let (session, transport) = try Self.makeAttachedSession()
-        try Self.acknowledgeInitialize(from: transport)
-        let listLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
-        transport.emitLine(try Self.responseText(id: try XCTUnwrap(listLoaded["id"]), result: .object([
-            "threads": .array([.object(["id": .string("thread-a")])]),
-        ])))
-        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
-        let resumeA = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
-        transport.emitLine(try Self.responseText(id: try XCTUnwrap(resumeA["id"]), result: .object([
-            "thread": .object(["id": .string("thread-a")]),
-        ])))
-
-        session.refreshActiveThread()
-        XCTAssertTrue(Self.waitForSentLineCount(5, transport: transport))
-        let refresh = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(4).first))
-        transport.emitLine(try Self.responseText(id: try XCTUnwrap(refresh["id"]), result: .object([
-            "threads": .array([.object(["id": .string("thread-b")])]),
-        ])))
-
-        XCTAssertTrue(Self.waitFor { session.isStopped() })
-        let resumedThreadIDs = transport.sentLines().compactMap { line -> String? in
-            guard let object = try? Self.object(from: line),
-                  object["method"]?.stringValue == "thread/resume" else {
-                return nil
-            }
-            return object["params"]?.objectValue?["threadId"]?.stringValue
-        }
-        XCTAssertEqual(resumedThreadIDs, ["thread-a"],
-                       "the old connection must never subscribe to both roots")
     }
 
     func testSubmitMessageLoadsThreadWhenAttachedRuntimeWasNotReady() throws {
@@ -990,59 +1585,6 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
 
         wait(for: [submitCompleted], timeout: 2.0)
         XCTAssertNil(submitError)
-    }
-
-    func testSubmitLookupUsesKnownRegistryRootOverAmbiguousBareLoadedThreads() throws {
-        let (session, transport) = try Self.makeAttachedSession()
-        session.setRegistryRootThreadID("thread-root")
-        try Self.acknowledgeInitialize(from: transport)
-
-        let initialListLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
-        transport.emitLine(try Self.responseText(id: try XCTUnwrap(initialListLoaded["id"]), result: .object([
-            "threads": .array([]),
-        ])))
-
-        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
-        let initialResume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
-        transport.emitLine(try Self.errorResponseText(id: try XCTUnwrap(initialResume["id"]),
-                                                      code: -32600,
-                                                      message: "no rollout found for thread id thread-root"))
-        XCTAssertTrue(Self.waitFor { session.attachSubscriptionStateForTesting == "no_loaded_thread" })
-
-        let submitCompleted = expectation(description: "submitMessage completes after authoritative root lookup")
-        let submitError = ThreadSafeErrorBox()
-        DispatchQueue.global().async {
-            do {
-                try session.submitMessage(text: "route to the root", clientRequestID: nil)
-            } catch {
-                submitError.set(error)
-            }
-            submitCompleted.fulfill()
-        }
-
-        XCTAssertTrue(Self.waitForSentLineCount(5, transport: transport))
-        let submitListLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(4).first))
-        XCTAssertEqual(submitListLoaded["method"]?.stringValue, "thread/loaded/list")
-        transport.emitLine(try Self.responseText(id: try XCTUnwrap(submitListLoaded["id"]), result: .object([
-            "data": .array([
-                .string("thread-child"),
-                .string("thread-root"),
-            ]),
-        ])))
-
-        guard Self.waitForSentLineCount(6, transport: transport) else {
-            wait(for: [submitCompleted], timeout: 2)
-            return XCTFail("submit lookup did not resolve the authoritative registry root")
-        }
-        let turnStart = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(5).first))
-        XCTAssertEqual(turnStart["method"]?.stringValue, "turn/start")
-        XCTAssertEqual(turnStart["params"]?.objectValue?["threadId"]?.stringValue, "thread-root")
-        transport.emitLine(try Self.responseText(id: try XCTUnwrap(turnStart["id"]), result: .object([
-            "turn": .object(["id": .string("turn-root")]),
-        ])))
-
-        wait(for: [submitCompleted], timeout: 2)
-        XCTAssertNil(submitError.get())
     }
 
     // Production regression (Automation, 2026-07-21): Codex can accept a
@@ -1397,8 +1939,11 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         }
     }
 
-    // The diagnostic reflects pending and active work. It is not the submit
-    // authority; submitMessage() still owns the atomic start/steer/busy route.
+    // P0 fix regression: canSubmitMessage() must gate false WHILE a turn is
+    // busy (pending submit or an active running turn) — previously it only
+    // checked "does an active thread exist," so a busy session still
+    // reported true, and the caller proceeded straight into
+    // claimForSubmit()'s throw instead of being able to fall back cleanly.
     func testCanSubmitMessageIsFalseWhileTurnIsBusy() throws {
         let runner = FakeCodexAppServerProcessRunner()
         let connector = FakeCodexAppServerTransportConnector()
@@ -1502,67 +2047,6 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertEqual(turnStart["params"]?.objectValue?["input"]?.arrayValue?.first?.objectValue?["text"]?.stringValue,
                        "remote after TUI idle")
     }
-
-    func testTurnStateStoreRoutesIdlePendingAndKnownTurnAtomically() {
-        let store = CodexAppServerTurnStateStore()
-        let claimID = UUID()
-
-        XCTAssertEqual(store.routeSubmit(threadID: "thread-live", claimID: claimID), .start)
-        XCTAssertEqual(store.routeSubmit(threadID: "thread-live"), .busyWithoutTurnID)
-
-        store.reconcileAcceptedStart(threadID: "thread-live",
-                                     claimID: claimID,
-                                     turnID: "turn-1")
-        XCTAssertEqual(store.routeSubmit(threadID: "thread-live"), .steer(turnID: "turn-1"))
-    }
-
-    func testTurnStateStoreDuplicateStartPreservesRemoteOriginAcrossIdleStatus() {
-        let store = CodexAppServerTurnStateStore()
-        let claimID = UUID()
-
-        XCTAssertEqual(store.routeSubmit(threadID: "thread-live", claimID: claimID), .start)
-        store.markStarted(threadID: "thread-live", turnID: "turn-1")
-        store.markStarted(threadID: "thread-live", turnID: "turn-1")
-        store.markThreadIdle(threadID: "thread-live")
-
-        XCTAssertEqual(store.routeSubmit(threadID: "thread-live"), .steer(turnID: "turn-1"),
-                       "an idempotent duplicate turn/started must not relabel a remote turn as app-server-owned")
-    }
-
-    func testTurnStateStoreCompletionBeforeResponseDoesNotResurrectTurn() {
-        let store = CodexAppServerTurnStateStore()
-        let claimID = UUID()
-
-        XCTAssertEqual(store.routeSubmit(threadID: "thread-live", claimID: claimID), .start)
-        store.markCompleted(threadID: "thread-live", turnID: "turn-fast")
-        store.reconcileAcceptedStart(threadID: "thread-live",
-                                     claimID: claimID,
-                                     turnID: "turn-fast")
-
-        XCTAssertEqual(store.routeSubmit(threadID: "thread-live"), .start)
-    }
-
-    func testTurnStateStoreLateExpiredClaimCannotOverwriteReplacement() {
-        var now = Date(timeIntervalSince1970: 100)
-        let store = CodexAppServerTurnStateStore(timeout: 1) { now }
-        let firstClaimID = UUID()
-        let secondClaimID = UUID()
-
-        XCTAssertEqual(store.routeSubmit(threadID: "thread-live", claimID: firstClaimID), .start)
-        now = now.addingTimeInterval(2)
-        XCTAssertEqual(store.routeSubmit(threadID: "thread-live", claimID: secondClaimID), .start)
-
-        store.reconcileAcceptedStart(threadID: "thread-live",
-                                     claimID: firstClaimID,
-                                     turnID: "turn-stale")
-        XCTAssertEqual(store.routeSubmit(threadID: "thread-live"), .busyWithoutTurnID)
-
-        store.reconcileAcceptedStart(threadID: "thread-live",
-                                     claimID: secondClaimID,
-                                     turnID: "turn-current")
-        XCTAssertEqual(store.routeSubmit(threadID: "thread-live"), .steer(turnID: "turn-current"))
-    }
-
 
     func testTurnStateStoreExpiresStuckActiveTurn() throws {
         var now = Date(timeIntervalSince1970: 100)
@@ -1826,194 +2310,18 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         let envelope = try XCTUnwrap(prompts.envelopes().first)
         XCTAssertEqual(envelope.prompt.source, "codex_command_approval")
 
-        let resolved = try prompts.session?.submitApproval(promptID: envelope.prompt.promptID, targetIndex: 0)
-        XCTAssertEqual(resolved?.type, .interactivePromptResolved)
+        let outcome = try prompts.session?.submitApproval(promptID: envelope.prompt.promptID,
+                                                          targetIndex: 0,
+                                                          clientRequestID: nil,
+                                                          lifecycleToken: nil)
+        guard case .pendingConfirmation = outcome else {
+            return XCTFail("expected pendingConfirmation, got \(String(describing: outcome))")
+        }
 
         let process = try XCTUnwrap(runner.process)
         let response = try Self.object(from: process.stdinLines().last ?? "")
         XCTAssertEqual(response["id"]?.stringValue, "approval-1")
         XCTAssertEqual(response["result"]?.objectValue?["decision"]?.stringValue, "accept")
-    }
-
-    func testSessionLifecycleApprovalForwardsCapabilityAndClientRequestIdentity() throws {
-        let runner = FakeCodexAppServerProcessRunner()
-        let prompts = PromptSink()
-        let session = try Self.makeSession(runner: runner, prompts: prompts)
-        runner.process?.emitStdout("""
-        {"id":"approval-lifecycle","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"cmd-lifecycle","startedAtMs":1786000000000,"command":"ls"}}
-        """)
-        let envelope = try XCTUnwrap(prompts.envelopes().first)
-
-        let outcome = try session.submitApproval(promptID: envelope.prompt.promptID,
-                                                 targetIndex: 0,
-                                                 clientRequestID: "client-lifecycle",
-                                                 lifecycleToken: envelope.event.eventID)
-
-        guard case .pendingConfirmation(let promptID) = outcome else {
-            return XCTFail("expected pendingConfirmation, got \(outcome)")
-        }
-        XCTAssertEqual(promptID, envelope.prompt.promptID)
-        let pending = try XCTUnwrap(session.pendingApprovalPromptEvents().first)
-        XCTAssertEqual(pending.metadata?["submit_state"], "submitting")
-        XCTAssertEqual(pending.metadata?["client_request_id"], "client-lifecycle")
-        XCTAssertEqual(AgentInteractivePromptSidebarMessages.lifecycleToken(from: pending),
-                       envelope.event.eventID)
-        let process = try XCTUnwrap(runner.process)
-        let response = try Self.object(from: process.stdinLines().last ?? "")
-        XCTAssertEqual(response["id"]?.stringValue, "approval-lifecycle")
-        XCTAssertEqual(response["result"]?.objectValue?["decision"]?.stringValue, "accept")
-    }
-
-    func testFactoryStartedSocketSessionRoutesLifecycleApprovalThroughConfirmedTransportWrite() throws {
-        let runner = FakeCodexAppServerProcessRunner()
-        let connector = FakeCodexAppServerTransportConnector()
-        let prompts = PromptSink()
-        let session = try Self.makeSession(
-            configuration: .unixSocket(codexExecutablePath: "/tmp/disposable-codex",
-                                       socketPath: "/tmp/tidey-codex-sidecar/app.sock",
-                                       workingDirectory: "/tmp/tidey-codex-disposable",
-                                       environment: [:]),
-            runner: runner,
-            connector: connector,
-            prompts: prompts
-        )
-        let transport = try XCTUnwrap(connector.transport)
-        transport.emitLine(Self.approvalRequestLine(id: "approval-start"))
-        let envelope = try XCTUnwrap(prompts.envelopes().first)
-
-        _ = try session.submitApproval(promptID: envelope.prompt.promptID,
-                                       targetIndex: 0,
-                                       clientRequestID: "client-start",
-                                       lifecycleToken: envelope.event.eventID)
-
-        let response = try Self.object(from: try XCTUnwrap(transport.confirmedSentLines().last))
-        XCTAssertEqual(response["id"]?.stringValue, "approval-start")
-        XCTAssertFalse(transport.sentLines().contains { line in
-            (try? Self.object(from: line)["id"]?.stringValue) == "approval-start"
-        })
-    }
-
-    func testFactoryAttachedSessionRoutesLifecycleApprovalThroughConfirmedTransportWrite() throws {
-        let connector = FakeCodexAppServerTransportConnector()
-        let prompts = PromptSink()
-        let factory = CodexAppServerRuntimeSessionFactory(processRunner: FakeCodexAppServerProcessRunner(),
-                                                          transportConnector: connector)
-        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
-                                         processID: 9001,
-                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
-                                                                               panelID: "panel-1",
-                                                                               sessionID: "session-1"),
-                                         nextSequence: { _ in 1 },
-                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
-                                         onAgentEvent: { _ in },
-                                         onInteractivePrompt: { prompts.append($0) },
-                                         onInteractivePromptResolved: { prompts.appendResolved($0) })
-        let transport = try XCTUnwrap(connector.transport)
-        transport.emitLine(Self.approvalRequestLine(id: "approval-attach"))
-        let envelope = try XCTUnwrap(prompts.envelopes().first)
-
-        _ = try session.submitApproval(promptID: envelope.prompt.promptID,
-                                       targetIndex: 0,
-                                       clientRequestID: "client-attach",
-                                       lifecycleToken: envelope.event.eventID)
-
-        let response = try Self.object(from: try XCTUnwrap(transport.confirmedSentLines().last))
-        XCTAssertEqual(response["id"]?.stringValue, "approval-attach")
-        XCTAssertFalse(transport.sentLines().contains { line in
-            (try? Self.object(from: line)["id"]?.stringValue) == "approval-attach"
-        })
-    }
-
-    func testStartedStdioSessionDoesNotConfirmApprovalBeforeProcessWriteCompletes() throws {
-        let runner = FakeCodexAppServerProcessRunner()
-        let prompts = PromptSink()
-        let session = try Self.makeSession(runner: runner, prompts: prompts)
-        let process = try XCTUnwrap(runner.process)
-        process.emitStdout(Self.approvalRequestLine(id: "approval-stdio-blocked"))
-        let envelope = try XCTUnwrap(prompts.envelopes().first)
-        let writeEntered = DispatchSemaphore(value: 0)
-        let releaseWrite = DispatchSemaphore(value: 0)
-        process.setSendLineHook { _ in
-            writeEntered.signal()
-            releaseWrite.wait()
-        }
-        let submit = DispatchGroup()
-        let submitError = ThreadSafeErrorBox()
-        submit.enter()
-        DispatchQueue.global().async {
-            defer { submit.leave() }
-            do {
-                _ = try session.submitApproval(promptID: envelope.prompt.promptID,
-                                               targetIndex: 0,
-                                               clientRequestID: "client-stdio-blocked",
-                                               lifecycleToken: envelope.event.eventID)
-            } catch {
-                submitError.set(error)
-            }
-        }
-
-        XCTAssertEqual(writeEntered.wait(timeout: .now() + 1), .success)
-        XCTAssertEqual(submit.wait(timeout: .now() + 0.05), .timedOut,
-                       "stdio confirmation returned before the process write completed")
-        releaseWrite.signal()
-        XCTAssertEqual(submit.wait(timeout: .now() + 1), .success)
-        XCTAssertNil(submitError.get())
-    }
-
-    func testStartedStdioSessionPropagatesConfirmedProcessWriteFailure() throws {
-        let runner = FakeCodexAppServerProcessRunner()
-        let prompts = PromptSink()
-        let session = try Self.makeSession(runner: runner, prompts: prompts)
-        let process = try XCTUnwrap(runner.process)
-        process.emitStdout(Self.approvalRequestLine(id: "approval-stdio-failure"))
-        let envelope = try XCTUnwrap(prompts.envelopes().first)
-        process.setSendLineHook { _ in
-            throw CodexAppServerProcessError.closed
-        }
-
-        XCTAssertThrowsError(try session.submitApproval(promptID: envelope.prompt.promptID,
-                                                         targetIndex: 0,
-                                                         clientRequestID: "client-stdio-failure",
-                                                         lifecycleToken: envelope.event.eventID)) { error in
-            guard case CodexAppServerProcessError.closed = error else {
-                return XCTFail("expected process write failure, got \(error)")
-            }
-        }
-    }
-
-    func testSessionLifecycleUserInputForwardsStrictStructuredWireShape() throws {
-        let runner = FakeCodexAppServerProcessRunner()
-        let prompts = PromptSink()
-        let session = try Self.makeSession(runner: runner, prompts: prompts)
-        runner.process?.emitStdout("""
-        {"id":"input-lifecycle","method":"item/tool/requestUserInput","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"input-1","questions":[{"id":"format","header":"Output","question":"Which format?","options":[{"label":"PNG","description":"Lossless"}]},{"id":"notes","header":"Notes","question":"Any notes?"}]}}
-        """)
-        let envelope = try XCTUnwrap(prompts.envelopes().first)
-        let answers = [
-            "format": ["PNG"],
-            "notes": ["keep alpha", "lossless"],
-        ]
-
-        let outcome = try session.submitUserInput(promptID: envelope.prompt.promptID,
-                                                  answers: answers,
-                                                  clientRequestID: "client-input",
-                                                  lifecycleToken: envelope.event.eventID)
-
-        guard case .pendingConfirmation(let promptID) = outcome else {
-            return XCTFail("expected pendingConfirmation, got \(outcome)")
-        }
-        XCTAssertEqual(promptID, envelope.prompt.promptID)
-        let pending = try XCTUnwrap(session.pendingApprovalPromptEvents().first)
-        XCTAssertEqual(pending.metadata?["client_request_id"], "client-input")
-        let process = try XCTUnwrap(runner.process)
-        let response = try Self.object(from: process.stdinLines().last ?? "")
-        let wireAnswers = try XCTUnwrap(response["result"]?.objectValue?["answers"]?.objectValue)
-        XCTAssertEqual(wireAnswers["format"]?.objectValue?["answers"]?.arrayValue,
-                       [.string("PNG")])
-        XCTAssertEqual(wireAnswers["notes"]?.objectValue?["answers"]?.arrayValue,
-                       [.string("keep alpha"), .string("lossless")])
-        XCTAssertEqual(Set(wireAnswers.keys), Set(answers.keys),
-                       "the userInput response must not invent or flatten answer fields")
     }
 
     func testSessionStopTerminatesProcessAndClosesConnection() throws {
@@ -2028,102 +2336,6 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
             guard case CodexAppServerConnectionError.closed = error else {
                 return XCTFail("expected closed error, got \(error)")
             }
-        }
-    }
-
-    func testTransportCloseMarksAttachedRuntimeStopped() throws {
-        let (session, transport) = try Self.makeAttachedSession()
-        try Self.acknowledgeInitialize(from: transport)
-        XCTAssertFalse(session.isStopped())
-
-        transport.emitClose(CodexAppServerTransportError.closed)
-
-        XCTAssertTrue(Self.waitFor { session.isStopped() })
-        XCTAssertFalse(session.canSubmitMessage())
-    }
-
-    func testAttachedProtocolViolationClosesChannelWithoutTerminatingExternalProcessAndCanReattach() throws {
-        let runner = FakeCodexAppServerProcessRunner()
-        let connector = FakeCodexAppServerTransportConnector()
-        let externalProcess = FakeCodexAppServerExternalProcess(processID: 9001)
-        let factory = CodexAppServerRuntimeSessionFactory(
-            processRunner: runner,
-            transportConnector: connector,
-            externalProcessFactory: { _ in externalProcess })
-        let session = try Self.attachSession(factory: factory)
-        let firstTransport = try XCTUnwrap(connector.transport)
-
-        firstTransport.emitLine(Self.protocolOwnerLine)
-        firstTransport.emitLine(Self.protocolCollisionLine)
-
-        XCTAssertTrue(Self.waitFor { session.isStopped() })
-        XCTAssertEqual(firstTransport.closeCallCount, 1)
-        XCTAssertEqual(externalProcess.terminateCallCount, 0)
-        XCTAssertTrue(runner.startedConfigurations.isEmpty)
-
-        let replacement = try Self.attachSession(factory: factory)
-        let replacementTransport = try XCTUnwrap(connector.transport)
-        XCTAssertFalse(firstTransport === replacementTransport)
-        XCTAssertEqual(replacementTransport.sentLines().count, 1)
-        XCTAssertFalse(replacement.isStopped())
-
-        replacement.stop()
-        XCTAssertEqual(externalProcess.terminateCallCount, 0)
-    }
-
-    func testOwnedStdioProtocolViolationTerminatesProcessExactlyOnce() throws {
-        let runner = FakeCodexAppServerProcessRunner()
-        let session = try Self.makeSession(runner: runner)
-        let process = try XCTUnwrap(runner.process)
-
-        process.emitStdout(Self.protocolOwnerLine)
-        process.emitStdout(Self.protocolCollisionLine)
-        process.emitStdout(Self.protocolCollisionLine)
-        session.stop()
-
-        XCTAssertTrue(session.isStopped())
-        XCTAssertEqual(process.terminateCallCount, 1)
-    }
-
-    func testProtocolViolationAndStopExpireApprovalsAndPendingClientHandlersExactlyOnce() throws {
-        let connector = FakeCodexAppServerTransportConnector()
-        let prompts = PromptSink()
-        let factory = CodexAppServerRuntimeSessionFactory(
-            processRunner: FakeCodexAppServerProcessRunner(),
-            transportConnector: connector)
-        let session = try factory.attach(
-            socketPath: "/tmp/tidey-real-panel/app.sock",
-            processID: 9001,
-            context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
-                                                  panelID: "panel-1",
-                                                  sessionID: "session-1"),
-            nextSequence: { _ in 1 },
-            timestampProvider: { "2026-07-22T00:00:00.000Z" },
-            onAgentEvent: { _ in },
-            onInteractivePrompt: { prompts.append($0) },
-            onInteractivePromptResolved: { prompts.appendResolved($0) })
-        let transport = try XCTUnwrap(connector.transport)
-        try Self.acknowledgeInitialize(from: transport)
-        transport.emitLine(Self.pendingApprovalLine)
-        XCTAssertEqual(session.pendingApprovalPromptEvents().count, 1)
-
-        var clientResponses = [Result<JSONValue, CodexAppServerConnectionError>]()
-        try session.startThread(cwd: nil) { clientResponses.append($0) }
-
-        transport.emitLine(Self.protocolOwnerLine)
-        transport.emitLine(Self.protocolCollisionLine)
-        session.stop()
-        transport.emitClose(CodexAppServerTransportError.closed)
-        transport.emitLine(Self.protocolCollisionLine)
-
-        let protocolTerminals = prompts.resolvedEvents().filter {
-            $0.metadata?["reason"] == "protocol_violation"
-        }
-        XCTAssertEqual(protocolTerminals.count, 1)
-        XCTAssertTrue(session.pendingApprovalPromptEvents().isEmpty)
-        XCTAssertEqual(clientResponses.count, 1)
-        guard case .failure(.protocolViolation) = clientResponses[0] else {
-            return XCTFail("pending client handler must receive protocolViolation exactly once")
         }
     }
 
@@ -2145,13 +2357,6 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         }
     }
 
-    private static let protocolOwnerLine =
-        #"{"id":"collision-1","method":"unknown/method","params":{"value":1}}"#
-    private static let protocolCollisionLine =
-        #"{"id":"collision-1","method":"unknown/method","params":{"value":2}}"#
-    private static let pendingApprovalLine =
-        #"{"id":"approval-pending","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","startedAtMs":1786000000000,"command":"ls"}}"#
-
     func testUnixWebSocketConnectorWaitsForUpgradeBeforeReturningTransport() throws {
         let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
         defer {
@@ -2167,10 +2372,8 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         let socketPath = socketDirectory.appendingPathComponent("app.sock").path
         let receivedMessage = expectation(description: "server receives websocket text after upgrade")
         let receivedEventLoopMessage = expectation(description: "server receives websocket text sent from event loop")
-        let receivedConfirmedMessage = expectation(description: "server receives confirmed websocket text")
         let requestURI = RequestURIBox()
         let clientFrameMask = ClientFrameMaskBox()
-        let serverChildChannel = ChannelBox()
 
         let upgrader = NIOWebSocketServerUpgrader(
             maxFrameSize: 1 << 20,
@@ -2183,17 +2386,13 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
                 return promise.futureResult
             },
             upgradePipelineHandler: { channel, _ in
-                serverChildChannel.set(channel)
-                return channel.pipeline.addHandler(ServerTextFrameHandler { text in
+                channel.pipeline.addHandler(ServerTextFrameHandler { text in
                     clientFrameMask.setObservedMaskedFrame()
                     if text == "{\"jsonrpc\":\"2.0\"}" {
                         receivedMessage.fulfill()
                     }
                     if text == "{\"fromEventLoop\":true}" {
                         receivedEventLoopMessage.fulfill()
-                    }
-                    if text == "{\"confirmed\":true}" {
-                        receivedConfirmedMessage.fulfill()
                     }
                 })
             }
@@ -2222,33 +2421,9 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertNoThrow(try group.next().submit {
             try transport.sendLine("{\"fromEventLoop\":true}")
         }.wait())
-        XCTAssertNoThrow(try transport.sendLineAwaitingWrite("{\"confirmed\":true}"))
-        wait(for: [receivedMessage, receivedEventLoopMessage, receivedConfirmedMessage], timeout: 2.0)
+        wait(for: [receivedMessage, receivedEventLoopMessage], timeout: 2.0)
         XCTAssertEqual(requestURI.get(), "/")
         XCTAssertEqual(clientFrameMask.didObserveMaskedFrame(), true)
-
-        XCTAssertThrowsError(try group.next().submit {
-            try transport.sendLineAwaitingWrite("{\"confirmedOnEventLoop\":true}")
-        }.wait(), "a confirmed write must fail closed rather than block its own event loop") { error in
-            guard case CodexAppServerTransportError.confirmationUnavailable = error else {
-                return XCTFail("expected confirmationUnavailable, got \(error)")
-            }
-        }
-
-        try XCTUnwrap(serverChildChannel.get()).close().wait()
-        let deadline = Date().addingTimeInterval(2)
-        var closedChannelWriteError: Error?
-        repeat {
-            do {
-                try transport.sendLineAwaitingWrite("{\"afterPeerClose\":true}")
-            } catch {
-                closedChannelWriteError = error
-                break
-            }
-            Thread.sleep(forTimeInterval: 0.02)
-        } while Date() < deadline
-        XCTAssertNotNil(closedChannelWriteError,
-                        "a confirmed write must surface the channel write failure")
     }
 
     func testUnixWebSocketConnectorAcceptsLargeReplayFrames() throws {
@@ -2311,6 +2486,133 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         wait(for: [receivedReplay], timeout: 5.0)
     }
 
+    func testAttachInitializeSendFailureClosesTransportExactlyOnce() throws {
+        // The attach handler built transport/connection/session, then the
+        // initialize send throws: the factory must roll the transport back
+        // (close exactly once) instead of leaking a half-built session.
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        connector.configureTransport = { $0.sendLineError = CodexAppServerTransportError.closed }
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        XCTAssertThrowsError(try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                                processID: 9001,
+                                                context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                                     panelID: "panel-1",
+                                                                                     sessionID: "session-1"),
+                                                nextSequence: { _ in 1 },
+                                                timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                                onAgentEvent: { _ in },
+                                                onInteractivePrompt: { _ in },
+                                                onInteractivePromptResolved: { _ in }))
+        let transport = try XCTUnwrap(connector.transport)
+        XCTAssertEqual(transport.closeCallCount, 1,
+                       "a failed attach initialize must close the transport exactly once")
+    }
+
+    func testStartInitializeSendFailureTerminatesOwnedProcessExactlyOnce() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        runner.configureProcess = { $0.sendLineError = CodexAppServerProcessError.closed }
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        XCTAssertThrowsError(try factory.start(configuration: CodexAppServerLaunchConfiguration(
+                                                    executablePath: "/tmp/disposable-codex",
+                                                    arguments: ["app-server"],
+                                                    workingDirectory: "/tmp/tidey-codex-disposable",
+                                                    environment: [:]),
+                                               context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                                    panelID: "panel-1",
+                                                                                    sessionID: "session-1"),
+                                               nextSequence: { _ in 1 },
+                                               timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                               onAgentEvent: { _ in },
+                                               onInteractivePrompt: { _ in },
+                                               onInteractivePromptResolved: { _ in }))
+        let process = try XCTUnwrap(runner.process)
+        XCTAssertEqual(process.terminateCallCount, 1,
+                       "a failed start initialize must terminate the owned process exactly once")
+    }
+
+    private static let violationApprovalLine = """
+    {"id":"approval-1","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","startedAtMs":1786000000000,"command":"ls","cwd":"/tmp"}}
+    """
+    private static let violationChangedLine = """
+    {"id":"approval-1","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","startedAtMs":1786000000000,"command":"rm -rf /","cwd":"/tmp"}}
+    """
+
+    func testStdioProtocolViolationTerminatesOwnedProcessOnce() throws {
+        // A protocol violation on a factory-STARTED stdio runtime must
+        // actually stop the runtime generation: the owned process is
+        // terminated (stdio has no separately closable channel) and the
+        // session is unusable afterwards.
+        let runner = FakeCodexAppServerProcessRunner()
+        let prompts = PromptSink()
+        let session = try Self.makeSession(runner: runner, prompts: prompts)
+        try Self.acknowledgeInitialize(from: runner.process)
+        let process = try XCTUnwrap(runner.process)
+
+        process.emitStdout(Self.violationApprovalLine)
+        let envelope = try XCTUnwrap(prompts.envelopes().first)
+        guard case .pendingConfirmation = try session.submitApproval(promptID: envelope.prompt.promptID,
+                                                                      targetIndex: 0,
+                                                                      clientRequestID: "client-1",
+                                                                      lifecycleToken: envelope.event.eventID) else {
+            return XCTFail("expected pendingConfirmation")
+        }
+        let framesBeforeViolation = process.stdinLines().count
+
+        // Changed payload under the same id: protocol violation.
+        process.emitStdout(Self.violationChangedLine)
+        process.emitStdout(Self.violationChangedLine)
+
+        XCTAssertEqual(process.terminateCallCount, 1,
+                       "the owned stdio process must be terminated exactly once")
+        XCTAssertTrue(session.isStopped())
+        XCTAssertEqual(process.stdinLines().count, framesBeforeViolation,
+                       "no further bytes may reach the poisoned transport")
+        XCTAssertThrowsError(try session.submitMessage(text: "after violation", clientRequestID: nil)) { _ in }
+    }
+
+    func testUnixSocketAttachProtocolViolationClosesTransportWithoutKillingExternalProcess() throws {
+        // For an ATTACHED external app-server the violation must abort the
+        // client transport exactly once; the external process is not ours to
+        // kill (CodexAppServerExternalProcess.terminate() is a no-op by
+        // construction).
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        let prompts = PromptSink()
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                              panelID: "panel-1",
+                                                                              sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-06-07T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { prompts.append($0) },
+                                         onInteractivePromptResolved: { _ in })
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+
+        transport.emitLine(Self.violationApprovalLine)
+        let envelope = try XCTUnwrap(prompts.envelopes().first)
+        _ = try session.submitApproval(promptID: envelope.prompt.promptID,
+                                       targetIndex: 0,
+                                       clientRequestID: "client-1",
+                                       lifecycleToken: envelope.event.eventID)
+
+        transport.emitLine(Self.violationChangedLine)
+        transport.emitLine(Self.violationChangedLine)
+
+        XCTAssertEqual(transport.closeCallCount, 1,
+                       "the attached transport must be aborted exactly once")
+        XCTAssertTrue(session.isStopped())
+        XCTAssertTrue(runner.startedConfigurations.isEmpty, "attach must not have started (or killed) any owned process")
+    }
+
     private static func makeSession(configuration: CodexAppServerLaunchConfiguration = CodexAppServerLaunchConfiguration(
                                         executablePath: "/tmp/disposable-codex",
                                         arguments: ["app-server"],
@@ -2337,35 +2639,6 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
                                         onInteractivePromptResolved: { prompts.appendResolved($0) })
         prompts.session = session
         return session
-    }
-
-    private static func approvalRequestLine(id: String) -> String {
-        """
-        {"id":"\(id)","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"cmd-1","startedAtMs":1786000000000,"command":"ls"}}
-        """
-    }
-
-    private static func makeAttachedSession() throws -> (CodexAppServerRuntimeSession, FakeCodexAppServerConnectionTransport) {
-        let connector = FakeCodexAppServerTransportConnector()
-        let factory = CodexAppServerRuntimeSessionFactory(processRunner: FakeCodexAppServerProcessRunner(),
-                                                          transportConnector: connector)
-        let session = try attachSession(factory: factory)
-        return (session, try XCTUnwrap(connector.transport))
-    }
-
-    private static func attachSession(
-        factory: CodexAppServerRuntimeSessionFactory
-    ) throws -> CodexAppServerRuntimeSession {
-        try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
-                           processID: 9001,
-                           context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
-                                                                 panelID: "panel-1",
-                                                                 sessionID: "session-1"),
-                           nextSequence: { _ in 1 },
-                           timestampProvider: { "2026-06-07T00:00:00.000Z" },
-                           onAgentEvent: { _ in },
-                           onInteractivePrompt: { _ in },
-                           onInteractivePromptResolved: { _ in })
     }
 
     private static func object(from line: String,
@@ -2468,6 +2741,18 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
             ]),
         ])))
         XCTAssertTrue(waitForSentLineCount(4, transport: transport), file: file, line: sourceLine)
+    }
+
+    private static func waitFor(timeout: TimeInterval = 2.0,
+                                _ condition: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() {
+                return true
+            }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        return condition()
     }
 
     private static func inProgressResumeResult(threadID: String, turnID: String) -> JSONValue {
@@ -2584,7 +2869,6 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         return requestObject
     }
 
-
     private static func waitForSentLineCount(_ count: Int,
                                              transport: FakeCodexAppServerConnectionTransport,
                                              timeout: TimeInterval = 2.0,
@@ -2598,18 +2882,6 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
             Thread.sleep(forTimeInterval: 0.01)
         }
         return transport.sentLines().count >= count
-    }
-
-    private static func waitFor(timeout: TimeInterval = 2,
-                                condition: () -> Bool) -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if condition() {
-                return true
-            }
-            Thread.sleep(forTimeInterval: 0.01)
-        }
-        return condition()
     }
 }
 
@@ -2688,26 +2960,10 @@ private final class RequestURIBox: @unchecked Sendable {
     }
 }
 
-private final class ChannelBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var channel: Channel?
-
-    func set(_ channel: Channel) {
-        lock.lock()
-        self.channel = channel
-        lock.unlock()
-    }
-
-    func get() -> Channel? {
-        lock.lock()
-        defer { lock.unlock() }
-        return channel
-    }
-}
-
 final class FakeCodexAppServerTransportConnector: CodexAppServerTransportConnecting {
     private(set) var connectedModes: [CodexAppServerTransportMode] = []
     private(set) var transport: FakeCodexAppServerConnectionTransport?
+    var configureTransport: ((FakeCodexAppServerConnectionTransport) -> Void)?
 
     func connect(mode: CodexAppServerTransportMode,
                  onLine: @escaping @Sendable (String) -> Void,
@@ -2715,6 +2971,7 @@ final class FakeCodexAppServerTransportConnector: CodexAppServerTransportConnect
         connectedModes.append(mode)
         let transport = FakeCodexAppServerConnectionTransport(onLine: onLine,
                                                               onClose: onClose)
+        configureTransport?(transport)
         self.transport = transport
         return transport
     }
@@ -2723,9 +2980,7 @@ final class FakeCodexAppServerTransportConnector: CodexAppServerTransportConnect
 final class FakeCodexAppServerConnectionTransport: CodexAppServerConnectionTransport {
     private let lock = NSLock()
     private var lines: [String] = []
-    private var confirmedLines: [String] = []
     private var closed = false
-    private var closeCount = 0
     private let onLine: @Sendable (String) -> Void
     private let onClose: @Sendable (Error?) -> Void
 
@@ -2735,30 +2990,25 @@ final class FakeCodexAppServerConnectionTransport: CodexAppServerConnectionTrans
         self.onClose = onClose
     }
 
+    var sendLineError: Error?
+
     func sendLine(_ line: String) throws {
+        if let sendLineError {
+            throw sendLineError
+        }
         lock.lock()
         lines.append(line)
         lock.unlock()
     }
 
-    func sendLineAwaitingWrite(_ line: String) throws {
-        lock.lock()
-        confirmedLines.append(line)
-        lock.unlock()
-    }
+    private(set) var closeCallCount = 0
 
     func close() {
         lock.lock()
         closed = true
-        closeCount += 1
+        closeCallCount += 1
         lock.unlock()
         onClose(nil)
-    }
-
-    var closeCallCount: Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return closeCount
     }
 
     func emitLine(_ line: String) {
@@ -2774,17 +3024,12 @@ final class FakeCodexAppServerConnectionTransport: CodexAppServerConnectionTrans
         defer { lock.unlock() }
         return lines
     }
-
-    func confirmedSentLines() -> [String] {
-        lock.lock()
-        defer { lock.unlock() }
-        return confirmedLines
-    }
 }
 
 final class FakeCodexAppServerProcessRunner: CodexAppServerProcessRunning {
     private(set) var startedConfigurations: [CodexAppServerLaunchConfiguration] = []
     private(set) var process: FakeCodexAppServerManagedProcess?
+    var configureProcess: ((FakeCodexAppServerManagedProcess) -> Void)?
 
     func start(configuration: CodexAppServerLaunchConfiguration,
                onStdoutLine: @escaping @Sendable (String) -> Void,
@@ -2794,6 +3039,7 @@ final class FakeCodexAppServerProcessRunner: CodexAppServerProcessRunning {
         let process = FakeCodexAppServerManagedProcess(onStdoutLine: onStdoutLine,
                                                        onStderrLine: onStderrLine,
                                                        onExit: onExit)
+        configureProcess?(process)
         self.process = process
         return process
     }
@@ -2802,11 +3048,11 @@ final class FakeCodexAppServerProcessRunner: CodexAppServerProcessRunning {
 final class FakeCodexAppServerManagedProcess: CodexAppServerManagedProcess {
     private let lock = NSLock()
     private var lines: [String] = []
-    private var sendLineHook: ((String) throws -> Void)?
     private let onStdoutLine: @Sendable (String) -> Void
     private let onStderrLine: @Sendable (String) -> Void
     private let onExit: @Sendable (Int32) -> Void
-    private var terminationCount = 0
+    private(set) var didTerminate = false
+    private(set) var terminateCallCount = 0
 
     init(onStdoutLine: @escaping @Sendable (String) -> Void,
          onStderrLine: @escaping @Sendable (String) -> Void,
@@ -2820,36 +3066,20 @@ final class FakeCodexAppServerManagedProcess: CodexAppServerManagedProcess {
         4242
     }
 
+    var sendLineError: Error?
+
     func sendLine(_ line: String) throws {
-        lock.lock()
-        let hook = sendLineHook
-        lock.unlock()
-        try hook?(line)
+        if let sendLineError {
+            throw sendLineError
+        }
         lock.lock()
         lines.append(line)
         lock.unlock()
     }
 
-    func setSendLineHook(_ hook: @escaping (String) throws -> Void) {
-        lock.lock()
-        sendLineHook = hook
-        lock.unlock()
-    }
-
     func terminate() {
-        lock.lock()
-        terminationCount += 1
-        lock.unlock()
-    }
-
-    var didTerminate: Bool {
-        terminateCallCount > 0
-    }
-
-    var terminateCallCount: Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return terminationCount
+        didTerminate = true
+        terminateCallCount += 1
     }
 
     func emitStdout(_ line: String) {
@@ -2868,32 +3098,6 @@ final class FakeCodexAppServerManagedProcess: CodexAppServerManagedProcess {
         lock.lock()
         defer { lock.unlock() }
         return lines
-    }
-}
-
-final class FakeCodexAppServerExternalProcess: CodexAppServerManagedProcess {
-    let processID: Int32?
-    private let lock = NSLock()
-    private var terminationCount = 0
-
-    init(processID: Int32?) {
-        self.processID = processID
-    }
-
-    func sendLine(_ line: String) throws {
-        throw CodexAppServerProcessError.closed
-    }
-
-    func terminate() {
-        lock.lock()
-        terminationCount += 1
-        lock.unlock()
-    }
-
-    var terminateCallCount: Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return terminationCount
     }
 }
 
