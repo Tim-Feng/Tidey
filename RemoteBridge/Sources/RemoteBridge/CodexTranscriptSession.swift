@@ -254,6 +254,91 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         }
     }
 
+    func afterCursorCoverageSeed(afterSeq: Int) -> AgentAfterCursorCoverageSeed {
+        queue.sync {
+            if tailer == nil {
+                resolveTranscriptIfPossible()
+            }
+            guard let tailer, let floorOffset = tailer.contiguousScanFloorOffset else {
+                return .unavailable
+            }
+            let floorSeq = transcriptSequenceBase
+                + transcriptEventSequence(lineOffset: floorOffset, ordinal: 0)
+            if floorOffset == 0 || floorSeq - 1 <= afterSeq {
+                return .covered
+            }
+            return .walkFrom(beforeSeq: floorSeq)
+        }
+    }
+
+    func afterCursorBackfillStep(beforeSeq: Int, afterSeq: Int, limit: Int) -> AgentAfterCursorBackfillStep {
+        queue.sync {
+            if tailer == nil {
+                resolveTranscriptIfPossible()
+            }
+            guard let tailer else {
+                return AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+            }
+            guard beforeSeq > transcriptSequenceBase else {
+                return AgentAfterCursorBackfillStep(outcome: .reachedSourceStart, nextBeforeSeq: nil, events: [])
+            }
+            let beforeOffset = transcriptLineOffset(for: beforeSeq - transcriptSequenceBase)
+            guard beforeOffset > 0 else {
+                return AgentAfterCursorBackfillStep(outcome: .reachedSourceStart, nextBeforeSeq: nil, events: [])
+            }
+            let effectiveLimit = min(limit, historicalReplayWindowCapacity)
+            lastRequestedBackfillAnchorSeq = beforeSeq
+            isCollectingBackfillPage = true
+            collectedBackfillPage = []
+            let loaded: Bool
+            do {
+                loaded = try tailer.backfill(beforeOffset: beforeOffset, limit: effectiveLimit)
+            } catch JSONLFileTailerError.sourceInvalidated {
+                isCollectingBackfillPage = false
+                collectedBackfillPage = []
+                // Contract: .sourceInvalidated is only returned AFTER the
+                // old epoch is fully revoked, so the caller's refetch can
+                // never observe stale stored events.
+                beginNewSourceEpochAfterInvalidation()
+                return AgentAfterCursorBackfillStep(outcome: .sourceInvalidated, nextBeforeSeq: nil, events: [])
+            } catch {
+                isCollectingBackfillPage = false
+                collectedBackfillPage = []
+                return AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+            }
+            isCollectingBackfillPage = false
+            let rawPage = collectedBackfillPage
+            collectedBackfillPage = []
+            // Coverage is judged on the COMPLETE raw frontier (including
+            // invalid-UTF8 records the line handler never sees) — decoded
+            // lines alone would fake reachedSourceStart on an all-invalid
+            // page or jump the frontier past a leading invalid record.
+            let rawFrontier = tailer.lastBackfillRawFrontier
+            guard loaded, rawFrontier?.readAnyRecord == true else {
+                return AgentAfterCursorBackfillStep(outcome: .reachedSourceStart, nextBeforeSeq: nil, events: [])
+            }
+            let pageMinOffset = rawFrontier?.minimumRawOffset ?? beforeOffset
+            if rawPage.isEmpty == false {
+                mergeHistoricalPage(rawPage)
+            }
+            // replayHistoricalWindow republishes the merged window to the
+            // Hub — cache upkeep only. The request-owned slice below is
+            // limited to THIS step's contiguous raw interval, so retained
+            // unrelated lines outside it never leak into coverage.
+            let products = rawPage.isEmpty ? [] : replayHistoricalWindow()
+            let floorSeq = transcriptSequenceBase
+                + transcriptEventSequence(lineOffset: pageMinOffset, ordinal: 0)
+            let stepEvents = products.filter { $0.seq >= floorSeq && $0.seq < beforeSeq }
+            guard pageMinOffset > 0 else {
+                return AgentAfterCursorBackfillStep(outcome: .reachedSourceStart, nextBeforeSeq: nil, events: stepEvents)
+            }
+            if floorSeq - 1 <= afterSeq {
+                return AgentAfterCursorBackfillStep(outcome: .coveredCursor, nextBeforeSeq: floorSeq, events: stepEvents)
+            }
+            return AgentAfterCursorBackfillStep(outcome: .advanced, nextBeforeSeq: floorSeq, events: stepEvents)
+        }
+    }
+
     func stop() {
         queue.sync {
             resolverTimer?.cancel()
@@ -339,6 +424,22 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         if resolverTimer == nil {
             startResolver()
         }
+    }
+
+    #if DEBUG
+    var tailerForTesting: JSONLFileTailer? {
+        queue.sync { tailer }
+    }
+    #endif
+
+    /// Full source-epoch revoke for an invalidated transcript, callable from
+    /// within the session queue: revokes the Hub's old buffered AND
+    /// historical events (sequence high-water survives), clears raw/parser/
+    /// backfill state, drops the old tailer/path, and restarts the resolver
+    /// so a replacement source can attach.
+    private func beginNewSourceEpochAfterInvalidation() {
+        hub.beginNewSourceEpoch(sessionID: record.sessionID)
+        switchTranscriptIdentity()
     }
 
     private func switchTranscriptIdentity() {

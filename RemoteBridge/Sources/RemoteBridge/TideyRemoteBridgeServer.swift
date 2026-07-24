@@ -1017,17 +1017,29 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
             }
             let beforeSeq = rawBeforeSeq?.intValue
             let afterSeq = rawAfterSeq?.intValue
-            let flow = BridgeAgentEventFetchFlow.run(eventHub: eventHub,
-                                                     workspaceID: workspaceID,
-                                                     sessionID: sessionID,
-                                                     limit: limit,
-                                                     maxBytes: maxBytes,
-                                                     beforeSeq: beforeSeq,
-                                                     afterSeq: afterSeq) { [registryMonitor] sessionID, beforeSeq, limit in
-                registryMonitor.backfillSession(sessionID: sessionID,
-                                                 beforeSeq: beforeSeq,
-                                                 limit: limit)
-            }
+            let flow = BridgeAgentEventFetchFlow.run(
+                eventHub: eventHub,
+                workspaceID: workspaceID,
+                sessionID: sessionID,
+                limit: limit,
+                maxBytes: maxBytes,
+                beforeSeq: beforeSeq,
+                afterSeq: afterSeq,
+                backfill: { [registryMonitor] sessionID, beforeSeq, limit in
+                    registryMonitor.backfillSession(sessionID: sessionID,
+                                                    beforeSeq: beforeSeq,
+                                                    limit: limit)
+                },
+                afterSeed: { [registryMonitor] sessionID, afterSeq in
+                    registryMonitor.afterCursorCoverageSeed(sessionID: sessionID,
+                                                            afterSeq: afterSeq)
+                },
+                afterStep: { [registryMonitor] sessionID, beforeSeq, afterSeq, limit in
+                    registryMonitor.afterCursorBackfillStep(sessionID: sessionID,
+                                                            beforeSeq: beforeSeq,
+                                                            afterSeq: afterSeq,
+                                                            limit: limit)
+                })
             let fetchResult = flow.fetchResult
             let didBackfill = flow.didBackfill
             observability.recordFetch(workspaceID: workspaceID,

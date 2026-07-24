@@ -977,7 +977,13 @@ final class CodexTranscriptSessionTests: XCTestCase {
                                           limit: limit,
                                           beforeSeq: beforeSeq,
                                           afterSeq: nil,
-                                          backfill: backfill).fetchResult
+                                          backfill: backfill,
+                                          afterSeed: { _, _ in .unavailable },
+                                          afterStep: { _, _, _, _ in
+                                              AgentAfterCursorBackfillStep(outcome: .unavailable,
+                                                                           nextBeforeSeq: nil,
+                                                                           events: [])
+                                          }).fetchResult
         }
 
         // Client A pages deep through the REAL flow, advancing by the
@@ -1253,6 +1259,57 @@ final class CodexTranscriptSessionTests: XCTestCase {
         ]
         let data = try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
         return String(data: data, encoding: .utf8)!
+    }
+
+    func testAfterCursorStepInvalidationRevokesOldEpochAndResolverReattaches() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout-session.jsonl", isDirectory: false)
+        let lines = (1...5).map { makeCodexMessageLine(role: "user", content: "msg-\($0)") }
+            .joined(separator: "\n") + "\n"
+        try lines.write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                             fileManager: .default,
+                                             hub: hub)
+        session.start()
+        defer { session.stop() }
+
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20,
+                      beforeSeq: nil, afterSeq: nil).events.contains { $0.text == "msg-5" }
+        })
+        let seededEvents = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20,
+                                     beforeSeq: nil, afterSeq: nil).events
+        let anchor = try XCTUnwrap(seededEvents.last?.seq)
+
+        // Deterministic invalidation: mutate the source between the step's
+        // raw read and its post-read fence.
+        session.tailerForTesting?.backfillAfterReadForTesting = {
+            guard let handle = try? FileHandle(forWritingTo: transcriptURL) else { return }
+            try? handle.truncate(atOffset: 3)
+            try? handle.close()
+        }
+
+        let step = session.afterCursorBackfillStep(beforeSeq: anchor, afterSeq: 0, limit: 10)
+
+        XCTAssertEqual(step.outcome, .sourceInvalidated)
+        XCTAssertTrue(step.events.isEmpty)
+        let postFetch = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20,
+                                  beforeSeq: nil, afterSeq: nil)
+        XCTAssertTrue(postFetch.events.isEmpty,
+                      "the revoked epoch's live and historical events must be gone from the Hub")
+
+        // The resolver must be able to attach a replacement source.
+        let fresh = makeCodexMessageLine(role: "user", content: "fresh-1") + "\n"
+        try fresh.write(to: transcriptURL, atomically: true, encoding: .utf8)
+        XCTAssertTrue(waitUntil(timeout: 4) {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20,
+                      beforeSeq: nil, afterSeq: nil).events.contains { $0.text == "fresh-1" }
+        }, "the resolver must re-attach the replacement source after the epoch revoke")
     }
 
     private func waitUntil(timeout: TimeInterval = 2,

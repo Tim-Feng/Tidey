@@ -14,10 +14,57 @@ private func unsupportedClaudeTranscriptVersion(in object: [String: Any]) -> Str
     return version.hasPrefix(claudeTranscriptMajorVersion) ? nil : version
 }
 
+/// One raw-transcript scan step of an after-cursor coverage walk. The
+/// returned events are REQUEST-OWNED: they belong to this step's contiguous
+/// raw interval and are the caller's authority for that interval — the
+/// Hub's bounded, possibly merged historical cache is not.
+struct AgentAfterCursorBackfillStep {
+    enum Outcome: Equatable {
+        case advanced
+        case coveredCursor
+        case reachedSourceStart
+        /// The session MUST have fully revoked the old source epoch
+        /// (Hub buffered + historical stored events, raw/parser state)
+        /// before returning this, so the caller's immediate refetch can
+        /// never observe stale-epoch data.
+        case sourceInvalidated
+        case unavailable
+    }
+
+    let outcome: Outcome
+    /// Anchor for the next step: the sequence floor of the raw interval this
+    /// step scanned. nil when the walk cannot continue.
+    let nextBeforeSeq: Int?
+    /// Events derived from this step's contiguous raw interval only.
+    let events: [AgentEvent]
+}
+
+/// Session-owned coverage seed for an after-cursor fetch. The gate and the
+/// walk anchor MUST derive from the current source epoch's tailer frontier
+/// plus the transcript sequence mapping — never from any event buffer,
+/// whose synthetic and bounded contents cannot prove raw coverage.
+enum AgentAfterCursorCoverageSeed: Equatable {
+    /// The cursor lies inside the raw interval the tailer has scanned
+    /// contiguously up to the current EOF.
+    case covered
+    /// The cursor precedes the scanned interval: walk the raw transcript
+    /// backward starting from this session-owned frontier.
+    case walkFrom(beforeSeq: Int)
+    /// No transcript-backed session exists; the Hub buffer is the only
+    /// truth there is (plain fetch, no coverage claim).
+    case hubOnly
+    /// A transcript is expected but no provable raw frontier exists —
+    /// fail closed.
+    case unavailable
+    case sourceInvalidated
+}
+
 protocol AgentTranscriptSession: AnyObject {
     func start()
     func update(record: AgentSessionRegistryRecord)
     func backfill(beforeSeq: Int, limit: Int) -> Bool
+    func afterCursorCoverageSeed(afterSeq: Int) -> AgentAfterCursorCoverageSeed
+    func afterCursorBackfillStep(beforeSeq: Int, afterSeq: Int, limit: Int) -> AgentAfterCursorBackfillStep
     func stop()
 }
 
@@ -520,6 +567,25 @@ final class AgentSessionRegistryMonitor {
     func backfillSession(sessionID: String, beforeSeq: Int, limit: Int) -> Bool {
         let session: AgentTranscriptSession? = queue.sync { sessions[sessionID] }
         return session?.backfill(beforeSeq: beforeSeq, limit: limit) ?? false
+    }
+
+    func afterCursorBackfillStep(sessionID: String,
+                                 beforeSeq: Int,
+                                 afterSeq: Int,
+                                 limit: Int) -> AgentAfterCursorBackfillStep {
+        let session: AgentTranscriptSession? = queue.sync { sessions[sessionID] }
+        return session?.afterCursorBackfillStep(beforeSeq: beforeSeq, afterSeq: afterSeq, limit: limit)
+            ?? AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+    }
+
+    func afterCursorCoverageSeed(sessionID: String, afterSeq: Int) -> AgentAfterCursorCoverageSeed {
+        let session: AgentTranscriptSession? = queue.sync { sessions[sessionID] }
+        guard let session else {
+            // No transcript-backed session: the Hub buffer is the only
+            // truth there is — plain fetch, no coverage machinery.
+            return .hubOnly
+        }
+        return session.afterCursorCoverageSeed(afterSeq: afterSeq)
     }
 
     func replaceLivePanels(workspaceID: String, panels: [AgentPanelProcessSnapshot]) {
@@ -1674,8 +1740,28 @@ final class JSONLFileTailer {
     private var pendingLineOffset: Int?
     private(set) var earliestLoadedOffset: Int?
     private(set) var reachedStartOfFile = false
+    /// Floor of the raw interval scanned CONTIGUOUSLY up to the current
+    /// EOF: bootstrap seeds it, live appends keep the ceiling at EOF, and a
+    /// backfill lowers it only when its page connects to the interval.
+    /// This — not any event buffer — is the coverage authority for
+    /// after-cursor fetches.
+    private(set) var contiguousScanFloorOffset: Int?
     private(set) var openedSourceIdentity: JSONLFileSourceIdentity?
     var backfillAfterReadForTesting: (() -> Void)?
+    /// Runs after the initial validated frontier is fixed and BEFORE the
+    /// pending tail fragment is seeded and the startup drain runs.
+    var afterInitialFrontierHookForTesting: (() -> Void)?
+    private let queueKey = DispatchSpecificKey<Void>()
+
+    /// The COMPLETE raw frontier of the most recent backfill call —
+    /// including invalid-UTF8 records that never reach the line handler.
+    /// Coverage decisions must use this, never the decoded lines alone.
+    struct BackfillRawFrontier {
+        let readAnyRecord: Bool
+        let minimumRawOffset: Int?
+        let containsInvalidRecord: Bool
+    }
+    private(set) var lastBackfillRawFrontier: BackfillRawFrontier?
     private var validatedBoundaryOffset = 0
     private var validatedBoundary = Data()
 
@@ -1691,9 +1777,24 @@ final class JSONLFileTailer {
         self.lineHandler = lineHandler
         self.invalidUTF8Handler = invalidUTF8Handler
         self.invalidationHandler = invalidationHandler
+        queue.setSpecific(key: queueKey, value: ())
     }
 
+    /// Startup is serialized on the tailer's queue regardless of the
+    /// caller's context: the vnode watcher is armed early during startup,
+    /// and without this an event handler could drain an appended suffix
+    /// concurrently with the pending-fragment seeding.
     func start() throws {
+        if DispatchQueue.getSpecific(key: queueKey) != nil {
+            try startOnQueue()
+        } else {
+            try queue.sync {
+                try startOnQueue()
+            }
+        }
+    }
+
+    private func startOnQueue() throws {
         let fd = open(fileURL.path, O_RDONLY)
         guard fd >= 0 else {
             throw POSIXError(.ENOENT)
@@ -1732,6 +1833,7 @@ final class JSONLFileTailer {
             guard establishInitialValidatedFrontier() else {
                 throw JSONLFileTailerError.sourceInvalidated
             }
+            afterInitialFrontierHookForTesting?()
             pendingData.removeAll(keepingCapacity: false)
             pendingLineOffset = nil
             // The bytes between the last newline and the initial EOF are an
@@ -1762,6 +1864,9 @@ final class JSONLFileTailer {
             earliestLoadedOffset = bootstrappedRecords.first?.offset
                 ?? appendedRecords.first?.offset
             reachedStartOfFile = (earliestLoadedOffset ?? 0) == 0
+            contiguousScanFloorOffset = bootstrappedRecords.first?.offset
+                ?? appendedRecords.first?.offset
+                ?? nextReadOffset
         } catch {
             stop()
             throw error
@@ -1786,6 +1891,13 @@ final class JSONLFileTailer {
             beforeOffset: beforeOffset,
             limit: limit,
             includeAnchorLine: includeAnchorLine)
+        lastBackfillRawFrontier = BackfillRawFrontier(
+            readAnyRecord: records.isEmpty == false,
+            minimumRawOffset: records.map(\.offset).min(),
+            containsInvalidRecord: records.contains {
+                if case .invalidUTF8 = $0 { return true }
+                return false
+            })
         backfillAfterReadForTesting?()
         guard currentSourceIsValid(minimumSize: nextReadOffset) else {
             throw JSONLFileTailerError.sourceInvalidated
@@ -1801,6 +1913,15 @@ final class JSONLFileTailer {
         earliestLoadedOffset = min(earliestLoadedOffset ?? Int.max,
                                    records.first?.offset ?? Int.max)
         reachedStartOfFile = (records.first?.offset ?? 0) == 0
+        // Lower the contiguous scan floor only when this page CONNECTS to
+        // the interval already scanned up to EOF; a disconnected deep page
+        // proves nothing about the bytes between it and the floor.
+        if let floor = contiguousScanFloorOffset,
+           beforeOffset >= floor || includeAnchorLine,
+           let pageMinOffset = records.first?.offset,
+           pageMinOffset < floor {
+            contiguousScanFloorOffset = pageMinOffset
+        }
         return true
     }
 
@@ -1814,6 +1935,7 @@ final class JSONLFileTailer {
         openedSourceIdentity = nil
         validatedBoundaryOffset = 0
         validatedBoundary.removeAll(keepingCapacity: false)
+        contiguousScanFloorOffset = nil
         if let source {
             self.source = nil
             source.cancel()
@@ -2045,25 +2167,29 @@ final class JSONLFileTailer {
         guard count > 0 else {
             return Data()
         }
-        var bytes = [UInt8](repeating: 0, count: count)
-        var totalBytesRead = 0
-        while totalBytesRead < count {
-            let bytesRead = bytes.withUnsafeMutableBytes { buffer in
-                pread(fileDescriptor,
-                      buffer.baseAddress?.advanced(by: totalBytesRead),
-                      count - totalBytesRead,
-                      off_t(offset + totalBytesRead))
+        // Single allocation: the buffer is filled in place and handed over
+        // as-is — an arbitrarily long partial record must not transiently
+        // cost double its size.
+        var data = Data(count: count)
+        let succeeded = data.withUnsafeMutableBytes { buffer -> Bool in
+            var totalBytesRead = 0
+            while totalBytesRead < count {
+                let bytesRead = pread(fileDescriptor,
+                                      buffer.baseAddress?.advanced(by: totalBytesRead),
+                                      count - totalBytesRead,
+                                      off_t(offset + totalBytesRead))
+                if bytesRead > 0 {
+                    totalBytesRead += bytesRead
+                    continue
+                }
+                if bytesRead < 0, errno == EINTR {
+                    continue
+                }
+                return false
             }
-            if bytesRead > 0 {
-                totalBytesRead += bytesRead
-                continue
-            }
-            if bytesRead < 0, errno == EINTR {
-                continue
-            }
-            return nil
+            return true
         }
-        return Data(bytes)
+        return succeeded ? data : nil
     }
 
     private func refreshValidatedBoundary() -> Bool {
@@ -3180,6 +3306,156 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                         events: [],
                                         anchorSeq: beforeSeq)
             return loadedAnyRawPage
+        }
+    }
+
+    func afterCursorCoverageSeed(afterSeq: Int) -> AgentAfterCursorCoverageSeed {
+        queue.sync {
+            if tailer == nil {
+                resolveTranscriptIfPossible()
+            }
+            guard let tailer, let floorOffset = tailer.contiguousScanFloorOffset else {
+                return .unavailable
+            }
+            let floorSeq = transcriptSequenceBase
+                + transcriptEventSequence(lineOffset: floorOffset, ordinal: 0)
+            if floorOffset == 0 || floorSeq - 1 <= afterSeq {
+                return .covered
+            }
+            return .walkFrom(beforeSeq: floorSeq)
+        }
+    }
+
+    func afterCursorBackfillStep(beforeSeq: Int, afterSeq: Int, limit: Int) -> AgentAfterCursorBackfillStep {
+        queue.sync {
+            if tailer == nil {
+                resolveTranscriptIfPossible()
+            }
+            guard let tailer else {
+                return AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+            }
+            guard let beforePosition = transcriptEventPositionInCurrentSource(for: beforeSeq),
+                  beforePosition.lineOffset > 0 || beforePosition.ordinal > 0 else {
+                return AgentAfterCursorBackfillStep(outcome: .reachedSourceStart, nextBeforeSeq: nil, events: [])
+            }
+            do {
+                try tailer.validateCurrentSource()
+            } catch JSONLFileTailerError.sourceInvalidated {
+                beginNewSourceEpoch()
+                startResolver()
+                return AgentAfterCursorBackfillStep(outcome: .sourceInvalidated, nextBeforeSeq: nil, events: [])
+            } catch {
+                failHistoricalClosureCoverage(beforeSeq: beforeSeq)
+                return AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+            }
+            let closureIndexIsReady: Bool
+            do {
+                closureIndexIsReady = try ensureHistoricalClosureIndex()
+            } catch JSONLFileTailerError.sourceInvalidated {
+                beginNewSourceEpoch()
+                startResolver()
+                return AgentAfterCursorBackfillStep(outcome: .sourceInvalidated, nextBeforeSeq: nil, events: [])
+            } catch {
+                failHistoricalClosureCoverage(beforeSeq: beforeSeq)
+                return AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+            }
+            guard closureIndexIsReady else {
+                failHistoricalClosureCoverage(beforeSeq: beforeSeq)
+                return AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+            }
+            hub.setHistoricalClosureCoverage(sessionID: record.sessionID, isComplete: true)
+
+            let liveParserState = captureLiveParserState()
+            resetParserStateForHistoricalReplay()
+            historicalReplayOpenerEventIDs = []
+            historicalReplayProducts = []
+            historicalBackfillAnchorSeq = beforeSeq
+            isBackfillingHistory = true
+            var sourceWasInvalidated = false
+            defer {
+                isCollectingHistoricalBackfillPage = false
+                collectedHistoricalBackfillPage = []
+                historicalBackfillAnchorSeq = nil
+                historicalReplayProducts = []
+                isBackfillingHistory = false
+                restoreLiveParserState(liveParserState)
+                if sourceWasInvalidated {
+                    beginNewSourceEpoch()
+                    startResolver()
+                }
+            }
+
+            isCollectingHistoricalBackfillPage = true
+            collectedHistoricalBackfillPage = []
+            let didLoad: Bool
+            do {
+                didLoad = try tailer.backfill(beforeOffset: beforePosition.lineOffset,
+                                              limit: limit,
+                                              includeAnchorLine: beforePosition.ordinal > 0)
+            } catch JSONLFileTailerError.sourceInvalidated {
+                sourceWasInvalidated = true
+                return AgentAfterCursorBackfillStep(outcome: .sourceInvalidated, nextBeforeSeq: nil, events: [])
+            } catch {
+                return AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+            }
+            isCollectingHistoricalBackfillPage = false
+            let rawPage = collectedHistoricalBackfillPage
+            collectedHistoricalBackfillPage = []
+            // Coverage is judged on the COMPLETE raw frontier: a page whose
+            // records are all invalid UTF-8 was still scanned — treating it
+            // as "nothing before the anchor" would fake reachedSourceStart
+            // and skip everything below the invalid interval.
+            let rawFrontier = tailer.lastBackfillRawFrontier
+            guard didLoad, rawFrontier?.readAnyRecord == true else {
+                return AgentAfterCursorBackfillStep(outcome: .reachedSourceStart, nextBeforeSeq: nil, events: [])
+            }
+
+            resetParserStateForHistoricalReplay()
+            historicalReplayOpenerEventIDs = []
+            historicalReplayProducts = []
+            for entry in rawPage {
+                consume(line: entry.line, lineOffset: entry.offset)
+            }
+            do {
+                try tailer.validateCurrentSource()
+            } catch JSONLFileTailerError.sourceInvalidated {
+                sourceWasInvalidated = true
+                return AgentAfterCursorBackfillStep(outcome: .sourceInvalidated, nextBeforeSeq: nil, events: [])
+            } catch {
+                return AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+            }
+            guard let index = historicalClosureIndex else {
+                return AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+            }
+            for openerEventID in historicalReplayOpenerEventIDs {
+                guard let closure = index.closureByOpenerEventID[openerEventID],
+                      closure.seq < beforeSeq else {
+                    continue
+                }
+                historicalReplayProducts.append(closure)
+            }
+            var seenEventIDs = Set<String>()
+            let products = historicalReplayProducts.filter {
+                seenEventIDs.insert($0.eventID).inserted
+            }
+            // Cache upkeep only: the Hub's historical cache is bounded and
+            // replaceable; the caller's authority for this interval is the
+            // returned events.
+            hub.replaceHistoricalEvents(sessionID: record.sessionID,
+                                        events: products,
+                                        anchorSeq: beforeSeq)
+            historicalReplayOpenerEventIDs = []
+
+            let stepEvents = products.filter { $0.seq < beforeSeq }
+            guard let pageMinOffset = rawFrontier?.minimumRawOffset, pageMinOffset > 0 else {
+                return AgentAfterCursorBackfillStep(outcome: .reachedSourceStart, nextBeforeSeq: nil, events: stepEvents)
+            }
+            let floorSeq = transcriptSequenceBase
+                + transcriptEventSequence(lineOffset: pageMinOffset, ordinal: 0)
+            if floorSeq - 1 <= afterSeq {
+                return AgentAfterCursorBackfillStep(outcome: .coveredCursor, nextBeforeSeq: floorSeq, events: stepEvents)
+            }
+            return AgentAfterCursorBackfillStep(outcome: .advanced, nextBeforeSeq: floorSeq, events: stepEvents)
         }
     }
 

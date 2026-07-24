@@ -179,9 +179,14 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                                                     sessionID: "session",
                                                     limit: 20,
                                                     beforeSeq: askPageAnchor,
-                                                    afterSeq: nil) { _, anchor, limit in
+                                                    afterSeq: nil,
+                                                    backfill: { _, anchor, limit in
             session.backfill(beforeSeq: anchor, limit: limit)
-        }
+        },
+                                                    afterSeed: { _, _ in .unavailable },
+                                                    afterStep: { _, _, _, _ in
+            AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+        })
         XCTAssertTrue(askPage.didBackfill)
         XCTAssertFalse(askPage.fetchResult.events.contains {
             $0.type == .interactivePrompt && $0.metadata?["prompt_id"] == promptID
@@ -445,9 +450,14 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                                                     sessionID: "session",
                                                     limit: 2,
                                                     beforeSeq: line8Anchor,
-                                                    afterSeq: nil) { _, anchor, limit in
+                                                    afterSeq: nil,
+                                                    backfill: { _, anchor, limit in
             session.backfill(beforeSeq: anchor, limit: limit)
-        }
+        },
+                                                    afterSeed: { _, _ in .unavailable },
+                                                    afterStep: { _, _, _, _ in
+            AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+        })
         XCTAssertEqual(shallow.fetchResult.events.map(\.text), ["line-6", "line-7"])
 
         let line4Offset = (lines.prefix(4).joined(separator: "\n") + "\n").utf8.count
@@ -457,9 +467,14 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                                                  sessionID: "session",
                                                  limit: 2,
                                                  beforeSeq: line4Anchor,
-                                                 afterSeq: nil) { _, anchor, limit in
+                                                 afterSeq: nil,
+                                                    backfill: { _, anchor, limit in
             session.backfill(beforeSeq: anchor, limit: limit)
-        }
+        },
+                                                    afterSeed: { _, _ in .unavailable },
+                                                    afterStep: { _, _, _, _ in
+            AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+        })
         XCTAssertEqual(deep.fetchResult.events.map(\.text), ["line-2", "line-3"],
                        "a deeper exact-anchor request must displace the newer cached page")
     }
@@ -498,9 +513,13 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                                                    sessionID: "session",
                                                    limit: 10,
                                                    beforeSeq: anchor,
-                                                   afterSeq: nil) { _, beforeSeq, limit in
+                                                   afterSeq: nil,
+                                                   backfill: { _, beforeSeq, limit in
             session.backfill(beforeSeq: beforeSeq, limit: limit)
-        }
+        afterSeed: { _, _ in .unavailable },
+        }, afterStep: { _, _, _, _ in
+            AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+        })
 
         XCTAssertTrue(output.didBackfill)
         XCTAssertEqual(output.fetchResult.events.compactMap(\.text), ["old-visible"],
@@ -771,9 +790,13 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                                                  sessionID: "session",
                                                  limit: 500,
                                                  beforeSeq: markerSeq,
-                                                 afterSeq: nil) { _, beforeSeq, limit in
+                                                 afterSeq: nil,
+                                                   backfill: { _, beforeSeq, limit in
             session.backfill(beforeSeq: beforeSeq, limit: limit)
-        }
+        afterSeed: { _, _ in .unavailable },
+        }, afterStep: { _, _, _, _ in
+            AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+        })
         XCTAssertTrue(page.didBackfill)
         XCTAssertFalse(page.fetchResult.events.contains {
             $0.eventID == "context-b:claude-context-command:0"
@@ -850,9 +873,14 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                                                    sessionID: "session",
                                                    limit: 4,
                                                    beforeSeq: initialAnchor,
-                                                   afterSeq: nil) { _, anchor, limit in
+                                                   afterSeq: nil,
+                                                    backfill: { _, anchor, limit in
             session.backfill(beforeSeq: anchor, limit: limit)
-        }
+        },
+                                                    afterSeed: { _, _ in .unavailable },
+                                                    afterStep: { _, _, _, _ in
+            AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+        })
 
         XCTAssertNil(seamError)
         XCTAssertTrue(appendedPartial)
@@ -1507,9 +1535,13 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                                                     sessionID: "session",
                                                     limit: 20,
                                                     beforeSeq: resultSeq,
-                                                    afterSeq: nil) { _, beforeSeq, limit in
+                                                    afterSeq: nil,
+                                                   backfill: { _, beforeSeq, limit in
             session.backfill(beforeSeq: beforeSeq, limit: limit)
-        }
+        afterSeed: { _, _ in .unavailable },
+        }, afterStep: { _, _, _, _ in
+            AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+        })
         XCTAssertTrue(askPage.didBackfill)
         XCTAssertFalse(askPage.fetchResult.events.contains {
             $0.type == .interactivePrompt && $0.metadata?["prompt_id"] == "toolu_cross_page"
@@ -1528,9 +1560,13 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                                                         sessionID: "session",
                                                         limit: 20,
                                                         beforeSeq: contextSummarySeq,
-                                                        afterSeq: nil) { _, beforeSeq, limit in
+                                                        afterSeq: nil,
+                                                   backfill: { _, beforeSeq, limit in
             session.backfill(beforeSeq: beforeSeq, limit: limit)
-        }
+        afterSeed: { _, _ in .unavailable },
+        }, afterStep: { _, _, _, _ in
+            AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+        })
         XCTAssertTrue(contextPage.didBackfill)
         XCTAssertFalse(contextPage.fetchResult.events.contains {
             $0.metadata?["tidey_generated"] == "claude_context_command"
@@ -1576,9 +1612,13 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                                                     sessionID: "session",
                                                     limit: 20,
                                                     beforeSeq: resultSeq,
-                                                    afterSeq: nil) { _, beforeSeq, limit in
+                                                    afterSeq: nil,
+                                                   backfill: { _, beforeSeq, limit in
             session.backfill(beforeSeq: beforeSeq, limit: limit)
-        }
+        afterSeed: { _, _ in .unavailable },
+        }, afterStep: { _, _, _, _ in
+            AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+        })
         XCTAssertTrue(askPage.didBackfill)
         XCTAssertFalse(askPage.fetchResult.events.contains {
             $0.eventID == "cached-ask:ask-user-question:\(promptID)"
@@ -1592,9 +1632,13 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                                                         sessionID: "session",
                                                         limit: 20,
                                                         beforeSeq: contextSummarySeq,
-                                                        afterSeq: nil) { _, beforeSeq, limit in
+                                                        afterSeq: nil,
+                                                   backfill: { _, beforeSeq, limit in
             session.backfill(beforeSeq: beforeSeq, limit: limit)
-        }
+        afterSeed: { _, _ in .unavailable },
+        }, afterStep: { _, _, _, _ in
+            AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+        })
         XCTAssertTrue(contextPage.didBackfill)
         XCTAssertFalse(contextPage.fetchResult.events.contains {
             $0.eventID == "cached-context-command:claude-context-command:0"
@@ -1736,9 +1780,13 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                                                  sessionID: "session",
                                                  limit: 20,
                                                  beforeSeq: resolvedOrdinalSeq,
-                                                 afterSeq: nil) { _, beforeSeq, limit in
+                                                 afterSeq: nil,
+                                                   backfill: { _, beforeSeq, limit in
             session.backfill(beforeSeq: beforeSeq, limit: limit)
-        }
+        afterSeed: { _, _ in .unavailable },
+        }, afterStep: { _, _, _, _ in
+            AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+        })
 
         XCTAssertTrue(page.didBackfill)
         XCTAssertTrue(page.fetchResult.events.contains {
@@ -1792,9 +1840,13 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                                                           sessionID: "session",
                                                           limit: 1,
                                                           beforeSeq: secondAskPageAnchor,
-                                                          afterSeq: nil) { _, beforeSeq, limit in
+                                                          afterSeq: nil,
+                                                   backfill: { _, beforeSeq, limit in
             session.backfill(beforeSeq: beforeSeq, limit: limit)
-        }
+        afterSeed: { _, _ in .unavailable },
+        }, afterStep: { _, _, _, _ in
+            AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+        })
 
         XCTAssertTrue(secondAskPage.didBackfill)
         XCTAssertEqual(secondAskPage.fetchResult.events.map(\.eventID),
@@ -1847,9 +1899,13 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                                                          sessionID: "session",
                                                          limit: 20,
                                                          beforeSeq: resultSeq,
-                                                         afterSeq: nil) { _, beforeSeq, limit in
+                                                         afterSeq: nil,
+                                                   backfill: { _, beforeSeq, limit in
             session.backfill(beforeSeq: beforeSeq, limit: limit)
-        }
+        afterSeed: { _, _ in .unavailable },
+        }, afterStep: { _, _, _, _ in
+            AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+        })
         XCTAssertTrue(beforeResult.didBackfill)
         XCTAssertFalse(beforeResult.fetchResult.events.contains {
             $0.eventID == "overlap-first:ask-user-question:\(promptID)"
@@ -1865,9 +1921,13 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
             sessionID: "session",
             limit: 20,
             beforeSeq: transcriptEventSequence(lineOffset: firstFillerOffset, ordinal: 0),
-            afterSeq: nil) { _, beforeSeq, limit in
+            afterSeq: nil,
+                                                   backfill: { _, beforeSeq, limit in
                 session.backfill(beforeSeq: beforeSeq, limit: limit)
-            }
+            afterSeed: { _, _ in .unavailable },
+            }, afterStep: { _, _, _, _ in
+            AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+        })
         let firstLifecycleToken = "overlap-first:ask-user-question:\(promptID)"
         XCTAssertTrue(afterResult.fetchResult.events.contains {
             $0.type == .interactivePromptResolved
@@ -1914,9 +1974,13 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                                                     sessionID: "session",
                                                     limit: 1,
                                                     beforeSeq: firstFillerSeq,
-                                                    afterSeq: nil) { _, beforeSeq, limit in
+                                                    afterSeq: nil,
+                                                   backfill: { _, beforeSeq, limit in
             session.backfill(beforeSeq: beforeSeq, limit: limit)
-        }
+        afterSeed: { _, _ in .unavailable },
+        }, afterStep: { _, _, _, _ in
+            AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+        })
         XCTAssertTrue(askPage.didBackfill)
         XCTAssertEqual(askPage.fetchResult.events.map(\.eventID),
                        ["historical-ask:ask-user-question:\(promptID)"])
@@ -1980,9 +2044,13 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                                                         sessionID: "session",
                                                         limit: 1,
                                                         beforeSeq: firstFillerSeq,
-                                                        afterSeq: nil) { _, beforeSeq, limit in
+                                                        afterSeq: nil,
+                                                   backfill: { _, beforeSeq, limit in
             session.backfill(beforeSeq: beforeSeq, limit: limit)
-        }
+        afterSeed: { _, _ in .unavailable },
+        }, afterStep: { _, _, _, _ in
+            AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+        })
         XCTAssertTrue(commandPage.didBackfill)
         XCTAssertEqual(commandPage.fetchResult.events.map(\.eventID),
                        ["historical-context:claude-context-command:0"])
@@ -2039,9 +2107,13 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                                                              sessionID: "session",
                                                              limit: 1,
                                                              beforeSeq: secondContextSeq,
-                                                             afterSeq: nil) { _, beforeSeq, limit in
+                                                             afterSeq: nil,
+                                                   backfill: { _, beforeSeq, limit in
             session.backfill(beforeSeq: beforeSeq, limit: limit)
-        }
+        afterSeed: { _, _ in .unavailable },
+        }, afterStep: { _, _, _, _ in
+            AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+        })
 
         XCTAssertTrue(firstContextPage.didBackfill)
         XCTAssertFalse(firstContextPage.fetchResult.events.contains {
@@ -2087,9 +2159,13 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                                                         sessionID: "session",
                                                         limit: 1,
                                                         beforeSeq: stdoutSeq,
-                                                        afterSeq: nil) { _, beforeSeq, limit in
+                                                        afterSeq: nil,
+                                                   backfill: { _, beforeSeq, limit in
             session.backfill(beforeSeq: beforeSeq, limit: limit)
-        }
+        afterSeed: { _, _ in .unavailable },
+        }, afterStep: { _, _, _, _ in
+            AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+        })
 
         XCTAssertTrue(contextPage.didBackfill)
         XCTAssertFalse(contextPage.fetchResult.events.contains {
@@ -2243,9 +2319,13 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                                                         sessionID: "session",
                                                         limit: 10,
                                                         beforeSeq: firstSeq,
-                                                        afterSeq: nil) { _, beforeSeq, limit in
+                                                        afterSeq: nil,
+                                                   backfill: { _, beforeSeq, limit in
             session.backfill(beforeSeq: beforeSeq, limit: limit)
-        }
+        afterSeed: { _, _ in .unavailable },
+        }, afterStep: { _, _, _, _ in
+            AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+        })
         XCTAssertFalse(beforeFirst.fetchResult.events.contains { $0.text == "new-first" },
                        "a rebased public cursor must still exclude its exact source event")
     }
@@ -2319,9 +2399,13 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                                                           sessionID: "session",
                                                           limit: 10,
                                                           beforeSeq: rebasedSeq,
-                                                          afterSeq: nil) { _, beforeSeq, limit in
+                                                          afterSeq: nil,
+                                                   backfill: { _, beforeSeq, limit in
             session.backfill(beforeSeq: beforeSeq, limit: limit)
-        }
+        afterSeed: { _, _ in .unavailable },
+        }, afterStep: { _, _, _, _ in
+            AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+        })
         XCTAssertFalse(beforeRebased.fetchResult.events.contains { $0.text == "rebased" },
                        "cursor inversion must use the sequence actually accepted by Hub")
     }
@@ -2370,9 +2454,13 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                                                    sessionID: "session",
                                                    limit: 4,
                                                    beforeSeq: beforeSeq,
-                                                   afterSeq: nil) { _, anchor, limit in
+                                                   afterSeq: nil,
+                                                   backfill: { _, anchor, limit in
             return session.backfill(beforeSeq: anchor, limit: limit)
-        }
+        afterSeed: { _, _ in .unavailable },
+        }, afterStep: { _, _, _, _ in
+            AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+        })
 
         XCTAssertNil(replacementError)
         XCTAssertFalse(output.didBackfill)
@@ -2478,9 +2566,13 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
             sessionID: "session",
             limit: 20,
             beforeSeq: anchor,
-            afterSeq: nil) { _, beforeSeq, limit in
+            afterSeq: nil,
+                                                   backfill: { _, beforeSeq, limit in
                 session.backfill(beforeSeq: beforeSeq, limit: limit)
-            }
+            afterSeed: { _, _ in .unavailable },
+            }, afterStep: { _, _, _, _ in
+            AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+        })
         XCTAssertTrue(initialPage.fetchResult.events.contains {
             $0.eventID == "fail-closed-ask:ask-user-question:\(promptID)"
         }, "the baseline index must expose a genuinely open historical Ask; got \(initialPage.fetchResult.events.map(\.eventID))",
@@ -2496,9 +2588,13 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
             sessionID: "session",
             limit: 20,
             beforeSeq: anchor,
-            afterSeq: nil) { _, beforeSeq, limit in
+            afterSeq: nil,
+                                                   backfill: { _, beforeSeq, limit in
                 session.backfill(beforeSeq: beforeSeq, limit: limit)
-            }
+            afterSeed: { _, _ in .unavailable },
+            }, afterStep: { _, _, _, _ in
+            AgentAfterCursorBackfillStep(outcome: .unavailable, nextBeforeSeq: nil, events: [])
+        })
         XCTAssertFalse(failedPage.fetchResult.events.contains {
             $0.eventID == "fail-closed-ask:ask-user-question:\(promptID)"
         }, "unknown source-wide closure coverage must never expose a cached opener",

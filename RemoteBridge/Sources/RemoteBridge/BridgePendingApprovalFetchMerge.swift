@@ -28,15 +28,23 @@ enum BridgePendingApprovalFetchMerge {
                           oldestSeq: pageOldestSeq,
                           newestSeq: pageNewestSeq)
         }
-        // Injected pending snapshots ride along in the payload but must
-        // never advance the after-directional bound: the Hub fetch and the
-        // pending lookup are two separate reads, and letting a pending seq
-        // above the cursor advance newest_seq would make the next poll
-        // permanently skip everything appended between those two reads.
-        let cursorFloor = max(pageNewestSeq, requestedAfterSeq ?? Int.min)
+        if let requestedAfterSeq {
+            // Injected pending snapshots ride along in the payload but must
+            // never advance the after-directional bound: the Hub fetch and
+            // the pending lookup are two separate reads, and letting a
+            // pending seq above the cursor advance newest_seq would make
+            // the next poll permanently skip everything appended between
+            // those two reads.
+            return Merged(events: events,
+                          oldestSeq: events.first?.seq ?? pageOldestSeq,
+                          newestSeq: max(pageNewestSeq, requestedAfterSeq))
+        }
+        // Cursor-less initial fetch: an empty stored page with injected
+        // pending events keeps its latest-snapshot semantics — the bounds
+        // follow the injected events.
         return Merged(events: events,
                       oldestSeq: events.first?.seq ?? pageOldestSeq,
-                      newestSeq: cursorFloor)
+                      newestSeq: max(events.last?.seq ?? pageNewestSeq, pageNewestSeq))
     }
 
     static func mergeReplayEnvelopes(_ replayEnvelopes: [AgentEventEnvelope],

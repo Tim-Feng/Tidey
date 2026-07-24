@@ -179,6 +179,90 @@ final class JSONLFileTailerTests: XCTestCase {
         XCTAssertEqual(captured.map(\.0), [0, 3])
     }
 
+    func testPartialLargerThanOneScanChunkIsFullyReassembled() throws {
+        // The partial fragment exceeds the 8192-byte backward-scan chunk:
+        // the seed must walk multiple chunks to the last newline, not just
+        // read the final block.
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("events.jsonl")
+        let longPrefix = String(repeating: "x", count: 20_000)
+        try ("head\n" + longPrefix).write(to: fileURL, atomically: false, encoding: .utf8)
+
+        let queue = DispatchQueue(label: "JSONLFileTailerTests.large-partial")
+        let reassembled = expectation(description: "large partial reassembled")
+        var captured = [(Int, String)]()
+        let tailer = JSONLFileTailer(fileURL: fileURL,
+                                     queue: queue,
+                                     bootstrapLineLimit: 10,
+                                     lineHandler: { offset, line in
+                                         captured.append((offset, line))
+                                         if line.hasSuffix("END") {
+                                             reassembled.fulfill()
+                                         }
+                                     },
+                                     invalidationHandler: {})
+
+        try tailer.start()
+        XCTAssertEqual(captured.map(\.1), ["head"])
+
+        let handle = try FileHandle(forWritingTo: fileURL)
+        try handle.seekToEnd()
+        handle.write(Data("END\n".utf8))
+        try handle.close()
+
+        wait(for: [reassembled], timeout: 2.0)
+        tailer.stop()
+
+        XCTAssertEqual(captured.count, 2)
+        XCTAssertEqual(captured.last?.1, longPrefix + "END",
+                       "the multi-chunk fragment must reassemble in full")
+        XCTAssertEqual(captured.last?.0, 5)
+    }
+
+    func testSuffixAppendedDuringStartupWindowIsStillReassembledOnce() throws {
+        // Deterministic race: the suffix lands AFTER the initial frontier is
+        // fixed but BEFORE the seed/drain — the serialized startup must
+        // still publish exactly one reassembled record at the original
+        // offset, never a suffix-only or duplicate record.
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("events.jsonl")
+        try "one\npar".write(to: fileURL, atomically: false, encoding: .utf8)
+
+        let queue = DispatchQueue(label: "JSONLFileTailerTests.startup-race")
+        var captured = [(Int, String)]()
+        let tailer = JSONLFileTailer(fileURL: fileURL,
+                                     queue: queue,
+                                     bootstrapLineLimit: 10,
+                                     lineHandler: { offset, line in
+                                         captured.append((offset, line))
+                                     },
+                                     invalidationHandler: {})
+        tailer.afterInitialFrontierHookForTesting = {
+            guard let handle = try? FileHandle(forWritingTo: fileURL) else {
+                return XCTFail("could not append during the startup window")
+            }
+            try? handle.seekToEnd()
+            handle.write(Data("tial\n".utf8))
+            try? handle.close()
+        }
+
+        try tailer.start()
+        // The suffix was on disk before the startup drain, so the record is
+        // complete by the time start() returns.
+        queue.sync {}
+        tailer.stop()
+
+        XCTAssertEqual(captured.map(\.1), ["one", "partial"],
+                       "the startup-window suffix must complete the seeded fragment exactly once")
+        XCTAssertEqual(captured.map(\.0), [0, 4])
+    }
+
     func testAppendImmediatelyFollowedByDeleteDrainsFinalCompleteLine() throws {
         let fileURL = try writeTestFile()
         let queue = DispatchQueue(label: "JSONLFileTailerTests.append-delete")

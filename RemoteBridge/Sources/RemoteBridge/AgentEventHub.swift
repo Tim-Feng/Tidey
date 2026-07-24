@@ -377,6 +377,54 @@ final class AgentEventHub {
         }
     }
 
+    /// Live-window-only snapshot above a cursor: bufferedEvents with the
+    /// current session bindings applied, ascending, capped at `limit`. The
+    /// bounded historical cache is deliberately excluded — a request-owned
+    /// coverage walk supplies that interval itself.
+    func fetchLiveOnly(workspaceID: String,
+                       sessionID: String,
+                       limit: Int,
+                       afterSeq: Int) -> [AgentEvent] {
+        queue.sync {
+            guard let state = sessions[sessionID] else {
+                return []
+            }
+            let events = state.bufferedEvents
+                .compactMap { effectiveEvent($0) }
+                .filter { event in
+                    guard event.workspaceID == workspaceID, event.seq > afterSeq else {
+                        return false
+                    }
+                    // Same fail-closed opener visibility as a normal fetch:
+                    // the live-only helper must not bypass it.
+                    if requiresHistoricalClosureCoverage(event),
+                       state.historicalClosureCoverageIsComplete == false {
+                        return false
+                    }
+                    return true
+                }
+                .sorted { $0.seq < $1.seq }
+            return Array(events.prefix(max(limit, 0)))
+        }
+    }
+
+    /// Applies the session workspace/panel bindings the Hub would apply on
+    /// fetch, so request-owned events assembled outside the Hub carry the
+    /// same identity rewrites.
+    func applyingSessionBindings(_ events: [AgentEvent]) -> [AgentEvent] {
+        queue.sync {
+            events.compactMap { effectiveEvent($0) }
+        }
+    }
+
+    /// Applies the fetch byte budget to an externally assembled page using
+    /// the same measurement and truncation rules as a Hub fetch.
+    func budgetLimitedPage(_ events: [AgentEvent],
+                           maxBytes: Int?,
+                           prefersNewestEvents: Bool) -> [AgentEvent] {
+        budgetLimitedEvents(events, maxBytes: maxBytes, prefersNewestEvents: prefersNewestEvents)
+    }
+
     func sequenceHighWater(sessionID: String) -> Int {
         queue.sync {
             max(sessions[sessionID]?.storedSeqHighWater ?? transcriptSessionStartedSequence,

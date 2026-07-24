@@ -69,6 +69,22 @@ final class BridgePendingApprovalFetchMergeTests: XCTestCase {
                        "newest_seq must stay at the stored page/request cursor bound, exactly")
     }
 
+    func testEmptyCursorlessPageKeepsLatestSnapshotBounds() {
+        // Initial fetch with no cursor: an empty stored page (0/0) plus a
+        // pending snapshot at seq 100 must present the snapshot bounds
+        // (100/100), never inverted bounds like oldest=100/newest=0.
+        let pending = prompt(id: "prompt-100", seq: 100, submitState: "pending")
+
+        let merged = BridgePendingApprovalFetchMerge.merge(pageEvents: [],
+                                                           pageOldestSeq: 0,
+                                                           pageNewestSeq: 0,
+                                                           pendingEvents: [pending])
+
+        XCTAssertEqual(merged.events.map(\.eventID), ["prompt-100"])
+        XCTAssertEqual(merged.oldestSeq, 100)
+        XCTAssertEqual(merged.newestSeq, 100)
+    }
+
     func testEmptyBeforePageKeepsStoredBoundsWhenInjectingPendingSnapshot() {
         let pending = prompt(id: "prompt-500", seq: 500, submitState: "pending")
 
