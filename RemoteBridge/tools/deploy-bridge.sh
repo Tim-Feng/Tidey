@@ -108,10 +108,9 @@ else
 fi
 
 if launchctl print "$SERVICE_TARGET" >/dev/null 2>&1; then
-  launchctl kickstart -k "$SERVICE_TARGET"
-else
-  launchctl bootstrap "$LAUNCHCTL_DOMAIN" "$PLIST_PATH"
+  launchctl bootout "$LAUNCHCTL_DOMAIN" "$PLIST_PATH" >/dev/null 2>&1 || true
 fi
+launchctl bootstrap "$LAUNCHCTL_DOMAIN" "$PLIST_PATH"
 
 echo "Waiting for admin endpoint..."
 for ((attempt = 1; attempt <= HEALTH_CHECK_ATTEMPTS; attempt++)); do
