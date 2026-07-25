@@ -2820,6 +2820,61 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                        "source A's live parser snapshot must NOT be restored into the new epoch")
     }
 
+    func testClaudeAfterCursorStepPublishesReplacementSourceAfterReplayCleanup() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let lines = [makeClaudeUserLine(uuid: "src-a-user", content: "src-a-user"),
+                     makeClaudeAskUserQuestionAssistantLine(uuid: "src-a-ask", toolCallID: "toolu_src_a")]
+        let (transcriptURL, _) = try writeTrackedTranscript(lines, into: directory)
+        let hub = AgentEventHub()
+        let session = makeStartedSession(transcriptURL, hub: hub, readySentinel: "src-a-user")
+        defer { session.stop() }
+        XCTAssertTrue(session.hasActiveAskLifecyclesForTesting,
+                      "precondition: source A has a visible active Ask lifecycle")
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+        let eof = try fileSize(transcriptURL)
+
+        // Replace the SAME path atomically with an already-valid transcript:
+        // the post-read fence fails, and the replacement must still reach
+        // the Hub through a resolver that runs AFTER replay cleanup.
+        let replacementLine = makeClaudeUserLine(uuid: "replacement-sentinel",
+                                                 content: "replacement-sentinel")
+        var replacementWriteError: Error?
+        session.afterCursorStepAfterRawReadForTesting = {
+            do {
+                try Data((replacementLine + "\n").utf8).write(to: transcriptURL, options: .atomic)
+            } catch {
+                replacementWriteError = error
+            }
+        }
+        defer { session.afterCursorStepAfterRawReadForTesting = nil }
+
+        let step = session.afterCursorStep(
+            from: AgentHistoryAnchor(epoch: epoch,
+                                     position: TranscriptEventPosition(lineOffset: eof, ordinal: 0)),
+            afterSeq: 0,
+            limit: 5)
+
+        XCTAssertNil(replacementWriteError, "precondition: the atomic replacement wrote cleanly")
+        guard case .sourceChanged = step.outcome else {
+            return XCTFail("the replaced source is sourceChanged, got \(step.outcome)")
+        }
+        XCTAssertTrue(step.events.isEmpty, "no stale source A event may ride the step")
+        XCTAssertEqual(step.epoch, hub.currentHistoryEpoch(sessionID: "session"))
+        XCTAssertFalse(session.hasActiveAskLifecyclesForTesting,
+                       "source A's Ask state must not be restored")
+
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20)
+                .events.contains { $0.text == "replacement-sentinel" }
+        }, "the replacement source's events must reach the Hub — a resolver started before replay cleanup swallows them into the discarded replay collector/legacy branch")
+        let sentinelCount = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20)
+            .events.filter { $0.text == "replacement-sentinel" }.count
+        XCTAssertEqual(sentinelCount, 1, "the replacement sentinel appears exactly once")
+    }
+
     func testClaudeAfterCursorStepRequiresExactCursorInsideReadIntervalToComplete() throws {
         let (transcriptURL, directory, lineCount) = try makeLargeTranscriptFixture()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -2868,7 +2923,7 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         let hub = AgentEventHub()
         let session = makeStartedSession(transcriptURL,
                                          hub: hub,
-                                         readySentinel: nil == nil ? "deep-\(lineCount - 1)-" + String(repeating: "x", count: 160) : "")
+                                         readySentinel: "deep-\(lineCount - 1)-" + String(repeating: "x", count: 160))
         defer { session.stop() }
         let epoch = hub.currentHistoryEpoch(sessionID: "session")
 

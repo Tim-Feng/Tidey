@@ -3337,13 +3337,23 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             // snapshot afterwards would pour a retired source's pending
             // command/Ask lifecycles/lineage into the new epoch.
             var sourceWasInvalidated = false
+            var shouldStartResolverAfterCleanup = false
             defer {
+                // Cleanup order matters: the resolver may bootstrap the
+                // replacement source SYNCHRONOUSLY, so it must only run
+                // after every replay flag is cleared — otherwise the
+                // replacement's events fall into the discarded replay
+                // collector/legacy branch instead of the Hub and are
+                // permanently lost at the new tailer's EOF.
                 isCollectingHistoricalBackfillPage = false
                 collectedHistoricalBackfillPage = []
                 afterCursorReplayCollector = nil
                 isBackfillingHistory = false
                 if sourceWasInvalidated == false {
                     restoreLiveParserState(liveParserState)
+                }
+                if shouldStartResolverAfterCleanup {
+                    startResolver()
                 }
             }
 
@@ -3356,8 +3366,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                                  includeAnchorLine: anchorPosition.ordinal > 0)
             } catch JSONLFileTailerError.sourceInvalidated {
                 sourceWasInvalidated = true
+                shouldStartResolverAfterCleanup = true
                 beginNewSourceEpoch()
-                startResolver()
                 currentEpoch = hub.currentHistoryEpoch(sessionID: record.sessionID)
                 return out(.sourceChanged)
             } catch {
@@ -3384,8 +3394,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 try tailer.validateCurrentSource()
             } catch JSONLFileTailerError.sourceInvalidated {
                 sourceWasInvalidated = true
+                shouldStartResolverAfterCleanup = true
                 beginNewSourceEpoch()
-                startResolver()
                 currentEpoch = hub.currentHistoryEpoch(sessionID: record.sessionID)
                 return out(.sourceChanged)
             } catch {
