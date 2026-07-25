@@ -437,6 +437,114 @@ final class JSONLFileTailerTests: XCTestCase {
         }
     }
 
+    func testBackfillReportsAllInvalidRawFrontierAfterSourceFence() throws {
+        var data = Data()
+        data.append(contentsOf: [0xff, 0x0a])          // invalid @0
+        data.append(contentsOf: [0xfe, 0x0a])          // invalid @2
+        data.append(Data("three\n".utf8))              // valid @4
+        let fileURL = try writeFile(data: data)
+        let queue = DispatchQueue(label: "JSONLFileTailerTests.frontier-all-invalid")
+        let tailer = JSONLFileTailer(fileURL: fileURL,
+                                     queue: queue,
+                                     bootstrapLineLimit: 1,
+                                     lineHandler: { _, _ in },
+                                     invalidUTF8Handler: { _ in },
+                                     invalidationHandler: {})
+        try tailer.start()
+
+        let result = try tailer.backfill(beforeOffset: 4, limit: 5)
+        tailer.stop()
+
+        XCTAssertTrue(result.didRead)
+        let frontier = try XCTUnwrap(result.rawFrontier,
+                                     "an all-invalid complete page is still raw evidence")
+        XCTAssertTrue(frontier.readAnyRecord)
+        XCTAssertTrue(frontier.containsInvalidRecord)
+        XCTAssertEqual(frontier.minimumRawOffset, 0)
+        XCTAssertTrue(frontier.reachedSourceStart)
+    }
+
+    func testBackfillMixedInvalidPageUsesActualMinimumRawBoundary() throws {
+        var data = Data("old\n".utf8)                  // valid @0, dropped by limit
+        data.append(contentsOf: [0xff, 0x0a])          // invalid @4
+        data.append(Data("mid\n".utf8))                // valid @6
+        data.append(Data("new\n".utf8))                // valid @10
+        let fileURL = try writeFile(data: data)
+        let queue = DispatchQueue(label: "JSONLFileTailerTests.frontier-mixed")
+        let tailer = JSONLFileTailer(fileURL: fileURL,
+                                     queue: queue,
+                                     bootstrapLineLimit: 1,
+                                     lineHandler: { _, _ in },
+                                     invalidUTF8Handler: { _ in },
+                                     invalidationHandler: {})
+        try tailer.start()
+
+        let result = try tailer.backfill(beforeOffset: 10, limit: 2)
+        tailer.stop()
+
+        XCTAssertTrue(result.didRead)
+        let frontier = try XCTUnwrap(result.rawFrontier)
+        XCTAssertTrue(frontier.readAnyRecord)
+        XCTAssertTrue(frontier.containsInvalidRecord)
+        XCTAssertEqual(frontier.minimumRawOffset, 4,
+                       "the limit dropped old@0 — its range must not be claimed as covered")
+        XCTAssertFalse(frontier.reachedSourceStart)
+    }
+
+    func testBackfillLeadingBlankPageReportsActualSourceStart() throws {
+        var data = Data("\n\n".utf8)                   // leading blanks @0-1
+        data.append(Data("rec\n".utf8))                // valid @2
+        data.append(Data("tail\n".utf8))               // valid @6
+        let fileURL = try writeFile(data: data)
+        let queue = DispatchQueue(label: "JSONLFileTailerTests.frontier-leading-blank")
+        let tailer = JSONLFileTailer(fileURL: fileURL,
+                                     queue: queue,
+                                     bootstrapLineLimit: 1,
+                                     lineHandler: { _, _ in },
+                                     invalidationHandler: {})
+        try tailer.start()
+
+        let result = try tailer.backfill(beforeOffset: 6, limit: 5)
+        tailer.stop()
+
+        XCTAssertTrue(result.didRead)
+        let frontier = try XCTUnwrap(result.rawFrontier)
+        XCTAssertTrue(frontier.readAnyRecord)
+        XCTAssertEqual(frontier.minimumRawOffset, 0,
+                       "the scan covered the leading blanks down to byte 0")
+        XCTAssertTrue(frontier.reachedSourceStart,
+                      "a first-record offset above 0 must not hide that byte 0 was reached")
+    }
+
+    func testBackfillBlankOnlyPageAdvancesWithoutFalseSourceStart() throws {
+        var data = Data("old\n".utf8)                  // valid @0
+        data.append(Data(String(repeating: "\n", count: 70_000).utf8)) // blank gap > one reader chunk
+        data.append(Data("tail\n".utf8))               // valid @70004
+        let fileURL = try writeFile(data: data)
+        let queue = DispatchQueue(label: "JSONLFileTailerTests.frontier-blank-only")
+        let tailer = JSONLFileTailer(fileURL: fileURL,
+                                     queue: queue,
+                                     bootstrapLineLimit: 1,
+                                     lineHandler: { _, _ in },
+                                     invalidationHandler: {})
+        try tailer.start()
+
+        let result = try tailer.backfill(beforeOffset: 70_004, limit: 2)
+        tailer.stop()
+
+        XCTAssertFalse(result.didRead, "a blank-only page has no record — didRead stays false")
+        let frontier = try XCTUnwrap(result.rawFrontier,
+                                     "an eventless scan still advances the raw boundary")
+        XCTAssertFalse(frontier.readAnyRecord)
+        XCTAssertFalse(frontier.containsInvalidRecord)
+        let boundary = try XCTUnwrap(frontier.minimumRawOffset)
+        XCTAssertLessThan(boundary, 70_004,
+                          "the boundary must move strictly toward the source start")
+        XCTAssertGreaterThan(boundary, 0,
+                             "the scan did not reach byte 0 through the oversized blank gap")
+        XCTAssertFalse(frontier.reachedSourceStart)
+    }
+
     private func writeTestFile() throws -> URL {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

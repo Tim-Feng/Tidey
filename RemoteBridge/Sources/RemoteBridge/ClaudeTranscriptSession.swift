@@ -1866,7 +1866,7 @@ final class JSONLFileTailer {
         // than the deepest page another client already read; neither the
         // earliest observed offset nor a sticky start-of-file marker may
         // redirect or block that request.
-        let records = try JSONLFileReader.readBeforeRecords(
+        let page = try JSONLFileReader.readBeforePage(
             fileURL: fileURL,
             beforeOffset: beforeOffset,
             limit: limit,
@@ -1875,24 +1875,34 @@ final class JSONLFileTailer {
         guard currentSourceIsValid(minimumSize: nextReadOffset) else {
             throw JSONLFileTailerError.sourceInvalidated
         }
+        let records = page.records
+        // The frontier is assembled ONLY after the post-read source fence
+        // succeeded (a fence failure throws and exposes nothing) and comes
+        // from the reader's ACTUAL scan boundary: blank lines it covered
+        // count, records the limit dropped do not, and invalid-UTF8 records
+        // are raw evidence — an all-invalid page never masquerades as an
+        // eventless source start, and a blank-only page still advances the
+        // boundary.
+        let rawFrontier = JSONLRawFrontier(
+            readAnyRecord: !records.isEmpty,
+            minimumRawOffset: page.minimumRawOffset,
+            containsInvalidRecord: records.contains {
+                if case .invalidUTF8 = $0 { return true }
+                return false
+            },
+            reachedSourceStart: page.reachedSourceStart)
         guard !records.isEmpty else {
             if beforeOffset <= (earliestLoadedOffset ?? beforeOffset) {
                 reachedStartOfFile = true
             }
-            return JSONLBackfillResult(didRead: false, rawFrontier: nil)
+            return JSONLBackfillResult(didRead: false, rawFrontier: rawFrontier)
         }
 
         deliver(records)
         earliestLoadedOffset = min(earliestLoadedOffset ?? Int.max,
                                    records.first?.offset ?? Int.max)
         reachedStartOfFile = (records.first?.offset ?? 0) == 0
-        // Structural row: didRead is exactly the old Bool; the frontier
-        // PRODUCER is not wired yet (always nil) so the frontier behavioral
-        // row keeps its RED. Deriving it from `records` here would also be
-        // wrong: the reader skips blank lines, so a first-record offset can
-        // neither stand in for the scanned floor nor prove byte 0 was
-        // reached — the reader must report its actual scan boundary.
-        return JSONLBackfillResult(didRead: true, rawFrontier: nil)
+        return JSONLBackfillResult(didRead: true, rawFrontier: rawFrontier)
     }
 
     func validateCurrentSource() throws {
