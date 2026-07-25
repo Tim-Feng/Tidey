@@ -2864,6 +2864,113 @@ final class CodexTranscriptSessionTests: XCTestCase {
         XCTAssertTrue(session.validateHistoryEpoch(hub.currentHistoryEpoch(sessionID: "session")))
     }
 
+    // A deferred resolver restart that runs AFTER stop() must be a no-op:
+    // an ended session never re-attaches, never re-publishes its window,
+    // and never leaves a live tailer behind.
+    func testDeferredResolverRestartAfterStopDoesNotReattach() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lines = (0..<8).map { makeCodexMessageLine(role: "assistant", content: "a-\($0)") }
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(transcriptURL, hub: hub, readySentinel: "a-7")
+        session.stop()
+        let endedEventCount = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 200).events.count
+        // The queued restart from an earlier attach frame finally runs —
+        // strictly after stop() in queue order.
+        session.enqueueDeferredResolverRestartForTesting()
+        // Drain the queue through the sync getters.
+        XCTAssertFalse(session.hasActiveTailerForTesting,
+                       "an ended session must not re-attach from a deferred restart")
+        XCTAssertEqual(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 200).events.count,
+                       endedEventCount,
+                       "nothing publishes after sessionEnded")
+    }
+
+    // startResolver must be idempotent per unattached session: repeated
+    // same-generation calls with a failing resolve keep exactly ONE
+    // fallback timer.
+    func testRepeatedStartResolverKeepsSingleFallbackTimer() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let missingURL = directory.appendingPathComponent("never-written.jsonl", isDirectory: false)
+        let hub = AgentEventHub()
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: missingURL.path),
+                                             fileManager: .default,
+                                             hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertFalse(session.hasActiveTailerForTesting, "precondition: the resolve keeps failing")
+        let installsAfterStart = session.resolverTimerInstallCountSnapshotForTesting
+        XCTAssertGreaterThanOrEqual(installsAfterStart, 1, "the fallback timer exists")
+        session.enqueueDeferredResolverRestartForTesting()
+        session.enqueueDeferredResolverRestartForTesting()
+        XCTAssertFalse(session.hasActiveTailerForTesting)
+        XCTAssertEqual(session.resolverTimerInstallCountSnapshotForTesting, installsAfterStart,
+                       "repeated restarts reuse the existing fallback timer — no stacking/replacement")
+    }
+
+    // Guard: invalidation → transient → success settles on exactly the
+    // final source; the Hub epoch advances only per invalidation, the
+    // transient abort stays internal, and no stale products survive.
+    func testInvalidationThenTransientThenSuccessSettlesOnce() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lineCount = transcriptBootstrapLineLimit + 20
+        func writeFile(prefix: String) throws {
+            let lines = (0..<lineCount).map { makeCodexMessageLine(role: "assistant", content: "\(prefix)-\($0)") }
+            try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        }
+        try writeFile(prefix: "gen0")
+        let hub = AgentEventHub()
+        let baseGeneration = hub.currentHistoryEpoch(sessionID: "session").generation
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                             fileManager: .default,
+                                             hub: hub)
+        let lock = NSLock()
+        var replaced = false
+        var replacementWriteError: Error?
+        session.bootstrapContextBeforeReadForTesting = {
+            lock.lock()
+            defer { lock.unlock() }
+            guard replaced == false else { return }
+            replaced = true
+            do { try writeFile(prefix: "final") } catch { replacementWriteError = error }
+        }
+        var faultConsults = 0
+        session.bootstrapContextReadFaultForTesting = {
+            lock.lock()
+            defer { lock.unlock() }
+            faultConsults += 1
+            // Attach 1 reaches the REAL read (invalidation); attach 2 hits
+            // the transient fault; attach 3 succeeds.
+            return faultConsults == 2 ? POSIXError(.EIO) : nil
+        }
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil(timeout: 8) {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                .events.contains { $0.text == "final-\(lineCount - 1)" }
+        }, "the final source attaches after invalidation → transient → success")
+        XCTAssertNil(replacementWriteError)
+        XCTAssertFalse(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 3000)
+                        .events.contains { $0.text?.hasPrefix("gen0-") == true },
+                       "no stale products survive")
+        XCTAssertEqual(hub.currentHistoryEpoch(sessionID: "session").generation,
+                       baseGeneration + 1,
+                       "the Hub epoch advances only for the invalidation — the transient abort stays internal")
+        XCTAssertTrue(session.validateHistoryEpoch(hub.currentHistoryEpoch(sessionID: "session")))
+        XCTAssertTrue(session.hasActiveTailerForTesting)
+    }
+
     func testValidationSourceFenceRunsBeforeSemanticTrustGate() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)

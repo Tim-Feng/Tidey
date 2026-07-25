@@ -726,24 +726,43 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     }
 
     // Schedules a resolver restart strictly after the current queue frame
-    // (no synchronous recursion inside an old attach stack).
+    // (no synchronous recursion inside an old attach stack). The restart
+    // captures the CURRENT generation: a queued restart that runs after a
+    // later reset — or after stop() — is a no-op, so an ended session can
+    // never re-attach from a stale queued closure.
     private func scheduleResolverRestartAfterCurrentFrame() {
+        let expectedGeneration = activeSourceGeneration
         queue.async { [weak self] in
-            self?.startResolver()
+            guard let self else { return }
+            guard self.didPublishEnd == false,
+                  self.activeSourceGeneration == expectedGeneration else {
+                return
+            }
+            self.startResolver()
         }
     }
 
     private func startResolver() {
+        // An ended session stays ended: no resolve, no timer.
+        guard didPublishEnd == false else {
+            return
+        }
         resolveTranscriptIfPossible()
         if tailer != nil {
             log("startResolver resolved transcript=\(transcriptURL?.path ?? "<nil>")")
+            return
+        }
+        // Idempotent per unattached session: reuse the existing fallback
+        // timer instead of stacking/replacing DispatchSources.
+        guard resolverTimer == nil else {
             return
         }
 
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + .seconds(1), repeating: .seconds(1))
         timer.setEventHandler { [weak self] in
-            self?.resolveTranscriptIfPossible()
+            guard let self, self.didPublishEnd == false else { return }
+            self.resolveTranscriptIfPossible()
         }
         timer.resume()
         resolverTimerInstallCountForTesting += 1
