@@ -94,11 +94,13 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
         }
         var backfillCalls = 0
 
+        var planCalls = 0
         let output = runAfter(hub: hub,
                               limit: 3,
                               afterSeq: 1,
                               plan: { _, _, expected in
-                                  AgentAfterCursorPlan(epoch: expected, mode: .unavailable)
+                                  planCalls += 1
+                                  return AgentAfterCursorPlan(epoch: expected, mode: .unavailable)
                               },
                               backfill: { _, _, _ in
                                   backfillCalls += 1
@@ -106,6 +108,7 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
                               })
 
         XCTAssertEqual(backfillCalls, 0)
+        XCTAssertEqual(planCalls, 1, "a same-epoch unavailable plan is terminal — no retry")
         XCTAssertFalse(output.didBackfill)
         assertFailClosed(output, afterSeq: 1)
     }
@@ -491,26 +494,311 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
                        "the lease's accepted/rebased copy wins the overlap")
     }
 
-    // Guards: finalization fences already present on the parent commit.
-    func testValidationAdvancingEpochFailsClosedDespiteReturningTrue() {
+    // MARK: G3c one-retry state machine
+
+    func testEpochChangeAfterFinalStepDiscardsWholePageAndRetriesOnce() {
         let hub = AgentEventHub()
-        for seq in 101...103 {
-            hub.publish(makeEvent(seq: seq, text: "live-\(seq)"))
-        }
+        var planCalls = 0
+        var stepCalls = 0
 
         let output = runAfter(hub: hub,
                               limit: 5,
                               afterSeq: 100,
                               plan: { _, _, expected in
-                                  AgentAfterCursorPlan(
+                                  planCalls += 1
+                                  if planCalls == 1 {
+                                      return AgentAfterCursorPlan(
+                                          epoch: expected,
+                                          mode: .scan(from: AgentHistoryAnchor(
+                                              epoch: expected,
+                                              position: TranscriptEventPosition(lineOffset: 5_000, ordinal: 0))))
+                                  }
+                                  return AgentAfterCursorPlan(epoch: expected, mode: .hubOnly)
+                              },
+                              step: { _, stepAnchor, _, _ in
+                                  stepCalls += 1
+                                  // The epoch moves AFTER the final step is
+                                  // accepted: the whole page is discarded
+                                  // and the retry serves the replacement.
+                                  hub.beginNewSourceEpoch(sessionID: "session")
+                                  hub.publish(self.makeEvent(id: "replacement", seq: 200, text: "replacement"))
+                                  return AgentAfterCursorStep(
+                                      epoch: stepAnchor.epoch,
+                                      outcome: .complete,
+                                      events: [self.makeEvent(id: "stale", seq: 150, text: "stale")])
+                              })
+
+        XCTAssertEqual(planCalls, 2)
+        XCTAssertEqual(stepCalls, 1)
+        XCTAssertEqual(output.fetchResult.events.compactMap(\.text), ["replacement"],
+                       "only the replacement-epoch payload survives")
+        XCTAssertTrue(output.didBackfill,
+                      "the first attempt accepted a complete step even though its payload was discarded")
+    }
+
+    func testEpochChangeMidWalkRetriesOnceThenFailsClosed() {
+        let hub = AgentEventHub()
+        var planCalls = 0
+        var stepCalls = 0
+
+        let output = runAfter(hub: hub,
+                              limit: 5,
+                              afterSeq: 100,
+                              plan: { _, _, expected in
+                                  planCalls += 1
+                                  return AgentAfterCursorPlan(
                                       epoch: expected,
-                                      mode: .rawCovered(replayFrom: self.anchor(hub, at: 9_999)))
+                                      mode: .scan(from: AgentHistoryAnchor(
+                                          epoch: expected,
+                                          position: TranscriptEventPosition(lineOffset: 5_000, ordinal: 0))))
+                              },
+                              step: { _, stepAnchor, _, _ in
+                                  stepCalls += 1
+                                  hub.beginNewSourceEpoch(sessionID: "session")
+                                  return AgentAfterCursorStep(epoch: stepAnchor.epoch,
+                                                              outcome: .sourceChanged,
+                                                              events: [])
+                              })
+
+        XCTAssertEqual(planCalls, 2, "exactly one retry — never a third attempt")
+        XCTAssertEqual(stepCalls, 2)
+        XCTAssertFalse(output.didBackfill, "no step was ever accepted")
+        assertFailClosed(output, afterSeq: 100)
+    }
+
+    func testSourceInvalidationRetriesCoverageInsteadOfPlainHubFetch() {
+        let hub = AgentEventHub()
+        var planCalls = 0
+        var stepCalls = 0
+
+        let output = runAfter(hub: hub,
+                              limit: 5,
+                              afterSeq: 100,
+                              plan: { _, _, expected in
+                                  planCalls += 1
+                                  return AgentAfterCursorPlan(
+                                      epoch: expected,
+                                      mode: .scan(from: AgentHistoryAnchor(
+                                          epoch: expected,
+                                          position: TranscriptEventPosition(lineOffset: 5_000, ordinal: 0))))
+                              },
+                              step: { _, stepAnchor, _, _ in
+                                  stepCalls += 1
+                                  if stepCalls == 1 {
+                                      // Same-epoch .sourceChanged: the
+                                      // OUTCOME classification must retry
+                                      // with fresh coverage, not fall back
+                                      // to a plain Hub fetch.
+                                      hub.beginNewSourceEpoch(sessionID: "session")
+                                      hub.publish(self.makeEvent(id: "live-repl", seq: 300, text: "live-repl"))
+                                      return AgentAfterCursorStep(
+                                          epoch: stepAnchor.epoch,
+                                          outcome: .sourceChanged,
+                                          events: [self.makeEvent(id: "stale", seq: 150, text: "stale")])
+                                  }
+                                  return AgentAfterCursorStep(
+                                      epoch: stepAnchor.epoch,
+                                      outcome: .complete,
+                                      events: [self.makeEvent(id: "raw-repl", seq: 250, text: "raw-repl")])
+                              })
+
+        XCTAssertEqual(planCalls, 2)
+        XCTAssertEqual(stepCalls, 2)
+        XCTAssertEqual(output.fetchResult.events.compactMap(\.text), ["raw-repl", "live-repl"],
+                       "the retry re-plans and re-walks: replacement raw prefix + retry lease live — a plain Hub fetch would miss the raw prefix")
+    }
+
+    func testPlanEpochMismatchRetriesOnce() {
+        let hub = AgentEventHub()
+        hub.publish(makeEvent(seq: 101, text: "live-101"))
+        var planCalls = 0
+
+        let output = runAfter(hub: hub,
+                              limit: 5,
+                              afterSeq: 100,
+                              plan: { _, _, expected in
+                                  planCalls += 1
+                                  if planCalls == 1 {
+                                      return AgentAfterCursorPlan(
+                                          epoch: AgentHistoryEpoch(sessionID: "session",
+                                                                   generation: expected.generation &+ 99),
+                                          mode: .hubOnly)
+                                  }
+                                  return AgentAfterCursorPlan(epoch: expected, mode: .hubOnly)
+                              })
+
+        XCTAssertEqual(planCalls, 2)
+        XCTAssertEqual(output.fetchResult.events.compactMap(\.text), ["live-101"],
+                       "the mismatched first attempt contributes no payload")
+    }
+
+    func testPlanAnchorEpochMismatchRetriesOnce() {
+        let hub = AgentEventHub()
+        var planCalls = 0
+        var stepCalls = 0
+
+        let output = runAfter(hub: hub,
+                              limit: 5,
+                              afterSeq: 100,
+                              plan: { _, _, expected in
+                                  planCalls += 1
+                                  let anchorEpoch = planCalls == 1
+                                      ? AgentHistoryEpoch(sessionID: "session",
+                                                          generation: expected.generation &+ 99)
+                                      : expected
+                                  return AgentAfterCursorPlan(
+                                      epoch: expected,
+                                      mode: .scan(from: AgentHistoryAnchor(
+                                          epoch: anchorEpoch,
+                                          position: TranscriptEventPosition(lineOffset: 5_000, ordinal: 0))))
+                              },
+                              step: { _, stepAnchor, _, _ in
+                                  stepCalls += 1
+                                  return AgentAfterCursorStep(
+                                      epoch: stepAnchor.epoch,
+                                      outcome: .complete,
+                                      events: [self.makeEvent(seq: 101, text: "raw-101")])
+                              })
+
+        XCTAssertEqual(planCalls, 2)
+        XCTAssertEqual(stepCalls, 1, "the mismatched-anchor attempt never walks")
+        XCTAssertEqual(output.fetchResult.events.compactMap(\.text), ["raw-101"])
+    }
+
+    func testStepEpochMismatchRetriesOnce() {
+        let hub = AgentEventHub()
+        var planCalls = 0
+        var stepCalls = 0
+
+        let output = runAfter(hub: hub,
+                              limit: 5,
+                              afterSeq: 100,
+                              plan: { _, _, expected in
+                                  planCalls += 1
+                                  return AgentAfterCursorPlan(
+                                      epoch: expected,
+                                      mode: .scan(from: AgentHistoryAnchor(
+                                          epoch: expected,
+                                          position: TranscriptEventPosition(lineOffset: 5_000, ordinal: 0))))
+                              },
+                              step: { _, stepAnchor, _, _ in
+                                  stepCalls += 1
+                                  if stepCalls == 1 {
+                                      return AgentAfterCursorStep(
+                                          epoch: AgentHistoryEpoch(sessionID: "session",
+                                                                   generation: stepAnchor.epoch.generation &+ 99),
+                                          outcome: .complete,
+                                          events: [self.makeEvent(id: "stale", seq: 150, text: "stale")])
+                                  }
+                                  return AgentAfterCursorStep(
+                                      epoch: stepAnchor.epoch,
+                                      outcome: .complete,
+                                      events: [self.makeEvent(id: "second", seq: 201, text: "second")])
+                              })
+
+        XCTAssertEqual(planCalls, 2)
+        XCTAssertEqual(stepCalls, 2)
+        XCTAssertEqual(output.fetchResult.events.compactMap(\.text), ["second"],
+                       "only the second attempt's events are served")
+    }
+
+    func testValidationFalseAfterEpochChangeRetriesOnce() {
+        let hub = AgentEventHub()
+        for seq in 101...102 {
+            hub.publish(makeEvent(seq: seq, text: "pre-\(seq)"))
+        }
+        var planCalls = 0
+        var validateCalls = 0
+
+        let output = runAfter(hub: hub,
+                              limit: 5,
+                              afterSeq: 100,
+                              plan: { _, _, expected in
+                                  planCalls += 1
+                                  return AgentAfterCursorPlan(
+                                      epoch: expected,
+                                      mode: .rawCovered(replayFrom: AgentHistoryAnchor(
+                                          epoch: expected,
+                                          position: TranscriptEventPosition(lineOffset: 9_999, ordinal: 0))))
                               },
                               validate: { _, _ in
-                                  hub.beginNewSourceEpoch(sessionID: "session")
+                                  validateCalls += 1
+                                  if validateCalls == 1 {
+                                      hub.beginNewSourceEpoch(sessionID: "session")
+                                      hub.publish(self.makeEvent(id: "replacement", seq: 200, text: "replacement"))
+                                      return false
+                                  }
                                   return true
                               })
 
+        XCTAssertEqual(planCalls, 2)
+        XCTAssertEqual(validateCalls, 2)
+        XCTAssertEqual(output.fetchResult.events.compactMap(\.text), ["replacement"],
+                       "a false validation caused by an epoch change retries and serves the replacement epoch")
+    }
+
+    func testValidationAdvancingEpochRetriesOnceEvenWhenReturningTrue() {
+        let hub = AgentEventHub()
+        for seq in 101...103 {
+            hub.publish(makeEvent(seq: seq, text: "pre-\(seq)"))
+        }
+        var planCalls = 0
+        var validateCalls = 0
+
+        let output = runAfter(hub: hub,
+                              limit: 5,
+                              afterSeq: 100,
+                              plan: { _, _, expected in
+                                  planCalls += 1
+                                  return AgentAfterCursorPlan(
+                                      epoch: expected,
+                                      mode: .rawCovered(replayFrom: AgentHistoryAnchor(
+                                          epoch: expected,
+                                          position: TranscriptEventPosition(lineOffset: 9_999, ordinal: 0))))
+                              },
+                              validate: { _, _ in
+                                  validateCalls += 1
+                                  if validateCalls == 1 {
+                                      hub.beginNewSourceEpoch(sessionID: "session")
+                                      hub.publish(self.makeEvent(id: "replacement", seq: 200, text: "replacement"))
+                                      return true
+                                  }
+                                  return true
+                              })
+
+        XCTAssertEqual(planCalls, 2,
+                       "an epoch that moved during validation retries even when validation returns true")
+        XCTAssertEqual(validateCalls, 2)
+        XCTAssertEqual(output.fetchResult.events.compactMap(\.text), ["replacement"],
+                       "only the replacement-epoch payload survives")
+    }
+
+    // Terminal guard: validation false while the Hub epoch is UNCHANGED is
+    // a terminal fail — no retry quota applies.
+    func testValidationFalseWithoutEpochChangeFailsClosedWithoutRetry() {
+        let hub = AgentEventHub()
+        hub.publish(makeEvent(seq: 101, text: "live-101"))
+        var planCalls = 0
+        var validateCalls = 0
+
+        let output = runAfter(hub: hub,
+                              limit: 5,
+                              afterSeq: 100,
+                              plan: { _, _, expected in
+                                  planCalls += 1
+                                  return AgentAfterCursorPlan(
+                                      epoch: expected,
+                                      mode: .rawCovered(replayFrom: AgentHistoryAnchor(
+                                          epoch: expected,
+                                          position: TranscriptEventPosition(lineOffset: 9_999, ordinal: 0))))
+                              },
+                              validate: { _, _ in
+                                  validateCalls += 1
+                                  return false
+                              })
+
+        XCTAssertEqual(planCalls, 1)
+        XCTAssertEqual(validateCalls, 1)
         assertFailClosed(output, afterSeq: 100)
     }
 
@@ -543,11 +831,13 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
         hub.publish(makeEvent(seq: 300, text: "live-300"))
         var stepCalls = 0
 
+        var planCalls = 0
         let output = runAfter(hub: hub,
                               limit: 3,
                               afterSeq: 100,
                               plan: { _, _, expected in
-                                  AgentAfterCursorPlan(
+                                  planCalls += 1
+                                  return AgentAfterCursorPlan(
                                       epoch: expected,
                                       mode: .scan(from: self.anchor(hub, at: 1_000)))
                               },
@@ -559,6 +849,7 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
                                       events: [self.makeEvent(seq: 150, text: "climbing-150")])
                               })
 
+        XCTAssertEqual(planCalls, 1, "a same-epoch stall is terminal — no retry")
         XCTAssertEqual(stepCalls, 1, "a HIGHER next raw position is a stall — exactly one step call")
         XCTAssertFalse(output.didBackfill)
         assertFailClosed(output, afterSeq: 100)
@@ -643,13 +934,15 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
     func testStalledWalkFailsClosed() {
         let hub = AgentEventHub()
         hub.publish(makeEvent(seq: 300, text: "live-300"))
+        var planCalls = 0
         var stepCalls = 0
 
         let output = runAfter(hub: hub,
                               limit: 3,
                               afterSeq: 100,
                               plan: { _, _, expected in
-                                  AgentAfterCursorPlan(
+                                  planCalls += 1
+                                  return AgentAfterCursorPlan(
                                       epoch: expected,
                                       mode: .scan(from: self.anchor(hub, at: 1_000)))
                               },
@@ -661,6 +954,7 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
                                       events: [self.makeEvent(seq: 150, text: "stalled-150")])
                               })
 
+        XCTAssertEqual(planCalls, 1, "a same-epoch stall is terminal — no retry")
         XCTAssertEqual(stepCalls, 1, "a stalled anchor is rejected immediately — no loop")
         XCTAssertFalse(output.didBackfill,
                        "a rejected stalled step never counts as backfill")
@@ -670,13 +964,15 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
     func testIncompleteCoverageFailsClosed() {
         let hub = AgentEventHub()
         hub.publish(makeEvent(seq: 300, text: "live-300"))
+        var planCalls = 0
         var stepCalls = 0
 
         let output = runAfter(hub: hub,
                               limit: 3,
                               afterSeq: 100,
                               plan: { _, _, expected in
-                                  AgentAfterCursorPlan(
+                                  planCalls += 1
+                                  return AgentAfterCursorPlan(
                                       epoch: expected,
                                       mode: .scan(from: self.anchor(hub, at: 1_000)))
                               },
@@ -693,6 +989,7 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
                                                               events: [])
                               })
 
+        XCTAssertEqual(planCalls, 1, "same-epoch incomplete coverage is terminal — no retry")
         XCTAssertEqual(stepCalls, 2)
         XCTAssertTrue(output.didBackfill,
                       "one ACCEPTED advanced step counts as backfill even when coverage later fails")

@@ -114,9 +114,20 @@ enum BridgeAgentEventFetchFlow {
         return Output(fetchResult: fetchResult, didBackfill: didBackfill)
     }
 
-    // The typed after-cursor path (G3a decision table). Currently a single
-    // attempt returned as-is; the G3c retry classification composes over
-    // whole attempts here.
+    // One attempt's classified result: epoch/source/lease invalidations are
+    // RETRYABLE (the world moved underneath the attempt); everything else —
+    // success and same-epoch terminal failures alike — is completed.
+    private enum AfterCursorAttemptResult {
+        case completed(Output)
+        case retryableInvalidation(didBackfill: Bool)
+    }
+
+    // The typed after-cursor path: at most TWO attempts (initial + one
+    // retry) inside the same historical request transaction, composed as a
+    // loop — never by re-entering the public run. Each attempt owns a fresh
+    // lease/plan/accumulator whose defer-cancel unwinds before the next
+    // attempt starts; a second invalidation fails closed, never a third
+    // attempt. didBackfill is the request-level OR across attempts.
     private static func runAfterCursor(
         eventHub: AgentEventHub,
         workspaceID: String,
@@ -126,13 +137,27 @@ enum BridgeAgentEventFetchFlow {
         afterSeq: Int,
         seams: AfterCursorSeams
     ) -> Output {
-        runAfterCursorAttempt(eventHub: eventHub,
-                              workspaceID: workspaceID,
-                              sessionID: sessionID,
-                              limit: limit,
-                              maxBytes: maxBytes,
-                              afterSeq: afterSeq,
-                              seams: seams)
+        var requestDidBackfill = false
+        for _ in 0..<2 {
+            switch runAfterCursorAttempt(eventHub: eventHub,
+                                         workspaceID: workspaceID,
+                                         sessionID: sessionID,
+                                         limit: limit,
+                                         maxBytes: maxBytes,
+                                         afterSeq: afterSeq,
+                                         seams: seams) {
+            case .completed(let output):
+                return Output(fetchResult: output.fetchResult,
+                              didBackfill: requestDidBackfill || output.didBackfill)
+            case .retryableInvalidation(let didBackfill):
+                requestDidBackfill = requestDidBackfill || didBackfill
+            }
+        }
+        return Output(fetchResult: AgentEventHub.FetchResult(events: [],
+                                                             oldestSeq: afterSeq,
+                                                             newestSeq: afterSeq,
+                                                             hasMore: true),
+                      didBackfill: requestDidBackfill)
     }
 
     // ONE complete after-cursor attempt: lease begin/finish/cancel, plan,
@@ -149,13 +174,14 @@ enum BridgeAgentEventFetchFlow {
         maxBytes: Int?,
         afterSeq: Int,
         seams: AfterCursorSeams
-    ) -> Output {
-        func failClosed(didBackfill: Bool) -> Output {
-            Output(fetchResult: AgentEventHub.FetchResult(events: [],
-                                                          oldestSeq: afterSeq,
-                                                          newestSeq: afterSeq,
-                                                          hasMore: true),
-                   didBackfill: didBackfill)
+    ) -> AfterCursorAttemptResult {
+        // Same-epoch failures are TERMINAL — retry quota never re-runs them.
+        func failClosed(didBackfill: Bool) -> AfterCursorAttemptResult {
+            .completed(Output(fetchResult: AgentEventHub.FetchResult(events: [],
+                                                                     oldestSeq: afterSeq,
+                                                                     newestSeq: afterSeq,
+                                                                     hasMore: true),
+                              didBackfill: didBackfill))
         }
         // The Hub path always served at least one event; the typed path
         // keeps that contract for capacity, raw page size, and count trim.
@@ -175,21 +201,22 @@ enum BridgeAgentEventFetchFlow {
 
         let plan = seams.plan(sessionID, afterSeq, expectedEpoch)
         guard plan.epoch == expectedEpoch else {
-            return failClosed(didBackfill: false)
+            // The world moved between lease and plan: retryable.
+            return .retryableInvalidation(didBackfill: false)
         }
 
         enum Mode {
             case leaseOnly
             case walk(from: AgentHistoryAnchor)
             case hubOnlyBestEffort
-            case unavailable
         }
         let mode: Mode
         switch plan.mode {
         case .rawCovered(let replayFrom):
-            if replayFrom.epoch != expectedEpoch {
-                mode = .unavailable
-            } else if lease.evidence.containsEveryAcceptedLiveEvent(afterSeq: afterSeq) {
+            guard replayFrom.epoch == expectedEpoch else {
+                return .retryableInvalidation(didBackfill: false)
+            }
+            if lease.evidence.containsEveryAcceptedLiveEvent(afterSeq: afterSeq) {
                 mode = .leaseOnly
             } else {
                 // Raw coverage is NOT retained product coverage: a pre-lease
@@ -198,11 +225,15 @@ enum BridgeAgentEventFetchFlow {
                 mode = .walk(from: replayFrom)
             }
         case .scan(let from):
-            mode = from.epoch == expectedEpoch ? .walk(from: from) : .unavailable
+            guard from.epoch == expectedEpoch else {
+                return .retryableInvalidation(didBackfill: false)
+            }
+            mode = .walk(from: from)
         case .hubOnly:
             mode = .hubOnlyBestEffort
         case .unavailable:
-            mode = .unavailable
+            // Same-epoch unavailable is terminal.
+            return failClosed(didBackfill: false)
         }
 
         var didBackfill = false
@@ -246,8 +277,6 @@ enum BridgeAgentEventFetchFlow {
         }
 
         switch mode {
-        case .unavailable:
-            return failClosed(didBackfill: false)
         case .leaseOnly, .hubOnlyBestEffort:
             break
         case .walk(let startAnchor):
@@ -256,22 +285,26 @@ enum BridgeAgentEventFetchFlow {
             walking: while true {
                 let step = seams.step(sessionID, anchor, afterSeq, stepLimit)
                 guard step.epoch == expectedEpoch else {
-                    // G3a: any epoch movement (incl. sourceChanged) discards
-                    // the whole attempt; the one-retry state machine is G3c.
-                    return failClosed(didBackfill: didBackfill)
+                    return .retryableInvalidation(didBackfill: didBackfill)
                 }
                 switch step.outcome {
-                case .unavailable, .sourceChanged:
+                case .sourceChanged:
+                    // The source moved underneath the walk: retryable.
+                    return .retryableInvalidation(didBackfill: didBackfill)
+                case .unavailable:
+                    // Same-epoch incomplete coverage is terminal.
                     return failClosed(didBackfill: didBackfill)
                 case .complete:
                     didBackfill = true
                     retainBounded(step.events)
                     break walking
                 case .advanced(let next):
-                    guard next.epoch == expectedEpoch,
-                          next.position < anchor.position else {
-                        // A stalled or epoch-crossing anchor is rejected —
-                        // it never counts as backfill.
+                    guard next.epoch == expectedEpoch else {
+                        return .retryableInvalidation(didBackfill: didBackfill)
+                    }
+                    guard next.position < anchor.position else {
+                        // A same-epoch stall is terminal — it never counts
+                        // as backfill.
                         return failClosed(didBackfill: didBackfill)
                     }
                     didBackfill = true
@@ -281,11 +314,21 @@ enum BridgeAgentEventFetchFlow {
             }
         }
 
-        // Finalization order: finish the lease, THEN validate the epoch.
-        guard let snapshot = eventHub.finishAfterCursorLiveLease(lease.token),
-              snapshot.epoch == expectedEpoch,
-              seams.validateEpoch(sessionID, expectedEpoch),
-              eventHub.currentHistoryEpoch(sessionID: sessionID) == expectedEpoch else {
+        // Finalization order: finish the lease, session validate, then read
+        // the Hub current epoch REGARDLESS of the validation result — an
+        // epoch that moved retries; a false validation under an unchanged
+        // epoch is terminal.
+        guard let snapshot = eventHub.finishAfterCursorLiveLease(lease.token) else {
+            return .retryableInvalidation(didBackfill: didBackfill)
+        }
+        guard snapshot.epoch == expectedEpoch else {
+            return .retryableInvalidation(didBackfill: didBackfill)
+        }
+        let validated = seams.validateEpoch(sessionID, expectedEpoch)
+        guard eventHub.currentHistoryEpoch(sessionID: sessionID) == expectedEpoch else {
+            return .retryableInvalidation(didBackfill: didBackfill)
+        }
+        guard validated else {
             return failClosed(didBackfill: didBackfill)
         }
 
@@ -316,10 +359,10 @@ enum BridgeAgentEventFetchFlow {
                                                   prefersNewestEvents: false)
         let droppedByBudget = budgeted.count < page.count
         let hasMore = droppedByCount || droppedByBudget || rawTruncated || snapshot.truncated
-        return Output(fetchResult: AgentEventHub.FetchResult(events: budgeted,
-                                                             oldestSeq: budgeted.first?.seq ?? afterSeq,
-                                                             newestSeq: budgeted.last?.seq ?? afterSeq,
-                                                             hasMore: hasMore),
-                      didBackfill: didBackfill)
+        return .completed(Output(fetchResult: AgentEventHub.FetchResult(events: budgeted,
+                                                                        oldestSeq: budgeted.first?.seq ?? afterSeq,
+                                                                        newestSeq: budgeted.last?.seq ?? afterSeq,
+                                                                        hasMore: hasMore),
+                                 didBackfill: didBackfill))
     }
 }
