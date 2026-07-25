@@ -2942,6 +2942,10 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private var collectedHistoricalBackfillPage = [(offset: Int, line: String)]()
     private var historicalBackfillAnchorSeq: Int?
     private var exactTranscriptPositionByPublicSequence = [Int: TranscriptEventPosition]()
+    // Semantic trust over the CURRENT source epoch: false after any unknown/
+    // malformed/unsupported record or failed closure coverage; restored only
+    // by a fresh successful closure index (or a new source epoch).
+    private var historySemanticTrust = true
     private var publicTranscriptSequenceByEventID = [String: Int]()
 
     func historicalClosureIndexStatsForTesting() -> ClaudeHistoricalClosureIndexStats {
@@ -3108,6 +3112,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                      hub.sequenceHighWater(sessionID: record.sessionID))
         exactTranscriptPositionByPublicSequence = [:]
         publicTranscriptSequenceByEventID = [:]
+        historySemanticTrust = true
         historicalClosureSourceEpoch &+= 1
         historicalClosureIndex = nil
         historicalIndexEventSink = nil
@@ -3150,6 +3155,89 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         promptNotificationDeduper.remove(sessionID: record.sessionID)
         hub.beginNewSourceEpoch(sessionID: record.sessionID)
         transcriptURL = nil
+    }
+
+    // Typed after-cursor plan: classifies the cursor against RAW evidence
+    // only (contiguous coverage + the exact seq→position map). Lease/
+    // retention evidence is the flow's cross-check — the session never
+    // guesses it. Successful modes always anchor at the FIXED validated
+    // EOF ceiling, never the floor: if live eviction happened above the
+    // floor, a floor-anchored walk could never recover that range.
+    func afterCursorPlan(afterSeq: Int,
+                         expectedEpoch: AgentHistoryEpoch) -> AgentAfterCursorPlan {
+        queue.sync {
+            let currentEpoch = hub.currentHistoryEpoch(sessionID: record.sessionID)
+            func unavailable() -> AgentAfterCursorPlan {
+                AgentAfterCursorPlan(epoch: currentEpoch, mode: .unavailable)
+            }
+            guard didPublishEnd == false, expectedEpoch == currentEpoch else {
+                return unavailable()
+            }
+            if tailer == nil {
+                resolveTranscriptIfPossible()
+            }
+            guard let tailer else {
+                return unavailable()
+            }
+            do {
+                try tailer.validateCurrentSource()
+                // Semantic validation: the incremental closure/index scan
+                // must fully understand the source. Raw frontier coverage is
+                // NEVER a substitute for it.
+                let indexIsReady = try ensureHistoricalClosureIndex()
+                try tailer.validateCurrentSource()
+                guard indexIsReady else {
+                    historySemanticTrust = false
+                    return unavailable()
+                }
+            } catch JSONLFileTailerError.sourceInvalidated {
+                beginNewSourceEpoch()
+                startResolver()
+                return unavailable()
+            } catch {
+                historySemanticTrust = false
+                return unavailable()
+            }
+            historySemanticTrust = true
+            guard let coverage = queueOwnedContiguousRawCoverage(of: tailer) else {
+                return unavailable()
+            }
+            let ceilingAnchor = AgentHistoryAnchor(
+                epoch: currentEpoch,
+                position: TranscriptEventPosition(lineOffset: coverage.replayUpperBoundOffset,
+                                                  ordinal: 0))
+            let rawCovered: Bool
+            if coverage.minimumRawOffset == 0 {
+                rawCovered = true
+            } else if let position = exactTranscriptPositionByPublicSequence[afterSeq],
+                      position.lineOffset >= coverage.minimumRawOffset,
+                      position.lineOffset < coverage.replayUpperBoundOffset {
+                rawCovered = true
+            } else if afterSeq >= maxObservedSeq {
+                rawCovered = true
+            } else {
+                rawCovered = false
+            }
+            return AgentAfterCursorPlan(epoch: currentEpoch,
+                                        mode: rawCovered
+                                            ? .rawCovered(replayFrom: ceilingAnchor)
+                                            : .scan(from: ceilingAnchor))
+        }
+    }
+
+    func validateHistoryEpoch(_ epoch: AgentHistoryEpoch) -> Bool {
+        queue.sync {
+            guard didPublishEnd == false, historySemanticTrust else {
+                return false
+            }
+            return epoch == hub.currentHistoryEpoch(sessionID: record.sessionID)
+        }
+    }
+
+    // The tailer runs on this session's queue; reading its queue-owned
+    // snapshot from here is already serialized.
+    private func queueOwnedContiguousRawCoverage(of tailer: JSONLFileTailer) -> JSONLContiguousRawCoverage? {
+        tailer.contiguousRawCoverage
     }
 
     func backfill(beforeSeq: Int, limit: Int) -> Bool {
@@ -3323,6 +3411,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     }
 
     private func failHistoricalClosureCoverage(beforeSeq: Int) {
+        historySemanticTrust = false
         hub.setHistoricalClosureCoverage(sessionID: record.sessionID, isComplete: false)
         hub.replaceHistoricalEvents(sessionID: record.sessionID,
                                     events: [],
@@ -3811,6 +3900,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     }
 
     private func failClosedForUnknownTranscriptRecord(lineOffset _: Int) {
+        historySemanticTrust = false
         hub.setHistoricalClosureCoverage(sessionID: record.sessionID, isComplete: false)
     }
 
@@ -4586,8 +4676,12 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             return event
         }
         maxObservedSeq = max(maxObservedSeq, acceptedEvent.seq)
+        // EVERY file-backed product (normal or Hub-rebased) records its
+        // public seq → raw position mapping: the typed plan classifies
+        // cursors only through this exact map — synthetic seqs have no raw
+        // position and must never be reverse-engineered via base arithmetic.
+        exactTranscriptPositionByPublicSequence[acceptedEvent.seq] = position
         if acceptedEvent.seq != proposedSeq {
-            exactTranscriptPositionByPublicSequence[acceptedEvent.seq] = position
             publicTranscriptSequenceByEventID[eventID] = acceptedEvent.seq
             if let index = historicalClosureIndex,
                let openerEventID = index.openerEventIDByClosureEventID[eventID],

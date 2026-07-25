@@ -2426,6 +2426,237 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         XCTAssertEqual(notificationCount(), 2)
     }
 
+    // B7 fixture: >bootstrap-limit lines, each ~200 bytes, so the file
+    // exceeds one 64KiB reader chunk and the bootstrap coverage floor is a
+    // real mid-file boundary (> 0).
+    private func makeLargeTranscriptFixture() throws -> (URL, directory: URL, lineCount: Int) {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        let lineCount = transcriptBootstrapLineLimit + 20
+        let lines = (0..<lineCount).map {
+            makeClaudeUserLine(uuid: "line-\($0)",
+                               content: "line-\($0)-" + String(repeating: "x", count: 160))
+        }
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        return (transcriptURL, directory, lineCount)
+    }
+
+    private func makeSmallTranscriptFixture() throws -> (URL, directory: URL) {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        let lines = (0..<8).map { makeClaudeUserLine(uuid: "small-\($0)", content: "small-\($0)") }
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        return (transcriptURL, directory)
+    }
+
+    private func fileSize(_ url: URL) throws -> Int {
+        try Int(XCTUnwrap((FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.intValue))
+    }
+
+    func testClaudeAfterCursorPlanScansFromValidatedEOFWhenSyntheticStartPrecedesBootstrapFloor() throws {
+        let (transcriptURL, directory, lineCount) = try makeLargeTranscriptFixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5)
+                .events.contains { $0.text?.hasPrefix("line-\(lineCount - 1)-") == true }
+        })
+        let eof = try fileSize(transcriptURL)
+
+        let plan = session.afterCursorPlan(afterSeq: 0,
+                                           expectedEpoch: hub.currentHistoryEpoch(sessionID: "session"))
+
+        guard case .scan(let anchor) = plan.mode else {
+            return XCTFail("a synthetic session-start cursor below the bootstrap floor must SCAN, got \(plan.mode)")
+        }
+        XCTAssertEqual(anchor.position, TranscriptEventPosition(lineOffset: eof, ordinal: 0),
+                       "the scan anchor is the fixed validated EOF, never the coverage floor")
+        XCTAssertEqual(anchor.epoch, plan.epoch)
+    }
+
+    func testClaudeAfterCursorPlanReturnsRawCoveredForSparseCursorInsideTrustedInterval() throws {
+        let (transcriptURL, directory, lineCount) = try makeLargeTranscriptFixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5)
+                .events.contains { $0.text?.hasPrefix("line-\(lineCount - 1)-") == true }
+        })
+        // A real file-backed cursor inside the trusted interval; public seqs
+        // are SPARSE here, so `after+1`-style reasoning would misclassify.
+        let cursorSeq = try XCTUnwrap(
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 200)
+                .events.first { $0.text?.hasPrefix("line-\(lineCount - 3)-") == true }?.seq)
+        let eof = try fileSize(transcriptURL)
+
+        let plan = session.afterCursorPlan(afterSeq: cursorSeq,
+                                           expectedEpoch: hub.currentHistoryEpoch(sessionID: "session"))
+
+        guard case .rawCovered(let anchor) = plan.mode else {
+            return XCTFail("a cursor inside the trusted raw interval is rawCovered, got \(plan.mode)")
+        }
+        XCTAssertEqual(anchor.position, TranscriptEventPosition(lineOffset: eof, ordinal: 0),
+                       "rawCovered still carries the fixed validated EOF as its replay anchor")
+    }
+
+    func testClaudeAfterCursorPlanDoesNotGuessLeaseEvictionEvidence() throws {
+        let (transcriptURL, directory) = try makeSmallTranscriptFixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let hub = AgentEventHub(maxBufferedEvents: 2, maxSeenEventIDs: 100)
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5)
+                .events.contains { $0.text == "small-7" }
+        })
+        let lease = hub.beginAfterCursorLiveLease(sessionID: "session", afterSeq: 0, capacity: 10)
+        XCTAssertFalse(lease.evidence.containsEveryAcceptedLiveEvent(afterSeq: 0),
+                       "precondition: the tiny Hub buffer really evicted live events")
+        hub.cancelAfterCursorLiveLease(lease.token)
+
+        let plan = session.afterCursorPlan(afterSeq: 0,
+                                           expectedEpoch: hub.currentHistoryEpoch(sessionID: "session"))
+
+        guard case .rawCovered = plan.mode else {
+            return XCTFail("the session answers from RAW evidence only — lease eviction is the flow's cross-check, got \(plan.mode)")
+        }
+    }
+
+    func testClaudeAfterCursorPlanRawCoveredFromCompleteSourceWithFixedReplayCeiling() throws {
+        let (transcriptURL, directory) = try makeSmallTranscriptFixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5)
+                .events.contains { $0.text == "small-7" }
+        })
+        let eof = try fileSize(transcriptURL)
+
+        let plan = session.afterCursorPlan(afterSeq: 0,
+                                           expectedEpoch: hub.currentHistoryEpoch(sessionID: "session"))
+
+        guard case .rawCovered(let anchor) = plan.mode else {
+            return XCTFail("floor 0 means the whole raw source is trusted, got \(plan.mode)")
+        }
+        XCTAssertEqual(anchor.position, TranscriptEventPosition(lineOffset: eof, ordinal: 0))
+    }
+
+    func testClaudeAfterCursorPlanUnavailableWithoutValidatedTranscript() {
+        let hub = AgentEventHub()
+        let record = AgentSessionRegistryRecord(version: 1,
+                                                vendor: "claude",
+                                                workspaceID: "workspace",
+                                                sessionID: "session",
+                                                panelID: "panel",
+                                                pid: Int32(ProcessInfo.processInfo.processIdentifier),
+                                                cwd: "/tmp",
+                                                createdAt: "2026-04-30T00:00:00Z",
+                                                transcriptPath: nil)
+        let session = ClaudeTranscriptSession(record: record, fileManager: .default, hub: hub)
+        session.start()
+        defer { session.stop() }
+
+        let plan = session.afterCursorPlan(afterSeq: 0,
+                                           expectedEpoch: hub.currentHistoryEpoch(sessionID: "session"))
+        guard case .unavailable = plan.mode else {
+            return XCTFail("no validated transcript can only be unavailable, got \(plan.mode)")
+        }
+    }
+
+    func testClaudeHistoryPlanAndValidationBindToHubEpoch() throws {
+        let (transcriptURL, directory) = try makeSmallTranscriptFixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5)
+                .events.contains { $0.text == "small-7" }
+        })
+        let oldEpoch = hub.currentHistoryEpoch(sessionID: "session")
+        let oldPlan = session.afterCursorPlan(afterSeq: 0, expectedEpoch: oldEpoch)
+        guard case .rawCovered(let oldAnchor) = oldPlan.mode else {
+            return XCTFail("precondition: the old-epoch plan succeeds, got \(oldPlan.mode)")
+        }
+        XCTAssertEqual(oldAnchor.epoch, oldEpoch)
+        XCTAssertTrue(session.validateHistoryEpoch(oldEpoch))
+
+        hub.beginNewSourceEpoch(sessionID: "session")
+
+        let stalePlan = session.afterCursorPlan(afterSeq: 0, expectedEpoch: oldEpoch)
+        guard case .unavailable = stalePlan.mode else {
+            return XCTFail("an old expected epoch after a Hub reset must be unavailable, got \(stalePlan.mode)")
+        }
+        XCTAssertEqual(stalePlan.epoch, hub.currentHistoryEpoch(sessionID: "session"),
+                       "the failed plan reports the CURRENT Hub-issued epoch")
+        XCTAssertFalse(session.validateHistoryEpoch(oldEpoch))
+
+        let currentEpoch = hub.currentHistoryEpoch(sessionID: "session")
+        let freshPlan = session.afterCursorPlan(afterSeq: 0, expectedEpoch: currentEpoch)
+        guard case .rawCovered(let freshAnchor) = freshPlan.mode else {
+            return XCTFail("the current epoch plans normally, got \(freshPlan.mode)")
+        }
+        XCTAssertEqual(freshAnchor.epoch, currentEpoch,
+                       "successful anchors always carry the Hub-issued CURRENT epoch")
+    }
+
+    func testClaudeHistoryValidationFailsAfterUnknownRecordAppend() throws {
+        let (transcriptURL, directory) = try makeSmallTranscriptFixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5)
+                .events.contains { $0.text == "small-7" }
+        })
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+        guard case .rawCovered = session.afterCursorPlan(afterSeq: 0, expectedEpoch: epoch).mode else {
+            return XCTFail("precondition: the clean transcript plans rawCovered")
+        }
+        XCTAssertTrue(session.validateHistoryEpoch(epoch))
+
+        let handle = try FileHandle(forWritingTo: transcriptURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("this-is-not-json\n".utf8))
+        try handle.close()
+
+        XCTAssertTrue(waitUntil { session.validateHistoryEpoch(epoch) == false },
+                      "an unknown live record must revoke semantic trust")
+        let poisonedPlan = session.afterCursorPlan(afterSeq: 0, expectedEpoch: epoch)
+        guard case .unavailable = poisonedPlan.mode else {
+            return XCTFail("a poisoned transcript must not offer a rawCovered fast path, got \(poisonedPlan.mode)")
+        }
+    }
+
     private func makeRecord(transcriptPath: String) -> AgentSessionRegistryRecord {
         AgentSessionRegistryRecord(version: 1,
                                    vendor: "claude",
