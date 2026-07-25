@@ -160,6 +160,21 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     var currentSourceGenerationForTesting: Int {
         queue.sync { activeSourceGeneration }
     }
+    // Number of fallback resolver timers ever installed (queue-owned).
+    private(set) var resolverTimerInstallCountForTesting = 0
+    var resolverTimerInstallCountSnapshotForTesting: Int {
+        queue.sync { resolverTimerInstallCountForTesting }
+    }
+    var hasActiveTailerForTesting: Bool {
+        queue.sync { tailer != nil }
+    }
+    // Enqueues the SAME deferred resolver restart the production
+    // invalidation path uses — for deterministic post-stop interleaving.
+    func enqueueDeferredResolverRestartForTesting() {
+        queue.sync {
+            scheduleResolverRestartAfterCurrentFrame()
+        }
+    }
     // Semantic trust over the CURRENT source (S10 state; enforced by the
     // closure-B row): poisoned by invalid UTF-8 / malformed JSON /
     // unsupported schema, re-established only when a replacement source
@@ -710,6 +725,14 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         }
     }
 
+    // Schedules a resolver restart strictly after the current queue frame
+    // (no synchronous recursion inside an old attach stack).
+    private func scheduleResolverRestartAfterCurrentFrame() {
+        queue.async { [weak self] in
+            self?.startResolver()
+        }
+    }
+
     private func startResolver() {
         resolveTranscriptIfPossible()
         if tailer != nil {
@@ -723,6 +746,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             self?.resolveTranscriptIfPossible()
         }
         timer.resume()
+        resolverTimerInstallCountForTesting += 1
         resolverTimer = timer
     }
 
@@ -873,9 +897,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             // stack. (resetTranscriptSource advances the generation, so
             // the aborted candidate's queued callbacks are retired too.)
             resetTranscriptSource(startResolverNow: false)
-            queue.async { [weak self] in
-                self?.startResolver()
-            }
+            scheduleResolverRestartAfterCurrentFrame()
         } else {
             // Retire the aborted candidate's invalidation token WITHOUT
             // bumping the Hub history epoch: a queued vnode callback from
