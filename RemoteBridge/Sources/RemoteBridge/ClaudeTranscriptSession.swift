@@ -534,13 +534,14 @@ final class AgentSessionRegistryMonitor {
 
     // Typed after-cursor seams: the registry queue only resolves the session
     // reference; the session seam runs OFF this queue so no registry →
-    // session queue chain forms. Missing sessions answer legacy-neutral.
+    // session queue chain forms. A MISSING session fails closed — it can
+    // never let an old raw page plan or validate.
     func afterCursorPlan(sessionID: String,
                          afterSeq: Int,
                          expectedEpoch: AgentHistoryEpoch) -> AgentAfterCursorPlan {
         let session: AgentTranscriptSession? = queue.sync { sessions[sessionID] }
         guard let session else {
-            return AgentAfterCursorPlan(epoch: expectedEpoch, mode: .hubOnly)
+            return AgentAfterCursorPlan(epoch: expectedEpoch, mode: .unavailable)
         }
         return session.afterCursorPlan(afterSeq: afterSeq, expectedEpoch: expectedEpoch)
     }
@@ -558,7 +559,7 @@ final class AgentSessionRegistryMonitor {
 
     func validateHistoryEpoch(sessionID: String, epoch: AgentHistoryEpoch) -> Bool {
         let session: AgentTranscriptSession? = queue.sync { sessions[sessionID] }
-        return session?.validateHistoryEpoch(epoch) ?? true
+        return session?.validateHistoryEpoch(epoch) ?? false
     }
 
     func replaceLivePanels(workspaceID: String, panels: [AgentPanelProcessSnapshot]) {
@@ -1615,6 +1616,12 @@ final class AgentSessionRegistryMonitor {
             guard let vendor = AgentVendorRegistry.resolve(id: record.vendor) else {
                 continue
             }
+            // A NEW session incarnation (same ID or not) must never accept
+            // anchors minted against a previous object: advance the
+            // Hub-issued epoch BEFORE the incarnation exists, so every old
+            // plan/step/validate fails closed. Workspace/panel migration
+            // takes the update() path above and never reaches this.
+            hub.beginNewSourceEpoch(sessionID: record.sessionID)
             let session = vendor.makeTranscriptSession(record: record,
                                                        fileManager: fileManager,
                                                        hub: hub,
