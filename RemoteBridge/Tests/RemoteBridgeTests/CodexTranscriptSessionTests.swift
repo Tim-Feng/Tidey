@@ -1302,8 +1302,10 @@ final class CodexTranscriptSessionTests: XCTestCase {
         let ids = events.map(\.eventID)
         XCTAssertEqual(Set(ids).count, ids.count, "no duplicate across step intervals")
         let expectedTexts = Set((0..<lineCount).map { "walk-\($0)-" + String(repeating: "x", count: 160) })
-        XCTAssertEqual(Set(events.compactMap(\.text)).intersection(expectedTexts), expectedTexts,
-                       "the union covers EVERY transcript event — the exact expected text set, no gap")
+        XCTAssertEqual(events.count, lineCount,
+                       "the union yields exactly one product per fixture line — no extra, no gap")
+        XCTAssertEqual(Set(events.compactMap(\.text)), expectedTexts,
+                       "the union is EXACTLY the expected text set — nothing beyond the fixture")
         let cacheAfterWalk = hub.fetch(workspaceID: "workspace",
                                        sessionID: "session",
                                        limit: 2000,
@@ -1729,9 +1731,12 @@ final class CodexTranscriptSessionTests: XCTestCase {
         let first = fetchOnce()
         XCTAssertTrue(first.didBackfill)
         let expected = Set(contents)
-        XCTAssertEqual(Set(first.fetchResult.events.compactMap(\.text)).intersection(expected),
-                       expected,
-                       "the first fetch owns the complete depth — the exact expected text set")
+        let firstFixtureTexts = first.fetchResult.events.compactMap(\.text)
+            .filter { $0.hasPrefix("depth-") }
+        XCTAssertEqual(firstFixtureTexts.count, lineCount,
+                       "exactly one product per fixture line — no duplicate, no gap")
+        XCTAssertEqual(Set(firstFixtureTexts), expected,
+                       "the fixture-filtered page is EXACTLY the expected text set")
 
         // A request-owned scan must NOT promote the eligibility floor: the
         // deep pages exist only in that request's response, not in any

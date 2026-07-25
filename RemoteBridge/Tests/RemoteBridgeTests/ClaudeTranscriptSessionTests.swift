@@ -3094,9 +3094,12 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         let first = fetchOnce()
         XCTAssertTrue(first.didBackfill)
         let expected = Set(contents)
-        XCTAssertEqual(Set(first.fetchResult.events.compactMap(\.text)).intersection(expected),
-                       expected,
-                       "the first fetch owns the complete depth — the exact expected text set")
+        let firstFixtureTexts = first.fetchResult.events.compactMap(\.text)
+            .filter { $0.hasPrefix("depth-") }
+        XCTAssertEqual(firstFixtureTexts.count, lineCount,
+                       "exactly one product per fixture line — no duplicate, no gap")
+        XCTAssertEqual(Set(firstFixtureTexts), expected,
+                       "the fixture-filtered page is EXACTLY the expected text set")
 
         let planAfterFirst = session.afterCursorPlan(
             afterSeq: 0,
