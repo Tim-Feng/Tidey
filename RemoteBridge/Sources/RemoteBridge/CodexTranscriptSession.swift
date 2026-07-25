@@ -48,36 +48,63 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     // inventory: all 36,294 pairable twins are adjacent); every
     // consume(line:) — malformed included — consumes it, so nothing but
     // the immediate twin is ever suppressed.
-    private var pendingAgentMessagePairKey: String?
-    private var adjacentPairKeyFromPreviousRecord: String?
-    // True only while consuming ONE pre-window context record to seed the
-    // pair-adjacency state (page floor of an after-cursor step, or the
-    // live bootstrap floor). Suppresses every product; the only surviving
-    // effects are the pending pair key and any semantic-trust poison.
-    private var isSeedingAdjacencyContext = false
+    // Adjacent producer-twin state: a phaseful agent_message leaves a
+    // descriptor for EXACTLY the next raw record. When the predecessor's
+    // products were already published, the matching response_item is
+    // suppressed; when the predecessor was CONTEXT-ONLY (pre-window peek,
+    // products never published), the matching response_item publishes the
+    // CANONICAL product under the predecessor's identity — stable across
+    // API limits, so live and raw-walk unions dedupe by eventID.
+    struct PendingAgentMessagePair {
+        let key: String
+        let kind: AgentEventKind
+        let phase: String
+        let lineOffset: Int
+        let timestamp: String?
+        let productsPublished: Bool
+    }
+    private var pendingAgentMessagePair: PendingAgentMessagePair?
+    private var adjacentPairFromPreviousRecord: PendingAgentMessagePair?
+    // Suppresses the tailer's invalid-UTF-8 poison while reading a
+    // context record: context lives OUTSIDE the owned window and carries
+    // no trust authority — its own page judges it.
+    private var isReadingAdjacencyContext = false
 
-    // Consumes a single pre-window record for adjacency context only:
-    // parser state is snapshotted and restored around it, so nothing but
-    // the pending pair key (and a trust poison from a malformed record)
-    // escapes. The context stays local to the caller's window — no
-    // mutable pair state survives across steps or requests beyond the
-    // immediately following record.
-    private func consumeAdjacencyContextRecord(line: String, lineOffset: Int) {
-        let snapshot = captureLiveParserState()
-        isSeedingAdjacencyContext = true
-        consume(line: line, lineOffset: lineOffset)
-        isSeedingAdjacencyContext = false
-        let seededPairKey = pendingAgentMessagePairKey
-        restoreLiveParserState(snapshot)
-        pendingAgentMessagePairKey = seededPairKey
+    // Pure adjacency extractor: a context record contributes EVIDENCE
+    // only — no consume, no products, no coverage or semantic-trust
+    // authority. A phaseful agent_message yields a context-only
+    // descriptor; every other shape (malformed included) just means "no
+    // context" and is judged by the page/window that actually owns it.
+    static func adjacencyPairDescriptor(line: String, lineOffset: Int) -> PendingAgentMessagePair? {
+        guard let data = line.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              (object["type"] as? String) == "event_msg",
+              let payload = object["payload"] as? [String: Any],
+              (payload["type"] as? String) == "agent_message",
+              let message = payload["message"] as? String,
+              let phase = payload["phase"] as? String,
+              phase == "commentary" || phase == "final_answer" else {
+            return nil
+        }
+        let text = compactString(message)
+        guard !text.isEmpty else {
+            return nil
+        }
+        let kind: AgentEventKind = phase == "final_answer" ? .assistantFinal : .assistantMessage
+        return PendingAgentMessagePair(key: "\(kind.rawValue)|\(phase)|\(text)",
+                                       kind: kind,
+                                       phase: phase,
+                                       lineOffset: lineOffset,
+                                       timestamp: object["timestamp"] as? String,
+                                       productsPublished: false)
     }
 
     private struct LiveParserStateSnapshot {
         let unsupportedVersions: Set<String>
         let resolvedToolCallIDs: Set<String>
         let publishedAssistantTextKeys: Set<String>
-        let pendingAgentMessagePairKey: String?
-        let adjacentPairKeyFromPreviousRecord: String?
+        let pendingAgentMessagePair: PendingAgentMessagePair?
+        let adjacentPairFromPreviousRecord: PendingAgentMessagePair?
         let didSeeInteractiveEvent: Bool
         let lastStartedTurnID: String?
         let lastCompletedTurnID: String?
@@ -154,8 +181,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         LiveParserStateSnapshot(unsupportedVersions: unsupportedVersions,
                                 resolvedToolCallIDs: resolvedToolCallIDs,
                                 publishedAssistantTextKeys: publishedAssistantTextKeys,
-                                pendingAgentMessagePairKey: pendingAgentMessagePairKey,
-                                adjacentPairKeyFromPreviousRecord: adjacentPairKeyFromPreviousRecord,
+                                pendingAgentMessagePair: pendingAgentMessagePair,
+                                adjacentPairFromPreviousRecord: adjacentPairFromPreviousRecord,
                                 didSeeInteractiveEvent: didSeeInteractiveEvent,
                                 lastStartedTurnID: lastStartedTurnID,
                                 lastCompletedTurnID: lastCompletedTurnID,
@@ -168,8 +195,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         unsupportedVersions = []
         resolvedToolCallIDs = []
         publishedAssistantTextKeys = []
-        pendingAgentMessagePairKey = nil
-        adjacentPairKeyFromPreviousRecord = nil
+        pendingAgentMessagePair = nil
+        adjacentPairFromPreviousRecord = nil
         didSeeInteractiveEvent = false
         lastStartedTurnID = nil
         lastCompletedTurnID = nil
@@ -182,8 +209,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         unsupportedVersions = snapshot.unsupportedVersions
         resolvedToolCallIDs = snapshot.resolvedToolCallIDs
         publishedAssistantTextKeys = snapshot.publishedAssistantTextKeys
-        pendingAgentMessagePairKey = snapshot.pendingAgentMessagePairKey
-        adjacentPairKeyFromPreviousRecord = snapshot.adjacentPairKeyFromPreviousRecord
+        pendingAgentMessagePair = snapshot.pendingAgentMessagePair
+        adjacentPairFromPreviousRecord = snapshot.adjacentPairFromPreviousRecord
         didSeeInteractiveEvent = snapshot.didSeeInteractiveEvent
         lastStartedTurnID = snapshot.lastStartedTurnID
         lastCompletedTurnID = snapshot.lastCompletedTurnID
@@ -494,29 +521,31 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                rawPage.isEmpty == false {
                 isCollectingBackfillPage = true
                 collectedBackfillPage = []
-                let contextResult: JSONLBackfillResult
+                isReadingAdjacencyContext = true
                 do {
-                    contextResult = try tailer.backfill(beforeOffset: contextFloor,
-                                                        limit: 1,
-                                                        includeAnchorLine: false)
+                    _ = try tailer.backfill(beforeOffset: contextFloor,
+                                            limit: 1,
+                                            includeAnchorLine: false)
                 } catch JSONLFileTailerError.sourceInvalidated {
+                    isReadingAdjacencyContext = false
                     sourceWasInvalidated = true
                     shouldStartResolverAfterCleanup = true
                     resetTranscriptSource(startResolverNow: false)
                     currentEpoch = hub.currentHistoryEpoch(sessionID: record.sessionID)
                     return out(.sourceChanged)
                 } catch {
+                    isReadingAdjacencyContext = false
                     return out(.unavailable)
                 }
+                isReadingAdjacencyContext = false
                 isCollectingBackfillPage = false
                 let contextLines = collectedBackfillPage
                 collectedBackfillPage = []
-                if let contextFrontier = contextResult.rawFrontier,
-                   contextFrontier.containsInvalidRecord {
-                    return out(.unavailable)
-                }
-                for entry in contextLines {
-                    consumeAdjacencyContextRecord(line: entry.line, lineOffset: entry.offset)
+                // Evidence only: a malformed / invalid / non-agent-message
+                // context record means "no context" — the page that owns
+                // it will judge it.
+                pendingAgentMessagePair = contextLines.last.flatMap {
+                    Self.adjacencyPairDescriptor(line: $0.line, lineOffset: $0.offset)
                 }
             }
             for entry in rawPage {
@@ -706,9 +735,14 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                          self.consume(line: line, lineOffset: offset)
                                      },
                                      invalidUTF8Handler: { [weak self] _ in
+                                         guard let self else { return }
+                                         // A context peek carries no trust
+                                         // authority; the owning page
+                                         // judges its own bytes.
+                                         guard self.isReadingAdjacencyContext == false else { return }
                                          // Invalid raw bytes anywhere in the
-                                         // source poison semantic trust.
-                                         self?.sourceSemanticTrust = false
+                                         // OWNED source poison semantic trust.
+                                         self.sourceSemanticTrust = false
                                      },
                                      invalidationHandler: { [weak self] in
                                          self?.handleTailerInvalidation(generation: generation)
@@ -746,20 +780,26 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                 bootstrapContextBeforeReadForTesting?()
                 isCollectingBackfillPage = true
                 collectedBackfillPage = []
+                isReadingAdjacencyContext = true
                 if let injectedFault = bootstrapContextReadFaultForTesting?() {
                     _ = injectedFault
+                    isReadingAdjacencyContext = false
                     isCollectingBackfillPage = false
                     collectedBackfillPage = []
                 } else if (try? tailer.backfill(beforeOffset: bootstrapFloor,
                                                 limit: 1,
                                                 includeAnchorLine: false)) != nil {
+                    isReadingAdjacencyContext = false
                     let contextLines = collectedBackfillPage
                     isCollectingBackfillPage = false
                     collectedBackfillPage = []
-                    for entry in contextLines {
-                        consumeAdjacencyContextRecord(line: entry.line, lineOffset: entry.offset)
+                    // Evidence only — a non-phaseful/malformed predecessor
+                    // is simply "no context".
+                    pendingAgentMessagePair = contextLines.last.flatMap {
+                        Self.adjacencyPairDescriptor(line: $0.line, lineOffset: $0.offset)
                     }
                 } else {
+                    isReadingAdjacencyContext = false
                     isCollectingBackfillPage = false
                     collectedBackfillPage = []
                 }
@@ -820,8 +860,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         unsupportedVersions.removeAll()
         resolvedToolCallIDs.removeAll()
         publishedAssistantTextKeys.removeAll()
-        pendingAgentMessagePairKey = nil
-        adjacentPairKeyFromPreviousRecord = nil
+        pendingAgentMessagePair = nil
+        adjacentPairFromPreviousRecord = nil
         bootstrappedShellState = .prompt
         currentShellState = .prompt
         lastStartedTurnID = nil
@@ -914,8 +954,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     private func consume(line: String, lineOffset: Int) {
         // Every record — malformed included — consumes the previous
         // record's pending pair key: adjacency lasts exactly one record.
-        adjacentPairKeyFromPreviousRecord = pendingAgentMessagePairKey
-        pendingAgentMessagePairKey = nil
+        adjacentPairFromPreviousRecord = pendingAgentMessagePair
+        pendingAgentMessagePair = nil
         guard let data = line.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let type = object["type"] as? String,
@@ -1111,7 +1151,22 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             switch phase {
             case "commentary", "final_answer":
                 let kind: AgentEventKind = phase == "final_answer" ? .assistantFinal : .assistantMessage
-                if adjacentPairKeyFromPreviousRecord == "\(kind.rawValue)|\(phase ?? "")|\(text)" {
+                if let pair = adjacentPairFromPreviousRecord,
+                   pair.key == "\(kind.rawValue)|\(phase ?? "")|\(text)" {
+                    if pair.productsPublished {
+                        // The twin already produced — suppress.
+                        return
+                    }
+                    // The predecessor was CONTEXT-ONLY: this item publishes
+                    // the canonical product under the predecessor's
+                    // identity, so live and raw-walk unions dedupe.
+                    publishAssistantText(kind: pair.kind,
+                                         eventNamespace: pair.phase == "final_answer" ? "final" : "commentary",
+                                         phase: pair.phase,
+                                         timestamp: pair.timestamp ?? timestamp,
+                                         text: text,
+                                         lineOffset: pair.lineOffset,
+                                         ordinal: 0)
                     return
                 }
                 publishAssistantText(kind: kind,
@@ -1361,10 +1416,15 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                              text: text,
                              lineOffset: lineOffset,
                              ordinal: 0)
-        // Leave the pair key for EXACTLY the next record: its same-text
-        // response_item twin (all pairable twins are adjacent in the
-        // corpus) is suppressed; anything else consumes the key.
-        pendingAgentMessagePairKey = "\(kind.rawValue)|\(phase)|\(text)"
+        // Leave the pair descriptor for EXACTLY the next record: its
+        // same-text response_item twin (all pairable twins are adjacent in
+        // the corpus) is suppressed; anything else consumes it.
+        pendingAgentMessagePair = PendingAgentMessagePair(key: "\(kind.rawValue)|\(phase)|\(text)",
+                                                          kind: kind,
+                                                          phase: phase,
+                                                          lineOffset: lineOffset,
+                                                          timestamp: timestamp,
+                                                          productsPublished: true)
     }
 
     private func publishAssistantText(kind: AgentEventKind,
@@ -1589,11 +1649,6 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                    output: String?,
                                    toolCallID: String?,
                                    metadata: [String: String]?) {
-        // A context-seeding record contributes adjacency state only —
-        // never a product, a sequence advance, or an exact position.
-        guard isSeedingAdjacencyContext == false else {
-            return
-        }
         let seq = fileBackedSequence(lineOffset: lineOffset, ordinal: ordinal)
         maxObservedSeq = max(maxObservedSeq, seq)
         // Minimal B17 exact-position recording (unrebased seq only — the

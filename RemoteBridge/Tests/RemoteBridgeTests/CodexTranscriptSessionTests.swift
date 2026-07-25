@@ -2441,6 +2441,15 @@ final class CodexTranscriptSessionTests: XCTestCase {
                                               readySentinel: "deep-\(lineCount - 1)")
         defer { session.stop() }
 
+        // Live/latest BEFORE any depth walk: the response_item half of the
+        // bootstrap-floor twin sits INSIDE the owned bootstrap window and
+        // must not be silently swallowed — live carries the twin exactly
+        // once, under the predecessor's canonical identity.
+        let liveTwinIDs = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 2000)
+            .events.filter { $0.text == "bootstrap-floor-twin" }.map(\.eventID)
+        XCTAssertEqual(liveTwinIDs.count, 1,
+                       "the bootstrap-floor twin is live exactly once before any walk")
+
         var stepOutcomes = [String]()
         func fetchOnce(limit: Int, recordSteps: Bool = false) -> BridgeAgentEventFetchFlow.Output {
             BridgeAgentEventFetchFlow.run(
@@ -2511,6 +2520,85 @@ final class CodexTranscriptSessionTests: XCTestCase {
                        "the bootstrap-floor twin publishes exactly once across live + walk")
         XCTAssertEqual(texts(wide, "cross-page-twin"), 1)
         XCTAssertEqual(texts(wide, "dup-legal-text"), 2)
+
+        // Canonical identity is the PREDECESSOR event_msg's and must not
+        // change with the API limit / step boundary layout.
+        func twinIDs(_ output: BridgeAgentEventFetchFlow.Output) -> Set<String> {
+            Set(output.fetchResult.events.filter { $0.text == "bootstrap-floor-twin" }.map(\.eventID))
+        }
+        XCTAssertEqual(twinIDs(wide), Set(liveTwinIDs),
+                       "live and the walk agree on ONE canonical twin identity")
+        let mid = fetchOnce(limit: 600)
+        XCTAssertEqual(texts(mid, "bootstrap-floor-twin"), 1)
+        XCTAssertEqual(twinIDs(mid), Set(liveTwinIDs),
+                       "the canonical identity survives a different step-boundary layout")
+    }
+
+    // Context records live OUTSIDE the owned window and carry NO coverage
+    // or semantic-trust authority: a malformed (or non-agent-message)
+    // predecessor just means "no adjacency context". Its own page judges
+    // it — the depth walk that actually covers it still fails closed.
+    func testCodexMalformedContextRecordIsNotCoverageAuthority() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lineCount = transcriptBootstrapLineLimit + 20
+        var lines = (0..<lineCount).map {
+            makeCodexMessageLine(role: "assistant", content: "deep-\($0)")
+        }
+        // The record immediately BELOW the bootstrap floor is garbage.
+        lines[lineCount - transcriptBootstrapLineLimit - 1] = "this-is-not-json"
+        // The window-head record is a phaseful response_item: with a
+        // malformed predecessor there is no context, so it publishes.
+        lines[lineCount - transcriptBootstrapLineLimit] =
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"commentary\",\"content\":[{\"type\":\"output_text\",\"text\":\"head-item-text\"}]}}"
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(transcriptURL, hub: hub,
+                                              readySentinel: "deep-\(lineCount - 1)")
+        defer { session.stop() }
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+        XCTAssertTrue(session.validateHistoryEpoch(epoch),
+                      "a malformed CONTEXT record must not poison — it is outside the owned window")
+        XCTAssertTrue(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 2000)
+                        .events.contains { $0.text == "head-item-text" },
+                      "the window-head item publishes — no stale suppression from a garbage predecessor")
+        switch session.afterCursorPlan(afterSeq: 0, expectedEpoch: epoch).mode {
+        case .rawCovered, .scan:
+            break
+        case .hubOnly, .unavailable:
+            XCTFail("the source stays plannable until its OWN coverage reaches the garbage")
+        }
+        // A depth walk that actually covers the garbage record fails
+        // closed — the authority belongs to the owned page, not the
+        // context peek.
+        let output = BridgeAgentEventFetchFlow.run(
+            eventHub: hub,
+            workspaceID: "workspace",
+            sessionID: "session",
+            limit: 499,
+            beforeSeq: nil,
+            afterSeq: 0,
+            afterCursorSeams: .init(
+                plan: { _, afterSeq, expected in
+                    session.afterCursorPlan(afterSeq: afterSeq, expectedEpoch: expected)
+                },
+                step: { _, anchor, afterSeq, limit in
+                    session.afterCursorStep(from: anchor, afterSeq: afterSeq, limit: limit)
+                },
+                validateEpoch: { _, epoch in
+                    session.validateHistoryEpoch(epoch)
+                })) { _, _, _ in
+            XCTFail("the legacy backfill closure must not serve the typed after path")
+            return false
+        }
+        XCTAssertTrue(output.fetchResult.events.isEmpty,
+                      "covering the garbage fails the request closed — no partial page")
+        XCTAssertTrue(output.fetchResult.hasMore)
+        XCTAssertFalse(session.validateHistoryEpoch(epoch),
+                       "once the OWNED walk covered the garbage, the poison is real")
     }
 
     func testValidationSourceFenceRunsBeforeSemanticTrustGate() throws {
