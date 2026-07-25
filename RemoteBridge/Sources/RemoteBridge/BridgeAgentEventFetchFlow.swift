@@ -192,6 +192,15 @@ enum BridgeAgentEventFetchFlow {
         // unique candidate the cap excludes records the truncation.
         func retainBounded(_ events: [AgentEvent]) {
             for event in events where event.seq > afterSeq {
+                // Identity gate BEFORE the bounded dictionary: a foreign
+                // session candidate must not overwrite a requested event's
+                // ID, crowd legitimate history out of the capacity, or mark
+                // truncation. sessionID is safe to check pre-binding — the
+                // Hub binding only rewrites workspace/panel, never session;
+                // the workspace filter must wait for the current binding.
+                guard event.sessionID == sessionID else {
+                    continue
+                }
                 if rawByEventID[event.eventID] != nil {
                     rawByEventID[event.eventID] = event
                     continue
@@ -268,7 +277,10 @@ enum BridgeAgentEventFetchFlow {
             + snapshot.events
         let projected = eventHub.applyingCurrentSessionBindings(combined)
         var dedupedByEventID = [String: AgentEvent]()
-        for event in projected where event.seq > afterSeq {
+        for event in projected
+        where event.workspaceID == workspaceID
+            && event.sessionID == sessionID
+            && event.seq > afterSeq {
             dedupedByEventID[event.eventID] = event
         }
         var page = dedupedByEventID.values

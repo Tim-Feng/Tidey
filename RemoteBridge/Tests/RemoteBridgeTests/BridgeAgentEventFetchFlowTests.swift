@@ -293,6 +293,7 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
     }
 
     private func runAfter(hub: AgentEventHub,
+                          workspaceID: String = "workspace",
                           limit: Int,
                           maxBytes: Int? = nil,
                           afterSeq: Int,
@@ -307,7 +308,7 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
                               return false
                           }) -> BridgeAgentEventFetchFlow.Output {
         BridgeAgentEventFetchFlow.run(eventHub: hub,
-                                      workspaceID: "workspace",
+                                      workspaceID: workspaceID,
                                       sessionID: "session",
                                       limit: limit,
                                       maxBytes: maxBytes,
@@ -894,12 +895,14 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
 
     private func makeEvent(id: String,
                            seq: Int,
-                           text: String) -> AgentEvent {
+                           text: String,
+                           workspaceID: String = "workspace",
+                           sessionID: String = "session") -> AgentEvent {
         AgentEvent(eventID: id,
                    seq: seq,
                    vendor: "codex",
-                   workspaceID: "workspace",
-                   sessionID: "session",
+                   workspaceID: workspaceID,
+                   sessionID: sessionID,
                    timestamp: "2026-07-22T12:00:00Z",
                    type: .assistantMessage,
                    role: "assistant",
@@ -909,6 +912,117 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
                    output: nil,
                    toolCallID: nil,
                    metadata: nil)
+    }
+
+    // MARK: G3b/B13 requested-identity filter
+
+    func testRequestOwnedPageFiltersCurrentWorkspaceAndSessionAfterBindingChange() {
+        let hub = AgentEventHub()
+
+        let output = runAfter(hub: hub,
+                              workspaceID: "current-workspace",
+                              limit: 10,
+                              afterSeq: 100,
+                              plan: { _, _, expected in
+                                  // The session migrates AFTER the lease
+                                  // began: the CURRENT binding must be
+                                  // applied before the identity filter.
+                                  hub.migrateSession(sessionID: "session",
+                                                     toWorkspaceID: "current-workspace",
+                                                     panelID: "current-panel")
+                                  return AgentAfterCursorPlan(
+                                      epoch: expected,
+                                      mode: .scan(from: self.anchor(hub, at: 5_000)))
+                              },
+                              step: { _, stepAnchor, _, _ in
+                                  AgentAfterCursorStep(
+                                      epoch: stepAnchor.epoch,
+                                      outcome: .complete,
+                                      events: [
+                                          self.makeEvent(id: "z", seq: 150, text: "legit-z",
+                                                         workspaceID: "old-workspace"),
+                                          self.makeEvent(id: "a", seq: 150, text: "legit-a",
+                                                         workspaceID: "old-workspace"),
+                                          self.makeEvent(id: "foreign", seq: 151, text: "foreign",
+                                                         workspaceID: "current-workspace",
+                                                         sessionID: "other-session"),
+                                      ])
+                              })
+
+        XCTAssertEqual(output.fetchResult.events.map(\.eventID), ["a", "z"],
+                       "only the requested identity survives, in stable (seq,eventID) order")
+        for event in output.fetchResult.events {
+            XCTAssertEqual(event.workspaceID, "current-workspace",
+                           "the CURRENT binding is applied before the filter")
+            XCTAssertEqual(event.sessionID, "session")
+            XCTAssertEqual(event.metadata?["panel_id"], "current-panel")
+        }
+    }
+
+    func testForeignRawCandidatesCannotOverwriteOrCrowdOutRequestedIdentity() {
+        let hub = AgentEventHub()
+
+        let output = runAfter(hub: hub,
+                              limit: 2,
+                              afterSeq: 100,
+                              plan: { _, _, expected in
+                                  AgentAfterCursorPlan(
+                                      epoch: expected,
+                                      mode: .scan(from: self.anchor(hub, at: 5_000)))
+                              },
+                              step: { _, stepAnchor, _, _ in
+                                  AgentAfterCursorStep(
+                                      epoch: stepAnchor.epoch,
+                                      outcome: .complete,
+                                      events: [
+                                          self.makeEvent(id: "shared", seq: 104, text: "legit-shared"),
+                                          self.makeEvent(id: "requested-b", seq: 105, text: "legit-b"),
+                                          self.makeEvent(id: "f1", seq: 101, text: "foreign-1",
+                                                         sessionID: "other-session"),
+                                          self.makeEvent(id: "f2", seq: 102, text: "foreign-2",
+                                                         sessionID: "other-session"),
+                                          self.makeEvent(id: "shared", seq: 100, text: "foreign-shared",
+                                                         sessionID: "other-session"),
+                                          self.makeEvent(id: "f3", seq: 103, text: "foreign-3",
+                                                         sessionID: "other-session"),
+                                      ])
+                              })
+
+        XCTAssertEqual(output.fetchResult.events.map(\.eventID), ["shared", "requested-b"],
+                       "foreign session events can neither overwrite nor crowd out requested history")
+        XCTAssertEqual(output.fetchResult.events.map(\.seq), [104, 105])
+        XCTAssertTrue(output.fetchResult.events.allSatisfy { $0.sessionID == "session" })
+        XCTAssertFalse(output.fetchResult.hasMore,
+                       "excluded foreign candidates never count as truncation")
+    }
+
+    func testRequestOwnedPageRejectsForeignWorkspaceWithoutCurrentBinding() {
+        let hub = AgentEventHub()
+
+        let output = runAfter(hub: hub,
+                              limit: 10,
+                              afterSeq: 100,
+                              plan: { _, _, expected in
+                                  AgentAfterCursorPlan(
+                                      epoch: expected,
+                                      mode: .scan(from: self.anchor(hub, at: 5_000)))
+                              },
+                              step: { _, stepAnchor, _, _ in
+                                  AgentAfterCursorStep(
+                                      epoch: stepAnchor.epoch,
+                                      outcome: .complete,
+                                      events: [
+                                          self.makeEvent(id: "home", seq: 101, text: "home"),
+                                          self.makeEvent(id: "away", seq: 102, text: "away",
+                                                         workspaceID: "other-workspace"),
+                                      ])
+                              })
+
+        XCTAssertEqual(output.fetchResult.events.map(\.eventID), ["home"],
+                       "without a current binding the exact requested workspace still filters")
+        XCTAssertEqual(output.fetchResult.oldestSeq, 101)
+        XCTAssertEqual(output.fetchResult.newestSeq, 101)
+        XCTAssertFalse(output.fetchResult.hasMore)
     }
 
     private func makeEvent(seq: Int,
