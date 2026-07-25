@@ -1082,6 +1082,57 @@ final class AgentEventHubTests: XCTestCase {
                        "the Hub-issued generation must advance even for an empty session")
     }
 
+    func testLiveEvictionWatermarkFeedsLeaseEvidence() {
+        let hub = AgentEventHub(maxBufferedEvents: 2, maxSeenEventIDs: 100)
+        for seq in 1...4 {
+            hub.publish(makeAssistantEvent(id: "evict-\(seq)", seq: seq), deliverToSubscribers: false)
+        }
+        // Capacity 2 keeps [3,4]; seq 1...2 were evicted from the LIVE buffer.
+        let lease = hub.beginAfterCursorLiveLease(sessionID: "session", afterSeq: 0, capacity: 10)
+        XCTAssertEqual(lease.evidence.evictedThroughSeqAtLeaseStart, 2,
+                       "the watermark is the highest accepted live seq the buffer evicted")
+        XCTAssertFalse(lease.evidence.containsEveryAcceptedLiveEvent(afterSeq: 1),
+                       "a cursor below the watermark cannot trust the retained window")
+        XCTAssertTrue(lease.evidence.containsEveryAcceptedLiveEvent(afterSeq: 2))
+        XCTAssertTrue(lease.evidence.containsEveryAcceptedLiveEvent(afterSeq: 3))
+        hub.cancelAfterCursorLiveLease(lease.token)
+    }
+
+    func testHistoricalReplacementDoesNotTouchEvictionWatermark() {
+        let hub = AgentEventHub(maxBufferedEvents: 100, maxSeenEventIDs: 100)
+        for seq in 5...8 {
+            hub.publish(makeAssistantEvent(id: "live-\(seq)", seq: seq), deliverToSubscribers: false)
+        }
+        hub.replaceHistoricalEvents(sessionID: "session",
+                                    events: (1...3).map { makeAssistantEvent(id: "hist-\($0)", seq: $0) })
+
+        let lease = hub.beginAfterCursorLiveLease(sessionID: "session", afterSeq: 0, capacity: 10)
+        XCTAssertNil(lease.evidence.evictedThroughSeqAtLeaseStart,
+                     "historical cache replacement is not a live eviction")
+        hub.cancelAfterCursorLiveLease(lease.token)
+    }
+
+    func testEpochResetClearsWatermarkAndPreservesCursorAuthority() {
+        let hub = AgentEventHub(maxBufferedEvents: 2, maxSeenEventIDs: 100)
+        for seq in 1...4 {
+            hub.publish(makeAssistantEvent(id: "pre-\(seq)", seq: seq), deliverToSubscribers: false)
+        }
+        hub.beginNewSourceEpoch(sessionID: "session")
+
+        let lease = hub.beginAfterCursorLiveLease(sessionID: "session", afterSeq: 0, capacity: 10)
+        XCTAssertNil(lease.evidence.evictedThroughSeqAtLeaseStart,
+                     "the watermark described the retired buffer and must reset")
+        XCTAssertEqual(lease.evidence.epoch.generation, 1)
+        hub.cancelAfterCursorLiveLease(lease.token)
+
+        // Cursor authority survives the reset: a replacement-source event
+        // reusing a low seq must rebase above the old high water.
+        let accepted = hub.publish(makeAssistantEvent(id: "replacement-1", seq: 1),
+                                   deliverToSubscribers: false)
+        XCTAssertEqual(accepted?.seq, 5,
+                       "high-water/reservation must not be cleared by the epoch reset")
+    }
+
     private func makeContextEvent(id: String, seq: Int, kind: String) -> AgentEvent {
         AgentEvent(eventID: id,
                    seq: seq,

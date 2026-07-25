@@ -841,7 +841,16 @@ final class AgentEventHub {
 
             state.bufferedEvents.append(event)
             if state.bufferedEvents.count > maxBufferedEvents {
-                state.bufferedEvents.removeFirst(state.bufferedEvents.count - maxBufferedEvents)
+                let overflow = state.bufferedEvents.count - maxBufferedEvents
+                // The ONLY place the live eviction watermark advances: it
+                // records the highest accepted/rebased live seq this buffer
+                // has dropped, so lease evidence can prove whether a cursor's
+                // window is still fully retained.
+                if let evictedMaxSeq = state.bufferedEvents.prefix(overflow).map(\.seq).max() {
+                    state.evictedThroughSeq = max(state.evictedThroughSeq ?? evictedMaxSeq,
+                                                  evictedMaxSeq)
+                }
+                state.bufferedEvents.removeFirst(overflow)
             }
             switch event.type {
             case .sessionStarted:
