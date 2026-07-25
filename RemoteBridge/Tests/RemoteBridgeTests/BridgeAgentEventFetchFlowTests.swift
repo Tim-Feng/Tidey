@@ -981,7 +981,11 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
                                                          sessionID: "other-session"),
                                           self.makeEvent(id: "f2", seq: 102, text: "foreign-2",
                                                          sessionID: "other-session"),
-                                          self.makeEvent(id: "shared", seq: 100, text: "foreign-shared",
+                                          // ABOVE the cursor so it reaches
+                                          // the identity gate itself — an
+                                          // eventID collision with the legit
+                                          // "shared" copy.
+                                          self.makeEvent(id: "shared", seq: 103, text: "foreign-shared",
                                                          sessionID: "other-session"),
                                           self.makeEvent(id: "f3", seq: 103, text: "foreign-3",
                                                          sessionID: "other-session"),
@@ -991,6 +995,8 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
         XCTAssertEqual(output.fetchResult.events.map(\.eventID), ["shared", "requested-b"],
                        "foreign session events can neither overwrite nor crowd out requested history")
         XCTAssertEqual(output.fetchResult.events.map(\.seq), [104, 105])
+        XCTAssertEqual(output.fetchResult.events.first?.text, "legit-shared",
+                       "the foreign collision copy must not overwrite the requested copy")
         XCTAssertTrue(output.fetchResult.events.allSatisfy { $0.sessionID == "session" })
         XCTAssertFalse(output.fetchResult.hasMore,
                        "excluded foreign candidates never count as truncation")

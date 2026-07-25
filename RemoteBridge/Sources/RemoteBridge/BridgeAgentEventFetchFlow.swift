@@ -267,11 +267,10 @@ enum BridgeAgentEventFetchFlow {
         }
 
         // Union authority (agreed order): concatenate request-owned raw
-        // events THEN lease events → current Hub binding (atomic) → this
-        // gate's filters (seq > afterSeq; B13 adds the requested
-        // workspace/session filter) → eventID dedupe with the lease's later
-        // accepted/rebased copy winning → stable (seq, eventID) sort →
-        // count → bytes.
+        // events THEN lease events → current Hub binding (atomic) →
+        // requested workspace/session filter → seq > afterSeq → eventID
+        // dedupe with the lease's later accepted/rebased copy winning →
+        // stable (seq, eventID) sort → count → bytes.
         let combined = rawByEventID.values
             .sorted { ($0.seq, $0.eventID) < ($1.seq, $1.eventID) }
             + snapshot.events
