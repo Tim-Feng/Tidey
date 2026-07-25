@@ -58,6 +58,36 @@ final class CodexTranscriptSession: AgentTranscriptSession {
 
     private var lastRequestedBackfillAnchorSeq: Int?
 
+    // MARK: After-cursor replay seams (S9; wired by B17)
+
+    // Request-local after-cursor replay collection: exists only for the
+    // lifetime of one afterCursorStep; while present, replay products are
+    // routed here and never into the legacy shared replay state.
+    private struct AfterCursorReplayCollector {
+        var products = [AgentEvent]()
+        var positionsByEventID = [String: TranscriptEventPosition]()
+    }
+    private var afterCursorReplayCollector: AfterCursorReplayCollector?
+    // Deterministic injection point: fires after a step's raw read has
+    // completed (page collected) and before any final validation/return.
+    var afterCursorStepAfterRawReadForTesting: (() -> Void)?
+    // Exact public seq → raw position (populated by the typed walk); the
+    // eventID → accepted/rebased public sequence mapping is B18's row and
+    // stays empty until then.
+    private var exactTranscriptPositionByPublicSequence = [Int: TranscriptEventPosition]()
+    private var publicTranscriptSequenceByEventID = [String: Int]()
+
+    // Exact-map hit wins; otherwise the existing base arithmetic fallback.
+    private func transcriptEventPositionInCurrentSource(for seq: Int) -> TranscriptEventPosition? {
+        if let exactPosition = exactTranscriptPositionByPublicSequence[seq] {
+            return exactPosition
+        }
+        guard seq > transcriptSequenceBase else {
+            return nil
+        }
+        return transcriptEventPosition(for: seq - transcriptSequenceBase)
+    }
+
     private func captureLiveParserState() -> LiveParserStateSnapshot {
         LiveParserStateSnapshot(unsupportedVersions: unsupportedVersions,
                                 resolvedToolCallIDs: resolvedToolCallIDs,
