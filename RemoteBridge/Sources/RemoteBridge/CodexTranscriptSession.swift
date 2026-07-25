@@ -149,6 +149,17 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     // Deterministic injected fault for the bootstrap context read; when it
     // returns an error the read is treated as having thrown it.
     var bootstrapContextReadFaultForTesting: (() -> Error?)?
+    // Deterministic stale-callback injection: invokes the tailer
+    // invalidation path with an explicit generation token, exactly as a
+    // queued vnode callback from a retired candidate would.
+    func fireTailerInvalidationForTesting(generation: Int) {
+        queue.sync {
+            handleTailerInvalidation(generation: generation)
+        }
+    }
+    var currentSourceGenerationForTesting: Int {
+        queue.sync { activeSourceGeneration }
+    }
     // Semantic trust over the CURRENT source (S10 state; enforced by the
     // closure-B row): poisoned by invalid UTF-8 / malformed JSON /
     // unsupported schema, re-established only when a replacement source
