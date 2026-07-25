@@ -2657,6 +2657,88 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         }
     }
 
+    func testClaudeAfterCursorPlanRechecksHubEpochAfterSemanticScan() throws {
+        let (transcriptURL, directory) = try makeSmallTranscriptFixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let hub = AgentEventHub()
+        let session = makeStartedSession(transcriptURL, hub: hub, readySentinel: "small-7")
+        defer { session.stop() }
+        let capturedEpoch = hub.currentHistoryEpoch(sessionID: "session")
+        var didBump = false
+        session.historicalIndexBeforeScanForTesting = {
+            guard didBump == false else { return }
+            didBump = true
+            hub.beginNewSourceEpoch(sessionID: "session")
+        }
+        defer { session.historicalIndexBeforeScanForTesting = nil }
+
+        let plan = session.afterCursorPlan(afterSeq: 0, expectedEpoch: capturedEpoch)
+
+        XCTAssertTrue(didBump, "precondition: the epoch advanced during the semantic scan")
+        guard case .unavailable = plan.mode else {
+            return XCTFail("an epoch that moved during the scan must be unavailable, got \(plan.mode)")
+        }
+        XCTAssertEqual(plan.epoch, hub.currentHistoryEpoch(sessionID: "session"),
+                       "the failed plan reports the post-scan CURRENT epoch, never the captured one")
+        XCTAssertFalse(session.validateHistoryEpoch(capturedEpoch))
+    }
+
+    func testClaudeHistoryPlanAndValidationFailClosedBeforeStart() throws {
+        let (transcriptURL, directory) = try makeSmallTranscriptFixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        defer { session.stop() }
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+
+        let plan = session.afterCursorPlan(afterSeq: 0, expectedEpoch: epoch)
+        guard case .unavailable = plan.mode else {
+            return XCTFail("an un-started session must not resolve and plan, got \(plan.mode)")
+        }
+        XCTAssertFalse(session.validateHistoryEpoch(epoch),
+                       "an un-started session must never validate a raw page")
+    }
+
+    func testClaudeHistoryValidationFailsUntilReplacementSourceIsValidated() throws {
+        let (transcriptURL, directory) = try makeSmallTranscriptFixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let hub = AgentEventHub()
+        let session = makeStartedSession(transcriptURL, hub: hub, readySentinel: "small-7")
+        defer { session.stop() }
+        let oldEpoch = hub.currentHistoryEpoch(sessionID: "session")
+        guard case .rawCovered = session.afterCursorPlan(afterSeq: 0, expectedEpoch: oldEpoch).mode else {
+            return XCTFail("precondition: source A plans successfully")
+        }
+
+        // Point the record at a DIFFERENT canonical transcript path that does
+        // not exist yet: the epoch advances but no validated tailer exists.
+        let missingURL = directory.appendingPathComponent("replacement-not-yet.jsonl", isDirectory: false)
+        var replacement = makeRecord(transcriptPath: missingURL.path)
+        replacement = AgentSessionRegistryRecord(version: replacement.version,
+                                                 vendor: replacement.vendor,
+                                                 workspaceID: replacement.workspaceID,
+                                                 sessionID: replacement.sessionID,
+                                                 panelID: replacement.panelID,
+                                                 pid: replacement.pid,
+                                                 cwd: replacement.cwd,
+                                                 createdAt: replacement.createdAt,
+                                                 transcriptPath: missingURL.path)
+        session.update(record: replacement)
+        XCTAssertTrue(waitUntil {
+            hub.currentHistoryEpoch(sessionID: "session") != oldEpoch
+        }, "precondition: the source switch advanced the Hub epoch")
+
+        let currentEpoch = hub.currentHistoryEpoch(sessionID: "session")
+        XCTAssertFalse(session.validateHistoryEpoch(currentEpoch),
+                       "the NEW epoch must not validate before its replacement source is validated")
+        let plan = session.afterCursorPlan(afterSeq: 0, expectedEpoch: currentEpoch)
+        guard case .unavailable = plan.mode else {
+            return XCTFail("no validated replacement source can only be unavailable, got \(plan.mode)")
+        }
+    }
+
     private func makeStartedSession(_ transcriptURL: URL,
                                     hub: AgentEventHub,
                                     readySentinel: String) -> ClaudeTranscriptSession {

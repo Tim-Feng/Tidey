@@ -2950,10 +2950,11 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private var collectedHistoricalBackfillPage = [(offset: Int, line: String)]()
     private var historicalBackfillAnchorSeq: Int?
     private var exactTranscriptPositionByPublicSequence = [Int: TranscriptEventPosition]()
-    // Semantic trust over the CURRENT source epoch: false after any unknown/
-    // malformed/unsupported record or failed closure coverage; restored only
-    // by a fresh successful closure index (or a new source epoch).
-    private var historySemanticTrust = true
+    // Semantic trust over the CURRENT source epoch: EARNED, never assumed —
+    // false until a successful semantic index under a validated source
+    // fence, false again after any unknown/malformed/unsupported record,
+    // failed closure coverage, or source epoch switch.
+    private var historySemanticTrust = false
     private var publicTranscriptSequenceByEventID = [String: Int]()
 
     func historicalClosureIndexStatsForTesting() -> ClaudeHistoricalClosureIndexStats {
@@ -3120,7 +3121,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                      hub.sequenceHighWater(sessionID: record.sessionID))
         exactTranscriptPositionByPublicSequence = [:]
         publicTranscriptSequenceByEventID = [:]
-        historySemanticTrust = true
+        // The replacement source has proven nothing yet.
+        historySemanticTrust = false
         historicalClosureSourceEpoch &+= 1
         historicalClosureIndex = nil
         historicalIndexEventSink = nil
@@ -3174,18 +3176,22 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     func afterCursorPlan(afterSeq: Int,
                          expectedEpoch: AgentHistoryEpoch) -> AgentAfterCursorPlan {
         queue.sync {
-            let currentEpoch = hub.currentHistoryEpoch(sessionID: record.sessionID)
-            func unavailable() -> AgentAfterCursorPlan {
-                AgentAfterCursorPlan(epoch: currentEpoch, mode: .unavailable)
+            // Every failed plan reports the TRUE current Hub epoch at the
+            // moment of failure — never a captured or caller-supplied token.
+            func unavailableNow() -> AgentAfterCursorPlan {
+                AgentAfterCursorPlan(epoch: hub.currentHistoryEpoch(sessionID: record.sessionID),
+                                     mode: .unavailable)
             }
-            guard didPublishEnd == false, expectedEpoch == currentEpoch else {
-                return unavailable()
+            let capturedEpoch = hub.currentHistoryEpoch(sessionID: record.sessionID)
+            guard didPublishStart, didPublishEnd == false,
+                  expectedEpoch == capturedEpoch else {
+                return unavailableNow()
             }
             if tailer == nil {
                 resolveTranscriptIfPossible()
             }
             guard let tailer else {
-                return unavailable()
+                return unavailableNow()
             }
             do {
                 try tailer.validateCurrentSource()
@@ -3196,19 +3202,26 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 try tailer.validateCurrentSource()
                 guard indexIsReady else {
                     historySemanticTrust = false
-                    return unavailable()
+                    return unavailableNow()
                 }
             } catch JSONLFileTailerError.sourceInvalidated {
                 beginNewSourceEpoch()
                 startResolver()
-                return unavailable()
+                return unavailableNow()
             } catch {
                 historySemanticTrust = false
-                return unavailable()
+                return unavailableNow()
             }
             historySemanticTrust = true
             guard let coverage = queueOwnedContiguousRawCoverage(of: tailer) else {
-                return unavailable()
+                return unavailableNow()
+            }
+            // Final epoch fence: the semantic scan and coverage read take
+            // time — a Hub epoch that moved underneath them invalidates
+            // everything derived above.
+            let currentEpoch = hub.currentHistoryEpoch(sessionID: record.sessionID)
+            guard currentEpoch == capturedEpoch else {
+                return unavailableNow()
             }
             let ceilingAnchor = AgentHistoryAnchor(
                 epoch: currentEpoch,
@@ -3235,7 +3248,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
 
     func validateHistoryEpoch(_ epoch: AgentHistoryEpoch) -> Bool {
         queue.sync {
-            guard didPublishEnd == false, historySemanticTrust else {
+            guard didPublishStart, didPublishEnd == false, historySemanticTrust else {
                 return false
             }
             return epoch == hub.currentHistoryEpoch(sessionID: record.sessionID)
@@ -3257,7 +3270,9 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                      _ events: [AgentEvent] = []) -> AgentAfterCursorStep {
                 AgentAfterCursorStep(epoch: currentEpoch, outcome: outcome, events: events)
             }
-            guard didPublishEnd == false, historySemanticTrust, limit > 0 else {
+            // Trust is EARNED by this step's own semantic index below —
+            // an initial false must not block a legitimate direct seam.
+            guard didPublishStart, didPublishEnd == false, limit > 0 else {
                 return out(.unavailable)
             }
             guard anchor.epoch == currentEpoch else {
@@ -3290,6 +3305,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 historySemanticTrust = false
                 return out(.unavailable)
             }
+            historySemanticTrust = true
 
             let liveParserState = captureLiveParserState()
             resetParserStateForHistoricalReplay()
