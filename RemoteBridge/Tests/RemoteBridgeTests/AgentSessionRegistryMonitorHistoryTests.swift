@@ -44,21 +44,24 @@ final class AgentSessionRegistryMonitorHistoryTests: XCTestCase {
         return url
     }
 
-    private func writeRecord(at url: URL, workspaceID: String, transcriptPath: String) throws {
+    private func writeRecord(at url: URL,
+                             workspaceID: String,
+                             transcriptPath: String,
+                             panelID: String = "panel") throws {
         let record = """
         {
           "version": 1,
           "vendor": "claude",
           "workspace_id": "\(workspaceID)",
           "session_id": "session",
-          "panel_id": "panel",
+          "panel_id": "\(panelID)",
           "pid": \(getpid()),
           "cwd": "/tmp",
           "created_at": "2026-04-30T00:00:00Z",
           "transcript_path": "\(transcriptPath)"
         }
         """
-        try Data(record.utf8).write(to: url)
+        try Data(record.utf8).write(to: url, options: .atomic)
     }
 
     private func makeFixture(transcriptURL: URL) throws -> Fixture {
@@ -110,14 +113,14 @@ final class AgentSessionRegistryMonitorHistoryTests: XCTestCase {
         let oldEpoch = fixture.hub.currentHistoryEpoch(sessionID: "session")
 
         try FileManager.default.removeItem(at: fixture.registryURL)
+        fixture.monitor.scanRegistryForTesting()
 
-        XCTAssertTrue(waitUntil {
-            let plan = fixture.monitor.afterCursorPlan(sessionID: "session",
-                                                       afterSeq: 0,
-                                                       expectedEpoch: oldEpoch)
-            if case .unavailable = plan.mode { return true }
-            return false
-        }, "a removed session must plan unavailable, never hubOnly")
+        let plan = fixture.monitor.afterCursorPlan(sessionID: "session",
+                                                   afterSeq: 0,
+                                                   expectedEpoch: oldEpoch)
+        guard case .unavailable = plan.mode else {
+            return XCTFail("a removed session must plan unavailable, never hubOnly, got \(plan.mode)")
+        }
         XCTAssertFalse(fixture.monitor.validateHistoryEpoch(sessionID: "session", epoch: oldEpoch),
                        "a missing session must never validate an old raw page")
     }
@@ -145,17 +148,17 @@ final class AgentSessionRegistryMonitorHistoryTests: XCTestCase {
         // Removal must be OBSERVED before the same-ID recreation, otherwise
         // the scan would treat it as an update of the same incarnation.
         try FileManager.default.removeItem(at: fixture.registryURL)
-        XCTAssertTrue(waitUntil {
-            if case .unavailable = fixture.monitor.afterCursorPlan(sessionID: "session",
-                                                                   afterSeq: 0,
-                                                                   expectedEpoch: oldEpoch).mode {
-                return true
-            }
-            return false
-        }, "precondition: the removal was observed")
+        fixture.monitor.scanRegistryForTesting()
+        if case .unavailable = fixture.monitor.afterCursorPlan(sessionID: "session",
+                                                               afterSeq: 0,
+                                                               expectedEpoch: oldEpoch).mode {
+        } else {
+            return XCTFail("precondition: the removal was observed")
+        }
         try writeRecord(at: fixture.registryURL,
                         workspaceID: "workspace",
                         transcriptPath: secondTranscript.path)
+        fixture.monitor.scanRegistryForTesting()
 
         XCTAssertTrue(waitUntil {
             planIsUsable(fixture.monitor.afterCursorPlan(
@@ -195,15 +198,17 @@ final class AgentSessionRegistryMonitorHistoryTests: XCTestCase {
         }, "precondition: the session plans successfully")
         let epoch = fixture.hub.currentHistoryEpoch(sessionID: "session")
 
-        // Workspace/panel migration is an UPDATE of the same incarnation.
+        // Workspace AND panel migration is an UPDATE of the same incarnation.
         try writeRecord(at: fixture.registryURL,
                         workspaceID: "workspace-moved",
-                        transcriptPath: transcriptURL.path)
+                        transcriptPath: transcriptURL.path,
+                        panelID: "panel-moved")
+        fixture.monitor.scanRegistryForTesting()
 
         XCTAssertTrue(waitUntil {
             fixture.hub.fetch(workspaceID: "workspace-moved", sessionID: "session", limit: 5)
                 .events.isEmpty == false
-        }, "precondition: the migration was observed")
+        }, "precondition: the migration was observed (session async update convergence)")
         XCTAssertEqual(fixture.hub.currentHistoryEpoch(sessionID: "session"), epoch,
                        "migration is not a replacement — the epoch must not change")
         XCTAssertTrue(fixture.monitor.validateHistoryEpoch(sessionID: "session", epoch: epoch),
