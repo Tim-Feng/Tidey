@@ -20,7 +20,7 @@ struct AgentHistoryAnchor: Equatable, Sendable {
     let position: TranscriptEventPosition
 }
 
-enum AgentAfterCursorPlanMode: Equatable {
+enum AgentAfterCursorPlanMode: Equatable, Sendable {
     // The cursor lies inside the contiguously validated raw interval.
     // `replayFrom` is REQUIRED: when Hub evidence shows a live eviction
     // above the cursor, the flow re-scans from this fixed frontier — a
@@ -35,7 +35,7 @@ enum AgentAfterCursorPlanMode: Equatable {
     case unavailable
 }
 
-struct AgentAfterCursorPlan: Equatable {
+struct AgentAfterCursorPlan: Equatable, Sendable {
     let epoch: AgentHistoryEpoch
     let mode: AgentAfterCursorPlanMode
 }
@@ -43,8 +43,8 @@ struct AgentAfterCursorPlan: Equatable {
 // One request-owned raw walk step. `events` belong to the request that
 // issued the step — they are return values, never read back from a shared
 // mutable cache.
-struct AgentAfterCursorStep {
-    enum Outcome: Equatable {
+struct AgentAfterCursorStep: Sendable {
+    enum Outcome: Equatable, Sendable {
         case advanced(AgentHistoryAnchor)
         case complete
         case sourceChanged

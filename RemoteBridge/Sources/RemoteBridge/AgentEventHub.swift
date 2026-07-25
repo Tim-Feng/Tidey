@@ -25,12 +25,12 @@ struct AgentLiveWindowEvidence: Equatable, Sendable {
     }
 }
 
-struct AgentAfterCursorLiveLease {
+struct AgentAfterCursorLiveLease: Sendable {
     let token: AgentAfterCursorLiveLeaseToken
     let evidence: AgentLiveWindowEvidence
 }
 
-struct AgentAfterCursorLiveLeaseSnapshot {
+struct AgentAfterCursorLiveLeaseSnapshot: Sendable {
     let epoch: AgentHistoryEpoch
     let events: [AgentEvent]
     let truncated: Bool

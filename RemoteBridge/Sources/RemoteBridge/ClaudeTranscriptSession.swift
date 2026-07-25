@@ -1697,7 +1697,7 @@ struct JSONLRawFrontier: Equatable, Sendable {
     let reachedSourceStart: Bool
 }
 
-struct JSONLBackfillResult {
+struct JSONLBackfillResult: Sendable {
     let didRead: Bool
     let rawFrontier: JSONLRawFrontier?
 }
