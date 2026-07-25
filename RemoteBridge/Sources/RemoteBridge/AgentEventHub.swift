@@ -990,6 +990,30 @@ final class AgentEventHub {
         deliveryExecutor.queue.sync {}
     }
 
+    // MARK: Request-owned event projection seams (G3 contract)
+    //
+    // The flow assembles after-cursor pages from request-owned raw events
+    // plus a lease snapshot; these wrappers let it reuse the Hub's binding
+    // projection and byte-budget policy WITHOUT duplicating either rule and
+    // without reading any shared event storage. The Hub queue performs no
+    // outbound calls here.
+
+    func applyingCurrentSessionBindings(_ events: [AgentEvent]) -> [AgentEvent] {
+        queue.sync {
+            events.compactMap { effectiveEvent($0) }
+        }
+    }
+
+    // Pure policy over an already count-limited page: preserves the exact
+    // oversized-event placeholder behavior and trim direction.
+    func budgetLimitedPage(_ events: [AgentEvent],
+                           maxBytes: Int?,
+                           prefersNewestEvents: Bool) -> [AgentEvent] {
+        budgetLimitedEvents(events,
+                            maxBytes: maxBytes,
+                            prefersNewestEvents: prefersNewestEvents)
+    }
+
     private func effectiveEvent(_ event: AgentEvent?) -> AgentEvent? {
         guard let event else {
             return nil
