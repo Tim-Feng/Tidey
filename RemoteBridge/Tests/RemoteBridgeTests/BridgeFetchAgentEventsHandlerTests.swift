@@ -422,16 +422,19 @@ final class BridgeFetchAgentEventsHandlerTests: XCTestCase {
             let newestSeq: Int
             let hasMore: Bool
         }
-        func wireFetch(afterSeq: Int) throws -> WirePage {
+        func wireFetch(afterSeq: Int, maxBytes: Int?) throws -> WirePage {
+            var params: [String: JSONValue] = [
+                "workspace_id": .string("workspace-after"),
+                "session_id": .string("session-after"),
+                "limit": .number(97),
+                "after_seq": .number(Double(afterSeq)),
+            ]
+            if let maxBytes {
+                params["max_bytes"] = .number(Double(maxBytes))
+            }
             let request = BridgeRequest(id: UUID().uuidString,
                                         action: "fetch_agent_events",
-                                        params: [
-                                            "workspace_id": .string("workspace-after"),
-                                            "session_id": .string("session-after"),
-                                            "limit": .number(97),
-                                            "max_bytes": .number(Double(maxBytes)),
-                                            "after_seq": .number(Double(afterSeq)),
-                                        ])
+                                        params: params)
             let result = try XCTUnwrap(handler.handleLocalRequest(request, context: context),
                                        "the handler must dispatch fetch_agent_events locally")
             XCTAssertEqual(result.response.ok, true)
@@ -457,12 +460,26 @@ final class BridgeFetchAgentEventsHandlerTests: XCTestCase {
                             hasMore: try XCTUnwrap(result.response.result?["has_more"]?.boolValue))
         }
 
+        // CONTROL request — same handler/session/fixture, NO max_bytes: it
+        // pins that a count-limited first page holds exactly 97 rows, so
+        // the budget run's smaller first page below is attributable to the
+        // byte budget and nothing else (raw page / history boundaries
+        // included, since the control crosses the very same ones).
+        let control = try wireFetch(afterSeq: 0, maxBytes: nil)
+        XCTAssertEqual(control.events.count, 97, "the control page is exactly the count limit")
+        XCTAssertTrue(control.hasMore)
+        XCTAssertEqual(control.events.map(\.eventID),
+                       (0..<97).map { String(format: "history-%04d:user-text:0", $0) },
+                       "the control page is exactly the first 97 fixture identities")
+        XCTAssertEqual(control.oldestSeq, control.events.first?.seq)
+        XCTAssertEqual(control.newestSeq, control.events.last?.seq)
+
         var pages = [WirePage]()
         var union = [WireEvent]()
         var cursor = 0
         var completed = false
         for _ in 0..<(lineCount + 1) {
-            let page = try wireFetch(afterSeq: cursor)
+            let page = try wireFetch(afterSeq: cursor, maxBytes: maxBytes)
             XCTAssertFalse(page.events.isEmpty, "every page carries events")
             XCTAssertLessThanOrEqual(page.events.count, 97)
             for event in page.events {
@@ -507,8 +524,16 @@ final class BridgeFetchAgentEventsHandlerTests: XCTestCase {
         XCTAssertEqual(union.last.map { String($0.text.split(separator: "|")[0]) },
                        String(format: "history-%04d", lineCount - 1))
         XCTAssertGreaterThan(pages.count, 1, "the deep history spans multiple wire pages")
-        XCTAssertLessThan(pages[0].events.count, 97,
-                          "the byte budget really cut the first page below the count limit")
+        // Direct byte-budget proof against the control: the SAME request
+        // shape without max_bytes served exactly 97 rows, so the smaller
+        // budget first page can only come from the byte budget.
+        let budgetFirst = try XCTUnwrap(pages.first)
+        XCTAssertLessThan(budgetFirst.events.count, control.events.count,
+                          "the byte budget really cut the first page below the 97-row control")
+        XCTAssertEqual(budgetFirst.events.map(\.eventID),
+                       Array(control.events.map(\.eventID).prefix(budgetFirst.events.count)),
+                       "the budget first page is EXACTLY the control page's prefix")
+        XCTAssertTrue(budgetFirst.hasMore)
         XCTAssertFalse(pages.last?.hasMore ?? true)
 
         // The raw walk stays request-owned: the shared retained cache is
