@@ -2532,6 +2532,20 @@ final class CodexTranscriptSessionTests: XCTestCase {
         XCTAssertEqual(texts(mid, "bootstrap-floor-twin"), 1)
         XCTAssertEqual(twinIDs(mid), Set(liveTwinIDs),
                        "the canonical identity survives a different step-boundary layout")
+
+        // The cross-page twin too: (eventID, seq) must be IDENTICAL when
+        // the pair is split across raw steps (limit 499) and when it sits
+        // inside a single step (wide/mid) — canonical identity never
+        // follows the raw page layout.
+        func crossPageIdentity(_ output: BridgeAgentEventFetchFlow.Output) -> Set<String> {
+            Set(output.fetchResult.events.filter { $0.text == "cross-page-twin" }
+                    .map { "\($0.eventID)#\($0.seq)" })
+        }
+        XCTAssertEqual(crossPageIdentity(first).count, 1)
+        XCTAssertEqual(crossPageIdentity(first), crossPageIdentity(wide),
+                       "split-across-steps and single-step layouts share one (eventID, seq)")
+        XCTAssertEqual(crossPageIdentity(first), crossPageIdentity(mid),
+                       "the identity also survives the 600-limit layout")
     }
 
     // Context records live OUTSIDE the owned window and carry NO coverage
@@ -2684,20 +2698,34 @@ final class CodexTranscriptSessionTests: XCTestCase {
         let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
                                              fileManager: .default,
                                              hub: hub)
-        var faultsServed = 0
+        // The fault stays CLOSED (every context read fails) until the
+        // no-publish assertion completes — a one-shot fault would race the
+        // resolver's 1s retry against the assertion.
+        let faultLock = NSLock()
+        var faultGateOpen = false
+        var faultAttempts = 0
         session.bootstrapContextReadFaultForTesting = {
-            guard faultsServed == 0 else { return nil }
-            faultsServed += 1
+            faultLock.lock()
+            defer { faultLock.unlock() }
+            guard faultGateOpen == false else { return nil }
+            faultAttempts += 1
             return POSIXError(.EIO)
         }
         session.start()
         defer { session.stop() }
-        // Synchronous checkpoint: the faulted attach published NOTHING.
+        // Synchronous checkpoint: at least one faulted attach ran and
+        // published NOTHING — deterministic while the gate stays closed.
         _ = session.validateHistoryEpoch(hub.currentHistoryEpoch(sessionID: "session"))
-        XCTAssertEqual(faultsServed, 1)
+        faultLock.lock()
+        let attemptsAtCheckpoint = faultAttempts
+        faultLock.unlock()
+        XCTAssertGreaterThanOrEqual(attemptsAtCheckpoint, 1)
         XCTAssertFalse(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 2000)
                         .events.contains { $0.text?.hasPrefix("deep-") == true || $0.text == "floor-twin" },
                        "a transient context fault fails the attach closed — no window product publishes")
+        faultLock.lock()
+        faultGateOpen = true
+        faultLock.unlock()
         // The resolver retries and attaches with REAL adjacency context.
         XCTAssertTrue(waitUntil(timeout: 6) {
             hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
@@ -2733,6 +2761,107 @@ final class CodexTranscriptSessionTests: XCTestCase {
                        "the twin stays exactly-once across live + walk")
         XCTAssertEqual(Set(wideTwinIDs), Set(liveTwinIDs),
                        "the retry seeded real context — live and walk share ONE canonical identity")
+    }
+
+    // A transient candidate abort must RETIRE the aborted candidate's
+    // invalidation token: a queued vnode callback from candidate A,
+    // arriving after candidate B attached, must not reset the healthy B.
+    func testStaleCallbackFromAbortedCandidateCannotResetReplacement() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lineCount = transcriptBootstrapLineLimit + 20
+        let lines = (0..<lineCount).map { makeCodexMessageLine(role: "assistant", content: "deep-\($0)") }
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                             fileManager: .default,
+                                             hub: hub)
+        let candidateAGeneration = session.currentSourceGenerationForTesting
+        let faultLock = NSLock()
+        var faultGateOpen = false
+        session.bootstrapContextReadFaultForTesting = {
+            faultLock.lock()
+            defer { faultLock.unlock() }
+            return faultGateOpen ? nil : POSIXError(.EIO)
+        }
+        session.start()
+        defer { session.stop() }
+        // Candidate A aborts on the transient fault (queue drains here).
+        _ = session.validateHistoryEpoch(hub.currentHistoryEpoch(sessionID: "session"))
+        faultLock.lock()
+        faultGateOpen = true
+        faultLock.unlock()
+        // Candidate B attaches on the resolver retry.
+        XCTAssertTrue(waitUntil(timeout: 6) {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                .events.contains { $0.text == "deep-\(lineCount - 1)" }
+        }, "the replacement candidate attaches")
+        let epochBefore = hub.currentHistoryEpoch(sessionID: "session")
+        // The aborted candidate A's queued vnode callback finally runs.
+        session.fireTailerInvalidationForTesting(generation: candidateAGeneration)
+        XCTAssertEqual(hub.currentHistoryEpoch(sessionID: "session"), epochBefore,
+                       "a stale callback from the ABORTED candidate must not move the epoch")
+        XCTAssertTrue(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                        .events.contains { $0.text == "deep-\(lineCount - 1)" },
+                      "the healthy replacement's products survive the stale callback")
+        XCTAssertTrue(session.validateHistoryEpoch(epochBefore),
+                      "the healthy replacement stays attached and trusted")
+    }
+
+    // Guard (end-state; the recursion removal itself is structural):
+    // three consecutive source replacements during attach leave exactly
+    // the FINAL source attached, with one reset per replacement and no
+    // stale products.
+    func testConsecutiveBootstrapInvalidationsSettleOnFinalSource() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lineCount = transcriptBootstrapLineLimit + 20
+        func writeFile(prefix: String) throws {
+            let lines = (0..<lineCount).map { makeCodexMessageLine(role: "assistant", content: "\(prefix)-\($0)") }
+            try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        }
+        try writeFile(prefix: "gen0")
+        let hub = AgentEventHub()
+        let baseGeneration = hub.currentHistoryEpoch(sessionID: "session").generation
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                             fileManager: .default,
+                                             hub: hub)
+        let replaceLock = NSLock()
+        var replacements = 0
+        var replacementWriteError: Error?
+        session.bootstrapContextBeforeReadForTesting = {
+            replaceLock.lock()
+            defer { replaceLock.unlock() }
+            guard replacements < 3 else { return }
+            replacements += 1
+            do {
+                try writeFile(prefix: replacements == 3 ? "final" : "gen\(replacements)")
+            } catch {
+                replacementWriteError = error
+            }
+        }
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil(timeout: 8) {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                .events.contains { $0.text == "final-\(lineCount - 1)" }
+        }, "the FINAL source attaches after three consecutive replacements")
+        XCTAssertNil(replacementWriteError)
+        let allEvents = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 3000).events
+        XCTAssertFalse(allEvents.contains { text in
+            guard let text = text.text else { return false }
+            return text.hasPrefix("gen0-") || text.hasPrefix("gen1-") || text.hasPrefix("gen2-")
+        }, "no stale source's products survive")
+        XCTAssertEqual(hub.currentHistoryEpoch(sessionID: "session").generation,
+                       baseGeneration + 3,
+                       "exactly one reset per replacement")
+        XCTAssertTrue(session.validateHistoryEpoch(hub.currentHistoryEpoch(sessionID: "session")))
     }
 
     func testValidationSourceFenceRunsBeforeSemanticTrustGate() throws {

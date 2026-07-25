@@ -867,8 +867,20 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         self.transcriptURL = nil
         isBootstrappingSidebarState = false
         if resetSource {
-            resetTranscriptSource(startResolverNow: true)
+            // Cleanup/reset FIRST; the resolver restart is scheduled after
+            // the current queue frame — consecutive source replacements
+            // must never recurse synchronously inside the old attach
+            // stack. (resetTranscriptSource advances the generation, so
+            // the aborted candidate's queued callbacks are retired too.)
+            resetTranscriptSource(startResolverNow: false)
+            queue.async { [weak self] in
+                self?.startResolver()
+            }
         } else {
+            // Retire the aborted candidate's invalidation token WITHOUT
+            // bumping the Hub history epoch: a queued vnode callback from
+            // this candidate must never reset the NEXT candidate.
+            activeSourceGeneration &+= 1
             // No source is attached: untrusted until an attach succeeds.
             sourceSemanticTrust = false
         }
