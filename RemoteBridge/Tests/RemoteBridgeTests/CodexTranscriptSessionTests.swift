@@ -1400,6 +1400,288 @@ final class CodexTranscriptSessionTests: XCTestCase {
         }
     }
 
+    private func makeStartedCodexSession(_ transcriptURL: URL,
+                                         hub: AgentEventHub,
+                                         readySentinel: String) -> CodexTranscriptSession {
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                             fileManager: .default,
+                                             hub: hub)
+        session.start()
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10)
+                .events.contains { $0.text == readySentinel }
+        }, "the session must bootstrap")
+        return session
+    }
+
+    func testCodexUnknownTopLevelRecordPoisonsCoverage() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lineCount = transcriptBootstrapLineLimit + 20
+        var lines = (0..<lineCount).map {
+            makeCodexMessageLine(role: "assistant",
+                                 content: "deep-\($0)-" + String(repeating: "x", count: 160))
+        }
+        // A well-formed record of an ARBITRARY unknown top-level type,
+        // below the bootstrap floor: future schema, not known-ignored.
+        lines[3] = "{\"type\":\"totally_unknown_record\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"type\":\"x\"}}"
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(transcriptURL, hub: hub,
+                                              readySentinel: "deep-\(lineCount - 1)-" + String(repeating: "x", count: 160))
+        defer { session.stop() }
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+        let plan = session.afterCursorPlan(afterSeq: 0, expectedEpoch: epoch)
+        guard case .scan(let startAnchor) = plan.mode else {
+            return XCTFail("precondition: the clean bootstrap plans a scan, got \(plan.mode)")
+        }
+
+        var anchor = startAnchor
+        var sawUnavailable = false
+        walk: for _ in 0..<64 {
+            let step = session.afterCursorStep(from: anchor, afterSeq: 0, limit: 40)
+            switch step.outcome {
+            case .advanced(let next):
+                anchor = next
+            case .unavailable:
+                XCTAssertTrue(step.events.isEmpty)
+                sawUnavailable = true
+                break walk
+            case .complete:
+                return XCTFail("the walk must not complete past an unknown record")
+            case .sourceChanged:
+                return XCTFail("an unknown record is not a source change")
+            }
+        }
+        XCTAssertTrue(sawUnavailable, "the unknown-record page fails the step closed")
+        guard case .unavailable = session.afterCursorPlan(afterSeq: 0, expectedEpoch: epoch).mode else {
+            return XCTFail("the poison persists for the same source")
+        }
+    }
+
+    // Guard: the known-ignored catalog must NOT poison — these appear in
+    // real rollouts and are legal eventless raw progress.
+    func testCodexKnownIgnoredTopLevelRecordsAdvanceWithoutPoison() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lineCount = transcriptBootstrapLineLimit + 20
+        var lines = (0..<lineCount).map {
+            makeCodexMessageLine(role: "assistant",
+                                 content: "deep-\($0)-" + String(repeating: "x", count: 160))
+        }
+        for (index, ignoredType) in ["turn_context", "compacted", "world_state",
+                                     "inter_agent_communication_metadata"].enumerated() {
+            lines[3 + index] = "{\"type\":\"\(ignoredType)\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{}}"
+        }
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(transcriptURL, hub: hub,
+                                              readySentinel: "deep-\(lineCount - 1)-" + String(repeating: "x", count: 160))
+        defer { session.stop() }
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+        let plan = session.afterCursorPlan(afterSeq: 0, expectedEpoch: epoch)
+        guard case .scan(let startAnchor) = plan.mode else {
+            return XCTFail("precondition: a scan plan, got \(plan.mode)")
+        }
+        var anchor = startAnchor
+        var completed = false
+        walk: for _ in 0..<64 {
+            let step = session.afterCursorStep(from: anchor, afterSeq: 0, limit: 40)
+            switch step.outcome {
+            case .advanced(let next):
+                XCTAssertLessThan(next.position, anchor.position)
+                anchor = next
+            case .complete:
+                completed = true
+                break walk
+            case .unavailable, .sourceChanged:
+                return XCTFail("known-ignored records must not poison, got \(step.outcome)")
+            }
+        }
+        XCTAssertTrue(completed)
+        XCTAssertTrue(session.validateHistoryEpoch(epoch),
+                      "known-ignored records keep the source trusted")
+    }
+
+    func testCodexSchemaViolationsPoisonPlanAndValidation() throws {
+        let violations: [(name: String, line: String)] = [
+            ("response_item-missing-payload-type",
+             "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"role\":\"assistant\"}}"),
+            ("response_item-unknown-payload-type",
+             "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"type\":\"future_item\"}}"),
+            ("event_msg-unknown-payload-type",
+             "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"type\":\"quantum_event\"}}"),
+            ("session_meta-non-string-cli-version",
+             "{\"type\":\"session_meta\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"id\":\"session\",\"cli_version\":123}}"),
+            ("session_meta-foreign-id",
+             "{\"type\":\"session_meta\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"id\":\"someone-else\"}}"),
+        ]
+        for violation in violations {
+            let directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+            let lines = [makeCodexMessageLine(role: "assistant", content: "a-0"),
+                         violation.line,
+                         makeCodexMessageLine(role: "assistant", content: "a-1")]
+            try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+            let hub = AgentEventHub()
+            let session = makeStartedCodexSession(transcriptURL, hub: hub, readySentinel: "a-1")
+            defer { session.stop() }
+            let epoch = hub.currentHistoryEpoch(sessionID: "session")
+            if case .unavailable = session.afterCursorPlan(afterSeq: 0, expectedEpoch: epoch).mode {
+            } else {
+                XCTFail("\(violation.name): a schema violation must poison the plan")
+            }
+            XCTAssertFalse(session.validateHistoryEpoch(epoch),
+                           "\(violation.name): a schema violation must poison validation")
+        }
+    }
+
+    // Guard: a supported session_meta plus known-ignored NESTED records must
+    // stay trusted — the poison rules must not over-reach.
+    func testCodexSupportedSessionMetaWithKnownIgnoredNestedRecordsStaysTrusted() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lines = [
+            "{\"type\":\"session_meta\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"id\":\"session\",\"cli_version\":\"0.42.0\"}}",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"type\":\"reasoning\",\"summary\":[]}}",
+            "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"type\":\"token_count\",\"info\":{}}}",
+            makeCodexMessageLine(role: "assistant", content: "a-0"),
+        ]
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(transcriptURL, hub: hub, readySentinel: "a-0")
+        defer { session.stop() }
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+        switch session.afterCursorPlan(afterSeq: 0, expectedEpoch: epoch).mode {
+        case .rawCovered, .scan:
+            break
+        case .hubOnly, .unavailable:
+            XCTFail("legal records must keep the source plannable")
+        }
+        XCTAssertTrue(session.validateHistoryEpoch(epoch))
+    }
+
+    func testValidationSourceFenceRunsBeforeSemanticTrustGate() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lines = (0..<4).map { makeCodexMessageLine(role: "assistant", content: "a-\($0)") }
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(transcriptURL, hub: hub, readySentinel: "a-3")
+        defer { session.stop() }
+        let oldEpoch = hub.currentHistoryEpoch(sessionID: "session")
+
+        // Poison source A via a live malformed append.
+        let handle = try FileHandle(forWritingTo: transcriptURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("this-is-not-json\n".utf8))
+        try handle.close()
+        XCTAssertTrue(waitUntil { session.validateHistoryEpoch(oldEpoch) == false },
+                      "precondition: source A is poisoned")
+
+        // The poisoned A is then atomically replaced by a CLEAN B: the
+        // source fence must detect it BEFORE the trust gate short-circuits.
+        var replacementWriteError: Error?
+        session.validateHistoryEpochBeforeSourceValidationForTesting = {
+            do {
+                try Data((self.makeCodexMessageLine(role: "assistant", content: "b-sentinel") + "\n").utf8)
+                    .write(to: transcriptURL, options: .atomic)
+            } catch {
+                replacementWriteError = error
+            }
+        }
+        defer { session.validateHistoryEpochBeforeSourceValidationForTesting = nil }
+
+        XCTAssertFalse(session.validateHistoryEpoch(oldEpoch))
+        XCTAssertNil(replacementWriteError)
+        XCTAssertEqual(hub.currentHistoryEpoch(sessionID: "session").generation,
+                       oldEpoch.generation + 1,
+                       "the fence ran before the trust gate: the replacement was detected and reset exactly once")
+        XCTAssertFalse(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                        .events.contains { $0.text?.hasPrefix("a-") == true })
+        XCTAssertTrue(waitUntil(timeout: 4) {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                .events.contains { $0.text == "b-sentinel" }
+        }, "the clean replacement reattaches")
+        let freshEpoch = hub.currentHistoryEpoch(sessionID: "session")
+        switch session.afterCursorPlan(afterSeq: 0, expectedEpoch: freshEpoch).mode {
+        case .rawCovered, .scan:
+            break
+        case .hubOnly, .unavailable:
+            XCTFail("the clean replacement source plans normally")
+        }
+    }
+
+    func testPlanSourceFenceRunsBeforeSemanticTrustGate() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lines = (0..<4).map { makeCodexMessageLine(role: "assistant", content: "a-\($0)") }
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(transcriptURL, hub: hub, readySentinel: "a-3")
+        defer { session.stop() }
+        let oldEpoch = hub.currentHistoryEpoch(sessionID: "session")
+
+        let handle = try FileHandle(forWritingTo: transcriptURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("this-is-not-json\n".utf8))
+        try handle.close()
+        XCTAssertTrue(waitUntil { session.validateHistoryEpoch(oldEpoch) == false },
+                      "precondition: source A is poisoned")
+
+        var replacementWriteError: Error?
+        session.afterCursorPlanBeforeSourceValidationForTesting = {
+            do {
+                try Data((self.makeCodexMessageLine(role: "assistant", content: "b-sentinel") + "\n").utf8)
+                    .write(to: transcriptURL, options: .atomic)
+            } catch {
+                replacementWriteError = error
+            }
+        }
+        defer { session.afterCursorPlanBeforeSourceValidationForTesting = nil }
+
+        let plan = session.afterCursorPlan(afterSeq: 0, expectedEpoch: oldEpoch)
+        guard case .unavailable = plan.mode else {
+            return XCTFail("the stale-epoch plan is unavailable, got \(plan.mode)")
+        }
+        XCTAssertNil(replacementWriteError)
+        XCTAssertEqual(hub.currentHistoryEpoch(sessionID: "session").generation,
+                       oldEpoch.generation + 1,
+                       "the plan's fence ran before the trust gate and reset exactly once")
+        XCTAssertTrue(waitUntil(timeout: 4) {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                .events.contains { $0.text == "b-sentinel" }
+        }, "the clean replacement reattaches")
+        // Unhook before the fresh plan: re-firing the atomic replace would
+        // legitimately invalidate B and mask the assertion under test.
+        session.afterCursorPlanBeforeSourceValidationForTesting = nil
+        let freshEpoch = hub.currentHistoryEpoch(sessionID: "session")
+        switch session.afterCursorPlan(afterSeq: 0, expectedEpoch: freshEpoch).mode {
+        case .rawCovered, .scan:
+            break
+        case .hubOnly, .unavailable:
+            XCTFail("the clean replacement source plans normally")
+        }
+    }
+
     func testCodexRepeatedAfterCursorFetchRescansRequestOwnedDepth() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)

@@ -287,10 +287,13 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             if tailer == nil {
                 resolveTranscriptIfPossible()
             }
-            guard let tailer, sourceSemanticTrust else {
+            guard let tailer else {
                 return unavailableNow()
             }
             afterCursorPlanBeforeSourceValidationForTesting?()
+            // Fence BEFORE the semantic-trust gate: a poisoned source that
+            // has since been replaced on disk must surface as epoch movement,
+            // not sit terminal behind a stale trust=false verdict.
             do {
                 try tailer.validateCurrentSource()
             } catch JSONLFileTailerError.sourceInvalidated {
@@ -298,6 +301,9 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                 return unavailableNow()
             } catch {
                 // A transient I/O error is not a source invalidation.
+                return unavailableNow()
+            }
+            guard sourceSemanticTrust else {
                 return unavailableNow()
             }
             guard let coverage = tailer.contiguousRawCoverage else {
@@ -364,9 +370,10 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             if tailer == nil {
                 resolveTranscriptIfPossible()
             }
-            guard let tailer, sourceSemanticTrust else {
+            guard let tailer else {
                 return out(.unavailable)
             }
+            // Fence before the semantic-trust gate (same order as plan).
             do {
                 try tailer.validateCurrentSource()
             } catch JSONLFileTailerError.sourceInvalidated {
@@ -375,6 +382,9 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                 currentEpoch = hub.currentHistoryEpoch(sessionID: record.sessionID)
                 return out(.sourceChanged)
             } catch {
+                return out(.unavailable)
+            }
+            guard sourceSemanticTrust else {
                 return out(.unavailable)
             }
 
@@ -488,11 +498,13 @@ final class CodexTranscriptSession: AgentTranscriptSession {
 
     func validateHistoryEpoch(_ epoch: AgentHistoryEpoch) -> Bool {
         queue.sync {
-            guard didPublishStart, didPublishEnd == false, let tailer,
-                  sourceSemanticTrust else {
+            guard didPublishStart, didPublishEnd == false, let tailer else {
                 return false
             }
             validateHistoryEpochBeforeSourceValidationForTesting?()
+            // Fence BEFORE the semantic-trust gate: a poisoned source that
+            // was replaced on disk must revoke and move the epoch, never sit
+            // terminal behind a stale trust=false verdict.
             do {
                 try tailer.validateCurrentSource()
             } catch JSONLFileTailerError.sourceInvalidated {
@@ -503,6 +515,9 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                 resetTranscriptSource(startResolverNow: true)
                 return false
             } catch {
+                return false
+            }
+            guard sourceSemanticTrust else {
                 return false
             }
             return epoch == hub.currentHistoryEpoch(sessionID: record.sessionID)
@@ -793,14 +808,67 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             consumeResponseItem(payload: payload, timestamp: timestamp, lineOffset: lineOffset)
         case "event_msg":
             consumeEventMessage(payload: payload, timestamp: timestamp, lineOffset: lineOffset)
-        default:
+        case _ where Self.knownIgnoredTopLevelTypes.contains(type):
+            // Explicitly catalogued legal record kinds that Tidey ignores:
+            // eventless raw progress, never a trust judgment.
             break
+        default:
+            // An ARBITRARY unknown top-level type is future/unsupported
+            // schema — silent acceptance would fake complete coverage.
+            sourceSemanticTrust = false
         }
     }
+
+    // Legal rollout record kinds Tidey deliberately ignores (from real
+    // rollouts). `default` is NEVER an allowlist: anything outside the
+    // producing set and these catalogs poisons semantic trust.
+    private static let knownIgnoredTopLevelTypes: Set<String> = [
+        "turn_context",
+        "compacted",
+        "world_state",
+        "inter_agent_communication_metadata",
+    ]
+    private static let knownIgnoredResponseItemTypes: Set<String> = [
+        "reasoning",
+        "web_search_call",
+        "local_shell_call",
+        "custom_tool_call",
+        "custom_tool_call_output",
+        "ghost_commit",
+    ]
+    private static let knownIgnoredEventMessageTypes: Set<String> = [
+        "token_count",
+        "agent_reasoning",
+        "agent_reasoning_delta",
+        "agent_message_delta",
+        "agent_reasoning_section_break",
+        "exec_command_begin",
+        "exec_command_output_delta",
+        "patch_apply_begin",
+        "mcp_tool_call_begin",
+        "mcp_tool_call_end",
+        "web_search_begin",
+        "web_search_end",
+        "turn_diff",
+        "background_event",
+        "stream_error",
+        "plan_update",
+        "session_configured",
+        "user_message",
+    ]
 
     private func consumeSessionMeta(payload: [String: Any], timestamp: String, lineOffset: Int) {
         guard let sessionID = payload["id"] as? String,
               transcriptSessionIDs.contains(sessionID) else {
+            // session_meta whose id is missing, non-string, or belongs to a
+            // different session/thread identity contradicts this source.
+            sourceSemanticTrust = false
+            return
+        }
+        if payload["cli_version"] != nil, !(payload["cli_version"] is String) {
+            // An explicit non-string cli_version is malformed; only an
+            // absent field keeps legacy compatibility.
+            sourceSemanticTrust = false
             return
         }
         if let cliVersion = payload["cli_version"] as? String,
@@ -826,6 +894,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
 
     private func consumeResponseItem(payload: [String: Any], timestamp: String, lineOffset: Int) {
         guard let payloadType = payload["type"] as? String else {
+            // A response_item without a string payload type is malformed.
+            sourceSemanticTrust = false
             return
         }
 
@@ -836,10 +906,10 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             consumeFunctionCall(payload: payload, timestamp: timestamp, lineOffset: lineOffset)
         case "function_call_output":
             consumeFunctionCallOutput(payload: payload, timestamp: timestamp, lineOffset: lineOffset)
-        case "reasoning":
+        case _ where Self.knownIgnoredResponseItemTypes.contains(payloadType):
             break
         default:
-            break
+            sourceSemanticTrust = false
         }
     }
 
@@ -938,6 +1008,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
 
     private func consumeEventMessage(payload: [String: Any], timestamp: String, lineOffset: Int) {
         guard let payloadType = payload["type"] as? String else {
+            // An event_msg without a string payload type is malformed.
+            sourceSemanticTrust = false
             return
         }
 
@@ -954,8 +1026,10 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             consumeExecCommandEnd(payload: payload, timestamp: timestamp, lineOffset: lineOffset)
         case "patch_apply_end":
             consumePatchApplyEnd(payload: payload, timestamp: timestamp, lineOffset: lineOffset)
-        default:
+        case _ where Self.knownIgnoredEventMessageTypes.contains(payloadType):
             break
+        default:
+            sourceSemanticTrust = false
         }
     }
 
