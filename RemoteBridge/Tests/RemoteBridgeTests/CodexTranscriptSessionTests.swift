@@ -2310,6 +2310,67 @@ final class CodexTranscriptSessionTests: XCTestCase {
                       "absent/null phases are legal — the source stays trusted")
     }
 
+    // Dedupe ruling: only the ADJACENT producer twin is suppressed — a
+    // phaseful event_msg leaves a pair key for exactly the next raw
+    // record (corpus line-distance inventory: all 36,294 pairable twins
+    // are distance 1). Legitimate same-text assistant messages in
+    // different turns must BOTH survive; the protocol gives no
+    // session-wide kind/phase/text uniqueness guarantee.
+    func testCodexOnlyAdjacentAgentMessageTwinIsSuppressed() throws {
+        func agentMessage(_ ts: String, phase: String, text: String) -> String {
+            "{\"type\":\"event_msg\",\"timestamp\":\"\(ts)\",\"payload\":{\"type\":\"agent_message\",\"message\":\"\(text)\",\"phase\":\"\(phase)\"}}"
+        }
+        func assistantItem(_ ts: String, phase: String, text: String) -> String {
+            "{\"type\":\"response_item\",\"timestamp\":\"\(ts)\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"\(phase)\",\"content\":[{\"type\":\"output_text\",\"text\":\"\(text)\"}]}}"
+        }
+        let separator = "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:50Z\",\"payload\":{\"type\":\"reasoning\",\"summary\":[]}}"
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lines = [
+            // Repeated identical event_msg messages in different turns:
+            // both survive.
+            agentMessage("2026-05-15T00:00:00Z", phase: "commentary", text: "repeat-event-text"),
+            separator,
+            agentMessage("2026-05-15T00:00:02Z", phase: "commentary", text: "repeat-event-text"),
+            // Repeated identical response_item-only messages: both survive.
+            assistantItem("2026-05-15T00:00:03Z", phase: "commentary", text: "repeat-item-text"),
+            separator,
+            assistantItem("2026-05-15T00:00:05Z", phase: "commentary", text: "repeat-item-text"),
+            // Adjacent twins (same and differing timestamps): exactly once.
+            agentMessage("2026-05-15T00:00:06Z", phase: "commentary", text: "same-ts-twin"),
+            assistantItem("2026-05-15T00:00:06Z", phase: "commentary", text: "same-ts-twin"),
+            agentMessage("2026-05-15T00:00:07Z", phase: "final_answer", text: "diff-ts-twin"),
+            assistantItem("2026-05-15T00:00:08Z", phase: "final_answer", text: "diff-ts-twin"),
+            // An interposed record consumes adjacency: a later same-text
+            // response_item is a REAL message, not a twin.
+            agentMessage("2026-05-15T00:00:09Z", phase: "commentary", text: "stale-key-text"),
+            separator,
+            assistantItem("2026-05-15T00:00:11Z", phase: "commentary", text: "stale-key-text"),
+            makeCodexMessageLine(role: "assistant", content: "a-0"),
+        ]
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(transcriptURL, hub: hub, readySentinel: "a-0")
+        defer { session.stop() }
+        let events = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 100).events
+        func count(_ text: String) -> Int {
+            events.filter { $0.text == text }.count
+        }
+        XCTAssertEqual(count("repeat-event-text"), 2,
+                       "legitimate same-text messages in different turns must both survive")
+        XCTAssertEqual(count("repeat-item-text"), 2,
+                       "repeated response_item-only messages must both survive")
+        XCTAssertEqual(count("same-ts-twin"), 1, "an adjacent twin publishes exactly once")
+        XCTAssertEqual(count("diff-ts-twin"), 1,
+                       "an adjacent twin with differing timestamps publishes exactly once")
+        XCTAssertEqual(count("stale-key-text"), 2,
+                       "an interposed record consumes adjacency — no stale-key suppression")
+        XCTAssertTrue(session.validateHistoryEpoch(hub.currentHistoryEpoch(sessionID: "session")))
+    }
+
     func testValidationSourceFenceRunsBeforeSemanticTrustGate() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)

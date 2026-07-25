@@ -43,11 +43,20 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     private var lastStartedTurnID: String?
     private var lastCompletedTurnID: String?
     private var lastAbortedTurnID: String?
+    // Adjacent producer-twin suppression: a phaseful agent_message leaves
+    // a pair key for EXACTLY the next raw record (corpus line-distance
+    // inventory: all 36,294 pairable twins are adjacent); every
+    // consume(line:) — malformed included — consumes it, so nothing but
+    // the immediate twin is ever suppressed.
+    private var pendingAgentMessagePairKey: String?
+    private var adjacentPairKeyFromPreviousRecord: String?
 
     private struct LiveParserStateSnapshot {
         let unsupportedVersions: Set<String>
         let resolvedToolCallIDs: Set<String>
         let publishedAssistantTextKeys: Set<String>
+        let pendingAgentMessagePairKey: String?
+        let adjacentPairKeyFromPreviousRecord: String?
         let didSeeInteractiveEvent: Bool
         let lastStartedTurnID: String?
         let lastCompletedTurnID: String?
@@ -117,6 +126,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         LiveParserStateSnapshot(unsupportedVersions: unsupportedVersions,
                                 resolvedToolCallIDs: resolvedToolCallIDs,
                                 publishedAssistantTextKeys: publishedAssistantTextKeys,
+                                pendingAgentMessagePairKey: pendingAgentMessagePairKey,
+                                adjacentPairKeyFromPreviousRecord: adjacentPairKeyFromPreviousRecord,
                                 didSeeInteractiveEvent: didSeeInteractiveEvent,
                                 lastStartedTurnID: lastStartedTurnID,
                                 lastCompletedTurnID: lastCompletedTurnID,
@@ -129,6 +140,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         unsupportedVersions = []
         resolvedToolCallIDs = []
         publishedAssistantTextKeys = []
+        pendingAgentMessagePairKey = nil
+        adjacentPairKeyFromPreviousRecord = nil
         didSeeInteractiveEvent = false
         lastStartedTurnID = nil
         lastCompletedTurnID = nil
@@ -141,6 +154,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         unsupportedVersions = snapshot.unsupportedVersions
         resolvedToolCallIDs = snapshot.resolvedToolCallIDs
         publishedAssistantTextKeys = snapshot.publishedAssistantTextKeys
+        pendingAgentMessagePairKey = snapshot.pendingAgentMessagePairKey
+        adjacentPairKeyFromPreviousRecord = snapshot.adjacentPairKeyFromPreviousRecord
         didSeeInteractiveEvent = snapshot.didSeeInteractiveEvent
         lastStartedTurnID = snapshot.lastStartedTurnID
         lastCompletedTurnID = snapshot.lastCompletedTurnID
@@ -697,6 +712,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         unsupportedVersions.removeAll()
         resolvedToolCallIDs.removeAll()
         publishedAssistantTextKeys.removeAll()
+        pendingAgentMessagePairKey = nil
+        adjacentPairKeyFromPreviousRecord = nil
         bootstrappedShellState = .prompt
         currentShellState = .prompt
         lastStartedTurnID = nil
@@ -787,6 +804,10 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     }
 
     private func consume(line: String, lineOffset: Int) {
+        // Every record — malformed included — consumes the previous
+        // record's pending pair key: adjacency lasts exactly one record.
+        adjacentPairKeyFromPreviousRecord = pendingAgentMessagePairKey
+        pendingAgentMessagePairKey = nil
         guard let data = line.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let type = object["type"] as? String,
@@ -973,23 +994,20 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                 return
             }
             // A phaseful assistant item maps to the SAME kind/namespace as
-            // its event_msg twin; the text-keyed dedupe in
-            // publishAssistantText makes the pair produce exactly once,
-            // whichever record arrives (or exists) first.
+            // its event_msg twin. Only the ADJACENT twin is suppressed:
+            // schema validation already completed above, and the pair key
+            // from the immediately preceding record is matched here — a
+            // same-text item anywhere else is a real message.
             didSeeInteractiveEvent = true
             switch phase {
-            case "commentary":
-                publishAssistantText(kind: .assistantMessage,
-                                     eventNamespace: "commentary",
-                                     phase: "commentary",
-                                     timestamp: timestamp,
-                                     text: text,
-                                     lineOffset: lineOffset,
-                                     ordinal: 0)
-            case "final_answer":
-                publishAssistantText(kind: .assistantFinal,
-                                     eventNamespace: "final",
-                                     phase: "final_answer",
+            case "commentary", "final_answer":
+                let kind: AgentEventKind = phase == "final_answer" ? .assistantFinal : .assistantMessage
+                if adjacentPairKeyFromPreviousRecord == "\(kind.rawValue)|\(phase ?? "")|\(text)" {
+                    return
+                }
+                publishAssistantText(kind: kind,
+                                     eventNamespace: phase == "final_answer" ? "final" : "commentary",
+                                     phase: phase ?? "",
                                      timestamp: timestamp,
                                      text: text,
                                      lineOffset: lineOffset,
@@ -1226,23 +1244,18 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         }
 
         didSeeInteractiveEvent = true
-        if phase == "final_answer" {
-            publishAssistantText(kind: .assistantFinal,
-                                 eventNamespace: "final",
-                                 phase: "final_answer",
-                                 timestamp: timestamp,
-                                 text: text,
-                                 lineOffset: lineOffset,
-                                 ordinal: 0)
-        } else {
-            publishAssistantText(kind: .assistantMessage,
-                                 eventNamespace: "commentary",
-                                 phase: "commentary",
-                                 timestamp: timestamp,
-                                 text: text,
-                                 lineOffset: lineOffset,
-                                 ordinal: 0)
-        }
+        let kind: AgentEventKind = phase == "final_answer" ? .assistantFinal : .assistantMessage
+        publishAssistantText(kind: kind,
+                             eventNamespace: phase == "final_answer" ? "final" : "commentary",
+                             phase: phase,
+                             timestamp: timestamp,
+                             text: text,
+                             lineOffset: lineOffset,
+                             ordinal: 0)
+        // Leave the pair key for EXACTLY the next record: its same-text
+        // response_item twin (all pairable twins are adjacent in the
+        // corpus) is suppressed; anything else consumes the key.
+        pendingAgentMessagePairKey = "\(kind.rawValue)|\(phase)|\(text)"
     }
 
     private func publishAssistantText(kind: AgentEventKind,
@@ -1252,12 +1265,11 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                       text: String,
                                       lineOffset: Int,
                                       ordinal: Int) {
-        // The dedupe key deliberately EXCLUDES the timestamp: 15,391 of
-        // the 36,298 real event_msg/response_item pairs carry timestamps
-        // differing by up to 2s (all pairs are ≤2s apart; no distant
-        // identical repeats exist in the corpus), so a timestamp-keyed
-        // dedupe would double-publish 42% of them.
-        let dedupeKey = "\(kind.rawValue)|\(phase)|\(text)"
+        // General repeat-suppression keeps the timestamp: producer twins
+        // with differing timestamps are handled by the ADJACENT pair key
+        // instead, so legitimate same-text messages in different turns
+        // both survive.
+        let dedupeKey = "\(kind.rawValue)|\(phase)|\(timestamp)|\(text)"
         guard !publishedAssistantTextKeys.contains(dedupeKey) else {
             return
         }
