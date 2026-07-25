@@ -936,12 +936,17 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             sourceSemanticTrust = false
             return
         }
-        // JSON-null phase is observed real data (23,916 records in the
-        // 2026-07-26 inventory) — legal absent. Any other non-string
-        // phase is malformed.
-        if let phaseValue = payload["phase"], !(phaseValue is NSNull), !(phaseValue is String) {
-            sourceSemanticTrust = false
-            return
+        // phase is Option<MessagePhase> (models.rs @ rust-v0.145.0):
+        // absent and JSON null are legal-absent (inventory v2 over all
+        // 1,164 local files: 27,677 absent, 0 explicit null), and only the
+        // two official enum values are legal Strings — an unknown String
+        // is not a member of the enum.
+        if let phaseValue = payload["phase"], !(phaseValue is NSNull) {
+            guard let phaseString = phaseValue as? String,
+                  phaseString == "commentary" || phaseString == "final_answer" else {
+                sourceSemanticTrust = false
+                return
+            }
         }
         let phase = payload["phase"] as? String
         guard let contentValue = payload["content"] else {
@@ -949,7 +954,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             return
         }
         let text: String
-        switch Self.parseContentValue(contentValue) {
+        switch Self.parseContentValue(contentValue, context: .message) {
         case .malformed:
             sourceSemanticTrust = false
             return
@@ -1043,7 +1048,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             sourceSemanticTrust = false
             return
         }
-        let parsed = Self.parseContentValue(outputValue)
+        let parsed = Self.parseContentValue(outputValue, context: .functionOutput)
         if case .malformed = parsed {
             // Schema validation BEFORE the resolved-ID dedupe: a malformed
             // duplicate must never hide behind an already-resolved call.
@@ -1566,16 +1571,34 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     // content and malformed content — the two have opposite trust meanings.
     enum CodexContentParse {
         case text(String)   // valid, non-empty compacted text
-        case noText         // valid, but no text product (empty / image-only)
+        case noText         // valid, but no text product (empty / media-only)
         case malformed      // schema violation
     }
 
-    // Accepts the two legal shapes observed in real rollouts: a plain
-    // String, or an Array of content blocks (input_text / output_text /
-    // legacy text / summary_text carrying a String "text"; input_image
-    // carrying a String "image_url"). Anything else is malformed.
-    static func parseContentValue(_ value: Any) -> CodexContentParse {
+    // The two content contexts have DIFFERENT official schemas (codex-rs
+    // models.rs @ rust-v0.145.0, 25af12f7) — one shared allowlist would
+    // either over-accept or over-reject:
+    //   .message        — Array only; text blocks input_text/output_text;
+    //                     no-text blocks input_image/input_audio.
+    //   .functionOutput — String or Array; text block input_text only;
+    //                     no-text blocks input_image/input_audio/
+    //                     encrypted_content; the official human-readable
+    //                     conversion keeps nonblank input_text joined "\n".
+    // text / summary_text / a message top-level String are in neither
+    // schema and have zero evidence across all 1,164 local rollout files
+    // (inventory v2, 2026-07-25) — no legacy catalog, fail closed.
+    enum CodexContentContext {
+        case message
+        case functionOutput
+    }
+
+    private static let legalImageDetails: Set<String> = ["auto", "low", "high", "original"]
+
+    static func parseContentValue(_ value: Any, context: CodexContentContext) -> CodexContentParse {
         if let string = value as? String {
+            guard context == .functionOutput else {
+                return .malformed
+            }
             let compacted = compactString(string)
             return compacted.isEmpty ? .noText : .text(compacted)
         }
@@ -1588,22 +1611,43 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                   let type = block["type"] as? String else {
                 return .malformed
             }
-            switch type {
-            case "input_text", "output_text", "text", "summary_text":
+            switch (context, type) {
+            case (.message, "input_text"), (.message, "output_text"), (.functionOutput, "input_text"):
                 guard let text = block["text"] as? String else {
                     return .malformed
                 }
                 parts.append(text)
-            case "input_image":
+            case (_, "input_image"):
                 guard block["image_url"] is String else {
+                    return .malformed
+                }
+                if let detail = block["detail"] {
+                    guard let detailString = detail as? String,
+                          Self.legalImageDetails.contains(detailString) else {
+                        return .malformed
+                    }
+                }
+            case (_, "input_audio"):
+                guard block["audio_url"] is String else {
+                    return .malformed
+                }
+            case (.functionOutput, "encrypted_content"):
+                guard block["encrypted_content"] is String else {
                     return .malformed
                 }
             default:
                 return .malformed
             }
         }
-        let joined = compactString(parts.joined(separator: "\n\n"))
-        return joined.isEmpty ? .noText : .text(joined)
+        let joined: String
+        switch context {
+        case .functionOutput:
+            joined = parts.filter { !compactString($0).isEmpty }.joined(separator: "\n")
+        case .message:
+            joined = parts.joined(separator: "\n\n")
+        }
+        let compacted = compactString(joined)
+        return compacted.isEmpty ? .noText : .text(compacted)
     }
 
     private static func isBootstrapUserMessage(_ text: String) -> Bool {

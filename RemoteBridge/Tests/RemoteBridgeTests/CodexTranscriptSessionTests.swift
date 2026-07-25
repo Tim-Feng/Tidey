@@ -1683,19 +1683,23 @@ final class CodexTranscriptSessionTests: XCTestCase {
         XCTAssertTrue(session.validateHistoryEpoch(epoch))
     }
 
-    // Real rollouts carry function_call_output.output as a String OR a
-    // content-block Array (inventory 2026-07-26: 35,353 String / 3,878
-    // Array). Structured text outputs are legal current data and must
-    // survive into the tool result, in block order.
+    // Official FunctionCallOutput.output schema (codex-rs models.rs @
+    // rust-v0.145.0, 25af12f7): String or Array of input_text /
+    // input_image / input_audio / encrypted_content. The human-readable
+    // conversion keeps ONLY nonblank input_text, joined with a single
+    // "\n"; media/encrypted blocks are legal but contribute no text (the
+    // text on both sides keeps its order — the media itself never enters
+    // the String output).
     func testCodexStructuredFunctionOutputPreservesTextBlocks() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let outputBlocks = "[{\"type\":\"input_text\",\"text\":\"part-1\"},{\"type\":\"input_text\",\"text\":\"   \"},{\"type\":\"input_image\",\"detail\":\"original\",\"image_url\":\"data:image/png;base64,AA==\"},{\"type\":\"input_audio\",\"audio_url\":\"data:audio/wav;base64,AA==\"},{\"type\":\"encrypted_content\",\"encrypted_content\":\"AAAA\"},{\"type\":\"input_text\",\"text\":\"part-2\"}]"
         let lines = [
             "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"type\":\"function_call\",\"call_id\":\"call-1\",\"name\":\"shell\",\"arguments\":\"{}\"}}",
-            "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:01Z\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call-1\",\"output\":[{\"type\":\"input_text\",\"text\":\"part-1\"},{\"type\":\"input_image\",\"detail\":\"auto\",\"image_url\":\"data:image/png;base64,AA==\"},{\"type\":\"input_text\",\"text\":\"part-2\"}]}}",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:01Z\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call-1\",\"output\":\(outputBlocks)}}",
             "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:02Z\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call-1\",\"output\":[{\"type\":\"input_text\",\"text\":\"late-duplicate\"}]}}",
             makeCodexMessageLine(role: "assistant", content: "a-0"),
         ]
@@ -1707,16 +1711,16 @@ final class CodexTranscriptSessionTests: XCTestCase {
             .events.filter { $0.eventID == "call-1:function-output" }
         XCTAssertEqual(results.count, 1,
                        "the structured output resolves the call EXACTLY once — the resolved-ID dedupe holds")
-        XCTAssertEqual(results.first?.output, "part-1\n\npart-2",
-                       "all legal text blocks join in block order; the interleaved image is preserved around, not poisoning")
+        XCTAssertEqual(results.first?.output, "part-1\npart-2",
+                       "exactly the official conversion: nonblank input_text only, joined with a single newline")
         XCTAssertEqual(results.first?.toolCallID, "call-1")
         let epoch = hub.currentHistoryEpoch(sessionID: "session")
         XCTAssertTrue(session.validateHistoryEpoch(epoch),
-                      "a structured legal output keeps the source trusted")
+                      "legal media/encrypted blocks keep the source trusted")
     }
 
-    // Guard: image-only Array, empty String, and empty Array outputs are
-    // legal no-text products — no event, no poison.
+    // Guard: media/encrypted-only Array, empty String, and empty Array
+    // outputs are legal no-text products — no event, no poison.
     func testCodexEventlessFunctionOutputsStayLegal() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
@@ -1727,6 +1731,7 @@ final class CodexTranscriptSessionTests: XCTestCase {
             "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"img-only\",\"output\":[{\"type\":\"input_image\",\"detail\":\"auto\",\"image_url\":\"data:image/png;base64,AA==\"}]}}",
             "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:01Z\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"empty-str\",\"output\":\"\"}}",
             "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:02Z\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"empty-arr\",\"output\":[]}}",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:03Z\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"media-enc-only\",\"output\":[{\"type\":\"input_audio\",\"audio_url\":\"data:audio/wav;base64,AA==\"},{\"type\":\"encrypted_content\",\"encrypted_content\":\"AAAA\"}]}}",
             makeCodexMessageLine(role: "assistant", content: "a-0"),
         ]
         try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
@@ -1894,6 +1899,150 @@ final class CodexTranscriptSessionTests: XCTestCase {
         }
         XCTAssertTrue(session.validateHistoryEpoch(epoch),
                       "legal no-product records keep the source trusted")
+    }
+
+    // One deep-page fail-closed check per call: the row's record(s) sit
+    // below the bootstrap floor, the initial plan must scan, and the walk
+    // must poison without leaking same-page partial products. Running each
+    // row in its own function scope guarantees the session and its file
+    // watcher stop before the next row starts, on failure paths too.
+    private func assertDeepRowFailsClosed(name: String,
+                                          rowLines: [String],
+                                          file: StaticString = #filePath,
+                                          line: UInt = #line) throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lineCount = transcriptBootstrapLineLimit + 20
+        var lines = (0..<lineCount).map {
+            makeCodexMessageLine(role: "assistant",
+                                 content: "deep-\($0)-" + String(repeating: "x", count: 40))
+        }
+        for (offset, rowLine) in rowLines.enumerated() {
+            lines[3 + offset] = rowLine
+        }
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(transcriptURL, hub: hub,
+                                              readySentinel: "deep-\(lineCount - 1)-" + String(repeating: "x", count: 40))
+        defer { session.stop() }
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+        let plan = session.afterCursorPlan(afterSeq: 0, expectedEpoch: epoch)
+        guard case .scan(let startAnchor) = plan.mode else {
+            XCTFail("\(name): precondition — a below-floor cursor plans a scan, got \(plan.mode)",
+                    file: file, line: line)
+            return
+        }
+        var anchor = startAnchor
+        var sawUnavailable = false
+        walk: for _ in 0..<4 {
+            let step = session.afterCursorStep(from: anchor, afterSeq: 0, limit: lineCount + 100)
+            switch step.outcome {
+            case .advanced(let next):
+                anchor = next
+            case .unavailable:
+                XCTAssertTrue(step.events.isEmpty,
+                              "\(name): a poisoned step must not leak same-page partial products",
+                              file: file, line: line)
+                sawUnavailable = true
+                break walk
+            case .complete:
+                XCTFail("\(name): the walk must not complete past a malformed record",
+                        file: file, line: line)
+                break walk
+            case .sourceChanged:
+                XCTFail("\(name): a malformed record is not a source change", file: file, line: line)
+                break walk
+            }
+        }
+        XCTAssertTrue(sawUnavailable, "\(name): the malformed page fails the step closed",
+                      file: file, line: line)
+        if case .unavailable = session.afterCursorPlan(afterSeq: 0, expectedEpoch: epoch).mode {
+        } else {
+            XCTFail("\(name): the poison persists for later plans", file: file, line: line)
+        }
+        XCTAssertFalse(session.validateHistoryEpoch(epoch),
+                       "\(name): the poison persists for validation", file: file, line: line)
+    }
+
+    // Official FunctionCallOutput.output block allowlist (models.rs @
+    // rust-v0.145.0): input_text / input_image / input_audio /
+    // encrypted_content. output_text, text, and summary_text are NOT in
+    // the function-output schema and have zero evidence in the full local
+    // corpus — fail closed. Required fields and the ImageDetail enum
+    // (auto/low/high/original) are enforced.
+    func testCodexFunctionOutputProfileViolationsFailClosed() throws {
+        func fco(_ output: String) -> String {
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"c1\",\"output\":\(output)}}"
+        }
+        let rows: [(name: String, output: String)] = [
+            ("fco-output-text-block", "[{\"type\":\"output_text\",\"text\":\"x\"}]"),
+            ("fco-text-block", "[{\"type\":\"text\",\"text\":\"x\"}]"),
+            ("fco-summary-text-block", "[{\"type\":\"summary_text\",\"text\":\"x\"}]"),
+            ("fco-audio-missing-url", "[{\"type\":\"input_audio\"}]"),
+            ("fco-audio-nonstring-url", "[{\"type\":\"input_audio\",\"audio_url\":7}]"),
+            ("fco-encrypted-missing-field", "[{\"type\":\"encrypted_content\"}]"),
+            ("fco-encrypted-nonstring-field", "[{\"type\":\"encrypted_content\",\"encrypted_content\":7}]"),
+            ("fco-image-illegal-detail", "[{\"type\":\"input_image\",\"image_url\":\"u\",\"detail\":\"giant\"}]"),
+            ("fco-image-nonstring-detail", "[{\"type\":\"input_image\",\"image_url\":\"u\",\"detail\":7}]"),
+        ]
+        for row in rows {
+            try assertDeepRowFailsClosed(name: row.name, rowLines: [fco(row.output)])
+        }
+    }
+
+    // Official ResponseItem::Message.content schema (models.rs @
+    // rust-v0.145.0): an ARRAY of input_text / output_text / input_image /
+    // input_audio. A top-level String and the text / summary_text /
+    // encrypted_content blocks are not in the schema and have zero
+    // evidence across ALL 1,164 local rollout files (inventory v2,
+    // 2026-07-25) — fail closed, no legacy catalog. phase is
+    // Option<MessagePhase>: absent, JSON null, commentary, and
+    // final_answer are legal; an unknown String is not.
+    func testCodexMessageProfileMatchesOfficialSchema() throws {
+        func message(_ payloadTail: String) -> String {
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"type\":\"message\",\(payloadTail)}}"
+        }
+        let poisonRows: [(name: String, payloadTail: String)] = [
+            ("message-string-content", "\"role\":\"user\",\"content\":\"legacy string\""),
+            ("message-text-block", "\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"x\"}]"),
+            ("message-summary-text-block", "\"role\":\"user\",\"content\":[{\"type\":\"summary_text\",\"text\":\"x\"}]"),
+            ("message-unknown-phase-string", "\"role\":\"assistant\",\"phase\":\"draft\",\"content\":[{\"type\":\"input_text\",\"text\":\"hi\"}]"),
+            ("message-image-illegal-detail", "\"role\":\"user\",\"content\":[{\"type\":\"input_image\",\"image_url\":\"u\",\"detail\":\"giant\"}]"),
+            ("message-audio-nonstring-url", "\"role\":\"user\",\"content\":[{\"type\":\"input_audio\",\"audio_url\":7}]"),
+            ("message-encrypted-content-block", "\"role\":\"user\",\"content\":[{\"type\":\"encrypted_content\",\"encrypted_content\":\"AAAA\"}]"),
+        ]
+        for row in poisonRows {
+            try assertDeepRowFailsClosed(name: row.name, rowLines: [message(row.payloadTail)])
+        }
+
+        // Legal side: input_audio is a legal message no-text block,
+        // output_text is legal text, and phase absent / JSON null /
+        // commentary / final_answer are all legal.
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lines = [
+            message("\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"legal-audio-msg\"},{\"type\":\"input_audio\",\"audio_url\":\"data:audio/wav;base64,AA==\"}]"),
+            message("\"role\":\"assistant\",\"phase\":null,\"content\":[{\"type\":\"output_text\",\"text\":\"null-phase-msg\"}]"),
+            message("\"role\":\"assistant\",\"phase\":\"commentary\",\"content\":[{\"type\":\"output_text\",\"text\":\"policy no-product\"}]"),
+            makeCodexMessageLine(role: "assistant", content: "a-0"),
+        ]
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(transcriptURL, hub: hub, readySentinel: "a-0")
+        defer { session.stop() }
+        let events = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50).events
+        XCTAssertTrue(events.contains { $0.text == "legal-audio-msg" },
+                      "a legal input_audio block must not poison the user message around it")
+        XCTAssertTrue(events.contains { $0.text == "null-phase-msg" },
+                      "JSON-null phase is legal (Option<MessagePhase>)")
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+        XCTAssertTrue(session.validateHistoryEpoch(epoch))
     }
 
     func testValidationSourceFenceRunsBeforeSemanticTrustGate() throws {
