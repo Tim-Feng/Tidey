@@ -83,6 +83,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     }
     // Fires inside validateHistoryEpoch before the source validation.
     var validateHistoryEpochBeforeSourceValidationForTesting: (() -> Void)?
+    // Fires inside afterCursorPlan before the source validation.
+    var afterCursorPlanBeforeSourceValidationForTesting: (() -> Void)?
     // Semantic trust over the CURRENT source (S10 state; enforced by the
     // closure-B row): poisoned by invalid UTF-8 / malformed JSON /
     // unsupported schema, re-established only when a replacement source
@@ -288,6 +290,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             guard let tailer, sourceSemanticTrust else {
                 return unavailableNow()
             }
+            afterCursorPlanBeforeSourceValidationForTesting?()
             do {
                 try tailer.validateCurrentSource()
             } catch JSONLFileTailerError.sourceInvalidated {
