@@ -773,6 +773,51 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
                        "only the replacement-epoch payload survives")
     }
 
+    func testAdvancedNextAnchorEpochMismatchRetriesOnceWithoutAcceptingStep() {
+        let hub = AgentEventHub()
+        hub.publish(makeEvent(seq: 101, text: "live-101"))
+        var planCalls = 0
+        var stepCalls = 0
+
+        let output = runAfter(hub: hub,
+                              limit: 5,
+                              afterSeq: 100,
+                              plan: { _, _, expected in
+                                  planCalls += 1
+                                  if planCalls == 1 {
+                                      return AgentAfterCursorPlan(
+                                          epoch: expected,
+                                          mode: .scan(from: AgentHistoryAnchor(
+                                              epoch: expected,
+                                              position: TranscriptEventPosition(lineOffset: 5_000, ordinal: 0))))
+                                  }
+                                  return AgentAfterCursorPlan(epoch: expected, mode: .hubOnly)
+                              },
+                              step: { _, stepAnchor, _, _ in
+                                  stepCalls += 1
+                                  // step.epoch is valid, but the NEXT anchor
+                                  // crosses epochs: the whole step is
+                                  // rejected and the attempt retries.
+                                  return AgentAfterCursorStep(
+                                      epoch: stepAnchor.epoch,
+                                      outcome: .advanced(AgentHistoryAnchor(
+                                          epoch: AgentHistoryEpoch(sessionID: "session",
+                                                                   generation: stepAnchor.epoch.generation &+ 99),
+                                          position: TranscriptEventPosition(lineOffset: 4_000, ordinal: 0))),
+                                      events: [self.makeEvent(id: "stale", seq: 150, text: "stale")])
+                              })
+
+        XCTAssertEqual(planCalls, 2)
+        XCTAssertEqual(stepCalls, 1)
+        XCTAssertEqual(output.fetchResult.events.compactMap(\.text), ["live-101"],
+                       "only the retry attempt's lease window is served — the stale step event must not leak")
+        XCTAssertFalse(output.didBackfill,
+                       "an epoch-crossing next anchor rejects the whole step — it is never accepted")
+        XCTAssertEqual(output.fetchResult.oldestSeq, 101)
+        XCTAssertEqual(output.fetchResult.newestSeq, 101)
+        XCTAssertFalse(output.fetchResult.hasMore)
+    }
+
     // Terminal guard: validation false while the Hub epoch is UNCHANGED is
     // a terminal fail — no retry quota applies.
     func testValidationFalseWithoutEpochChangeFailsClosedWithoutRetry() {
