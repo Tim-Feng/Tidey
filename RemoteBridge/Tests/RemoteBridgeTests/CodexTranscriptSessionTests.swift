@@ -2047,6 +2047,64 @@ final class CodexTranscriptSessionTests: XCTestCase {
         XCTAssertTrue(session.validateHistoryEpoch(epoch))
     }
 
+    // exec/patch metadata is producer contract too (inventory over all
+    // local rollouts: exec exit_code always a JSON Number, status always a
+    // String; patch success always a Boolean, status always a String).
+    // Fields stay optional for legacy fixtures, but an explicit
+    // wrong-typed value must poison — silently rendering it to nil while
+    // raw coverage advances is the same silent-gap bug. The Bool rows pin
+    // that an NSNumber Bool bridge (CFBoolean) cannot pass as a Number.
+    func testCodexExecPatchMetadataSchemaFailsClosed() throws {
+        func eventMsg(_ payload: String) -> String {
+            "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":\(payload)}"
+        }
+        let rows: [(name: String, lines: [String])] = [
+            ("exec-exit-code-string", [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"e1\",\"exit_code\":\"0\",\"stdout\":\"ok\"}")]),
+            ("exec-exit-code-bool", [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"e1\",\"exit_code\":true,\"stdout\":\"ok\"}")]),
+            ("exec-status-non-string", [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"e1\",\"status\":7,\"stdout\":\"ok\"}")]),
+            ("patch-success-non-bool-number", [eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"p1\",\"success\":1,\"stdout\":\"ok\"}")]),
+            ("patch-success-non-bool-string", [eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"p1\",\"success\":\"yes\",\"stdout\":\"ok\"}")]),
+            ("patch-status-non-string", [eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"p1\",\"status\":7,\"stdout\":\"ok\"}")]),
+            ("exec-malformed-metadata-after-resolved",
+             [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"em-dup\",\"exit_code\":0,\"status\":\"completed\",\"stdout\":\"legal first\"}"),
+              eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"em-dup\",\"exit_code\":\"0\",\"stdout\":\"dup\"}")]),
+            ("patch-malformed-metadata-after-resolved",
+             [eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"pm-dup\",\"success\":true,\"stdout\":\"legal first\"}"),
+              eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"pm-dup\",\"success\":1,\"stdout\":\"dup\"}")]),
+        ]
+        for row in rows {
+            try assertDeepRowFailsClosed(name: row.name, rowLines: row.lines)
+        }
+
+        // Legal side: well-typed metadata (Number exit code, Boolean
+        // success, String status) keeps the source trusted and reaches the
+        // product; absent fields stay legal.
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lines = [
+            eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"legal-exec\",\"exit_code\":0,\"status\":\"completed\",\"stdout\":\"exec-out\"}"),
+            eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"legal-patch\",\"success\":true,\"status\":\"completed\",\"stdout\":\"patch-out\"}"),
+            eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"absent-meta\",\"stdout\":\"bare-out\"}"),
+            makeCodexMessageLine(role: "assistant", content: "a-0"),
+        ]
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(transcriptURL, hub: hub, readySentinel: "a-0")
+        defer { session.stop() }
+        let events = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50).events
+        let execResult = events.first { $0.eventID == "legal-exec:exec-end" }
+        XCTAssertEqual(execResult?.output, "exec-out")
+        XCTAssertEqual(execResult?.metadata?["exit_code"], "0")
+        let patchResult = events.first { $0.eventID == "legal-patch:patch-end" }
+        XCTAssertEqual(patchResult?.output, "patch-out")
+        XCTAssertTrue(events.contains { $0.eventID == "absent-meta:exec-end" },
+                      "absent metadata fields stay legal")
+        XCTAssertTrue(session.validateHistoryEpoch(hub.currentHistoryEpoch(sessionID: "session")))
+    }
+
     func testValidationSourceFenceRunsBeforeSemanticTrustGate() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)

@@ -1243,6 +1243,22 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             sourceSemanticTrust = false
             return
         }
+        // Metadata schema is producer contract too (inventory: exit_code
+        // always a JSON Number, status always a String). Optional for
+        // legacy, but an explicit wrong-typed value poisons — BEFORE
+        // candidate selection, dedupe, or the empty-product policy.
+        if let exitCode = payload["exit_code"] {
+            guard exitCode is NSNumber, !Self.isJSONBoolean(exitCode) else {
+                sourceSemanticTrust = false
+                return
+            }
+        }
+        if let status = payload["status"] {
+            guard status is String else {
+                sourceSemanticTrust = false
+                return
+            }
+        }
         // Validate EVERY present output candidate before selection, dedupe,
         // or the empty-product policy: a non-string candidate must never be
         // hidden by another field or an already-resolved call.
@@ -1286,6 +1302,21 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             sourceSemanticTrust = false
             return
         }
+        // Metadata schema (inventory: success always a Boolean, status
+        // always a String) — optional for legacy, poisons when mistyped,
+        // BEFORE candidate selection, dedupe, or the empty-product policy.
+        if let success = payload["success"] {
+            guard Self.isJSONBoolean(success) else {
+                sourceSemanticTrust = false
+                return
+            }
+        }
+        if let status = payload["status"] {
+            guard status is String else {
+                sourceSemanticTrust = false
+                return
+            }
+        }
         guard let candidate = validatedOutputCandidate(payload: payload,
                                                        keys: ["stdout", "stderr"]) else {
             return
@@ -1318,6 +1349,13 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                   "status": payload["status"] as? String,
                               ]
                           ))
+    }
+
+    // JSONSerialization bridges JSON true/false to CFBoolean (an NSNumber
+    // subclass), so `is NSNumber` alone cannot tell a Bool from a Number —
+    // the type ID check can.
+    private static func isJSONBoolean(_ value: Any) -> Bool {
+        CFGetTypeID(value as CFTypeRef) == CFBooleanGetTypeID()
     }
 
     // Validates every PRESENT candidate key, then selects the first present
