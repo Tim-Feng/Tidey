@@ -3066,10 +3066,9 @@ final class CodexTranscriptSessionTests: XCTestCase {
                                                          afterSeq: nil) { _, beforeSeq, limit in
             session.backfill(beforeSeq: beforeSeq, limit: limit)
         }
-        XCTAssertTrue(beforeMiddle.fetchResult.events.contains { $0.text == "b-0" },
-                      "the accepted cursor inverts to the correct raw position")
-        XCTAssertFalse(beforeMiddle.fetchResult.events.contains { $0.text == "b-1" },
-                       "the cursor event itself is excluded")
+        XCTAssertEqual(beforeMiddle.fetchResult.events.compactMap(\.text).filter { $0.hasPrefix("b-") },
+                       ["b-0"],
+                       "the accepted cursor inverts to EXACTLY the preceding row — nothing extra, cursor excluded")
     }
 
     // B18: mid-source Hub rebase — the accepted sequences (not the
@@ -3139,10 +3138,9 @@ final class CodexTranscriptSessionTests: XCTestCase {
                                                          afterSeq: nil) { _, beforeSeq, limit in
             session.backfill(beforeSeq: beforeSeq, limit: limit)
         }
-        XCTAssertTrue(beforeSecond.fetchResult.events.contains { $0.text == "r-0" },
-                      "the before inverse lands on the accepted cursor's true raw position")
-        XCTAssertFalse(beforeSecond.fetchResult.events.contains { $0.text == "r-1" },
-                       "the cursor event is excluded — no proposed-arithmetic misread")
+        XCTAssertEqual(beforeSecond.fetchResult.events.compactMap(\.text).filter { $0.hasPrefix("r-") },
+                       ["r-0"],
+                       "the before inverse lands on EXACTLY the preceding row — nothing extra, cursor excluded")
 
         // B. Typed after flow from the ACCEPTED #1 cursor: exactly #2 and
         // #3, once each, ordered by accepted seq, identity-equal to the
@@ -3181,6 +3179,105 @@ final class CodexTranscriptSessionTests: XCTestCase {
         XCTAssertEqual(rerun.fetchResult.events.map { "\($0.eventID)#\($0.seq)#\($0.text ?? "")" },
                        after.fetchResult.events.map { "\($0.eventID)#\($0.seq)#\($0.text ?? "")" },
                        "the same fetch reruns byte-identically")
+    }
+
+    // Contract guard: after a Hub rebase, the never-published PROPOSED
+    // sequence must not survive as exact raw authority. If an
+    // implementation kept the old proposed-seq exact-map write and merely
+    // ADDED the accepted mapping, a plan on the proposed cursor would
+    // wrongly classify rawCovered. (Production was fixed in 208a56ad8;
+    // this is the test-only closure pinning it.)
+    func testRebasedProposedSequenceIsNotRetainedAsExactRawAuthority() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lineCount = transcriptBootstrapLineLimit + 1
+        let lines = (0..<lineCount).map { makeCodexMessageLine(role: "assistant", content: "row-\($0)") }
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        var offsets = [Int]()
+        var runningOffset = 0
+        for line in lines {
+            offsets.append(runningOffset)
+            runningOffset += line.utf8.count + 1
+        }
+        let appendOffset = runningOffset
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(transcriptURL, hub: hub,
+                                              readySentinel: "row-\(lineCount - 1)")
+        defer { session.stop() }
+        // Nonzero retained floor, PROVEN behaviorally: a cursor below the
+        // bootstrap floor must plan a scan (floor == 0 would rawCover it).
+        let epochAtFloorProbe = hub.currentHistoryEpoch(sessionID: "session")
+        guard case .scan = session.afterCursorPlan(afterSeq: 0, expectedEpoch: epochAtFloorProbe).mode else {
+            return XCTFail("precondition: the retained floor is nonzero — afterSeq 0 must scan")
+        }
+        // Derive the session's sequence base from an observed accepted row
+        // (nothing has been rebased yet), then the append row's proposal.
+        let lastRow = try XCTUnwrap(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5)
+            .events.first { $0.text == "row-\(lineCount - 1)" })
+        let base = lastRow.seq - transcriptEventSequence(lineOffset: offsets[lineCount - 1], ordinal: 0)
+        let proposedSeq = base + transcriptEventSequence(lineOffset: appendOffset, ordinal: 0)
+        hub.publish(AgentEvent(eventID: "external-high-synthetic",
+                               seq: 1_000_000_000,
+                               vendor: "codex",
+                               workspaceID: "workspace",
+                               sessionID: "session",
+                               timestamp: "2026-05-15T00:00:00Z",
+                               type: .status,
+                               role: nil, text: nil, name: nil, input: nil,
+                               output: nil, toolCallID: nil, metadata: nil))
+        let highWater = hub.sequenceHighWater(sessionID: "session")
+        XCTAssertGreaterThan(highWater, proposedSeq,
+                             "precondition: the high-water sits above the append row's proposal")
+        let deliveryLock = NSLock()
+        var acceptedAppend: AgentEvent?
+        let (subscriptionID, _) = hub.subscribe(workspaceID: "workspace", sessionID: "session") { envelope in
+            deliveryLock.lock()
+            if envelope.event.text == "appended-row" {
+                acceptedAppend = envelope.event
+            }
+            deliveryLock.unlock()
+        }
+        defer { hub.unsubscribe(subscriptionID) }
+        let handle = try FileHandle(forWritingTo: transcriptURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data((makeCodexMessageLine(role: "assistant", content: "appended-row") + "\n").utf8))
+        try handle.close()
+        XCTAssertTrue(waitUntil {
+            deliveryLock.lock()
+            defer { deliveryLock.unlock() }
+            return acceptedAppend != nil
+        })
+        deliveryLock.lock()
+        let accepted = acceptedAppend
+        deliveryLock.unlock()
+        let acceptedSeq = try XCTUnwrap(accepted?.seq)
+        XCTAssertGreaterThan(acceptedSeq, highWater, "precondition: the Hub rebased the append")
+        XCTAssertNotEqual(acceptedSeq, proposedSeq)
+
+        // The NEVER-PUBLISHED proposed cursor must scan: with a nonzero
+        // retained floor and proposed < accepted max, only a leftover
+        // proposed-seq exact mapping could claim rawCovered.
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+        switch session.afterCursorPlan(afterSeq: proposedSeq, expectedEpoch: epoch).mode {
+        case .scan:
+            break
+        case .rawCovered:
+            XCTFail("the rebased row's proposed seq must NOT survive as exact raw authority")
+        case .hubOnly, .unavailable:
+            XCTFail("the source stays plannable")
+        }
+        // Guard: the ACCEPTED cursor still classifies through the exact
+        // map — fixing the proposed authority must not drop the accepted
+        // mapping.
+        switch session.afterCursorPlan(afterSeq: acceptedSeq, expectedEpoch: epoch).mode {
+        case .rawCovered:
+            break
+        case .scan, .hubOnly, .unavailable:
+            XCTFail("the accepted cursor keeps its exact raw classification")
+        }
     }
 
     func testValidationSourceFenceRunsBeforeSemanticTrustGate() throws {
