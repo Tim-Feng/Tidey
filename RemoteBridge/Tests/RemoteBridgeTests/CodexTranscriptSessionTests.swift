@@ -2207,6 +2207,45 @@ final class CodexTranscriptSessionTests: XCTestCase {
         XCTAssertTrue(session.validateHistoryEpoch(hub.currentHistoryEpoch(sessionID: "session")))
     }
 
+    // JSONSerialization stores JSON integers above Int64.max as UNSIGNED
+    // NSNumbers, whose int64Value wraps (18446744073709551615 → -1,
+    // 18446744071562067968 → Int32.min) — an int64Value-based range check
+    // silently accepts them. The bounds must be checked with
+    // NSNumber.compare, which handles unsigned numbers numerically.
+    func testCodexExitCodeUnsignedWrapFailsClosed() throws {
+        func execEnd(_ exitCode: String) -> String {
+            "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"type\":\"exec_command_end\",\"call_id\":\"e1\",\"stdout\":\"ok\",\"stderr\":\"\",\"formatted_output\":\"\",\"aggregated_output\":\"\",\"exit_code\":\(exitCode),\"status\":\"completed\"}}"
+        }
+        let poisonRows: [(name: String, exitCode: String)] = [
+            ("exec-exit-code-uint64-max", "18446744073709551615"),
+            ("exec-exit-code-uint64-wrap-to-i32-range", "18446744071562067968"),
+            ("exec-exit-code-negative-overflow", "-2147483649"),
+        ]
+        for row in poisonRows {
+            try assertDeepRowFailsClosed(name: row.name, rowLines: [execEnd(row.exitCode)])
+        }
+
+        // Boundary guards: the exact i32 bounds are legal exit codes.
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lines = [
+            "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"type\":\"exec_command_end\",\"call_id\":\"min-bound\",\"stdout\":\"min-out\",\"stderr\":\"\",\"formatted_output\":\"\",\"aggregated_output\":\"\",\"exit_code\":-2147483648,\"status\":\"failed\"}}",
+            "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-15T00:00:01Z\",\"payload\":{\"type\":\"exec_command_end\",\"call_id\":\"max-bound\",\"stdout\":\"max-out\",\"stderr\":\"\",\"formatted_output\":\"\",\"aggregated_output\":\"\",\"exit_code\":2147483647,\"status\":\"failed\"}}",
+            makeCodexMessageLine(role: "assistant", content: "a-0"),
+        ]
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(transcriptURL, hub: hub, readySentinel: "a-0")
+        defer { session.stop() }
+        let events = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50).events
+        XCTAssertTrue(events.contains { $0.eventID == "min-bound:exec-end" }, "Int32.min is a legal exit code")
+        XCTAssertTrue(events.contains { $0.eventID == "max-bound:exec-end" }, "Int32.max is a legal exit code")
+        XCTAssertTrue(session.validateHistoryEpoch(hub.currentHistoryEpoch(sessionID: "session")))
+    }
+
     func testValidationSourceFenceRunsBeforeSemanticTrustGate() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)

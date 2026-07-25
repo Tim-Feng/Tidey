@@ -1246,7 +1246,9 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             sourceSemanticTrust = false
             return
         }
-        // Official 0.145 ExecCommandEnd schema (models.rs @ 25af12f7):
+        // Official 0.145 ExecCommandEnd schema (protocol.rs /
+        // legacy_events.rs @ 25af12f7 — the content schemas live in
+        // models.rs, the event structs do not):
         // stdout/stderr/formatted_output are REQUIRED Strings; only
         // aggregated_output has a serde default (absent → ""); exit_code
         // is a required i32; status is the required {completed, failed,
@@ -1377,7 +1379,12 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     }
 
     // A JSON integer within i32 range: not a Bool (CFBoolean type ID), not
-    // a float-typed number, and inside Int32 bounds.
+    // a float-typed number, and inside Int32 bounds. The bounds use
+    // NSNumber.compare — int64Value WRAPS for unsigned NSNumbers
+    // (18446744073709551615 → -1), which would silently pass the range.
+    private static let int32MinNumber = NSNumber(value: Int32.min)
+    private static let int32MaxNumber = NSNumber(value: Int32.max)
+
     private static func isInt32JSONNumber(_ value: Any) -> Bool {
         guard let number = value as? NSNumber, !isJSONBoolean(number) else {
             return false
@@ -1385,8 +1392,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         guard CFNumberIsFloatType(number) == false else {
             return false
         }
-        let raw = number.int64Value
-        return raw >= Int64(Int32.min) && raw <= Int64(Int32.max)
+        return number.compare(int32MinNumber) != .orderedAscending
+            && number.compare(int32MaxNumber) != .orderedDescending
     }
 
     // The official end-status enum shared by exec_command_end and
