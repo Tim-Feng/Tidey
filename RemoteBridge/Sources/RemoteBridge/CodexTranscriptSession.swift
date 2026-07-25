@@ -769,8 +769,6 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             isCollectingBackfillPage = false
             let bootstrapLines = collectedBackfillPage
             collectedBackfillPage = []
-            self.tailer = tailer
-            self.transcriptURL = transcriptURL
             // Retained-coverage eligibility floor: fixed at attach from the
             // initial bootstrap/live publication window, captured BEFORE
             // the context backfill lowers the tailer's SCAN floor.
@@ -781,29 +779,52 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                 isCollectingBackfillPage = true
                 collectedBackfillPage = []
                 isReadingAdjacencyContext = true
-                if let injectedFault = bootstrapContextReadFaultForTesting?() {
-                    _ = injectedFault
-                    isReadingAdjacencyContext = false
-                    isCollectingBackfillPage = false
-                    collectedBackfillPage = []
-                } else if (try? tailer.backfill(beforeOffset: bootstrapFloor,
-                                                limit: 1,
-                                                includeAnchorLine: false)) != nil {
-                    isReadingAdjacencyContext = false
-                    let contextLines = collectedBackfillPage
-                    isCollectingBackfillPage = false
-                    collectedBackfillPage = []
-                    // Evidence only — a non-phaseful/malformed predecessor
-                    // is simply "no context".
-                    pendingAgentMessagePair = contextLines.last.flatMap {
-                        Self.adjacencyPairDescriptor(line: $0.line, lineOffset: $0.offset)
+                do {
+                    if let injectedFault = bootstrapContextReadFaultForTesting?() {
+                        throw injectedFault
                     }
-                } else {
+                    _ = try tailer.backfill(beforeOffset: bootstrapFloor,
+                                            limit: 1,
+                                            includeAnchorLine: false)
+                } catch JSONLFileTailerError.sourceInvalidated {
+                    // The source was replaced between tailer.start() and
+                    // the context read: the collected window is STALE —
+                    // never publish it. Reset exactly once; the resolver
+                    // re-attaches the replacement.
                     isReadingAdjacencyContext = false
-                    isCollectingBackfillPage = false
-                    collectedBackfillPage = []
+                    failBootstrapAttach(tailer, resetSource: true)
+                    return
+                } catch {
+                    // A transient context read must not silently claim
+                    // adjacency-complete: the attach fails closed and the
+                    // resolver retries.
+                    isReadingAdjacencyContext = false
+                    failBootstrapAttach(tailer, resetSource: false)
+                    return
+                }
+                isReadingAdjacencyContext = false
+                let contextLines = collectedBackfillPage
+                isCollectingBackfillPage = false
+                collectedBackfillPage = []
+                // Evidence only — a non-phaseful/malformed predecessor is
+                // simply "no context".
+                pendingAgentMessagePair = contextLines.last.flatMap {
+                    Self.adjacencyPairDescriptor(line: $0.line, lineOffset: $0.offset)
                 }
             }
+            // Post-context source fence: the source must still be THIS
+            // source before the collected window is allowed to publish.
+            do {
+                try tailer.validateCurrentSource()
+            } catch JSONLFileTailerError.sourceInvalidated {
+                failBootstrapAttach(tailer, resetSource: true)
+                return
+            } catch {
+                failBootstrapAttach(tailer, resetSource: false)
+                return
+            }
+            self.tailer = tailer
+            self.transcriptURL = transcriptURL
             for entry in bootstrapLines {
                 consume(line: entry.line, lineOffset: entry.offset)
             }
@@ -818,6 +839,27 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             self.tailer = nil
             self.transcriptURL = nil
             log("tailer.start failed transcript=\(transcriptURL.path) error=\(error)")
+        }
+    }
+
+    // Attach failure AFTER tailer.start(): the local tailer is really
+    // stopped and dropped (never installed as self.tailer), nothing from
+    // the collected window publishes, and either the unified reset runs
+    // exactly once (source invalidated → resolver re-attaches the
+    // replacement immediately) or the attach simply fails closed and the
+    // resolver keeps retrying (transient fault).
+    private func failBootstrapAttach(_ tailer: JSONLFileTailer, resetSource: Bool) {
+        isCollectingBackfillPage = false
+        collectedBackfillPage = []
+        tailer.stop()
+        self.tailer = nil
+        self.transcriptURL = nil
+        isBootstrappingSidebarState = false
+        if resetSource {
+            resetTranscriptSource(startResolverNow: true)
+        } else {
+            // No source is attached: untrusted until an attach succeeds.
+            sourceSemanticTrust = false
         }
     }
 

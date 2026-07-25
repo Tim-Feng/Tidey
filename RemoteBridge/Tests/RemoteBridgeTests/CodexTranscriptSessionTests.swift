@@ -2169,7 +2169,7 @@ final class CodexTranscriptSessionTests: XCTestCase {
     // exactly {completed, failed, declined}. The full local corpus (1,167
     // files: exec 8,734 / patch 76,687) has ZERO absent or null
     // projection fields — so absence fails closed, no legacy exception.
-    func testCodexExecPatchOfficialSchemaFailsClosed() throws {
+    func testCodexExecPatchProjectionSchemaFailsClosed() throws {
         func eventMsg(_ payload: String) -> String {
             "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":\(payload)}"
         }
@@ -2599,6 +2599,140 @@ final class CodexTranscriptSessionTests: XCTestCase {
         XCTAssertTrue(output.fetchResult.hasMore)
         XCTAssertFalse(session.validateHistoryEpoch(epoch),
                        "once the OWNED walk covered the garbage, the poison is real")
+    }
+
+    // Bootstrap context read error classification: a source replaced
+    // between tailer.start() and the context read must NOT attach the
+    // stale window — no publish of the collected lines, no retained old
+    // tailer, exactly one reset, and the replacement re-attaches.
+    func testBootstrapContextInvalidationDropsStaleWindowAndReattaches() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lineCount = transcriptBootstrapLineLimit + 20
+        let aLines = (0..<lineCount).map { makeCodexMessageLine(role: "assistant", content: "a-deep-\($0)") }
+        try (aLines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let baseGeneration = hub.currentHistoryEpoch(sessionID: "session").generation
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                             fileManager: .default,
+                                             hub: hub)
+        var replacementWriteError: Error?
+        session.bootstrapContextBeforeReadForTesting = {
+            // Atomically replace the source between the window collection
+            // and the context read: the context backfill's fence must see
+            // the invalidation.
+            do {
+                try Data((self.makeCodexMessageLine(role: "assistant", content: "b-sentinel") + "\n").utf8)
+                    .write(to: transcriptURL, options: .atomic)
+            } catch {
+                replacementWriteError = error
+            }
+            session.bootstrapContextBeforeReadForTesting = nil
+        }
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil(timeout: 4) {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                .events.contains { $0.text == "b-sentinel" }
+        }, "the replacement source re-attaches")
+        XCTAssertNil(replacementWriteError)
+        XCTAssertFalse(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 2000)
+                        .events.contains { $0.text?.hasPrefix("a-deep-") == true },
+                       "no stale products after the replacement attach")
+        XCTAssertEqual(hub.currentHistoryEpoch(sessionID: "session").generation,
+                       baseGeneration + 1,
+                       "the reset happened exactly once")
+        // Deterministic no-stale-publish proof, immune to watcher-timing:
+        // a CONTROL session that only ever saw the replacement file yields
+        // the identical b-sentinel sequence. If the stale window had been
+        // published (and revoked) first, its consumed sequences would have
+        // shifted the reset base and the sequences would differ.
+        let controlHub = AgentEventHub()
+        let controlSession = makeStartedCodexSession(transcriptURL, hub: controlHub,
+                                                     readySentinel: "b-sentinel")
+        defer { controlSession.stop() }
+        let mainSeq = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+            .events.first { $0.text == "b-sentinel" }?.seq
+        let controlSeq = controlHub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+            .events.first { $0.text == "b-sentinel" }?.seq
+        XCTAssertNotNil(mainSeq)
+        XCTAssertEqual(mainSeq, controlSeq,
+                       "the stale window never consumed sequences — it was never published")
+    }
+
+    // A transient context read error must not silently claim
+    // adjacency-complete: the attach fails closed (nothing published, no
+    // tailer kept) and the resolver's retry attaches with REAL context —
+    // the twin keeps its canonical predecessor identity.
+    func testBootstrapContextTransientFaultFailsAttachClosedThenRetries() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lineCount = transcriptBootstrapLineLimit + 20
+        var lines = (0..<lineCount).map { makeCodexMessageLine(role: "assistant", content: "deep-\($0)") }
+        lines[lineCount - transcriptBootstrapLineLimit - 1] =
+            "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-15T00:05:39Z\",\"payload\":{\"type\":\"agent_message\",\"message\":\"floor-twin\",\"phase\":\"commentary\"}}"
+        lines[lineCount - transcriptBootstrapLineLimit] =
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:05:40Z\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"commentary\",\"content\":[{\"type\":\"output_text\",\"text\":\"floor-twin\"}]}}"
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                             fileManager: .default,
+                                             hub: hub)
+        var faultsServed = 0
+        session.bootstrapContextReadFaultForTesting = {
+            guard faultsServed == 0 else { return nil }
+            faultsServed += 1
+            return POSIXError(.EIO)
+        }
+        session.start()
+        defer { session.stop() }
+        // Synchronous checkpoint: the faulted attach published NOTHING.
+        _ = session.validateHistoryEpoch(hub.currentHistoryEpoch(sessionID: "session"))
+        XCTAssertEqual(faultsServed, 1)
+        XCTAssertFalse(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 2000)
+                        .events.contains { $0.text?.hasPrefix("deep-") == true || $0.text == "floor-twin" },
+                       "a transient context fault fails the attach closed — no window product publishes")
+        // The resolver retries and attaches with REAL adjacency context.
+        XCTAssertTrue(waitUntil(timeout: 6) {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                .events.contains { $0.text == "deep-\(lineCount - 1)" }
+        }, "the retry attaches")
+        let liveTwinIDs = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 2000)
+            .events.filter { $0.text == "floor-twin" }.map(\.eventID)
+        XCTAssertEqual(liveTwinIDs.count, 1)
+        // Identity consistency proves the retry seeded real context: a
+        // wide walk's product carries the SAME canonical identity.
+        let wide = BridgeAgentEventFetchFlow.run(
+            eventHub: hub,
+            workspaceID: "workspace",
+            sessionID: "session",
+            limit: 2000,
+            beforeSeq: nil,
+            afterSeq: 0,
+            afterCursorSeams: .init(
+                plan: { _, afterSeq, expected in
+                    session.afterCursorPlan(afterSeq: afterSeq, expectedEpoch: expected)
+                },
+                step: { _, anchor, afterSeq, limit in
+                    session.afterCursorStep(from: anchor, afterSeq: afterSeq, limit: limit)
+                },
+                validateEpoch: { _, epoch in
+                    session.validateHistoryEpoch(epoch)
+                })) { _, _, _ in
+            XCTFail("the legacy backfill closure must not serve the typed after path")
+            return false
+        }
+        let wideTwinIDs = wide.fetchResult.events.filter { $0.text == "floor-twin" }.map(\.eventID)
+        XCTAssertEqual(wideTwinIDs.count, 1,
+                       "the twin stays exactly-once across live + walk")
+        XCTAssertEqual(Set(wideTwinIDs), Set(liveTwinIDs),
+                       "the retry seeded real context — live and walk share ONE canonical identity")
     }
 
     func testValidationSourceFenceRunsBeforeSemanticTrustGate() throws {
