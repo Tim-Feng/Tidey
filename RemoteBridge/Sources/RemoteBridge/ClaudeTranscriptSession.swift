@@ -1765,6 +1765,10 @@ final class JSONLFileTailer {
             afterInitialFrontierHookForTesting?()
             pendingData.removeAll(keepingCapacity: false)
             pendingLineOffset = nil
+            // A record whose newline had not been written by the fixed
+            // startup EOF must not be lost: later appends complete it, so
+            // its bytes seed the pending buffer at their ORIGINAL offset.
+            try seedPendingTailFragment()
 
             let bootstrappedRecords = try JSONLFileReader.readBeforeRecords(
                 fileURL: fileURL,
@@ -2079,6 +2083,56 @@ final class JSONLFileTailer {
             return nil
         }
         return Data(bytes)
+    }
+
+    // Backward-scan from the fixed validated EOF in 8KiB chunks to the last
+    // newline, then read the trailing fragment in one allocation. Peak
+    // memory is O(fragment length + one scan chunk); the fragment is
+    // whatever the source already holds, never an amplification of it.
+    private func seedPendingTailFragment() throws {
+        guard nextReadOffset > 0 else {
+            return
+        }
+        let chunkSize = 8192
+        var scanEnd = nextReadOffset
+        var lastNewlineOffset: Int?
+        while scanEnd > 0, lastNewlineOffset == nil {
+            let start = max(0, scanEnd - chunkSize)
+            let chunk = try readRange(offset: start, length: scanEnd - start)
+            if let index = chunk.lastIndex(of: 0x0a) {
+                lastNewlineOffset = start + chunk.distance(from: chunk.startIndex, to: index)
+            }
+            scanEnd = start
+        }
+        let fragmentStart = lastNewlineOffset.map { $0 + 1 } ?? 0
+        guard fragmentStart < nextReadOffset else {
+            return
+        }
+        pendingData = try readRange(offset: fragmentStart,
+                                    length: nextReadOffset - fragmentStart)
+        pendingLineOffset = fragmentStart
+    }
+
+    private func readRange(offset: Int, length: Int) throws -> Data {
+        var data = Data(count: length)
+        try data.withUnsafeMutableBytes { (buffer: UnsafeMutableRawBufferPointer) in
+            var totalBytesRead = 0
+            while totalBytesRead < length {
+                let bytesRead = pread(fd,
+                                      buffer.baseAddress?.advanced(by: totalBytesRead),
+                                      length - totalBytesRead,
+                                      off_t(offset + totalBytesRead))
+                if bytesRead > 0 {
+                    totalBytesRead += bytesRead
+                    continue
+                }
+                if bytesRead < 0, errno == EINTR {
+                    continue
+                }
+                throw JSONLFileTailerError.sourceInvalidated
+            }
+        }
+        return data
     }
 
     private func readAvailableRecords() -> [JSONLFileRecord] {

@@ -315,6 +315,106 @@ final class JSONLFileTailerTests: XCTestCase {
                        "the hook-time suffix must deliver exactly once, got \(captured)")
     }
 
+    func testPreEOFPartialRecordSurvivesTailerRestart() throws {
+        var data = Data("one\n".utf8)
+        data.append(Data("par".utf8))          // pre-EOF partial record, no newline
+        let fileURL = try writeFile(data: data)
+        let queue = DispatchQueue(label: "JSONLFileTailerTests.partial")
+        let completedExpectation = expectation(description: "completed partial delivered")
+        var captured = [(Int, String)]()
+        let tailer = JSONLFileTailer(fileURL: fileURL,
+                                     queue: queue,
+                                     bootstrapLineLimit: 5,
+                                     lineHandler: { offset, line in
+                                         captured.append((offset, line))
+                                         if line.hasSuffix("tial") {
+                                             completedExpectation.fulfill()
+                                         }
+                                     },
+                                     invalidationHandler: {})
+        try tailer.start()
+        XCTAssertEqual(captured.map(\.1), ["one"], "the partial record must not be delivered before completion")
+
+        let handle = try FileHandle(forWritingTo: fileURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("tial\n".utf8))
+        try handle.close()
+
+        wait(for: [completedExpectation], timeout: 2.0)
+        tailer.stop()
+        XCTAssertEqual(captured.map(\.1), ["one", "partial"],
+                       "the pre-EOF fragment must be joined with the appended suffix")
+        XCTAssertEqual(captured.last?.0, 4, "the completed record's offset is the fragment start")
+    }
+
+    func testPartialMultibyteUTF8SplitAcrossStartupIsReassembled() throws {
+        var data = Data("one\n".utf8)
+        data.append(Data("caf".utf8))
+        data.append(contentsOf: [0xC3])        // first byte of é, split at startup EOF
+        let fileURL = try writeFile(data: data)
+        let queue = DispatchQueue(label: "JSONLFileTailerTests.multibyte")
+        let completedExpectation = expectation(description: "multibyte record completed")
+        var captured = [String]()
+        var invalidOffsets = [Int]()
+        let tailer = JSONLFileTailer(fileURL: fileURL,
+                                     queue: queue,
+                                     bootstrapLineLimit: 5,
+                                     lineHandler: { _, line in
+                                         captured.append(line)
+                                         if line != "one" {
+                                             completedExpectation.fulfill()
+                                         }
+                                     },
+                                     invalidUTF8Handler: { offset in
+                                         invalidOffsets.append(offset)
+                                         completedExpectation.fulfill()
+                                     },
+                                     invalidationHandler: {})
+        try tailer.start()
+
+        let handle = try FileHandle(forWritingTo: fileURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data([0xA9, 0x0A]))   // é continuation + newline
+        try handle.close()
+
+        wait(for: [completedExpectation], timeout: 2.0)
+        tailer.stop()
+        XCTAssertEqual(invalidOffsets, [], "a split multibyte code point is not an invalid record")
+        XCTAssertEqual(captured, ["one", "café"],
+                       "the split code point must reassemble byte-exactly across the startup boundary")
+    }
+
+    func testPartialLargerThanOneScanChunkIsFullyReassembled() throws {
+        var data = Data("head\n".utf8)                       // 5 bytes
+        data.append(Data(String(repeating: "x", count: 20_000).utf8))  // partial > 2 scan chunks
+        let fileURL = try writeFile(data: data)
+        let queue = DispatchQueue(label: "JSONLFileTailerTests.large-partial")
+        let completedExpectation = expectation(description: "large partial completed")
+        var captured = [(Int, String)]()
+        let tailer = JSONLFileTailer(fileURL: fileURL,
+                                     queue: queue,
+                                     bootstrapLineLimit: 5,
+                                     lineHandler: { offset, line in
+                                         captured.append((offset, line))
+                                         if line.hasSuffix("END") {
+                                             completedExpectation.fulfill()
+                                         }
+                                     },
+                                     invalidationHandler: {})
+        try tailer.start()
+
+        let handle = try FileHandle(forWritingTo: fileURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("END\n".utf8))
+        try handle.close()
+
+        wait(for: [completedExpectation], timeout: 2.0)
+        tailer.stop()
+        XCTAssertEqual(captured.last?.1, String(repeating: "x", count: 20_000) + "END",
+                       "the >8KiB fragment must be reassembled in full")
+        XCTAssertEqual(captured.last?.0, 5, "the completed record keeps its original partial offset")
+    }
+
     private func writeTestFile() throws -> URL {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
