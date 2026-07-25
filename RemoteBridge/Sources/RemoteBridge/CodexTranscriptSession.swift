@@ -929,18 +929,41 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     }
 
     private func consumeMessageItem(payload: [String: Any], timestamp: String, lineOffset: Int) {
-        guard let role = payload["role"] as? String else {
+        // Schema validation first, product policy second: a producing
+        // record with missing/mistyped required fields is
+        // un-understandable data, never a legal eventless record.
+        guard let role = payload["role"] as? String, !role.isEmpty else {
+            sourceSemanticTrust = false
             return
         }
-
-        let phase = payload["phase"] as? String
-        let text = Self.compactString(Self.extractMessageText(from: payload["content"]))
-        guard !text.isEmpty else {
+        // JSON-null phase is observed real data (23,916 records in the
+        // 2026-07-26 inventory) — legal absent. Any other non-string
+        // phase is malformed.
+        if let phaseValue = payload["phase"], !(phaseValue is NSNull), !(phaseValue is String) {
+            sourceSemanticTrust = false
             return
+        }
+        let phase = payload["phase"] as? String
+        guard let contentValue = payload["content"] else {
+            sourceSemanticTrust = false
+            return
+        }
+        let text: String
+        switch Self.parseContentValue(contentValue) {
+        case .malformed:
+            sourceSemanticTrust = false
+            return
+        case .noText:
+            text = ""
+        case .text(let value):
+            text = value
         }
 
         switch role {
         case "assistant":
+            guard !text.isEmpty else {
+                return
+            }
             if phase == "commentary" || phase == "final_answer" {
                 return
             }
@@ -954,7 +977,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                  ordinal: 0)
 
         case "user":
-            guard shouldPublishUserMessage(text) else {
+            guard !text.isEmpty, shouldPublishUserMessage(text) else {
                 return
             }
             publishFileBacked(kind: .userMessage,
@@ -970,13 +993,29 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                               toolCallID: nil,
                               metadata: nil)
 
-        default:
+        case "developer":
+            // Legal role with no history product (product policy).
             break
+
+        default:
+            // An unknown future role must fail closed, not skip silently.
+            sourceSemanticTrust = false
         }
     }
 
     private func consumeFunctionCall(payload: [String: Any], timestamp: String, lineOffset: Int) {
-        guard let callID = payload["call_id"] as? String else {
+        guard let callID = payload["call_id"] as? String, !callID.isEmpty else {
+            sourceSemanticTrust = false
+            return
+        }
+        guard let name = payload["name"] as? String, !name.isEmpty else {
+            sourceSemanticTrust = false
+            return
+        }
+        // An empty arguments String is legal; a missing or non-string
+        // value is not.
+        guard let arguments = payload["arguments"] as? String else {
+            sourceSemanticTrust = false
             return
         }
 
@@ -988,18 +1027,20 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                           timestamp: timestamp,
                           role: "assistant",
                           text: nil,
-                          name: (payload["name"] as? String) ?? "tool",
-                          input: Self.compactString(payload["arguments"] as? String),
+                          name: name,
+                          input: Self.compactString(arguments),
                           output: nil,
                           toolCallID: callID,
                           metadata: nil)
     }
 
     private func consumeFunctionCallOutput(payload: [String: Any], timestamp: String, lineOffset: Int) {
-        guard let callID = payload["call_id"] as? String else {
+        guard let callID = payload["call_id"] as? String, !callID.isEmpty else {
+            sourceSemanticTrust = false
             return
         }
         guard let outputValue = payload["output"] else {
+            sourceSemanticTrust = false
             return
         }
         let parsed = Self.parseContentValue(outputValue)
@@ -1128,15 +1169,25 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     }
 
     private func consumeAgentMessage(payload: [String: Any], timestamp: String, lineOffset: Int) {
-        let text = Self.compactString(payload["message"] as? String)
+        // Schema validation first: message and phase are required. An
+        // empty message String is legal (170 observed real records) but a
+        // missing/mistyped field or an unknown phase fails closed.
+        guard let message = payload["message"] as? String else {
+            sourceSemanticTrust = false
+            return
+        }
+        guard let phase = payload["phase"] as? String,
+              phase == "commentary" || phase == "final_answer" else {
+            sourceSemanticTrust = false
+            return
+        }
+        let text = Self.compactString(message)
         guard !text.isEmpty else {
             return
         }
 
         didSeeInteractiveEvent = true
-        let phase = payload["phase"] as? String
-        switch phase {
-        case "final_answer":
+        if phase == "final_answer" {
             publishAssistantText(kind: .assistantFinal,
                                  eventNamespace: "final",
                                  phase: "final_answer",
@@ -1144,7 +1195,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                  text: text,
                                  lineOffset: lineOffset,
                                  ordinal: 0)
-        case "commentary":
+        } else {
             publishAssistantText(kind: .assistantMessage,
                                  eventNamespace: "commentary",
                                  phase: "commentary",
@@ -1152,8 +1203,6 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                  text: text,
                                  lineOffset: lineOffset,
                                  ordinal: 0)
-        default:
-            break
         }
     }
 
@@ -1185,16 +1234,22 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     }
 
     private func consumeExecCommandEnd(payload: [String: Any], timestamp: String, lineOffset: Int) {
-        guard let callID = payload["call_id"] as? String,
-              !resolvedToolCallIDs.contains(callID) else {
+        guard let callID = payload["call_id"] as? String, !callID.isEmpty else {
+            sourceSemanticTrust = false
             return
         }
-        let output = Self.compactString(
-            (payload["aggregated_output"] as? String) ??
-            (payload["formatted_output"] as? String) ??
-            (payload["stdout"] as? String) ??
-            (payload["stderr"] as? String)
-        )
+        // Validate EVERY present output candidate before selection, dedupe,
+        // or the empty-product policy: a non-string candidate must never be
+        // hidden by another field or an already-resolved call.
+        guard let candidate = validatedOutputCandidate(
+            payload: payload,
+            keys: ["aggregated_output", "formatted_output", "stdout", "stderr"]) else {
+            return
+        }
+        guard !resolvedToolCallIDs.contains(callID) else {
+            return
+        }
+        let output = Self.compactString(candidate)
         guard !output.isEmpty else {
             return
         }
@@ -1222,14 +1277,18 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     }
 
     private func consumePatchApplyEnd(payload: [String: Any], timestamp: String, lineOffset: Int) {
-        guard let callID = payload["call_id"] as? String,
-              !resolvedToolCallIDs.contains(callID) else {
+        guard let callID = payload["call_id"] as? String, !callID.isEmpty else {
+            sourceSemanticTrust = false
             return
         }
-        let output = Self.compactString(
-            (payload["stdout"] as? String) ??
-            (payload["stderr"] as? String)
-        )
+        guard let candidate = validatedOutputCandidate(payload: payload,
+                                                       keys: ["stdout", "stderr"]) else {
+            return
+        }
+        guard !resolvedToolCallIDs.contains(callID) else {
+            return
+        }
+        let output = Self.compactString(candidate)
         guard !output.isEmpty else {
             return
         }
@@ -1254,6 +1313,25 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                   "status": payload["status"] as? String,
                               ]
                           ))
+    }
+
+    // Validates every PRESENT candidate key, then selects the first present
+    // value in priority order ("" when none is present, so the caller's
+    // empty-product policy applies). Returns nil ONLY after poisoning on a
+    // non-string candidate.
+    private func validatedOutputCandidate(payload: [String: Any], keys: [String]) -> String? {
+        var selected: String?
+        for key in keys {
+            guard let value = payload[key] else { continue }
+            guard let string = value as? String else {
+                sourceSemanticTrust = false
+                return nil
+            }
+            if selected == nil {
+                selected = string
+            }
+        }
+        return selected ?? ""
     }
 
     private func shouldPublishUserMessage(_ text: String) -> Bool {
@@ -1526,28 +1604,6 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         }
         let joined = compactString(parts.joined(separator: "\n\n"))
         return joined.isEmpty ? .noText : .text(joined)
-    }
-
-    private static func extractMessageText(from value: Any?) -> String {
-        if let string = value as? String {
-            return string
-        }
-        guard let blocks = value as? [[String: Any]] else {
-            return ""
-        }
-
-        let parts = blocks.compactMap { block -> String? in
-            guard let type = block["type"] as? String else {
-                return nil
-            }
-            switch type {
-            case "input_text", "output_text", "text", "summary_text":
-                return block["text"] as? String
-            default:
-                return nil
-            }
-        }
-        return parts.joined(separator: "\n\n")
     }
 
     private static func isBootstrapUserMessage(_ text: String) -> Bool {

@@ -1746,6 +1746,156 @@ final class CodexTranscriptSessionTests: XCTestCase {
         XCTAssertTrue(session.validateHistoryEpoch(epoch))
     }
 
+    // A record whose type is KNOWN to produce history events but whose
+    // required fields are missing or mistyped is un-understandable data.
+    // Silently returning while raw coverage advances would fake complete
+    // cross-page history — every such row must fail closed. Each row sits
+    // BELOW the bootstrap floor so the initial plan is a scan and the walk
+    // must poison mid-replay without leaking same-page partial products.
+    func testCodexMalformedProducerPayloadsFailClosed() throws {
+        func responseItem(_ payload: String) -> String {
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":\(payload)}"
+        }
+        func eventMsg(_ payload: String) -> String {
+            "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":\(payload)}"
+        }
+        let rows: [(name: String, lines: [String])] = [
+            ("message-role-missing", [responseItem("{\"type\":\"message\",\"content\":[{\"type\":\"input_text\",\"text\":\"hi\"}]}")]),
+            ("message-role-wrong-type", [responseItem("{\"type\":\"message\",\"role\":7,\"content\":[{\"type\":\"input_text\",\"text\":\"hi\"}]}")]),
+            ("message-role-empty", [responseItem("{\"type\":\"message\",\"role\":\"\",\"content\":[{\"type\":\"input_text\",\"text\":\"hi\"}]}")]),
+            ("message-role-unknown", [responseItem("{\"type\":\"message\",\"role\":\"narrator\",\"content\":[{\"type\":\"input_text\",\"text\":\"hi\"}]}")]),
+            ("message-content-missing", [responseItem("{\"type\":\"message\",\"role\":\"user\"}")]),
+            ("message-content-wrong-type", [responseItem("{\"type\":\"message\",\"role\":\"user\",\"content\":42}")]),
+            ("message-content-block-nondict", [responseItem("{\"type\":\"message\",\"role\":\"user\",\"content\":[\"oops\"]}")]),
+            ("message-content-block-missing-type", [responseItem("{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"text\":\"x\"}]}")]),
+            ("message-content-block-unknown-type", [responseItem("{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"video\"}]}")]),
+            ("message-text-block-nonstring-text", [responseItem("{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":5}]}")]),
+            ("message-text-block-missing-text", [responseItem("{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"output_text\"}]}")]),
+            ("message-input-image-missing-url", [responseItem("{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_image\",\"detail\":\"high\"}]}")]),
+            ("message-input-image-nonstring-url", [responseItem("{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_image\",\"image_url\":9}]}")]),
+            ("message-phase-nonstring", [responseItem("{\"type\":\"message\",\"role\":\"assistant\",\"phase\":7,\"content\":[{\"type\":\"input_text\",\"text\":\"hi\"}]}")]),
+            ("function-call-call-id-missing", [responseItem("{\"type\":\"function_call\",\"name\":\"shell\",\"arguments\":\"{}\"}")]),
+            ("function-call-call-id-wrong-type", [responseItem("{\"type\":\"function_call\",\"call_id\":7,\"name\":\"shell\",\"arguments\":\"{}\"}")]),
+            ("function-call-call-id-empty", [responseItem("{\"type\":\"function_call\",\"call_id\":\"\",\"name\":\"shell\",\"arguments\":\"{}\"}")]),
+            ("function-call-name-missing", [responseItem("{\"type\":\"function_call\",\"call_id\":\"c1\",\"arguments\":\"{}\"}")]),
+            ("function-call-name-wrong-type", [responseItem("{\"type\":\"function_call\",\"call_id\":\"c1\",\"name\":4,\"arguments\":\"{}\"}")]),
+            ("function-call-name-empty", [responseItem("{\"type\":\"function_call\",\"call_id\":\"c1\",\"name\":\"\",\"arguments\":\"{}\"}")]),
+            ("function-call-arguments-missing", [responseItem("{\"type\":\"function_call\",\"call_id\":\"c1\",\"name\":\"shell\"}")]),
+            ("function-call-arguments-wrong-type", [responseItem("{\"type\":\"function_call\",\"call_id\":\"c1\",\"name\":\"shell\",\"arguments\":7}")]),
+            ("function-output-call-id-missing", [responseItem("{\"type\":\"function_call_output\",\"output\":\"x\"}")]),
+            ("function-output-call-id-wrong-type", [responseItem("{\"type\":\"function_call_output\",\"call_id\":7,\"output\":\"x\"}")]),
+            ("function-output-call-id-empty", [responseItem("{\"type\":\"function_call_output\",\"call_id\":\"\",\"output\":\"x\"}")]),
+            ("function-output-output-missing", [responseItem("{\"type\":\"function_call_output\",\"call_id\":\"c1\"}")]),
+            ("function-output-output-wrong-type", [responseItem("{\"type\":\"function_call_output\",\"call_id\":\"c1\",\"output\":7}")]),
+            ("function-output-block-malformed", [responseItem("{\"type\":\"function_call_output\",\"call_id\":\"c1\",\"output\":[{\"type\":\"input_text\",\"text\":3}]}")]),
+            ("function-output-block-unknown", [responseItem("{\"type\":\"function_call_output\",\"call_id\":\"c1\",\"output\":[{\"type\":\"mystery\"}]}")]),
+            ("function-output-malformed-duplicate-after-legal",
+             [responseItem("{\"type\":\"function_call_output\",\"call_id\":\"dup-1\",\"output\":\"legal first\"}"),
+              responseItem("{\"type\":\"function_call_output\",\"call_id\":\"dup-1\",\"output\":7}")]),
+            ("agent-message-message-missing", [eventMsg("{\"type\":\"agent_message\",\"phase\":\"commentary\"}")]),
+            ("agent-message-message-wrong-type", [eventMsg("{\"type\":\"agent_message\",\"message\":7,\"phase\":\"commentary\"}")]),
+            ("agent-message-phase-missing", [eventMsg("{\"type\":\"agent_message\",\"message\":\"hi\"}")]),
+            ("agent-message-phase-wrong-type", [eventMsg("{\"type\":\"agent_message\",\"message\":\"hi\",\"phase\":7}")]),
+            ("agent-message-phase-unknown", [eventMsg("{\"type\":\"agent_message\",\"message\":\"hi\",\"phase\":\"draft\"}")]),
+            ("exec-end-call-id-missing", [eventMsg("{\"type\":\"exec_command_end\",\"stdout\":\"ok\"}")]),
+            ("exec-end-call-id-wrong-type", [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":7,\"stdout\":\"ok\"}")]),
+            ("exec-end-call-id-empty", [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"\",\"stdout\":\"ok\"}")]),
+            ("exec-end-nonstring-candidate-not-hidden", [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"e1\",\"aggregated_output\":5,\"stdout\":\"ok\"}")]),
+            ("patch-end-call-id-empty", [eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"\",\"stdout\":\"ok\"}")]),
+            ("patch-end-nonstring-candidate-not-hidden", [eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"p1\",\"stdout\":3,\"stderr\":\"ok\"}")]),
+        ]
+        for row in rows {
+            let directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+            let lineCount = transcriptBootstrapLineLimit + 20
+            var lines = (0..<lineCount).map {
+                makeCodexMessageLine(role: "assistant",
+                                     content: "deep-\($0)-" + String(repeating: "x", count: 40))
+            }
+            for (offset, line) in row.lines.enumerated() {
+                lines[3 + offset] = line
+            }
+            try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+            let hub = AgentEventHub()
+            let session = makeStartedCodexSession(transcriptURL, hub: hub,
+                                                  readySentinel: "deep-\(lineCount - 1)-" + String(repeating: "x", count: 40))
+            defer { session.stop() }
+            let epoch = hub.currentHistoryEpoch(sessionID: "session")
+            let plan = session.afterCursorPlan(afterSeq: 0, expectedEpoch: epoch)
+            guard case .scan(let startAnchor) = plan.mode else {
+                XCTFail("\(row.name): precondition — a below-floor cursor plans a scan, got \(plan.mode)")
+                continue
+            }
+            var anchor = startAnchor
+            var sawUnavailable = false
+            walk: for _ in 0..<4 {
+                let step = session.afterCursorStep(from: anchor, afterSeq: 0,
+                                                   limit: lineCount + 100)
+                switch step.outcome {
+                case .advanced(let next):
+                    anchor = next
+                case .unavailable:
+                    XCTAssertTrue(step.events.isEmpty,
+                                  "\(row.name): a poisoned step must not leak same-page partial products")
+                    sawUnavailable = true
+                    break walk
+                case .complete:
+                    XCTFail("\(row.name): the walk must not complete past a malformed producer record")
+                    break walk
+                case .sourceChanged:
+                    XCTFail("\(row.name): a malformed record is not a source change")
+                    break walk
+                }
+            }
+            XCTAssertTrue(sawUnavailable, "\(row.name): the malformed page fails the step closed")
+            if case .unavailable = session.afterCursorPlan(afterSeq: 0, expectedEpoch: epoch).mode {
+            } else {
+                XCTFail("\(row.name): the poison persists for later plans")
+            }
+            XCTAssertFalse(session.validateHistoryEpoch(epoch),
+                           "\(row.name): the poison persists for validation")
+        }
+    }
+
+    // Guard: legal records that yield no product — empty text, image-only
+    // content, role/phase product policy, JSON-null phase (23,916 observed
+    // real records), absent/empty output candidates — must NOT poison.
+    func testCodexLegalNoProductProducerRecordsStayTrusted() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lines = [
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"type\":\"message\",\"role\":\"developer\",\"content\":[{\"type\":\"input_text\",\"text\":\"policy text\"}]}}",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:01Z\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"commentary\",\"content\":[{\"type\":\"output_text\",\"text\":\"covered by event_msg\"}]}}",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:02Z\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[]}}",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:03Z\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"phase\":null,\"content\":[{\"type\":\"input_image\",\"detail\":\"auto\",\"image_url\":\"data:image/png;base64,AA==\"}]}}",
+            "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-15T00:00:04Z\",\"payload\":{\"type\":\"agent_message\",\"message\":\"\",\"phase\":\"commentary\"}}",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:05Z\",\"payload\":{\"type\":\"function_call\",\"call_id\":\"empty-args\",\"name\":\"noop\",\"arguments\":\"\"}}",
+            "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-15T00:00:06Z\",\"payload\":{\"type\":\"exec_command_end\",\"call_id\":\"no-candidates\"}}",
+            "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-15T00:00:07Z\",\"payload\":{\"type\":\"exec_command_end\",\"call_id\":\"empty-candidates\",\"aggregated_output\":\"\",\"stdout\":\"\"}}",
+            "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-15T00:00:08Z\",\"payload\":{\"type\":\"patch_apply_end\",\"call_id\":\"empty-patch\",\"stdout\":\"\",\"stderr\":\"\"}}",
+            makeCodexMessageLine(role: "assistant", content: "a-0"),
+        ]
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(transcriptURL, hub: hub, readySentinel: "a-0")
+        defer { session.stop() }
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+        switch session.afterCursorPlan(afterSeq: 0, expectedEpoch: epoch).mode {
+        case .rawCovered, .scan:
+            break
+        case .hubOnly, .unavailable:
+            XCTFail("legal no-product records must keep the source plannable")
+        }
+        XCTAssertTrue(session.validateHistoryEpoch(epoch),
+                      "legal no-product records keep the source trusted")
+    }
+
     func testValidationSourceFenceRunsBeforeSemanticTrustGate() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
