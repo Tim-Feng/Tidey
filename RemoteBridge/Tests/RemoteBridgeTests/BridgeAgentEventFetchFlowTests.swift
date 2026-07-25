@@ -601,7 +601,42 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
                        "the earliest event from the deeper final step is the one retained")
         XCTAssertEqual(output.fetchResult.events.first?.metadata?["tidey_truncated"], "true",
                        "an event over the byte budget keeps its placeholder metadata")
+        XCTAssertEqual(output.fetchResult.events.first?.metadata?["tidey_max_bytes"], "1")
+        XCTAssertEqual(output.fetchResult.oldestSeq, 101)
+        XCTAssertEqual(output.fetchResult.newestSeq, 101)
         XCTAssertTrue(output.fetchResult.hasMore, "the byte trim is reflected in hasMore")
+    }
+
+    // Guard on current HEAD: an Int.max LIMIT (distinct from the existing
+    // afterSeq == Int.max case) exercises the overflow-safe capacity seam.
+    func testAfterCursorIntMaxLimitScanIsOverflowSafe() {
+        let hub = AgentEventHub()
+        hub.publish(makeEvent(seq: 300, text: "live-300"))
+        var suppliedStepLimits = [Int]()
+
+        let output = runAfter(hub: hub,
+                              limit: Int.max,
+                              afterSeq: 100,
+                              plan: { _, _, expected in
+                                  AgentAfterCursorPlan(
+                                      epoch: expected,
+                                      mode: .scan(from: self.anchor(hub, at: 5_000)))
+                              },
+                              step: { _, stepAnchor, _, stepLimit in
+                                  suppliedStepLimits.append(stepLimit)
+                                  return AgentAfterCursorStep(
+                                      epoch: stepAnchor.epoch,
+                                      outcome: .complete,
+                                      events: [self.makeEvent(seq: 101, text: "raw-101")])
+                              })
+
+        XCTAssertEqual(suppliedStepLimits, [Int.max],
+                       "the raw step receives the overflow-clamped limit unchanged")
+        XCTAssertTrue(output.didBackfill)
+        XCTAssertEqual(output.fetchResult.events.map(\.seq), [101, 300])
+        XCTAssertEqual(output.fetchResult.oldestSeq, 101)
+        XCTAssertEqual(output.fetchResult.newestSeq, 300)
+        XCTAssertFalse(output.fetchResult.hasMore)
     }
 
     func testStalledWalkFailsClosed() {
