@@ -2393,6 +2393,126 @@ final class CodexTranscriptSessionTests: XCTestCase {
         XCTAssertTrue(session.validateHistoryEpoch(hub.currentHistoryEpoch(sessionID: "session")))
     }
 
+    // An adjacent producer twin split across an after-cursor raw page
+    // boundary (event_msg last record of the older page, response_item
+    // first record of the newer page) must still publish exactly once
+    // through the REAL flow: the production step limit is
+    // max(limit + 1, 500), so any twin at a 500-record boundary — or at
+    // the live bootstrap floor, which sits at the same distance — would
+    // otherwise appear twice with distinct eventIDs that no union dedupe
+    // catches.
+    func testCodexAdjacentTwinAcrossRawPageBoundaryPublishesOnce() throws {
+        func agentMessage(_ ts: String, phase: String, text: String) -> String {
+            "{\"type\":\"event_msg\",\"timestamp\":\"\(ts)\",\"payload\":{\"type\":\"agent_message\",\"message\":\"\(text)\",\"phase\":\"\(phase)\"}}"
+        }
+        func assistantItem(_ ts: String, phase: String, text: String) -> String {
+            "{\"type\":\"response_item\",\"timestamp\":\"\(ts)\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"\(phase)\",\"content\":[{\"type\":\"output_text\",\"text\":\"\(text)\"}]}}"
+        }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lineCount = transcriptBootstrapLineLimit * 2 + 40      // 1040
+        var lines = (0..<lineCount).map {
+            makeCodexMessageLine(role: "assistant", content: "deep-\($0)")
+        }
+        // Two legitimate same-text messages in different turns (page 3).
+        lines[10] = agentMessage("2026-05-15T00:00:10Z", phase: "commentary", text: "dup-legal-text")
+        lines[12] = agentMessage("2026-05-15T00:00:12Z", phase: "commentary", text: "dup-legal-text")
+        // event_msg-only near the boundary (its own message, no twin).
+        lines[38] = agentMessage("2026-05-15T00:00:38Z", phase: "commentary", text: "event-only-text")
+        // The cross-page twin: last record of page 3 / first record of
+        // page 2 for a limit-499 walk (boundary at lineCount - 1000).
+        lines[39] = agentMessage("2026-05-15T00:00:39Z", phase: "commentary", text: "cross-page-twin")
+        lines[40] = assistantItem("2026-05-15T00:00:40Z", phase: "commentary", text: "cross-page-twin")
+        // response_item-only right after the boundary.
+        lines[41] = assistantItem("2026-05-15T00:00:41Z", phase: "commentary", text: "item-only-text")
+        // A second twin exactly at the live BOOTSTRAP floor
+        // (lineCount - transcriptBootstrapLineLimit): the floor cuts
+        // between the twins, so live sees only the response_item.
+        lines[lineCount - transcriptBootstrapLineLimit - 1] =
+            agentMessage("2026-05-15T00:05:39Z", phase: "commentary", text: "bootstrap-floor-twin")
+        lines[lineCount - transcriptBootstrapLineLimit] =
+            assistantItem("2026-05-15T00:05:40Z", phase: "commentary", text: "bootstrap-floor-twin")
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(transcriptURL, hub: hub,
+                                              readySentinel: "deep-\(lineCount - 1)")
+        defer { session.stop() }
+
+        var stepOutcomes = [String]()
+        func fetchOnce(limit: Int, recordSteps: Bool = false) -> BridgeAgentEventFetchFlow.Output {
+            BridgeAgentEventFetchFlow.run(
+                eventHub: hub,
+                workspaceID: "workspace",
+                sessionID: "session",
+                limit: limit,
+                beforeSeq: nil,
+                afterSeq: 0,
+                afterCursorSeams: .init(
+                    plan: { _, afterSeq, expected in
+                        session.afterCursorPlan(afterSeq: afterSeq, expectedEpoch: expected)
+                    },
+                    step: { _, anchor, afterSeq, stepLimit in
+                        let step = session.afterCursorStep(from: anchor, afterSeq: afterSeq, limit: stepLimit)
+                        if recordSteps {
+                            switch step.outcome {
+                            case .advanced: stepOutcomes.append("advanced")
+                            case .complete: stepOutcomes.append("complete")
+                            case .sourceChanged: stepOutcomes.append("sourceChanged")
+                            case .unavailable: stepOutcomes.append("unavailable")
+                            }
+                        }
+                        return step
+                    },
+                    validateEpoch: { _, epoch in
+                        session.validateHistoryEpoch(epoch)
+                    })) { _, _, _ in
+                XCTFail("the legacy backfill closure must not serve the typed after path")
+                return false
+            }
+        }
+
+        // Request 1 (limit 499 → 500-record steps): the deep boundary at
+        // lineCount-1000 splits the cross-page twin between two steps.
+        let first = fetchOnce(limit: 499, recordSteps: true)
+        XCTAssertTrue(first.didBackfill, "the walk really ran")
+        XCTAssertGreaterThanOrEqual(stepOutcomes.filter { $0 == "advanced" }.count, 1,
+                                    "the walk advanced across at least one page boundary")
+        XCTAssertEqual(stepOutcomes.last, "complete", "the walk completed — no fail-closed masking")
+        func texts(_ output: BridgeAgentEventFetchFlow.Output, _ text: String) -> Int {
+            output.fetchResult.events.filter { $0.text == text }.count
+        }
+        XCTAssertEqual(texts(first, "cross-page-twin"), 1,
+                       "the twin split across two raw steps publishes exactly once")
+        XCTAssertEqual(texts(first, "dup-legal-text"), 2,
+                       "non-adjacent same-text messages in different turns both survive")
+        XCTAssertEqual(texts(first, "event-only-text"), 1, "event_msg-only near the boundary is kept")
+        XCTAssertEqual(texts(first, "item-only-text"), 1, "response_item-only after the boundary is kept")
+        XCTAssertTrue(session.validateHistoryEpoch(hub.currentHistoryEpoch(sessionID: "session")),
+                      "the source stays trusted through the boundary walk")
+
+        // The same request again: byte-identical page.
+        let second = fetchOnce(limit: 499)
+        func triples(_ output: BridgeAgentEventFetchFlow.Output) -> [String] {
+            output.fetchResult.events.map { "\($0.eventID)#\($0.seq)#\($0.text ?? "")" }
+        }
+        XCTAssertEqual(triples(second), triples(first),
+                       "the repeated request serves the identical page")
+
+        // Request 2 (limit 2000 → single-step walk over the full depth):
+        // the twin at the live bootstrap floor publishes exactly once —
+        // the union of live bootstrap products and walk products must not
+        // carry both twin representations.
+        let wide = fetchOnce(limit: 2000)
+        XCTAssertTrue(wide.didBackfill)
+        XCTAssertEqual(texts(wide, "bootstrap-floor-twin"), 1,
+                       "the bootstrap-floor twin publishes exactly once across live + walk")
+        XCTAssertEqual(texts(wide, "cross-page-twin"), 1)
+        XCTAssertEqual(texts(wide, "dup-legal-text"), 2)
+    }
+
     func testValidationSourceFenceRunsBeforeSemanticTrustGate() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)

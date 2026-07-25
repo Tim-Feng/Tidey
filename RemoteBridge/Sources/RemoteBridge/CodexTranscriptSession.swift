@@ -50,6 +50,27 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     // the immediate twin is ever suppressed.
     private var pendingAgentMessagePairKey: String?
     private var adjacentPairKeyFromPreviousRecord: String?
+    // True only while consuming ONE pre-window context record to seed the
+    // pair-adjacency state (page floor of an after-cursor step, or the
+    // live bootstrap floor). Suppresses every product; the only surviving
+    // effects are the pending pair key and any semantic-trust poison.
+    private var isSeedingAdjacencyContext = false
+
+    // Consumes a single pre-window record for adjacency context only:
+    // parser state is snapshotted and restored around it, so nothing but
+    // the pending pair key (and a trust poison from a malformed record)
+    // escapes. The context stays local to the caller's window — no
+    // mutable pair state survives across steps or requests beyond the
+    // immediately following record.
+    private func consumeAdjacencyContextRecord(line: String, lineOffset: Int) {
+        let snapshot = captureLiveParserState()
+        isSeedingAdjacencyContext = true
+        consume(line: line, lineOffset: lineOffset)
+        isSeedingAdjacencyContext = false
+        let seededPairKey = pendingAgentMessagePairKey
+        restoreLiveParserState(snapshot)
+        pendingAgentMessagePairKey = seededPairKey
+    }
 
     private struct LiveParserStateSnapshot {
         let unsupportedVersions: Set<String>
@@ -453,6 +474,44 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             guard frontier.containsInvalidRecord == false else {
                 return out(.unavailable)
             }
+            // Pair-adjacency context: the FIRST record of this page may be
+            // the response_item twin of a phaseful event_msg that is the
+            // LAST record of the NEXT (older) page. Seed the adjacency
+            // state from the one raw record before the page floor —
+            // context only, no products — so a twin split across the page
+            // boundary still publishes exactly once (from the event_msg's
+            // own step). The context is derived inside this step from this
+            // page's floor: nothing mutable survives across steps.
+            if frontier.reachedSourceStart == false,
+               let contextFloor = frontier.minimumRawOffset, contextFloor > 0,
+               rawPage.isEmpty == false {
+                isCollectingBackfillPage = true
+                collectedBackfillPage = []
+                let contextResult: JSONLBackfillResult
+                do {
+                    contextResult = try tailer.backfill(beforeOffset: contextFloor,
+                                                        limit: 1,
+                                                        includeAnchorLine: false)
+                } catch JSONLFileTailerError.sourceInvalidated {
+                    sourceWasInvalidated = true
+                    shouldStartResolverAfterCleanup = true
+                    resetTranscriptSource(startResolverNow: false)
+                    currentEpoch = hub.currentHistoryEpoch(sessionID: record.sessionID)
+                    return out(.sourceChanged)
+                } catch {
+                    return out(.unavailable)
+                }
+                isCollectingBackfillPage = false
+                let contextLines = collectedBackfillPage
+                collectedBackfillPage = []
+                if let contextFrontier = contextResult.rawFrontier,
+                   contextFrontier.containsInvalidRecord {
+                    return out(.unavailable)
+                }
+                for entry in contextLines {
+                    consumeAdjacencyContextRecord(line: entry.line, lineOffset: entry.offset)
+                }
+            }
             for entry in rawPage {
                 consume(line: entry.line, lineOffset: entry.offset)
             }
@@ -653,21 +712,58 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             // The replacement source starts as a trusted candidate; its own
             // records may poison it during bootstrap.
             sourceSemanticTrust = true
+            // Two-phase bootstrap: collect the window's lines first, so the
+            // pair-adjacency context (the one record BEFORE the bootstrap
+            // floor) can be seeded before any window record is consumed —
+            // otherwise a producer twin cut in half by the floor would
+            // publish its response_item here AND its event_msg in a later
+            // depth walk.
+            isCollectingBackfillPage = true
+            collectedBackfillPage = []
+            defer {
+                isCollectingBackfillPage = false
+                collectedBackfillPage = []
+            }
             try tailer.start()
-            isBootstrappingSidebarState = false
+            isCollectingBackfillPage = false
+            let bootstrapLines = collectedBackfillPage
+            collectedBackfillPage = []
             self.tailer = tailer
             self.transcriptURL = transcriptURL
             // Retained-coverage eligibility floor: fixed at attach from the
-            // initial bootstrap/live publication window. Request-owned
-            // steps and legacy scans lower the tailer's SCAN floor but must
-            // never lower this one.
-            livePublishedRawFloor = tailer.contiguousRawCoverage?.minimumRawOffset
+            // initial bootstrap/live publication window, captured BEFORE
+            // the context backfill lowers the tailer's SCAN floor.
+            // Request-owned steps and legacy scans must never lower it.
+            let attachCoverageFloor = tailer.contiguousRawCoverage?.minimumRawOffset
+            if let bootstrapFloor = bootstrapLines.first?.offset, bootstrapFloor > 0 {
+                isCollectingBackfillPage = true
+                collectedBackfillPage = []
+                if (try? tailer.backfill(beforeOffset: bootstrapFloor,
+                                         limit: 1,
+                                         includeAnchorLine: false)) != nil {
+                    let contextLines = collectedBackfillPage
+                    isCollectingBackfillPage = false
+                    collectedBackfillPage = []
+                    for entry in contextLines {
+                        consumeAdjacencyContextRecord(line: entry.line, lineOffset: entry.offset)
+                    }
+                } else {
+                    isCollectingBackfillPage = false
+                    collectedBackfillPage = []
+                }
+            }
+            for entry in bootstrapLines {
+                consume(line: entry.line, lineOffset: entry.offset)
+            }
+            isBootstrappingSidebarState = false
+            livePublishedRawFloor = attachCoverageFloor
             resolverTimer?.cancel()
             resolverTimer = nil
             log("tailer.start bootstrap end shellState=\(currentShellState) startedTurn=\(lastStartedTurnID ?? "<nil>") completedTurn=\(lastCompletedTurnID ?? "<nil>")")
             publishSidebarSessionActivation(force: false)
         } catch {
             isBootstrappingSidebarState = false
+            self.tailer = nil
             self.transcriptURL = nil
             log("tailer.start failed transcript=\(transcriptURL.path) error=\(error)")
         }
@@ -1481,6 +1577,11 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                    output: String?,
                                    toolCallID: String?,
                                    metadata: [String: String]?) {
+        // A context-seeding record contributes adjacency state only —
+        // never a product, a sequence advance, or an exact position.
+        guard isSeedingAdjacencyContext == false else {
+            return
+        }
         let seq = fileBackedSequence(lineOffset: lineOffset, ordinal: ordinal)
         maxObservedSeq = max(maxObservedSeq, seq)
         // Minimal B17 exact-position recording (unrebased seq only — the
