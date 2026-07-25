@@ -996,12 +996,25 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     }
 
     private func consumeFunctionCallOutput(payload: [String: Any], timestamp: String, lineOffset: Int) {
-        guard let callID = payload["call_id"] as? String,
-              !resolvedToolCallIDs.contains(callID) else {
+        guard let callID = payload["call_id"] as? String else {
             return
         }
-        let output = Self.compactString(payload["output"] as? String)
-        guard !output.isEmpty else {
+        guard let outputValue = payload["output"] else {
+            return
+        }
+        let parsed = Self.parseContentValue(outputValue)
+        if case .malformed = parsed {
+            // Schema validation BEFORE the resolved-ID dedupe: a malformed
+            // duplicate must never hide behind an already-resolved call.
+            sourceSemanticTrust = false
+            return
+        }
+        guard !resolvedToolCallIDs.contains(callID) else {
+            return
+        }
+        guard case .text(let output) = parsed else {
+            // Legal no-text output (empty / image-only): no product, no
+            // poison, and the call stays unresolved for a later text output.
             return
         }
 
@@ -1469,6 +1482,50 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         var merged = metadata ?? [:]
         merged["client_request_id"] = clientRequestID
         return merged
+    }
+
+    // Tri-state content parse: "" must never stand in for BOTH legal empty
+    // content and malformed content — the two have opposite trust meanings.
+    enum CodexContentParse {
+        case text(String)   // valid, non-empty compacted text
+        case noText         // valid, but no text product (empty / image-only)
+        case malformed      // schema violation
+    }
+
+    // Accepts the two legal shapes observed in real rollouts: a plain
+    // String, or an Array of content blocks (input_text / output_text /
+    // legacy text / summary_text carrying a String "text"; input_image
+    // carrying a String "image_url"). Anything else is malformed.
+    static func parseContentValue(_ value: Any) -> CodexContentParse {
+        if let string = value as? String {
+            let compacted = compactString(string)
+            return compacted.isEmpty ? .noText : .text(compacted)
+        }
+        guard let blocks = value as? [Any] else {
+            return .malformed
+        }
+        var parts: [String] = []
+        for rawBlock in blocks {
+            guard let block = rawBlock as? [String: Any],
+                  let type = block["type"] as? String else {
+                return .malformed
+            }
+            switch type {
+            case "input_text", "output_text", "text", "summary_text":
+                guard let text = block["text"] as? String else {
+                    return .malformed
+                }
+                parts.append(text)
+            case "input_image":
+                guard block["image_url"] is String else {
+                    return .malformed
+                }
+            default:
+                return .malformed
+            }
+        }
+        let joined = compactString(parts.joined(separator: "\n\n"))
+        return joined.isEmpty ? .noText : .text(joined)
     }
 
     private static func extractMessageText(from value: Any?) -> String {

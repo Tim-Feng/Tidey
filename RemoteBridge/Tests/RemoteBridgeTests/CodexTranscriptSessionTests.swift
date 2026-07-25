@@ -1683,6 +1683,69 @@ final class CodexTranscriptSessionTests: XCTestCase {
         XCTAssertTrue(session.validateHistoryEpoch(epoch))
     }
 
+    // Real rollouts carry function_call_output.output as a String OR a
+    // content-block Array (inventory 2026-07-26: 35,353 String / 3,878
+    // Array). Structured text outputs are legal current data and must
+    // survive into the tool result, in block order.
+    func testCodexStructuredFunctionOutputPreservesTextBlocks() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lines = [
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"type\":\"function_call\",\"call_id\":\"call-1\",\"name\":\"shell\",\"arguments\":\"{}\"}}",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:01Z\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call-1\",\"output\":[{\"type\":\"input_text\",\"text\":\"part-1\"},{\"type\":\"input_image\",\"detail\":\"auto\",\"image_url\":\"data:image/png;base64,AA==\"},{\"type\":\"input_text\",\"text\":\"part-2\"}]}}",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:02Z\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call-1\",\"output\":[{\"type\":\"input_text\",\"text\":\"late-duplicate\"}]}}",
+            makeCodexMessageLine(role: "assistant", content: "a-0"),
+        ]
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(transcriptURL, hub: hub, readySentinel: "a-0")
+        defer { session.stop() }
+        let results = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+            .events.filter { $0.eventID == "call-1:function-output" }
+        XCTAssertEqual(results.count, 1,
+                       "the structured output resolves the call EXACTLY once — the resolved-ID dedupe holds")
+        XCTAssertEqual(results.first?.output, "part-1\n\npart-2",
+                       "all legal text blocks join in block order; the interleaved image is preserved around, not poisoning")
+        XCTAssertEqual(results.first?.toolCallID, "call-1")
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+        XCTAssertTrue(session.validateHistoryEpoch(epoch),
+                      "a structured legal output keeps the source trusted")
+    }
+
+    // Guard: image-only Array, empty String, and empty Array outputs are
+    // legal no-text products — no event, no poison.
+    func testCodexEventlessFunctionOutputsStayLegal() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lines = [
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"img-only\",\"output\":[{\"type\":\"input_image\",\"detail\":\"auto\",\"image_url\":\"data:image/png;base64,AA==\"}]}}",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:01Z\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"empty-str\",\"output\":\"\"}}",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:02Z\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"empty-arr\",\"output\":[]}}",
+            makeCodexMessageLine(role: "assistant", content: "a-0"),
+        ]
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(transcriptURL, hub: hub, readySentinel: "a-0")
+        defer { session.stop() }
+        XCTAssertFalse(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                        .events.contains { $0.type == .toolResult },
+                       "eventless legal outputs publish nothing")
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+        switch session.afterCursorPlan(afterSeq: 0, expectedEpoch: epoch).mode {
+        case .rawCovered, .scan:
+            break
+        case .hubOnly, .unavailable:
+            XCTFail("eventless legal outputs must not poison the plan")
+        }
+        XCTAssertTrue(session.validateHistoryEpoch(epoch))
+    }
+
     func testValidationSourceFenceRunsBeforeSemanticTrustGate() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
