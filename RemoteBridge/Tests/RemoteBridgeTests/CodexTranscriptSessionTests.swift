@@ -3280,6 +3280,135 @@ final class CodexTranscriptSessionTests: XCTestCase {
         }
     }
 
+    // B19: a replacement epoch must not reuse the retired source's scan
+    // frontier. A full real-flow walk lowers A's scan floor to BOF; after
+    // switching to a different-path, different-size B, the fresh plan must
+    // be EXACTLY a scan anchored at B's OWN EOF, and a real typed fetch
+    // must serve the complete B depth.
+    func testReplacementEpochDoesNotReuseOldScanFrontier() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let lineCount = transcriptBootstrapLineLimit + 20
+        let threadA = "019d70fe-fd27-7a12-a3f7-9c89ae5048b6"
+        let threadB = "019ec8cb-fd27-7a12-a3f7-9c89ae5048b6"
+        let transcriptA = directory.appendingPathComponent("rollout-a-\(threadA).jsonl", isDirectory: false)
+        let transcriptB = directory.appendingPathComponent("rollout-b-\(threadB).jsonl", isDirectory: false)
+        let aTexts = (0..<lineCount).map { "a-\($0)" }
+        // Deliberately different byte size for B.
+        let bTexts = (0..<lineCount).map { "b-\($0)-" + String(repeating: "y", count: 23) }
+        let aLines = aTexts.map { makeCodexMessageLine(role: "assistant", content: $0) }
+        let bLines = bTexts.map { makeCodexMessageLine(role: "assistant", content: $0) }
+        try (aLines.joined(separator: "\n") + "\n").write(to: transcriptA, atomically: true, encoding: .utf8)
+        try (bLines.joined(separator: "\n") + "\n").write(to: transcriptB, atomically: true, encoding: .utf8)
+        let bEOF = bLines.reduce(0) { $0 + $1.utf8.count + 1 }
+        let hub = AgentEventHub()
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptA.path,
+                                                                sessionID: "instance-session",
+                                                                threadID: threadA,
+                                                                resumeThreadID: threadA),
+                                             fileManager: .default,
+                                             hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "instance-session", limit: 5)
+                .events.contains { $0.text == aTexts[lineCount - 1] }
+        })
+
+        func fetchOnce() -> BridgeAgentEventFetchFlow.Output {
+            BridgeAgentEventFetchFlow.run(
+                eventHub: hub,
+                workspaceID: "workspace",
+                sessionID: "instance-session",
+                limit: lineCount + 10,
+                beforeSeq: nil,
+                afterSeq: 0,
+                afterCursorSeams: .init(
+                    plan: { _, afterSeq, expected in
+                        session.afterCursorPlan(afterSeq: afterSeq, expectedEpoch: expected)
+                    },
+                    step: { _, anchor, afterSeq, limit in
+                        session.afterCursorStep(from: anchor, afterSeq: afterSeq, limit: limit)
+                    },
+                    validateEpoch: { _, epoch in
+                        session.validateHistoryEpoch(epoch)
+                    })) { _, _, _ in
+                XCTFail("the legacy backfill closure must not serve the typed after path")
+                return false
+            }
+        }
+
+        // A's scan floor really reaches BOF: the full real-flow walk
+        // covers EVERY A row, in raw order, with no more pages.
+        let aWalk = fetchOnce()
+        XCTAssertTrue(aWalk.didBackfill, "the A walk really ran")
+        XCTAssertEqual(aWalk.fetchResult.events.compactMap(\.text).filter { $0.hasPrefix("a-") },
+                       aTexts, "the A walk covers the exact ordered A depth")
+        XCTAssertFalse(aWalk.fetchResult.hasMore)
+
+        let oldEpoch = hub.currentHistoryEpoch(sessionID: "instance-session")
+        session.update(record: makeRecord(transcriptPath: transcriptB.path,
+                                          sessionID: "instance-session",
+                                          threadID: threadB,
+                                          resumeThreadID: threadA))
+        XCTAssertTrue(waitUntil(timeout: 6) {
+            hub.fetch(workspaceID: "workspace", sessionID: "instance-session", limit: 5)
+                .events.contains { $0.text == bTexts[lineCount - 1] }
+        }, "the replacement source attaches")
+        let newEpoch = hub.currentHistoryEpoch(sessionID: "instance-session")
+        XCTAssertEqual(newEpoch.generation, oldEpoch.generation + 1, "exactly one reset")
+        XCTAssertFalse(hub.fetch(workspaceID: "workspace", sessionID: "instance-session", limit: 2000)
+                        .events.contains { $0.text?.hasPrefix("a-") == true },
+                       "A's products are revoked")
+        // The retired epoch fails closed under the existing typed contract.
+        if case .unavailable = session.afterCursorPlan(afterSeq: 0, expectedEpoch: oldEpoch).mode {
+        } else {
+            XCTFail("a plan against the retired epoch is unavailable")
+        }
+        let staleStep = session.afterCursorStep(
+            from: AgentHistoryAnchor(epoch: oldEpoch,
+                                     position: TranscriptEventPosition(lineOffset: 64, ordinal: 0)),
+            afterSeq: 0, limit: 10)
+        guard case .sourceChanged = staleStep.outcome else {
+            return XCTFail("a step against the retired epoch reports sourceChanged, got \(staleStep.outcome)")
+        }
+        XCTAssertFalse(session.validateHistoryEpoch(oldEpoch), "the retired epoch never validates")
+
+        // The fresh B plan is EXACTLY a scan anchored at B's own EOF.
+        let freshPlan = session.afterCursorPlan(afterSeq: 0, expectedEpoch: newEpoch)
+        guard case .scan(let anchor) = freshPlan.mode else {
+            return XCTFail("the fresh plan must SCAN — never rawCovered/hubOnly/unavailable from a stale frontier, got \(freshPlan.mode)")
+        }
+        XCTAssertEqual(anchor.epoch, newEpoch, "the anchor belongs to the B epoch")
+        XCTAssertEqual(anchor.position, TranscriptEventPosition(lineOffset: bEOF, ordinal: 0),
+                       "the anchor is B's OWN EOF, not anything inherited from A")
+
+        // The real typed fetch serves the complete B depth, three times
+        // identically.
+        var runs = [[String]]()
+        for _ in 0..<3 {
+            let output = fetchOnce()
+            XCTAssertEqual(output.fetchResult.events.compactMap(\.text).filter { $0.hasPrefix("b-") },
+                           bTexts, "the B walk serves the exact ordered B depth")
+            for index in 0..<20 {
+                XCTAssertTrue(output.fetchResult.events.contains { $0.text == bTexts[index] },
+                              "b-\(index) below the bootstrap window is served")
+            }
+            XCTAssertFalse(output.fetchResult.events.contains { $0.text?.hasPrefix("a-") == true })
+            let ids = output.fetchResult.events.map(\.eventID)
+            XCTAssertEqual(Set(ids).count, ids.count, "no duplicate eventIDs")
+            let seqs = output.fetchResult.events.map(\.seq)
+            XCTAssertEqual(seqs, seqs.sorted(), "sequences strictly increase")
+            XCTAssertEqual(Set(seqs).count, seqs.count)
+            XCTAssertFalse(output.fetchResult.hasMore)
+            runs.append(output.fetchResult.events.map { "\($0.eventID)#\($0.seq)#\($0.text ?? "")" })
+        }
+        XCTAssertEqual(runs[0], runs[1])
+        XCTAssertEqual(runs[1], runs[2], "three reruns are triple-identical")
+    }
+
     func testValidationSourceFenceRunsBeforeSemanticTrustGate() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
