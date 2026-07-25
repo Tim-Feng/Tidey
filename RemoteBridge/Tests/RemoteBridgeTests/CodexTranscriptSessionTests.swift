@@ -1810,58 +1810,60 @@ final class CodexTranscriptSessionTests: XCTestCase {
             ("patch-end-nonstring-candidate-not-hidden", [eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"p1\",\"stdout\":3,\"stderr\":\"ok\"}")]),
         ]
         for row in rows {
-            let directory = FileManager.default.temporaryDirectory
-                .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            defer { try? FileManager.default.removeItem(at: directory) }
-            let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
-            let lineCount = transcriptBootstrapLineLimit + 20
-            var lines = (0..<lineCount).map {
-                makeCodexMessageLine(role: "assistant",
-                                     content: "deep-\($0)-" + String(repeating: "x", count: 40))
-            }
-            for (offset, line) in row.lines.enumerated() {
-                lines[3 + offset] = line
-            }
-            try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
-            let hub = AgentEventHub()
-            let session = makeStartedCodexSession(transcriptURL, hub: hub,
-                                                  readySentinel: "deep-\(lineCount - 1)-" + String(repeating: "x", count: 40))
-            defer { session.stop() }
-            let epoch = hub.currentHistoryEpoch(sessionID: "session")
-            let plan = session.afterCursorPlan(afterSeq: 0, expectedEpoch: epoch)
-            guard case .scan(let startAnchor) = plan.mode else {
-                XCTFail("\(row.name): precondition — a below-floor cursor plans a scan, got \(plan.mode)")
-                continue
-            }
-            var anchor = startAnchor
-            var sawUnavailable = false
-            walk: for _ in 0..<4 {
-                let step = session.afterCursorStep(from: anchor, afterSeq: 0,
-                                                   limit: lineCount + 100)
-                switch step.outcome {
-                case .advanced(let next):
-                    anchor = next
-                case .unavailable:
-                    XCTAssertTrue(step.events.isEmpty,
-                                  "\(row.name): a poisoned step must not leak same-page partial products")
-                    sawUnavailable = true
-                    break walk
-                case .complete:
-                    XCTFail("\(row.name): the walk must not complete past a malformed producer record")
-                    break walk
-                case .sourceChanged:
-                    XCTFail("\(row.name): a malformed record is not a source change")
-                    break walk
-                }
-            }
-            XCTAssertTrue(sawUnavailable, "\(row.name): the malformed page fails the step closed")
-            if case .unavailable = session.afterCursorPlan(afterSeq: 0, expectedEpoch: epoch).mode {
-            } else {
-                XCTFail("\(row.name): the poison persists for later plans")
-            }
-            XCTAssertFalse(session.validateHistoryEpoch(epoch),
-                           "\(row.name): the poison persists for validation")
+            // Each row runs in its own function scope so the session and
+            // its file watcher stop before the next row, on failure too.
+            try assertDeepRowFailsClosed(name: row.name, rowLines: row.lines)
+        }
+    }
+
+    // Guards for already-correct contracts (recorded as retrospective
+    // pre-green unless a run shows otherwise):
+    // an eventless output leaves the call unresolved, so a LATER legal
+    // text output for the same call still yields exactly one tool result.
+    func testCodexLaterTextOutputAfterEventlessOutputResolvesOnce() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lines = [
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"late-text\",\"output\":[{\"type\":\"input_image\",\"detail\":\"high\",\"image_url\":\"data:image/png;base64,AA==\"}]}}",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:01Z\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"late-text\",\"output\":\"\"}}",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:02Z\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"late-text\",\"output\":[{\"type\":\"input_text\",\"text\":\"the real text\"}]}}",
+            makeCodexMessageLine(role: "assistant", content: "a-0"),
+        ]
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(transcriptURL, hub: hub, readySentinel: "a-0")
+        defer { session.stop() }
+        let results = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+            .events.filter { $0.eventID == "late-text:function-output" }
+        XCTAssertEqual(results.count, 1, "exactly one tool result after eventless predecessors")
+        XCTAssertEqual(results.first?.output, "the real text")
+        XCTAssertTrue(session.validateHistoryEpoch(hub.currentHistoryEpoch(sessionID: "session")))
+    }
+
+    // Guards: a non-string output candidate arriving AFTER the call ID was
+    // legally resolved must still poison — validation runs before the
+    // resolved-ID dedupe for exec_command_end and patch_apply_end too.
+    // Plus the patch call_id missing/wrong-type rows the original table
+    // lacked (it only had the empty-string variant).
+    func testCodexExecAndPatchValidationStaysAheadOfDedupe() throws {
+        func eventMsg(_ payload: String) -> String {
+            "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":\(payload)}"
+        }
+        let rows: [(name: String, lines: [String])] = [
+            ("exec-nonstring-candidate-after-resolved",
+             [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"exec-dup\",\"stdout\":\"legal first\"}"),
+              eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"exec-dup\",\"stdout\":7}")]),
+            ("patch-nonstring-candidate-after-resolved",
+             [eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"patch-dup\",\"stderr\":\"legal first\"}"),
+              eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"patch-dup\",\"stderr\":7}")]),
+            ("patch-end-call-id-missing", [eventMsg("{\"type\":\"patch_apply_end\",\"stdout\":\"ok\"}")]),
+            ("patch-end-call-id-wrong-type", [eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":7,\"stdout\":\"ok\"}")]),
+        ]
+        for row in rows {
+            try assertDeepRowFailsClosed(name: row.name, rowLines: row.lines)
         }
     }
 
