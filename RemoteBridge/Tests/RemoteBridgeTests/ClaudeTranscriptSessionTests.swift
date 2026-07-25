@@ -1630,13 +1630,26 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                        ["two"],
                        "capacity one initially retains only the last same-line ordinal")
 
-        let page = BridgeAgentEventFetchFlow.run(eventHub: hub,
-                                                 workspaceID: "workspace",
-                                                 sessionID: "session",
-                                                 limit: 1,
-                                                 beforeSeq: nil,
-                                                 afterSeq: firstOrdinalSeq) { _, beforeSeq, limit in
-            session.backfill(beforeSeq: beforeSeq, limit: limit)
+        // Production G3 path: the REAL session plan/step/validate seams.
+        let page = BridgeAgentEventFetchFlow.run(
+            eventHub: hub,
+            workspaceID: "workspace",
+            sessionID: "session",
+            limit: 1,
+            beforeSeq: nil,
+            afterSeq: firstOrdinalSeq,
+            afterCursorSeams: .init(
+                plan: { _, afterSeq, expected in
+                    session.afterCursorPlan(afterSeq: afterSeq, expectedEpoch: expected)
+                },
+                step: { _, anchor, afterSeq, limit in
+                    session.afterCursorStep(from: anchor, afterSeq: afterSeq, limit: limit)
+                },
+                validateEpoch: { _, epoch in
+                    session.validateHistoryEpoch(epoch)
+                })) { _, _, _ in
+            XCTFail("the legacy backfill closure must not serve the typed after path")
+            return false
         }
 
         XCTAssertTrue(page.didBackfill)

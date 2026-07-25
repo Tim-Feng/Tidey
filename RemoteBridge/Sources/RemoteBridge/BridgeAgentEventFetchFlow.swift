@@ -72,10 +72,17 @@ enum BridgeAgentEventFetchFlow {
         afterCursorSeams: AfterCursorSeams,
         backfill: (_ sessionID: String, _ beforeSeq: Int, _ limit: Int) -> Bool
     ) -> Output {
-        // afterCursorSeams is intentionally unused here: this row only
-        // threads the seams; the legacy after path below stays authoritative
-        // until the lease/walk decision table lands.
-        _ = afterCursorSeams
+        if let sessionID, let afterSeq, beforeSeq == nil {
+            // The typed after path never reads shared history: its response
+            // authority is request-owned raw events plus the live lease.
+            return runAfterCursor(eventHub: eventHub,
+                                  workspaceID: workspaceID,
+                                  sessionID: sessionID,
+                                  limit: limit,
+                                  maxBytes: maxBytes,
+                                  afterSeq: afterSeq,
+                                  seams: afterCursorSeams)
+        }
         var fetchResult = eventHub.fetch(workspaceID: workspaceID,
                                          sessionID: sessionID,
                                          limit: limit,
@@ -102,26 +109,161 @@ enum BridgeAgentEventFetchFlow {
                                          maxBytes: maxBytes,
                                          beforeSeq: beforeSeq,
                                          afterSeq: nil)
-        } else if let sessionID, let afterSeq {
-            let (nextAfterSeq, nextAfterSeqOverflowed) = afterSeq.addingReportingOverflow(1)
-            while nextAfterSeqOverflowed == false,
-                  let earliestBufferedSeq = eventHub.oldestBufferedSeq(sessionID: sessionID),
-                  earliestBufferedSeq > nextAfterSeq {
-                let backfilled = backfill(sessionID, earliestBufferedSeq, max(limit, transcriptBootstrapLineLimit))
-                didBackfill = didBackfill || backfilled
-                fetchResult = eventHub.fetch(workspaceID: workspaceID,
-                                             sessionID: sessionID,
-                                             limit: limit,
-                                             maxBytes: maxBytes,
-                                             beforeSeq: nil,
-                                             afterSeq: afterSeq)
-                guard backfilled,
-                      let nextEarliestBufferedSeq = eventHub.oldestBufferedSeq(sessionID: sessionID),
-                      nextEarliestBufferedSeq < earliestBufferedSeq else {
-                    break
+        }
+        return Output(fetchResult: fetchResult, didBackfill: didBackfill)
+    }
+
+    // The typed after-cursor path (G3a decision table). Response authority
+    // is ONLY the request-owned raw accumulator plus the live lease
+    // snapshot; `eventHub.fetch`, buffered minima, legacy backfill and the
+    // shared historical cache are never consulted.
+    private static func runAfterCursor(
+        eventHub: AgentEventHub,
+        workspaceID: String,
+        sessionID: String,
+        limit: Int,
+        maxBytes: Int?,
+        afterSeq: Int,
+        seams: AfterCursorSeams
+    ) -> Output {
+        func failClosed(didBackfill: Bool) -> Output {
+            Output(fetchResult: AgentEventHub.FetchResult(events: [],
+                                                          oldestSeq: afterSeq,
+                                                          newestSeq: afterSeq,
+                                                          hasMore: true),
+                   didBackfill: didBackfill)
+        }
+        let (rawCapacity, capacityOverflowed) = limit.addingReportingOverflow(1)
+        let boundedCapacity = capacityOverflowed ? Int.max : rawCapacity
+
+        // Lease FIRST: a publish+evict between plan and lease could hide an
+        // event from both the plan's frontier and the lease window.
+        let lease = eventHub.beginAfterCursorLiveLease(sessionID: sessionID,
+                                                       afterSeq: afterSeq,
+                                                       capacity: boundedCapacity)
+        // Idempotent: a finished lease token is already consumed, so this
+        // never double-releases; every early return path is covered.
+        defer { eventHub.cancelAfterCursorLiveLease(lease.token) }
+        let expectedEpoch = lease.evidence.epoch
+
+        let plan = seams.plan(sessionID, afterSeq, expectedEpoch)
+        guard plan.epoch == expectedEpoch else {
+            return failClosed(didBackfill: false)
+        }
+
+        enum Mode {
+            case leaseOnly
+            case walk(from: AgentHistoryAnchor)
+            case hubOnlyBestEffort
+            case unavailable
+        }
+        let mode: Mode
+        switch plan.mode {
+        case .rawCovered(let replayFrom):
+            if replayFrom.epoch != expectedEpoch {
+                mode = .unavailable
+            } else if lease.evidence.containsEveryAcceptedLiveEvent(afterSeq: afterSeq) {
+                mode = .leaseOnly
+            } else {
+                // Raw coverage is NOT retained product coverage: a pre-lease
+                // eviction above the cursor forces a raw replay from the
+                // plan's FIXED validated frontier.
+                mode = .walk(from: replayFrom)
+            }
+        case .scan(let from):
+            mode = from.epoch == expectedEpoch ? .walk(from: from) : .unavailable
+        case .hubOnly:
+            mode = .hubOnlyBestEffort
+        case .unavailable:
+            mode = .unavailable
+        }
+
+        var didBackfill = false
+        var rawByEventID = [String: AgentEvent]()
+        var rawTruncated = false
+        func retainBounded(_ events: [AgentEvent]) {
+            for event in events where event.seq > afterSeq {
+                rawByEventID[event.eventID] = event
+            }
+            if rawByEventID.count > boundedCapacity {
+                // The response window is the EARLIEST events above the
+                // cursor; deeper (older) steps may displace newer retained
+                // candidates. The trim is recorded for hasMore.
+                rawTruncated = true
+                let kept = rawByEventID.values
+                    .sorted { $0.seq < $1.seq }
+                    .prefix(boundedCapacity)
+                rawByEventID = Dictionary(uniqueKeysWithValues: kept.map { ($0.eventID, $0) })
+            }
+        }
+
+        switch mode {
+        case .unavailable:
+            return failClosed(didBackfill: false)
+        case .leaseOnly, .hubOnlyBestEffort:
+            break
+        case .walk(let startAnchor):
+            let stepLimit = max(boundedCapacity, transcriptBootstrapLineLimit)
+            var anchor = startAnchor
+            walking: while true {
+                let step = seams.step(sessionID, anchor, afterSeq, stepLimit)
+                guard step.epoch == expectedEpoch else {
+                    // G3a: any epoch movement (incl. sourceChanged) discards
+                    // the whole attempt; the one-retry state machine is G3c.
+                    return failClosed(didBackfill: didBackfill)
+                }
+                switch step.outcome {
+                case .unavailable, .sourceChanged:
+                    return failClosed(didBackfill: didBackfill)
+                case .complete:
+                    didBackfill = true
+                    retainBounded(step.events)
+                    break walking
+                case .advanced(let next):
+                    guard next.epoch == expectedEpoch,
+                          next.position < anchor.position else {
+                        // A stalled or epoch-crossing anchor is rejected —
+                        // it never counts as backfill.
+                        return failClosed(didBackfill: didBackfill)
+                    }
+                    didBackfill = true
+                    retainBounded(step.events)
+                    anchor = next
                 }
             }
         }
-        return Output(fetchResult: fetchResult, didBackfill: didBackfill)
+
+        // Finalization order: finish the lease, THEN validate the epoch.
+        guard let snapshot = eventHub.finishAfterCursorLiveLease(lease.token),
+              snapshot.epoch == expectedEpoch,
+              seams.validateEpoch(sessionID, expectedEpoch),
+              eventHub.currentHistoryEpoch(sessionID: sessionID) == expectedEpoch else {
+            return failClosed(didBackfill: didBackfill)
+        }
+
+        // Union authority: raw accumulator + lease snapshot only. The
+        // lease's accepted/rebased copy wins any overlap.
+        var unionByEventID = rawByEventID
+        for event in snapshot.events {
+            unionByEventID[event.eventID] = event
+        }
+        let projected = eventHub.applyingCurrentSessionBindings(Array(unionByEventID.values))
+        var page = projected
+            .filter { $0.seq > afterSeq }
+            .sorted { ($0.seq, $0.eventID) < ($1.seq, $1.eventID) }
+        let droppedByCount = page.count > limit
+        if droppedByCount {
+            page = Array(page.prefix(limit))
+        }
+        let budgeted = eventHub.budgetLimitedPage(page,
+                                                  maxBytes: maxBytes,
+                                                  prefersNewestEvents: false)
+        let droppedByBudget = budgeted.count < page.count
+        let hasMore = droppedByCount || droppedByBudget || rawTruncated || snapshot.truncated
+        return Output(fetchResult: AgentEventHub.FetchResult(events: budgeted,
+                                                             oldestSeq: budgeted.first?.seq ?? afterSeq,
+                                                             newestSeq: budgeted.last?.seq ?? afterSeq,
+                                                             hasMore: hasMore),
+                      didBackfill: didBackfill)
     }
 }
