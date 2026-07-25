@@ -1838,7 +1838,7 @@ final class JSONLFileTailer {
             // its bytes seed the pending buffer at their ORIGINAL offset.
             try seedPendingTailFragment()
 
-            let bootstrappedRecords = try JSONLFileReader.readBeforeRecords(
+            let bootstrapPage = try JSONLFileReader.readBeforePage(
                 fileURL: fileURL,
                 beforeOffset: nextReadOffset,
                 limit: bootstrapLineLimit)
@@ -1854,7 +1854,17 @@ final class JSONLFileTailer {
                   currentSourceIsValid(minimumSize: nextReadOffset) else {
                 throw JSONLFileTailerError.sourceInvalidated
             }
-            deliver(bootstrappedRecords + appendedRecords)
+            deliver(bootstrapPage.records + appendedRecords)
+            // Contiguous coverage is established only after the FINAL fence:
+            // the floor is the bootstrap page's actual scan boundary (never
+            // a record offset) and the ceiling is the fixed validated EOF —
+            // the appended drain is contiguous with the bootstrap window.
+            if let openedSourceIdentity {
+                contiguousRawCoverage = JSONLContiguousRawCoverage(
+                    minimumRawOffset: bootstrapPage.minimumRawOffset,
+                    replayUpperBoundOffset: validatedBoundaryOffset,
+                    sourceIdentity: openedSourceIdentity)
+            }
         } catch {
             stop()
             throw error
@@ -1899,6 +1909,21 @@ final class JSONLFileTailer {
                 return false
             },
             reachedSourceStart: page.reachedSourceStart)
+        // Connectivity is judged from the page's ACTUAL scanned interval:
+        // the floor lowers only when the page touches/overlaps the current
+        // interval within the validated ceiling. Blank/eventless/invalid
+        // bytes all count as scanned here — semantic trust is the session's
+        // concern, not the tailer's.
+        if let coverage = contiguousRawCoverage,
+           coverage.sourceIdentity == openedSourceIdentity,
+           page.maximumRawOffsetExclusive <= coverage.replayUpperBoundOffset,
+           page.maximumRawOffsetExclusive >= coverage.minimumRawOffset,
+           page.minimumRawOffset < coverage.minimumRawOffset {
+            contiguousRawCoverage = JSONLContiguousRawCoverage(
+                minimumRawOffset: page.minimumRawOffset,
+                replayUpperBoundOffset: coverage.replayUpperBoundOffset,
+                sourceIdentity: coverage.sourceIdentity)
+        }
         guard !records.isEmpty else {
             return JSONLBackfillResult(didRead: false, rawFrontier: rawFrontier)
         }
@@ -1923,6 +1948,7 @@ final class JSONLFileTailer {
 
     private func stopOnQueue() {
         openedSourceIdentity = nil
+        contiguousRawCoverage = nil
         validatedBoundaryOffset = 0
         validatedBoundary.removeAll(keepingCapacity: false)
         if let source {
@@ -1994,6 +2020,16 @@ final class JSONLFileTailer {
         switch sourceContinuity(minimumSize: nextReadOffset) {
         case .valid:
             deliver(records)
+            // A fully fenced live append only ADVANCES the validated
+            // ceiling; the floor never moves on the live path.
+            if let coverage = contiguousRawCoverage,
+               coverage.sourceIdentity == openedSourceIdentity {
+                contiguousRawCoverage = JSONLContiguousRawCoverage(
+                    minimumRawOffset: coverage.minimumRawOffset,
+                    replayUpperBoundOffset: max(coverage.replayUpperBoundOffset,
+                                                validatedBoundaryOffset),
+                    sourceIdentity: coverage.sourceIdentity)
+            }
         case .detached:
             // Unlink/rename can land after the proposed boundary was
             // adopted but before publication. The buffered bytes still came

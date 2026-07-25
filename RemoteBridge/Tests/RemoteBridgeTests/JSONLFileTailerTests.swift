@@ -545,6 +545,165 @@ final class JSONLFileTailerTests: XCTestCase {
         XCTAssertFalse(frontier.reachedSourceStart)
     }
 
+    // B6 helpers: a >64KiB opening line forces the bootstrap backward scan
+    // to stop inside the file, so the coverage floor is a REAL mid-file
+    // parse base distinct from any record offset.
+    private func writeCoverageFixture() throws -> (URL, blankBase: Int, firstRecord: Int, eof: Int) {
+        var data = Data(String(repeating: "p", count: 70_000).utf8)
+        data.append(Data("\n".utf8))                    // huge line ends @70000
+        data.append(Data("\n\n".utf8))                  // blanks @70001-70002
+        data.append(Data("r1\n".utf8))                  // record @70003
+        data.append(Data("r2\n".utf8))                  // record @70006
+        let url = try writeFile(data: data)
+        return (url, blankBase: 70_001, firstRecord: 70_003, eof: data.count)
+    }
+
+    private func makeCoverageTailer(_ fileURL: URL,
+                                    queue: DispatchQueue,
+                                    bootstrapLineLimit: Int = 3) -> JSONLFileTailer {
+        JSONLFileTailer(fileURL: fileURL,
+                        queue: queue,
+                        bootstrapLineLimit: bootstrapLineLimit,
+                        lineHandler: { _, _ in },
+                        invalidUTF8Handler: { _ in },
+                        invalidationHandler: {})
+    }
+
+    func testStartupContiguousCoverageUsesActualBootstrapScanBoundary() throws {
+        let (fileURL, blankBase, firstRecord, eof) = try writeCoverageFixture()
+        let queue = DispatchQueue(label: "JSONLFileTailerTests.coverage-startup")
+        let tailer = makeCoverageTailer(fileURL, queue: queue)
+        try tailer.start()
+        defer { tailer.stop() }
+
+        let coverage = try XCTUnwrap(queue.sync { tailer.contiguousRawCoverage },
+                                     "startup must establish the coverage snapshot")
+        XCTAssertEqual(coverage.minimumRawOffset, blankBase,
+                       "the floor is the bootstrap page's ACTUAL scan boundary (covers blanks)")
+        XCTAssertNotEqual(coverage.minimumRawOffset, firstRecord,
+                          "the floor must not be guessed from the first record")
+        XCTAssertEqual(coverage.replayUpperBoundOffset, eof,
+                       "the ceiling is the fixed validated EOF")
+    }
+
+    func testConnectedBackfillLowersContiguousRawFloorIncludingEventlessPage() throws {
+        var data = Data("base\n".utf8)                                    // record @0
+        data.append(Data(String(repeating: "\n", count: 140_000).utf8))   // blank gap > 2 reader chunks
+        data.append(Data("tail\n".utf8))                                  // record @140005
+        let fileURL = try writeFile(data: data)
+        let queue = DispatchQueue(label: "JSONLFileTailerTests.coverage-connected")
+        let tailer = makeCoverageTailer(fileURL, queue: queue, bootstrapLineLimit: 1)
+        try tailer.start()
+        defer { tailer.stop() }
+        let startFloor = try XCTUnwrap(queue.sync { tailer.contiguousRawCoverage }).minimumRawOffset
+
+        let result = try queue.sync { try tailer.backfill(beforeOffset: startFloor, limit: 2) }
+        XCTAssertFalse(result.didRead, "precondition: the connected page is blank-only")
+        let lowered = try XCTUnwrap(queue.sync { tailer.contiguousRawCoverage }).minimumRawOffset
+        XCTAssertLessThan(lowered, startFloor,
+                          "a CONNECTED eventless page still lowers the contiguous floor")
+    }
+
+    func testDisconnectedBackfillDoesNotLowerContiguousRawFloor() throws {
+        let (fileURL, _, _, _) = try writeCoverageFixture()
+        let queue = DispatchQueue(label: "JSONLFileTailerTests.coverage-disconnected")
+        let tailer = makeCoverageTailer(fileURL, queue: queue)
+        try tailer.start()
+        defer { tailer.stop() }
+        let startFloor = try XCTUnwrap(queue.sync { tailer.contiguousRawCoverage }).minimumRawOffset
+
+        // A page deep below the floor whose upper bound cannot touch it.
+        _ = try queue.sync { try tailer.backfill(beforeOffset: 10, limit: 1) }
+        let after = try XCTUnwrap(queue.sync { tailer.contiguousRawCoverage }).minimumRawOffset
+        XCTAssertEqual(after, startFloor,
+                       "a DISCONNECTED page must not lower the contiguous floor")
+    }
+
+    func testDisconnectedOrdinalAnchorDoesNotLowerContiguousRawFloor() throws {
+        var data = Data("a\n".utf8)                                       // record @0
+        data.append(Data("b\n".utf8))                                     // record @2
+        data.append(Data(String(repeating: "\n", count: 140_000).utf8))   // gap > 2 reader chunks
+        data.append(Data("tail\n".utf8))                                  // record @140004
+        let fileURL = try writeFile(data: data)
+        let queue = DispatchQueue(label: "JSONLFileTailerTests.coverage-anchor")
+        let tailer = makeCoverageTailer(fileURL, queue: queue, bootstrapLineLimit: 1)
+        try tailer.start()
+        defer { tailer.stop() }
+        let startFloor = try XCTUnwrap(queue.sync { tailer.contiguousRawCoverage }).minimumRawOffset
+
+        // includeAnchorLine on the deep "a" anchor extends the page's end to
+        // offset 2 only — nowhere near the floor. The archived WIP wrongly
+        // treated ANY anchor-line request as connected.
+        _ = try queue.sync { try tailer.backfill(beforeOffset: 0, limit: 1, includeAnchorLine: true) }
+        let after = try XCTUnwrap(queue.sync { tailer.contiguousRawCoverage }).minimumRawOffset
+        XCTAssertEqual(after, startFloor,
+                       "a disconnected ordinal-anchor page must not lower the floor")
+    }
+
+    func testValidatedLiveAppendAdvancesCoverageCeilingWithoutMovingFloor() throws {
+        let (fileURL, _, _, eof) = try writeCoverageFixture()
+        let queue = DispatchQueue(label: "JSONLFileTailerTests.coverage-append")
+        var captured = [String]()
+        let appendExpectation = expectation(description: "append delivered")
+        let tailer = JSONLFileTailer(fileURL: fileURL,
+                                     queue: queue,
+                                     bootstrapLineLimit: 3,
+                                     lineHandler: { _, line in
+                                         captured.append(line)
+                                         if line == "r3" {
+                                             appendExpectation.fulfill()
+                                         }
+                                     },
+                                     invalidationHandler: {})
+        try tailer.start()
+        defer { tailer.stop() }
+        let before = try XCTUnwrap(queue.sync { tailer.contiguousRawCoverage })
+
+        let handle = try FileHandle(forWritingTo: fileURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("r3\n".utf8))
+        try handle.close()
+        wait(for: [appendExpectation], timeout: 2.0)
+
+        let after = try XCTUnwrap(queue.sync { tailer.contiguousRawCoverage })
+        XCTAssertEqual(after.replayUpperBoundOffset, eof + 3,
+                       "a fenced live append advances the validated ceiling")
+        XCTAssertEqual(after.minimumRawOffset, before.minimumRawOffset,
+                       "a live append never moves the floor")
+    }
+
+    func testFenceFailureLeavesCoverageUntouchedAndStopClearsIt() throws {
+        let (fileURL, _, _, _) = try writeCoverageFixture()
+        let queue = DispatchQueue(label: "JSONLFileTailerTests.coverage-fence")
+        let tailer = makeCoverageTailer(fileURL, queue: queue)
+        try tailer.start()
+        let before = try XCTUnwrap(queue.sync { tailer.contiguousRawCoverage })
+
+        tailer.backfillAfterReadForTesting = {
+            try? Data("replaced\n".utf8).write(to: fileURL, options: .atomic)
+        }
+        // Read the snapshot INSIDE the same queue block, before the vnode
+        // watcher's own invalidation teardown (a separate, legitimate step)
+        // can run: the failed fence itself must not have touched it.
+        let (didThrow, coverageAfterThrow) = queue.sync { () -> (Bool, JSONLContiguousRawCoverage?) in
+            var didThrow = false
+            do {
+                _ = try tailer.backfill(beforeOffset: before.minimumRawOffset, limit: 1)
+            } catch {
+                didThrow = true
+            }
+            return (didThrow, tailer.contiguousRawCoverage)
+        }
+        tailer.backfillAfterReadForTesting = nil
+        XCTAssertTrue(didThrow, "precondition: the source fence must fail")
+        XCTAssertEqual(coverageAfterThrow, before,
+                       "a failed source fence must not mutate the coverage snapshot")
+
+        tailer.stop()
+        XCTAssertNil(queue.sync { tailer.contiguousRawCoverage },
+                     "stop() clears the snapshot")
+    }
+
     private func writeTestFile() throws -> URL {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
