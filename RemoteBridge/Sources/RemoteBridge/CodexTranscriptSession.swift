@@ -814,8 +814,9 @@ final class CodexTranscriptSession: AgentTranscriptSession {
               let payload = object["payload"] as? [String: Any] else {
             // A structurally malformed record poisons the whole source's
             // semantic trust — raw scan coverage over bytes we cannot
-            // understand is never history coverage. (Well-formed records of
-            // unknown TYPES fall through the switch below and stay legal.)
+            // understand is never history coverage. (Well-formed records
+            // route through the switch below: catalogued known-ignored
+            // types are legal, arbitrary unknown types poison.)
             sourceSemanticTrust = false
             return
         }
@@ -1294,16 +1295,21 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             sourceSemanticTrust = false
             return
         }
-        // Official 0.145 ExecCommandEnd schema (protocol.rs /
-        // legacy_events.rs @ 25af12f7 — the content schemas live in
-        // models.rs, the event structs do not):
-        // stdout/stderr/formatted_output are REQUIRED Strings; only
-        // aggregated_output has a serde default (absent → ""); exit_code
-        // is a required i32; status is the required {completed, failed,
-        // declined} enum. The full local corpus has zero absent/null
-        // required fields, so absence fails closed — no legacy exception.
-        // All of this runs BEFORE candidate selection, the resolved-ID
-        // dedupe, and the empty-product policy.
+        // Tidey's history PROJECTION of the official ExecCommandEnd event
+        // (protocol.rs / legacy_events.rs @ 25af12f7 — the content schemas
+        // live in models.rs, the event structs do not). This validates
+        // only the fields Tidey consumes for the history product and
+        // AgentEvent metadata — call_id, stdout, stderr, formatted_output,
+        // aggregated_output, exit_code, status — NOT the full official
+        // deserializer (turn_id/command/cwd/parsed_cmd/duration etc. are
+        // unvalidated producer-schema debt). Within the projection:
+        // stdout/stderr/formatted_output required Strings; only
+        // aggregated_output has a serde default (absent → ""); exit_code a
+        // required i32; status the required {completed, failed, declined}
+        // enum. The full local corpus has zero absent/null projection
+        // fields, so absence fails closed — no legacy exception. All of
+        // this runs BEFORE candidate selection, the resolved-ID dedupe,
+        // and the empty-product policy.
         guard let stdout = payload["stdout"] as? String,
               let stderr = payload["stderr"] as? String,
               let formattedOutput = payload["formatted_output"] as? String else {
@@ -1369,11 +1375,13 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             sourceSemanticTrust = false
             return
         }
-        // Official 0.145 PatchApplyEnd schema: stdout/stderr REQUIRED
-        // Strings, success a required Bool (CFBoolean type ID — NSNumber
-        // 0/1 cannot pass), status the required {completed, failed,
-        // declined} enum. Zero absent/null in the corpus → absence fails
-        // closed. Validation runs BEFORE selection, dedupe, empty policy.
+        // Tidey's history PROJECTION of the official PatchApplyEnd event
+        // (fields Tidey consumes only — not the full official
+        // deserializer): stdout/stderr required Strings, success a
+        // required Bool (CFBoolean type ID — NSNumber 0/1 cannot pass),
+        // status the required {completed, failed, declined} enum. Zero
+        // absent/null in the corpus → absence fails closed. Validation
+        // runs BEFORE selection, dedupe, empty policy.
         guard let stdout = payload["stdout"] as? String,
               let stderr = payload["stderr"] as? String else {
             sourceSemanticTrust = false

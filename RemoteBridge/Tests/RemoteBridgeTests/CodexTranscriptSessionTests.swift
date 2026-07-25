@@ -2052,10 +2052,8 @@ final class CodexTranscriptSessionTests: XCTestCase {
 
     // input_image.detail is Option<ImageDetail> in the official schema:
     // absent, explicit JSON null, and the four enum values are legal in
-    // BOTH content contexts; anything else is malformed. And since the
-    // official enums do not set deny_unknown_fields, extra keys on legal
-    // records and blocks must be ignored, never poisoned.
-    func testCodexOptionalNullDetailAndExtraKeysStayLegal() throws {
+    // BOTH content contexts; anything else is malformed.
+    func testCodexOptionalNullDetailStaysLegal() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -2064,7 +2062,6 @@ final class CodexTranscriptSessionTests: XCTestCase {
         let lines = [
             "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"null-detail-msg\"},{\"type\":\"input_image\",\"detail\":null,\"image_url\":\"data:image/png;base64,AA==\"}]}}",
             "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:01Z\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"null-detail-fco\",\"output\":[{\"type\":\"input_text\",\"text\":\"null-detail-out\"},{\"type\":\"input_image\",\"detail\":null,\"image_url\":\"data:image/png;base64,AA==\"}]}}",
-            "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:02Z\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"extra-keys-msg\",\"annotations\":[],\"future_field\":1}],\"unknown_top_field\":true}}",
             makeCodexMessageLine(role: "assistant", content: "a-0"),
         ]
         try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
@@ -2076,7 +2073,29 @@ final class CodexTranscriptSessionTests: XCTestCase {
                       "explicit null detail is legal in the message context")
         XCTAssertTrue(events.contains { $0.output == "null-detail-out" },
                       "explicit null detail is legal in the function-output context")
-        XCTAssertTrue(events.contains { $0.text == "extra-keys-msg" },
+        XCTAssertTrue(session.validateHistoryEpoch(hub.currentHistoryEpoch(sessionID: "session")))
+    }
+
+    // Standalone guard in its own file: a poison from another same-file
+    // row can no longer fail it collaterally. The official enums set no
+    // deny_unknown_fields, so extra keys on legal records and blocks are
+    // ignored, never poisoned.
+    func testCodexExtraKeysOnLegalRecordsStayLegal() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lines = [
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"extra-keys-msg\",\"annotations\":[],\"future_field\":1}],\"unknown_top_field\":true}}",
+            makeCodexMessageLine(role: "assistant", content: "a-0"),
+        ]
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(transcriptURL, hub: hub, readySentinel: "a-0")
+        defer { session.stop() }
+        XCTAssertTrue(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                        .events.contains { $0.text == "extra-keys-msg" },
                       "extra keys on legal records/blocks are ignored, not poisoned")
         XCTAssertTrue(session.validateHistoryEpoch(hub.currentHistoryEpoch(sessionID: "session")))
     }
@@ -2139,14 +2158,17 @@ final class CodexTranscriptSessionTests: XCTestCase {
         XCTAssertTrue(session.validateHistoryEpoch(hub.currentHistoryEpoch(sessionID: "session")))
     }
 
-    // Official 0.145 exec/patch schema (audited at the same 25af12f7
-    // commit): exec_command_end requires call_id/stdout/stderr/
-    // formatted_output Strings, exit_code i32, status enum; only
-    // aggregated_output has a serde default (absent → ""). patch_apply_end
-    // requires call_id/stdout/stderr Strings, success Bool, status enum.
-    // status is exactly {completed, failed, declined}. The full local
-    // corpus (1,167 files: exec 8,734 / patch 76,687) has ZERO absent or
-    // null required fields — so absence fails closed, no legacy exception.
+    // Tidey's history PROJECTION of the official 0.145 exec/patch events
+    // (audited at the same 25af12f7 commit; the projection covers only
+    // the fields Tidey consumes — turn_id/command/cwd/parsed_cmd/duration
+    // etc. remain unvalidated producer-schema debt): exec_command_end's
+    // projection requires call_id/stdout/stderr/formatted_output Strings,
+    // exit_code i32, status enum; only aggregated_output has a serde
+    // default (absent → ""). patch_apply_end's projection requires
+    // call_id/stdout/stderr Strings, success Bool, status enum. status is
+    // exactly {completed, failed, declined}. The full local corpus (1,167
+    // files: exec 8,734 / patch 76,687) has ZERO absent or null
+    // projection fields — so absence fails closed, no legacy exception.
     func testCodexExecPatchOfficialSchemaFailsClosed() throws {
         func eventMsg(_ payload: String) -> String {
             "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":\(payload)}"
