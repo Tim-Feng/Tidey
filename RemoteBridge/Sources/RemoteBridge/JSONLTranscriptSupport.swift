@@ -30,7 +30,7 @@ func transcriptEventPosition(for sequence: Int) -> TranscriptEventPosition {
         ordinal: zeroBasedSequence % transcriptLineSequenceMultiplier)
 }
 
-enum JSONLFileRecord: Equatable {
+enum JSONLFileRecord: Equatable, Sendable {
     case line(offset: Int, value: String)
     case invalidUTF8(offset: Int)
 
@@ -40,6 +40,20 @@ enum JSONLFileRecord: Equatable {
             return offset
         }
     }
+}
+
+// One backward read with its ACTUAL raw scan boundary. The metadata comes
+// from the reader's own scan/selection state, never from guessing off the
+// first non-blank record: blank lines inside the covered range yield no
+// record but ARE covered; records dropped by `limit` are NOT covered, so a
+// truncated page's boundary is the first RETAINED record.
+struct JSONLFileReadPage: Sendable {
+    let records: [JSONLFileRecord]
+    // Oldest byte offset this page's selection fully covers.
+    let minimumRawOffset: Int
+    // True only when the covered range extends to byte 0 (leading blanks
+    // included) — a first-record offset above 0 does not contradict it.
+    let reachedSourceStart: Bool
 }
 
 enum JSONLFileReader {
@@ -53,7 +67,23 @@ enum JSONLFileReader {
     }
 
     static func readTailRecords(fileURL: URL, limit: Int) throws -> [JSONLFileRecord] {
-        try readRecords(fileURL: fileURL, beforeOffsetExclusive: nil, limit: limit)
+        try readTailPage(fileURL: fileURL, limit: limit).records
+    }
+
+    static func readTailPage(fileURL: URL, limit: Int) throws -> JSONLFileReadPage {
+        try readPage(fileURL: fileURL, beforeOffsetExclusive: nil, limit: limit)
+    }
+
+    static func readBeforePage(fileURL: URL,
+                               beforeOffset: Int,
+                               limit: Int,
+                               includeAnchorLine: Bool = false) throws -> JSONLFileReadPage {
+        let endOffset = includeAnchorLine
+            ? try offsetAfterLine(fileURL: fileURL, lineOffset: beforeOffset)
+            : beforeOffset
+        return try readPage(fileURL: fileURL,
+                            beforeOffsetExclusive: endOffset,
+                            limit: limit)
     }
 
     static func readBefore(fileURL: URL,
@@ -74,12 +104,10 @@ enum JSONLFileReader {
                                   beforeOffset: Int,
                                   limit: Int,
                                   includeAnchorLine: Bool = false) throws -> [JSONLFileRecord] {
-        let endOffset = includeAnchorLine
-            ? try offsetAfterLine(fileURL: fileURL, lineOffset: beforeOffset)
-            : beforeOffset
-        return try readRecords(fileURL: fileURL,
-                               beforeOffsetExclusive: endOffset,
-                               limit: limit)
+        try readBeforePage(fileURL: fileURL,
+                           beforeOffset: beforeOffset,
+                           limit: limit,
+                           includeAnchorLine: includeAnchorLine).records
     }
 
     private static func offsetAfterLine(fileURL: URL, lineOffset: Int) throws -> Int {
@@ -102,11 +130,14 @@ enum JSONLFileReader {
         return fileSize
     }
 
-    private static func readRecords(fileURL: URL,
-                                    beforeOffsetExclusive: Int?,
-                                    limit: Int) throws -> [JSONLFileRecord] {
+    private static func readPage(fileURL: URL,
+                                 beforeOffsetExclusive: Int?,
+                                 limit: Int) throws -> JSONLFileReadPage {
         guard limit > 0 else {
-            return []
+            // Nothing was scanned: claim no coverage.
+            return JSONLFileReadPage(records: [],
+                                     minimumRawOffset: max(beforeOffsetExclusive ?? 0, 0),
+                                     reachedSourceStart: false)
         }
 
         let handle = try FileHandle(forReadingFrom: fileURL)
@@ -117,7 +148,10 @@ enum JSONLFileReader {
         let fileSize = try Int(handle.seekToEnd())
         let endOffset = min(max(beforeOffsetExclusive ?? fileSize, 0), fileSize)
         guard endOffset > 0 else {
-            return []
+            // The requested range already sits at byte 0.
+            return JSONLFileReadPage(records: [],
+                                     minimumRawOffset: 0,
+                                     reachedSourceStart: true)
         }
 
         var startOffset = endOffset
@@ -140,19 +174,33 @@ enum JSONLFileReader {
         var parseBaseOffset = startOffset
         if startOffset > 0 {
             guard let firstNewlineIndex = buffer.firstIndex(of: 0x0A) else {
-                return []
+                return JSONLFileReadPage(records: [],
+                                         minimumRawOffset: endOffset,
+                                         reachedSourceStart: false)
             }
             let bytesToDrop = buffer.distance(from: buffer.startIndex, to: firstNewlineIndex) + 1
             parseBaseOffset += bytesToDrop
             buffer.removeFirst(bytesToDrop)
         }
 
-        return parseRecords(buffer, baseOffset: parseBaseOffset, limit: limit)
+        let parsedRecords = parseRecords(buffer, baseOffset: parseBaseOffset)
+        if parsedRecords.count > limit {
+            // Older records were dropped by the limit: their range is NOT
+            // covered, so the boundary is the first RETAINED record.
+            let retained = Array(parsedRecords.suffix(limit))
+            return JSONLFileReadPage(records: retained,
+                                     minimumRawOffset: retained.first?.offset ?? endOffset,
+                                     reachedSourceStart: false)
+        }
+        // Every parsed byte from the parse base (blank lines included) is
+        // covered; byte 0 was reached only when the scan itself got there.
+        return JSONLFileReadPage(records: parsedRecords,
+                                 minimumRawOffset: parseBaseOffset,
+                                 reachedSourceStart: startOffset == 0)
     }
 
     private static func parseRecords(_ data: Data,
-                                     baseOffset: Int,
-                                     limit: Int) -> [JSONLFileRecord] {
+                                     baseOffset: Int) -> [JSONLFileRecord] {
         guard !data.isEmpty else {
             return []
         }
@@ -173,9 +221,6 @@ enum JSONLFileReader {
             lineStartIndex = data.index(after: index)
         }
 
-        if records.count > limit {
-            return Array(records.suffix(limit))
-        }
         return records
     }
 }
