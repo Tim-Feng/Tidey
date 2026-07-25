@@ -2047,6 +2047,37 @@ final class CodexTranscriptSessionTests: XCTestCase {
         XCTAssertTrue(session.validateHistoryEpoch(epoch))
     }
 
+    // input_image.detail is Option<ImageDetail> in the official schema:
+    // absent, explicit JSON null, and the four enum values are legal in
+    // BOTH content contexts; anything else is malformed. And since the
+    // official enums do not set deny_unknown_fields, extra keys on legal
+    // records and blocks must be ignored, never poisoned.
+    func testCodexOptionalNullDetailAndExtraKeysStayLegal() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lines = [
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"null-detail-msg\"},{\"type\":\"input_image\",\"detail\":null,\"image_url\":\"data:image/png;base64,AA==\"}]}}",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:01Z\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"null-detail-fco\",\"output\":[{\"type\":\"input_text\",\"text\":\"null-detail-out\"},{\"type\":\"input_image\",\"detail\":null,\"image_url\":\"data:image/png;base64,AA==\"}]}}",
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:02Z\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"extra-keys-msg\",\"annotations\":[],\"future_field\":1}],\"unknown_top_field\":true}}",
+            makeCodexMessageLine(role: "assistant", content: "a-0"),
+        ]
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(transcriptURL, hub: hub, readySentinel: "a-0")
+        defer { session.stop() }
+        let events = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50).events
+        XCTAssertTrue(events.contains { $0.text == "null-detail-msg" },
+                      "explicit null detail is legal in the message context")
+        XCTAssertTrue(events.contains { $0.output == "null-detail-out" },
+                      "explicit null detail is legal in the function-output context")
+        XCTAssertTrue(events.contains { $0.text == "extra-keys-msg" },
+                      "extra keys on legal records/blocks are ignored, not poisoned")
+        XCTAssertTrue(session.validateHistoryEpoch(hub.currentHistoryEpoch(sessionID: "session")))
+    }
+
     // exec/patch metadata is producer contract too (inventory over all
     // local rollouts: exec exit_code always a JSON Number, status always a
     // String; patch success always a Boolean, status always a String).

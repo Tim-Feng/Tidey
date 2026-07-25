@@ -932,6 +932,9 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         // Schema validation first, product policy second: a producing
         // record with missing/mistyped required fields is
         // un-understandable data, never a legal eventless record.
+        // The official Message.role is a plain required String, NOT a wire
+        // enum — the non-empty {assistant, user, developer} allowlist is
+        // Tidey's semantic-trust policy backed by the full local corpus.
         guard let role = payload["role"] as? String, !role.isEmpty else {
             sourceSemanticTrust = false
             return
@@ -1617,14 +1620,19 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     // models.rs @ rust-v0.145.0, 25af12f7) — one shared allowlist would
     // either over-accept or over-reject:
     //   .message        — Array only; text blocks input_text/output_text;
-    //                     no-text blocks input_image/input_audio.
+    //                     no-text blocks input_image/input_audio. The
+    //                     "\n\n" flatten is Tidey's display normalization,
+    //                     not an official conversion.
     //   .functionOutput — String or Array; text block input_text only;
     //                     no-text blocks input_image/input_audio/
     //                     encrypted_content; the official human-readable
     //                     conversion keeps nonblank input_text joined "\n".
-    // text / summary_text / a message top-level String are in neither
-    // schema and have zero evidence across all 1,164 local rollout files
-    // (inventory v2, 2026-07-25) — no legacy catalog, fail closed.
+    // The ContentItem enums have no serde(other) and no
+    // deny_unknown_fields: an unknown BLOCK type is schema-invalid, while
+    // extra keys on a legal block are ignored. text / summary_text / a
+    // message top-level String are in neither schema and have zero
+    // evidence across all local rollout files (inventory v2, 2026-07-25)
+    // — no legacy catalog, fail closed.
     enum CodexContentContext {
         case message
         case functionOutput
@@ -1659,7 +1667,10 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                 guard block["image_url"] is String else {
                     return .malformed
                 }
-                if let detail = block["detail"] {
+                // detail is Option<ImageDetail>: absent and explicit JSON
+                // null are both legal; only a present non-null value must
+                // be one of the enum Strings.
+                if let detail = block["detail"], !(detail is NSNull) {
                     guard let detailString = detail as? String,
                           Self.legalImageDetails.contains(detailString) else {
                         return .malformed
