@@ -1067,6 +1067,21 @@ final class AgentEventHubTests: XCTestCase {
         XCTAssertEqual(hub.currentHistoryEpoch(sessionID: "session").generation, 1)
     }
 
+    func testEmptySessionEpochResetInvalidatesLeaseAndAdvancesGeneration() {
+        let hub = AgentEventHub()
+        // No SessionState exists yet: a lease can still be begun (empty
+        // window), so a reset MUST still invalidate it — otherwise finish
+        // serves a retired-epoch snapshot.
+        let lease = hub.beginAfterCursorLiveLease(sessionID: "session", afterSeq: 0, capacity: 10)
+
+        hub.beginNewSourceEpoch(sessionID: "session")
+
+        XCTAssertNil(hub.finishAfterCursorLiveLease(lease.token),
+                     "a reset before any stored event must still mark the lease sourceChanged")
+        XCTAssertEqual(hub.currentHistoryEpoch(sessionID: "session").generation, 1,
+                       "the Hub-issued generation must advance even for an empty session")
+    }
+
     private func makeContextEvent(id: String, seq: Int, kind: String) -> AgentEvent {
         AgentEvent(eventID: id,
                    seq: seq,

@@ -660,9 +660,10 @@ final class AgentEventHub {
     // client.
     func beginNewSourceEpoch(sessionID: String) {
         queue.sync {
-            guard var state = sessions[sessionID] else {
-                return
-            }
+            // A lease can exist before any SessionState does (empty Hub),
+            // so the reset must not early-return: the generation advances
+            // and matching leases invalidate unconditionally.
+            var state = sessions[sessionID] ?? SessionState()
             state.bufferedEvents.removeAll()
             state.historicalEvents.removeAll()
             state.historicalEventIDs.removeAll()
