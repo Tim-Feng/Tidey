@@ -114,11 +114,34 @@ enum BridgeAgentEventFetchFlow {
         return Output(fetchResult: fetchResult, didBackfill: didBackfill)
     }
 
-    // The typed after-cursor path (G3a decision table). Response authority
-    // is ONLY the request-owned raw accumulator plus the live lease
-    // snapshot; `eventHub.fetch`, buffered minima, legacy backfill and the
-    // shared historical cache are never consulted.
+    // The typed after-cursor path (G3a decision table). Currently a single
+    // attempt returned as-is; the G3c retry classification composes over
+    // whole attempts here.
     private static func runAfterCursor(
+        eventHub: AgentEventHub,
+        workspaceID: String,
+        sessionID: String,
+        limit: Int,
+        maxBytes: Int?,
+        afterSeq: Int,
+        seams: AfterCursorSeams
+    ) -> Output {
+        runAfterCursorAttempt(eventHub: eventHub,
+                              workspaceID: workspaceID,
+                              sessionID: sessionID,
+                              limit: limit,
+                              maxBytes: maxBytes,
+                              afterSeq: afterSeq,
+                              seams: seams)
+    }
+
+    // ONE complete after-cursor attempt: lease begin/finish/cancel, plan,
+    // decision table, bounded raw walk, and final projection all live —
+    // and stay — inside this scope. Response authority is ONLY the
+    // request-owned raw accumulator plus the live lease snapshot;
+    // `eventHub.fetch`, buffered minima, legacy backfill and the shared
+    // historical cache are never consulted.
+    private static func runAfterCursorAttempt(
         eventHub: AgentEventHub,
         workspaceID: String,
         sessionID: String,
