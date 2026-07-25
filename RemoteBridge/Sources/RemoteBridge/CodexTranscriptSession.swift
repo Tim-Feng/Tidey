@@ -308,11 +308,19 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                 epoch: currentEpoch,
                 position: TranscriptEventPosition(lineOffset: coverage.replayUpperBoundOffset,
                                                   ordinal: 0))
+            // Retained eligibility uses the LIVE-PUBLISHED floor, never the
+            // tailer's current scan floor: a request-owned walk lowers the
+            // scan floor but its products live only in that request's
+            // response — treating them as retained coverage would let a
+            // repeated fetch skip the depth entirely.
+            guard let retainedFloor = livePublishedRawFloor else {
+                return unavailableNow()
+            }
             let rawCovered: Bool
-            if coverage.minimumRawOffset == 0 {
+            if retainedFloor == 0 {
                 rawCovered = true
             } else if let position = exactTranscriptPositionByPublicSequence[afterSeq],
-                      position.lineOffset >= coverage.minimumRawOffset,
+                      position.lineOffset >= retainedFloor,
                       position.lineOffset < coverage.replayUpperBoundOffset {
                 rawCovered = true
             } else if afterSeq >= maxObservedSeq {
@@ -616,6 +624,11 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             isBootstrappingSidebarState = false
             self.tailer = tailer
             self.transcriptURL = transcriptURL
+            // Retained-coverage eligibility floor: fixed at attach from the
+            // initial bootstrap/live publication window. Request-owned
+            // steps and legacy scans lower the tailer's SCAN floor but must
+            // never lower this one.
+            livePublishedRawFloor = tailer.contiguousRawCoverage?.minimumRawOffset
             resolverTimer?.cancel()
             resolverTimer = nil
             log("tailer.start bootstrap end shellState=\(currentShellState) startedTurn=\(lastStartedTurnID ?? "<nil>") completedTurn=\(lastCompletedTurnID ?? "<nil>")")
@@ -675,6 +688,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         // No source is attached now: untrusted until a replacement attaches
         // and independently re-establishes trust.
         sourceSemanticTrust = false
+        livePublishedRawFloor = nil
         hub.replaceHistoricalEvents(sessionID: record.sessionID, events: [], anchorSeq: nil)
         hub.beginNewSourceEpoch(sessionID: record.sessionID)
         if startResolverNow {

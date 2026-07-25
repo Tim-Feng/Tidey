@@ -3056,6 +3056,65 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         }
     }
 
+    func testClaudeRepeatedAfterCursorFetchRescansRequestOwnedDepth() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let lineCount = transcriptBootstrapLineLimit + 20
+        let contents = (0..<lineCount).map { "depth-\($0)-" + String(repeating: "x", count: 160) }
+        let lines = (0..<lineCount).map { makeClaudeUserLine(uuid: "depth-\($0)", content: contents[$0]) }
+        let (transcriptURL, _) = try writeTrackedTranscript(lines, into: directory)
+        let hub = AgentEventHub()
+        let session = makeStartedSession(transcriptURL, hub: hub, readySentinel: contents[lineCount - 1])
+        defer { session.stop() }
+        func fetchOnce() -> BridgeAgentEventFetchFlow.Output {
+            BridgeAgentEventFetchFlow.run(
+                eventHub: hub,
+                workspaceID: "workspace",
+                sessionID: "session",
+                limit: 2000,
+                beforeSeq: nil,
+                afterSeq: 0,
+                afterCursorSeams: .init(
+                    plan: { _, afterSeq, expected in
+                        session.afterCursorPlan(afterSeq: afterSeq, expectedEpoch: expected)
+                    },
+                    step: { _, anchor, afterSeq, limit in
+                        session.afterCursorStep(from: anchor, afterSeq: afterSeq, limit: limit)
+                    },
+                    validateEpoch: { _, epoch in
+                        session.validateHistoryEpoch(epoch)
+                    })) { _, _, _ in
+                XCTFail("the legacy backfill closure must not serve the typed after path")
+                return false
+            }
+        }
+
+        let first = fetchOnce()
+        XCTAssertTrue(first.didBackfill)
+        let expected = Set(contents)
+        XCTAssertEqual(Set(first.fetchResult.events.compactMap(\.text)).intersection(expected),
+                       expected,
+                       "the first fetch owns the complete depth — the exact expected text set")
+
+        let planAfterFirst = session.afterCursorPlan(
+            afterSeq: 0,
+            expectedEpoch: hub.currentHistoryEpoch(sessionID: "session"))
+        guard case .scan = planAfterFirst.mode else {
+            return XCTFail("a repeated fetch must re-scan; request-owned depth is not retained coverage, got \(planAfterFirst.mode)")
+        }
+
+        let second = fetchOnce()
+        XCTAssertTrue(second.didBackfill,
+                      "the second identical fetch re-walks the raw depth")
+        func triples(_ output: BridgeAgentEventFetchFlow.Output) -> [String] {
+            output.fetchResult.events.map { "\($0.eventID)#\($0.seq)#\($0.text ?? "")" }
+        }
+        XCTAssertEqual(triples(second), triples(first),
+                       "the second fetch serves the IDENTICAL complete page — no gap, no duplicate")
+    }
+
     private func makeStartedSession(_ transcriptURL: URL,
                                     hub: AgentEventHub,
                                     readySentinel: String) -> ClaudeTranscriptSession {

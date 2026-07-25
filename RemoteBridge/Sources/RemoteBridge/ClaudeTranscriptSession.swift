@@ -3153,6 +3153,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         publicTranscriptSequenceByEventID = [:]
         // The replacement source has proven nothing yet.
         historySemanticTrust = false
+        livePublishedRawFloor = nil
         afterCursorReplayCollector = nil
         historicalClosureSourceEpoch &+= 1
         historicalClosureIndex = nil
@@ -3258,11 +3259,19 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 epoch: currentEpoch,
                 position: TranscriptEventPosition(lineOffset: coverage.replayUpperBoundOffset,
                                                   ordinal: 0))
+            // Retained eligibility uses the LIVE-PUBLISHED floor, never the
+            // tailer's current scan floor: a request-owned walk lowers the
+            // scan floor but its products live only in that request's
+            // response — treating them as retained coverage would let a
+            // repeated fetch skip the depth entirely.
+            guard let retainedFloor = livePublishedRawFloor else {
+                return unavailableNow()
+            }
             let rawCovered: Bool
-            if coverage.minimumRawOffset == 0 {
+            if retainedFloor == 0 {
                 rawCovered = true
             } else if let position = exactTranscriptPositionByPublicSequence[afterSeq],
-                      position.lineOffset >= coverage.minimumRawOffset,
+                      position.lineOffset >= retainedFloor,
                       position.lineOffset < coverage.replayUpperBoundOffset {
                 rawCovered = true
             } else if afterSeq >= maxObservedSeq {
@@ -4035,6 +4044,11 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             try tailer.start()
             self.tailer = tailer
             self.transcriptURL = transcriptURL
+            // Retained-coverage eligibility floor: fixed at attach from the
+            // initial bootstrap/live publication window. Request-owned
+            // steps and legacy scans lower the tailer's SCAN floor but must
+            // never lower this one.
+            livePublishedRawFloor = tailer.contiguousRawCoverage?.minimumRawOffset
         } catch {
             self.transcriptURL = nil
         }

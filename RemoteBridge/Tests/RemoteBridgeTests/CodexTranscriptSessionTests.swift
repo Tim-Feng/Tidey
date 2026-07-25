@@ -1400,6 +1400,77 @@ final class CodexTranscriptSessionTests: XCTestCase {
         }
     }
 
+    func testCodexRepeatedAfterCursorFetchRescansRequestOwnedDepth() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lineCount = transcriptBootstrapLineLimit + 20
+        let contents = (0..<lineCount).map { "depth-\($0)-" + String(repeating: "x", count: 160) }
+        try (contents.map { makeCodexMessageLine(role: "assistant", content: $0) }
+                .joined(separator: "\n") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                             fileManager: .default,
+                                             hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5)
+                .events.contains { $0.text == contents[lineCount - 1] }
+        })
+        func fetchOnce() -> BridgeAgentEventFetchFlow.Output {
+            BridgeAgentEventFetchFlow.run(
+                eventHub: hub,
+                workspaceID: "workspace",
+                sessionID: "session",
+                limit: 2000,
+                beforeSeq: nil,
+                afterSeq: 0,
+                afterCursorSeams: .init(
+                    plan: { _, afterSeq, expected in
+                        session.afterCursorPlan(afterSeq: afterSeq, expectedEpoch: expected)
+                    },
+                    step: { _, anchor, afterSeq, limit in
+                        session.afterCursorStep(from: anchor, afterSeq: afterSeq, limit: limit)
+                    },
+                    validateEpoch: { _, epoch in
+                        session.validateHistoryEpoch(epoch)
+                    })) { _, _, _ in
+                XCTFail("the legacy backfill closure must not serve the typed after path")
+                return false
+            }
+        }
+
+        let first = fetchOnce()
+        XCTAssertTrue(first.didBackfill)
+        let expected = Set(contents)
+        XCTAssertEqual(Set(first.fetchResult.events.compactMap(\.text)).intersection(expected),
+                       expected,
+                       "the first fetch owns the complete depth — the exact expected text set")
+
+        // A request-owned scan must NOT promote the eligibility floor: the
+        // deep pages exist only in that request's response, not in any
+        // retained window.
+        let planAfterFirst = session.afterCursorPlan(
+            afterSeq: 0,
+            expectedEpoch: hub.currentHistoryEpoch(sessionID: "session"))
+        guard case .scan = planAfterFirst.mode else {
+            return XCTFail("a repeated fetch must re-scan; request-owned depth is not retained coverage, got \(planAfterFirst.mode)")
+        }
+
+        let second = fetchOnce()
+        XCTAssertTrue(second.didBackfill,
+                      "the second identical fetch re-walks the raw depth")
+        func triples(_ output: BridgeAgentEventFetchFlow.Output) -> [String] {
+            output.fetchResult.events.map { "\($0.eventID)#\($0.seq)#\($0.text ?? "")" }
+        }
+        XCTAssertEqual(triples(second), triples(first),
+                       "the second fetch serves the IDENTICAL complete page — no gap, no duplicate")
+    }
+
     func testValidationSourceInvalidationRevokesEpochBeforeReturningFalse() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
