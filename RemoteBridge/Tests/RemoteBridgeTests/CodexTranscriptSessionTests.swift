@@ -1714,7 +1714,7 @@ final class CodexTranscriptSessionTests: XCTestCase {
         XCTAssertEqual(results.count, 1,
                        "the structured output resolves the call EXACTLY once — the resolved-ID dedupe holds")
         XCTAssertEqual(results.first?.output, "part-1\npart-2",
-                       "exactly the official conversion: nonblank input_text only, joined with a single newline")
+                       "official nonblank-input_text filtering + single-\"\\n\" join, then Tidey's existing outer trim normalization")
         XCTAssertEqual(results.first?.toolCallID, "call-1")
         let epoch = hub.currentHistoryEpoch(sessionID: "session")
         XCTAssertTrue(session.validateHistoryEpoch(epoch),
@@ -1801,7 +1801,9 @@ final class CodexTranscriptSessionTests: XCTestCase {
               responseItem("{\"type\":\"function_call_output\",\"call_id\":\"dup-1\",\"output\":7}")]),
             ("agent-message-message-missing", [eventMsg("{\"type\":\"agent_message\",\"phase\":\"commentary\"}")]),
             ("agent-message-message-wrong-type", [eventMsg("{\"type\":\"agent_message\",\"message\":7,\"phase\":\"commentary\"}")]),
-            ("agent-message-phase-missing", [eventMsg("{\"type\":\"agent_message\",\"message\":\"hi\"}")]),
+            // phase-missing removed: phase is Option<MessagePhase>
+            // (protocol.rs @ 25af12f7 L2153-2160) — absent is legal; see
+            // testCodexAgentMessagePhaseOptionPairing.
             ("agent-message-phase-wrong-type", [eventMsg("{\"type\":\"agent_message\",\"message\":\"hi\",\"phase\":7}")]),
             ("agent-message-phase-unknown", [eventMsg("{\"type\":\"agent_message\",\"message\":\"hi\",\"phase\":\"draft\"}")]),
             ("exec-end-call-id-missing", [eventMsg("{\"type\":\"exec_command_end\",\"stdout\":\"ok\",\"stderr\":\"\",\"formatted_output\":\"\",\"aggregated_output\":\"\",\"exit_code\":0,\"status\":\"completed\"}")]),
@@ -2244,6 +2246,68 @@ final class CodexTranscriptSessionTests: XCTestCase {
         XCTAssertTrue(events.contains { $0.eventID == "min-bound:exec-end" }, "Int32.min is a legal exit code")
         XCTAssertTrue(events.contains { $0.eventID == "max-bound:exec-end" }, "Int32.max is a legal exit code")
         XCTAssertTrue(session.validateHistoryEpoch(hub.currentHistoryEpoch(sessionID: "session")))
+    }
+
+    // agent_message.phase is Option<MessagePhase> (protocol.rs @ 25af12f7
+    // L2153-2160): absent and explicit null are LEGAL — the paired
+    // response_item/message produces the assistant text instead. Corpus
+    // evidence: 8 legacy absent-phase records (2026-02-14) all carry a
+    // same-text paired response_item; of 36,298 phaseful response_items,
+    // 20,900 pair with an identical timestamp and 15,391 pair with a
+    // timestamp differing by ≤2s — so exactly-once holds via a
+    // (kind|phase|text) dedupe, NOT a timestamp-keyed one.
+    func testCodexAgentMessagePhaseOptionPairing() throws {
+        func agentMessage(_ ts: String, _ payloadTail: String) -> String {
+            "{\"type\":\"event_msg\",\"timestamp\":\"\(ts)\",\"payload\":{\"type\":\"agent_message\",\(payloadTail)}}"
+        }
+        func assistantItem(_ ts: String, phase: String, text: String) -> String {
+            "{\"type\":\"response_item\",\"timestamp\":\"\(ts)\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"\(phase)\",\"content\":[{\"type\":\"output_text\",\"text\":\"\(text)\"}]}}"
+        }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lines = [
+            // Legacy absent-phase pairs (timestamps differ by 1s — the real
+            // corpus shape): the response_item produces, exactly once.
+            agentMessage("2026-05-15T00:00:00Z", "\"message\":\"legacy-commentary-text\""),
+            assistantItem("2026-05-15T00:00:01Z", phase: "commentary", text: "legacy-commentary-text"),
+            agentMessage("2026-05-15T00:00:02Z", "\"message\":\"legacy-final-text\""),
+            assistantItem("2026-05-15T00:00:03Z", phase: "final_answer", text: "legacy-final-text"),
+            // Explicit-null phase is equally legal.
+            agentMessage("2026-05-15T00:00:04Z", "\"message\":\"null-phase-text\",\"phase\":null"),
+            assistantItem("2026-05-15T00:00:05Z", phase: "commentary", text: "null-phase-text"),
+            // Modern phaseful pair with differing timestamps: exactly once.
+            agentMessage("2026-05-15T00:00:06Z", "\"message\":\"modern-pair-text\",\"phase\":\"commentary\""),
+            assistantItem("2026-05-15T00:00:07Z", phase: "commentary", text: "modern-pair-text"),
+            agentMessage("2026-05-15T00:00:08Z", "\"message\":\"modern-final-text\",\"phase\":\"final_answer\""),
+            assistantItem("2026-05-15T00:00:09Z", phase: "final_answer", text: "modern-final-text"),
+            // A response_item-only source must not lose the message.
+            assistantItem("2026-05-15T00:00:10Z", phase: "commentary", text: "item-only-text"),
+            makeCodexMessageLine(role: "assistant", content: "a-0"),
+        ]
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(transcriptURL, hub: hub, readySentinel: "a-0")
+        defer { session.stop() }
+        let events = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50).events
+        func count(_ type: AgentEventKind, _ text: String) -> Int {
+            events.filter { $0.type == type && $0.text == text }.count
+        }
+        XCTAssertEqual(count(.assistantMessage, "legacy-commentary-text"), 1,
+                       "absent-phase pair yields exactly one commentary product")
+        XCTAssertEqual(count(.assistantFinal, "legacy-final-text"), 1,
+                       "absent-phase pair yields exactly one final product")
+        XCTAssertEqual(count(.assistantMessage, "null-phase-text"), 1,
+                       "explicit-null phase is legal and pairs the same way")
+        XCTAssertEqual(count(.assistantMessage, "modern-pair-text"), 1,
+                       "a phaseful pair with differing timestamps still yields exactly one")
+        XCTAssertEqual(count(.assistantFinal, "modern-final-text"), 1)
+        XCTAssertEqual(count(.assistantMessage, "item-only-text"), 1,
+                       "a response_item-only source must not lose the message")
+        XCTAssertTrue(session.validateHistoryEpoch(hub.currentHistoryEpoch(sessionID: "session")),
+                      "absent/null phases are legal — the source stays trusted")
     }
 
     func testValidationSourceFenceRunsBeforeSemanticTrustGate() throws {

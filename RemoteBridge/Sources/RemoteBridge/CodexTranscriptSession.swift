@@ -972,17 +972,37 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             guard !text.isEmpty else {
                 return
             }
-            if phase == "commentary" || phase == "final_answer" {
-                return
-            }
+            // A phaseful assistant item maps to the SAME kind/namespace as
+            // its event_msg twin; the text-keyed dedupe in
+            // publishAssistantText makes the pair produce exactly once,
+            // whichever record arrives (or exists) first.
             didSeeInteractiveEvent = true
-            publishAssistantText(kind: .assistantMessage,
-                                 eventNamespace: "assistant",
-                                 phase: phase ?? "message",
-                                 timestamp: timestamp,
-                                 text: text,
-                                 lineOffset: lineOffset,
-                                 ordinal: 0)
+            switch phase {
+            case "commentary":
+                publishAssistantText(kind: .assistantMessage,
+                                     eventNamespace: "commentary",
+                                     phase: "commentary",
+                                     timestamp: timestamp,
+                                     text: text,
+                                     lineOffset: lineOffset,
+                                     ordinal: 0)
+            case "final_answer":
+                publishAssistantText(kind: .assistantFinal,
+                                     eventNamespace: "final",
+                                     phase: "final_answer",
+                                     timestamp: timestamp,
+                                     text: text,
+                                     lineOffset: lineOffset,
+                                     ordinal: 0)
+            default:
+                publishAssistantText(kind: .assistantMessage,
+                                     eventNamespace: "assistant",
+                                     phase: phase ?? "message",
+                                     timestamp: timestamp,
+                                     text: text,
+                                     lineOffset: lineOffset,
+                                     ordinal: 0)
+            }
 
         case "user":
             guard !text.isEmpty, shouldPublishUserMessage(text) else {
@@ -1177,16 +1197,27 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     }
 
     private func consumeAgentMessage(payload: [String: Any], timestamp: String, lineOffset: Int) {
-        // Schema validation first: message and phase are required. An
-        // empty message String is legal (170 observed real records) but a
-        // missing/mistyped field or an unknown phase fails closed.
+        // message is a required String (an empty one is legal — 170
+        // observed real records). phase is Option<MessagePhase>
+        // (protocol.rs @ 25af12f7 L2153-2160): absent and explicit JSON
+        // null are LEGAL — the paired response_item/message produces the
+        // assistant text instead; only commentary/final_answer are legal
+        // Strings and anything else fails closed.
         guard let message = payload["message"] as? String else {
             sourceSemanticTrust = false
             return
         }
-        guard let phase = payload["phase"] as? String,
-              phase == "commentary" || phase == "final_answer" else {
-            sourceSemanticTrust = false
+        let phase: String
+        if let phaseValue = payload["phase"], !(phaseValue is NSNull) {
+            guard let phaseString = phaseValue as? String,
+                  phaseString == "commentary" || phaseString == "final_answer" else {
+                sourceSemanticTrust = false
+                return
+            }
+            phase = phaseString
+        } else {
+            // Legal legacy shape: no product here — the paired
+            // response_item carries the phase and produces exactly once.
             return
         }
         let text = Self.compactString(message)
@@ -1221,7 +1252,12 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                       text: String,
                                       lineOffset: Int,
                                       ordinal: Int) {
-        let dedupeKey = "\(kind.rawValue)|\(phase)|\(timestamp)|\(text)"
+        // The dedupe key deliberately EXCLUDES the timestamp: 15,391 of
+        // the 36,298 real event_msg/response_item pairs carry timestamps
+        // differing by up to 2s (all pairs are ≤2s apart; no distant
+        // identical repeats exist in the corpus), so a timestamp-keyed
+        // dedupe would double-publish 42% of them.
+        let dedupeKey = "\(kind.rawValue)|\(phase)|\(text)"
         guard !publishedAssistantTextKeys.contains(dedupeKey) else {
             return
         }
