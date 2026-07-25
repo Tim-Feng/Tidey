@@ -1717,6 +1717,13 @@ final class JSONLFileTailer {
     }
 
     func start() throws {
+        // The armed vnode watcher handles events on the tailer queue; the
+        // startup critical section (frontier adoption, bootstrap read,
+        // append drain, publication) must not interleave with it.
+        try syncOnQueue { try startOnQueue() }
+    }
+
+    private func startOnQueue() throws {
         let fd = open(fileURL.path, O_RDONLY)
         guard fd >= 0 else {
             throw POSIXError(.ENOENT)

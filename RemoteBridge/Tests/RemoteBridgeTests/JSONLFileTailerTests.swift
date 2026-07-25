@@ -282,6 +282,39 @@ final class JSONLFileTailerTests: XCTestCase {
         }
     }
 
+    func testStartCriticalSectionRunsOnTailerQueue() throws {
+        let fileURL = try writeTestFile()
+        let queue = DispatchQueue(label: "JSONLFileTailerTests.start-queue")
+        var captured = [String]()
+        let tailer = JSONLFileTailer(fileURL: fileURL,
+                                     queue: queue,
+                                     bootstrapLineLimit: 2,
+                                     lineHandler: { _, line in captured.append(line) },
+                                     invalidationHandler: {})
+        var hookRanOnTailerQueue: Bool?
+        tailer.afterInitialFrontierHookForTesting = { [unowned tailer] in
+            // Queue-specific evidence, not timing: the startup critical
+            // section must already be executing on the tailer queue here.
+            hookRanOnTailerQueue = tailer.isOnTailerQueue
+            let handle = try? FileHandle(forWritingTo: fileURL)
+            try? handle?.seekToEnd()
+            try? handle?.write(contentsOf: Data("five\n".utf8))
+            try? handle?.close()
+        }
+        try tailer.start()
+        XCTAssertEqual(hookRanOnTailerQueue, true,
+                       "the startup critical section must run on the tailer queue")
+
+        // The suffix appended at the hook races the armed vnode watcher;
+        // once the watcher settles it must have been delivered exactly once.
+        let settled = expectation(description: "watcher settled")
+        queue.async { settled.fulfill() }
+        wait(for: [settled], timeout: 2.0)
+        tailer.stop()
+        XCTAssertEqual(captured.filter { $0 == "five" }.count, 1,
+                       "the hook-time suffix must deliver exactly once, got \(captured)")
+    }
+
     private func writeTestFile() throws -> URL {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
