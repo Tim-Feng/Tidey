@@ -274,26 +274,36 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
 
     // B. Different sessions never share a global gate: a typed AFTER flow
     // for session-b completes while session-a's before flow holds its own
-    // gate.
+    // gate — and BOTH requests are real, fully asserted history requests.
+    // Timeout ladder: A's blocked release allowance (15s) far exceeds B's
+    // while-A-blocked liveness wait (5s), so a B "success" cannot be A
+    // timing out and freeing the gate first.
     func testConcurrentHistoryRequestsForDifferentSessionsDoNotShareGate() {
         let hub = AgentEventHub()
+        // Live seeds: replaceHistoricalEvents rejects rows for a session
+        // with no stored high-water, so BOTH sessions need one. Cursor 100
+        // excludes session-a's seed from its result.
+        hub.publish(makeEvent(id: "a-live-100", seq: 100, text: "a-live-100",
+                              workspaceID: "workspace-a", sessionID: "session-a"))
         hub.publish(makeEvent(id: "b-live-160", seq: 160, text: "b-live-160",
                               workspaceID: "workspace-b", sessionID: "session-b"))
         let aEntered = DispatchSemaphore(value: 0)
         let releaseA = DispatchSemaphore(value: 0)
+        let aCompleted = DispatchSemaphore(value: 0)
+        let bCompleted = DispatchSemaphore(value: 0)
         let counters = LockedCounters()
         let aReleaseWait = LockedBox<DispatchTimeoutResult>()
+        let aOutput = LockedBox<BridgeAgentEventFetchFlow.Output>()
         let bOutput = LockedBox<BridgeAgentEventFetchFlow.Output>()
-        let aDone = expectation(description: "session A completed")
-        let bDone = expectation(description: "session B completed while A blocks")
 
         DispatchQueue.global(qos: .userInitiated).async {
-            _ = BridgeAgentEventFetchFlow.run(eventHub: hub,
-                                              workspaceID: "workspace-a",
-                                              sessionID: "session-a",
-                                              limit: 3,
-                                              beforeSeq: 100,
-                                              afterSeq: nil) { _, beforeSeq, _ in
+            let output = BridgeAgentEventFetchFlow.run(eventHub: hub,
+                                                       workspaceID: "workspace-a",
+                                                       sessionID: "session-a",
+                                                       limit: 3,
+                                                       beforeSeq: 100,
+                                                       afterSeq: nil) { _, beforeSeq, _ in
+                counters.increment("aBackfill")
                 hub.replaceHistoricalEvents(
                     sessionID: "session-a",
                     events: (97...99).map {
@@ -302,15 +312,17 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
                     },
                     anchorSeq: beforeSeq)
                 aEntered.signal()
-                aReleaseWait.set(releaseA.wait(timeout: .now() + 5.0))
+                aReleaseWait.set(releaseA.wait(timeout: .now() + 15.0))
                 return true
             }
-            aDone.fulfill()
+            aOutput.set(output)
+            aCompleted.signal()
         }
         let aEnteredResult = aEntered.wait(timeout: .now() + 2.0)
         guard aEnteredResult == .success else {
             releaseA.signal()
-            wait(for: [aDone], timeout: 5.0)
+            let aCleanup = aCompleted.wait(timeout: .now() + 5.0)
+            XCTAssertEqual(aCleanup, .success, "A worker joined during cleanup")
             return XCTFail("A never entered its backfill seam")
         }
 
@@ -351,26 +363,53 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
                 return false
             }
             bOutput.set(output)
-            bDone.fulfill()
+            bCompleted.signal()
         }
-        // Liveness: B must COMPLETE while A is still blocked.
-        let bLiveness = XCTWaiter.wait(for: [bDone], timeout: 1.0)
-        guard bLiveness == .completed else {
+        // Liveness: B must COMPLETE (output captured) while A is still
+        // blocked inside its 15s allowance.
+        let bLiveness = bCompleted.wait(timeout: .now() + 5.0)
+        guard bLiveness == .success else {
             releaseA.signal()
-            wait(for: [aDone], timeout: 5.0)
+            let aCleanup = aCompleted.wait(timeout: .now() + 5.0)
+            let bCleanup = bCompleted.wait(timeout: .now() + 5.0)
+            XCTAssertEqual(aCleanup, .success, "A worker joined during cleanup")
+            XCTAssertEqual(bCleanup, .success, "B worker joined during cleanup")
             return XCTFail("session B's request must run to completion while session A holds ITS gate")
         }
         releaseA.signal()
-        wait(for: [aDone], timeout: 5.0)
-        XCTAssertEqual(aReleaseWait.value, .success)
+        let aJoin = aCompleted.wait(timeout: .now() + 5.0)
+        XCTAssertEqual(aJoin, .success, "A worker joined after the release")
+        XCTAssertEqual(aReleaseWait.value, .success,
+                       "A was released by the test, not by its own timeout")
+
+        XCTAssertEqual(counters.value("aBackfill"), 1)
+        guard let a = aOutput.value else {
+            return XCTFail("A output captured")
+        }
+        XCTAssertTrue(a.didBackfill)
+        XCTAssertFalse(a.fetchResult.hasMore)
+        XCTAssertEqual(a.fetchResult.events.map(\.eventID), ["a-97", "a-98", "a-99"],
+                       "session A's before page is a real, exact history page")
+        XCTAssertEqual(a.fetchResult.oldestSeq, 97)
+        XCTAssertEqual(a.fetchResult.newestSeq, 99)
+        for event in a.fetchResult.events {
+            XCTAssertEqual(event.workspaceID, "workspace-a")
+            XCTAssertEqual(event.sessionID, "session-a")
+        }
+
+        XCTAssertEqual(counters.value("bPlan"), 1)
+        XCTAssertEqual(counters.value("bStep"), 1)
+        XCTAssertEqual(counters.value("bValidate"), 1)
+        XCTAssertEqual(counters.value("bLegacyBackfill"), 0)
         guard let b = bOutput.value else {
             return XCTFail("B output captured")
         }
         XCTAssertTrue(b.didBackfill)
         XCTAssertFalse(b.fetchResult.hasMore)
-        XCTAssertEqual(counters.value("bLegacyBackfill"), 0)
         XCTAssertEqual(b.fetchResult.events.map(\.eventID),
                        ["b-101", "b-102", "b-103", "b-live-160"])
+        XCTAssertEqual(b.fetchResult.oldestSeq, 101)
+        XCTAssertEqual(b.fetchResult.newestSeq, 160)
         for event in b.fetchResult.events {
             XCTAssertEqual(event.workspaceID, "workspace-b")
             XCTAssertEqual(event.sessionID, "session-b")
@@ -613,8 +652,11 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
         XCTAssertEqual(a.fetchResult.oldestSeq, 51)
         XCTAssertEqual(a.fetchResult.newestSeq, 161)
         XCTAssertTrue(b.didBackfill)
+        XCTAssertFalse(b.fetchResult.hasMore)
         XCTAssertEqual(b.fetchResult.events.map(\.eventID),
                        ["before-b-61", "before-b-62", "before-b-63"])
+        XCTAssertEqual(b.fetchResult.oldestSeq, 61)
+        XCTAssertEqual(b.fetchResult.newestSeq, 63)
         XCTAssertFalse(a.fetchResult.events.contains { $0.eventID.hasPrefix("before-b-") })
         XCTAssertFalse(b.fetchResult.events.contains { $0.eventID.hasPrefix("after-a-") })
     }
