@@ -2971,6 +2971,218 @@ final class CodexTranscriptSessionTests: XCTestCase {
         XCTAssertTrue(session.hasActiveTailerForTesting)
     }
 
+    // B18: the source-reset base must adopt the Hub sequence high-water —
+    // external synthetic/status publishes are cursor authority that
+    // survives epochs. The replacement source's public sequences must be
+    // EXACTLY highWater + raw layout (not merely "> high"), unique,
+    // strictly increasing by raw position, and fixed for the whole source
+    // epoch.
+    func testEpochResetBaseAdoptsSyntheticHighWaterAndPreservesRawSequenceLayout() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let threadA = "019d70fe-fd27-7a12-a3f7-9c89ae5048b6"
+        let threadB = "019ec8cb-fd27-7a12-a3f7-9c89ae5048b6"
+        let transcriptA = directory.appendingPathComponent("rollout-a-\(threadA).jsonl", isDirectory: false)
+        let transcriptB = directory.appendingPathComponent("rollout-b-\(threadB).jsonl", isDirectory: false)
+        try (makeCodexMessageLine(role: "assistant", content: "a-old") + "\n")
+            .write(to: transcriptA, atomically: true, encoding: .utf8)
+        let bLines = (0..<3).map { makeCodexMessageLine(role: "assistant", content: "b-\($0)") }
+        try (bLines.joined(separator: "\n") + "\n").write(to: transcriptB, atomically: true, encoding: .utf8)
+        // Raw byte offsets of B's lines — the raw sequence layout.
+        var bOffsets = [Int]()
+        var runningOffset = 0
+        for line in bLines {
+            bOffsets.append(runningOffset)
+            runningOffset += line.utf8.count + 1
+        }
+
+        let hub = AgentEventHub(maxBufferedEvents: 1)
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptA.path,
+                                                                sessionID: "instance-session",
+                                                                threadID: threadA,
+                                                                resumeThreadID: threadA),
+                                             fileManager: .default,
+                                             hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "instance-session", limit: 5)
+                .events.contains { $0.text == "a-old" }
+        })
+        hub.publish(AgentEvent(eventID: "external-synthetic",
+                               seq: 1_000_000_000,
+                               vendor: "codex",
+                               workspaceID: "workspace",
+                               sessionID: "instance-session",
+                               timestamp: "2026-05-15T00:00:00Z",
+                               type: .status,
+                               role: nil, text: nil, name: nil, input: nil,
+                               output: nil, toolCallID: nil, metadata: nil))
+        let highWater = hub.sequenceHighWater(sessionID: "instance-session")
+        XCTAssertGreaterThanOrEqual(highWater, 1_000_000_000)
+
+        let deliveryLock = NSLock()
+        var deliveredEvents = [AgentEvent]()
+        let (subscriptionID, _) = hub.subscribe(workspaceID: "workspace", sessionID: "instance-session") { envelope in
+            deliveryLock.lock()
+            deliveredEvents.append(envelope.event)
+            deliveryLock.unlock()
+        }
+        defer { hub.unsubscribe(subscriptionID) }
+
+        session.update(record: makeRecord(transcriptPath: transcriptB.path,
+                                          sessionID: "instance-session",
+                                          threadID: threadB,
+                                          resumeThreadID: threadA))
+        XCTAssertTrue(waitUntil(timeout: 6) {
+            deliveryLock.lock()
+            defer { deliveryLock.unlock() }
+            return (0..<3).allSatisfy { i in deliveredEvents.contains { $0.text == "b-\(i)" } }
+        }, "the replacement source attaches and publishes")
+        deliveryLock.lock()
+        let accepted = (0..<3).compactMap { i in deliveredEvents.first { $0.text == "b-\(i)" } }
+        deliveryLock.unlock()
+        XCTAssertEqual(accepted.count, 3)
+        for (index, event) in accepted.enumerated() {
+            XCTAssertEqual(event.seq,
+                           highWater + transcriptEventSequence(lineOffset: bOffsets[index], ordinal: 0),
+                           "b-\(index): the public seq is EXACTLY highWater + raw layout, not a drifting rebase")
+        }
+        XCTAssertEqual(Set(accepted.map(\.seq)).count, 3, "all sequences unique")
+        XCTAssertEqual(accepted.map(\.seq), accepted.map(\.seq).sorted(),
+                       "sequences strictly follow raw position order")
+        XCTAssertEqual(Set(accepted.map(\.eventID)).count, 3, "eventIDs unique and layout-stable")
+
+        // No leakage of source A's exact/eventID maps into B: a before
+        // fetch on b-1's ACCEPTED cursor returns exactly b-0 and excludes
+        // the cursor event.
+        let beforeMiddle = BridgeAgentEventFetchFlow.run(eventHub: hub,
+                                                         workspaceID: "workspace",
+                                                         sessionID: "instance-session",
+                                                         limit: 10,
+                                                         beforeSeq: accepted[1].seq,
+                                                         afterSeq: nil) { _, beforeSeq, limit in
+            session.backfill(beforeSeq: beforeSeq, limit: limit)
+        }
+        XCTAssertTrue(beforeMiddle.fetchResult.events.contains { $0.text == "b-0" },
+                      "the accepted cursor inverts to the correct raw position")
+        XCTAssertFalse(beforeMiddle.fetchResult.events.contains { $0.text == "b-1" },
+                       "the cursor event itself is excluded")
+    }
+
+    // B18: mid-source Hub rebase — the accepted sequences (not the
+    // proposed arithmetic) are the ONLY public cursor authority, for both
+    // the legacy before inverse and the typed after-cursor replay.
+    func testFileBackedCursorsUseAcceptedHubSequenceAfterMidSourceRebase() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        try (makeCodexMessageLine(role: "assistant", content: "initial") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub(maxBufferedEvents: 1)
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                             fileManager: .default,
+                                             hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5)
+                .events.contains { $0.text == "initial" }
+        })
+        hub.publish(AgentEvent(eventID: "mid-source-synthetic",
+                               seq: 20_000_000,
+                               vendor: "codex",
+                               workspaceID: "workspace",
+                               sessionID: "session",
+                               timestamp: "2026-05-15T00:00:00Z",
+                               type: .status,
+                               role: nil, text: nil, name: nil, input: nil,
+                               output: nil, toolCallID: nil, metadata: nil))
+        let deliveryLock = NSLock()
+        var deliveredEvents = [AgentEvent]()
+        let (subscriptionID, _) = hub.subscribe(workspaceID: "workspace", sessionID: "session") { envelope in
+            deliveryLock.lock()
+            deliveredEvents.append(envelope.event)
+            deliveryLock.unlock()
+        }
+        defer { hub.unsubscribe(subscriptionID) }
+        let appended = (0..<3).map { makeCodexMessageLine(role: "assistant", content: "r-\($0)") }
+        let handle = try FileHandle(forWritingTo: transcriptURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data((appended.joined(separator: "\n") + "\n").utf8))
+        try handle.close()
+        XCTAssertTrue(waitUntil {
+            deliveryLock.lock()
+            defer { deliveryLock.unlock() }
+            return (0..<3).allSatisfy { i in deliveredEvents.contains { $0.text == "r-\(i)" } }
+        })
+        deliveryLock.lock()
+        let acceptedRows = (0..<3).compactMap { i in deliveredEvents.first { $0.text == "r-\(i)" } }
+        deliveryLock.unlock()
+        XCTAssertEqual(acceptedRows.count, 3)
+        XCTAssertTrue(acceptedRows.allSatisfy { $0.seq > 20_000_000 }, "precondition: Hub rebased the rows")
+        XCTAssertFalse(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5)
+                        .events.contains { $0.text == "r-0" },
+                       "precondition: capacity one evicted the early rows")
+
+        // A. Legacy before inverse on the ACCEPTED #2 cursor: exactly #1,
+        // never the cursor event, no proposed-arithmetic misread.
+        let beforeSecond = BridgeAgentEventFetchFlow.run(eventHub: hub,
+                                                         workspaceID: "workspace",
+                                                         sessionID: "session",
+                                                         limit: 10,
+                                                         beforeSeq: acceptedRows[1].seq,
+                                                         afterSeq: nil) { _, beforeSeq, limit in
+            session.backfill(beforeSeq: beforeSeq, limit: limit)
+        }
+        XCTAssertTrue(beforeSecond.fetchResult.events.contains { $0.text == "r-0" },
+                      "the before inverse lands on the accepted cursor's true raw position")
+        XCTAssertFalse(beforeSecond.fetchResult.events.contains { $0.text == "r-1" },
+                       "the cursor event is excluded — no proposed-arithmetic misread")
+
+        // B. Typed after flow from the ACCEPTED #1 cursor: exactly #2 and
+        // #3, once each, ordered by accepted seq, identity-equal to the
+        // live accepted events, and reproducible.
+        func afterFetch() -> BridgeAgentEventFetchFlow.Output {
+            BridgeAgentEventFetchFlow.run(
+                eventHub: hub,
+                workspaceID: "workspace",
+                sessionID: "session",
+                limit: 10,
+                beforeSeq: nil,
+                afterSeq: acceptedRows[0].seq,
+                afterCursorSeams: .init(
+                    plan: { _, afterSeq, expected in
+                        session.afterCursorPlan(afterSeq: afterSeq, expectedEpoch: expected)
+                    },
+                    step: { _, anchor, afterSeq, limit in
+                        session.afterCursorStep(from: anchor, afterSeq: afterSeq, limit: limit)
+                    },
+                    validateEpoch: { _, epoch in
+                        session.validateHistoryEpoch(epoch)
+                    })) { _, _, _ in
+                XCTFail("the legacy backfill closure must not serve the typed after path")
+                return false
+            }
+        }
+        let after = afterFetch()
+        let afterTriples = after.fetchResult.events
+            .filter { ($0.text ?? "").hasPrefix("r-") }
+            .map { "\($0.eventID)#\($0.seq)#\($0.text ?? "")" }
+        let expectedTriples = [acceptedRows[1], acceptedRows[2]]
+            .map { "\($0.eventID)#\($0.seq)#\($0.text ?? "")" }
+        XCTAssertEqual(afterTriples, expectedTriples,
+                       "the typed after replay serves EXACTLY the live accepted identities, in accepted order")
+        let rerun = afterFetch()
+        XCTAssertEqual(rerun.fetchResult.events.map { "\($0.eventID)#\($0.seq)#\($0.text ?? "")" },
+                       after.fetchResult.events.map { "\($0.eventID)#\($0.seq)#\($0.text ?? "")" },
+                       "the same fetch reruns byte-identically")
+    }
+
     func testValidationSourceFenceRunsBeforeSemanticTrustGate() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)

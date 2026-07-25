@@ -668,10 +668,14 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             guard let tailer else {
                 return false
             }
-            guard beforeSeq > transcriptSequenceBase else {
+            // The accepted-sequence authority: cursor inversion goes
+            // through the exact map first (a Hub-rebased public cursor has
+            // no meaningful raw arithmetic), with the same base fallback
+            // for never-rebased sequences.
+            guard let beforePosition = transcriptEventPositionInCurrentSource(for: beforeSeq) else {
                 return false
             }
-            let beforeOffset = transcriptLineOffset(for: beforeSeq - transcriptSequenceBase)
+            let beforeOffset = beforePosition.lineOffset
             guard beforeOffset > 0 else {
                 return false
             }
@@ -973,7 +977,11 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         lastStartedTurnID = nil
         lastCompletedTurnID = nil
         lastAbortedTurnID = nil
-        transcriptSequenceBase = maxObservedSeq
+        // Hub high-water/reservations are cursor authority ACROSS epochs:
+        // the replacement source's base adopts them (fixed for the whole
+        // source epoch — the base never drifts mid-source).
+        transcriptSequenceBase = max(maxObservedSeq,
+                                     hub.sequenceHighWater(sessionID: record.sessionID))
         // No source is attached now: untrusted until a replacement attaches
         // and independently re-establishes trust.
         sourceSemanticTrust = false
@@ -1755,13 +1763,12 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                    output: String?,
                                    toolCallID: String?,
                                    metadata: [String: String]?) {
-        let seq = fileBackedSequence(lineOffset: lineOffset, ordinal: ordinal)
-        maxObservedSeq = max(maxObservedSeq, seq)
-        // Minimal B17 exact-position recording (unrebased seq only — the
-        // accepted/rebased mapping is B18's row): every file-backed product
-        // remembers its raw position for typed plan/step classification.
         let position = TranscriptEventPosition(lineOffset: lineOffset, ordinal: ordinal)
-        exactTranscriptPositionByPublicSequence[seq] = position
+        let proposedSeq = fileBackedSequence(lineOffset: lineOffset, ordinal: ordinal)
+        // The Hub-ACCEPTED sequence is the only public cursor authority: a
+        // replay of an already-rebased event must reproduce the accepted
+        // identity, never the proposed arithmetic.
+        let seq = publicTranscriptSequenceByEventID[eventID] ?? proposedSeq
         let resolvedMetadata = metadataWithClientRequestID(kind: kind, text: text, metadata: metadata)
         let event = AgentEvent(eventID: eventID,
                                seq: seq,
@@ -1778,8 +1785,11 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                toolCallID: toolCallID,
                                metadata: baseMetadata(resolvedMetadata))
         if isBackfillingHistory {
+            maxObservedSeq = max(maxObservedSeq, seq)
+            exactTranscriptPositionByPublicSequence[seq] = position
             // Request-local after-cursor collection wins over the legacy
-            // shared replay state while a step collector exists.
+            // shared replay state while a step collector exists. Products
+            // carry their RAW positions; the walk slices by position.
             if afterCursorReplayCollector != nil {
                 afterCursorReplayCollector?.products.append(event)
                 afterCursorReplayCollector?.positionsByEventID[event.eventID] = position
@@ -1788,7 +1798,17 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             historicalReplayProducts.append(event)
             return
         }
-        hub.publish(event)
+        guard let acceptedEvent = hub.publish(event) else {
+            maxObservedSeq = max(maxObservedSeq, seq)
+            return
+        }
+        maxObservedSeq = max(maxObservedSeq, acceptedEvent.seq)
+        // Only the ACCEPTED public seq owns a raw position — a rebased
+        // event must never leave a proposed-seq → position false authority.
+        exactTranscriptPositionByPublicSequence[acceptedEvent.seq] = position
+        if acceptedEvent.seq != proposedSeq {
+            publicTranscriptSequenceByEventID[eventID] = acceptedEvent.seq
+        }
     }
 
     private func publishSynthetic(kind: AgentEventKind,
@@ -1802,7 +1822,6 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                   output: String?,
                                   toolCallID: String?,
                                   metadata: [String: String]?) {
-        maxObservedSeq = max(maxObservedSeq, seq)
         let event = AgentEvent(eventID: eventID,
                                seq: seq,
                                vendor: "codex",
@@ -1818,6 +1837,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                toolCallID: toolCallID,
                                metadata: metadata)
         if isBackfillingHistory {
+            maxObservedSeq = max(maxObservedSeq, seq)
             // Synthetics carry no raw position: they join the collector's
             // products (and are excluded from interval slicing) rather than
             // the legacy shared replay state while a step is active.
@@ -1828,7 +1848,11 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             historicalReplayProducts.append(event)
             return
         }
-        hub.publish(event)
+        // Live synthetics advance maxObservedSeq by the ACCEPTED sequence,
+        // and never touch the exact/eventID raw maps — a synthetic has no
+        // raw position.
+        let acceptedEvent = hub.publish(event) ?? event
+        maxObservedSeq = max(maxObservedSeq, acceptedEvent.seq)
     }
 
     private func publishSidebarSessionActivation(force: Bool) {
