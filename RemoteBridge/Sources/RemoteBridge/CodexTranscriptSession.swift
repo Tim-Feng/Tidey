@@ -234,8 +234,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             let previousRecord = self.record
             let didMigrateWorkspace = previousRecord.workspaceID != record.workspaceID
             let didMigratePanel = previousRecord.panelID != record.panelID
-            let didChangeTranscriptIdentity = Self.transcriptIdentity(for: previousRecord) !=
-                Self.transcriptIdentity(for: record)
+            let didChangeTranscriptIdentity = self.isTranscriptIdentityChange(
+                from: previousRecord, to: record)
             if didMigrateWorkspace || didMigratePanel {
                 self.hub.migrateSession(sessionID: previousRecord.sessionID,
                                         toWorkspaceID: record.workspaceID,
@@ -290,8 +290,11 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             }
             do {
                 try tailer.validateCurrentSource()
-            } catch {
+            } catch JSONLFileTailerError.sourceInvalidated {
                 resetTranscriptSource(startResolverNow: true)
+                return unavailableNow()
+            } catch {
+                // A transient I/O error is not a source invalidation.
                 return unavailableNow()
             }
             guard let coverage = tailer.contiguousRawCoverage else {
@@ -355,11 +358,13 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             }
             do {
                 try tailer.validateCurrentSource()
-            } catch {
+            } catch JSONLFileTailerError.sourceInvalidated {
                 // Pre-replay: no replay state is active — resolve now.
                 resetTranscriptSource(startResolverNow: true)
                 currentEpoch = hub.currentHistoryEpoch(sessionID: record.sessionID)
                 return out(.sourceChanged)
+            } catch {
+                return out(.unavailable)
             }
 
             let liveSnapshot = captureLiveParserState()
@@ -392,12 +397,15 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                 readResult = try tailer.backfill(beforeOffset: anchorPosition.lineOffset,
                                                  limit: limit,
                                                  includeAnchorLine: anchorPosition.ordinal > 0)
-            } catch {
+            } catch JSONLFileTailerError.sourceInvalidated {
                 sourceWasInvalidated = true
                 shouldStartResolverAfterCleanup = true
                 resetTranscriptSource(startResolverNow: false)
                 currentEpoch = hub.currentHistoryEpoch(sessionID: record.sessionID)
                 return out(.sourceChanged)
+            } catch {
+                // A transient read error must not revoke a valid source.
+                return out(.unavailable)
             }
             isCollectingBackfillPage = false
             let rawPage = collectedBackfillPage
@@ -414,12 +422,14 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             }
             do {
                 try tailer.validateCurrentSource()
-            } catch {
+            } catch JSONLFileTailerError.sourceInvalidated {
                 sourceWasInvalidated = true
                 shouldStartResolverAfterCleanup = true
                 resetTranscriptSource(startResolverNow: false)
                 currentEpoch = hub.currentHistoryEpoch(sessionID: record.sessionID)
                 return out(.sourceChanged)
+            } catch {
+                return out(.unavailable)
             }
             // Final Hub epoch fence: any movement discards the whole page.
             let epochAfterRead = hub.currentHistoryEpoch(sessionID: record.sessionID)
@@ -466,7 +476,16 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                 return false
             }
             validateHistoryEpochBeforeSourceValidationForTesting?()
-            guard (try? tailer.validateCurrentSource()) != nil else {
+            do {
+                try tailer.validateCurrentSource()
+            } catch JSONLFileTailerError.sourceInvalidated {
+                // Revoke SYNCHRONOUSLY before returning false: the flow's
+                // finalization reads the Hub epoch right after validation
+                // and must observe the movement (a retryable signal), never
+                // an unchanged-epoch terminal false.
+                resetTranscriptSource(startResolverNow: true)
+                return false
+            } catch {
                 return false
             }
             return epoch == hub.currentHistoryEpoch(sessionID: record.sessionID)
@@ -1263,6 +1282,37 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             record.threadID ?? "",
             record.resumeThreadID ?? "",
         ]
+    }
+
+    private static func canonicalTranscriptPath(_ path: String) -> String {
+        URL(fileURLWithPath: NSString(string: path).expandingTildeInPath).standardizedFileURL.path
+    }
+
+    // A source switch is a LOGICAL identity change (thread/resume) or a new
+    // path that resolves to a DIFFERENT file than the currently attached
+    // source. Equivalent spellings of the same file, and a nil path being
+    // enriched to the already-resolved file, are registry metadata updates
+    // — never a reset.
+    private func isTranscriptIdentityChange(from previousRecord: AgentSessionRegistryRecord,
+                                            to record: AgentSessionRegistryRecord) -> Bool {
+        if previousRecord.threadID != record.threadID
+            || previousRecord.resumeThreadID != record.resumeThreadID {
+            return true
+        }
+        guard let newPath = record.transcriptPath, !newPath.isEmpty else {
+            // Path removed/absent: keep the current source.
+            return false
+        }
+        let canonicalNew = Self.canonicalTranscriptPath(newPath)
+        if let currentURL = transcriptURL {
+            return canonicalNew != currentURL.standardizedFileURL.path
+        }
+        if let oldPath = previousRecord.transcriptPath, !oldPath.isEmpty {
+            return canonicalNew != Self.canonicalTranscriptPath(oldPath)
+        }
+        // nil → path with no attached source yet: the resolver simply picks
+        // it up; nothing to reset.
+        return false
     }
 
     private func baseMetadata(_ metadata: [String: String]?) -> [String: String]? {

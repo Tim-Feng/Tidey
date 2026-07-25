@@ -1301,8 +1301,9 @@ final class CodexTranscriptSessionTests: XCTestCase {
         }
         let ids = events.map(\.eventID)
         XCTAssertEqual(Set(ids).count, ids.count, "no duplicate across step intervals")
-        XCTAssertEqual(events.filter { $0.text?.hasPrefix("walk-") == true }.count, lineCount,
-                       "the union covers every transcript event with no gap")
+        let expectedTexts = Set((0..<lineCount).map { "walk-\($0)-" + String(repeating: "x", count: 160) })
+        XCTAssertEqual(Set(events.compactMap(\.text)).intersection(expectedTexts), expectedTexts,
+                       "the union covers EVERY transcript event — the exact expected text set, no gap")
         let cacheAfterWalk = hub.fetch(workspaceID: "workspace",
                                        sessionID: "session",
                                        limit: 2000,
@@ -1311,6 +1312,155 @@ final class CodexTranscriptSessionTests: XCTestCase {
                        "typed steps never write request pages into the shared historical cache")
         XCTAssertTrue(cacheAfterWalk.events.contains { $0.eventID == "cache-sentinel" },
                       "the pre-seeded cache sentinel is untouched")
+    }
+
+    func testValidationSourceInvalidationRevokesEpochBeforeReturningFalse() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lines = (0..<8).map { makeCodexMessageLine(role: "assistant", content: "a-\($0)") }
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                             fileManager: .default,
+                                             hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10)
+                .events.contains { $0.text == "a-7" }
+        })
+        let oldEpoch = hub.currentHistoryEpoch(sessionID: "session")
+        var replacementWriteError: Error?
+        session.validateHistoryEpochBeforeSourceValidationForTesting = {
+            do {
+                try Data((self.makeCodexMessageLine(role: "assistant", content: "b-sentinel") + "\n").utf8)
+                    .write(to: transcriptURL, options: .atomic)
+            } catch {
+                replacementWriteError = error
+            }
+        }
+        defer { session.validateHistoryEpochBeforeSourceValidationForTesting = nil }
+
+        let validated = session.validateHistoryEpoch(oldEpoch)
+
+        XCTAssertNil(replacementWriteError)
+        XCTAssertFalse(validated)
+        // AT RETURN the epoch has already advanced exactly once and A's
+        // products are revoked — the G3c retry signal reads a CHANGED Hub
+        // epoch, never an unchanged-epoch terminal false.
+        XCTAssertEqual(hub.currentHistoryEpoch(sessionID: "session").generation,
+                       oldEpoch.generation + 1)
+        XCTAssertFalse(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                        .events.contains { $0.text?.hasPrefix("a-") == true })
+        XCTAssertTrue(waitUntil(timeout: 4) {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                .events.contains { $0.text == "b-sentinel" }
+        }, "the resolver reattaches source B")
+        XCTAssertEqual(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                        .events.filter { $0.text == "b-sentinel" }.count, 1)
+        XCTAssertEqual(hub.currentHistoryEpoch(sessionID: "session").generation,
+                       oldEpoch.generation + 1,
+                       "no stale tailer callback bumps the generation a second time")
+    }
+
+    func testAfterCursorReadErrorDoesNotRevokeValidSource() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: directory.path)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lines = (0..<8).map { makeCodexMessageLine(role: "assistant", content: "a-\($0)") }
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                             fileManager: .default,
+                                             hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10)
+                .events.contains { $0.text == "a-7" }
+        })
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+        let plan = session.afterCursorPlan(afterSeq: 0, expectedEpoch: epoch)
+        let startAnchor: AgentHistoryAnchor
+        switch plan.mode {
+        case .rawCovered(let anchor), .scan(let anchor):
+            startAnchor = anchor
+        case .hubOnly, .unavailable:
+            return XCTFail("precondition: a typed anchor exists, got \(plan.mode)")
+        }
+        // A transient path-read I/O failure (unreadable directory) is NOT a
+        // source invalidation.
+        session.tailerBackfillBeforeReadForTesting = {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o000],
+                                                   ofItemAtPath: directory.path)
+        }
+
+        let step = session.afterCursorStep(from: startAnchor, afterSeq: 0, limit: 5)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: directory.path)
+        session.tailerBackfillBeforeReadForTesting = nil
+        guard case .unavailable = step.outcome else {
+            return XCTFail("a plain read error is unavailable, got \(step.outcome)")
+        }
+        XCTAssertTrue(step.events.isEmpty)
+        XCTAssertEqual(hub.currentHistoryEpoch(sessionID: "session"), epoch,
+                       "a read error must not bump the epoch")
+        XCTAssertTrue(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                        .events.contains { $0.text == "a-7" },
+                      "existing events survive a read error")
+        let retryPlan = session.afterCursorPlan(afterSeq: 0, expectedEpoch: epoch)
+        switch retryPlan.mode {
+        case .rawCovered, .scan:
+            break
+        case .hubOnly, .unavailable:
+            XCTFail("the same epoch plans again once the read error clears, got \(retryPlan.mode)")
+        }
+    }
+
+    func testEquivalentTranscriptPathMetadataUpdateDoesNotResetEpoch() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory.appendingPathComponent("nested", isDirectory: true),
+            withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lines = (0..<8).map { makeCodexMessageLine(role: "assistant", content: "a-\($0)") }
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let equivalentPath = directory
+            .appendingPathComponent("nested", isDirectory: true).path + "/../rollout.jsonl"
+        let hub = AgentEventHub()
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: equivalentPath),
+                                             fileManager: .default,
+                                             hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10)
+                .events.contains { $0.text == "a-7" }
+        })
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+
+        // The SAME file under its standardized path: registry metadata
+        // enrichment, not a source switch.
+        session.update(record: makeRecord(transcriptPath: transcriptURL.standardizedFileURL.path))
+        _ = session.validateHistoryEpoch(epoch)   // flush the session queue
+
+        XCTAssertEqual(hub.currentHistoryEpoch(sessionID: "session"), epoch,
+                       "an equivalent-path metadata update must not reset the epoch")
+        XCTAssertTrue(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                        .events.contains { $0.text == "a-7" },
+                      "the original events survive")
+        XCTAssertTrue(session.validateHistoryEpoch(epoch),
+                      "the tailer keeps running across the metadata update")
     }
 
     func testAfterCursorStepInvalidationRevokesOldEpochAndResolverReattaches() throws {
@@ -1332,6 +1482,7 @@ final class CodexTranscriptSessionTests: XCTestCase {
                 .events.contains { $0.text == "a-7" }
         })
         let oldEpoch = hub.currentHistoryEpoch(sessionID: "session")
+        hub.replaceHistoricalEvents(sessionID: "session", events: [makeCacheSentinel(seq: 1)])
         let plan = session.afterCursorPlan(afterSeq: 0, expectedEpoch: oldEpoch)
         let startAnchor: AgentHistoryAnchor
         switch plan.mode {
@@ -1363,7 +1514,10 @@ final class CodexTranscriptSessionTests: XCTestCase {
                        "the Hub generation advances EXACTLY once")
         XCTAssertFalse(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
                         .events.contains { $0.text?.hasPrefix("a-") == true },
-                       "source A's live/historical events are revoked immediately")
+                       "source A's LIVE events are revoked immediately")
+        XCTAssertFalse(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50, beforeSeq: 5)
+                        .events.contains { $0.eventID == "cache-sentinel" },
+                       "source A's HISTORICAL events are revoked immediately")
         XCTAssertFalse(session.validateHistoryEpoch(oldEpoch))
 
         XCTAssertTrue(waitUntil(timeout: 4) {
@@ -1386,6 +1540,9 @@ final class CodexTranscriptSessionTests: XCTestCase {
         case .hubOnly, .unavailable:
             XCTFail("the replacement source plans normally, got \(freshPlan.mode)")
         }
+        XCTAssertEqual(hub.currentHistoryEpoch(sessionID: "session").generation,
+                       oldEpoch.generation + 1,
+                       "after the fresh plan drained the session queue, stale callbacks still caused no second bump")
     }
 
     private func makeRecord(transcriptPath: String,
