@@ -541,7 +541,10 @@ final class AgentSessionRegistryMonitor {
                          expectedEpoch: AgentHistoryEpoch) -> AgentAfterCursorPlan {
         let session: AgentTranscriptSession? = queue.sync { sessions[sessionID] }
         guard let session else {
-            return AgentAfterCursorPlan(epoch: expectedEpoch, mode: .unavailable)
+            // Read OFF the registry queue: the failed plan reports the TRUE
+            // current Hub token, never echoing the caller's expected one.
+            return AgentAfterCursorPlan(epoch: hub.currentHistoryEpoch(sessionID: sessionID),
+                                        mode: .unavailable)
         }
         return session.afterCursorPlan(afterSeq: afterSeq, expectedEpoch: expectedEpoch)
     }

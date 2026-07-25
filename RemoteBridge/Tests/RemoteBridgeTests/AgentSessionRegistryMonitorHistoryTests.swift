@@ -181,6 +181,40 @@ final class AgentSessionRegistryMonitorHistoryTests: XCTestCase {
         XCTAssertTrue(step.events.isEmpty)
     }
 
+    func testMissingSessionPlanReportsHubCurrentEpoch() throws {
+        let workDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tidey-monitor-history-tx-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: workDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workDirectory) }
+        let transcriptURL = try writeTranscript(into: workDirectory, name: "one.jsonl", prefix: "one")
+        let fixture = try makeFixture(transcriptURL: transcriptURL)
+        defer { try? FileManager.default.removeItem(at: fixture.supportDirectory) }
+        XCTAssertTrue(waitUntil {
+            planIsUsable(fixture.monitor.afterCursorPlan(
+                sessionID: "session",
+                afterSeq: 0,
+                expectedEpoch: fixture.hub.currentHistoryEpoch(sessionID: "session")))
+        }, "precondition: the live session plans successfully")
+        let staleEpoch = fixture.hub.currentHistoryEpoch(sessionID: "session")
+
+        try FileManager.default.removeItem(at: fixture.registryURL)
+        fixture.monitor.scanRegistryForTesting()
+        // The Hub epoch moves again AFTER the removal: a missing-session
+        // plan must report the TRUE current token, never echo the caller's.
+        fixture.hub.beginNewSourceEpoch(sessionID: "session")
+
+        let plan = fixture.monitor.afterCursorPlan(sessionID: "session",
+                                                   afterSeq: 0,
+                                                   expectedEpoch: staleEpoch)
+        guard case .unavailable = plan.mode else {
+            return XCTFail("a missing session can only be unavailable, got \(plan.mode)")
+        }
+        XCTAssertEqual(plan.epoch, fixture.hub.currentHistoryEpoch(sessionID: "session"),
+                       "the missing-session plan reports the Hub CURRENT epoch")
+        XCTAssertNotEqual(plan.epoch, staleEpoch,
+                          "the caller's stale token must not be echoed back")
+    }
+
     func testWorkspaceMigrationKeepsEpochAndValidation() throws {
         let workDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("tidey-monitor-history-tx-\(UUID().uuidString)", isDirectory: true)
