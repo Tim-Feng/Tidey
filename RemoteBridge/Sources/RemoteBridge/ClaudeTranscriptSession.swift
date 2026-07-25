@@ -1701,6 +1701,17 @@ struct JSONLBackfillResult: Sendable {
     let rawFrontier: JSONLRawFrontier?
 }
 
+// The tailer's contiguously scanned raw interval under ONE source identity:
+// every byte in [minimumRawOffset, replayUpperBoundOffset) has been read
+// through a successful source fence. The floor only classifies whether a
+// cursor lies inside trusted raw coverage; walks anchor at the fixed
+// validated ceiling, never at the floor.
+struct JSONLContiguousRawCoverage: Equatable, Sendable {
+    let minimumRawOffset: Int
+    let replayUpperBoundOffset: Int
+    let sourceIdentity: JSONLFileSourceIdentity
+}
+
 final class JSONLFileTailer {
     private enum SourceContinuity {
         case valid
@@ -1729,6 +1740,9 @@ final class JSONLFileTailer {
     private var nextReadOffset = 0
     private var pendingLineOffset: Int?
     private(set) var openedSourceIdentity: JSONLFileSourceIdentity?
+    // Queue-owned contiguous raw coverage snapshot. Structural seam only:
+    // nothing populates it yet — maintenance is the next behavioral row.
+    private(set) var contiguousRawCoverage: JSONLContiguousRawCoverage?
     var backfillAfterReadForTesting: (() -> Void)?
     var afterInitialFrontierHookForTesting: (() -> Void)?
     // Per-instance queue identity: the key object itself is unique to this

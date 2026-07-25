@@ -4,9 +4,15 @@ let transcriptBootstrapLineLimit = 500
 let transcriptLineSequenceMultiplier = 4096
 let transcriptSessionStartedSequence = 0
 
-struct TranscriptEventPosition: Equatable, Sendable {
+struct TranscriptEventPosition: Equatable, Sendable, Comparable {
     let lineOffset: Int
     let ordinal: Int
+
+    // Raw-position order is lexicographic (lineOffset, ordinal) — never
+    // derived from public sequence arithmetic.
+    static func < (lhs: TranscriptEventPosition, rhs: TranscriptEventPosition) -> Bool {
+        (lhs.lineOffset, lhs.ordinal) < (rhs.lineOffset, rhs.ordinal)
+    }
 }
 
 func transcriptEventSequence(lineOffset: Int, ordinal: Int) -> Int {
@@ -51,6 +57,11 @@ struct JSONLFileReadPage: Sendable {
     let records: [JSONLFileRecord]
     // Oldest byte offset this page's selection fully covers.
     let minimumRawOffset: Int
+    // The reader's ACTUAL exclusive upper bound for this read — the clamped
+    // end offset (after any anchor-line extension). This is the authority
+    // for interval-connectivity decisions; callers must not re-derive it
+    // from request parameters or the includeAnchorLine flag.
+    let maximumRawOffsetExclusive: Int
     // True only when the covered range extends to byte 0 (leading blanks
     // included) — a first-record offset above 0 does not contradict it.
     let reachedSourceStart: Bool
@@ -134,9 +145,11 @@ enum JSONLFileReader {
                                  beforeOffsetExclusive: Int?,
                                  limit: Int) throws -> JSONLFileReadPage {
         guard limit > 0 else {
-            // Nothing was scanned: claim no coverage.
+            // Nothing was scanned: claim no coverage (an empty interval).
+            let clamped = max(beforeOffsetExclusive ?? 0, 0)
             return JSONLFileReadPage(records: [],
-                                     minimumRawOffset: max(beforeOffsetExclusive ?? 0, 0),
+                                     minimumRawOffset: clamped,
+                                     maximumRawOffsetExclusive: clamped,
                                      reachedSourceStart: false)
         }
 
@@ -151,6 +164,7 @@ enum JSONLFileReader {
             // The requested range already sits at byte 0.
             return JSONLFileReadPage(records: [],
                                      minimumRawOffset: 0,
+                                     maximumRawOffsetExclusive: 0,
                                      reachedSourceStart: true)
         }
 
@@ -176,6 +190,7 @@ enum JSONLFileReader {
             guard let firstNewlineIndex = buffer.firstIndex(of: 0x0A) else {
                 return JSONLFileReadPage(records: [],
                                          minimumRawOffset: endOffset,
+                                         maximumRawOffsetExclusive: endOffset,
                                          reachedSourceStart: false)
             }
             let bytesToDrop = buffer.distance(from: buffer.startIndex, to: firstNewlineIndex) + 1
@@ -190,12 +205,14 @@ enum JSONLFileReader {
             let retained = Array(parsedRecords.suffix(limit))
             return JSONLFileReadPage(records: retained,
                                      minimumRawOffset: retained.first?.offset ?? endOffset,
+                                     maximumRawOffsetExclusive: endOffset,
                                      reachedSourceStart: false)
         }
         // Every parsed byte from the parse base (blank lines included) is
         // covered; byte 0 was reached only when the scan itself got there.
         return JSONLFileReadPage(records: parsedRecords,
                                  minimumRawOffset: parseBaseOffset,
+                                 maximumRawOffsetExclusive: endOffset,
                                  reachedSourceStart: startOffset == 0)
     }
 
