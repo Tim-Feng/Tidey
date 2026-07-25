@@ -115,6 +115,13 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     var validateHistoryEpochBeforeSourceValidationForTesting: (() -> Void)?
     // Fires inside afterCursorPlan before the source validation.
     var afterCursorPlanBeforeSourceValidationForTesting: (() -> Void)?
+    // Fires during attach after the bootstrap window is collected and
+    // before the adjacency-context read (realistic source-replacement
+    // fault point).
+    var bootstrapContextBeforeReadForTesting: (() -> Void)?
+    // Deterministic injected fault for the bootstrap context read; when it
+    // returns an error the read is treated as having thrown it.
+    var bootstrapContextReadFaultForTesting: (() -> Error?)?
     // Semantic trust over the CURRENT source (S10 state; enforced by the
     // closure-B row): poisoned by invalid UTF-8 / malformed JSON /
     // unsupported schema, re-established only when a replacement source
@@ -736,11 +743,16 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             // Request-owned steps and legacy scans must never lower it.
             let attachCoverageFloor = tailer.contiguousRawCoverage?.minimumRawOffset
             if let bootstrapFloor = bootstrapLines.first?.offset, bootstrapFloor > 0 {
+                bootstrapContextBeforeReadForTesting?()
                 isCollectingBackfillPage = true
                 collectedBackfillPage = []
-                if (try? tailer.backfill(beforeOffset: bootstrapFloor,
-                                         limit: 1,
-                                         includeAnchorLine: false)) != nil {
+                if let injectedFault = bootstrapContextReadFaultForTesting?() {
+                    _ = injectedFault
+                    isCollectingBackfillPage = false
+                    collectedBackfillPage = []
+                } else if (try? tailer.backfill(beforeOffset: bootstrapFloor,
+                                                limit: 1,
+                                                includeAnchorLine: false)) != nil {
                     let contextLines = collectedBackfillPage
                     isCollectingBackfillPage = false
                     collectedBackfillPage = []
