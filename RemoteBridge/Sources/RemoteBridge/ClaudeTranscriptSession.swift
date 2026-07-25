@@ -20,9 +20,10 @@ protocol AgentTranscriptSession: AnyObject {
     func backfill(beforeSeq: Int, limit: Int) -> Bool
     func stop()
     // Typed after-cursor seam (see AgentHistoryContract.swift). Defaults
-    // are legacy-neutral: hubOnly plan / unavailable step / always-valid
-    // epoch keep current fetch behavior for sessions that predate the
-    // contract.
+    // for sessions that predate the contract: hubOnly plan / unavailable
+    // step / always-valid epoch. Since G3a a hubOnly plan is served as the
+    // bounded live-lease best-effort window — the legacy after backfill and
+    // shared history are never consulted.
     func afterCursorPlan(afterSeq: Int,
                          expectedEpoch: AgentHistoryEpoch) -> AgentAfterCursorPlan
     func afterCursorStep(from anchor: AgentHistoryAnchor,
