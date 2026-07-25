@@ -2657,6 +2657,318 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         }
     }
 
+    private func makeStartedSession(_ transcriptURL: URL,
+                                    hub: AgentEventHub,
+                                    readySentinel: String) -> ClaudeTranscriptSession {
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10)
+                .events.contains { $0.text == readySentinel }
+        }, "the session must bootstrap")
+        return session
+    }
+
+    private func walkAfterCursor(_ session: ClaudeTranscriptSession,
+                                 from start: AgentHistoryAnchor,
+                                 afterSeq: Int,
+                                 limit: Int,
+                                 maxSteps: Int = 64) -> (steps: [AgentAfterCursorStep], events: [AgentEvent]) {
+        var anchor = start
+        var steps = [AgentAfterCursorStep]()
+        var events = [AgentEvent]()
+        for _ in 0..<maxSteps {
+            let step = session.afterCursorStep(from: anchor, afterSeq: afterSeq, limit: limit)
+            steps.append(step)
+            events.append(contentsOf: step.events)
+            switch step.outcome {
+            case .advanced(let next):
+                anchor = next
+            case .complete, .sourceChanged, .unavailable:
+                return (steps, events)
+            }
+        }
+        return (steps, events)
+    }
+
+    func testClaudeAfterCursorStepAdvancesThroughEventlessRawPage() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        var data = Data((makeClaudeUserLine(uuid: "deep-0", content: "deep-0") + "\n").utf8)
+        data.append(Data(String(repeating: "\n", count: 70_000).utf8))     // blank gap > one reader chunk
+        let tailBase = data.count
+        data.append(Data((makeClaudeUserLine(uuid: "near-0", content: "near-0") + "\n").utf8))
+        try data.write(to: transcriptURL)
+        let hub = AgentEventHub()
+        let session = makeStartedSession(transcriptURL, hub: hub, readySentinel: "near-0")
+        defer { session.stop() }
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+
+        // Anchor immediately below the near record: the next page is pure
+        // blank bytes — no record, but the walk must still advance.
+        let step = session.afterCursorStep(
+            from: AgentHistoryAnchor(epoch: epoch,
+                                     position: TranscriptEventPosition(lineOffset: tailBase, ordinal: 0)),
+            afterSeq: 0,
+            limit: 3)
+
+        guard case .advanced(let next) = step.outcome else {
+            return XCTFail("an eventless raw page still advances, got \(step.outcome)")
+        }
+        XCTAssertTrue(step.events.isEmpty)
+        XCTAssertLessThan(next.position, TranscriptEventPosition(lineOffset: tailBase, ordinal: 0),
+                          "the next anchor is strictly lower")
+        XCTAssertGreaterThan(next.position.lineOffset, 0, "the blank gap has not reached BOF yet")
+    }
+
+    func testClaudeAfterCursorStepSlicesEventsToItsRawInterval() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        let lines = (0..<12).map { makeClaudeUserLine(uuid: "slice-\($0)", content: "slice-\($0)") }
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = makeStartedSession(transcriptURL, hub: hub, readySentinel: "slice-11")
+        defer { session.stop() }
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+        let eof = try fileSize(transcriptURL)
+
+        let (steps, events) = walkAfterCursor(
+            session,
+            from: AgentHistoryAnchor(epoch: epoch,
+                                     position: TranscriptEventPosition(lineOffset: eof, ordinal: 0)),
+            afterSeq: 0,
+            limit: 4)
+
+        guard case .complete = steps.last?.outcome else {
+            return XCTFail("the walk must complete at BOF, got \(String(describing: steps.last?.outcome))")
+        }
+        XCTAssertGreaterThan(steps.count, 1, "precondition: more than one interval was walked")
+        let ids = events.map(\.eventID)
+        XCTAssertEqual(Set(ids).count, ids.count,
+                       "successive request-owned intervals never repeat an event")
+        XCTAssertEqual(Set(events.compactMap(\.text)),
+                       Set((0..<12).map { "slice-\($0)" }),
+                       "the union covers every event above the cursor exactly")
+        XCTAssertTrue(events.allSatisfy { $0.seq > 0 })
+    }
+
+    func testClaudeAfterCursorStepIncludesLaterOrdinalFromCursorLineExactlyOnce() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        let lines = [makeClaudeUserLine(uuid: "pre", content: "pre"),
+                     makeClaudeAssistantTextLine(uuid: "multi", texts: ["ord-0", "ord-1", "ord-2"]),
+                     makeClaudeUserLine(uuid: "post", content: "post")]
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = makeStartedSession(transcriptURL, hub: hub, readySentinel: "post")
+        defer { session.stop() }
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+        let cursorSeq = try XCTUnwrap(
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 20)
+                .events.first { $0.text == "ord-0" }?.seq)
+        let eof = try fileSize(transcriptURL)
+
+        let (steps, events) = walkAfterCursor(
+            session,
+            from: AgentHistoryAnchor(epoch: epoch,
+                                     position: TranscriptEventPosition(lineOffset: eof, ordinal: 0)),
+            afterSeq: cursorSeq,
+            limit: 5)
+
+        guard case .complete = steps.last?.outcome else {
+            return XCTFail("the walk completes, got \(String(describing: steps.last?.outcome))")
+        }
+        let texts = events.compactMap(\.text)
+        XCTAssertEqual(texts.filter { $0 == "ord-1" }.count, 1, "later ordinal appears exactly once")
+        XCTAssertEqual(texts.filter { $0 == "ord-2" }.count, 1, "later ordinal appears exactly once")
+        XCTAssertFalse(texts.contains("ord-0"), "the cursor event itself is excluded")
+        XCTAssertFalse(texts.contains("pre"), "events below the cursor are excluded")
+        XCTAssertTrue(texts.contains("post"))
+    }
+
+    func testClaudeAfterCursorStepDoesNotPopulateSharedHistoricalWindow() throws {
+        let (transcriptURL, directory, _) = try makeLargeTranscriptFixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 2000)
+                .events.contains { $0.text?.hasPrefix("line-519-") == true }
+        })
+        XCTAssertFalse(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 2000)
+                        .events.contains { $0.text?.hasPrefix("line-0-") == true },
+                       "precondition: the oldest line is outside the bootstrap window")
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+        let eof = try fileSize(transcriptURL)
+
+        let (steps, events) = walkAfterCursor(
+            session,
+            from: AgentHistoryAnchor(epoch: epoch,
+                                     position: TranscriptEventPosition(lineOffset: eof, ordinal: 0)),
+            afterSeq: 0,
+            limit: 200)
+
+        guard case .complete = steps.last?.outcome else {
+            return XCTFail("the walk completes, got \(String(describing: steps.last?.outcome))")
+        }
+        XCTAssertTrue(events.contains { $0.text?.hasPrefix("line-0-") == true },
+                      "the request-owned walk reaches the oldest event")
+        XCTAssertFalse(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 2000)
+                        .events.contains { $0.text?.hasPrefix("line-0-") == true },
+                       "step events are request-owned — the shared historical window must not see them")
+    }
+
+    func testClaudeAfterCursorStepFailsClosedOnInvalidRawPage() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        var data = Data()
+        data.append(contentsOf: [0xff, 0x0a])                              // invalid record @0
+        data.append(Data((makeClaudeUserLine(uuid: "tail", content: "tail") + "\n").utf8))
+        try data.write(to: transcriptURL)
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+
+        let step = session.afterCursorStep(
+            from: AgentHistoryAnchor(epoch: epoch,
+                                     position: TranscriptEventPosition(lineOffset: 2, ordinal: 0)),
+            afterSeq: 0,
+            limit: 5)
+
+        guard case .unavailable = step.outcome else {
+            return XCTFail("an invalid raw page can only be unavailable, got \(step.outcome)")
+        }
+        XCTAssertTrue(step.events.isEmpty)
+    }
+
+    func testClaudeAfterCursorStepRejectsStaleEpochAnchor() throws {
+        let (transcriptURL, directory) = try makeSmallTranscriptFixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let hub = AgentEventHub()
+        let session = makeStartedSession(transcriptURL, hub: hub, readySentinel: "small-7")
+        defer { session.stop() }
+        let staleEpoch = hub.currentHistoryEpoch(sessionID: "session")
+        let eof = try fileSize(transcriptURL)
+
+        hub.beginNewSourceEpoch(sessionID: "session")
+
+        let step = session.afterCursorStep(
+            from: AgentHistoryAnchor(epoch: staleEpoch,
+                                     position: TranscriptEventPosition(lineOffset: eof, ordinal: 0)),
+            afterSeq: 0,
+            limit: 5)
+        guard case .sourceChanged = step.outcome else {
+            return XCTFail("a stale-epoch anchor is sourceChanged, got \(step.outcome)")
+        }
+        XCTAssertTrue(step.events.isEmpty)
+        XCTAssertEqual(step.epoch, hub.currentHistoryEpoch(sessionID: "session"),
+                       "the step reports the CURRENT epoch")
+    }
+
+    func testClaudeAfterCursorStepDoesNotCompleteEarlyAfterHighSyntheticRebase() throws {
+        let (transcriptURL, directory) = try makeSmallTranscriptFixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let hub = AgentEventHub()
+        let session = makeStartedSession(transcriptURL, hub: hub, readySentinel: "small-7")
+        defer { session.stop() }
+
+        // A high synthetic (e.g. an approval published outside the
+        // transcript) raises the Hub high water above every sparse
+        // file-backed seq (offset×4096) this transcript can produce...
+        let syntheticSeq = 1_000_000_000
+        hub.publish(AgentEvent(eventID: "synthetic-high",
+                               seq: syntheticSeq,
+                               vendor: "claude",
+                               workspaceID: "workspace",
+                               sessionID: "session",
+                               timestamp: "2026-04-30T00:00:01Z",
+                               type: .assistantMessage,
+                               role: "assistant",
+                               text: "synthetic-high",
+                               name: nil,
+                               input: nil,
+                               output: nil,
+                               toolCallID: nil,
+                               metadata: nil),
+                    deliverToSubscribers: false)
+        // ...and every later file event rebases above it.
+        let appended = (0..<9).map { makeClaudeUserLine(uuid: "rebased-\($0)", content: "rebased-\($0)") }
+        let handle = try FileHandle(forWritingTo: transcriptURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data((appended.joined(separator: "\n") + "\n").utf8))
+        try handle.close()
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                .events.contains { $0.text == "rebased-8" && $0.seq > syntheticSeq }
+        }, "precondition: appended file events rebase above the synthetic high water")
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+        let eof = try fileSize(transcriptURL)
+
+        let (steps, events) = walkAfterCursor(
+            session,
+            from: AgentHistoryAnchor(epoch: epoch,
+                                     position: TranscriptEventPosition(lineOffset: eof, ordinal: 0)),
+            afterSeq: syntheticSeq,
+            limit: 3)
+
+        guard case .advanced = steps.first?.outcome else {
+            return XCTFail("the first page must not complete early on a virtual boundary, got \(String(describing: steps.first?.outcome))")
+        }
+        guard case .complete = steps.last?.outcome else {
+            return XCTFail("an unknown synthetic cursor walks conservatively to BOF, got \(String(describing: steps.last?.outcome))")
+        }
+        XCTAssertEqual(Set(events.compactMap(\.text)),
+                       Set((0..<9).map { "rebased-\($0)" }),
+                       "the union covers every event above the synthetic cursor")
+        XCTAssertTrue(events.allSatisfy { $0.seq > syntheticSeq })
+    }
+
+    func testClaudeAfterCursorStepSourceSwitchInvalidatesOldAnchor() throws {
+        let (transcriptURL, directory) = try makeSmallTranscriptFixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let hub = AgentEventHub()
+        let session = makeStartedSession(transcriptURL, hub: hub, readySentinel: "small-7")
+        defer { session.stop() }
+        let oldEpoch = hub.currentHistoryEpoch(sessionID: "session")
+        let eof = try fileSize(transcriptURL)
+        let oldAnchor = AgentHistoryAnchor(epoch: oldEpoch,
+                                           position: TranscriptEventPosition(lineOffset: eof, ordinal: 0))
+
+        // Same-path truncate/rewrite: a different logical generation.
+        try (makeClaudeUserLine(uuid: "replacement", content: "replacement") + "\n")
+            .write(to: transcriptURL, atomically: false, encoding: .utf8)
+
+        let step = session.afterCursorStep(from: oldAnchor, afterSeq: 0, limit: 5)
+        guard case .sourceChanged = step.outcome else {
+            return XCTFail("a replaced source must invalidate the old anchor, got \(step.outcome)")
+        }
+        XCTAssertTrue(step.events.isEmpty)
+        XCTAssertFalse(session.validateHistoryEpoch(oldEpoch),
+                       "the old epoch must not validate after the source switch")
+    }
+
     private func makeRecord(transcriptPath: String) -> AgentSessionRegistryRecord {
         AgentSessionRegistryRecord(version: 1,
                                    vendor: "claude",

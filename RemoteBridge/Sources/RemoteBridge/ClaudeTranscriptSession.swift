@@ -2938,6 +2938,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private var historicalIndexCompleteLineCount = 0
     private var historicalReplayOpenerEventIDs = Set<String>()
     private var historicalReplayProducts = [AgentEvent]()
+    private var historicalReplayPositionsByEventID = [String: TranscriptEventPosition]()
     private var isCollectingHistoricalBackfillPage = false
     private var collectedHistoricalBackfillPage = [(offset: Int, line: String)]()
     private var historicalBackfillAnchorSeq: Int?
@@ -3231,6 +3232,171 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 return false
             }
             return epoch == hub.currentHistoryEpoch(sessionID: record.sessionID)
+        }
+    }
+
+    // One request-owned raw walk step: reads exactly one raw page below the
+    // anchor, replays it through the parser, and RETURNS the products —
+    // the shared historical window is never populated from here. The
+    // interval is sliced by raw (lineOffset, ordinal) order; an unknown or
+    // synthetic cursor never terminates the walk early on a virtual
+    // sequence boundary — it walks conservatively to BOF.
+    func afterCursorStep(from anchor: AgentHistoryAnchor,
+                         afterSeq: Int,
+                         limit: Int) -> AgentAfterCursorStep {
+        queue.sync {
+            var currentEpoch = hub.currentHistoryEpoch(sessionID: record.sessionID)
+            func out(_ outcome: AgentAfterCursorStep.Outcome,
+                     _ events: [AgentEvent] = []) -> AgentAfterCursorStep {
+                AgentAfterCursorStep(epoch: currentEpoch, outcome: outcome, events: events)
+            }
+            guard didPublishEnd == false, historySemanticTrust, limit > 0 else {
+                return out(.unavailable)
+            }
+            guard anchor.epoch == currentEpoch else {
+                return out(.sourceChanged)
+            }
+            let anchorPosition = anchor.position
+            guard anchorPosition.lineOffset > 0 || anchorPosition.ordinal > 0 else {
+                return out(.complete)
+            }
+            if tailer == nil {
+                resolveTranscriptIfPossible()
+            }
+            guard let tailer else {
+                return out(.unavailable)
+            }
+            do {
+                try tailer.validateCurrentSource()
+                let indexIsReady = try ensureHistoricalClosureIndex()
+                try tailer.validateCurrentSource()
+                guard indexIsReady else {
+                    historySemanticTrust = false
+                    return out(.unavailable)
+                }
+            } catch JSONLFileTailerError.sourceInvalidated {
+                beginNewSourceEpoch()
+                startResolver()
+                currentEpoch = hub.currentHistoryEpoch(sessionID: record.sessionID)
+                return out(.sourceChanged)
+            } catch {
+                historySemanticTrust = false
+                return out(.unavailable)
+            }
+
+            let liveParserState = captureLiveParserState()
+            resetParserStateForHistoricalReplay()
+            historicalReplayOpenerEventIDs = []
+            historicalReplayProducts = []
+            historicalReplayPositionsByEventID = [:]
+            historicalBackfillAnchorSeq = nil
+            isBackfillingHistory = true
+            defer {
+                isCollectingHistoricalBackfillPage = false
+                collectedHistoricalBackfillPage = []
+                historicalReplayProducts = []
+                historicalReplayPositionsByEventID = [:]
+                historicalReplayOpenerEventIDs = []
+                isBackfillingHistory = false
+                restoreLiveParserState(liveParserState)
+            }
+
+            isCollectingHistoricalBackfillPage = true
+            collectedHistoricalBackfillPage = []
+            let readResult: JSONLBackfillResult
+            do {
+                readResult = try tailer.backfill(beforeOffset: anchorPosition.lineOffset,
+                                                 limit: limit,
+                                                 includeAnchorLine: anchorPosition.ordinal > 0)
+            } catch JSONLFileTailerError.sourceInvalidated {
+                beginNewSourceEpoch()
+                startResolver()
+                currentEpoch = hub.currentHistoryEpoch(sessionID: record.sessionID)
+                return out(.sourceChanged)
+            } catch {
+                historySemanticTrust = false
+                return out(.unavailable)
+            }
+            isCollectingHistoricalBackfillPage = false
+            let rawPage = collectedHistoricalBackfillPage
+            collectedHistoricalBackfillPage = []
+            guard let frontier = readResult.rawFrontier else {
+                return out(.unavailable)
+            }
+            // Invalid raw bytes poison the whole step: nothing from this
+            // page may be served, and the walk must not advance past bytes
+            // it cannot understand.
+            guard frontier.containsInvalidRecord == false else {
+                return out(.unavailable)
+            }
+            for entry in rawPage {
+                consume(line: entry.line, lineOffset: entry.offset)
+            }
+            do {
+                try tailer.validateCurrentSource()
+            } catch JSONLFileTailerError.sourceInvalidated {
+                beginNewSourceEpoch()
+                startResolver()
+                currentEpoch = hub.currentHistoryEpoch(sessionID: record.sessionID)
+                return out(.sourceChanged)
+            } catch {
+                historySemanticTrust = false
+                return out(.unavailable)
+            }
+            guard historySemanticTrust else {
+                // A malformed record surfaced during the replay itself.
+                return out(.unavailable)
+            }
+
+            let pageFloorOffset = frontier.minimumRawOffset ?? anchorPosition.lineOffset
+            let pageFloor = TranscriptEventPosition(lineOffset: pageFloorOffset, ordinal: 0)
+            // Interval slice by raw position: [pageFloor, anchor).
+            var sliced = historicalReplayProducts.filter { event in
+                guard let position = historicalReplayPositionsByEventID[event.eventID] else {
+                    return false
+                }
+                return position >= pageFloor && position < anchorPosition
+            }
+            if let index = historicalClosureIndex {
+                // Documented exception: an Ask/context opener's EXACT
+                // closure may ride from outside the interval (eventID
+                // deduplicated); an opener consumed by a silent context
+                // consumer is suppressed instead of resurfacing stale.
+                var closures = [AgentEvent]()
+                sliced = sliced.filter { event in
+                    guard historicalReplayOpenerEventIDs.contains(event.eventID) else {
+                        return true
+                    }
+                    if let closure = index.closureByOpenerEventID[event.eventID] {
+                        closures.append(closure)
+                        return true
+                    }
+                    return index.contextConsumerSequenceByOpenerEventID[event.eventID] == nil
+                }
+                sliced.append(contentsOf: closures)
+            }
+            var seenEventIDs = Set<String>()
+            let events = sliced
+                .filter { $0.seq > afterSeq }
+                .filter { seenEventIDs.insert($0.eventID).inserted }
+                .sorted { $0.seq < $1.seq }
+
+            if frontier.reachedSourceStart {
+                return out(.complete, events)
+            }
+            // Only an EXACT raw cursor position can prove the walk crossed
+            // the cursor; synthetic seqs have none and walk to BOF.
+            if let cursorPosition = exactTranscriptPositionByPublicSequence[afterSeq],
+               cursorPosition >= pageFloor {
+                return out(.complete, events)
+            }
+            let nextPosition = TranscriptEventPosition(lineOffset: pageFloorOffset, ordinal: 0)
+            guard nextPosition < anchorPosition else {
+                // A stalled walk is incomplete coverage.
+                return out(.unavailable)
+            }
+            return out(.advanced(AgentHistoryAnchor(epoch: currentEpoch, position: nextPosition)),
+                       events)
         }
     }
 
@@ -4669,6 +4835,10 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 historicalReplayOpenerEventIDs.insert(event.eventID)
             }
             historicalReplayProducts.append(event)
+            // The after-cursor walk slices its interval by RAW position —
+            // never by public-sequence arithmetic — so every replay product
+            // records where it came from.
+            historicalReplayPositionsByEventID[event.eventID] = position
             return event
         }
         guard let acceptedEvent = hub.publish(event) else {
