@@ -1183,6 +1183,37 @@ final class AgentEventHubTests: XCTestCase {
         XCTAssertTrue(snapshot.truncated, "seq 3 exceeded the lease capacity")
     }
 
+    func testLeaseEvidenceRecordsRebasedEvictionAndIgnoresHistoricalPaths() throws {
+        let hub = AgentEventHub(maxBufferedEvents: 1, maxSeenEventIDs: 100)
+        hub.publish(makeAssistantEvent(id: "a", seq: 5), deliverToSubscribers: false)
+        let rebased = hub.publish(makeAssistantEvent(id: "b", seq: 2), deliverToSubscribers: false)
+        XCTAssertEqual(rebased?.seq, 6, "precondition: the low incoming seq must be rebased")
+        hub.publish(makeAssistantEvent(id: "c", seq: 9), deliverToSubscribers: false)
+
+        // The rebased event itself was evicted: the watermark must be its
+        // REBASED seq (6), never the incoming raw seq (2).
+        let lease = hub.beginAfterCursorLiveLease(sessionID: "session", afterSeq: 0, capacity: 10)
+        XCTAssertEqual(lease.evidence.evictedThroughSeqAtLeaseStart, 6)
+        hub.cancelAfterCursorLiveLease(lease.token)
+
+        // With the watermark non-nil, historical paths must not move it:
+        // window replacement AND a historicalBackfill publish whose cache
+        // trim also evicts (capacity 1).
+        hub.replaceHistoricalEvents(sessionID: "session",
+                                    events: (1...2).map { makeAssistantEvent(id: "hist-\($0)", seq: $0) })
+        hub.publish(makeAssistantEvent(id: "hist-3", seq: 3),
+                    deliverToSubscribers: false,
+                    storage: .historicalBackfill)
+        let after = hub.beginAfterCursorLiveLease(sessionID: "session", afterSeq: 0, capacity: 10)
+        XCTAssertEqual(after.evidence.evictedThroughSeqAtLeaseStart, 6,
+                       "historical replacement/backfill trims are not live evictions")
+
+        // cancel -> cancel -> finish: cancel is idempotent and consuming.
+        hub.cancelAfterCursorLiveLease(after.token)
+        hub.cancelAfterCursorLiveLease(after.token)
+        XCTAssertNil(hub.finishAfterCursorLiveLease(after.token))
+    }
+
     private func makeContextEvent(id: String, seq: Int, kind: String) -> AgentEvent {
         AgentEvent(eventID: id,
                    seq: seq,
