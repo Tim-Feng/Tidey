@@ -1133,6 +1133,55 @@ final class AgentEventHubTests: XCTestCase {
                        "high-water/reservation must not be cleared by the epoch reset")
     }
 
+    func testAfterCursorLeaseCapturesAcceptedRebasedLivePublishesExactlyOnce() throws {
+        let hub = AgentEventHub(maxBufferedEvents: 100, maxSeenEventIDs: 100)
+        for seq in 1...4 {
+            hub.publish(makeAssistantEvent(id: "seed-\(seq)", seq: seq), deliverToSubscribers: false)
+        }
+        let lease = hub.beginAfterCursorLiveLease(sessionID: "session", afterSeq: 2, capacity: 10)
+        let highCursorLease = hub.beginAfterCursorLiveLease(sessionID: "session", afterSeq: 100, capacity: 10)
+        // The session moves workspaces AFTER the lease began: the lease must
+        // keep its captured raw values and never re-project at finish.
+        hub.migrateSession(sessionID: "session", toWorkspaceID: "workspace-moved", panelID: nil)
+
+        hub.publish(makeAssistantEvent(id: "live-5", seq: 5), deliverToSubscribers: false)
+        hub.publish(makeAssistantEvent(id: "live-5", seq: 5), deliverToSubscribers: false)   // duplicate: rejected
+        let rebased = hub.publish(makeAssistantEvent(id: "live-low", seq: 3), deliverToSubscribers: false)
+        XCTAssertEqual(rebased?.seq, 6, "precondition: the low-seq publish must be rebased")
+        hub.publish(makeSessionEvent(id: "foreign-1", seq: 7, sessionID: "other-session"),
+                    deliverToSubscribers: false)
+        hub.publish(makeAssistantEvent(id: "hist-1", seq: 1),
+                    deliverToSubscribers: false,
+                    storage: .historicalBackfill)
+
+        let snapshot = try XCTUnwrap(hub.finishAfterCursorLiveLease(lease.token))
+        XCTAssertEqual(snapshot.events.map(\.eventID),
+                       ["seed-3", "seed-4", "live-5", "live-low"],
+                       "accepted liveForward publishes enter the lease exactly once")
+        XCTAssertEqual(snapshot.events.map(\.seq), [3, 4, 5, 6],
+                       "the lease stores the accepted/rebased seq")
+        XCTAssertEqual(snapshot.events.map(\.workspaceID),
+                       Array(repeating: "workspace", count: 4),
+                       "lease events stay raw — the current binding applies only at final assembly")
+
+        let highSnapshot = try XCTUnwrap(hub.finishAfterCursorLiveLease(highCursorLease.token))
+        XCTAssertTrue(highSnapshot.events.isEmpty,
+                      "publishes at or below the cursor never enter a lease")
+    }
+
+    func testAfterCursorLeaseKeepsEarliestCapacityAcrossPublishAndBufferEviction() throws {
+        let hub = AgentEventHub(maxBufferedEvents: 2, maxSeenEventIDs: 100)
+        let lease = hub.beginAfterCursorLiveLease(sessionID: "session", afterSeq: 0, capacity: 2)
+        for seq in 1...3 {
+            hub.publish(makeAssistantEvent(id: "pub-\(seq)", seq: seq), deliverToSubscribers: false)
+        }
+        // The live buffer (capacity 2) evicted seq 1; the lease still owns it.
+        let snapshot = try XCTUnwrap(hub.finishAfterCursorLiveLease(lease.token))
+        XCTAssertEqual(snapshot.events.map(\.seq), [1, 2],
+                       "the lease keeps the EARLIEST capacity events exactly once each")
+        XCTAssertTrue(snapshot.truncated, "seq 3 exceeded the lease capacity")
+    }
+
     private func makeContextEvent(id: String, seq: Int, kind: String) -> AgentEvent {
         AgentEvent(eventID: id,
                    seq: seq,

@@ -861,6 +861,30 @@ final class AgentEventHub {
             default:
                 break
             }
+            // Request-window capture: every ACCEPTED liveForward publish
+            // (post-rebase) joins matching open leases exactly once — same
+            // session, same epoch, above the cursor, not sourceChanged.
+            // Duplicates/rejected/historicalBackfill never reach this point.
+            // The RAW event is stored; the current binding applies only at
+            // final assembly. Entirely on the Hub queue, no outbound calls.
+            for (token, lease) in activeAfterCursorLeases {
+                guard lease.sessionID == event.sessionID,
+                      lease.sourceChanged == false,
+                      lease.epoch.generation == state.historyEpochGeneration,
+                      event.seq > lease.afterSeq,
+                      lease.events.contains(where: { $0.eventID == event.eventID }) == false else {
+                    continue
+                }
+                var lease = lease
+                if lease.events.count >= lease.capacity {
+                    // The lease keeps the EARLIEST events; this publish has
+                    // the highest accepted seq, so it is the one dropped.
+                    lease.truncated = true
+                } else {
+                    lease.events.append(event)
+                }
+                activeAfterCursorLeases[token] = lease
+            }
             sessions[event.sessionID] = state
             acceptedEvent = event
 
