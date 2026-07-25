@@ -2939,6 +2939,12 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private var historicalClosureIndex: HistoricalClosureIndexState?
     private var historicalIndexEventSink: ((AgentEvent) -> Void)?
     var historicalIndexBeforeScanForTesting: (() -> Void)?
+    // Deterministic injection point: fires after the step's raw read has
+    // completed (page collected) and before any final validation/return.
+    var afterCursorStepAfterRawReadForTesting: (() -> Void)?
+    var hasActiveAskLifecyclesForTesting: Bool {
+        queue.sync { activeAskUserQuestionLifecyclesByToolCallID.isEmpty == false }
+    }
     var historicalIndexBeforeSourceValidationForTesting: (() -> Void)?
     private var historicalIndexScanPassCount = 0
     private var historicalIndexReadByteCount = 0
@@ -3322,12 +3328,20 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             resetParserStateForHistoricalReplay()
             afterCursorReplayCollector = AfterCursorReplayCollector()
             isBackfillingHistory = true
+            // Cleanup ordering is explicit: when the source was invalidated
+            // mid-replay, beginNewSourceEpoch already installed the NEW
+            // epoch's fresh parser state — restoring source A's live
+            // snapshot afterwards would pour a retired source's pending
+            // command/Ask lifecycles/lineage into the new epoch.
+            var sourceWasInvalidated = false
             defer {
                 isCollectingHistoricalBackfillPage = false
                 collectedHistoricalBackfillPage = []
                 afterCursorReplayCollector = nil
                 isBackfillingHistory = false
-                restoreLiveParserState(liveParserState)
+                if sourceWasInvalidated == false {
+                    restoreLiveParserState(liveParserState)
+                }
             }
 
             isCollectingHistoricalBackfillPage = true
@@ -3338,6 +3352,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                                  limit: limit,
                                                  includeAnchorLine: anchorPosition.ordinal > 0)
             } catch JSONLFileTailerError.sourceInvalidated {
+                sourceWasInvalidated = true
                 beginNewSourceEpoch()
                 startResolver()
                 currentEpoch = hub.currentHistoryEpoch(sessionID: record.sessionID)
@@ -3349,6 +3364,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             isCollectingHistoricalBackfillPage = false
             let rawPage = collectedHistoricalBackfillPage
             collectedHistoricalBackfillPage = []
+            afterCursorStepAfterRawReadForTesting?()
             guard let frontier = readResult.rawFrontier else {
                 return out(.unavailable)
             }
@@ -3364,6 +3380,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             do {
                 try tailer.validateCurrentSource()
             } catch JSONLFileTailerError.sourceInvalidated {
+                sourceWasInvalidated = true
                 beginNewSourceEpoch()
                 startResolver()
                 currentEpoch = hub.currentHistoryEpoch(sessionID: record.sessionID)
@@ -3375,6 +3392,14 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             guard historySemanticTrust else {
                 // A malformed record surfaced during the replay itself.
                 return out(.unavailable)
+            }
+            // Final Hub epoch fence: nothing derived from this read may be
+            // served if the epoch moved after the raw read — the whole page
+            // is discarded, not trimmed.
+            let epochAfterRead = hub.currentHistoryEpoch(sessionID: record.sessionID)
+            guard epochAfterRead == currentEpoch else {
+                currentEpoch = epochAfterRead
+                return out(.sourceChanged)
             }
 
             let pageFloorOffset = frontier.minimumRawOffset ?? anchorPosition.lineOffset
@@ -3415,9 +3440,13 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 return out(.complete, events)
             }
             // Only an EXACT raw cursor position can prove the walk crossed
-            // the cursor; synthetic seqs have none and walk to BOF.
+            // the cursor, and only when it lies INSIDE this step's read
+            // interval [pageFloor, anchor) — a cursor above the anchor was
+            // never part of this walk. Synthetic seqs have none and walk
+            // conservatively to BOF.
             if let cursorPosition = exactTranscriptPositionByPublicSequence[afterSeq],
-               cursorPosition >= pageFloor {
+               cursorPosition >= pageFloor,
+               cursorPosition < anchorPosition {
                 return out(.complete, events)
             }
             let nextPosition = TranscriptEventPosition(lineOffset: pageFloorOffset, ordinal: 0)
@@ -4852,11 +4881,17 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                metadata: baseMetadata(resolvedMetadata),
                                payload: payload)
         if let historicalIndexEventSink {
+            exactTranscriptPositionByPublicSequence[seq] = position
             historicalIndexEventSink(event)
             return event
         }
         if isBackfillingHistory {
             maxObservedSeq = max(maxObservedSeq, seq)
+            // EVERY file-backed product — live, historical index, legacy
+            // replay, or after-cursor step — records its exact public seq →
+            // raw position; nothing is ever reverse-derived from synthetic
+            // sequence arithmetic.
+            exactTranscriptPositionByPublicSequence[seq] = position
             // Request-local after-cursor collection: while a step collector
             // exists, products (with their RAW positions — the walk slices
             // by position, never by public-sequence arithmetic) go ONLY to
