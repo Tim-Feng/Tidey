@@ -1,5 +1,41 @@
 import Foundation
 
+// Request-local live lease contract (agreed G1b design). The token is
+// opaque — only the Hub can mint one, so a lease cannot be forged or
+// duplicated outside this file.
+struct AgentAfterCursorLiveLeaseToken: Hashable, Sendable {
+    fileprivate let id: UUID
+
+    fileprivate init(id: UUID) {
+        self.id = id
+    }
+}
+
+struct AgentLiveWindowEvidence: Equatable, Sendable {
+    let epoch: AgentHistoryEpoch
+    // Highest live-buffer seq evicted before the lease began; nil when the
+    // buffer has never evicted in this epoch.
+    let evictedThroughSeqAtLeaseStart: Int?
+
+    // True when every accepted live event above the cursor was still
+    // retained at lease start — the precondition for the lease-only fast
+    // path; otherwise the flow must re-scan from the plan's raw frontier.
+    func containsEveryAcceptedLiveEvent(afterSeq: Int) -> Bool {
+        evictedThroughSeqAtLeaseStart.map { $0 <= afterSeq } ?? true
+    }
+}
+
+struct AgentAfterCursorLiveLease {
+    let token: AgentAfterCursorLiveLeaseToken
+    let evidence: AgentLiveWindowEvidence
+}
+
+struct AgentAfterCursorLiveLeaseSnapshot {
+    let epoch: AgentHistoryEpoch
+    let events: [AgentEvent]
+    let truncated: Bool
+}
+
 enum HistoricalOpenerResolution: Equatable, Sendable {
     case visibleTerminal(eventID: String, sequence: Int)
     case silentConsumer(sequence: Int)
@@ -104,6 +140,25 @@ final class AgentEventHub {
         // Persists beyond buffer eviction so a late unseen event cannot fall
         // behind a cursor that clients have already advanced.
         var storedSeqHighWater: Int?
+        // Hub-issued history epoch generation: advanced only by
+        // beginNewSourceEpoch. Sessions carry the token; they never mint a
+        // parallel authority.
+        var historyEpochGeneration: UInt64 = 0
+        // Single live-buffer eviction watermark: updated ONLY by live buffer
+        // eviction (never by historical cache replacement), reset on a
+        // source epoch switch. Populating it at the eviction site is a
+        // behavioral row; this seam only stores and reports it.
+        var evictedThroughSeq: Int?
+    }
+
+    private struct ActiveAfterCursorLease {
+        let sessionID: String
+        let afterSeq: Int
+        let capacity: Int
+        let epoch: AgentHistoryEpoch
+        var events: [AgentEvent]
+        var truncated: Bool
+        var sourceChanged: Bool
     }
 
     private struct SessionBinding {
@@ -123,6 +178,7 @@ final class AgentEventHub {
     private var sessions = [String: SessionState]()
     private var sessionBindings = [String: SessionBinding]()
     private var reservedSeqBySessionID = [String: Int]()
+    private var activeAfterCursorLeases = [AgentAfterCursorLiveLeaseToken: ActiveAfterCursorLease]()
     private let maxBufferedEvents: Int
     private let maxSeenEventIDs: Int
 
@@ -613,7 +669,88 @@ final class AgentEventHub {
             state.historicalOpenerResolutions.removeAll()
             state.historicalClosureCoverageIsComplete = true
             state.seenEventIDs.removeAll()
+            // Epoch/reset seam: advance the Hub-issued generation, clear the
+            // live eviction watermark (it described the retired buffer), and
+            // flag every matching lease. Cursor authority (storedSeqHighWater
+            // and the reserved-seq map) survives intentionally.
+            state.historyEpochGeneration &+= 1
+            state.evictedThroughSeq = nil
             sessions[sessionID] = state
+            for (token, lease) in activeAfterCursorLeases where lease.sessionID == sessionID {
+                var lease = lease
+                lease.sourceChanged = true
+                activeAfterCursorLeases[token] = lease
+            }
+        }
+    }
+
+    // MARK: Request-local live lease seam (agreed G1b contract)
+    //
+    // The lease preserves Hub-retained transients for one request: it is
+    // begun BEFORE the session plan (so a publish+evict between plan and
+    // lease cannot hide an event), accumulates matching accepted liveForward
+    // publishes (a behavioral row), and is consumed exactly once. All work
+    // happens on the Hub queue with no outbound calls.
+
+    func currentHistoryEpoch(sessionID: String) -> AgentHistoryEpoch {
+        queue.sync {
+            AgentHistoryEpoch(sessionID: sessionID,
+                              generation: sessions[sessionID]?.historyEpochGeneration ?? 0)
+        }
+    }
+
+    func beginAfterCursorLiveLease(sessionID: String,
+                                   afterSeq: Int,
+                                   capacity: Int) -> AgentAfterCursorLiveLease {
+        queue.sync {
+            let state = sessions[sessionID] ?? SessionState()
+            let epoch = AgentHistoryEpoch(sessionID: sessionID,
+                                          generation: state.historyEpochGeneration)
+            let matching = state.bufferedEvents
+                .filter { $0.seq > afterSeq }
+                .sorted { $0.seq < $1.seq }
+            let boundedCapacity = max(1, capacity)
+            let retained = Array(matching.prefix(boundedCapacity))
+            let token = AgentAfterCursorLiveLeaseToken(id: UUID())
+            activeAfterCursorLeases[token] = ActiveAfterCursorLease(
+                sessionID: sessionID,
+                afterSeq: afterSeq,
+                capacity: boundedCapacity,
+                epoch: epoch,
+                events: retained,
+                truncated: matching.count > boundedCapacity,
+                sourceChanged: false)
+            return AgentAfterCursorLiveLease(
+                token: token,
+                evidence: AgentLiveWindowEvidence(
+                    epoch: epoch,
+                    evictedThroughSeqAtLeaseStart: state.evictedThroughSeq))
+        }
+    }
+
+    // Consumes the token: a second finish (or a finish after cancel)
+    // returns nil, as does a lease whose source epoch changed mid-request —
+    // its events belong to a retired source and must not be served.
+    func finishAfterCursorLiveLease(_ token: AgentAfterCursorLiveLeaseToken) -> AgentAfterCursorLiveLeaseSnapshot? {
+        queue.sync {
+            guard let lease = activeAfterCursorLeases.removeValue(forKey: token) else {
+                return nil
+            }
+            guard lease.sourceChanged == false else {
+                return nil
+            }
+            return AgentAfterCursorLiveLeaseSnapshot(epoch: lease.epoch,
+                                                     events: lease.events,
+                                                     truncated: lease.truncated)
+        }
+    }
+
+    // Idempotent: early-return paths cancel unconditionally; cancelling an
+    // unknown or already-consumed token is a no-op. Cleanup never relies on
+    // token deinit.
+    func cancelAfterCursorLiveLease(_ token: AgentAfterCursorLiveLeaseToken) {
+        queue.sync {
+            activeAfterCursorLeases.removeValue(forKey: token)
         }
     }
 

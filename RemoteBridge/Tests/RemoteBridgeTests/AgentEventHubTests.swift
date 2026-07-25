@@ -1037,6 +1037,36 @@ final class AgentEventHubTests: XCTestCase {
                           metadata: metadata)
     }
 
+    // Structural seam assertions only: publish-into-lease accumulation and
+    // eviction-watermark population are deliberately NOT covered here — they
+    // are the reserved RED behavioral rows of the next phase.
+    func testAfterCursorLiveLeaseSeamCopiesRequestStartWindowAndConsumesOnce() throws {
+        let hub = AgentEventHub()
+        for seq in 1...5 {
+            hub.publish(makeAssistantEvent(id: "live-\(seq)", seq: seq), deliverToSubscribers: false)
+        }
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+        XCTAssertEqual(epoch, AgentHistoryEpoch(sessionID: "session", generation: 0))
+
+        let lease = hub.beginAfterCursorLiveLease(sessionID: "session", afterSeq: 2, capacity: 2)
+        XCTAssertEqual(lease.evidence.epoch, epoch)
+        XCTAssertNil(lease.evidence.evictedThroughSeqAtLeaseStart)
+        XCTAssertTrue(lease.evidence.containsEveryAcceptedLiveEvent(afterSeq: 2))
+
+        let snapshot = try XCTUnwrap(hub.finishAfterCursorLiveLease(lease.token))
+        XCTAssertEqual(snapshot.events.map(\.seq), [3, 4],
+                       "the lease retains the EARLIEST events above the cursor")
+        XCTAssertTrue(snapshot.truncated, "seq 5 exceeded capacity")
+        XCTAssertNil(hub.finishAfterCursorLiveLease(lease.token), "finish consumes the token")
+        hub.cancelAfterCursorLiveLease(lease.token)
+
+        let second = hub.beginAfterCursorLiveLease(sessionID: "session", afterSeq: 0, capacity: 10)
+        hub.beginNewSourceEpoch(sessionID: "session")
+        XCTAssertNil(hub.finishAfterCursorLiveLease(second.token),
+                     "a sourceChanged lease must not serve retired-source events")
+        XCTAssertEqual(hub.currentHistoryEpoch(sessionID: "session").generation, 1)
+    }
+
     private func makeContextEvent(id: String, seq: Int, kind: String) -> AgentEvent {
         AgentEvent(eventID: id,
                    seq: seq,
