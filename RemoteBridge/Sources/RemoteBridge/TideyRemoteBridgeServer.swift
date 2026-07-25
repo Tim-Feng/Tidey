@@ -1017,13 +1017,29 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
             }
             let beforeSeq = rawBeforeSeq?.intValue
             let afterSeq = rawAfterSeq?.intValue
+            let afterCursorSeams = BridgeAgentEventFetchFlow.AfterCursorSeams(
+                plan: { [registryMonitor] sessionID, afterSeq, expectedEpoch in
+                    registryMonitor.afterCursorPlan(sessionID: sessionID,
+                                                    afterSeq: afterSeq,
+                                                    expectedEpoch: expectedEpoch)
+                },
+                step: { [registryMonitor] sessionID, anchor, afterSeq, limit in
+                    registryMonitor.afterCursorStep(sessionID: sessionID,
+                                                    anchor: anchor,
+                                                    afterSeq: afterSeq,
+                                                    limit: limit)
+                },
+                validateEpoch: { [registryMonitor] sessionID, epoch in
+                    registryMonitor.validateHistoryEpoch(sessionID: sessionID, epoch: epoch)
+                })
             let flow = BridgeAgentEventFetchFlow.run(eventHub: eventHub,
                                                      workspaceID: workspaceID,
                                                      sessionID: sessionID,
                                                      limit: limit,
                                                      maxBytes: maxBytes,
                                                      beforeSeq: beforeSeq,
-                                                     afterSeq: afterSeq) { [registryMonitor] sessionID, beforeSeq, limit in
+                                                     afterSeq: afterSeq,
+                                                     afterCursorSeams: afterCursorSeams) { [registryMonitor] sessionID, beforeSeq, limit in
                 registryMonitor.backfillSession(sessionID: sessionID,
                                                  beforeSeq: beforeSeq,
                                                  limit: limit)

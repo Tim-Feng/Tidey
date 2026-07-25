@@ -532,6 +532,35 @@ final class AgentSessionRegistryMonitor {
         return session?.backfill(beforeSeq: beforeSeq, limit: limit) ?? false
     }
 
+    // Typed after-cursor seams: the registry queue only resolves the session
+    // reference; the session seam runs OFF this queue so no registry →
+    // session queue chain forms. Missing sessions answer legacy-neutral.
+    func afterCursorPlan(sessionID: String,
+                         afterSeq: Int,
+                         expectedEpoch: AgentHistoryEpoch) -> AgentAfterCursorPlan {
+        let session: AgentTranscriptSession? = queue.sync { sessions[sessionID] }
+        guard let session else {
+            return AgentAfterCursorPlan(epoch: expectedEpoch, mode: .hubOnly)
+        }
+        return session.afterCursorPlan(afterSeq: afterSeq, expectedEpoch: expectedEpoch)
+    }
+
+    func afterCursorStep(sessionID: String,
+                         anchor: AgentHistoryAnchor,
+                         afterSeq: Int,
+                         limit: Int) -> AgentAfterCursorStep {
+        let session: AgentTranscriptSession? = queue.sync { sessions[sessionID] }
+        guard let session else {
+            return AgentAfterCursorStep(epoch: anchor.epoch, outcome: .unavailable, events: [])
+        }
+        return session.afterCursorStep(from: anchor, afterSeq: afterSeq, limit: limit)
+    }
+
+    func validateHistoryEpoch(sessionID: String, epoch: AgentHistoryEpoch) -> Bool {
+        let session: AgentTranscriptSession? = queue.sync { sessions[sessionID] }
+        return session?.validateHistoryEpoch(epoch) ?? true
+    }
+
     func replaceLivePanels(workspaceID: String, panels: [AgentPanelProcessSnapshot]) {
         queue.sync {
             livePanelsByWorkspace[workspaceID] = panels

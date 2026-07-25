@@ -9,6 +9,25 @@ enum BridgeAgentEventFetchFlow {
         let didBackfill: Bool
     }
 
+    // Typed after-cursor session seams (see AgentHistoryContract.swift),
+    // threaded from the registry/server. The legacy-neutral default keeps
+    // every existing call site and the current after path unchanged; the
+    // lease/walk decision table lands as separate behavioral rows.
+    struct AfterCursorSeams {
+        let plan: (_ sessionID: String, _ afterSeq: Int, _ expectedEpoch: AgentHistoryEpoch) -> AgentAfterCursorPlan
+        let step: (_ sessionID: String, _ anchor: AgentHistoryAnchor, _ afterSeq: Int, _ limit: Int) -> AgentAfterCursorStep
+        let validateEpoch: (_ sessionID: String, _ epoch: AgentHistoryEpoch) -> Bool
+
+        static let legacyNeutral = AfterCursorSeams(
+            plan: { _, _, expectedEpoch in
+                AgentAfterCursorPlan(epoch: expectedEpoch, mode: .hubOnly)
+            },
+            step: { _, anchor, _, _ in
+                AgentAfterCursorStep(epoch: anchor.epoch, outcome: .unavailable, events: [])
+            },
+            validateEpoch: { _, _ in true })
+    }
+
     static func run(eventHub: AgentEventHub,
                     workspaceID: String,
                     sessionID: String?,
@@ -16,6 +35,7 @@ enum BridgeAgentEventFetchFlow {
                     maxBytes: Int? = nil,
                     beforeSeq: Int?,
                     afterSeq: Int?,
+                    afterCursorSeams: AfterCursorSeams = .legacyNeutral,
                     backfill: (_ sessionID: String, _ beforeSeq: Int, _ limit: Int) -> Bool) -> Output {
         if let sessionID, beforeSeq != nil || afterSeq != nil {
             return eventHub.withHistoricalRequestTransaction(sessionID: sessionID) {
@@ -26,6 +46,7 @@ enum BridgeAgentEventFetchFlow {
                             maxBytes: maxBytes,
                             beforeSeq: beforeSeq,
                             afterSeq: afterSeq,
+                            afterCursorSeams: afterCursorSeams,
                             backfill: backfill)
             }
         }
@@ -36,6 +57,7 @@ enum BridgeAgentEventFetchFlow {
                            maxBytes: maxBytes,
                            beforeSeq: beforeSeq,
                            afterSeq: afterSeq,
+                           afterCursorSeams: afterCursorSeams,
                            backfill: backfill)
     }
 
@@ -47,8 +69,13 @@ enum BridgeAgentEventFetchFlow {
         maxBytes: Int?,
         beforeSeq: Int?,
         afterSeq: Int?,
+        afterCursorSeams: AfterCursorSeams,
         backfill: (_ sessionID: String, _ beforeSeq: Int, _ limit: Int) -> Bool
     ) -> Output {
+        // afterCursorSeams is intentionally unused here: this row only
+        // threads the seams; the legacy after path below stays authoritative
+        // until the lease/walk decision table lands.
+        _ = afterCursorSeams
         var fetchResult = eventHub.fetch(workspaceID: workspaceID,
                                          sessionID: sessionID,
                                          limit: limit,
