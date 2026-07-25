@@ -2945,7 +2945,17 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private var historicalIndexCompleteLineCount = 0
     private var historicalReplayOpenerEventIDs = Set<String>()
     private var historicalReplayProducts = [AgentEvent]()
-    private var historicalReplayPositionsByEventID = [String: TranscriptEventPosition]()
+
+    // Request-local after-cursor replay collection: exists ONLY for the
+    // lifetime of one afterCursorStep. While present, replay products are
+    // routed here and never into the legacy shared replay state, so stale
+    // entries cannot accumulate across requests.
+    private struct AfterCursorReplayCollector {
+        var products = [AgentEvent]()
+        var positionsByEventID = [String: TranscriptEventPosition]()
+        var openerEventIDs = Set<String>()
+    }
+    private var afterCursorReplayCollector: AfterCursorReplayCollector?
     private var isCollectingHistoricalBackfillPage = false
     private var collectedHistoricalBackfillPage = [(offset: Int, line: String)]()
     private var historicalBackfillAnchorSeq: Int?
@@ -3123,6 +3133,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         publicTranscriptSequenceByEventID = [:]
         // The replacement source has proven nothing yet.
         historySemanticTrust = false
+        afterCursorReplayCollector = nil
         historicalClosureSourceEpoch &+= 1
         historicalClosureIndex = nil
         historicalIndexEventSink = nil
@@ -3309,17 +3320,12 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
 
             let liveParserState = captureLiveParserState()
             resetParserStateForHistoricalReplay()
-            historicalReplayOpenerEventIDs = []
-            historicalReplayProducts = []
-            historicalReplayPositionsByEventID = [:]
-            historicalBackfillAnchorSeq = nil
+            afterCursorReplayCollector = AfterCursorReplayCollector()
             isBackfillingHistory = true
             defer {
                 isCollectingHistoricalBackfillPage = false
                 collectedHistoricalBackfillPage = []
-                historicalReplayProducts = []
-                historicalReplayPositionsByEventID = [:]
-                historicalReplayOpenerEventIDs = []
+                afterCursorReplayCollector = nil
                 isBackfillingHistory = false
                 restoreLiveParserState(liveParserState)
             }
@@ -3373,9 +3379,10 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
 
             let pageFloorOffset = frontier.minimumRawOffset ?? anchorPosition.lineOffset
             let pageFloor = TranscriptEventPosition(lineOffset: pageFloorOffset, ordinal: 0)
+            let collector = afterCursorReplayCollector ?? AfterCursorReplayCollector()
             // Interval slice by raw position: [pageFloor, anchor).
-            var sliced = historicalReplayProducts.filter { event in
-                guard let position = historicalReplayPositionsByEventID[event.eventID] else {
+            var sliced = collector.products.filter { event in
+                guard let position = collector.positionsByEventID[event.eventID] else {
                     return false
                 }
                 return position >= pageFloor && position < anchorPosition
@@ -3387,7 +3394,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 // consumer is suppressed instead of resurfacing stale.
                 var closures = [AgentEvent]()
                 sliced = sliced.filter { event in
-                    guard historicalReplayOpenerEventIDs.contains(event.eventID) else {
+                    guard collector.openerEventIDs.contains(event.eventID) else {
                         return true
                     }
                     if let closure = index.closureByOpenerEventID[event.eventID] {
@@ -3888,6 +3895,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         queue.sync {
             resolverTimer?.cancel()
             resolverTimer = nil
+            afterCursorReplayCollector = nil
             tailer?.stop()
             tailer = nil
             hookTailer?.stop()
@@ -4849,6 +4857,19 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         }
         if isBackfillingHistory {
             maxObservedSeq = max(maxObservedSeq, seq)
+            // Request-local after-cursor collection: while a step collector
+            // exists, products (with their RAW positions — the walk slices
+            // by position, never by public-sequence arithmetic) go ONLY to
+            // it; the legacy before-cursor replay state stays untouched.
+            if afterCursorReplayCollector != nil {
+                if event.type == .interactivePrompt
+                    || event.metadata?["tidey_generated"] == "claude_context_command" {
+                    afterCursorReplayCollector?.openerEventIDs.insert(event.eventID)
+                }
+                afterCursorReplayCollector?.products.append(event)
+                afterCursorReplayCollector?.positionsByEventID[event.eventID] = position
+                return event
+            }
             if let anchorSeq = historicalBackfillAnchorSeq,
                event.seq >= anchorSeq {
                 return event
@@ -4858,10 +4879,6 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 historicalReplayOpenerEventIDs.insert(event.eventID)
             }
             historicalReplayProducts.append(event)
-            // The after-cursor walk slices its interval by RAW position —
-            // never by public-sequence arithmetic — so every replay product
-            // records where it came from.
-            historicalReplayPositionsByEventID[event.eventID] = position
             return event
         }
         guard let acceptedEvent = hub.publish(event) else {
