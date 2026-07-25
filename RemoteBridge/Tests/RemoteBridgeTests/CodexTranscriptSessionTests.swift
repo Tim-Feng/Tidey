@@ -508,7 +508,9 @@ final class CodexTranscriptSessionTests: XCTestCase {
         let object: [String: Any] = [
             "type": "event_msg",
             "timestamp": "2026-05-15T00:05:00Z",
-            "payload": ["type": "exec_command_end", "call_id": callID, "aggregated_output": output],
+            "payload": ["type": "exec_command_end", "call_id": callID, "aggregated_output": output,
+                        "stdout": "", "stderr": "", "formatted_output": "",
+                        "exit_code": 0, "status": "completed"],
         ]
         return String(data: try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]), encoding: .utf8)!
     }
@@ -1802,12 +1804,12 @@ final class CodexTranscriptSessionTests: XCTestCase {
             ("agent-message-phase-missing", [eventMsg("{\"type\":\"agent_message\",\"message\":\"hi\"}")]),
             ("agent-message-phase-wrong-type", [eventMsg("{\"type\":\"agent_message\",\"message\":\"hi\",\"phase\":7}")]),
             ("agent-message-phase-unknown", [eventMsg("{\"type\":\"agent_message\",\"message\":\"hi\",\"phase\":\"draft\"}")]),
-            ("exec-end-call-id-missing", [eventMsg("{\"type\":\"exec_command_end\",\"stdout\":\"ok\"}")]),
-            ("exec-end-call-id-wrong-type", [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":7,\"stdout\":\"ok\"}")]),
-            ("exec-end-call-id-empty", [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"\",\"stdout\":\"ok\"}")]),
-            ("exec-end-nonstring-candidate-not-hidden", [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"e1\",\"aggregated_output\":5,\"stdout\":\"ok\"}")]),
-            ("patch-end-call-id-empty", [eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"\",\"stdout\":\"ok\"}")]),
-            ("patch-end-nonstring-candidate-not-hidden", [eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"p1\",\"stdout\":3,\"stderr\":\"ok\"}")]),
+            ("exec-end-call-id-missing", [eventMsg("{\"type\":\"exec_command_end\",\"stdout\":\"ok\",\"stderr\":\"\",\"formatted_output\":\"\",\"aggregated_output\":\"\",\"exit_code\":0,\"status\":\"completed\"}")]),
+            ("exec-end-call-id-wrong-type", [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":7,\"stdout\":\"ok\",\"stderr\":\"\",\"formatted_output\":\"\",\"aggregated_output\":\"\",\"exit_code\":0,\"status\":\"completed\"}")]),
+            ("exec-end-call-id-empty", [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"\",\"stdout\":\"ok\",\"stderr\":\"\",\"formatted_output\":\"\",\"aggregated_output\":\"\",\"exit_code\":0,\"status\":\"completed\"}")]),
+            ("exec-end-nonstring-candidate-not-hidden", [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"e1\",\"aggregated_output\":5,\"stdout\":\"ok\",\"stderr\":\"\",\"formatted_output\":\"\",\"exit_code\":0,\"status\":\"completed\"}")]),
+            ("patch-end-call-id-empty", [eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"\",\"stdout\":\"ok\",\"stderr\":\"\",\"success\":true,\"status\":\"completed\"}")]),
+            ("patch-end-nonstring-candidate-not-hidden", [eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"p1\",\"stdout\":3,\"stderr\":\"ok\",\"success\":true,\"status\":\"completed\"}")]),
         ]
         for row in rows {
             // Each row runs in its own function scope so the session and
@@ -1854,13 +1856,13 @@ final class CodexTranscriptSessionTests: XCTestCase {
         }
         let rows: [(name: String, lines: [String])] = [
             ("exec-nonstring-candidate-after-resolved",
-             [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"exec-dup\",\"stdout\":\"legal first\"}"),
-              eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"exec-dup\",\"stdout\":7}")]),
+             [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"exec-dup\",\"stdout\":\"legal first\",\"stderr\":\"\",\"formatted_output\":\"\",\"aggregated_output\":\"\",\"exit_code\":0,\"status\":\"completed\"}"),
+              eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"exec-dup\",\"stdout\":7,\"stderr\":\"\",\"formatted_output\":\"\",\"aggregated_output\":\"\",\"exit_code\":0,\"status\":\"completed\"}")]),
             ("patch-nonstring-candidate-after-resolved",
-             [eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"patch-dup\",\"stderr\":\"legal first\"}"),
-              eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"patch-dup\",\"stderr\":7}")]),
-            ("patch-end-call-id-missing", [eventMsg("{\"type\":\"patch_apply_end\",\"stdout\":\"ok\"}")]),
-            ("patch-end-call-id-wrong-type", [eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":7,\"stdout\":\"ok\"}")]),
+             [eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"patch-dup\",\"stdout\":\"\",\"stderr\":\"legal first\",\"success\":true,\"status\":\"completed\"}"),
+              eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"patch-dup\",\"stdout\":\"\",\"stderr\":7,\"success\":true,\"status\":\"completed\"}")]),
+            ("patch-end-call-id-missing", [eventMsg("{\"type\":\"patch_apply_end\",\"stdout\":\"ok\",\"stderr\":\"\",\"success\":true,\"status\":\"completed\"}")]),
+            ("patch-end-call-id-wrong-type", [eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":7,\"stdout\":\"ok\",\"stderr\":\"\",\"success\":true,\"status\":\"completed\"}")]),
         ]
         for row in rows {
             try assertDeepRowFailsClosed(name: row.name, rowLines: row.lines)
@@ -1883,9 +1885,8 @@ final class CodexTranscriptSessionTests: XCTestCase {
             "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:03Z\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"phase\":null,\"content\":[{\"type\":\"input_image\",\"detail\":\"auto\",\"image_url\":\"data:image/png;base64,AA==\"}]}}",
             "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-15T00:00:04Z\",\"payload\":{\"type\":\"agent_message\",\"message\":\"\",\"phase\":\"commentary\"}}",
             "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:05Z\",\"payload\":{\"type\":\"function_call\",\"call_id\":\"empty-args\",\"name\":\"noop\",\"arguments\":\"\"}}",
-            "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-15T00:00:06Z\",\"payload\":{\"type\":\"exec_command_end\",\"call_id\":\"no-candidates\"}}",
-            "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-15T00:00:07Z\",\"payload\":{\"type\":\"exec_command_end\",\"call_id\":\"empty-candidates\",\"aggregated_output\":\"\",\"stdout\":\"\"}}",
-            "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-15T00:00:08Z\",\"payload\":{\"type\":\"patch_apply_end\",\"call_id\":\"empty-patch\",\"stdout\":\"\",\"stderr\":\"\"}}",
+            "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-15T00:00:07Z\",\"payload\":{\"type\":\"exec_command_end\",\"call_id\":\"empty-candidates\",\"aggregated_output\":\"\",\"formatted_output\":\"\",\"stdout\":\"\",\"stderr\":\"\",\"exit_code\":0,\"status\":\"completed\"}}",
+            "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-15T00:00:08Z\",\"payload\":{\"type\":\"patch_apply_end\",\"call_id\":\"empty-patch\",\"stdout\":\"\",\"stderr\":\"\",\"success\":true,\"status\":\"completed\"}}",
             makeCodexMessageLine(role: "assistant", content: "a-0"),
         ]
         try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
@@ -2090,18 +2091,18 @@ final class CodexTranscriptSessionTests: XCTestCase {
             "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":\(payload)}"
         }
         let rows: [(name: String, lines: [String])] = [
-            ("exec-exit-code-string", [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"e1\",\"exit_code\":\"0\",\"stdout\":\"ok\"}")]),
-            ("exec-exit-code-bool", [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"e1\",\"exit_code\":true,\"stdout\":\"ok\"}")]),
-            ("exec-status-non-string", [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"e1\",\"status\":7,\"stdout\":\"ok\"}")]),
-            ("patch-success-non-bool-number", [eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"p1\",\"success\":1,\"stdout\":\"ok\"}")]),
-            ("patch-success-non-bool-string", [eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"p1\",\"success\":\"yes\",\"stdout\":\"ok\"}")]),
-            ("patch-status-non-string", [eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"p1\",\"status\":7,\"stdout\":\"ok\"}")]),
+            ("exec-exit-code-string", [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"e1\",\"exit_code\":\"0\",\"stdout\":\"ok\",\"stderr\":\"\",\"formatted_output\":\"\",\"aggregated_output\":\"\",\"status\":\"completed\"}")]),
+            ("exec-exit-code-bool", [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"e1\",\"exit_code\":true,\"stdout\":\"ok\",\"stderr\":\"\",\"formatted_output\":\"\",\"aggregated_output\":\"\",\"status\":\"completed\"}")]),
+            ("exec-status-non-string", [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"e1\",\"status\":7,\"stdout\":\"ok\",\"stderr\":\"\",\"formatted_output\":\"\",\"aggregated_output\":\"\",\"exit_code\":0}")]),
+            ("patch-success-non-bool-number", [eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"p1\",\"success\":1,\"stdout\":\"ok\",\"stderr\":\"\",\"status\":\"completed\"}")]),
+            ("patch-success-non-bool-string", [eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"p1\",\"success\":\"yes\",\"stdout\":\"ok\",\"stderr\":\"\",\"status\":\"completed\"}")]),
+            ("patch-status-non-string", [eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"p1\",\"status\":7,\"stdout\":\"ok\",\"stderr\":\"\",\"success\":true}")]),
             ("exec-malformed-metadata-after-resolved",
-             [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"em-dup\",\"exit_code\":0,\"status\":\"completed\",\"stdout\":\"legal first\"}"),
-              eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"em-dup\",\"exit_code\":\"0\",\"stdout\":\"dup\"}")]),
+             [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"em-dup\",\"exit_code\":0,\"status\":\"completed\",\"stdout\":\"legal first\",\"stderr\":\"\",\"formatted_output\":\"\",\"aggregated_output\":\"\"}"),
+              eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"em-dup\",\"exit_code\":\"0\",\"status\":\"completed\",\"stdout\":\"dup\",\"stderr\":\"\",\"formatted_output\":\"\",\"aggregated_output\":\"\"}")]),
             ("patch-malformed-metadata-after-resolved",
-             [eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"pm-dup\",\"success\":true,\"stdout\":\"legal first\"}"),
-              eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"pm-dup\",\"success\":1,\"stdout\":\"dup\"}")]),
+             [eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"pm-dup\",\"success\":true,\"status\":\"completed\",\"stdout\":\"legal first\",\"stderr\":\"\"}"),
+              eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"pm-dup\",\"success\":1,\"status\":\"completed\",\"stdout\":\"dup\",\"stderr\":\"\"}")]),
         ]
         for row in rows {
             try assertDeepRowFailsClosed(name: row.name, rowLines: row.lines)
@@ -2116,9 +2117,9 @@ final class CodexTranscriptSessionTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
         let lines = [
-            eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"legal-exec\",\"exit_code\":0,\"status\":\"completed\",\"stdout\":\"exec-out\"}"),
-            eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"legal-patch\",\"success\":true,\"status\":\"completed\",\"stdout\":\"patch-out\"}"),
-            eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"absent-meta\",\"stdout\":\"bare-out\"}"),
+            eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"legal-exec\",\"exit_code\":0,\"status\":\"completed\",\"stdout\":\"exec-out\",\"stderr\":\"\",\"formatted_output\":\"\",\"aggregated_output\":\"\"}"),
+            eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"legal-patch\",\"success\":true,\"status\":\"completed\",\"stdout\":\"patch-out\",\"stderr\":\"\"}"),
+            eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"absent-meta\",\"exit_code\":0,\"status\":\"completed\",\"stdout\":\"bare-out\",\"stderr\":\"\",\"formatted_output\":\"\"}"),
             makeCodexMessageLine(role: "assistant", content: "a-0"),
         ]
         try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
@@ -2132,7 +2133,77 @@ final class CodexTranscriptSessionTests: XCTestCase {
         let patchResult = events.first { $0.eventID == "legal-patch:patch-end" }
         XCTAssertEqual(patchResult?.output, "patch-out")
         XCTAssertTrue(events.contains { $0.eventID == "absent-meta:exec-end" },
-                      "absent metadata fields stay legal")
+                      "absent aggregated_output stays legal — the official serde default")
+        XCTAssertTrue(session.validateHistoryEpoch(hub.currentHistoryEpoch(sessionID: "session")))
+    }
+
+    // Official 0.145 exec/patch schema (audited at the same 25af12f7
+    // commit): exec_command_end requires call_id/stdout/stderr/
+    // formatted_output Strings, exit_code i32, status enum; only
+    // aggregated_output has a serde default (absent → ""). patch_apply_end
+    // requires call_id/stdout/stderr Strings, success Bool, status enum.
+    // status is exactly {completed, failed, declined}. The full local
+    // corpus (1,167 files: exec 8,734 / patch 76,687) has ZERO absent or
+    // null required fields — so absence fails closed, no legacy exception.
+    func testCodexExecPatchOfficialSchemaFailsClosed() throws {
+        func eventMsg(_ payload: String) -> String {
+            "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":\(payload)}"
+        }
+        let rows: [(name: String, lines: [String])] = [
+            ("exec-stdout-missing", [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"e1\",\"stderr\":\"\",\"formatted_output\":\"\",\"aggregated_output\":\"x\",\"exit_code\":0,\"status\":\"completed\"}")]),
+            ("exec-stderr-missing", [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"e1\",\"stdout\":\"ok\",\"formatted_output\":\"\",\"aggregated_output\":\"\",\"exit_code\":0,\"status\":\"completed\"}")]),
+            ("exec-formatted-output-missing", [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"e1\",\"stdout\":\"ok\",\"stderr\":\"\",\"aggregated_output\":\"\",\"exit_code\":0,\"status\":\"completed\"}")]),
+            ("exec-exit-code-missing", [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"e1\",\"stdout\":\"ok\",\"stderr\":\"\",\"formatted_output\":\"\",\"aggregated_output\":\"\",\"status\":\"completed\"}")]),
+            ("exec-status-missing", [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"e1\",\"stdout\":\"ok\",\"stderr\":\"\",\"formatted_output\":\"\",\"aggregated_output\":\"\",\"exit_code\":0}")]),
+            ("exec-status-unknown-enum", [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"e1\",\"stdout\":\"ok\",\"stderr\":\"\",\"formatted_output\":\"\",\"aggregated_output\":\"\",\"exit_code\":0,\"status\":\"running\"}")]),
+            ("exec-status-null", [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"e1\",\"stdout\":\"ok\",\"stderr\":\"\",\"formatted_output\":\"\",\"aggregated_output\":\"\",\"exit_code\":0,\"status\":null}")]),
+            ("exec-exit-code-float", [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"e1\",\"stdout\":\"ok\",\"stderr\":\"\",\"formatted_output\":\"\",\"aggregated_output\":\"\",\"exit_code\":1.5,\"status\":\"completed\"}")]),
+            ("exec-exit-code-i32-overflow", [eventMsg("{\"type\":\"exec_command_end\",\"call_id\":\"e1\",\"stdout\":\"ok\",\"stderr\":\"\",\"formatted_output\":\"\",\"aggregated_output\":\"\",\"exit_code\":3000000000,\"status\":\"completed\"}")]),
+            ("patch-stdout-missing", [eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"p1\",\"stderr\":\"ok\",\"success\":true,\"status\":\"completed\"}")]),
+            ("patch-stderr-missing", [eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"p1\",\"stdout\":\"ok\",\"success\":true,\"status\":\"completed\"}")]),
+            ("patch-success-missing", [eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"p1\",\"stdout\":\"ok\",\"stderr\":\"\",\"status\":\"completed\"}")]),
+            ("patch-status-missing", [eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"p1\",\"stdout\":\"ok\",\"stderr\":\"\",\"success\":true}")]),
+            ("patch-status-unknown-enum", [eventMsg("{\"type\":\"patch_apply_end\",\"call_id\":\"p1\",\"stdout\":\"ok\",\"stderr\":\"\",\"success\":true,\"status\":\"partial\"}")]),
+        ]
+        for row in rows {
+            try assertDeepRowFailsClosed(name: row.name, rowLines: row.lines)
+        }
+    }
+
+    // Output selection contract, pinned by corpus evidence: 297 real patch
+    // records carry a blank stdout with real stderr text — "first PRESENT
+    // candidate" silently drops them. The contract is the first NON-BLANK
+    // candidate in producer precedence order (exec: aggregated_output →
+    // formatted_output → stdout → stderr; patch: stdout → stderr); all
+    // candidates blank stays a legal no-text product.
+    func testCodexExecPatchOutputSelectionSkipsBlankCandidates() throws {
+        func eventMsg(_ timestamp: String, _ payload: String) -> String {
+            "{\"type\":\"event_msg\",\"timestamp\":\"\(timestamp)\",\"payload\":\(payload)}"
+        }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lines = [
+            eventMsg("2026-05-15T00:00:00Z", "{\"type\":\"exec_command_end\",\"call_id\":\"blank-first-exec\",\"aggregated_output\":\"\",\"formatted_output\":\"\",\"stdout\":\"exec-std-text\",\"stderr\":\"\",\"exit_code\":0,\"status\":\"completed\"}"),
+            eventMsg("2026-05-15T00:00:01Z", "{\"type\":\"patch_apply_end\",\"call_id\":\"blank-first-patch\",\"stdout\":\"   \",\"stderr\":\"patch-err-text\",\"success\":false,\"status\":\"failed\"}"),
+            eventMsg("2026-05-15T00:00:02Z", "{\"type\":\"exec_command_end\",\"call_id\":\"all-blank\",\"aggregated_output\":\"\",\"formatted_output\":\"\",\"stdout\":\"\",\"stderr\":\"  \",\"exit_code\":0,\"status\":\"completed\"}"),
+            makeCodexMessageLine(role: "assistant", content: "a-0"),
+        ]
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(transcriptURL, hub: hub, readySentinel: "a-0")
+        defer { session.stop() }
+        let events = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50).events
+        XCTAssertEqual(events.first { $0.eventID == "blank-first-exec:exec-end" }?.output,
+                       "exec-std-text",
+                       "a blank aggregated/formatted output must not shadow real stdout text")
+        XCTAssertEqual(events.first { $0.eventID == "blank-first-patch:patch-end" }?.output,
+                       "patch-err-text",
+                       "a blank stdout must not shadow real stderr text (297 corpus records)")
+        XCTAssertFalse(events.contains { $0.eventID == "all-blank:exec-end" },
+                       "all-blank candidates stay a legal no-text product")
         XCTAssertTrue(session.validateHistoryEpoch(hub.currentHistoryEpoch(sessionID: "session")))
     }
 

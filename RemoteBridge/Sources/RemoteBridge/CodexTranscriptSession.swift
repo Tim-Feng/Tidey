@@ -1246,34 +1246,48 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             sourceSemanticTrust = false
             return
         }
-        // Metadata schema is producer contract too (inventory: exit_code
-        // always a JSON Number, status always a String). Optional for
-        // legacy, but an explicit wrong-typed value poisons — BEFORE
-        // candidate selection, dedupe, or the empty-product policy.
-        if let exitCode = payload["exit_code"] {
-            guard exitCode is NSNumber, !Self.isJSONBoolean(exitCode) else {
+        // Official 0.145 ExecCommandEnd schema (models.rs @ 25af12f7):
+        // stdout/stderr/formatted_output are REQUIRED Strings; only
+        // aggregated_output has a serde default (absent → ""); exit_code
+        // is a required i32; status is the required {completed, failed,
+        // declined} enum. The full local corpus has zero absent/null
+        // required fields, so absence fails closed — no legacy exception.
+        // All of this runs BEFORE candidate selection, the resolved-ID
+        // dedupe, and the empty-product policy.
+        guard let stdout = payload["stdout"] as? String,
+              let stderr = payload["stderr"] as? String,
+              let formattedOutput = payload["formatted_output"] as? String else {
+            sourceSemanticTrust = false
+            return
+        }
+        let aggregatedOutput: String
+        if let value = payload["aggregated_output"] {
+            guard let string = value as? String else {
                 sourceSemanticTrust = false
                 return
             }
+            aggregatedOutput = string
+        } else {
+            aggregatedOutput = ""
         }
-        if let status = payload["status"] {
-            guard status is String else {
-                sourceSemanticTrust = false
-                return
-            }
+        guard let exitCodeValue = payload["exit_code"], Self.isInt32JSONNumber(exitCodeValue) else {
+            sourceSemanticTrust = false
+            return
         }
-        // Validate EVERY present output candidate before selection, dedupe,
-        // or the empty-product policy: a non-string candidate must never be
-        // hidden by another field or an already-resolved call.
-        guard let candidate = validatedOutputCandidate(
-            payload: payload,
-            keys: ["aggregated_output", "formatted_output", "stdout", "stderr"]) else {
+        guard let status = payload["status"] as? String,
+              Self.legalEndStatuses.contains(status) else {
+            sourceSemanticTrust = false
             return
         }
         guard !resolvedToolCallIDs.contains(callID) else {
             return
         }
-        let output = Self.compactString(candidate)
+        // Selection contract: the first NON-BLANK candidate in producer
+        // precedence order — a blank earlier candidate must not shadow
+        // later real text (297 corpus patch records prove the pattern).
+        let output = Self.compactString(
+            [aggregatedOutput, formattedOutput, stdout, stderr]
+                .first { !Self.compactString($0).isEmpty } ?? "")
         guard !output.isEmpty else {
             return
         }
@@ -1305,29 +1319,30 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             sourceSemanticTrust = false
             return
         }
-        // Metadata schema (inventory: success always a Boolean, status
-        // always a String) — optional for legacy, poisons when mistyped,
-        // BEFORE candidate selection, dedupe, or the empty-product policy.
-        if let success = payload["success"] {
-            guard Self.isJSONBoolean(success) else {
-                sourceSemanticTrust = false
-                return
-            }
+        // Official 0.145 PatchApplyEnd schema: stdout/stderr REQUIRED
+        // Strings, success a required Bool (CFBoolean type ID — NSNumber
+        // 0/1 cannot pass), status the required {completed, failed,
+        // declined} enum. Zero absent/null in the corpus → absence fails
+        // closed. Validation runs BEFORE selection, dedupe, empty policy.
+        guard let stdout = payload["stdout"] as? String,
+              let stderr = payload["stderr"] as? String else {
+            sourceSemanticTrust = false
+            return
         }
-        if let status = payload["status"] {
-            guard status is String else {
-                sourceSemanticTrust = false
-                return
-            }
+        guard let success = payload["success"], Self.isJSONBoolean(success) else {
+            sourceSemanticTrust = false
+            return
         }
-        guard let candidate = validatedOutputCandidate(payload: payload,
-                                                       keys: ["stdout", "stderr"]) else {
+        guard let status = payload["status"] as? String,
+              Self.legalEndStatuses.contains(status) else {
+            sourceSemanticTrust = false
             return
         }
         guard !resolvedToolCallIDs.contains(callID) else {
             return
         }
-        let output = Self.compactString(candidate)
+        let output = Self.compactString(
+            [stdout, stderr].first { !Self.compactString($0).isEmpty } ?? "")
         guard !output.isEmpty else {
             return
         }
@@ -1361,24 +1376,22 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         CFGetTypeID(value as CFTypeRef) == CFBooleanGetTypeID()
     }
 
-    // Validates every PRESENT candidate key, then selects the first present
-    // value in priority order ("" when none is present, so the caller's
-    // empty-product policy applies). Returns nil ONLY after poisoning on a
-    // non-string candidate.
-    private func validatedOutputCandidate(payload: [String: Any], keys: [String]) -> String? {
-        var selected: String?
-        for key in keys {
-            guard let value = payload[key] else { continue }
-            guard let string = value as? String else {
-                sourceSemanticTrust = false
-                return nil
-            }
-            if selected == nil {
-                selected = string
-            }
+    // A JSON integer within i32 range: not a Bool (CFBoolean type ID), not
+    // a float-typed number, and inside Int32 bounds.
+    private static func isInt32JSONNumber(_ value: Any) -> Bool {
+        guard let number = value as? NSNumber, !isJSONBoolean(number) else {
+            return false
         }
-        return selected ?? ""
+        guard CFNumberIsFloatType(number) == false else {
+            return false
+        }
+        let raw = number.int64Value
+        return raw >= Int64(Int32.min) && raw <= Int64(Int32.max)
     }
+
+    // The official end-status enum shared by exec_command_end and
+    // patch_apply_end (corpus values observed: completed/failed/declined).
+    private static let legalEndStatuses: Set<String> = ["completed", "failed", "declined"]
 
     private func shouldPublishUserMessage(_ text: String) -> Bool {
         guard !text.isEmpty else {
