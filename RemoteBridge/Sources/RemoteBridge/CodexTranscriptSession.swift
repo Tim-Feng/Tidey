@@ -285,7 +285,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             if tailer == nil {
                 resolveTranscriptIfPossible()
             }
-            guard let tailer else {
+            guard let tailer, sourceSemanticTrust else {
                 return unavailableNow()
             }
             do {
@@ -353,7 +353,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             if tailer == nil {
                 resolveTranscriptIfPossible()
             }
-            guard let tailer else {
+            guard let tailer, sourceSemanticTrust else {
                 return out(.unavailable)
             }
             do {
@@ -431,6 +431,11 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             } catch {
                 return out(.unavailable)
             }
+            // A record that poisoned semantic trust DURING the replay
+            // discards the whole step — no partial page may be served.
+            guard sourceSemanticTrust else {
+                return out(.unavailable)
+            }
             // Final Hub epoch fence: any movement discards the whole page.
             let epochAfterRead = hub.currentHistoryEpoch(sessionID: record.sessionID)
             guard epochAfterRead == currentEpoch else {
@@ -472,7 +477,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
 
     func validateHistoryEpoch(_ epoch: AgentHistoryEpoch) -> Bool {
         queue.sync {
-            guard didPublishStart, didPublishEnd == false, let tailer else {
+            guard didPublishStart, didPublishEnd == false, let tailer,
+                  sourceSemanticTrust else {
                 return false
             }
             validateHistoryEpochBeforeSourceValidationForTesting?()
@@ -592,12 +598,20 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                          }
                                          self.consume(line: line, lineOffset: offset)
                                      },
+                                     invalidUTF8Handler: { [weak self] _ in
+                                         // Invalid raw bytes anywhere in the
+                                         // source poison semantic trust.
+                                         self?.sourceSemanticTrust = false
+                                     },
                                      invalidationHandler: { [weak self] in
                                          self?.handleTailerInvalidation(generation: generation)
                                      })
         do {
             isBootstrappingSidebarState = true
             bootstrappedShellState = .prompt
+            // The replacement source starts as a trusted candidate; its own
+            // records may poison it during bootstrap.
+            sourceSemanticTrust = true
             try tailer.start()
             isBootstrappingSidebarState = false
             self.tailer = tailer
@@ -658,6 +672,9 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         lastCompletedTurnID = nil
         lastAbortedTurnID = nil
         transcriptSequenceBase = maxObservedSeq
+        // No source is attached now: untrusted until a replacement attaches
+        // and independently re-establishes trust.
+        sourceSemanticTrust = false
         hub.replaceHistoricalEvents(sessionID: record.sessionID, events: [], anchorSeq: nil)
         hub.beginNewSourceEpoch(sessionID: record.sessionID)
         if startResolverNow {
@@ -742,6 +759,11 @@ final class CodexTranscriptSession: AgentTranscriptSession {
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let type = object["type"] as? String,
               let payload = object["payload"] as? [String: Any] else {
+            // A structurally malformed record poisons the whole source's
+            // semantic trust — raw scan coverage over bytes we cannot
+            // understand is never history coverage. (Well-formed records of
+            // unknown TYPES fall through the switch below and stay legal.)
+            sourceSemanticTrust = false
             return
         }
 
@@ -768,6 +790,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
            !cliVersion.hasPrefix(codexTranscriptMajorVersion),
            !unsupportedVersions.contains(cliVersion) {
             unsupportedVersions.insert(cliVersion)
+            // An unsupported transcript schema poisons semantic trust.
+            sourceSemanticTrust = false
             publishFileBacked(kind: .status,
                               lineOffset: lineOffset,
                               ordinal: 0,

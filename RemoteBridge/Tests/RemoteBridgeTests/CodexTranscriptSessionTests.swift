@@ -1314,6 +1314,92 @@ final class CodexTranscriptSessionTests: XCTestCase {
                       "the pre-seeded cache sentinel is untouched")
     }
 
+    func testCodexAfterCursorPlanFailsClosedForInvalidUTF8InBootstrapCoverage() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        var data = Data((makeCodexMessageLine(role: "assistant", content: "a-0") + "\n").utf8)
+        data.append(contentsOf: [0xff, 0x0a])          // invalid UTF-8 complete record
+        data.append(Data((makeCodexMessageLine(role: "assistant", content: "a-1") + "\n").utf8))
+        try data.write(to: transcriptURL)
+        let hub = AgentEventHub()
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                             fileManager: .default,
+                                             hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10)
+                .events.contains { $0.text == "a-1" }
+        })
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+
+        let plan = session.afterCursorPlan(afterSeq: 0, expectedEpoch: epoch)
+        guard case .unavailable = plan.mode else {
+            return XCTFail("invalid UTF-8 inside bootstrap coverage must fail closed — minimumRawOffset == 0 is not trust, got \(plan.mode)")
+        }
+        XCTAssertFalse(session.validateHistoryEpoch(epoch),
+                       "a semantically poisoned source must not validate")
+    }
+
+    func testCodexAfterCursorMalformedRawPageFailsClosedWithoutAdvancing() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lineCount = transcriptBootstrapLineLimit + 20
+        var lines = (0..<lineCount).map {
+            makeCodexMessageLine(role: "assistant",
+                                 content: "deep-\($0)-" + String(repeating: "x", count: 160))
+        }
+        // Valid UTF-8 but malformed JSON, BELOW the bootstrap floor.
+        lines[3] = "{\"this-is\": \"not-a-codex-record\""
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                             fileManager: .default,
+                                             hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5)
+                .events.contains { $0.text?.hasPrefix("deep-\(lineCount - 1)-") == true }
+        })
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+        let plan = session.afterCursorPlan(afterSeq: 0, expectedEpoch: epoch)
+        guard case .scan(let startAnchor) = plan.mode else {
+            return XCTFail("precondition: the clean bootstrap plans a scan, got \(plan.mode)")
+        }
+
+        var anchor = startAnchor
+        var sawUnavailable = false
+        walk: for _ in 0..<64 {
+            let step = session.afterCursorStep(from: anchor, afterSeq: 0, limit: 40)
+            switch step.outcome {
+            case .advanced(let next):
+                anchor = next
+            case .unavailable:
+                XCTAssertTrue(step.events.isEmpty,
+                              "a poisoned page discards the WHOLE step — no partial events")
+                sawUnavailable = true
+                break walk
+            case .complete:
+                return XCTFail("the walk must not complete past a malformed record")
+            case .sourceChanged:
+                return XCTFail("a malformed record is not a source change, got \(step.outcome)")
+            }
+        }
+        XCTAssertTrue(sawUnavailable, "the malformed page fails the step closed")
+
+        let poisonedPlan = session.afterCursorPlan(afterSeq: 0, expectedEpoch: epoch)
+        guard case .unavailable = poisonedPlan.mode else {
+            return XCTFail("the poison persists until a source reset — a lowered tailer floor must not restore rawCovered, got \(poisonedPlan.mode)")
+        }
+    }
+
     func testValidationSourceInvalidationRevokesEpochBeforeReturningFalse() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
