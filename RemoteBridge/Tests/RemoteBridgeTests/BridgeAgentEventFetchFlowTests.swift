@@ -137,22 +137,69 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
         XCTAssertFalse(output.fetchResult.hasMore)
     }
 
-    func testConcurrentSameSessionHistoryRequestsReturnTheirOwnPages() {
-        let hub = AgentEventHub()
-        hub.publish(makeEvent(seq: 100, text: "live"))
-        let firstInstalled = DispatchSemaphore(value: 0)
-        let releaseFirst = DispatchSemaphore(value: 0)
-        let firstDone = expectation(description: "first request completed")
-        let secondDone = expectation(description: "second request completed")
-        let contention = expectation(description: "second request waited at the session gate")
-        hub.historicalRequestContentionHookForTesting = { sessionID in
-            if sessionID == "session" {
-                contention.fulfill()
-            }
+    // MARK: B21 concurrent history request ownership matrix
+    //
+    // Contract (G1b): the WHOLE same-session history flow serializes
+    // through the per-session transaction gate. "Independent ownership"
+    // means concurrently launched callers queue and each receives its own
+    // exact result — never that two same-session walks run simultaneously.
+    // Deterministic order pinned in every same-session test:
+    //   A seam entered/blocking → B contention observed with B's seam
+    //   count still 0 → release A → B's seam eventually enters.
+    // Caller-side output writes are NOT ordered against B's gate acquire
+    // (the gate unlocks in the transaction body's defer, before `run`
+    // returns) — A's non-contamination is proven by A's exact output.
+
+    private final class LockedCounters: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storage = [String: Int]()
+        func increment(_ key: String) {
+            lock.lock()
+            storage[key, default: 0] += 1
+            lock.unlock()
         }
-        let outputLock = NSLock()
-        var firstOutput: BridgeAgentEventFetchFlow.Output?
-        var secondOutput: BridgeAgentEventFetchFlow.Output?
+        func value(_ key: String) -> Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return storage[key] ?? 0
+        }
+    }
+
+    private final class LockedBox<Value>: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored: Value?
+        func set(_ value: Value) {
+            lock.lock()
+            stored = value
+            lock.unlock()
+        }
+        var value: Value? {
+            lock.lock()
+            defer { lock.unlock() }
+            return stored
+        }
+    }
+
+    // A. Same-session before → before.
+    func testConcurrentSameSessionBeforeRequestsSerializeThroughFinalFetch() {
+        let hub = AgentEventHub()
+        defer { hub.historicalRequestContentionHookForTesting = nil }
+        // Live seed: the session must exist in the Hub live buffer for the
+        // before path to serve; seq 100 sits AT the first cursor and is
+        // excluded from both results.
+        hub.publish(makeEvent(id: "live-seed-100", seq: 100, text: "live-seed-100"))
+        let aEntered = DispatchSemaphore(value: 0)
+        let releaseA = DispatchSemaphore(value: 0)
+        let bContended = DispatchSemaphore(value: 0)
+        let counters = LockedCounters()
+        let aReleaseWait = LockedBox<DispatchTimeoutResult>()
+        let aOutput = LockedBox<BridgeAgentEventFetchFlow.Output>()
+        let bOutput = LockedBox<BridgeAgentEventFetchFlow.Output>()
+        let aDone = expectation(description: "A completed")
+        let bDone = expectation(description: "B completed")
+        hub.historicalRequestContentionHookForTesting = { sessionID in
+            if sessionID == "session" { bContended.signal() }
+        }
 
         DispatchQueue.global(qos: .userInitiated).async {
             let output = BridgeAgentEventFetchFlow.run(eventHub: hub,
@@ -161,20 +208,24 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
                                                        limit: 3,
                                                        beforeSeq: 100,
                                                        afterSeq: nil) { _, beforeSeq, _ in
+                counters.increment("aBackfill")
                 hub.replaceHistoricalEvents(
                     sessionID: "session",
-                    events: (97...99).map { self.makeEvent(seq: $0, text: "first-\($0)") },
+                    events: (97...99).map { self.makeEvent(id: "first-\($0)", seq: $0, text: "first-\($0)") },
                     anchorSeq: beforeSeq)
-                firstInstalled.signal()
-                _ = releaseFirst.wait(timeout: .now() + 5.0)
+                aEntered.signal()
+                aReleaseWait.set(releaseA.wait(timeout: .now() + 5.0))
                 return true
             }
-            outputLock.lock()
-            firstOutput = output
-            outputLock.unlock()
-            firstDone.fulfill()
+            aOutput.set(output)
+            aDone.fulfill()
         }
-        XCTAssertEqual(firstInstalled.wait(timeout: .now() + 2.0), .success)
+        let aEnteredResult = aEntered.wait(timeout: .now() + 2.0)
+        guard aEnteredResult == .success else {
+            releaseA.signal()
+            wait(for: [aDone], timeout: 5.0)
+            return XCTFail("A never entered its backfill seam")
+        }
 
         DispatchQueue.global(qos: .userInitiated).async {
             let output = BridgeAgentEventFetchFlow.run(eventHub: hub,
@@ -183,47 +234,58 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
                                                        limit: 3,
                                                        beforeSeq: 50,
                                                        afterSeq: nil) { _, beforeSeq, _ in
+                counters.increment("bBackfill")
                 hub.replaceHistoricalEvents(
                     sessionID: "session",
-                    events: (47...49).map { self.makeEvent(seq: $0, text: "second-\($0)") },
+                    events: (47...49).map { self.makeEvent(id: "second-\($0)", seq: $0, text: "second-\($0)") },
                     anchorSeq: beforeSeq)
                 return true
             }
-            outputLock.lock()
-            secondOutput = output
-            outputLock.unlock()
-            secondDone.fulfill()
+            bOutput.set(output)
+            bDone.fulfill()
         }
-
-        let contentionResult = XCTWaiter.wait(for: [contention], timeout: 1.0)
-        releaseFirst.signal()
-        wait(for: [firstDone, secondDone], timeout: 5.0)
-        XCTAssertEqual(contentionResult, .completed,
-                       "same-session request B must wait until A finishes its final fetch")
-        outputLock.lock()
-        let firstTexts = firstOutput?.fetchResult.events.compactMap(\.text)
-        let secondTexts = secondOutput?.fetchResult.events.compactMap(\.text)
-        outputLock.unlock()
-        XCTAssertEqual(firstTexts, ["first-97", "first-98", "first-99"])
-        XCTAssertEqual(secondTexts, ["second-47", "second-48", "second-49"])
+        let bContendedResult = bContended.wait(timeout: .now() + 2.0)
+        let bBackfillsAtContention = counters.value("bBackfill")
+        guard bContendedResult == .success else {
+            releaseA.signal()
+            wait(for: [aDone, bDone], timeout: 5.0)
+            return XCTFail("B never contended on the session gate")
+        }
+        XCTAssertEqual(bBackfillsAtContention, 0,
+                       "B's backfill seam has NOT entered while A holds the gate")
+        releaseA.signal()
+        wait(for: [aDone, bDone], timeout: 5.0)
+        XCTAssertEqual(aReleaseWait.value, .success, "A's release wait completed")
+        XCTAssertEqual(counters.value("aBackfill"), 1)
+        XCTAssertEqual(counters.value("bBackfill"), 1,
+                       "B's seam entered after the release — the queued caller still ran")
+        guard let a = aOutput.value, let b = bOutput.value else {
+            return XCTFail("both outputs captured")
+        }
+        XCTAssertTrue(a.didBackfill)
+        XCTAssertTrue(b.didBackfill)
+        XCTAssertEqual(a.fetchResult.events.map(\.eventID), ["first-97", "first-98", "first-99"])
+        XCTAssertEqual(a.fetchResult.events.compactMap(\.text), ["first-97", "first-98", "first-99"])
+        XCTAssertEqual(b.fetchResult.events.map(\.eventID), ["second-47", "second-48", "second-49"])
+        XCTAssertEqual(b.fetchResult.events.compactMap(\.text), ["second-47", "second-48", "second-49"])
+        XCTAssertFalse(a.fetchResult.events.contains { $0.eventID.hasPrefix("second-") })
+        XCTAssertFalse(b.fetchResult.events.contains { $0.eventID.hasPrefix("first-") })
     }
 
-    func testHistoryRequestTransactionDoesNotBlockDifferentSessions() {
+    // B. Different sessions never share a global gate: a typed AFTER flow
+    // for session-b completes while session-a's before flow holds its own
+    // gate.
+    func testConcurrentHistoryRequestsForDifferentSessionsDoNotShareGate() {
         let hub = AgentEventHub()
-        hub.publish(makeEvent(seq: 100,
-                              text: "live-a",
-                              workspaceID: "workspace-a",
-                              sessionID: "session-a"))
-        hub.publish(makeEvent(seq: 200,
-                              text: "live-b",
-                              workspaceID: "workspace-b",
-                              sessionID: "session-b"))
-        let firstEntered = DispatchSemaphore(value: 0)
-        let releaseFirst = DispatchSemaphore(value: 0)
-        let firstDone = expectation(description: "session A completed")
-        let secondDone = expectation(description: "session B completed without waiting for A")
-        let outputLock = NSLock()
-        var secondOutput: BridgeAgentEventFetchFlow.Output?
+        hub.publish(makeEvent(id: "b-live-160", seq: 160, text: "b-live-160",
+                              workspaceID: "workspace-b", sessionID: "session-b"))
+        let aEntered = DispatchSemaphore(value: 0)
+        let releaseA = DispatchSemaphore(value: 0)
+        let counters = LockedCounters()
+        let aReleaseWait = LockedBox<DispatchTimeoutResult>()
+        let bOutput = LockedBox<BridgeAgentEventFetchFlow.Output>()
+        let aDone = expectation(description: "session A completed")
+        let bDone = expectation(description: "session B completed while A blocks")
 
         DispatchQueue.global(qos: .userInitiated).async {
             _ = BridgeAgentEventFetchFlow.run(eventHub: hub,
@@ -235,53 +297,482 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
                 hub.replaceHistoricalEvents(
                     sessionID: "session-a",
                     events: (97...99).map {
-                        self.makeEvent(seq: $0,
-                                       text: "a-\($0)",
-                                       workspaceID: "workspace-a",
-                                       sessionID: "session-a")
+                        self.makeEvent(id: "a-\($0)", seq: $0, text: "a-\($0)",
+                                       workspaceID: "workspace-a", sessionID: "session-a")
                     },
                     anchorSeq: beforeSeq)
-                firstEntered.signal()
-                _ = releaseFirst.wait(timeout: .now() + 5.0)
+                aEntered.signal()
+                aReleaseWait.set(releaseA.wait(timeout: .now() + 5.0))
                 return true
             }
-            firstDone.fulfill()
+            aDone.fulfill()
         }
-        XCTAssertEqual(firstEntered.wait(timeout: .now() + 2.0), .success)
+        let aEnteredResult = aEntered.wait(timeout: .now() + 2.0)
+        guard aEnteredResult == .success else {
+            releaseA.signal()
+            wait(for: [aDone], timeout: 5.0)
+            return XCTFail("A never entered its backfill seam")
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let output = BridgeAgentEventFetchFlow.run(
+                eventHub: hub,
+                workspaceID: "workspace-b",
+                sessionID: "session-b",
+                limit: 10,
+                beforeSeq: nil,
+                afterSeq: 100,
+                afterCursorSeams: .init(
+                    plan: { _, _, expected in
+                        counters.increment("bPlan")
+                        // session-b's OWN epoch anchors the scan.
+                        return AgentAfterCursorPlan(
+                            epoch: expected,
+                            mode: .scan(from: AgentHistoryAnchor(
+                                epoch: expected,
+                                position: TranscriptEventPosition(lineOffset: 10_000, ordinal: 0))))
+                    },
+                    step: { _, stepAnchor, _, _ in
+                        counters.increment("bStep")
+                        return AgentAfterCursorStep(
+                            epoch: stepAnchor.epoch,
+                            outcome: .complete,
+                            events: (101...103).map {
+                                self.makeEvent(id: "b-\($0)", seq: $0, text: "b-\($0)",
+                                               workspaceID: "workspace-b", sessionID: "session-b")
+                            })
+                    },
+                    validateEpoch: { _, _ in
+                        counters.increment("bValidate")
+                        return true
+                    })) { _, _, _ in
+                counters.increment("bLegacyBackfill")
+                XCTFail("the legacy backfill closure must not serve a typed after request")
+                return false
+            }
+            bOutput.set(output)
+            bDone.fulfill()
+        }
+        // Liveness: B must COMPLETE while A is still blocked.
+        let bLiveness = XCTWaiter.wait(for: [bDone], timeout: 1.0)
+        guard bLiveness == .completed else {
+            releaseA.signal()
+            wait(for: [aDone], timeout: 5.0)
+            return XCTFail("session B's request must run to completion while session A holds ITS gate")
+        }
+        releaseA.signal()
+        wait(for: [aDone], timeout: 5.0)
+        XCTAssertEqual(aReleaseWait.value, .success)
+        guard let b = bOutput.value else {
+            return XCTFail("B output captured")
+        }
+        XCTAssertTrue(b.didBackfill)
+        XCTAssertFalse(b.fetchResult.hasMore)
+        XCTAssertEqual(counters.value("bLegacyBackfill"), 0)
+        XCTAssertEqual(b.fetchResult.events.map(\.eventID),
+                       ["b-101", "b-102", "b-103", "b-live-160"])
+        for event in b.fetchResult.events {
+            XCTAssertEqual(event.workspaceID, "workspace-b")
+            XCTAssertEqual(event.sessionID, "session-b")
+        }
+    }
+
+    // C. Same-session before → after: the queued AFTER page stays
+    // request-owned and never absorbs the shared-cache before page.
+    func testConcurrentSameSessionBeforeThenAfterKeepsAfterPageRequestOwned() {
+        let hub = AgentEventHub()
+        defer { hub.historicalRequestContentionHookForTesting = nil }
+        hub.publish(makeEvent(id: "live-160", seq: 160, text: "live-160"))
+        let aEntered = DispatchSemaphore(value: 0)
+        let releaseA = DispatchSemaphore(value: 0)
+        let bContended = DispatchSemaphore(value: 0)
+        let counters = LockedCounters()
+        let aReleaseWait = LockedBox<DispatchTimeoutResult>()
+        let aOutput = LockedBox<BridgeAgentEventFetchFlow.Output>()
+        let bOutput = LockedBox<BridgeAgentEventFetchFlow.Output>()
+        let aDone = expectation(description: "A completed")
+        let bDone = expectation(description: "B completed")
+        hub.historicalRequestContentionHookForTesting = { sessionID in
+            if sessionID == "session" { bContended.signal() }
+        }
 
         DispatchQueue.global(qos: .userInitiated).async {
             let output = BridgeAgentEventFetchFlow.run(eventHub: hub,
-                                                       workspaceID: "workspace-b",
-                                                       sessionID: "session-b",
+                                                       workspaceID: "workspace",
+                                                       sessionID: "session",
                                                        limit: 3,
-                                                       beforeSeq: 200,
+                                                       beforeSeq: 100,
                                                        afterSeq: nil) { _, beforeSeq, _ in
+                counters.increment("aBackfill")
                 hub.replaceHistoricalEvents(
-                    sessionID: "session-b",
-                    events: (197...199).map {
-                        self.makeEvent(seq: $0,
-                                       text: "b-\($0)",
-                                       workspaceID: "workspace-b",
-                                       sessionID: "session-b")
+                    sessionID: "session",
+                    events: (61...63).map { self.makeEvent(id: "before-\($0)", seq: $0, text: "before-\($0)") },
+                    anchorSeq: beforeSeq)
+                aEntered.signal()
+                aReleaseWait.set(releaseA.wait(timeout: .now() + 5.0))
+                return true
+            }
+            aOutput.set(output)
+            aDone.fulfill()
+        }
+        let aEnteredResult = aEntered.wait(timeout: .now() + 2.0)
+        guard aEnteredResult == .success else {
+            releaseA.signal()
+            wait(for: [aDone], timeout: 5.0)
+            return XCTFail("A never entered its backfill seam")
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let output = BridgeAgentEventFetchFlow.run(
+                eventHub: hub,
+                workspaceID: "workspace",
+                sessionID: "session",
+                limit: 10,
+                beforeSeq: nil,
+                afterSeq: 50,
+                afterCursorSeams: .init(
+                    plan: { _, _, expected in
+                        counters.increment("bPlan")
+                        return AgentAfterCursorPlan(
+                            epoch: expected,
+                            mode: .scan(from: AgentHistoryAnchor(
+                                epoch: expected,
+                                position: TranscriptEventPosition(lineOffset: 10_000, ordinal: 0))))
                     },
+                    step: { _, stepAnchor, _, _ in
+                        counters.increment("bStep")
+                        return AgentAfterCursorStep(
+                            epoch: stepAnchor.epoch,
+                            outcome: .complete,
+                            events: (51...53).map {
+                                self.makeEvent(id: "after-\($0)", seq: $0, text: "after-\($0)")
+                            })
+                    },
+                    validateEpoch: { _, _ in
+                        counters.increment("bValidate")
+                        return true
+                    })) { _, _, _ in
+                counters.increment("bLegacyBackfill")
+                XCTFail("the legacy backfill closure must not serve a typed after request")
+                return false
+            }
+            bOutput.set(output)
+            bDone.fulfill()
+        }
+        let bContendedResult = bContended.wait(timeout: .now() + 2.0)
+        let bPlansAtContention = counters.value("bPlan")
+        guard bContendedResult == .success else {
+            releaseA.signal()
+            wait(for: [aDone, bDone], timeout: 5.0)
+            return XCTFail("B never contended on the session gate")
+        }
+        XCTAssertEqual(bPlansAtContention, 0,
+                       "B's plan seam has NOT entered while A holds the gate")
+        releaseA.signal()
+        wait(for: [aDone, bDone], timeout: 5.0)
+        XCTAssertEqual(aReleaseWait.value, .success)
+        XCTAssertEqual(counters.value("aBackfill"), 1)
+        XCTAssertEqual(counters.value("bPlan"), 1)
+        XCTAssertEqual(counters.value("bStep"), 1)
+        XCTAssertEqual(counters.value("bValidate"), 1)
+        XCTAssertEqual(counters.value("bLegacyBackfill"), 0)
+        guard let a = aOutput.value, let b = bOutput.value else {
+            return XCTFail("both outputs captured")
+        }
+        XCTAssertTrue(a.didBackfill)
+        XCTAssertEqual(a.fetchResult.events.map(\.eventID),
+                       ["before-61", "before-62", "before-63"],
+                       "A's before page holds exactly its own rows")
+        XCTAssertTrue(b.didBackfill)
+        XCTAssertFalse(b.fetchResult.hasMore)
+        XCTAssertEqual(b.fetchResult.events.map(\.eventID),
+                       ["after-51", "after-52", "after-53", "live-160"],
+                       "B's after page is request-owned plus its lease window")
+        XCTAssertFalse(b.fetchResult.events.contains { $0.eventID.hasPrefix("before-") },
+                       "the shared-cache before page never enters the after response")
+    }
+
+    // D. Same-session after → before: the blocked after walk keeps its
+    // request-owned page and its lease captures live publishes that the
+    // history gate must not block.
+    func testConcurrentSameSessionAfterThenBeforeKeepsAfterPageOwned() {
+        let hub = AgentEventHub()
+        defer { hub.historicalRequestContentionHookForTesting = nil }
+        hub.publish(makeEvent(id: "live-160", seq: 160, text: "live-160"))
+        let aEntered = DispatchSemaphore(value: 0)
+        let releaseA = DispatchSemaphore(value: 0)
+        let bContended = DispatchSemaphore(value: 0)
+        let counters = LockedCounters()
+        let aReleaseWait = LockedBox<DispatchTimeoutResult>()
+        let aOutput = LockedBox<BridgeAgentEventFetchFlow.Output>()
+        let bOutput = LockedBox<BridgeAgentEventFetchFlow.Output>()
+        let aDone = expectation(description: "A completed")
+        let bDone = expectation(description: "B completed")
+        hub.historicalRequestContentionHookForTesting = { sessionID in
+            if sessionID == "session" { bContended.signal() }
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let output = BridgeAgentEventFetchFlow.run(
+                eventHub: hub,
+                workspaceID: "workspace",
+                sessionID: "session",
+                limit: 10,
+                beforeSeq: nil,
+                afterSeq: 50,
+                afterCursorSeams: .init(
+                    plan: { _, _, expected in
+                        counters.increment("aPlan")
+                        return AgentAfterCursorPlan(
+                            epoch: expected,
+                            mode: .scan(from: AgentHistoryAnchor(
+                                epoch: expected,
+                                position: TranscriptEventPosition(lineOffset: 10_000, ordinal: 0))))
+                    },
+                    step: { _, stepAnchor, _, _ in
+                        counters.increment("aStep")
+                        if counters.value("aStep") == 1 {
+                            aEntered.signal()
+                            aReleaseWait.set(releaseA.wait(timeout: .now() + 5.0))
+                            return AgentAfterCursorStep(
+                                epoch: stepAnchor.epoch,
+                                outcome: .advanced(AgentHistoryAnchor(
+                                    epoch: stepAnchor.epoch,
+                                    position: TranscriptEventPosition(lineOffset: 5_000, ordinal: 0))),
+                                events: [self.makeEvent(id: "after-a-52", seq: 52, text: "after-a-52")])
+                        }
+                        return AgentAfterCursorStep(
+                            epoch: stepAnchor.epoch,
+                            outcome: .complete,
+                            events: [self.makeEvent(id: "after-a-51", seq: 51, text: "after-a-51"),
+                                     self.makeEvent(id: "after-a-53", seq: 53, text: "after-a-53")])
+                    },
+                    validateEpoch: { _, _ in
+                        counters.increment("aValidate")
+                        return true
+                    })) { _, _, _ in
+                counters.increment("aLegacyBackfill")
+                XCTFail("the legacy backfill closure must not serve a typed after request")
+                return false
+            }
+            aOutput.set(output)
+            aDone.fulfill()
+        }
+        let aEnteredResult = aEntered.wait(timeout: .now() + 2.0)
+        guard aEnteredResult == .success else {
+            releaseA.signal()
+            wait(for: [aDone], timeout: 5.0)
+            return XCTFail("A never entered its step seam")
+        }
+        // Live publish while A blocks INSIDE its step: the history gate
+        // must not block Hub publishes, and A's lease must capture it.
+        hub.publish(makeEvent(id: "live-161", seq: 161, text: "live-161"))
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let output = BridgeAgentEventFetchFlow.run(eventHub: hub,
+                                                       workspaceID: "workspace",
+                                                       sessionID: "session",
+                                                       limit: 10,
+                                                       beforeSeq: 100,
+                                                       afterSeq: nil) { _, beforeSeq, _ in
+                counters.increment("bBackfill")
+                hub.replaceHistoricalEvents(
+                    sessionID: "session",
+                    events: (61...63).map { self.makeEvent(id: "before-b-\($0)", seq: $0, text: "before-b-\($0)") },
                     anchorSeq: beforeSeq)
                 return true
             }
-            outputLock.lock()
-            secondOutput = output
-            outputLock.unlock()
-            secondDone.fulfill()
+            bOutput.set(output)
+            bDone.fulfill()
+        }
+        let bContendedResult = bContended.wait(timeout: .now() + 2.0)
+        let bBackfillsAtContention = counters.value("bBackfill")
+        guard bContendedResult == .success else {
+            releaseA.signal()
+            wait(for: [aDone, bDone], timeout: 5.0)
+            return XCTFail("B never contended on the session gate")
+        }
+        XCTAssertEqual(bBackfillsAtContention, 0,
+                       "B's backfill seam has NOT entered while A holds the gate")
+        releaseA.signal()
+        wait(for: [aDone, bDone], timeout: 5.0)
+        XCTAssertEqual(aReleaseWait.value, .success)
+        XCTAssertEqual(counters.value("aPlan"), 1)
+        XCTAssertEqual(counters.value("aStep"), 2)
+        XCTAssertEqual(counters.value("aValidate"), 1)
+        XCTAssertEqual(counters.value("aLegacyBackfill"), 0)
+        XCTAssertEqual(counters.value("bBackfill"), 1)
+        guard let a = aOutput.value, let b = bOutput.value else {
+            return XCTFail("both outputs captured")
+        }
+        XCTAssertTrue(a.didBackfill)
+        XCTAssertFalse(a.fetchResult.hasMore)
+        XCTAssertEqual(a.fetchResult.events.map(\.eventID),
+                       ["after-a-51", "after-a-52", "after-a-53", "live-160", "live-161"],
+                       "A owns its raw page and its lease captured the mid-walk live publish")
+        XCTAssertEqual(a.fetchResult.oldestSeq, 51)
+        XCTAssertEqual(a.fetchResult.newestSeq, 161)
+        XCTAssertTrue(b.didBackfill)
+        XCTAssertEqual(b.fetchResult.events.map(\.eventID),
+                       ["before-b-61", "before-b-62", "before-b-63"])
+        XCTAssertFalse(a.fetchResult.events.contains { $0.eventID.hasPrefix("before-b-") })
+        XCTAssertFalse(b.fetchResult.events.contains { $0.eventID.hasPrefix("after-a-") })
+    }
+
+    // E. Same-session after → after: queued walks keep independent
+    // accumulators and lease snapshots (the gate serializes them — this is
+    // NOT an active-walk overlap test).
+    func testConcurrentAfterWalksKeepIndependentOwnership() {
+        let hub = AgentEventHub()
+        defer { hub.historicalRequestContentionHookForTesting = nil }
+        let aEntered = DispatchSemaphore(value: 0)
+        let releaseA = DispatchSemaphore(value: 0)
+        let bContended = DispatchSemaphore(value: 0)
+        let counters = LockedCounters()
+        let aReleaseWait = LockedBox<DispatchTimeoutResult>()
+        let aOutput = LockedBox<BridgeAgentEventFetchFlow.Output>()
+        let bOutput = LockedBox<BridgeAgentEventFetchFlow.Output>()
+        let aDone = expectation(description: "A completed")
+        let bDone = expectation(description: "B completed")
+        hub.historicalRequestContentionHookForTesting = { sessionID in
+            if sessionID == "session" { bContended.signal() }
         }
 
-        let secondResult = XCTWaiter.wait(for: [secondDone], timeout: 1.0)
-        releaseFirst.signal()
-        wait(for: [firstDone], timeout: 5.0)
-        XCTAssertEqual(secondResult, .completed,
-                       "a history request for session B must run while session A is blocked")
-        outputLock.lock()
-        let secondTexts = secondOutput?.fetchResult.events.compactMap(\.text)
-        outputLock.unlock()
-        XCTAssertEqual(secondTexts, ["b-197", "b-198", "b-199"])
+        DispatchQueue.global(qos: .userInitiated).async {
+            let output = BridgeAgentEventFetchFlow.run(
+                eventHub: hub,
+                workspaceID: "workspace",
+                sessionID: "session",
+                limit: 10,
+                beforeSeq: nil,
+                afterSeq: 100,
+                afterCursorSeams: .init(
+                    plan: { _, _, expected in
+                        counters.increment("aPlan")
+                        return AgentAfterCursorPlan(
+                            epoch: expected,
+                            mode: .scan(from: AgentHistoryAnchor(
+                                epoch: expected,
+                                position: TranscriptEventPosition(lineOffset: 10_000, ordinal: 0))))
+                    },
+                    step: { _, stepAnchor, _, _ in
+                        counters.increment("aStep")
+                        if counters.value("aStep") == 1 {
+                            aEntered.signal()
+                            aReleaseWait.set(releaseA.wait(timeout: .now() + 5.0))
+                            return AgentAfterCursorStep(
+                                epoch: stepAnchor.epoch,
+                                outcome: .advanced(AgentHistoryAnchor(
+                                    epoch: stepAnchor.epoch,
+                                    position: TranscriptEventPosition(lineOffset: 5_000, ordinal: 0))),
+                                events: [self.makeEvent(id: "request-a-130", seq: 130, text: "request-a-130")])
+                        }
+                        return AgentAfterCursorStep(
+                            epoch: stepAnchor.epoch,
+                            outcome: .complete,
+                            events: [self.makeEvent(id: "request-a-131", seq: 131, text: "request-a-131"),
+                                     self.makeEvent(id: "request-a-132", seq: 132, text: "request-a-132")])
+                    },
+                    validateEpoch: { _, _ in
+                        counters.increment("aValidate")
+                        return true
+                    })) { _, _, _ in
+                counters.increment("aLegacyBackfill")
+                XCTFail("the legacy backfill closure must not serve a typed after request")
+                return false
+            }
+            aOutput.set(output)
+            aDone.fulfill()
+        }
+        let aEnteredResult = aEntered.wait(timeout: .now() + 2.0)
+        guard aEnteredResult == .success else {
+            releaseA.signal()
+            wait(for: [aDone], timeout: 5.0)
+            return XCTFail("A never entered its step seam")
+        }
+        // Shared retained lives, published while A blocks: both requests
+        // may legally serve them under their own cursors.
+        hub.publish(makeEvent(id: "live-190", seq: 190, text: "live-190"))
+        hub.publish(makeEvent(id: "live-191", seq: 191, text: "live-191"))
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let output = BridgeAgentEventFetchFlow.run(
+                eventHub: hub,
+                workspaceID: "workspace",
+                sessionID: "session",
+                limit: 10,
+                beforeSeq: nil,
+                afterSeq: 125,
+                afterCursorSeams: .init(
+                    plan: { _, _, expected in
+                        counters.increment("bPlan")
+                        return AgentAfterCursorPlan(
+                            epoch: expected,
+                            mode: .scan(from: AgentHistoryAnchor(
+                                epoch: expected,
+                                position: TranscriptEventPosition(lineOffset: 10_000, ordinal: 0))))
+                    },
+                    step: { _, stepAnchor, _, _ in
+                        counters.increment("bStep")
+                        return AgentAfterCursorStep(
+                            epoch: stepAnchor.epoch,
+                            outcome: .complete,
+                            events: (126...128).map {
+                                self.makeEvent(id: "request-b-\($0)", seq: $0, text: "request-b-\($0)")
+                            })
+                    },
+                    validateEpoch: { _, _ in
+                        counters.increment("bValidate")
+                        return true
+                    })) { _, _, _ in
+                counters.increment("bLegacyBackfill")
+                XCTFail("the legacy backfill closure must not serve a typed after request")
+                return false
+            }
+            bOutput.set(output)
+            bDone.fulfill()
+        }
+        let bContendedResult = bContended.wait(timeout: .now() + 2.0)
+        let bPlansAtContention = counters.value("bPlan")
+        guard bContendedResult == .success else {
+            releaseA.signal()
+            wait(for: [aDone, bDone], timeout: 5.0)
+            return XCTFail("B never contended on the session gate")
+        }
+        XCTAssertEqual(bPlansAtContention, 0,
+                       "B's plan seam has NOT entered while A holds the gate")
+        releaseA.signal()
+        wait(for: [aDone, bDone], timeout: 5.0)
+        XCTAssertEqual(aReleaseWait.value, .success)
+        XCTAssertEqual(counters.value("aPlan"), 1)
+        XCTAssertEqual(counters.value("aStep"), 2)
+        XCTAssertEqual(counters.value("aValidate"), 1)
+        XCTAssertEqual(counters.value("aLegacyBackfill"), 0)
+        XCTAssertEqual(counters.value("bPlan"), 1)
+        XCTAssertEqual(counters.value("bStep"), 1)
+        XCTAssertEqual(counters.value("bValidate"), 1)
+        XCTAssertEqual(counters.value("bLegacyBackfill"), 0)
+        guard let a = aOutput.value, let b = bOutput.value else {
+            return XCTFail("both outputs captured")
+        }
+        XCTAssertTrue(a.didBackfill)
+        XCTAssertFalse(a.fetchResult.hasMore)
+        XCTAssertEqual(a.fetchResult.events.map(\.eventID),
+                       ["request-a-130", "request-a-131", "request-a-132", "live-190", "live-191"],
+                       "A's page is its own raw walk plus the shared lives above ITS cursor")
+        XCTAssertEqual(a.fetchResult.oldestSeq, 130)
+        XCTAssertEqual(a.fetchResult.newestSeq, 191)
+        XCTAssertTrue(b.didBackfill)
+        XCTAssertFalse(b.fetchResult.hasMore)
+        XCTAssertEqual(b.fetchResult.events.map(\.eventID),
+                       ["request-b-126", "request-b-127", "request-b-128", "live-190", "live-191"],
+                       "B's page is its own raw walk plus the shared lives above ITS cursor")
+        XCTAssertEqual(b.fetchResult.oldestSeq, 126)
+        XCTAssertEqual(b.fetchResult.newestSeq, 191)
+        XCTAssertFalse(a.fetchResult.events.contains { $0.eventID.hasPrefix("request-b-") },
+                       "no B raw event leaks into A")
+        XCTAssertFalse(b.fetchResult.events.contains { $0.eventID.hasPrefix("request-a-") },
+                       "no A raw event leaks into B — A's raw seqs all sit above B's cursor, a shared accumulator would show them")
     }
 
     // MARK: G3a request-owned coverage batch
