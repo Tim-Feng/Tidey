@@ -236,7 +236,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                 isCollectingBackfillPage = true
                 collectedBackfillPage = []
                 let loaded = (try? tailer.backfill(beforeOffset: pageAnchorOffset,
-                                                   limit: effectiveLimit)) ?? false
+                                                   limit: effectiveLimit))?.didRead ?? false
                 isCollectingBackfillPage = false
                 guard loaded, collectedBackfillPage.isEmpty == false else {
                     return loadedAny

@@ -56,7 +56,7 @@ final class JSONLFileTailerTests: XCTestCase {
                                      invalidationHandler: {})
 
         try tailer.start()
-        let didBackfill = try tailer.backfill(beforeOffset: 8, limit: 2)
+        let didBackfill = try tailer.backfill(beforeOffset: 8, limit: 2).didRead
         tailer.stop()
 
         XCTAssertTrue(didBackfill)

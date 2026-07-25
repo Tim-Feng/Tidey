@@ -1684,6 +1684,24 @@ enum JSONLFileTailerError: Error {
     case sourceInvalidated
 }
 
+// Typed raw-page evidence shape for one tailer backfill read. The PRODUCER
+// is not wired yet — this structural row only establishes the return shape
+// (rawFrontier is always nil today). The behavioral row that populates it
+// must build the frontier strictly after the post-read source fence and
+// from the reader's ACTUAL scan boundary (the reader skips blank lines, so
+// first-record offsets cannot prove the scanned floor or byte 0).
+struct JSONLRawFrontier: Equatable, Sendable {
+    let readAnyRecord: Bool
+    let minimumRawOffset: Int?
+    let containsInvalidRecord: Bool
+    let reachedSourceStart: Bool
+}
+
+struct JSONLBackfillResult {
+    let didRead: Bool
+    let rawFrontier: JSONLRawFrontier?
+}
+
 final class JSONLFileTailer {
     private enum SourceContinuity {
         case valid
@@ -1837,9 +1855,9 @@ final class JSONLFileTailer {
 
     func backfill(beforeOffset: Int,
                   limit: Int,
-                  includeAnchorLine: Bool = false) throws -> Bool {
+                  includeAnchorLine: Bool = false) throws -> JSONLBackfillResult {
         guard (beforeOffset > 0 || includeAnchorLine), limit > 0 else {
-            return false
+            return JSONLBackfillResult(didRead: false, rawFrontier: nil)
         }
         guard currentSourceIsValid(minimumSize: nextReadOffset) else {
             throw JSONLFileTailerError.sourceInvalidated
@@ -1861,14 +1879,20 @@ final class JSONLFileTailer {
             if beforeOffset <= (earliestLoadedOffset ?? beforeOffset) {
                 reachedStartOfFile = true
             }
-            return false
+            return JSONLBackfillResult(didRead: false, rawFrontier: nil)
         }
 
         deliver(records)
         earliestLoadedOffset = min(earliestLoadedOffset ?? Int.max,
                                    records.first?.offset ?? Int.max)
         reachedStartOfFile = (records.first?.offset ?? 0) == 0
-        return true
+        // Structural row: didRead is exactly the old Bool; the frontier
+        // PRODUCER is not wired yet (always nil) so the frontier behavioral
+        // row keeps its RED. Deriving it from `records` here would also be
+        // wrong: the reader skips blank lines, so a first-record offset can
+        // neither stand in for the scanned floor nor prove byte 0 was
+        // reached — the reader must report its actual scan boundary.
+        return JSONLBackfillResult(didRead: true, rawFrontier: nil)
     }
 
     func validateCurrentSource() throws {
@@ -3162,7 +3186,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                     didLoad = try tailer.backfill(
                         beforeOffset: pageAnchorOffset,
                         limit: limit,
-                        includeAnchorLine: includeAnchorLine)
+                        includeAnchorLine: includeAnchorLine).didRead
                 } catch JSONLFileTailerError.sourceInvalidated {
                     sourceWasInvalidated = true
                     return false
