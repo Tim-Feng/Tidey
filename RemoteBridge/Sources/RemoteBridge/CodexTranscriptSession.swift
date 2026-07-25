@@ -828,6 +828,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         "world_state",
         "inter_agent_communication_metadata",
     ]
+    // Union of the current real catalog (~/.codex/sessions inventory,
+    // 2026-07-26) and legacy entries already supported by parser history.
     private static let knownIgnoredResponseItemTypes: Set<String> = [
         "reasoning",
         "web_search_call",
@@ -835,6 +837,10 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         "custom_tool_call",
         "custom_tool_call_output",
         "ghost_commit",
+        "agent_message",
+        "image_generation_call",
+        "tool_search_call",
+        "tool_search_output",
     ]
     private static let knownIgnoredEventMessageTypes: Set<String> = [
         "token_count",
@@ -855,6 +861,15 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         "plan_update",
         "session_configured",
         "user_message",
+        "collab_agent_spawn_end",
+        "collab_close_end",
+        "collab_waiting_end",
+        "context_compacted",
+        "image_generation_end",
+        "sub_agent_activity",
+        "thread_name_updated",
+        "thread_settings_applied",
+        "view_image_tool_call",
     ]
 
     private func consumeSessionMeta(payload: [String: Any], timestamp: String, lineOffset: Int) {

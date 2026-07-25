@@ -1575,6 +1575,114 @@ final class CodexTranscriptSessionTests: XCTestCase {
         XCTAssertTrue(session.validateHistoryEpoch(epoch))
     }
 
+    // The CURRENT real Codex rollout catalog (read-only inventory over the
+    // 500 most recent ~/.codex/sessions files, 2026-07-26): every legal
+    // subtype Tidey does not parse into an event must be explicitly
+    // known-ignored — a normal current rollout must never poison. Rows also
+    // keep legacy catalog entries already supported by the parser history.
+    func testCodexCurrentRolloutCatalogIgnoredSubtypesStayTrusted() throws {
+        let observedIgnoredResponseItemTypes = [
+            "reasoning", "web_search_call", "custom_tool_call",
+            "custom_tool_call_output", "agent_message", "image_generation_call",
+            "tool_search_call", "tool_search_output",
+            // legacy catalog entries retained from parser history
+            "local_shell_call", "ghost_commit",
+        ]
+        let observedIgnoredEventMessageTypes = [
+            "agent_reasoning", "collab_agent_spawn_end", "collab_close_end",
+            "collab_waiting_end", "context_compacted", "image_generation_end",
+            "mcp_tool_call_end", "sub_agent_activity", "thread_name_updated",
+            "thread_settings_applied", "token_count", "user_message",
+            "view_image_tool_call", "web_search_end",
+            // legacy catalog entries retained from parser history
+            "agent_reasoning_delta", "agent_message_delta",
+            "agent_reasoning_section_break", "exec_command_begin",
+            "exec_command_output_delta", "patch_apply_begin",
+            "mcp_tool_call_begin", "web_search_begin", "turn_diff",
+            "background_event", "stream_error", "plan_update",
+            "session_configured",
+        ]
+        var rows = observedIgnoredResponseItemTypes.map {
+            (name: "response_item/\($0)",
+             line: "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"type\":\"\($0)\"}}")
+        }
+        rows += observedIgnoredEventMessageTypes.map {
+            (name: "event_msg/\($0)",
+             line: "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"type\":\"\($0)\"}}")
+        }
+        for row in rows {
+            let directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+            let lines = [makeCodexMessageLine(role: "assistant", content: "a-0"),
+                         row.line,
+                         makeCodexMessageLine(role: "assistant", content: "a-1")]
+            try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+            let hub = AgentEventHub()
+            let session = makeStartedCodexSession(transcriptURL, hub: hub, readySentinel: "a-1")
+            defer { session.stop() }
+            let epoch = hub.currentHistoryEpoch(sessionID: "session")
+            switch session.afterCursorPlan(afterSeq: 0, expectedEpoch: epoch).mode {
+            case .rawCovered, .scan:
+                break
+            case .hubOnly, .unavailable:
+                XCTFail("\(row.name): a current legal ignored subtype must not poison the plan")
+            }
+            XCTAssertTrue(session.validateHistoryEpoch(epoch),
+                          "\(row.name): a current legal ignored subtype must stay trusted")
+        }
+
+        // Guard: an ARBITRARY unknown subtype outside the catalog stays
+        // poisoned — expanding the allowlist must not reopen the default.
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lines = [makeCodexMessageLine(role: "assistant", content: "a-0"),
+                     "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"type\":\"subtype_from_the_future\"}}",
+                     makeCodexMessageLine(role: "assistant", content: "a-1")]
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(transcriptURL, hub: hub, readySentinel: "a-1")
+        defer { session.stop() }
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+        if case .unavailable = session.afterCursorPlan(afterSeq: 0, expectedEpoch: epoch).mode {
+        } else {
+            XCTFail("an arbitrary unknown subtype must still poison the plan")
+        }
+        XCTAssertFalse(session.validateHistoryEpoch(epoch),
+                       "an arbitrary unknown subtype must still poison validation")
+    }
+
+    // Guard: session_meta with the matching id and an ABSENT cli_version is
+    // legacy-compatible — only an explicit non-string value poisons.
+    func testCodexSessionMetaAbsentCliVersionStaysLegacyCompatible() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lines = [
+            "{\"type\":\"session_meta\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"id\":\"session\"}}",
+            makeCodexMessageLine(role: "assistant", content: "a-0"),
+        ]
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(transcriptURL, hub: hub, readySentinel: "a-0")
+        defer { session.stop() }
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+        switch session.afterCursorPlan(afterSeq: 0, expectedEpoch: epoch).mode {
+        case .rawCovered, .scan:
+            break
+        case .hubOnly, .unavailable:
+            XCTFail("an absent cli_version is legacy-compatible, not a violation")
+        }
+        XCTAssertTrue(session.validateHistoryEpoch(epoch))
+    }
+
     func testValidationSourceFenceRunsBeforeSemanticTrustGate() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
