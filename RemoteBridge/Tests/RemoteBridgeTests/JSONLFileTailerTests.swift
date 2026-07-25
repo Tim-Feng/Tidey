@@ -415,6 +415,28 @@ final class JSONLFileTailerTests: XCTestCase {
         XCTAssertEqual(captured.last?.0, 5, "the completed record keeps its original partial offset")
     }
 
+    func testStopOffQueueDoesNotRaceEventHandler() throws {
+        // Regression: stop() from the test thread while the vnode handler
+        // validates the source on the tailer queue crashed in Data ==
+        // (validated boundary torn down mid-compare). Iterate to give the
+        // race room; serialized stop must never crash.
+        for iteration in 0..<50 {
+            let fileURL = try writeTestFile()
+            let queue = DispatchQueue(label: "JSONLFileTailerTests.stop-race-\(iteration)")
+            let tailer = JSONLFileTailer(fileURL: fileURL,
+                                         queue: queue,
+                                         bootstrapLineLimit: 2,
+                                         lineHandler: { _, _ in },
+                                         invalidationHandler: {})
+            try tailer.start()
+            let handle = try FileHandle(forWritingTo: fileURL)
+            try handle.seekToEnd()
+            try handle.write(contentsOf: Data("five\n".utf8))
+            try handle.close()
+            tailer.stop()
+        }
+    }
+
     private func writeTestFile() throws -> URL {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

@@ -1839,6 +1839,14 @@ final class JSONLFileTailer {
     }
 
     func stop() {
+        // Callers may stop from any thread while the vnode handler is
+        // mid-flight on the tailer queue; tearing down shared state (fd,
+        // validated boundary) must serialize with it. Reentrant-safe: the
+        // handler's own stop() calls execute in place.
+        syncOnQueue { stopOnQueue() }
+    }
+
+    private func stopOnQueue() {
         openedSourceIdentity = nil
         validatedBoundaryOffset = 0
         validatedBoundary.removeAll(keepingCapacity: false)
