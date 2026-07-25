@@ -59,19 +59,19 @@ struct BridgeFileActionHandler {
     private static let warningSizeBytes: Int64 = 512 * 1024
     private static let maximumReadableSizeBytes: Int64 = 1024 * 1024
 
-    private let rootResolver: PanelFileRootResolving
     private let fileManager: FileManager
     private let policy: BridgeDocumentFilePolicy
-    private let homeDirectoryURL: URL
+    private let targetResolver: BridgePanelFileTargetResolver
 
     init(rootResolver: PanelFileRootResolving,
          fileManager: FileManager = .default,
          policy: BridgeDocumentFilePolicy = .poc,
          homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser) {
-        self.rootResolver = rootResolver
         self.fileManager = fileManager
         self.policy = policy
-        self.homeDirectoryURL = homeDirectoryURL
+        self.targetResolver = BridgePanelFileTargetResolver(rootResolver: rootResolver,
+                                                            fileManager: fileManager,
+                                                            homeDirectoryURL: homeDirectoryURL)
     }
 
     func handle(_ request: BridgeRequest) throws -> BridgeResponse? {
@@ -87,7 +87,7 @@ struct BridgeFileActionHandler {
 
     private func readFile(_ request: BridgeRequest) throws -> BridgeResponse {
         let params = try BridgeFileReadRequest(params: request.params)
-        let expandedPath = expandTilde(in: params.path)
+        let expandedPath = targetResolver.expandTilde(in: params.path)
         BridgeFileReadDiagnostics.log("start request_id=\(request.id) requested_path=\(params.path) expanded_path=\(expandedPath) workspace_id=\(params.workspaceID) panel_id=\(params.panelID)")
         let resolved = try resolveFile(path: params.path,
                                        workspaceID: params.workspaceID,
@@ -172,35 +172,12 @@ struct BridgeFileActionHandler {
     private func resolveFile(path: String,
                              workspaceID: String,
                              panelID: String,
-                             allowsReadOnlyHomeScope: Bool) throws -> ResolvedFileTarget {
-        let rawRootPath = try rootResolver.rootPath(workspaceID: workspaceID, panelID: panelID)
-        let rootURL = URL(fileURLWithPath: rawRootPath, isDirectory: true)
-            .standardizedFileURL
-            .resolvingSymlinksInPath()
-        var isDirectory: ObjCBool = false
-        guard fileManager.fileExists(atPath: rootURL.path, isDirectory: &isDirectory), isDirectory.boolValue else {
-            throw BridgeInternalError.panelContextUnavailable("目前無法取得這個 panel 的檔案根目錄。")
-        }
-
-        let candidateURL: URL
-        let expandedPath = expandTilde(in: path)
-        if NSString(string: expandedPath).isAbsolutePath {
-            candidateURL = URL(fileURLWithPath: expandedPath, isDirectory: false)
-        } else {
-            candidateURL = rootURL.appendingPathComponent(expandedPath, isDirectory: false)
-        }
-        let normalizedURL = candidateURL.standardizedFileURL.resolvingSymlinksInPath()
-        guard policy.allows(normalizedURL) else {
-            throw BridgeInternalError.fileNotInAllowlist("這個檔案類型目前不支援在 iPhone 編輯。")
-        }
-        if isDescendant(normalizedURL, of: rootURL) {
-            return ResolvedFileTarget(targetURL: normalizedURL, isReadOnlyOutsideRoot: false)
-        }
-        guard allowsReadOnlyHomeScope,
-              policy.allowsReadOnlyHomeScope(normalizedURL, homeDirectoryURL: normalizedHomeDirectoryURL()) else {
-            throw BridgeInternalError.fileOutsideRoot("這個檔案不在允許編輯的範圍內。")
-        }
-        return ResolvedFileTarget(targetURL: normalizedURL, isReadOnlyOutsideRoot: true)
+                             allowsReadOnlyHomeScope: Bool) throws -> BridgeResolvedFileTarget {
+        try targetResolver.resolve(path: path,
+                                   workspaceID: workspaceID,
+                                   panelID: panelID,
+                                   policy: policy,
+                                   allowsReadOnlyHomeScope: allowsReadOnlyHomeScope)
     }
 
     private func readMetadata(at fileURL: URL, attributes: [FileAttributeKey: Any]? = nil) throws -> FileRevisionMetadata {
@@ -215,34 +192,6 @@ struct BridgeFileActionHandler {
                                     revisionToken: "\(Int64(mtime.timeIntervalSince1970 * 1000)):\(size):\(hash)")
     }
 
-    private func isDescendant(_ fileURL: URL, of rootURL: URL) -> Bool {
-        if fileURL.path == rootURL.path {
-            return true
-        }
-        let rootPrefix = rootURL.path.hasSuffix("/") ? rootURL.path : rootURL.path + "/"
-        return fileURL.path.hasPrefix(rootPrefix)
-    }
-
-    private func normalizedHomeDirectoryURL() -> URL {
-        homeDirectoryURL
-            .standardizedFileURL
-            .resolvingSymlinksInPath()
-    }
-
-    private func expandTilde(in path: String) -> String {
-        if path == "~" {
-            return homeDirectoryURL.path
-        }
-        if path.hasPrefix("~/") {
-            return homeDirectoryURL.appendingPathComponent(String(path.dropFirst(2))).path
-        }
-        return path
-    }
-}
-
-private struct ResolvedFileTarget {
-    let targetURL: URL
-    let isReadOnlyOutsideRoot: Bool
 }
 
 private struct FileRevisionMetadata {
@@ -251,7 +200,7 @@ private struct FileRevisionMetadata {
     let revisionToken: String
 }
 
-struct BridgeDocumentFilePolicy {
+struct BridgeDocumentFilePolicy: BridgeLocalFileContentPolicy {
     let allowedExtensions: Set<String>
     let wellKnownFilenames: Set<String>
 
@@ -259,6 +208,9 @@ struct BridgeDocumentFilePolicy {
         allowedExtensions: ["md", "markdown", "mdx", "txt", "rst"],
         wellKnownFilenames: ["README", "LICENSE", "CHANGELOG", "TODO"]
     )
+
+    let notInAllowlistMessage = "這個檔案類型目前不支援在 iPhone 編輯。"
+    let outsideRootMessage = "這個檔案不在允許編輯的範圍內。"
 
     func allows(_ fileURL: URL) -> Bool {
         let filename = fileURL.lastPathComponent
@@ -304,7 +256,13 @@ struct BridgeDocumentFilePolicy {
         guard fileComponents.count > rootComponents.count else {
             return false
         }
-        let relativeComponents = Array(fileComponents.dropFirst(rootComponents.count))
-        return relativeComponents.first == "Library"
+        // Default APFS is case-insensitive (~/library opens ~/Library) and
+        // URL symlink resolution does not GUARANTEE canonical component
+        // casing, so the compare must be ASCII case-insensitive (not a
+        // locale-sensitive lowercasing).
+        guard let first = fileComponents.dropFirst(rootComponents.count).first else {
+            return false
+        }
+        return first.caseInsensitiveCompare("Library") == .orderedSame
     }
 }

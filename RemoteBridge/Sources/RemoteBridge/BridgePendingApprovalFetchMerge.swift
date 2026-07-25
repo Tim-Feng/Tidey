@@ -24,14 +24,25 @@ enum BridgePendingApprovalFetchMerge {
                           newestSeq: pageNewestSeq)
         }
         if requestedBeforeSeq != nil {
+            // Empty before-cursor page: the stored-page bounds drive the
+            // client's BACKWARD paging — an injected pending snapshot rides
+            // the payload but must never replace them with its own seq.
             return Merged(events: events,
                           oldestSeq: pageOldestSeq,
                           newestSeq: pageNewestSeq)
         }
-        let cursorFloor = max(pageNewestSeq, requestedAfterSeq ?? Int.min)
+        if let requestedAfterSeq {
+            // Empty after-cursor page: injected pending snapshots ride the
+            // response, but newest_seq is a CURSOR — advancing it to a
+            // pending approval's higher seq would skip every event between
+            // the cursor and that approval on all later polls.
+            return Merged(events: events,
+                          oldestSeq: events.first?.seq ?? pageOldestSeq,
+                          newestSeq: max(pageNewestSeq, requestedAfterSeq))
+        }
         return Merged(events: events,
                       oldestSeq: events.first?.seq ?? pageOldestSeq,
-                      newestSeq: max(events.last?.seq ?? cursorFloor, cursorFloor))
+                      newestSeq: max(events.last?.seq ?? pageNewestSeq, pageNewestSeq))
     }
 
     static func mergeReplayEnvelopes(_ replayEnvelopes: [AgentEventEnvelope],

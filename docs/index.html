@@ -711,16 +711,69 @@
 
     /* ─── Mobile ─── */
     @media (max-width: 520px) {
-      .hero { padding: 64px 0 40px; }
+      .hero { padding: 28px 0 40px; }
       .hero h1 { font-size: 2.2rem; }
       .hero .tagline { font-size: 1rem; }
       .features, .faq { padding: 48px 0; }
       .remote { padding: 56px 28px; }
       .remote h2 { font-size: 1.7rem; }
       .closing h2 { font-size: 1.5rem; }
-      .top-nav { top: 12px; right: 16px; }
       .showcase-subtitle { font-size: 1.15rem; }
       .showcase-nav { width: 28px; height: 28px; font-size: 0.8rem; }
+
+      /* Top nav becomes a real header bar (like a native titlebar) instead of
+         floating pills — floating controls had no tap feedback (their only
+         affordance was a hover lift/glow) and crowded the hero on narrow
+         screens. */
+      .top-nav {
+        position: sticky;
+        top: 0;
+        left: 0;
+        right: auto;
+        width: 100%;
+        margin: 0 0 4px;
+        padding: 10px 16px;
+        justify-content: space-between;
+        background: rgba(12, 17, 23, 0.75);
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+        border-bottom: 1px solid var(--border);
+        box-sizing: border-box;
+      }
+      .top-dl {
+        padding: 9px 16px;
+        font-size: 0.8rem;
+      }
+      .top-dl:active {
+        transform: scale(0.96);
+        box-shadow: 0 1px 6px rgba(58, 143, 214, 0.25);
+      }
+
+      /* Language control: a two-way segmented toggle, not a hover-styled
+         dropdown button — both languages stay visible and the current one
+         is marked, so state is legible without touch-hover. */
+      .lang-btn { display: none; }
+      #langMenu {
+        display: flex;
+        position: static;
+        min-width: 0;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        padding: 3px;
+        box-shadow: none;
+      }
+      .lang-option {
+        padding: 7px 11px;
+        font-size: 0.74rem;
+        text-align: center;
+        white-space: nowrap;
+      }
+      .lang-option:active { background: rgba(255, 255, 255, 0.08); }
+      .lang-option.active {
+        background: var(--accent-dim);
+        color: var(--accent);
+      }
     }
   </style>
 </head>

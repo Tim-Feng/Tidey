@@ -4,7 +4,7 @@ import XCTest
 
 final class BridgeFileActionHandlerTests: XCTestCase {
     func testFileReadReturnsUTF8ContentAndRevisionToken() throws {
-        let fixture = try makeFixture()
+        let fixture = try makeFixture(cleanupWith: self)
         let fileURL = fixture.rootURL.appendingPathComponent("README.md")
         try "hello".write(to: fileURL, atomically: true, encoding: .utf8)
 
@@ -26,7 +26,7 @@ final class BridgeFileActionHandlerTests: XCTestCase {
     }
 
     func testFileWriteUpdatesContentWhenRevisionTokenMatches() throws {
-        let fixture = try makeFixture()
+        let fixture = try makeFixture(cleanupWith: self)
         let fileURL = fixture.rootURL.appendingPathComponent("README.md")
         try "before".write(to: fileURL, atomically: true, encoding: .utf8)
 
@@ -58,7 +58,7 @@ final class BridgeFileActionHandlerTests: XCTestCase {
     }
 
     func testFileWriteRejectsMismatchedRevisionToken() throws {
-        let fixture = try makeFixture()
+        let fixture = try makeFixture(cleanupWith: self)
         let fileURL = fixture.rootURL.appendingPathComponent("README.md")
         try "before".write(to: fileURL, atomically: true, encoding: .utf8)
 
@@ -82,7 +82,7 @@ final class BridgeFileActionHandlerTests: XCTestCase {
     }
 
     func testFileWriteAllowsForcedOverwriteWithStaleRevisionToken() throws {
-        let fixture = try makeFixture()
+        let fixture = try makeFixture(cleanupWith: self)
         let fileURL = fixture.rootURL.appendingPathComponent("README.md")
         try "before".write(to: fileURL, atomically: true, encoding: .utf8)
 
@@ -106,7 +106,7 @@ final class BridgeFileActionHandlerTests: XCTestCase {
     }
 
     func testFileReadRejectsPathOutsideRoot() throws {
-        let fixture = try makeFixture()
+        let fixture = try makeFixture(cleanupWith: self)
         let outsideURL = fixture.tempDirectory.appendingPathComponent("outside.md")
         try "outside".write(to: outsideURL, atomically: true, encoding: .utf8)
 
@@ -129,7 +129,7 @@ final class BridgeFileActionHandlerTests: XCTestCase {
     }
 
     func testFileReadExpandsTildeAndAllowsReadOnlyEditableDocumentUnderHome() throws {
-        let fixture = try makeFixture()
+        let fixture = try makeFixture(cleanupWith: self)
         let fileURL = fixture.homeURL
             .appendingPathComponent("GitHub/thought-seeds/thoughts/raw", isDirectory: true)
             .appendingPathComponent("Andrej Karpathy - From Vibe Coding to Agentic Engineering.md")
@@ -156,7 +156,7 @@ final class BridgeFileActionHandlerTests: XCTestCase {
     }
 
     func testFileReadUsesOrdinaryTmuxRouteCWDForLogicalPanelRoot() throws {
-        let fixture = try makeFixture()
+        let fixture = try makeFixture(cleanupWith: self)
         let tmuxRoot = fixture.tempDirectory.appendingPathComponent("tmux-window", isDirectory: true)
         try fixture.fileManager.createDirectory(at: tmuxRoot, withIntermediateDirectories: true)
         let fileURL = tmuxRoot.appendingPathComponent("README.md")
@@ -192,7 +192,7 @@ final class BridgeFileActionHandlerTests: XCTestCase {
     }
 
     func testFileReadRejectsHiddenHomePathOutsideRoot() throws {
-        let fixture = try makeFixture()
+        let fixture = try makeFixture(cleanupWith: self)
         let fileURL = fixture.homeURL.appendingPathComponent(".ssh/notes.md")
         try fixture.fileManager.createDirectory(at: fileURL.deletingLastPathComponent(),
                                                 withIntermediateDirectories: true)
@@ -217,7 +217,7 @@ final class BridgeFileActionHandlerTests: XCTestCase {
     }
 
     func testFileReadRejectsSensitiveHomePathOutsideRoot() throws {
-        let fixture = try makeFixture()
+        let fixture = try makeFixture(cleanupWith: self)
         let fileURL = fixture.homeURL.appendingPathComponent("Library/Keychains/notes.md")
         try fixture.fileManager.createDirectory(at: fileURL.deletingLastPathComponent(),
                                                 withIntermediateDirectories: true)
@@ -241,8 +241,51 @@ final class BridgeFileActionHandlerTests: XCTestCase {
         }
     }
 
+    // Policy-level lexical check with SYNTHETIC unresolved URLs (see the
+    // image policy counterpart): both policies must agree without relying
+    // on resolver casing canonicalization.
+    func testDocumentPolicyRejectsLibraryCasingVariantsWithoutResolverCanonicalization() {
+        let home = URL(fileURLWithPath: "/synthetic-home")
+        let policy = BridgeDocumentFilePolicy.poc
+
+        for variant in ["Library", "library", "LIBRARY", "LiBrArY"] {
+            let url = home.appendingPathComponent("\(variant)/Keychains/notes.md")
+            XCTAssertFalse(policy.allowsReadOnlyHomeScope(url, homeDirectoryURL: home), variant)
+        }
+        XCTAssertTrue(policy.allowsReadOnlyHomeScope(home.appendingPathComponent("GitHub/notes/a.md"),
+                                                     homeDirectoryURL: home))
+    }
+
+    func testFileReadRejectsSensitiveHomePathCasingVariants() throws {
+        let fixture = try makeFixture(cleanupWith: self)
+        let fileURL = fixture.homeURL.appendingPathComponent("Library/Keychains/notes.md")
+        try fixture.fileManager.createDirectory(at: fileURL.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try "secret".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let handler = BridgeFileActionHandler(rootResolver: fixture.rootResolver,
+                                              fileManager: fixture.fileManager,
+                                              homeDirectoryURL: fixture.homeURL)
+
+        // Case-insensitive APFS resolves ~/library to the real ~/Library;
+        // both policies must reject casing variants identically.
+        for requestPath in ["~/library/Keychains/notes.md", "~/LIBRARY/Keychains/notes.md"] {
+            XCTAssertThrowsError(try handler.handle(BridgeRequest(id: "request-1",
+                                                                  action: "file_read",
+                                                                  params: [
+                                                                    "workspace_id": .string("workspace-1"),
+                                                                    "panel_id": .string("panel-1"),
+                                                                    "path": .string(requestPath),
+                                                                  ])), requestPath) { error in
+                guard case BridgeInternalError.fileOutsideRoot = error else {
+                    return XCTFail("Unexpected error for \(requestPath): \(error)")
+                }
+            }
+        }
+    }
+
     func testFileWriteRejectsEditableDocumentOutsideRootUnderHome() throws {
-        let fixture = try makeFixture()
+        let fixture = try makeFixture(cleanupWith: self)
         let fileURL = fixture.homeURL.appendingPathComponent("GitHub/notes/outside.md")
         try fixture.fileManager.createDirectory(at: fileURL.deletingLastPathComponent(),
                                                 withIntermediateDirectories: true)
@@ -269,7 +312,7 @@ final class BridgeFileActionHandlerTests: XCTestCase {
     }
 
     func testFileReadRejectsNonAllowlistedExtension() throws {
-        let fixture = try makeFixture()
+        let fixture = try makeFixture(cleanupWith: self)
         let fileURL = fixture.rootURL.appendingPathComponent("script.swift")
         try "print(1)".write(to: fileURL, atomically: true, encoding: .utf8)
 
@@ -291,7 +334,7 @@ final class BridgeFileActionHandlerTests: XCTestCase {
     }
 
     func testFileReadRejectsNonUTF8ContentWithSpecificCode() throws {
-        let fixture = try makeFixture()
+        let fixture = try makeFixture(cleanupWith: self)
         let fileURL = fixture.rootURL.appendingPathComponent("README.md")
         let invalidUTF8 = Data([0xff, 0xfe, 0xfd])
         try invalidUTF8.write(to: fileURL)
@@ -314,7 +357,7 @@ final class BridgeFileActionHandlerTests: XCTestCase {
     }
 
     func testFileWriteRejectsNonWritableTargetWithSpecificCode() throws {
-        let fixture = try makeFixture()
+        let fixture = try makeFixture(cleanupWith: self)
         let fileURL = fixture.rootURL.appendingPathComponent("README.md")
         try "before".write(to: fileURL, atomically: true, encoding: .utf8)
         try fixture.fileManager.setAttributes([.posixPermissions: 0o444], ofItemAtPath: fileURL.path)
@@ -339,7 +382,7 @@ final class BridgeFileActionHandlerTests: XCTestCase {
     }
 
     func testFileReadRequestsConfirmationForFilesLargerThanWarningThreshold() throws {
-        let fixture = try makeFixture()
+        let fixture = try makeFixture(cleanupWith: self)
         let fileURL = fixture.rootURL.appendingPathComponent("README.md")
         try String(repeating: "a", count: 600 * 1024).write(to: fileURL, atomically: true, encoding: .utf8)
 
@@ -361,7 +404,7 @@ final class BridgeFileActionHandlerTests: XCTestCase {
     }
 
     func testFileReadAllowsLargeFilesAfterConfirmation() throws {
-        let fixture = try makeFixture()
+        let fixture = try makeFixture(cleanupWith: self)
         let fileURL = fixture.rootURL.appendingPathComponent("README.md")
         try String(repeating: "a", count: 600 * 1024).write(to: fileURL, atomically: true, encoding: .utf8)
 
@@ -381,7 +424,7 @@ final class BridgeFileActionHandlerTests: XCTestCase {
     }
 
     func testFileReadRejectsFilesLargerThanMaximumSize() throws {
-        let fixture = try makeFixture()
+        let fixture = try makeFixture(cleanupWith: self)
         let fileURL = fixture.rootURL.appendingPathComponent("README.md")
         try String(repeating: "a", count: 1100 * 1024).write(to: fileURL, atomically: true, encoding: .utf8)
 
@@ -412,7 +455,9 @@ private struct FileHandlerFixture {
     let rootResolver: MockPanelFileRootResolver
 }
 
-private func makeFixture() throws -> FileHandlerFixture {
+// Fixtures MUST remove their temp directory: leaked fixture trees once
+// accumulated gigabytes in $TMPDIR and filled the host disk.
+private func makeFixture(cleanupWith testCase: XCTestCase) throws -> FileHandlerFixture {
     let fileManager = FileManager.default
     let tempDirectory = fileManager.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -420,6 +465,9 @@ private func makeFixture() throws -> FileHandlerFixture {
     let homeURL = tempDirectory.appendingPathComponent("home", isDirectory: true)
     try fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
     try fileManager.createDirectory(at: homeURL, withIntermediateDirectories: true)
+    testCase.addTeardownBlock {
+        try? fileManager.removeItem(at: tempDirectory)
+    }
     return FileHandlerFixture(tempDirectory: tempDirectory,
                               rootURL: rootURL,
                               homeURL: homeURL,
