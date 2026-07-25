@@ -19,6 +19,16 @@ protocol AgentTranscriptSession: AnyObject {
     func update(record: AgentSessionRegistryRecord)
     func backfill(beforeSeq: Int, limit: Int) -> Bool
     func stop()
+    // Typed after-cursor seam (see AgentHistoryContract.swift). Defaults
+    // are legacy-neutral: hubOnly plan / unavailable step / always-valid
+    // epoch keep current fetch behavior for sessions that predate the
+    // contract.
+    func afterCursorPlan(afterSeq: Int,
+                         expectedEpoch: AgentHistoryEpoch) -> AgentAfterCursorPlan
+    func afterCursorStep(from anchor: AgentHistoryAnchor,
+                         afterSeq: Int,
+                         limit: Int) -> AgentAfterCursorStep
+    func validateHistoryEpoch(_ epoch: AgentHistoryEpoch) -> Bool
 }
 
 struct AgentSessionRegistryRecord: Codable, Sendable {
