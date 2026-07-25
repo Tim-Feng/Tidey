@@ -266,6 +266,10 @@ final class CodexTranscriptSessionTests: XCTestCase {
             return result.events.contains { $0.text == "old thread" }
         })
 
+        let oldSeq = try XCTUnwrap(
+            hub.fetch(workspaceID: "workspace", sessionID: "instance-session", limit: 10)
+                .events.first { $0.text == "old thread" }?.seq)
+
         session.update(record: makeRecord(transcriptPath: transcriptB.path,
                                           sessionID: "instance-session",
                                           threadID: threadB,
@@ -280,9 +284,14 @@ final class CodexTranscriptSessionTests: XCTestCase {
         let result = hub.fetch(workspaceID: "workspace",
                                sessionID: "instance-session",
                                limit: 10)
-        let oldEvent = try XCTUnwrap(result.events.first { $0.text == "old thread" })
+        // Reframed for the unified source-reset contract: an identity switch
+        // advances the Hub epoch and revokes the retired thread's events —
+        // while cursor authority survives, so the replacement thread still
+        // sequences strictly above the old one.
+        XCTAssertFalse(result.events.contains { $0.text == "old thread" },
+                       "the retired thread's events are revoked by the epoch reset")
         let newEvent = try XCTUnwrap(result.events.first { $0.text == "new live thread" })
-        XCTAssertGreaterThan(newEvent.seq, oldEvent.seq)
+        XCTAssertGreaterThan(newEvent.seq, oldSeq)
     }
 
     func testCodexBackfillOlderLinesKeepOriginalCursorPositions() throws {
@@ -1204,6 +1213,179 @@ final class CodexTranscriptSessionTests: XCTestCase {
         let all = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 8000).events
         XCTAssertFalse(all.contains { $0.text == "A-old" },
                        "the identity switch must revoke A's history immediately, got \(all.compactMap(\.text).prefix(5))")
+    }
+
+    // MARK: G4 B17 typed after-cursor walk + invalidation revoke
+
+    private func makeCacheSentinel(seq: Int) -> AgentEvent {
+        AgentEvent(eventID: "cache-sentinel",
+                   seq: seq,
+                   vendor: "codex",
+                   workspaceID: "workspace",
+                   sessionID: "session",
+                   timestamp: "2026-05-15T00:00:00Z",
+                   type: .assistantMessage,
+                   role: "assistant",
+                   text: "cache-sentinel",
+                   name: nil,
+                   input: nil,
+                   output: nil,
+                   toolCallID: nil,
+                   metadata: nil)
+    }
+
+    func testCodexAfterCursorPlanAndStepWalkBelowBootstrapFloor() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lineCount = transcriptBootstrapLineLimit + 20
+        let lines = (0..<lineCount).map {
+            makeCodexMessageLine(role: "assistant",
+                                 content: "walk-\($0)-" + String(repeating: "x", count: 160))
+        }
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                             fileManager: .default,
+                                             hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5)
+                .events.contains { $0.text?.hasPrefix("walk-\(lineCount - 1)-") == true }
+        })
+        hub.replaceHistoricalEvents(sessionID: "session", events: [makeCacheSentinel(seq: 1)])
+        let firstLiveSeq = try XCTUnwrap(
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 2000)
+                .events.filter { $0.text?.hasPrefix("walk-") == true }.map(\.seq).min())
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+        let eof = try Int(XCTUnwrap((FileManager.default.attributesOfItem(atPath: transcriptURL.path)[.size] as? NSNumber)?.intValue))
+
+        let plan = session.afterCursorPlan(afterSeq: 0, expectedEpoch: epoch)
+        guard case .scan(let startAnchor) = plan.mode else {
+            return XCTFail("a cursor below the bootstrap floor must SCAN, got \(plan.mode)")
+        }
+        XCTAssertEqual(startAnchor.position, TranscriptEventPosition(lineOffset: eof, ordinal: 0),
+                       "the scan anchor is the fixed validated EOF")
+        let secondPlan = session.afterCursorPlan(afterSeq: 0, expectedEpoch: epoch)
+        guard case .scan(let secondAnchor) = secondPlan.mode else {
+            return XCTFail("the second plan scans too, got \(secondPlan.mode)")
+        }
+        XCTAssertEqual(secondAnchor.position, startAnchor.position,
+                       "the starting anchor is stable across plans")
+
+        var anchor = startAnchor
+        var steps = [AgentAfterCursorStep]()
+        var events = [AgentEvent]()
+        walk: for _ in 0..<64 {
+            let step = session.afterCursorStep(from: anchor, afterSeq: 0, limit: 40)
+            steps.append(step)
+            events.append(contentsOf: step.events)
+            XCTAssertFalse(step.events.contains { $0.eventID == "cache-sentinel" },
+                           "the disjoint shared cache never enters a step payload")
+            switch step.outcome {
+            case .advanced(let next):
+                XCTAssertLessThan(next.position, anchor.position,
+                                  "every advanced anchor is strictly lower")
+                anchor = next
+            case .complete:
+                break walk
+            case .sourceChanged, .unavailable:
+                return XCTFail("the walk must stay available, got \(step.outcome)")
+            }
+        }
+        guard case .complete = steps.last?.outcome else {
+            return XCTFail("the walk completes at BOF, got \(String(describing: steps.last?.outcome))")
+        }
+        let ids = events.map(\.eventID)
+        XCTAssertEqual(Set(ids).count, ids.count, "no duplicate across step intervals")
+        XCTAssertEqual(events.filter { $0.text?.hasPrefix("walk-") == true }.count, lineCount,
+                       "the union covers every transcript event with no gap")
+        let cacheAfterWalk = hub.fetch(workspaceID: "workspace",
+                                       sessionID: "session",
+                                       limit: 2000,
+                                       beforeSeq: firstLiveSeq)
+        XCTAssertFalse(cacheAfterWalk.events.contains { $0.text?.hasPrefix("walk-") == true },
+                       "typed steps never write request pages into the shared historical cache")
+        XCTAssertTrue(cacheAfterWalk.events.contains { $0.eventID == "cache-sentinel" },
+                      "the pre-seeded cache sentinel is untouched")
+    }
+
+    func testAfterCursorStepInvalidationRevokesOldEpochAndResolverReattaches() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lines = (0..<8).map { makeCodexMessageLine(role: "assistant", content: "a-\($0)") }
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let hub = AgentEventHub()
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                             fileManager: .default,
+                                             hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10)
+                .events.contains { $0.text == "a-7" }
+        })
+        let oldEpoch = hub.currentHistoryEpoch(sessionID: "session")
+        let plan = session.afterCursorPlan(afterSeq: 0, expectedEpoch: oldEpoch)
+        let startAnchor: AgentHistoryAnchor
+        switch plan.mode {
+        case .rawCovered(let anchor), .scan(let anchor):
+            startAnchor = anchor
+        case .hubOnly, .unavailable:
+            return XCTFail("precondition: source A yields a typed anchor, got \(plan.mode)")
+        }
+        var replacementWriteError: Error?
+        session.afterCursorStepAfterRawReadForTesting = {
+            do {
+                try Data((self.makeCodexMessageLine(role: "assistant", content: "b-sentinel") + "\n").utf8)
+                    .write(to: transcriptURL, options: .atomic)
+            } catch {
+                replacementWriteError = error
+            }
+        }
+        defer { session.afterCursorStepAfterRawReadForTesting = nil }
+
+        let step = session.afterCursorStep(from: startAnchor, afterSeq: 0, limit: 5)
+
+        XCTAssertNil(replacementWriteError)
+        guard case .sourceChanged = step.outcome else {
+            return XCTFail("a replaced source is sourceChanged, got \(step.outcome)")
+        }
+        XCTAssertTrue(step.events.isEmpty)
+        XCTAssertEqual(hub.currentHistoryEpoch(sessionID: "session").generation,
+                       oldEpoch.generation + 1,
+                       "the Hub generation advances EXACTLY once")
+        XCTAssertFalse(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                        .events.contains { $0.text?.hasPrefix("a-") == true },
+                       "source A's live/historical events are revoked immediately")
+        XCTAssertFalse(session.validateHistoryEpoch(oldEpoch))
+
+        XCTAssertTrue(waitUntil(timeout: 4) {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                .events.contains { $0.text == "b-sentinel" }
+        }, "the resolver reattaches AFTER cleanup and bootstraps source B")
+        XCTAssertEqual(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                        .events.filter { $0.text == "b-sentinel" }.count, 1,
+                       "the replacement sentinel appears exactly once")
+        XCTAssertEqual(hub.currentHistoryEpoch(sessionID: "session").generation,
+                       oldEpoch.generation + 1,
+                       "no stale tailer callback bumps the generation a second time")
+
+        let freshEpoch = hub.currentHistoryEpoch(sessionID: "session")
+        let freshPlan = session.afterCursorPlan(afterSeq: 0, expectedEpoch: freshEpoch)
+        switch freshPlan.mode {
+        case .rawCovered(let anchor), .scan(let anchor):
+            XCTAssertEqual(anchor.epoch, freshEpoch,
+                           "a fresh plan uses the NEW Hub epoch, never the old anchor")
+        case .hubOnly, .unavailable:
+            XCTFail("the replacement source plans normally, got \(freshPlan.mode)")
+        }
     }
 
     private func makeRecord(transcriptPath: String,

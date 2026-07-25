@@ -68,6 +68,9 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         var positionsByEventID = [String: TranscriptEventPosition]()
     }
     private var afterCursorReplayCollector: AfterCursorReplayCollector?
+    // Advances on every source reset; stale tailer invalidation callbacks
+    // compare against it so one active source resets exactly once.
+    private var activeSourceGeneration = 0
     // Deterministic injection point: fires after a step's raw read has
     // completed (page collected) and before any final validation/return.
     var afterCursorStepAfterRawReadForTesting: (() -> Void)?
@@ -243,6 +246,212 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         }
     }
 
+    // Typed after-cursor plan: the Hub-issued epoch is the sole authority;
+    // classification uses the tailer's contiguous raw coverage plus the
+    // exact seq→position map, and every successful anchor is the FIXED
+    // validated replay ceiling.
+    func afterCursorPlan(afterSeq: Int,
+                         expectedEpoch: AgentHistoryEpoch) -> AgentAfterCursorPlan {
+        queue.sync {
+            func unavailableNow() -> AgentAfterCursorPlan {
+                AgentAfterCursorPlan(epoch: hub.currentHistoryEpoch(sessionID: record.sessionID),
+                                     mode: .unavailable)
+            }
+            let capturedEpoch = hub.currentHistoryEpoch(sessionID: record.sessionID)
+            guard didPublishStart, didPublishEnd == false,
+                  expectedEpoch == capturedEpoch else {
+                return unavailableNow()
+            }
+            if tailer == nil {
+                resolveTranscriptIfPossible()
+            }
+            guard let tailer else {
+                return unavailableNow()
+            }
+            do {
+                try tailer.validateCurrentSource()
+            } catch {
+                resetTranscriptSource(startResolverNow: true)
+                return unavailableNow()
+            }
+            guard let coverage = tailer.contiguousRawCoverage else {
+                return unavailableNow()
+            }
+            let currentEpoch = hub.currentHistoryEpoch(sessionID: record.sessionID)
+            guard currentEpoch == capturedEpoch else {
+                return unavailableNow()
+            }
+            let ceilingAnchor = AgentHistoryAnchor(
+                epoch: currentEpoch,
+                position: TranscriptEventPosition(lineOffset: coverage.replayUpperBoundOffset,
+                                                  ordinal: 0))
+            let rawCovered: Bool
+            if coverage.minimumRawOffset == 0 {
+                rawCovered = true
+            } else if let position = exactTranscriptPositionByPublicSequence[afterSeq],
+                      position.lineOffset >= coverage.minimumRawOffset,
+                      position.lineOffset < coverage.replayUpperBoundOffset {
+                rawCovered = true
+            } else if afterSeq >= maxObservedSeq {
+                rawCovered = true
+            } else {
+                rawCovered = false
+            }
+            return AgentAfterCursorPlan(epoch: currentEpoch,
+                                        mode: rawCovered
+                                            ? .rawCovered(replayFrom: ceilingAnchor)
+                                            : .scan(from: ceilingAnchor))
+        }
+    }
+
+    // One request-owned raw walk step: reads exactly one raw page below the
+    // anchor, replays it through the parser into the request-local
+    // collector, and RETURNS the products — the shared historical cache is
+    // never populated from here.
+    func afterCursorStep(from anchor: AgentHistoryAnchor,
+                         afterSeq: Int,
+                         limit: Int) -> AgentAfterCursorStep {
+        queue.sync {
+            var currentEpoch = hub.currentHistoryEpoch(sessionID: record.sessionID)
+            func out(_ outcome: AgentAfterCursorStep.Outcome,
+                     _ events: [AgentEvent] = []) -> AgentAfterCursorStep {
+                AgentAfterCursorStep(epoch: currentEpoch, outcome: outcome, events: events)
+            }
+            guard didPublishStart, didPublishEnd == false, limit > 0 else {
+                return out(.unavailable)
+            }
+            guard anchor.epoch == currentEpoch else {
+                return out(.sourceChanged)
+            }
+            let anchorPosition = anchor.position
+            guard anchorPosition.lineOffset > 0 || anchorPosition.ordinal > 0 else {
+                return out(.complete)
+            }
+            if tailer == nil {
+                resolveTranscriptIfPossible()
+            }
+            guard let tailer else {
+                return out(.unavailable)
+            }
+            do {
+                try tailer.validateCurrentSource()
+            } catch {
+                // Pre-replay: no replay state is active — resolve now.
+                resetTranscriptSource(startResolverNow: true)
+                currentEpoch = hub.currentHistoryEpoch(sessionID: record.sessionID)
+                return out(.sourceChanged)
+            }
+
+            let liveSnapshot = captureLiveParserState()
+            resetParserStateForHistoricalReplay()
+            afterCursorReplayCollector = AfterCursorReplayCollector()
+            isBackfillingHistory = true
+            var sourceWasInvalidated = false
+            var shouldStartResolverAfterCleanup = false
+            defer {
+                // Cleanup order: replay flags/collector first, live parser
+                // snapshot only for a still-valid source, and ONLY THEN the
+                // resolver — a synchronous replacement bootstrap must never
+                // land in the discarded collector.
+                isCollectingBackfillPage = false
+                collectedBackfillPage = []
+                afterCursorReplayCollector = nil
+                isBackfillingHistory = false
+                if sourceWasInvalidated == false {
+                    restoreLiveParserState(liveSnapshot)
+                }
+                if shouldStartResolverAfterCleanup {
+                    startResolver()
+                }
+            }
+
+            isCollectingBackfillPage = true
+            collectedBackfillPage = []
+            let readResult: JSONLBackfillResult
+            do {
+                readResult = try tailer.backfill(beforeOffset: anchorPosition.lineOffset,
+                                                 limit: limit,
+                                                 includeAnchorLine: anchorPosition.ordinal > 0)
+            } catch {
+                sourceWasInvalidated = true
+                shouldStartResolverAfterCleanup = true
+                resetTranscriptSource(startResolverNow: false)
+                currentEpoch = hub.currentHistoryEpoch(sessionID: record.sessionID)
+                return out(.sourceChanged)
+            }
+            isCollectingBackfillPage = false
+            let rawPage = collectedBackfillPage
+            collectedBackfillPage = []
+            afterCursorStepAfterRawReadForTesting?()
+            guard let frontier = readResult.rawFrontier else {
+                return out(.unavailable)
+            }
+            guard frontier.containsInvalidRecord == false else {
+                return out(.unavailable)
+            }
+            for entry in rawPage {
+                consume(line: entry.line, lineOffset: entry.offset)
+            }
+            do {
+                try tailer.validateCurrentSource()
+            } catch {
+                sourceWasInvalidated = true
+                shouldStartResolverAfterCleanup = true
+                resetTranscriptSource(startResolverNow: false)
+                currentEpoch = hub.currentHistoryEpoch(sessionID: record.sessionID)
+                return out(.sourceChanged)
+            }
+            // Final Hub epoch fence: any movement discards the whole page.
+            let epochAfterRead = hub.currentHistoryEpoch(sessionID: record.sessionID)
+            guard epochAfterRead == currentEpoch else {
+                currentEpoch = epochAfterRead
+                return out(.sourceChanged)
+            }
+
+            let pageFloorOffset = frontier.minimumRawOffset ?? anchorPosition.lineOffset
+            let pageFloor = TranscriptEventPosition(lineOffset: pageFloorOffset, ordinal: 0)
+            let collector = afterCursorReplayCollector ?? AfterCursorReplayCollector()
+            var seenEventIDs = Set<String>()
+            let events = collector.products
+                .filter { event in
+                    guard let position = collector.positionsByEventID[event.eventID] else {
+                        return false
+                    }
+                    return position >= pageFloor && position < anchorPosition
+                }
+                .filter { $0.seq > afterSeq }
+                .filter { seenEventIDs.insert($0.eventID).inserted }
+                .sorted { $0.seq < $1.seq }
+
+            if frontier.reachedSourceStart {
+                return out(.complete, events)
+            }
+            if let cursorPosition = exactTranscriptPositionByPublicSequence[afterSeq],
+               cursorPosition >= pageFloor,
+               cursorPosition < anchorPosition {
+                return out(.complete, events)
+            }
+            let nextPosition = TranscriptEventPosition(lineOffset: pageFloorOffset, ordinal: 0)
+            guard nextPosition < anchorPosition else {
+                return out(.unavailable)
+            }
+            return out(.advanced(AgentHistoryAnchor(epoch: currentEpoch, position: nextPosition)),
+                       events)
+        }
+    }
+
+    func validateHistoryEpoch(_ epoch: AgentHistoryEpoch) -> Bool {
+        queue.sync {
+            guard didPublishStart, didPublishEnd == false, let tailer else {
+                return false
+            }
+            guard (try? tailer.validateCurrentSource()) != nil else {
+                return false
+            }
+            return epoch == hub.currentHistoryEpoch(sessionID: record.sessionID)
+        }
+    }
+
     func backfill(beforeSeq: Int, limit: Int) -> Bool {
         queue.sync {
             if tailer == nil {
@@ -332,6 +541,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             return
         }
 
+        let generation = activeSourceGeneration
         let tailer = JSONLFileTailer(fileURL: transcriptURL,
                                      queue: queue,
                                      lineHandler: { [weak self] offset, line in
@@ -343,7 +553,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                          self.consume(line: line, lineOffset: offset)
                                      },
                                      invalidationHandler: { [weak self] in
-                                         self?.handleTailerInvalidation()
+                                         self?.handleTailerInvalidation(generation: generation)
                                      })
         do {
             isBootstrappingSidebarState = true
@@ -363,38 +573,56 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         }
     }
 
-    private func handleTailerInvalidation() {
-        transcriptURL = nil
-        tailer = nil
-        if resolverTimer == nil {
-            startResolver()
+    private func handleTailerInvalidation(generation: Int) {
+        // Stale callbacks from an already-retired tailer must not reset (or
+        // bump the Hub epoch) a second time.
+        guard generation == activeSourceGeneration else {
+            return
         }
+        resetTranscriptSource(startResolverNow: true)
     }
 
     private func switchTranscriptIdentity() {
-        historicalRawLines = []
-        collectedBackfillPage = []
-        historicalReplayProducts = []
-        lastRequestedBackfillAnchorSeq = nil
-        hub.replaceHistoricalEvents(sessionID: record.sessionID, events: [], anchorSeq: nil)
-        transcriptSequenceBase = maxObservedSeq
-        transcriptURL = nil
+        resetTranscriptSource(startResolverNow: true)
+    }
+
+    // The SINGLE source-reset path shared by live vnode invalidation,
+    // transcript identity switches, and after-cursor step source-fence
+    // failures: stop/drop the old tailer, clear every raw/parser/request/
+    // history state, advance the Hub epoch, and clear the transcript URL.
+    // The generation guard makes one active source reset exactly once.
+    private func resetTranscriptSource(startResolverNow: Bool) {
+        activeSourceGeneration &+= 1
         tailer?.stop()
         tailer = nil
         resolverTimer?.cancel()
         resolverTimer = nil
+        transcriptURL = nil
+        historicalRawLines = []
+        collectedBackfillPage = []
+        isCollectingBackfillPage = false
+        historicalReplayProducts = []
+        lastRequestedBackfillAnchorSeq = nil
+        afterCursorReplayCollector = nil
+        exactTranscriptPositionByPublicSequence = [:]
+        publicTranscriptSequenceByEventID = [:]
+        isBackfillingHistory = false
+        isBootstrappingSidebarState = false
         didSeeInteractiveEvent = false
         unsupportedVersions.removeAll()
         resolvedToolCallIDs.removeAll()
         publishedAssistantTextKeys.removeAll()
-        isBackfillingHistory = false
-        isBootstrappingSidebarState = false
         bootstrappedShellState = .prompt
         currentShellState = .prompt
         lastStartedTurnID = nil
         lastCompletedTurnID = nil
         lastAbortedTurnID = nil
-        startResolver()
+        transcriptSequenceBase = maxObservedSeq
+        hub.replaceHistoricalEvents(sessionID: record.sessionID, events: [], anchorSeq: nil)
+        hub.beginNewSourceEpoch(sessionID: record.sessionID)
+        if startResolverNow {
+            startResolver()
+        }
     }
 
     private func resolveTranscriptURL() -> URL? {
@@ -872,6 +1100,11 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                    metadata: [String: String]?) {
         let seq = fileBackedSequence(lineOffset: lineOffset, ordinal: ordinal)
         maxObservedSeq = max(maxObservedSeq, seq)
+        // Minimal B17 exact-position recording (unrebased seq only — the
+        // accepted/rebased mapping is B18's row): every file-backed product
+        // remembers its raw position for typed plan/step classification.
+        let position = TranscriptEventPosition(lineOffset: lineOffset, ordinal: ordinal)
+        exactTranscriptPositionByPublicSequence[seq] = position
         let resolvedMetadata = metadataWithClientRequestID(kind: kind, text: text, metadata: metadata)
         let event = AgentEvent(eventID: eventID,
                                seq: seq,
@@ -888,6 +1121,13 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                toolCallID: toolCallID,
                                metadata: baseMetadata(resolvedMetadata))
         if isBackfillingHistory {
+            // Request-local after-cursor collection wins over the legacy
+            // shared replay state while a step collector exists.
+            if afterCursorReplayCollector != nil {
+                afterCursorReplayCollector?.products.append(event)
+                afterCursorReplayCollector?.positionsByEventID[event.eventID] = position
+                return
+            }
             historicalReplayProducts.append(event)
             return
         }
@@ -921,6 +1161,13 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                toolCallID: toolCallID,
                                metadata: metadata)
         if isBackfillingHistory {
+            // Synthetics carry no raw position: they join the collector's
+            // products (and are excluded from interval slicing) rather than
+            // the legacy shared replay state while a step is active.
+            if afterCursorReplayCollector != nil {
+                afterCursorReplayCollector?.products.append(event)
+                return
+            }
             historicalReplayProducts.append(event)
             return
         }
