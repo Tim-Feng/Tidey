@@ -1676,6 +1676,11 @@ final class JSONLFileTailer {
     private(set) var reachedStartOfFile = false
     private(set) var openedSourceIdentity: JSONLFileSourceIdentity?
     var backfillAfterReadForTesting: (() -> Void)?
+    var afterInitialFrontierHookForTesting: (() -> Void)?
+    // Per-instance queue identity: the key object itself is unique to this
+    // tailer, so a queue shared across tailer generations can never observe
+    // a stale association (cleared again in deinit for hygiene).
+    private let queueIdentityKey = DispatchSpecificKey<UInt8>()
     private var validatedBoundaryOffset = 0
     private var validatedBoundary = Data()
 
@@ -1691,6 +1696,24 @@ final class JSONLFileTailer {
         self.lineHandler = lineHandler
         self.invalidUTF8Handler = invalidUTF8Handler
         self.invalidationHandler = invalidationHandler
+        queue.setSpecific(key: queueIdentityKey, value: 1)
+    }
+
+    deinit {
+        queue.setSpecific(key: queueIdentityKey, value: nil)
+    }
+
+    var isOnTailerQueue: Bool {
+        DispatchQueue.getSpecific(key: queueIdentityKey) != nil
+    }
+
+    // Reentrant-safe: running on the tailer queue executes the body in
+    // place; any other context hops onto the queue synchronously.
+    private func syncOnQueue<T>(_ body: () throws -> T) rethrows -> T {
+        if DispatchQueue.getSpecific(key: queueIdentityKey) != nil {
+            return try body()
+        }
+        return try queue.sync(execute: body)
     }
 
     func start() throws {
@@ -1732,6 +1755,7 @@ final class JSONLFileTailer {
             guard establishInitialValidatedFrontier() else {
                 throw JSONLFileTailerError.sourceInvalidated
             }
+            afterInitialFrontierHookForTesting?()
             pendingData.removeAll(keepingCapacity: false)
             pendingLineOffset = nil
 
