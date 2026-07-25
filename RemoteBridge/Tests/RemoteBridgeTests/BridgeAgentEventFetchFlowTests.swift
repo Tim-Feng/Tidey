@@ -128,6 +128,10 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
         XCTAssertTrue(output.fetchResult.events.isEmpty)
         XCTAssertFalse(output.didBackfill)
         XCTAssertEqual(backfillCalls, 0)
+        XCTAssertEqual(output.fetchResult.oldestSeq, Int.max,
+                       "a successful empty page anchors at the cursor")
+        XCTAssertEqual(output.fetchResult.newestSeq, Int.max)
+        XCTAssertFalse(output.fetchResult.hasMore)
     }
 
     func testConcurrentSameSessionHistoryRequestsReturnTheirOwnPages() {
@@ -334,6 +338,7 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
         }
         hub.replaceHistoricalEvents(sessionID: "session",
                                     events: (150...152).map { makeEvent(seq: $0, text: "cache-\($0)") })
+        var stepCalls = 0
 
         let output = runAfter(hub: hub,
                               limit: 10,
@@ -344,20 +349,218 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
                                       mode: .scan(from: self.anchor(hub, at: 10_000)))
                               },
                               step: { _, stepAnchor, _, _ in
-                                  AgentAfterCursorStep(
+                                  stepCalls += 1
+                                  if stepCalls == 1 {
+                                      return AgentAfterCursorStep(
+                                          epoch: stepAnchor.epoch,
+                                          outcome: .advanced(self.anchor(hub, at: 5_000)),
+                                          events: [self.makeEvent(seq: 103, text: "step-103")])
+                                  }
+                                  // The shared cache is REPLACED between the
+                                  // steps: request-owned events must survive.
+                                  hub.replaceHistoricalEvents(
+                                      sessionID: "session",
+                                      events: [self.makeEvent(seq: 160, text: "cache-replaced-160")])
+                                  return AgentAfterCursorStep(
                                       epoch: stepAnchor.epoch,
                                       outcome: .complete,
-                                      events: (101...103).map { self.makeEvent(seq: $0, text: "step-\($0)") })
+                                      events: (101...102).map { self.makeEvent(seq: $0, text: "step-\($0)") })
                               })
 
+        XCTAssertEqual(stepCalls, 2)
         XCTAssertTrue(output.didBackfill)
         let texts = output.fetchResult.events.compactMap(\.text)
         XCTAssertEqual(texts, ["step-101", "step-102", "step-103",
                                "live-200", "live-201", "live-202"],
-                       "step-returned history + lease window are the ONLY response authority")
+                       "earlier request-owned step events survive a mid-walk cache replacement")
         XCTAssertFalse(texts.contains { $0.hasPrefix("cache-") },
                        "shared historical cache events never enter the response")
         XCTAssertFalse(output.fetchResult.hasMore)
+    }
+
+    func testAfterCursorZeroLimitUsesEffectiveLimitOne() {
+        let hub = AgentEventHub()
+        for seq in 101...102 {
+            hub.publish(makeEvent(seq: seq, text: "live-\(seq)"))
+        }
+
+        let output = runAfter(hub: hub,
+                              limit: 0,
+                              afterSeq: 100,
+                              plan: { _, _, expected in
+                                  AgentAfterCursorPlan(epoch: expected, mode: .hubOnly)
+                              })
+
+        XCTAssertEqual(output.fetchResult.events.map(\.seq), [101],
+                       "limit 0 serves ONE event via effectiveLimit = max(limit, 1)")
+        XCTAssertTrue(output.fetchResult.hasMore)
+    }
+
+    func testEqualSequenceTieBreakKeepsLexicographicallyEarliest() {
+        let hub = AgentEventHub()
+        let letters = "abcdefghijklmnopqrst".map(String.init)
+
+        let output = runAfter(hub: hub,
+                              limit: 2,
+                              afterSeq: 100,
+                              plan: { _, _, expected in
+                                  AgentAfterCursorPlan(
+                                      epoch: expected,
+                                      mode: .scan(from: self.anchor(hub, at: 5_000)))
+                              },
+                              step: { _, stepAnchor, _, _ in
+                                  AgentAfterCursorStep(
+                                      epoch: stepAnchor.epoch,
+                                      outcome: .complete,
+                                      events: letters.map {
+                                          self.makeEvent(id: "tie-\($0)", seq: 150, text: "tie-\($0)")
+                                      })
+                              })
+
+        XCTAssertEqual(output.fetchResult.events.map(\.eventID), ["tie-a", "tie-b"],
+                       "equal-seq candidates at the capacity boundary must keep the lexicographically earliest (seq,eventID)")
+        XCTAssertTrue(output.fetchResult.hasMore,
+                      "unique candidates excluded by the cap set the truncation flag")
+    }
+
+    // Guard on the parent commit (deterministic non-tie displacement was
+    // already correct); it additionally pins the raw step page size.
+    func testDeeperStepsDisplaceNewerCandidatesAcrossCapacity() {
+        let hub = AgentEventHub()
+        var suppliedStepLimits = [Int]()
+        var stepCalls = 0
+
+        let output = runAfter(hub: hub,
+                              limit: 3,
+                              afterSeq: 100,
+                              plan: { _, _, expected in
+                                  AgentAfterCursorPlan(
+                                      epoch: expected,
+                                      mode: .scan(from: self.anchor(hub, at: 5_000)))
+                              },
+                              step: { _, stepAnchor, _, stepLimit in
+                                  suppliedStepLimits.append(stepLimit)
+                                  stepCalls += 1
+                                  if stepCalls == 1 {
+                                      return AgentAfterCursorStep(
+                                          epoch: stepAnchor.epoch,
+                                          outcome: .advanced(self.anchor(hub, at: 4_000)),
+                                          events: (200...204).map { self.makeEvent(seq: $0, text: "new-\($0)") })
+                                  }
+                                  return AgentAfterCursorStep(
+                                      epoch: stepAnchor.epoch,
+                                      outcome: .complete,
+                                      events: (101...105).map { self.makeEvent(seq: $0, text: "old-\($0)") })
+                              })
+
+        XCTAssertEqual(output.fetchResult.events.map(\.seq), [101, 102, 103],
+                       "deeper earliest events displace newer retained candidates")
+        XCTAssertTrue(output.fetchResult.hasMore)
+        XCTAssertTrue(suppliedStepLimits.allSatisfy { $0 >= max(4, transcriptBootstrapLineLimit) },
+                      "the raw step page size is at least max(effectiveLimit + 1, bootstrap), got \(suppliedStepLimits)")
+    }
+
+    // Guard: the lease's accepted/rebased copy wins a raw/lease eventID
+    // overlap (union insertion order already guaranteed this on the parent).
+    func testLeaseRebasedCopyWinsRawOverlap() {
+        let hub = AgentEventHub()
+        hub.publish(makeEvent(seq: 300, text: "live-300"))
+
+        let output = runAfter(hub: hub,
+                              limit: 10,
+                              afterSeq: 100,
+                              plan: { _, _, expected in
+                                  // The matching publish is REBASED above the
+                                  // high water and captured by the open lease.
+                                  hub.publish(self.makeEvent(id: "shared-1", seq: 150, text: "shared"))
+                                  return AgentAfterCursorPlan(
+                                      epoch: expected,
+                                      mode: .scan(from: self.anchor(hub, at: 5_000)))
+                              },
+                              step: { _, stepAnchor, _, _ in
+                                  AgentAfterCursorStep(
+                                      epoch: stepAnchor.epoch,
+                                      outcome: .complete,
+                                      events: [self.makeEvent(id: "shared-1", seq: 150, text: "shared")])
+                              })
+
+        let shared = output.fetchResult.events.filter { $0.eventID == "shared-1" }
+        XCTAssertEqual(shared.count, 1, "the overlapping eventID appears exactly once")
+        XCTAssertEqual(shared.first?.seq, 301,
+                       "the lease's accepted/rebased copy wins the overlap")
+    }
+
+    // Guards: finalization fences already present on the parent commit.
+    func testValidationAdvancingEpochFailsClosedDespiteReturningTrue() {
+        let hub = AgentEventHub()
+        for seq in 101...103 {
+            hub.publish(makeEvent(seq: seq, text: "live-\(seq)"))
+        }
+
+        let output = runAfter(hub: hub,
+                              limit: 5,
+                              afterSeq: 100,
+                              plan: { _, _, expected in
+                                  AgentAfterCursorPlan(
+                                      epoch: expected,
+                                      mode: .rawCovered(replayFrom: self.anchor(hub, at: 9_999)))
+                              },
+                              validate: { _, _ in
+                                  hub.beginNewSourceEpoch(sessionID: "session")
+                                  return true
+                              })
+
+        assertFailClosed(output, afterSeq: 100)
+    }
+
+    func testValidationPublishAfterLeaseFinishIsNotRetroactivelyIncluded() {
+        let hub = AgentEventHub()
+        for seq in 101...102 {
+            hub.publish(makeEvent(seq: seq, text: "live-\(seq)"))
+        }
+
+        let output = runAfter(hub: hub,
+                              limit: 5,
+                              afterSeq: 100,
+                              plan: { _, _, expected in
+                                  AgentAfterCursorPlan(
+                                      epoch: expected,
+                                      mode: .rawCovered(replayFrom: self.anchor(hub, at: 9_999)))
+                              },
+                              validate: { _, _ in
+                                  hub.publish(self.makeEvent(seq: 103, text: "late-103"))
+                                  return true
+                              })
+
+        XCTAssertEqual(output.fetchResult.events.map(\.seq), [101, 102],
+                       "a publish after lease finish is the NEXT page's business")
+    }
+
+    // Guard: the parent already rejected a non-descending anchor.
+    func testHigherNextAnchorFailsClosed() {
+        let hub = AgentEventHub()
+        hub.publish(makeEvent(seq: 300, text: "live-300"))
+        var stepCalls = 0
+
+        let output = runAfter(hub: hub,
+                              limit: 3,
+                              afterSeq: 100,
+                              plan: { _, _, expected in
+                                  AgentAfterCursorPlan(
+                                      epoch: expected,
+                                      mode: .scan(from: self.anchor(hub, at: 1_000)))
+                              },
+                              step: { _, stepAnchor, _, _ in
+                                  stepCalls += 1
+                                  return AgentAfterCursorStep(
+                                      epoch: stepAnchor.epoch,
+                                      outcome: .advanced(self.anchor(hub, at: 2_000)),
+                                      events: [self.makeEvent(seq: 150, text: "climbing-150")])
+                              })
+
+        XCTAssertEqual(stepCalls, 1, "a HIGHER next raw position is a stall — exactly one step call")
+        XCTAssertFalse(output.didBackfill)
+        assertFailClosed(output, afterSeq: 100)
     }
 
     func testTinyMaxBytesTrimsPayloadOnly() {
@@ -380,20 +583,24 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
                                       return AgentAfterCursorStep(
                                           epoch: stepAnchor.epoch,
                                           outcome: .advanced(self.anchor(hub, at: 5_000)),
-                                          events: [self.makeEvent(seq: 101, text: "raw-101"),
-                                                   self.makeEvent(seq: 102, text: "raw-102")])
+                                          events: [self.makeEvent(seq: 102, text: "raw-102"),
+                                                   self.makeEvent(seq: 103, text: "raw-103")])
                                   }
+                                  // The DEEPER, FINAL step provides the
+                                  // earliest event: only a budget applied
+                                  // after the complete union can retain it.
                                   return AgentAfterCursorStep(
                                       epoch: stepAnchor.epoch,
                                       outcome: .complete,
-                                      events: [self.makeEvent(seq: 103, text: "raw-103")])
+                                      events: [self.makeEvent(seq: 101, text: "raw-101")])
                               })
 
         XCTAssertEqual(stepCalls, 2,
                        "coverage walks to completion regardless of the byte budget")
-        XCTAssertFalse(output.fetchResult.events.isEmpty)
-        XCTAssertLessThan(output.fetchResult.events.count, 4,
-                          "the byte budget trims only the complete union")
+        XCTAssertEqual(output.fetchResult.events.map(\.eventID), ["event-101"],
+                       "the earliest event from the deeper final step is the one retained")
+        XCTAssertEqual(output.fetchResult.events.first?.metadata?["tidey_truncated"], "true",
+                       "an event over the byte budget keeps its placeholder metadata")
         XCTAssertTrue(output.fetchResult.hasMore, "the byte trim is reflected in hasMore")
     }
 
@@ -451,6 +658,8 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
                               })
 
         XCTAssertEqual(stepCalls, 2)
+        XCTAssertTrue(output.didBackfill,
+                      "one ACCEPTED advanced step counts as backfill even when coverage later fails")
         assertFailClosed(output, afterSeq: 100)
     }
 
@@ -610,8 +819,10 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
         for seq in 200...202 {
             hub.publish(makeEvent(seq: seq, text: "live-\(seq)"))
         }
+        // The cache sits ABOVE the cursor: only the union authority — never
+        // shared history — keeps it out of the payload.
         hub.replaceHistoricalEvents(sessionID: "session",
-                                    events: (10...20).map { makeEvent(seq: $0, text: "deep-\($0)") })
+                                    events: (155...165).map { makeEvent(seq: $0, text: "deep-\($0)") })
         var stepAnchors = [Int]()
         var stepCalls = 0
 
@@ -644,6 +855,25 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
         XCTAssertEqual(texts, ["raw-140", "raw-150", "live-200", "live-201", "live-202"])
         XCTAssertFalse(texts.contains { $0.hasPrefix("deep-") },
                        "shared historical cache neither redirects the walk nor enters the payload")
+    }
+
+    private func makeEvent(id: String,
+                           seq: Int,
+                           text: String) -> AgentEvent {
+        AgentEvent(eventID: id,
+                   seq: seq,
+                   vendor: "codex",
+                   workspaceID: "workspace",
+                   sessionID: "session",
+                   timestamp: "2026-07-22T12:00:00Z",
+                   type: .assistantMessage,
+                   role: "assistant",
+                   text: text,
+                   name: nil,
+                   input: nil,
+                   output: nil,
+                   toolCallID: nil,
+                   metadata: nil)
     }
 
     private func makeEvent(seq: Int,

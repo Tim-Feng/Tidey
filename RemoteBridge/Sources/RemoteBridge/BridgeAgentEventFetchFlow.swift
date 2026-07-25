@@ -10,9 +10,10 @@ enum BridgeAgentEventFetchFlow {
     }
 
     // Typed after-cursor session seams (see AgentHistoryContract.swift),
-    // threaded from the registry/server. The legacy-neutral default keeps
-    // every existing call site and the current after path unchanged; the
-    // lease/walk decision table lands as separate behavioral rows.
+    // threaded from the registry/server. Since G3a the default `.hubOnly`
+    // plan means BOUNDED LEASE BEST-EFFORT: the response is the request's
+    // live-lease window — never the legacy after backfill, never shared
+    // history.
     struct AfterCursorSeams {
         let plan: (_ sessionID: String, _ afterSeq: Int, _ expectedEpoch: AgentHistoryEpoch) -> AgentAfterCursorPlan
         let step: (_ sessionID: String, _ anchor: AgentHistoryAnchor, _ afterSeq: Int, _ limit: Int) -> AgentAfterCursorStep
@@ -133,7 +134,10 @@ enum BridgeAgentEventFetchFlow {
                                                           hasMore: true),
                    didBackfill: didBackfill)
         }
-        let (rawCapacity, capacityOverflowed) = limit.addingReportingOverflow(1)
+        // The Hub path always served at least one event; the typed path
+        // keeps that contract for capacity, raw page size, and count trim.
+        let effectiveLimit = max(limit, 1)
+        let (rawCapacity, capacityOverflowed) = effectiveLimit.addingReportingOverflow(1)
         let boundedCapacity = capacityOverflowed ? Int.max : rawCapacity
 
         // Lease FIRST: a publish+evict between plan and lease could hide an
@@ -181,19 +185,31 @@ enum BridgeAgentEventFetchFlow {
         var didBackfill = false
         var rawByEventID = [String: AgentEvent]()
         var rawTruncated = false
+        // Per-candidate bounded retention: the dictionary NEVER exceeds the
+        // capacity, the eviction key is deterministically the greatest
+        // (seq, eventID) — so equal-seq boundaries keep the lexicographically
+        // earliest — and deeper/older steps displace newer candidates. Any
+        // unique candidate the cap excludes records the truncation.
         func retainBounded(_ events: [AgentEvent]) {
             for event in events where event.seq > afterSeq {
-                rawByEventID[event.eventID] = event
-            }
-            if rawByEventID.count > boundedCapacity {
-                // The response window is the EARLIEST events above the
-                // cursor; deeper (older) steps may displace newer retained
-                // candidates. The trim is recorded for hasMore.
+                if rawByEventID[event.eventID] != nil {
+                    rawByEventID[event.eventID] = event
+                    continue
+                }
+                if rawByEventID.count < boundedCapacity {
+                    rawByEventID[event.eventID] = event
+                    continue
+                }
                 rawTruncated = true
-                let kept = rawByEventID.values
-                    .sorted { $0.seq < $1.seq }
-                    .prefix(boundedCapacity)
-                rawByEventID = Dictionary(uniqueKeysWithValues: kept.map { ($0.eventID, $0) })
+                guard let worst = rawByEventID.max(by: {
+                    ($0.value.seq, $0.key) < ($1.value.seq, $1.key)
+                }) else {
+                    continue
+                }
+                if (event.seq, event.eventID) < (worst.value.seq, worst.key) {
+                    rawByEventID.removeValue(forKey: worst.key)
+                    rawByEventID[event.eventID] = event
+                }
             }
         }
 
@@ -241,19 +257,25 @@ enum BridgeAgentEventFetchFlow {
             return failClosed(didBackfill: didBackfill)
         }
 
-        // Union authority: raw accumulator + lease snapshot only. The
-        // lease's accepted/rebased copy wins any overlap.
-        var unionByEventID = rawByEventID
-        for event in snapshot.events {
-            unionByEventID[event.eventID] = event
-        }
-        let projected = eventHub.applyingCurrentSessionBindings(Array(unionByEventID.values))
-        var page = projected
-            .filter { $0.seq > afterSeq }
+        // Union authority (agreed order): concatenate request-owned raw
+        // events THEN lease events → current Hub binding (atomic) → this
+        // gate's filters (seq > afterSeq; B13 adds the requested
+        // workspace/session filter) → eventID dedupe with the lease's later
+        // accepted/rebased copy winning → stable (seq, eventID) sort →
+        // count → bytes.
+        let combined = rawByEventID.values
             .sorted { ($0.seq, $0.eventID) < ($1.seq, $1.eventID) }
-        let droppedByCount = page.count > limit
+            + snapshot.events
+        let projected = eventHub.applyingCurrentSessionBindings(combined)
+        var dedupedByEventID = [String: AgentEvent]()
+        for event in projected where event.seq > afterSeq {
+            dedupedByEventID[event.eventID] = event
+        }
+        var page = dedupedByEventID.values
+            .sorted { ($0.seq, $0.eventID) < ($1.seq, $1.eventID) }
+        let droppedByCount = page.count > effectiveLimit
         if droppedByCount {
-            page = Array(page.prefix(limit))
+            page = Array(page.prefix(effectiveLimit))
         }
         let budgeted = eventHub.budgetLimitedPage(page,
                                                   maxBytes: maxBytes,

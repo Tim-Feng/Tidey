@@ -58,8 +58,10 @@ struct AgentAfterCursorStep: Sendable {
 
 // Session seam: the session is the sole authority for public sequence ↔
 // raw transcript position mapping. Sessions without typed after-cursor
-// support inherit legacy-neutral defaults (hubOnly plan, unavailable step,
-// epoch always valid) that preserve current fetch behavior exactly.
+// support inherit the defaults below (hubOnly plan, unavailable step,
+// epoch always valid); since G3a a hubOnly plan is served as the bounded
+// live-lease best-effort window — the legacy after backfill is never
+// consulted.
 extension AgentTranscriptSession {
     func afterCursorPlan(afterSeq: Int,
                          expectedEpoch: AgentHistoryEpoch) -> AgentAfterCursorPlan {
