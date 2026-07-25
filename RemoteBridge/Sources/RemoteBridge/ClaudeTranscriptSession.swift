@@ -1684,12 +1684,11 @@ enum JSONLFileTailerError: Error {
     case sourceInvalidated
 }
 
-// Typed raw-page evidence shape for one tailer backfill read. The PRODUCER
-// is not wired yet — this structural row only establishes the return shape
-// (rawFrontier is always nil today). The behavioral row that populates it
-// must build the frontier strictly after the post-read source fence and
-// from the reader's ACTUAL scan boundary (the reader skips blank lines, so
-// first-record offsets cannot prove the scanned floor or byte 0).
+// Typed raw-page evidence from one tailer backfill read. Assembled strictly
+// after the post-read source fence succeeds, from the reader's ACTUAL scan
+// boundary: covered blank lines count, limit-dropped records do not, and
+// invalid-UTF8 records are raw evidence. This is the ONLY raw scan
+// authority — the tailer keeps no record-based floor/source-start state.
 struct JSONLRawFrontier: Equatable, Sendable {
     let readAnyRecord: Bool
     let minimumRawOffset: Int?
@@ -1729,8 +1728,6 @@ final class JSONLFileTailer {
     private var pendingData = Data()
     private var nextReadOffset = 0
     private var pendingLineOffset: Int?
-    private(set) var earliestLoadedOffset: Int?
-    private(set) var reachedStartOfFile = false
     private(set) var openedSourceIdentity: JSONLFileSourceIdentity?
     var backfillAfterReadForTesting: (() -> Void)?
     var afterInitialFrontierHookForTesting: (() -> Void)?
@@ -1844,9 +1841,6 @@ final class JSONLFileTailer {
                 throw JSONLFileTailerError.sourceInvalidated
             }
             deliver(bootstrappedRecords + appendedRecords)
-            earliestLoadedOffset = bootstrappedRecords.first?.offset
-                ?? appendedRecords.first?.offset
-            reachedStartOfFile = (earliestLoadedOffset ?? 0) == 0
         } catch {
             stop()
             throw error
@@ -1892,16 +1886,10 @@ final class JSONLFileTailer {
             },
             reachedSourceStart: page.reachedSourceStart)
         guard !records.isEmpty else {
-            if beforeOffset <= (earliestLoadedOffset ?? beforeOffset) {
-                reachedStartOfFile = true
-            }
             return JSONLBackfillResult(didRead: false, rawFrontier: rawFrontier)
         }
 
         deliver(records)
-        earliestLoadedOffset = min(earliestLoadedOffset ?? Int.max,
-                                   records.first?.offset ?? Int.max)
-        reachedStartOfFile = (records.first?.offset ?? 0) == 0
         return JSONLBackfillResult(didRead: true, rawFrontier: rawFrontier)
     }
 

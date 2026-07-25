@@ -1037,9 +1037,10 @@ final class AgentEventHubTests: XCTestCase {
                           metadata: metadata)
     }
 
-    // Structural seam assertions only: publish-into-lease accumulation and
-    // eviction-watermark population are deliberately NOT covered here — they
-    // are the reserved RED behavioral rows of the next phase.
+    // Lease seam lifecycle: begin-copy window, truncation, consume-once,
+    // idempotent cancel, and epoch-reset invalidation. Eviction-watermark
+    // and publish-accumulation behavior are covered by their own tests
+    // below.
     func testAfterCursorLiveLeaseSeamCopiesRequestStartWindowAndConsumesOnce() throws {
         let hub = AgentEventHub()
         for seq in 1...5 {
