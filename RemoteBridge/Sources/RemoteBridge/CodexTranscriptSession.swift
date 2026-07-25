@@ -74,6 +74,26 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     // Deterministic injection point: fires after a step's raw read has
     // completed (page collected) and before any final validation/return.
     var afterCursorStepAfterRawReadForTesting: (() -> Void)?
+    // Forwarded to the active tailer: fires after the backfill's initial
+    // source fence and before the reader opens the file (realistic
+    // path-read I/O fault point).
+    var tailerBackfillBeforeReadForTesting: (() -> Void)? {
+        get { queue.sync { tailer?.backfillBeforeReadForTesting } }
+        set { queue.sync { tailer?.backfillBeforeReadForTesting = newValue } }
+    }
+    // Fires inside validateHistoryEpoch before the source validation.
+    var validateHistoryEpochBeforeSourceValidationForTesting: (() -> Void)?
+    // Semantic trust over the CURRENT source (S10 state; enforced by the
+    // closure-B row): poisoned by invalid UTF-8 / malformed JSON /
+    // unsupported schema, re-established only when a replacement source
+    // attaches.
+    private var sourceSemanticTrust = true
+    // The raw floor of the CURRENT source's initial bootstrap/live
+    // publication window (S10 state; enforced by the closure-C row).
+    // Request-owned steps and legacy scans must NEVER lower it — it is the
+    // retained-coverage eligibility floor, distinct from the tailer's scan
+    // floor.
+    private var livePublishedRawFloor: Int?
     // Exact public seq → raw position (populated by the typed walk); the
     // eventID → accepted/rebased public sequence mapping is B18's row and
     // stays empty until then.
@@ -445,6 +465,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             guard didPublishStart, didPublishEnd == false, let tailer else {
                 return false
             }
+            validateHistoryEpochBeforeSourceValidationForTesting?()
             guard (try? tailer.validateCurrentSource()) != nil else {
                 return false
             }

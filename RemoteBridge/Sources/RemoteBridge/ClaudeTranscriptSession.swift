@@ -1755,6 +1755,9 @@ final class JSONLFileTailer {
     // nothing populates it yet — maintenance is the next behavioral row.
     private(set) var contiguousRawCoverage: JSONLContiguousRawCoverage?
     var backfillAfterReadForTesting: (() -> Void)?
+    // Fires after backfill's INITIAL source fence has passed and before the
+    // reader opens the file — the realistic point for path-read I/O faults.
+    var backfillBeforeReadForTesting: (() -> Void)?
     var afterInitialFrontierHookForTesting: (() -> Void)?
     // Per-instance queue identity: the key object itself is unique to this
     // tailer, so a queue shared across tailer generations can never observe
@@ -1895,6 +1898,7 @@ final class JSONLFileTailer {
         // than the deepest page another client already read; neither the
         // earliest observed offset nor a sticky start-of-file marker may
         // redirect or block that request.
+        backfillBeforeReadForTesting?()
         let page = try JSONLFileReader.readBeforePage(
             fileURL: fileURL,
             beforeOffset: beforeOffset,
@@ -2970,6 +2974,12 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     private var collectedHistoricalBackfillPage = [(offset: Int, line: String)]()
     private var historicalBackfillAnchorSeq: Int?
     private var exactTranscriptPositionByPublicSequence = [Int: TranscriptEventPosition]()
+    // The raw floor of the CURRENT source's initial bootstrap/live
+    // publication window (S10 state; enforced by the closure-C row).
+    // Request-owned steps and legacy scans must NEVER lower it — it is the
+    // retained-coverage eligibility floor, distinct from the tailer's scan
+    // floor.
+    private var livePublishedRawFloor: Int?
     // Semantic trust over the CURRENT source epoch: EARNED, never assumed —
     // false until a successful semantic index under a validated source
     // fence, false again after any unknown/malformed/unsupported record,
