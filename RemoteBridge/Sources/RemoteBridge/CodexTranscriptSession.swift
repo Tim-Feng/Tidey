@@ -690,6 +690,14 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                 return result(didBackfill: false, frontier: nil)
             }
             beforeCursorBackfillBeforeSourceValidationForTesting?()
+            do {
+                try tailer.validateCurrentSource()
+            } catch JSONLFileTailerError.sourceInvalidated {
+                resetTranscriptSource(startResolverNow: true)
+                return result(didBackfill: false, frontier: nil)
+            } catch {
+                return result(didBackfill: false, frontier: nil)
+            }
             // The accepted-sequence authority: cursor inversion goes
             // through the exact map first (a Hub-rebased public cursor has
             // no meaningful raw arithmetic), with the same base fallback
@@ -709,11 +717,20 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             while true {
                 isCollectingBackfillPage = true
                 collectedBackfillPage = []
-                let readResult = try? tailer.backfill(beforeOffset: pageAnchorOffset,
-                                                      limit: effectiveLimit)
+                let readResult: JSONLBackfillResult
+                do {
+                    readResult = try tailer.backfill(beforeOffset: pageAnchorOffset,
+                                                     limit: effectiveLimit)
+                } catch JSONLFileTailerError.sourceInvalidated {
+                    isCollectingBackfillPage = false
+                    resetTranscriptSource(startResolverNow: true)
+                    return result(didBackfill: false, frontier: nil)
+                } catch {
+                    isCollectingBackfillPage = false
+                    return result(didBackfill: false, frontier: nil)
+                }
                 isCollectingBackfillPage = false
-                guard let readResult,
-                      let frontier = readResult.rawFrontier else {
+                guard let frontier = readResult.rawFrontier else {
                     return result(didBackfill: loadedAny,
                                   frontier: nil)
                 }

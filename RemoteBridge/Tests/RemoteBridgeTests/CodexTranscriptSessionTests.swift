@@ -1,3 +1,4 @@
+import Darwin
 import XCTest
 @testable import RemoteBridge
 
@@ -3642,6 +3643,46 @@ final class CodexTranscriptSessionTests: XCTestCase {
         XCTAssertEqual(hub.currentHistoryEpoch(sessionID: "session").generation,
                        oldEpoch.generation + 1,
                        "no stale tailer callback bumps the generation a second time")
+    }
+
+    func testCodexBeforeCursorDoesNotClaimBOFAfterOffsetZeroSourceReplacement() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let replacementURL = directory.appendingPathComponent("replacement.jsonl", isDirectory: false)
+        try (makeCodexMessageLine(role: "assistant", content: "old-offset-zero") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+        try (makeCodexMessageLine(role: "assistant", content: "replacement") + "\n")
+            .write(to: replacementURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                             fileManager: .default,
+                                             hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10)
+                .events.contains { $0.text == "old-offset-zero" }
+        })
+        let acceptedCursor = try XCTUnwrap(
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10)
+                .events.first { $0.text == "old-offset-zero" }?.seq
+        )
+
+        var replacementResult: Int32?
+        session.beforeCursorBackfillBeforeSourceValidationForTesting = {
+            replacementResult = Darwin.rename(replacementURL.path, transcriptURL.path)
+        }
+
+        let result = session.beforeCursorBackfill(beforeSeq: acceptedCursor, limit: 500)
+
+        XCTAssertEqual(replacementResult, 0)
+        XCTAssertFalse(result.didBackfill)
+        XCTAssertEqual(result.rawContinuation, .unavailable,
+                       "a stale offset-zero cursor must not claim source-proven BOF")
     }
 
     func testAfterCursorReadErrorDoesNotRevokeValidSource() throws {
