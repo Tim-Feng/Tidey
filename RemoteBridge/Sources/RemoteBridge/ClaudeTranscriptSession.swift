@@ -2963,6 +2963,9 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     // Deterministic injection point: fires after the step's raw read has
     // completed (page collected) and before any final validation/return.
     var afterCursorStepAfterRawReadForTesting: (() -> Void)?
+    // Same point for the legacy before-cursor path; it fires for visible and
+    // blank-only raw pages before continuation / BOF authority is classified.
+    var beforeCursorBackfillBeforeFinalSourceValidationForTesting: (() -> Void)?
     var hasActiveAskLifecyclesForTesting: Bool {
         queue.sync { activeAskUserQuestionLifecyclesByToolCallID.isEmpty == false }
     }
@@ -3629,6 +3632,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 isCollectingHistoricalBackfillPage = false
                 let rawPage = collectedHistoricalBackfillPage
                 collectedHistoricalBackfillPage = []
+                beforeCursorBackfillBeforeFinalSourceValidationForTesting?()
                 guard let frontier = readResult.rawFrontier else {
                     failHistoricalClosureCoverage(beforeSeq: beforeSeq)
                     return result(didBackfill: loadedAnyRawPage, frontier: nil)
