@@ -146,6 +146,9 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     // Fires after one before-cursor raw page has been read and any replay
     // products collected, but before final source authority is classified.
     var beforeCursorBackfillBeforeFinalSourceValidationForTesting: (() -> Void)?
+    // Fires after local source state is retired but immediately before the
+    // Hub atomically advances the source epoch and revokes its products.
+    var resetTranscriptSourceBeforeHubEpochAdvanceForTesting: (() -> Void)?
     // Fires inside afterCursorPlan before the source validation.
     var afterCursorPlanBeforeSourceValidationForTesting: (() -> Void)?
     // Fires during attach after the bootstrap window is collected and
@@ -1086,6 +1089,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         sourceSemanticTrust = false
         livePublishedRawFloor = nil
         hub.replaceHistoricalEvents(sessionID: record.sessionID, events: [], anchorSeq: nil)
+        resetTranscriptSourceBeforeHubEpochAdvanceForTesting?()
         hub.beginNewSourceEpoch(sessionID: record.sessionID)
         if startResolverNow {
             startResolver()
