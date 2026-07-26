@@ -716,15 +716,23 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             guard let beforePosition = transcriptEventPositionInCurrentSource(for: beforeSeq) else {
                 return result(didBackfill: false, frontier: nil)
             }
-            let beforeOffset = beforePosition.lineOffset
-            guard beforeOffset > 0 else {
+            let hasExactRawPosition =
+                exactTranscriptPositionByPublicSequence[beforeSeq] != nil
+            // A positive non-exact sequence is a conservative virtual
+            // cursor. It may sit after a raw product on the same record,
+            // including offset zero, so only an exact ordinal-zero raw
+            // cursor can prove there is no earlier product on that line.
+            let shouldIncludeAnchorLine =
+                hasExactRawPosition == false || beforePosition.ordinal > 0
+            guard beforePosition.lineOffset > 0 || shouldIncludeAnchorLine else {
                 return AgentBeforeCursorBackfillResult(didBackfill: false,
                                                        rawContinuation: .end,
                                                        authorityEpoch: authorityEpoch)
             }
             let effectiveLimit = min(limit, historicalReplayWindowCapacity)
             lastRequestedBackfillAnchorSeq = beforeSeq
-            var pageAnchorOffset = beforeOffset
+            var pageAnchorOffset = beforePosition.lineOffset
+            var includeAnchorLine = shouldIncludeAnchorLine
             var loadedAny = false
             while true {
                 isCollectingBackfillPage = true
@@ -732,7 +740,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                 let readResult: JSONLBackfillResult
                 do {
                     readResult = try tailer.backfill(beforeOffset: pageAnchorOffset,
-                                                     limit: effectiveLimit)
+                                                     limit: effectiveLimit,
+                                                     includeAnchorLine: includeAnchorLine)
                 } catch JSONLFileTailerError.sourceInvalidated {
                     isCollectingBackfillPage = false
                     resetTranscriptSource(startResolverNow: true)
@@ -798,11 +807,13 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                   authorityEpoch: authorityEpoch)
                 }
                 guard let nextAnchorOffset = frontier.minimumRawOffset,
-                      nextAnchorOffset < pageAnchorOffset else {
+                      nextAnchorOffset < pageAnchorOffset
+                        || includeAnchorLine && nextAnchorOffset == pageAnchorOffset else {
                     return result(didBackfill: loadedAny,
                                   frontier: nil)
                 }
                 pageAnchorOffset = nextAnchorOffset
+                includeAnchorLine = false
             }
         }
     }

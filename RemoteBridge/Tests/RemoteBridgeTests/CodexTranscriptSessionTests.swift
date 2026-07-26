@@ -1021,6 +1021,175 @@ final class CodexTranscriptSessionTests: XCTestCase {
         XCTAssertEqual(union.count, expectedUnion.count, "no duplicate in B's union")
     }
 
+    func testCodexBeforeCursorWireLoopRetreatsAcrossSyntheticMigrationMarker() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout-session.jsonl", isDirectory: false)
+        let fileRowCount = transcriptBootstrapLineLimit + 20
+        let lines = (0..<fileRowCount).map {
+            makeCodexMessageLine(role: "assistant", content: "file-\($0)")
+        }
+        try (lines.joined(separator: "\n") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub(maxBufferedEvents: 2)
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                             fileManager: .default,
+                                             hub: hub,
+                                             historicalReplayWindowCapacity: 1)
+        session.start()
+        defer { session.stop() }
+        let lastFileText = "file-\(fileRowCount - 1)"
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5)
+                .events.contains { $0.text == lastFileText }
+        })
+
+        let migratedWorkspaceID = "workspace-migrated"
+        let migratedRecord = AgentSessionRegistryRecord(
+            version: 1,
+            vendor: "codex",
+            workspaceID: migratedWorkspaceID,
+            sessionID: "session",
+            panelID: "panel-migrated",
+            pid: Int32(ProcessInfo.processInfo.processIdentifier),
+            cwd: "/tmp",
+            createdAt: "2026-05-15T00:00:00Z",
+            transcriptPath: transcriptURL.path
+        )
+        session.update(record: migratedRecord)
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: migratedWorkspaceID, sessionID: "session", limit: 5)
+                .events.contains {
+                    $0.type == .sessionStarted
+                        && $0.seq > transcriptSessionStartedSequence
+                }
+        }, "same-source workspace migration publishes a positive-sequence synthetic marker")
+
+        let handle = try FileHandle(forWritingTo: transcriptURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(
+            (makeCodexMessageLine(role: "assistant", content: "cursor") + "\n").utf8
+        ))
+        try handle.close()
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: migratedWorkspaceID, sessionID: "session", limit: 5)
+                .events.contains { $0.text == "cursor" }
+        })
+        let cursorSeq = try XCTUnwrap(
+            hub.fetch(workspaceID: migratedWorkspaceID, sessionID: "session", limit: 5)
+                .events
+                .first { $0.text == "cursor" }?
+                .seq
+        )
+
+        func wirePage(beforeSeq: Int) -> BridgeAgentEventFetchFlow.Output {
+            BridgeAgentEventFetchFlow.run(
+                eventHub: hub,
+                workspaceID: migratedWorkspaceID,
+                sessionID: "session",
+                limit: 1,
+                beforeSeq: beforeSeq,
+                afterSeq: nil,
+                beforeCursorBackfill: { _, beforeSeq, limit in
+                    session.beforeCursorBackfill(beforeSeq: beforeSeq, limit: limit)
+                }
+            )
+        }
+
+        let first = wirePage(beforeSeq: cursorSeq)
+        XCTAssertFalse(first.beforeCursorUnavailable)
+        XCTAssertTrue(first.fetchResult.hasMore,
+                      "the bounded raw page still has older source bytes")
+        XCTAssertEqual(first.fetchResult.events.count, 1)
+        let migrationMarker = try XCTUnwrap(first.fetchResult.events.first)
+        XCTAssertEqual(migrationMarker.type, .sessionStarted)
+        XCTAssertGreaterThan(migrationMarker.seq, transcriptSessionStartedSequence)
+        XCTAssertEqual(first.fetchResult.oldestSeq, migrationMarker.seq,
+                       "the count-limited page exposes the positive synthetic as a virtual cursor")
+        let second = wirePage(beforeSeq: first.fetchResult.oldestSeq)
+        XCTAssertFalse(second.beforeCursorUnavailable)
+        XCTAssertLessThan(second.fetchResult.oldestSeq, migrationMarker.seq)
+        XCTAssertTrue(second.fetchResult.events.contains { $0.text == lastFileText },
+                      "the virtual cursor must conservatively replay its adjacent raw line")
+    }
+
+    func testCodexBeforeCursorVirtualCursorAtOffsetZeroReplaysAnchorLine() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout-session.jsonl", isDirectory: false)
+        try (makeCodexMessageLine(role: "assistant", content: "raw-zero") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub(maxBufferedEvents: 1)
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                             fileManager: .default,
+                                             hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5)
+                .events.contains { $0.text == "raw-zero" }
+        })
+        let rawZero = try XCTUnwrap(
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5)
+                .events
+                .first { $0.text == "raw-zero" }
+        )
+        let synthetic = try XCTUnwrap(
+            hub.publish(AgentEvent(
+                eventID: "external-synthetic",
+                seq: hub.nextSyntheticSeq(sessionID: "session"),
+                vendor: "codex",
+                workspaceID: "workspace",
+                sessionID: "session",
+                timestamp: "2026-05-15T00:00:01Z",
+                type: .assistantMessage,
+                role: "assistant",
+                text: "external-synthetic",
+                name: nil,
+                input: nil,
+                output: nil,
+                toolCallID: nil,
+                metadata: ["source": "external"]
+            ),
+            deliverToSubscribers: false
+        ))
+        XCTAssertEqual(synthetic.seq, rawZero.seq + 1,
+                       "the external event is a virtual ordinal after offset-zero raw")
+        XCTAssertEqual(
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5)
+                .events
+                .map(\.eventID),
+            ["external-synthetic"],
+            "precondition: capacity pressure evicted the only raw event"
+        )
+
+        let page = BridgeAgentEventFetchFlow.run(
+            eventHub: hub,
+            workspaceID: "workspace",
+            sessionID: "session",
+            limit: 1,
+            beforeSeq: synthetic.seq,
+            afterSeq: nil,
+            beforeCursorBackfill: { _, beforeSeq, limit in
+                session.beforeCursorBackfill(beforeSeq: beforeSeq, limit: limit)
+            }
+        )
+
+        XCTAssertFalse(page.beforeCursorUnavailable)
+        XCTAssertTrue(page.didBackfill,
+                      "a virtual ordinal at offset zero must replay its anchor line")
+        XCTAssertEqual(page.fetchResult.events.compactMap(\.text), ["raw-zero"])
+        XCTAssertEqual(page.fetchResult.oldestSeq, rawZero.seq)
+        XCTAssertFalse(page.fetchResult.hasMore,
+                       "the replayed offset-zero line is source-proven BOF")
+    }
+
     // R12 B2: a single request whose limit exceeds the raw window capacity
     // must not skip lines before their FIRST parse — every returned page is
     // adjacent to the request anchor and the union is exact and ordered.
