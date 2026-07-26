@@ -7,6 +7,7 @@ enum BridgeAgentEventFetchFlow {
     struct Output {
         let fetchResult: AgentEventHub.FetchResult
         let didBackfill: Bool
+        let beforeCursorUnavailable: Bool
     }
 
     // Typed after-cursor session seams (see AgentHistoryContract.swift),
@@ -126,6 +127,7 @@ enum BridgeAgentEventFetchFlow {
                                          beforeSeq: beforeSeq,
                                          afterSeq: afterSeq)
         var didBackfill = false
+        var beforeCursorUnavailable = false
         if let sessionID, let beforeSeq {
             // Requested-anchor coverage: cache contents (hasMore) can never
             // stand in for the REQUESTED range — a deep page cache from
@@ -152,9 +154,13 @@ enum BridgeAgentEventFetchFlow {
             if backfillResult.rawContinuation == .more {
                 fetchResult = continuingBeforePage(fetchResult,
                                                    requestedBeforeSeq: beforeSeq)
+            } else if backfillResult.rawContinuation == .unavailable {
+                beforeCursorUnavailable = true
             }
         }
-        return Output(fetchResult: fetchResult, didBackfill: didBackfill)
+        return Output(fetchResult: fetchResult,
+                      didBackfill: didBackfill,
+                      beforeCursorUnavailable: beforeCursorUnavailable)
     }
 
     private static func continuingBeforePage(
@@ -213,7 +219,8 @@ enum BridgeAgentEventFetchFlow {
                                          seams: seams) {
             case .completed(let output):
                 return Output(fetchResult: output.fetchResult,
-                              didBackfill: requestDidBackfill || output.didBackfill)
+                              didBackfill: requestDidBackfill || output.didBackfill,
+                              beforeCursorUnavailable: false)
             case .retryableInvalidation(let didBackfill):
                 requestDidBackfill = requestDidBackfill || didBackfill
             }
@@ -222,7 +229,8 @@ enum BridgeAgentEventFetchFlow {
                                                              oldestSeq: afterSeq,
                                                              newestSeq: afterSeq,
                                                              hasMore: true),
-                      didBackfill: requestDidBackfill)
+                      didBackfill: requestDidBackfill,
+                      beforeCursorUnavailable: false)
     }
 
     // ONE complete after-cursor attempt: lease begin/finish/cancel, plan,
@@ -246,7 +254,8 @@ enum BridgeAgentEventFetchFlow {
                                                                      oldestSeq: afterSeq,
                                                                      newestSeq: afterSeq,
                                                                      hasMore: true),
-                              didBackfill: didBackfill))
+                              didBackfill: didBackfill,
+                              beforeCursorUnavailable: false))
         }
         // The Hub path always served at least one event; the typed path
         // keeps that contract for capacity, raw page size, and count trim.
@@ -428,6 +437,7 @@ enum BridgeAgentEventFetchFlow {
                                                                         oldestSeq: budgeted.first?.seq ?? afterSeq,
                                                                         newestSeq: budgeted.last?.seq ?? afterSeq,
                                                                         hasMore: hasMore),
-                                 didBackfill: didBackfill))
+                                 didBackfill: didBackfill,
+                                 beforeCursorUnavailable: false))
     }
 }

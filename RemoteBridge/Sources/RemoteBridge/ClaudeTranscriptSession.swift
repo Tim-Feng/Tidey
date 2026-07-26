@@ -543,7 +543,7 @@ final class AgentSessionRegistryMonitor {
         let session: AgentTranscriptSession? = queue.sync { sessions[sessionID] }
         return session?.beforeCursorBackfill(beforeSeq: beforeSeq, limit: limit)
             ?? AgentBeforeCursorBackfillResult(didBackfill: false,
-                                               rawContinuation: .unknown)
+                                               rawContinuation: .unavailable)
     }
 
     // Typed after-cursor seams: the registry queue only resolves the session

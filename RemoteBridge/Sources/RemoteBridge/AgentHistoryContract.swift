@@ -64,6 +64,12 @@ struct AgentBeforeCursorBackfillResult: Equatable, Sendable {
     enum RawContinuation: Equatable, Sendable {
         case more
         case end
+        // This session adopted raw-frontier authority, but this request
+        // could not prove either continuation or BOF. The handler must
+        // surface an explicit retryable failure, never guess from Hub
+        // visible-event counts.
+        case unavailable
+        // Legacy session seam: no raw-frontier contract was supplied.
         case unknown
     }
 
