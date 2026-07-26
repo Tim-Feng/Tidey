@@ -779,7 +779,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                     // publishes under the predecessor's canonical identity.
                     // Never merge this context into the bounded window.
                     var adjacencyContext: PendingAgentMessagePair?
-                    if let replayFloor = historicalRawLines.first?.offset,
+                    if frontier.reachedSourceStart == false,
+                       let replayFloor = historicalRawLines.first?.offset,
                        replayFloor > 0 {
                         isCollectingBackfillPage = true
                         collectedBackfillPage = []

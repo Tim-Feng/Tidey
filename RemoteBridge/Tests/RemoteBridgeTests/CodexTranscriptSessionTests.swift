@@ -3015,6 +3015,56 @@ final class CodexTranscriptSessionTests: XCTestCase {
                        "the complete client union has no duplicate identity")
     }
 
+    func testCodexBeforeCursorSourceBOFSkipsNonexistentAdjacencyContext() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let recentLines = (0..<transcriptBootstrapLineLimit).map {
+            makeCodexMessageLine(role: "assistant", content: "bof-recent-\($0)")
+        }
+        let lines = [makeCodexMessageLine(role: "assistant", content: "bof-old")] + recentLines
+        try ("\n" + lines.joined(separator: "\n") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(
+            transcriptURL,
+            hub: hub,
+            readySentinel: "bof-recent-\(transcriptBootstrapLineLimit - 1)"
+        )
+        defer { session.stop() }
+        let liveEvents = hub.fetch(workspaceID: "workspace",
+                                   sessionID: "session",
+                                   limit: transcriptBootstrapLineLimit)
+            .events.filter { $0.seq > transcriptSessionStartedSequence }
+        XCTAssertEqual(liveEvents.count, transcriptBootstrapLineLimit)
+        let beforeSeq = try XCTUnwrap(liveEvents.map(\.seq).min())
+
+        var backfillReadCount = 0
+        session.tailerBackfillBeforeReadForTesting = {
+            backfillReadCount += 1
+        }
+        defer { session.tailerBackfillBeforeReadForTesting = nil }
+        let result = session.beforeCursorBackfill(beforeSeq: beforeSeq, limit: 500)
+
+        XCTAssertTrue(result.didBackfill)
+        XCTAssertEqual(result.rawContinuation, .end,
+                       "the owned page reached byte-zero source BOF")
+        XCTAssertEqual(result.authorityEpoch,
+                       hub.currentHistoryEpoch(sessionID: "session"))
+        XCTAssertEqual(backfillReadCount, 1,
+                       "source-proven BOF has no predecessor context to read")
+        XCTAssertTrue(
+            hub.fetch(workspaceID: "workspace",
+                      sessionID: "session",
+                      limit: 10,
+                      beforeSeq: beforeSeq)
+                .events.contains { $0.text == "bof-old" }
+        )
+    }
+
     // Context records live OUTSIDE the owned window and carry NO coverage
     // or semantic-trust authority: a malformed (or non-agent-message)
     // predecessor just means "no adjacency context". Its own page judges
