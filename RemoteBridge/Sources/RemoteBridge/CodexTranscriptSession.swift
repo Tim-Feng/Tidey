@@ -143,6 +143,9 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     // Fires inside beforeCursorBackfill after resolving the active tailer
     // and before any source validation or offset-zero BOF decision.
     var beforeCursorBackfillBeforeSourceValidationForTesting: (() -> Void)?
+    // Fires after one before-cursor raw page has been read and any replay
+    // products collected, but before final source authority is classified.
+    var beforeCursorBackfillBeforeFinalSourceValidationForTesting: (() -> Void)?
     // Fires inside afterCursorPlan before the source validation.
     var afterCursorPlanBeforeSourceValidationForTesting: (() -> Void)?
     // Fires during attach after the bootstrap window is collected and
@@ -741,24 +744,27 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                     return result(didBackfill: loadedAny,
                                   frontier: nil)
                 }
+                var replayedProducts: [AgentEvent]?
                 if readResult.didRead, collectedBackfillPage.isEmpty == false {
                     loadedAny = true
                     mergeHistoricalPage(collectedBackfillPage)
-                    let products = replayHistoricalWindow()
+                    replayedProducts = replayHistoricalWindow()
+                }
+                collectedBackfillPage = []
+                beforeCursorBackfillBeforeFinalSourceValidationForTesting?()
+
+                if let products = replayedProducts {
                     guard sourceSemanticTrust else {
-                        collectedBackfillPage = []
                         return result(didBackfill: false, frontier: nil)
                     }
                     hub.replaceHistoricalEvents(sessionID: record.sessionID,
                                                 events: products,
                                                 anchorSeq: lastRequestedBackfillAnchorSeq)
                     if products.contains(where: { $0.seq < beforeSeq }) {
-                        collectedBackfillPage = []
                         return result(didBackfill: true,
                                       frontier: frontier)
                     }
                 }
-                collectedBackfillPage = []
 
                 // A blank-only scan is real raw progress even though the
                 // tailer delivered no JSONL record. Continue from its actual
