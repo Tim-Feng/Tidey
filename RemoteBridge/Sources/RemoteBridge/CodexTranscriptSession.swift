@@ -675,7 +675,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                 if let frontier {
                     continuation = frontier.reachedSourceStart ? .end : .more
                 } else {
-                    continuation = .unknown
+                    continuation = .unavailable
                 }
                 return AgentBeforeCursorBackfillResult(didBackfill: didBackfill,
                                                        rawContinuation: continuation)
@@ -695,7 +695,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             }
             let beforeOffset = beforePosition.lineOffset
             guard beforeOffset > 0 else {
-                return result(didBackfill: false, frontier: nil)
+                return AgentBeforeCursorBackfillResult(didBackfill: false,
+                                                       rawContinuation: .end)
             }
             let effectiveLimit = min(limit, historicalReplayWindowCapacity)
             lastRequestedBackfillAnchorSeq = beforeSeq

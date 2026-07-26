@@ -674,6 +674,109 @@ final class BridgeFetchAgentEventsHandlerTests: XCTestCase {
         }, "the synthetic start marker appears only on the terminal BOF page")
     }
 
+    // B22 RED: an invalid raw page cannot prove either continuation or BOF.
+    // Returning the visible Hub cache with has_more == false would silently
+    // truncate the session. The handler must surface an explicit unavailable
+    // response so the client never mistakes failed source authority for EOF.
+    func testHandlerBeforeCursorReturnsUnavailableInsteadOfFalseBOFForInvalidRawPage() throws {
+        let supportDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BridgeFetchHandlerTests-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: .default)
+        defer { try? FileManager.default.removeItem(at: supportDirectory) }
+
+        let transcriptURL = supportDirectory.appendingPathComponent("rollout-invalid-page.jsonl",
+                                                                    isDirectory: false)
+        let recentTexts = (0..<500).map { String(format: "recent-%04d", $0) }
+        var transcriptData = Data([0xFF, 0x0A])
+        for text in recentTexts {
+            transcriptData.append(Data(makeCodexMessageLine(role: "assistant", content: text).utf8))
+            transcriptData.append(0x0A)
+        }
+        try transcriptData.write(to: transcriptURL)
+
+        let record = """
+        {
+          "version": 1,
+          "vendor": "codex",
+          "workspace_id": "workspace-invalid-page",
+          "session_id": "session-invalid-page",
+          "panel_id": "panel-invalid-page",
+          "pid": \(ProcessInfo.processInfo.processIdentifier),
+          "cwd": "/tmp",
+          "created_at": "2026-07-26T12:00:00Z",
+          "transcript_path": "\(transcriptURL.path)"
+        }
+        """
+        try Data(record.utf8).write(
+            to: paths.codexAgentSessionsDirectory.appendingPathComponent("codex-session-invalid-page.json"))
+
+        let hub = AgentEventHub()
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: .default,
+                                                  hub: hub,
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+                                                  parentPIDLookup: { _ in nil })
+        try monitor.start()
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace-invalid-page",
+                      sessionID: "session-invalid-page",
+                      limit: 10).events.contains { $0.text == "recent-0499" }
+        }, "the invalid predecessor stays outside the valid 500-record bootstrap")
+
+        let handler = WebSocketFrameHandler(socketClient: TideySocketClient(locator: TideySocketLocator()),
+                                            eventHub: hub,
+                                            workspaceEventHub: WorkspaceEventHub(),
+                                            registryMonitor: monitor,
+                                            observability: BridgeObservabilityCenter(),
+                                            bridgePort: 0,
+                                            cloudflaredManager: BridgeCloudflaredManager(binaryResolver: { nil }),
+                                            ordinaryTmuxProjectionContext: OrdinaryTmuxProjectionContext())
+        let channel = EmbeddedChannel(handler: handler)
+        defer { _ = try? channel.finish() }
+        let context = try channel.pipeline.syncOperations.context(handler: handler)
+
+        let bootstrapRequest = BridgeRequest(
+            id: "invalid-page-bootstrap",
+            action: "fetch_agent_events",
+            params: [
+                "workspace_id": .string("workspace-invalid-page"),
+                "session_id": .string("session-invalid-page"),
+                "limit": .number(24),
+                "max_bytes": .number(Double(80 * 1024)),
+            ])
+        let bootstrap = try XCTUnwrap(
+            handler.handleLocalRequest(bootstrapRequest, context: context)
+        )
+        XCTAssertTrue(bootstrap.response.ok)
+        XCTAssertEqual(bootstrap.response.result?["events"]?.arrayValue?
+            .compactMap { $0.objectValue?["text"]?.stringValue },
+            Array(recentTexts.suffix(24)))
+        let beforeSeq = try XCTUnwrap(bootstrap.response.result?["oldest_seq"]?.intValue)
+        XCTAssertGreaterThan(beforeSeq, 0)
+
+        let beforeRequest = BridgeRequest(
+            id: "invalid-page-before",
+            action: "fetch_agent_events",
+            params: [
+                "workspace_id": .string("workspace-invalid-page"),
+                "session_id": .string("session-invalid-page"),
+                "limit": .number(500),
+                "max_bytes": .number(Double(160 * 1024)),
+                "before_seq": .number(Double(beforeSeq)),
+            ])
+        let result = try XCTUnwrap(handler.handleLocalRequest(beforeRequest, context: context))
+
+        if result.response.ok {
+            XCTAssertEqual(result.response.result?["has_more"]?.boolValue, false,
+                           "precondition: legacy Hub fallback mislabels the invalid page as BOF")
+            XCTFail("invalid raw authority returned a successful false-BOF response")
+            return
+        }
+        XCTAssertNil(result.response.result)
+        XCTAssertEqual(result.response.error?.code, "agent_history_unavailable")
+    }
+
     private func makeClaudeUserLine(uuid: String, sessionID: String, content: String) -> String {
         let object: [String: Any] = [
             "type": "user",

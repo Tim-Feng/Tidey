@@ -1055,6 +1055,20 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                                       returnedCount: fetchResult.events.count,
                                       didBackfill: didBackfill,
                                       durationMs: (CFAbsoluteTimeGetCurrent() - startedAt) * 1000)
+            if flow.beforeCursorUnavailable {
+                return LocalRequestResult(
+                    response: BridgeResponse(
+                        id: request.id,
+                        ok: false,
+                        result: nil,
+                        error: BridgeErrorPayload(
+                            code: "agent_history_unavailable",
+                            message: "Agent history is temporarily unavailable; retry the request."
+                        )),
+                    agentReplayEnvelopes: [],
+                    workspaceReplayEnvelopes: []
+                )
+            }
             let merged = BridgePendingApprovalFetchMerge.merge(
                 pageEvents: fetchResult.events,
                 pageOldestSeq: fetchResult.oldestSeq,
