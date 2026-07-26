@@ -2852,6 +2852,169 @@ final class CodexTranscriptSessionTests: XCTestCase {
                        "the identity also survives the 600-limit layout")
     }
 
+    // The legacy before path replays a rolling historical window into the
+    // shared Hub cache. When that window starts on the response_item half of
+    // an adjacent producer twin, the first client page must already use the
+    // predecessor event_msg's canonical identity. Otherwise the next older
+    // page replaces the Hub entry with the canonical identity after the
+    // client retained the response identity, leaving a duplicate in the
+    // client's page union.
+    func testCodexBeforeCursorReplayWindowFloorTwinKeepsCanonicalIdentity() throws {
+        func agentMessage(_ ts: String, phase: String, text: String) -> String {
+            "{\"type\":\"event_msg\",\"timestamp\":\"\(ts)\",\"payload\":{\"type\":\"agent_message\",\"message\":\"\(text)\",\"phase\":\"\(phase)\"}}"
+        }
+        func assistantItem(_ ts: String, phase: String, text: String) -> String {
+            "{\"type\":\"response_item\",\"timestamp\":\"\(ts)\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"\(phase)\",\"content\":[{\"type\":\"output_text\",\"text\":\"\(text)\"}]}}"
+        }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lineCount = transcriptBootstrapLineLimit * 2 + 40
+        let predecessorIndex = 515
+        let responseIndex = predecessorIndex + 1
+        let itemOnlyIndex = responseIndex + 1
+        let twinText = "before-window-floor-twin"
+        let itemOnlyText = "before-window-item-only"
+        var lines = (0..<lineCount).map {
+            makeCodexMessageLine(role: "assistant", content: "before-deep-\($0)")
+        }
+        lines[predecessorIndex] =
+            agentMessage("2026-05-15T00:08:35.000Z", phase: "commentary", text: twinText)
+        lines[responseIndex] =
+            assistantItem("2026-05-15T00:08:35.001Z", phase: "commentary", text: twinText)
+        lines[itemOnlyIndex] =
+            assistantItem("2026-05-15T00:08:35.002Z", phase: "commentary", text: itemOnlyText)
+
+        var lineOffsets = [Int]()
+        var nextLineOffset = 0
+        for line in lines {
+            lineOffsets.append(nextLineOffset)
+            nextLineOffset += line.utf8.count + 1
+        }
+        try (lines.joined(separator: "\n") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(
+            transcriptURL,
+            hub: hub,
+            readySentinel: "before-deep-\(lineCount - 1)"
+        )
+        defer { session.stop() }
+
+        // The iOS client bootstraps with 24 retained events. Its first older
+        // request starts at raw index 1016, so the production 500-record
+        // before read owns indices 516...1015: response half at the replay
+        // floor, predecessor exactly one record outside.
+        let bootstrap = hub.fetch(workspaceID: "workspace",
+                                  sessionID: "session",
+                                  limit: 24)
+        let bootstrapEvents = bootstrap.events.filter {
+            $0.seq > transcriptSessionStartedSequence
+        }
+        XCTAssertEqual(bootstrapEvents.count, 24)
+        XCTAssertEqual(bootstrapEvents.map(\.text).first ?? nil,
+                       "before-deep-\(lineCount - 24)")
+        XCTAssertEqual(bootstrap.oldestSeq,
+                       try XCTUnwrap(bootstrapEvents.map(\.seq).min()))
+        var cursor = bootstrap.oldestSeq
+        var clientEventsByID = Dictionary(
+            uniqueKeysWithValues: bootstrapEvents.map { ($0.eventID, $0) }
+        )
+
+        func wirePage(beforeSeq: Int) -> BridgeAgentEventFetchFlow.Output {
+            BridgeAgentEventFetchFlow.run(
+                eventHub: hub,
+                workspaceID: "workspace",
+                sessionID: "session",
+                limit: 500,
+                beforeSeq: beforeSeq,
+                afterSeq: nil,
+                beforeCursorBackfill: { _, beforeSeq, limit in
+                    session.beforeCursorBackfill(beforeSeq: beforeSeq, limit: limit)
+                }
+            )
+        }
+
+        let canonicalTwinSeq = transcriptEventSequence(
+            lineOffset: lineOffsets[predecessorIndex],
+            ordinal: 0
+        )
+        let responseTwinSeq = transcriptEventSequence(
+            lineOffset: lineOffsets[responseIndex],
+            ordinal: 0
+        )
+        let itemOnlySeq = transcriptEventSequence(
+            lineOffset: lineOffsets[itemOnlyIndex],
+            ordinal: 0
+        )
+        let canonicalTwinID = "commentary:session:\(canonicalTwinSeq)"
+        let responseTwinID = "commentary:session:\(responseTwinSeq)"
+        let itemOnlyID = "commentary:session:\(itemOnlySeq)"
+
+        var didReachBOF = false
+        for pageIndex in 0..<5 {
+            let page = wirePage(beforeSeq: cursor)
+            XCTAssertFalse(page.beforeCursorUnavailable,
+                           "page \(pageIndex) remains source-authoritative")
+            let pageableEvents = page.fetchResult.events.filter {
+                $0.seq > transcriptSessionStartedSequence
+            }
+            XCTAssertFalse(pageableEvents.isEmpty,
+                           "page \(pageIndex) makes visible progress")
+            if pageIndex == 0 {
+                XCTAssertTrue(page.fetchResult.hasMore)
+                XCTAssertEqual(
+                    pageableEvents.filter { $0.text == twinText }.map(\.eventID),
+                    [canonicalTwinID],
+                    "the first page uses the predecessor identity before the predecessor's own page"
+                )
+                XCTAssertEqual(
+                    pageableEvents.filter { $0.text == itemOnlyText }.map(\.eventID),
+                    [itemOnlyID],
+                    "a response_item-only canary keeps its own identity"
+                )
+            }
+            for event in pageableEvents {
+                clientEventsByID[event.eventID] = event
+            }
+            if page.fetchResult.hasMore == false {
+                didReachBOF = true
+                break
+            }
+            let nextCursor = try XCTUnwrap(pageableEvents.map(\.seq).min())
+            XCTAssertEqual(page.fetchResult.oldestSeq, nextCursor,
+                           "page \(pageIndex) exposes its wire cursor")
+            XCTAssertLessThan(nextCursor, cursor,
+                              "page \(pageIndex) strictly retreats")
+            cursor = page.fetchResult.oldestSeq
+        }
+        XCTAssertTrue(didReachBOF, "the real before flow reaches source BOF")
+
+        let clientEvents = Array(clientEventsByID.values)
+        let clientTwinEvents = clientEvents.filter { $0.text == twinText }
+        XCTAssertEqual(clientTwinEvents.map(\.eventID), [canonicalTwinID])
+        XCTAssertFalse(clientEventsByID.keys.contains(responseTwinID),
+                       "the response-half identity never leaks into the client union")
+
+        var expectedTexts = Set((0..<lineCount).compactMap { index -> String? in
+            guard index != predecessorIndex,
+                  index != responseIndex,
+                  index != itemOnlyIndex else {
+                return nil
+            }
+            return "before-deep-\(index)"
+        })
+        expectedTexts.insert(twinText)
+        expectedTexts.insert(itemOnlyText)
+        XCTAssertEqual(Set(clientEvents.compactMap(\.text)), expectedTexts,
+                       "the fix preserves every independently producing record")
+        XCTAssertEqual(clientEvents.count, expectedTexts.count,
+                       "the complete client union has no duplicate identity")
+    }
+
     // Context records live OUTSIDE the owned window and carry NO coverage
     // or semantic-trust authority: a malformed (or non-agent-message)
     // predecessor just means "no adjacency context". Its own page judges

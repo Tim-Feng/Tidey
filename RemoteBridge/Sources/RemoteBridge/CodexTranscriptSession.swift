@@ -276,9 +276,15 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     }
 
     @discardableResult
-    private func replayHistoricalWindow() -> [AgentEvent] {
+    private func replayHistoricalWindow(
+        adjacencyContext: PendingAgentMessagePair?
+    ) -> [AgentEvent] {
         let liveSnapshot = captureLiveParserState()
         resetParserStateForHistoricalReplay()
+        // The context record sits immediately before the owned replay
+        // window. It contributes adjacency evidence only: its products are
+        // never replayed, and the first owned record consumes the descriptor.
+        pendingAgentMessagePair = adjacencyContext
         historicalReplayProducts = []
         isBackfillingHistory = true
         for entry in historicalRawLines {
@@ -766,7 +772,46 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                 if readResult.didRead, collectedBackfillPage.isEmpty == false {
                     loadedAny = true
                     mergeHistoricalPage(collectedBackfillPage)
-                    replayedProducts = replayHistoricalWindow()
+                    // The rolling replay window can begin on the
+                    // response_item half of an adjacent producer twin. Read
+                    // exactly one predecessor outside the owned window and
+                    // seed it as pure adjacency evidence so the response
+                    // publishes under the predecessor's canonical identity.
+                    // Never merge this context into the bounded window.
+                    var adjacencyContext: PendingAgentMessagePair?
+                    if let replayFloor = historicalRawLines.first?.offset,
+                       replayFloor > 0 {
+                        isCollectingBackfillPage = true
+                        collectedBackfillPage = []
+                        isReadingAdjacencyContext = true
+                        do {
+                            _ = try tailer.backfill(beforeOffset: replayFloor,
+                                                    limit: 1,
+                                                    includeAnchorLine: false)
+                        } catch JSONLFileTailerError.sourceInvalidated {
+                            isReadingAdjacencyContext = false
+                            isCollectingBackfillPage = false
+                            collectedBackfillPage = []
+                            resetTranscriptSource(startResolverNow: true)
+                            return result(didBackfill: false, frontier: nil)
+                        } catch {
+                            isReadingAdjacencyContext = false
+                            isCollectingBackfillPage = false
+                            collectedBackfillPage = []
+                            return result(didBackfill: false, frontier: nil)
+                        }
+                        isReadingAdjacencyContext = false
+                        isCollectingBackfillPage = false
+                        let contextLines = collectedBackfillPage
+                        collectedBackfillPage = []
+                        adjacencyContext = contextLines.last.flatMap {
+                            Self.adjacencyPairDescriptor(line: $0.line,
+                                                         lineOffset: $0.offset)
+                        }
+                    }
+                    replayedProducts = replayHistoricalWindow(
+                        adjacencyContext: adjacencyContext
+                    )
                 }
                 collectedBackfillPage = []
                 beforeCursorBackfillBeforeFinalSourceValidationForTesting?()
