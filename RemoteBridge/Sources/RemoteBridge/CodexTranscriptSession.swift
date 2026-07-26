@@ -766,6 +766,9 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                 } catch {
                     return result(didBackfill: false, frontier: nil)
                 }
+                guard hub.currentHistoryEpoch(sessionID: record.sessionID) == authorityEpoch else {
+                    return result(didBackfill: false, frontier: nil)
+                }
                 guard sourceSemanticTrust else {
                     return result(didBackfill: false, frontier: nil)
                 }

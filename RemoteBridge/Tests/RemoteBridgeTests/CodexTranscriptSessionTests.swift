@@ -3793,6 +3793,59 @@ final class CodexTranscriptSessionTests: XCTestCase {
                        "the retired tailer's queued callback cannot reset the replacement twice")
     }
 
+    func testCodexBeforeCursorHubEpochChangeAfterReplayDoesNotPublishIntoReplacementEpoch() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let recent = (0..<transcriptBootstrapLineLimit).map {
+            makeCodexMessageLine(role: "assistant", content: "epoch-recent-\($0)")
+        }
+        try (([makeCodexMessageLine(role: "assistant", content: "epoch-stale-history")] + recent)
+            .joined(separator: "\n") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                             fileManager: .default,
+                                             hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5)
+                .events.contains { $0.text == "epoch-recent-\(transcriptBootstrapLineLimit - 1)" }
+        })
+        let beforeSeq = try XCTUnwrap(
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 2000)
+                .events
+                .filter { $0.text?.hasPrefix("epoch-recent-") == true }
+                .map(\.seq)
+                .min()
+        )
+        let oldEpoch = hub.currentHistoryEpoch(sessionID: "session")
+        session.beforeCursorBackfillBeforeFinalSourceValidationForTesting = {
+            hub.beginNewSourceEpoch(sessionID: "session")
+        }
+        defer { session.beforeCursorBackfillBeforeFinalSourceValidationForTesting = nil }
+
+        let result = session.beforeCursorBackfill(beforeSeq: beforeSeq, limit: 500)
+
+        XCTAssertFalse(result.didBackfill)
+        XCTAssertEqual(result.rawContinuation, .unavailable)
+        XCTAssertEqual(hub.currentHistoryEpoch(sessionID: "session").generation,
+                       oldEpoch.generation + 1)
+        XCTAssertFalse(
+            hub.fetch(workspaceID: "workspace",
+                      sessionID: "session",
+                      limit: 2000,
+                      beforeSeq: beforeSeq)
+                .events
+                .contains { $0.text == "epoch-stale-history" },
+            "source A replay products must not be written into the replacement Hub epoch"
+        )
+    }
+
     func testAfterCursorReadErrorDoesNotRevokeValidSource() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
