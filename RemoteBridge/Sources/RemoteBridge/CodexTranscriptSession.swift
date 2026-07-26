@@ -282,9 +282,6 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         restoreLiveParserState(liveSnapshot)
 
         let products = historicalReplayProducts
-        hub.replaceHistoricalEvents(sessionID: record.sessionID,
-                                    events: products,
-                                    anchorSeq: lastRequestedBackfillAnchorSeq)
         historicalReplayProducts = []
         return products
     }
@@ -698,6 +695,9 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             } catch {
                 return result(didBackfill: false, frontier: nil)
             }
+            guard sourceSemanticTrust else {
+                return result(didBackfill: false, frontier: nil)
+            }
             // The accepted-sequence authority: cursor inversion goes
             // through the exact map first (a Hub-rebased public cursor has
             // no meaningful raw arithmetic), with the same base fallback
@@ -745,6 +745,13 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                     loadedAny = true
                     mergeHistoricalPage(collectedBackfillPage)
                     let products = replayHistoricalWindow()
+                    guard sourceSemanticTrust else {
+                        collectedBackfillPage = []
+                        return result(didBackfill: false, frontier: nil)
+                    }
+                    hub.replaceHistoricalEvents(sessionID: record.sessionID,
+                                                events: products,
+                                                anchorSeq: lastRequestedBackfillAnchorSeq)
                     if products.contains(where: { $0.seq < beforeSeq }) {
                         collectedBackfillPage = []
                         return result(didBackfill: true,

@@ -1405,6 +1405,56 @@ final class CodexTranscriptSessionTests: XCTestCase {
         }
     }
 
+    func testCodexBeforeCursorSemanticPoisonFailsUnavailableWithoutPublishingPartialHistory() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let recent = (0..<transcriptBootstrapLineLimit).map {
+            makeCodexMessageLine(role: "assistant", content: "recent-\($0)")
+        }
+        let lines = [
+            makeCodexMessageLine(role: "assistant", content: "must-not-publish"),
+            "{\"type\":\"future_unknown_record\",\"payload\":{}}",
+        ] + recent
+        try (lines.joined(separator: "\n") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                             fileManager: .default,
+                                             hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5)
+                .events.contains { $0.text == "recent-\(transcriptBootstrapLineLimit - 1)" }
+        })
+        let beforeSeq = try XCTUnwrap(
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 2000)
+                .events
+                .filter { $0.text?.hasPrefix("recent-") == true }
+                .map(\.seq)
+                .min()
+        )
+
+        let result = session.beforeCursorBackfill(beforeSeq: beforeSeq, limit: 500)
+
+        XCTAssertFalse(result.didBackfill)
+        XCTAssertEqual(result.rawContinuation, .unavailable,
+                       "an unsupported deep record invalidates the entire before page")
+        XCTAssertFalse(
+            hub.fetch(workspaceID: "workspace",
+                      sessionID: "session",
+                      limit: 2000,
+                      beforeSeq: beforeSeq)
+                .events
+                .contains { $0.text == "must-not-publish" },
+            "valid siblings from a poisoned replay must not leak into shared history"
+        )
+    }
+
     private func makeStartedCodexSession(_ transcriptURL: URL,
                                          hub: AgentEventHub,
                                          readySentinel: String) -> CodexTranscriptSession {
