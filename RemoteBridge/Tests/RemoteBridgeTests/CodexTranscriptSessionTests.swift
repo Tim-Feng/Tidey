@@ -3194,6 +3194,86 @@ final class CodexTranscriptSessionTests: XCTestCase {
         XCTAssertFalse(historyTwinIDs.contains(responseTwinID))
     }
 
+    func testCodexBeforeCursorContextPoisonIsEvidenceOnlyUntilOwned() throws {
+        func assistantItem(text: String) -> String {
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:08:35.001Z\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"commentary\",\"content\":[{\"type\":\"output_text\",\"text\":\"\(text)\"}]}}"
+        }
+        func runVariant(name: String, poison: Data) throws {
+            let directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)",
+                                        isDirectory: true)
+            try FileManager.default.createDirectory(at: directory,
+                                                    withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let transcriptURL = directory.appendingPathComponent("rollout.jsonl",
+                                                                 isDirectory: false)
+            let lineCount = transcriptBootstrapLineLimit * 2 + 40
+            let predecessorIndex = 515
+            let responseIndex = predecessorIndex + 1
+            let responseText = "context-poison-\(name)"
+            var records = (0..<lineCount).map {
+                Data(makeCodexMessageLine(role: "assistant",
+                                          content: "\(name)-deep-\($0)").utf8)
+            }
+            records[predecessorIndex] = poison
+            records[responseIndex] = Data(assistantItem(text: responseText).utf8)
+            var transcriptData = Data()
+            var lineOffsets = [Int]()
+            for record in records {
+                lineOffsets.append(transcriptData.count)
+                transcriptData.append(record)
+                transcriptData.append(0x0A)
+            }
+            try transcriptData.write(to: transcriptURL, options: .atomic)
+
+            let hub = AgentEventHub()
+            let session = makeStartedCodexSession(
+                transcriptURL,
+                hub: hub,
+                readySentinel: "\(name)-deep-\(lineCount - 1)"
+            )
+            defer { session.stop() }
+            let bootstrap = hub.fetch(workspaceID: "workspace",
+                                      sessionID: "session",
+                                      limit: 24)
+            let beforeSeq = bootstrap.oldestSeq
+            let epoch = hub.currentHistoryEpoch(sessionID: "session")
+
+            let contextOnly = session.beforeCursorBackfill(beforeSeq: beforeSeq,
+                                                           limit: 500)
+            XCTAssertTrue(contextOnly.didBackfill, name)
+            XCTAssertEqual(contextOnly.rawContinuation, .more, name)
+            XCTAssertEqual(contextOnly.authorityEpoch, epoch, name)
+            XCTAssertTrue(session.validateHistoryEpoch(epoch),
+                          "\(name): context evidence does not poison trust")
+            let responseSeq = transcriptEventSequence(
+                lineOffset: lineOffsets[responseIndex],
+                ordinal: 0
+            )
+            let responseID = "commentary:session:\(responseSeq)"
+            let responseEvents = hub.fetch(workspaceID: "workspace",
+                                           sessionID: "session",
+                                           limit: 500,
+                                           beforeSeq: beforeSeq)
+                .events.filter { $0.text == responseText }
+            XCTAssertEqual(responseEvents.map(\.eventID), [responseID],
+                           "\(name): an unrecognized predecessor provides no pair evidence")
+
+            let ownedPoison = session.beforeCursorBackfill(beforeSeq: responseSeq,
+                                                           limit: 500)
+            XCTAssertFalse(ownedPoison.didBackfill, name)
+            XCTAssertEqual(ownedPoison.rawContinuation, .unavailable, name)
+            XCTAssertNil(ownedPoison.authorityEpoch, name)
+            XCTAssertEqual(hub.currentHistoryEpoch(sessionID: "session"), epoch,
+                           "\(name): semantic poison fails closed without inventing a new source")
+            XCTAssertFalse(session.validateHistoryEpoch(epoch),
+                           "\(name): trust fails only when the poison is owned")
+        }
+
+        try runVariant(name: "malformed-json", poison: Data("not-json".utf8))
+        try runVariant(name: "invalid-utf8", poison: Data([0xFF]))
+    }
+
     // Context records live OUTSIDE the owned window and carry NO coverage
     // or semantic-trust authority: a malformed (or non-agent-message)
     // predecessor just means "no adjacency context". Its own page judges
