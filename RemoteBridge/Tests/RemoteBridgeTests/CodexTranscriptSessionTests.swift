@@ -3107,6 +3107,93 @@ final class CodexTranscriptSessionTests: XCTestCase {
         )
     }
 
+    func testCodexBeforeCursorContextTransientReadFailurePreservesEpochAndRetries() throws {
+        let fixture = try makeCodexBeforeContextTwinFixture(prefix: "context-transient")
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                                   ofItemAtPath: fixture.directory.path)
+            try? FileManager.default.removeItem(at: fixture.directory)
+        }
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(
+            fixture.transcriptURL,
+            hub: hub,
+            readySentinel: "context-transient-deep-\(fixture.lineCount - 1)"
+        )
+        defer { session.stop() }
+        let bootstrap = hub.fetch(workspaceID: "workspace",
+                                  sessionID: "session",
+                                  limit: 24)
+        let beforeSeq = bootstrap.oldestSeq
+        XCTAssertGreaterThan(beforeSeq, transcriptSessionStartedSequence)
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+
+        var backfillReadCount = 0
+        var permissionChangeError: Error?
+        session.tailerBackfillBeforeReadForTesting = {
+            backfillReadCount += 1
+            guard backfillReadCount == 2 else { return }
+            do {
+                try FileManager.default.setAttributes([.posixPermissions: 0o000],
+                                                      ofItemAtPath: fixture.directory.path)
+            } catch {
+                permissionChangeError = error
+            }
+        }
+        let failed = session.beforeCursorBackfill(beforeSeq: beforeSeq, limit: 500)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                              ofItemAtPath: fixture.directory.path)
+        session.tailerBackfillBeforeReadForTesting = nil
+
+        XCTAssertNil(permissionChangeError)
+        XCTAssertEqual(backfillReadCount, 2,
+                       "the I/O fault lands during the context read")
+        XCTAssertFalse(failed.didBackfill)
+        XCTAssertEqual(failed.rawContinuation, .unavailable)
+        XCTAssertNil(failed.authorityEpoch)
+        XCTAssertEqual(hub.currentHistoryEpoch(sessionID: "session"), epoch,
+                       "a transient read failure does not reset the source")
+        XCTAssertTrue(
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                .events.contains {
+                    $0.text == "context-transient-deep-\(fixture.lineCount - 1)"
+                },
+            "the retained live window survives"
+        )
+        XCTAssertFalse(
+            hub.fetch(workspaceID: "workspace",
+                      sessionID: "session",
+                      limit: 2000,
+                      beforeSeq: beforeSeq)
+                .events.contains { $0.text == fixture.twinText },
+            "the owned page merged locally but did not publish a partial replay"
+        )
+        XCTAssertTrue(session.validateHistoryEpoch(epoch),
+                      "the same source remains valid once I/O recovers")
+
+        let retried = session.beforeCursorBackfill(beforeSeq: beforeSeq, limit: 500)
+        XCTAssertTrue(retried.didBackfill)
+        XCTAssertEqual(retried.rawContinuation, .more)
+        XCTAssertEqual(retried.authorityEpoch, epoch)
+        let canonicalTwinSeq = transcriptEventSequence(
+            lineOffset: fixture.lineOffsets[fixture.predecessorIndex],
+            ordinal: 0
+        )
+        let responseTwinSeq = transcriptEventSequence(
+            lineOffset: fixture.lineOffsets[fixture.responseIndex],
+            ordinal: 0
+        )
+        let canonicalTwinID = "commentary:session:\(canonicalTwinSeq)"
+        let responseTwinID = "commentary:session:\(responseTwinSeq)"
+        let historyTwinIDs = hub.fetch(workspaceID: "workspace",
+                                      sessionID: "session",
+                                      limit: 500,
+                                      beforeSeq: beforeSeq)
+            .events.filter { $0.text == fixture.twinText }.map(\.eventID)
+        XCTAssertEqual(historyTwinIDs, [canonicalTwinID])
+        XCTAssertFalse(historyTwinIDs.contains(responseTwinID))
+    }
+
     // Context records live OUTSIDE the owned window and carry NO coverage
     // or semantic-trust authority: a malformed (or non-agent-message)
     // predecessor just means "no adjacency context". Its own page judges
