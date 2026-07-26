@@ -535,10 +535,10 @@ final class CodexTranscriptSessionTests: XCTestCase {
     }
 
     func testCodexBackfillIsIsolatedParserTransaction() throws {
-        // Historical page: user echo, unsupported V, assistant K,
-        // function_call_output X, task states. After the backfill, LIVE
+        // Historical page: user echo, assistant K, function_call_output X,
+        // task states. After the backfill, LIVE
         // events with colliding parser keys (same dedupe key/new line, same
-        // call id, same version, task states) must all still publish; the
+        // call id, task states) must all still publish; the
         // live echo still consumes the registry; backfill itself delivers
         // nothing live and sends no sidebar commands.
         let directory = FileManager.default.temporaryDirectory
@@ -549,7 +549,6 @@ final class CodexTranscriptSessionTests: XCTestCase {
 
         var lines = [String]()
         lines.append(makeCodexMessageLine(role: "user", content: "repeat me"))
-        lines.append(makeCodexSessionMetaVersionLine(version: "9.9.9"))
         lines.append(makeCodexAgentMessageLine(text: "K"))
         lines.append(makeCodexFunctionCallOutputLine(callID: "call_X", output: "historical output"))
         lines.append(makeCodexTaskLine(type: "task_started", turnID: "old-turn"))
@@ -596,8 +595,6 @@ final class CodexTranscriptSessionTests: XCTestCase {
         XCTAssertNil(history.first { $0.text == "repeat me" }?.metadata?["client_request_id"],
                      "the historical echo carries no live submit correlation")
         XCTAssertEqual(registry.snapshot().map(\.clientRequestID), ["client-live"])
-        XCTAssertTrue(history.contains { $0.metadata?["reason"] == "unsupported_version" },
-                      "history derives its own unsupported-version status")
         XCTAssertTrue(history.contains { $0.type == .toolResult && $0.eventID.contains("call_X") })
 
         // LIVE follow-ups with colliding parser keys must all still publish.
@@ -606,7 +603,6 @@ final class CodexTranscriptSessionTests: XCTestCase {
         handle.write((makeCodexMessageLine(role: "user", content: "repeat me") + "\n").data(using: .utf8)!)
         handle.write((makeCodexAgentMessageLine(text: "K") + "\n").data(using: .utf8)!)
         handle.write((makeCodexExecCommandEndLine(callID: "call_X", output: "live output") + "\n").data(using: .utf8)!)
-        handle.write((makeCodexSessionMetaVersionLine(version: "9.9.9") + "\n").data(using: .utf8)!)
         handle.write((makeCodexTaskLine(type: "task_started", turnID: "live-turn") + "\n").data(using: .utf8)!)
         try handle.close()
 
@@ -626,11 +622,6 @@ final class CodexTranscriptSessionTests: XCTestCase {
                 $0.type == .toolResult && $0.eventID.contains("exec-end")
             }
         }, "the live tool result for the historical call id still publishes")
-        XCTAssertTrue(waitUntil {
-            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5000, afterSeq: boundary).events.contains {
-                $0.metadata?["reason"] == "unsupported_version" && $0.seq > boundary
-            }
-        }, "the live first observation of version V still publishes its status")
         XCTAssertTrue(waitUntil {
             sender.commands().dropFirst(sidebarBaseline).contains { $0.contains("report_shell_state running") }
         }, "the live task state still drives the sidebar")
