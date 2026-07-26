@@ -18,6 +18,8 @@ protocol AgentTranscriptSession: AnyObject {
     func start()
     func update(record: AgentSessionRegistryRecord)
     func backfill(beforeSeq: Int, limit: Int) -> Bool
+    func beforeCursorBackfill(beforeSeq: Int,
+                              limit: Int) -> AgentBeforeCursorBackfillResult
     func stop()
     // Typed after-cursor seam (see AgentHistoryContract.swift). Defaults
     // for sessions that predate the contract: hubOnly plan / unavailable
@@ -531,6 +533,17 @@ final class AgentSessionRegistryMonitor {
     func backfillSession(sessionID: String, beforeSeq: Int, limit: Int) -> Bool {
         let session: AgentTranscriptSession? = queue.sync { sessions[sessionID] }
         return session?.backfill(beforeSeq: beforeSeq, limit: limit) ?? false
+    }
+
+    func beforeCursorBackfillSession(
+        sessionID: String,
+        beforeSeq: Int,
+        limit: Int
+    ) -> AgentBeforeCursorBackfillResult {
+        let session: AgentTranscriptSession? = queue.sync { sessions[sessionID] }
+        return session?.beforeCursorBackfill(beforeSeq: beforeSeq, limit: limit)
+            ?? AgentBeforeCursorBackfillResult(didBackfill: false,
+                                               rawContinuation: .unknown)
     }
 
     // Typed after-cursor seams: the registry queue only resolves the session

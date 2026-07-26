@@ -56,6 +56,21 @@ struct AgentAfterCursorStep: Sendable {
     let events: [AgentEvent]
 }
 
+// One legacy before-cursor backfill's source-owned coverage result. Visible
+// Hub event counts cannot prove raw transcript EOF because valid raw records
+// may produce no public event. `.unknown` preserves the legacy contract for
+// transcript sessions that have not adopted this seam.
+struct AgentBeforeCursorBackfillResult: Equatable, Sendable {
+    enum RawContinuation: Equatable, Sendable {
+        case more
+        case end
+        case unknown
+    }
+
+    let didBackfill: Bool
+    let rawContinuation: RawContinuation
+}
+
 // Session seam: the session is the sole authority for public sequence ↔
 // raw transcript position mapping. Sessions without typed after-cursor
 // support inherit the defaults below (hubOnly plan, unavailable step,
@@ -63,6 +78,13 @@ struct AgentAfterCursorStep: Sendable {
 // live-lease best-effort window — the legacy after backfill is never
 // consulted.
 extension AgentTranscriptSession {
+    func beforeCursorBackfill(beforeSeq: Int,
+                              limit: Int) -> AgentBeforeCursorBackfillResult {
+        AgentBeforeCursorBackfillResult(didBackfill: backfill(beforeSeq: beforeSeq,
+                                                              limit: limit),
+                                        rawContinuation: .unknown)
+    }
+
     func afterCursorPlan(afterSeq: Int,
                          expectedEpoch: AgentHistoryEpoch) -> AgentAfterCursorPlan {
         AgentAfterCursorPlan(epoch: expectedEpoch, mode: .hubOnly)

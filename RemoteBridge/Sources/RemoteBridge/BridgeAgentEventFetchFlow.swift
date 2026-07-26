@@ -38,6 +38,37 @@ enum BridgeAgentEventFetchFlow {
                     afterSeq: Int?,
                     afterCursorSeams: AfterCursorSeams = .legacyNeutral,
                     backfill: (_ sessionID: String, _ beforeSeq: Int, _ limit: Int) -> Bool) -> Output {
+        run(eventHub: eventHub,
+            workspaceID: workspaceID,
+            sessionID: sessionID,
+            limit: limit,
+            maxBytes: maxBytes,
+            beforeSeq: beforeSeq,
+            afterSeq: afterSeq,
+            afterCursorSeams: afterCursorSeams,
+            beforeCursorBackfill: { sessionID, beforeSeq, limit in
+                AgentBeforeCursorBackfillResult(
+                    didBackfill: backfill(sessionID, beforeSeq, limit),
+                    rawContinuation: .unknown
+                )
+            })
+    }
+
+    static func run(
+        eventHub: AgentEventHub,
+        workspaceID: String,
+        sessionID: String?,
+        limit: Int,
+        maxBytes: Int? = nil,
+        beforeSeq: Int?,
+        afterSeq: Int?,
+        afterCursorSeams: AfterCursorSeams = .legacyNeutral,
+        beforeCursorBackfill: (
+            _ sessionID: String,
+            _ beforeSeq: Int,
+            _ limit: Int
+        ) -> AgentBeforeCursorBackfillResult
+    ) -> Output {
         if let sessionID, beforeSeq != nil || afterSeq != nil {
             return eventHub.withHistoricalRequestTransaction(sessionID: sessionID) {
                 runUnlocked(eventHub: eventHub,
@@ -48,7 +79,7 @@ enum BridgeAgentEventFetchFlow {
                             beforeSeq: beforeSeq,
                             afterSeq: afterSeq,
                             afterCursorSeams: afterCursorSeams,
-                            backfill: backfill)
+                            beforeCursorBackfill: beforeCursorBackfill)
             }
         }
         return runUnlocked(eventHub: eventHub,
@@ -59,7 +90,7 @@ enum BridgeAgentEventFetchFlow {
                            beforeSeq: beforeSeq,
                            afterSeq: afterSeq,
                            afterCursorSeams: afterCursorSeams,
-                           backfill: backfill)
+                           beforeCursorBackfill: beforeCursorBackfill)
     }
 
     private static func runUnlocked(
@@ -71,7 +102,11 @@ enum BridgeAgentEventFetchFlow {
         beforeSeq: Int?,
         afterSeq: Int?,
         afterCursorSeams: AfterCursorSeams,
-        backfill: (_ sessionID: String, _ beforeSeq: Int, _ limit: Int) -> Bool
+        beforeCursorBackfill: (
+            _ sessionID: String,
+            _ beforeSeq: Int,
+            _ limit: Int
+        ) -> AgentBeforeCursorBackfillResult
     ) -> Output {
         if let sessionID, let afterSeq, beforeSeq == nil {
             // The typed after path never reads shared history: its response
@@ -97,8 +132,12 @@ enum BridgeAgentEventFetchFlow {
             // another client would otherwise satisfy the limit and skip the
             // anchor-adjacent page forever. The session backfill is exact-
             // anchor, so the refetch below returns the adjacent page.
-            let backfilled = backfill(sessionID, beforeSeq, max(limit, transcriptBootstrapLineLimit))
-            if backfilled {
+            let backfillResult = beforeCursorBackfill(
+                sessionID,
+                beforeSeq,
+                max(limit, transcriptBootstrapLineLimit)
+            )
+            if backfillResult.didBackfill {
                 didBackfill = true
             }
             // Backfill may return false because it detected and revoked a
