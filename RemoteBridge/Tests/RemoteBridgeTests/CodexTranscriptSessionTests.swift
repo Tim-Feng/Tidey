@@ -3040,6 +3040,73 @@ final class CodexTranscriptSessionTests: XCTestCase {
         )
     }
 
+    func testCodexBeforeCursorContextInvalidationRevokesStaleWindowAndReattaches() throws {
+        let fixture = try makeCodexBeforeContextTwinFixture(prefix: "context-a")
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(
+            fixture.transcriptURL,
+            hub: hub,
+            readySentinel: "context-a-deep-\(fixture.lineCount - 1)"
+        )
+        defer { session.stop() }
+        let bootstrap = hub.fetch(workspaceID: "workspace",
+                                  sessionID: "session",
+                                  limit: 24)
+        let beforeSeq = bootstrap.oldestSeq
+        XCTAssertGreaterThan(beforeSeq, transcriptSessionStartedSequence)
+        let sourceAEpoch = hub.currentHistoryEpoch(sessionID: "session")
+
+        var backfillReadCount = 0
+        var replacementWriteError: Error?
+        session.tailerBackfillBeforeReadForTesting = {
+            backfillReadCount += 1
+            guard backfillReadCount == 2 else { return }
+            do {
+                try Data((self.makeCodexMessageLine(
+                    role: "assistant",
+                    content: "context-b-sentinel"
+                ) + "\n").utf8).write(to: fixture.transcriptURL, options: .atomic)
+            } catch {
+                replacementWriteError = error
+            }
+        }
+        let result = session.beforeCursorBackfill(beforeSeq: beforeSeq, limit: 500)
+        session.tailerBackfillBeforeReadForTesting = nil
+
+        XCTAssertNil(replacementWriteError)
+        XCTAssertEqual(backfillReadCount, 2,
+                       "the replacement lands during the context read")
+        XCTAssertFalse(result.didBackfill)
+        XCTAssertEqual(result.rawContinuation, .unavailable)
+        XCTAssertNil(result.authorityEpoch)
+        XCTAssertEqual(
+            hub.currentHistoryEpoch(sessionID: "session").generation,
+            sourceAEpoch.generation + 1,
+            "source replacement advances the Hub epoch exactly once"
+        )
+        XCTAssertFalse(
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 2000)
+                .events.contains {
+                    $0.text?.hasPrefix("context-a-") == true
+                },
+            "neither source A's live window nor its uncommitted historical replay survives"
+        )
+        XCTAssertTrue(waitUntil(timeout: 4) {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                .events.contains { $0.text == "context-b-sentinel" }
+        }, "the resolver reattaches source B")
+        let sourceBEpoch = hub.currentHistoryEpoch(sessionID: "session")
+        XCTAssertTrue(session.validateHistoryEpoch(sourceBEpoch))
+        XCTAssertEqual(sourceBEpoch.generation, sourceAEpoch.generation + 1,
+                       "reattaching source B does not reset the epoch again")
+        XCTAssertEqual(
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                .events.filter { $0.text == "context-b-sentinel" }.count,
+            1
+        )
+    }
+
     // Context records live OUTSIDE the owned window and carry NO coverage
     // or semantic-trust authority: a malformed (or non-agent-message)
     // predecessor just means "no adjacency context". Its own page judges
