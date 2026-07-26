@@ -253,8 +253,9 @@
   - missing/invalid/stalled raw authority 要回明確 unavailable，不能沿用 visible cache 回 `has_more=false`；即使 cursor 在 offset 0，也要先 source fence，避免同路徑 replacement 的舊 cursor誤報 BOF
   - raw frontier 本身仍不夠：replay 必須保持 semantic trust、完成 post-replay source fence，且 `.more` / `.end` 要綁定產生它的 Hub epoch；flow refetch 前後 epoch 都一致，才可對 client 宣告 continuation / BOF
   - source reset 對 Hub 可見的資料撤銷與 epoch 前進必須共用一個 atomic linearization point；先清 history、下一次 call 才 bump epoch，會讓並行 fetch 接受「舊 epoch＋空 history」並誤報 BOF
+  - positive seq 若不在 exact raw map，仍可作保守的 virtual cursor：必須保留 `(lineOffset, ordinal)` 並重讀 anchor line，再以 public seq 投影；只有 exact raw `(0, 0)` 能直接證明 BOF，否則 offset-zero synthetic 會讓第一筆 raw 靜默消失
   - paging 測試要像正式 client 一樣只用 wire `oldest_seq` / `has_more` 前進與停止，不能從 payload 自己找最小正 seq，否則會把錯誤 bounds 藏掉
-  - 補證：`8bc228295` `43c8266a6` `2ec452f29` `2bc9efc28` `70c0bf01c` `2a6683494` `a4c4c2abd` `ea21da0ff` `4e793551f` `619064a43` `50ba1c32b` `128a54451` `da9863369` `c7b78c5c7` `f1d04fab4` `3e4469dd5` `487be0d9c`
+  - 補證：`8bc228295` `43c8266a6` `2ec452f29` `2bc9efc28` `70c0bf01c` `2a6683494` `a4c4c2abd` `ea21da0ff` `4e793551f` `619064a43` `50ba1c32b` `128a54451` `da9863369` `c7b78c5c7` `f1d04fab4` `3e4469dd5` `487be0d9c` `08fab6ccf`
 - 跨頁關聯事件要用 source-wide closure evidence，再做 anchor-owned atomic projection
   - Ask opener / terminal與 `/context` command / summary可能隔很多頁；單頁內配對會把已結束的舊 opener誤顯示成待輸入
   - 先增量建立全 source closure index，再一次替換該 anchor擁有的 historical window；最後套完 workspace排序、limit與byte budget後，還要重驗 terminal仍在實際 slice，否則 fail closed隱藏 opener
