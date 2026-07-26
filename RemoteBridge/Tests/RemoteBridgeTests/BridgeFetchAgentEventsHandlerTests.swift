@@ -12,6 +12,12 @@ final class BridgeFetchAgentEventsHandlerTests: XCTestCase {
         """
     }
 
+    private func makeCodexTokenCountLine() -> String {
+        """
+        {"timestamp":"2026-04-12T12:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{}}}
+        """
+    }
+
     private func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
@@ -310,6 +316,362 @@ final class BridgeFetchAgentEventsHandlerTests: XCTestCase {
         let expectedUnion = (0..<30).map { "old-\($0)" }
         XCTAssertEqual(Set(union), Set(expectedUnion), "no gap in B's union, got \(union)")
         XCTAssertEqual(union.count, expectedUnion.count, "no duplicate in B's union, got \(union)")
+    }
+
+    // B22 RED: the production iOS older-history request uses the wire
+    // oldest_seq as its next before_seq and stops on has_more == false.
+    // Codex rollouts contain many legal eventless records, so one 500-raw-
+    // record backfill can yield far fewer than 500 visible products while
+    // substantial raw history still remains below that page. The handler
+    // must preserve raw-frontier authority until real BOF, and the
+    // synthetic session_started seq 0 must never become a nonterminal
+    // paging cursor.
+    func testHandlerBeforeCursorCodexHistoryUsesRawFrontierUntilBOF() throws {
+        let supportDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BridgeFetchHandlerTests-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: .default)
+        defer { try? FileManager.default.removeItem(at: supportDirectory) }
+
+        // Realistic low semantic density: exactly 1,800 raw records, but
+        // only every third record produces a visible assistant event.
+        // The other 1,200 token_count records are legal eventless progress,
+        // not malformed input and not semantic-trust poison.
+        let transcriptURL = supportDirectory.appendingPathComponent("rollout-low-density.jsonl",
+                                                                    isDirectory: false)
+        var lines = [String]()
+        var expectedVisibleIDs = [String]()
+        var expectedVisibleTexts = [String]()
+        var runningOffset = 0
+        for rawIndex in 0..<1_800 {
+            let line: String
+            if rawIndex.isMultiple(of: 3) {
+                let visibleIndex = rawIndex / 3
+                let text = String(format: "history-%04d", visibleIndex)
+                let seq = transcriptEventSequence(lineOffset: runningOffset, ordinal: 0)
+                line = makeCodexMessageLine(role: "assistant", content: text)
+                expectedVisibleIDs.append("assistant:session-before:\(seq)")
+                expectedVisibleTexts.append(text)
+            } else {
+                line = makeCodexTokenCountLine()
+            }
+            lines.append(line)
+            runningOffset += line.utf8.count + 1
+        }
+        XCTAssertEqual(expectedVisibleIDs.count, 600)
+        XCTAssertEqual(lines.count - expectedVisibleIDs.count, 1_200)
+        try (lines.joined(separator: "\n") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let fixtureBytes = try XCTUnwrap(
+            (FileManager.default.attributesOfItem(atPath: transcriptURL.path)[.size] as? NSNumber)?
+                .intValue)
+        XCTAssertGreaterThan(fixtureBytes, 64 * 1024,
+                             "precondition: history crosses the reader chunk boundary")
+
+        // created_at is deliberately newer than the raw event timestamps:
+        // the handler's timestamp merge can place session_started(seq: 0)
+        // after historical rows on the wire, matching the live failure.
+        let record = """
+        {
+          "version": 1,
+          "vendor": "codex",
+          "workspace_id": "workspace-before",
+          "session_id": "session-before",
+          "panel_id": "panel-before",
+          "pid": \(ProcessInfo.processInfo.processIdentifier),
+          "cwd": "/tmp",
+          "created_at": "2026-07-26T12:00:00Z",
+          "transcript_path": "\(transcriptURL.path)"
+        }
+        """
+        try Data(record.utf8).write(
+            to: paths.codexAgentSessionsDirectory.appendingPathComponent("codex-session-before.json"))
+
+        let hub = AgentEventHub()
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: .default,
+                                                  hub: hub,
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+                                                  parentPIDLookup: { _ in nil })
+        try monitor.start()
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace-before",
+                      sessionID: "session-before",
+                      limit: 10).events.contains { $0.text == "history-0599" }
+        }, "the real Codex session must bootstrap through the registry monitor")
+
+        let handler = WebSocketFrameHandler(socketClient: TideySocketClient(locator: TideySocketLocator()),
+                                            eventHub: hub,
+                                            workspaceEventHub: WorkspaceEventHub(),
+                                            registryMonitor: monitor,
+                                            observability: BridgeObservabilityCenter(),
+                                            bridgePort: 0,
+                                            cloudflaredManager: BridgeCloudflaredManager(binaryResolver: { nil }),
+                                            ordinaryTmuxProjectionContext: OrdinaryTmuxProjectionContext())
+        let channel = EmbeddedChannel(handler: handler)
+        defer { _ = try? channel.finish() }
+        let context = try channel.pipeline.syncOperations.context(handler: handler)
+
+        struct WireEvent {
+            let eventID: String
+            let seq: Int
+            let type: String
+            let text: String?
+        }
+        struct WirePage {
+            let events: [WireEvent]
+            let oldestSeq: Int
+            let newestSeq: Int
+            let hasMore: Bool
+        }
+        func wireFetch(limit: Int, maxBytes: Int, beforeSeq: Int?) throws -> WirePage {
+            var params: [String: JSONValue] = [
+                "workspace_id": .string("workspace-before"),
+                "session_id": .string("session-before"),
+                "limit": .number(Double(limit)),
+                "max_bytes": .number(Double(maxBytes)),
+            ]
+            if let beforeSeq {
+                params["before_seq"] = .number(Double(beforeSeq))
+            }
+            let request = BridgeRequest(id: UUID().uuidString,
+                                        action: "fetch_agent_events",
+                                        params: params)
+            let result = try XCTUnwrap(handler.handleLocalRequest(request, context: context),
+                                       "the handler must dispatch fetch_agent_events locally")
+            XCTAssertTrue(result.response.ok)
+            XCTAssertNil(result.response.error)
+            let values = try XCTUnwrap(result.response.result?["events"]?.arrayValue)
+            let events: [WireEvent] = try values.map { value in
+                let object = try XCTUnwrap(value.objectValue)
+                return WireEvent(eventID: try XCTUnwrap(object["event_id"]?.stringValue),
+                                 seq: try XCTUnwrap(object["seq"]?.intValue),
+                                 type: try XCTUnwrap(object["type"]?.stringValue),
+                                 text: object["text"]?.stringValue)
+            }
+            return WirePage(events: events,
+                            oldestSeq: try XCTUnwrap(result.response.result?["oldest_seq"]?.intValue),
+                            newestSeq: try XCTUnwrap(result.response.result?["newest_seq"]?.intValue),
+                            hasMore: try XCTUnwrap(result.response.result?["has_more"]?.boolValue))
+        }
+
+        // Exact production iOS request shapes.
+        let bootstrap = try wireFetch(limit: 24, maxBytes: 80 * 1024, beforeSeq: nil)
+        let bootstrapVisible = bootstrap.events.filter { $0.type == "assistant_message" }
+        XCTAssertEqual(bootstrapVisible.map(\.eventID), Array(expectedVisibleIDs.suffix(24)))
+        XCTAssertEqual(bootstrapVisible.compactMap(\.text), Array(expectedVisibleTexts.suffix(24)))
+        XCTAssertTrue(bootstrap.hasMore)
+        XCTAssertGreaterThan(bootstrap.oldestSeq, 0)
+
+        var visibleEvents = bootstrapVisible
+        var seenVisibleIDs = Set(bootstrapVisible.map(\.eventID))
+        var cursor = bootstrap.oldestSeq
+        var didReachBOF = false
+        var olderPageCount = 0
+        var terminalPage: WirePage?
+        for _ in 0..<(expectedVisibleIDs.count + 2) {
+            let requestCursor = cursor
+            let page = try wireFetch(limit: 500,
+                                     maxBytes: 160 * 1024,
+                                     beforeSeq: requestCursor)
+            olderPageCount += 1
+            let pageVisible = page.events.filter { $0.type == "assistant_message" }
+            if olderPageCount == 1 {
+                XCTAssertLessThan(pageVisible.count, 500,
+                                  "precondition: raw density leaves the visible page below the count limit")
+                XCTAssertTrue(page.hasMore,
+                              "raw frontier, not visible count, keeps the first sparse page nonterminal")
+            }
+            XCTAssertTrue(pageVisible.allSatisfy { $0.seq < requestCursor },
+                          "every older-history product lies below its wire cursor")
+            for event in pageVisible {
+                XCTAssertTrue(seenVisibleIDs.insert(event.eventID).inserted,
+                              "visible event \(event.eventID) must appear exactly once")
+                visibleEvents.append(event)
+            }
+
+            if page.hasMore {
+                XCTAssertGreaterThan(page.oldestSeq, 0,
+                                     "session_started seq 0 is not a nonterminal before cursor")
+                XCTAssertLessThan(page.oldestSeq, requestCursor,
+                                  "each nonterminal wire cursor strictly retreats")
+                cursor = page.oldestSeq
+            } else {
+                terminalPage = page
+                didReachBOF = true
+                break
+            }
+        }
+
+        XCTAssertTrue(didReachBOF, "paging terminates only when the raw source reaches BOF")
+        XCTAssertEqual(terminalPage?.oldestSeq, transcriptSessionStartedSequence,
+                       "seq 0 is exposed as the cursor bound only on the proven BOF page")
+        XCTAssertTrue(terminalPage?.events.contains {
+            $0.type == "session_started" && $0.seq == transcriptSessionStartedSequence
+        } == true, "the terminal page retains the synthetic session-start marker")
+        XCTAssertGreaterThan(olderPageCount, 1,
+                             "the low-density fixture spans multiple iOS older-history pages")
+        let orderedVisible = visibleEvents.sorted {
+            ($0.seq, $0.eventID) < ($1.seq, $1.eventID)
+        }
+        XCTAssertEqual(orderedVisible.count, 600)
+        XCTAssertEqual(orderedVisible.map(\.eventID), expectedVisibleIDs,
+                       "wire paging returns the exact 600 visible Codex identities")
+        XCTAssertEqual(orderedVisible.compactMap(\.text), expectedVisibleTexts,
+                       "wire paging returns every visible history row without a gap")
+    }
+
+    // B22 RED: raw-frontier progress can cross a page made entirely of blank
+    // lines. Such a page has no JSONL records and therefore no public events,
+    // but it is not BOF. The server must continue the same source-owned walk
+    // until it reaches an older public event or real BOF; returning has_more
+    // with the unchanged wire cursor would make the iOS client retry forever.
+    func testHandlerBeforeCursorCodexHistoryCrossesBlankRawGapWithoutStalling() throws {
+        let supportDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BridgeFetchHandlerTests-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: .default)
+        defer { try? FileManager.default.removeItem(at: supportDirectory) }
+
+        // Oldest -> newest:
+        // 1. one public event whose >64 KiB raw line makes the blank page's
+        //    backward scan stop inside this partial line (not at byte zero);
+        // 2. 600 truly blank lines, which are raw progress but no records;
+        // 3. exactly 500 recent public events, which form the bootstrap tail.
+        let transcriptURL = supportDirectory.appendingPathComponent("rollout-blank-gap.jsonl",
+                                                                    isDirectory: false)
+        let beforeGapText = "before-gap-" + String(repeating: "x", count: 70 * 1024)
+        let recentTexts = (0..<500).map { String(format: "recent-%04d", $0) }
+        let lines = [makeCodexMessageLine(role: "assistant", content: beforeGapText)]
+            + Array(repeating: "", count: 600)
+            + recentTexts.map { makeCodexMessageLine(role: "assistant", content: $0) }
+        try (lines.joined(separator: "\n") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let fixtureBytes = try XCTUnwrap(
+            (FileManager.default.attributesOfItem(atPath: transcriptURL.path)[.size] as? NSNumber)?
+                .intValue)
+        XCTAssertGreaterThan(fixtureBytes, 2 * 64 * 1024,
+                             "precondition: the fixture crosses two reader chunks")
+
+        let record = """
+        {
+          "version": 1,
+          "vendor": "codex",
+          "workspace_id": "workspace-blank-gap",
+          "session_id": "session-blank-gap",
+          "panel_id": "panel-blank-gap",
+          "pid": \(ProcessInfo.processInfo.processIdentifier),
+          "cwd": "/tmp",
+          "created_at": "2026-07-26T12:00:00Z",
+          "transcript_path": "\(transcriptURL.path)"
+        }
+        """
+        try Data(record.utf8).write(
+            to: paths.codexAgentSessionsDirectory.appendingPathComponent("codex-session-blank-gap.json"))
+
+        let hub = AgentEventHub()
+        let monitor = AgentSessionRegistryMonitor(paths: paths,
+                                                  fileManager: .default,
+                                                  hub: hub,
+                                                  tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+                                                  parentPIDLookup: { _ in nil })
+        try monitor.start()
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace-blank-gap",
+                      sessionID: "session-blank-gap",
+                      limit: 10).events.contains { $0.text == "recent-0499" }
+        }, "the real Codex session must bootstrap through the registry monitor")
+
+        let handler = WebSocketFrameHandler(socketClient: TideySocketClient(locator: TideySocketLocator()),
+                                            eventHub: hub,
+                                            workspaceEventHub: WorkspaceEventHub(),
+                                            registryMonitor: monitor,
+                                            observability: BridgeObservabilityCenter(),
+                                            bridgePort: 0,
+                                            cloudflaredManager: BridgeCloudflaredManager(binaryResolver: { nil }),
+                                            ordinaryTmuxProjectionContext: OrdinaryTmuxProjectionContext())
+        let channel = EmbeddedChannel(handler: handler)
+        defer { _ = try? channel.finish() }
+        let context = try channel.pipeline.syncOperations.context(handler: handler)
+
+        struct WireEvent {
+            let seq: Int
+            let type: String
+            let text: String?
+        }
+        struct WirePage {
+            let events: [WireEvent]
+            let oldestSeq: Int
+            let hasMore: Bool
+        }
+        func wireFetch(limit: Int, maxBytes: Int, beforeSeq: Int?) throws -> WirePage {
+            var params: [String: JSONValue] = [
+                "workspace_id": .string("workspace-blank-gap"),
+                "session_id": .string("session-blank-gap"),
+                "limit": .number(Double(limit)),
+                "max_bytes": .number(Double(maxBytes)),
+            ]
+            if let beforeSeq {
+                params["before_seq"] = .number(Double(beforeSeq))
+            }
+            let request = BridgeRequest(id: UUID().uuidString,
+                                        action: "fetch_agent_events",
+                                        params: params)
+            let result = try XCTUnwrap(handler.handleLocalRequest(request, context: context))
+            XCTAssertTrue(result.response.ok)
+            XCTAssertNil(result.response.error)
+            let values = try XCTUnwrap(result.response.result?["events"]?.arrayValue)
+            let events: [WireEvent] = try values.map { value in
+                let object = try XCTUnwrap(value.objectValue)
+                return WireEvent(seq: try XCTUnwrap(object["seq"]?.intValue),
+                                 type: try XCTUnwrap(object["type"]?.stringValue),
+                                 text: object["text"]?.stringValue)
+            }
+            return WirePage(events: events,
+                            oldestSeq: try XCTUnwrap(result.response.result?["oldest_seq"]?.intValue),
+                            hasMore: try XCTUnwrap(result.response.result?["has_more"]?.boolValue))
+        }
+
+        let bootstrap = try wireFetch(limit: 24, maxBytes: 80 * 1024, beforeSeq: nil)
+        XCTAssertEqual(bootstrap.events
+            .filter { $0.type == "assistant_message" }
+            .compactMap(\.text),
+            Array(recentTexts.suffix(24)))
+        XCTAssertTrue(bootstrap.hasMore)
+        XCTAssertGreaterThan(bootstrap.oldestSeq, 0)
+
+        // Page one consumes the 476 recent events below the bootstrap cursor.
+        // Its next wire cursor sits immediately above the blank raw gap.
+        let pageBeforeGap = try wireFetch(limit: 500,
+                                          maxBytes: 160 * 1024,
+                                          beforeSeq: bootstrap.oldestSeq)
+        XCTAssertEqual(pageBeforeGap.events
+            .filter { $0.type == "assistant_message" }
+            .compactMap(\.text),
+            Array(recentTexts.prefix(476)))
+        XCTAssertTrue(pageBeforeGap.hasMore)
+        XCTAssertGreaterThan(pageBeforeGap.oldestSeq, 0)
+        XCTAssertLessThan(pageBeforeGap.oldestSeq, bootstrap.oldestSeq)
+
+        let gapCursor = pageBeforeGap.oldestSeq
+        let pageAcrossGap = try wireFetch(limit: 500,
+                                          maxBytes: 160 * 1024,
+                                          beforeSeq: gapCursor)
+        if pageAcrossGap.hasMore, pageAcrossGap.oldestSeq >= gapCursor {
+            XCTFail("same-cursor stall across blank raw page: requested \(gapCursor), "
+                + "received oldest_seq \(pageAcrossGap.oldestSeq) with has_more=true")
+            return
+        }
+
+        XCTAssertFalse(pageAcrossGap.hasMore,
+                       "the same request crosses the blank page and proves real BOF")
+        XCTAssertEqual(pageAcrossGap.oldestSeq, transcriptSessionStartedSequence)
+        XCTAssertTrue(pageAcrossGap.events.contains {
+            $0.type == "assistant_message" && $0.text == beforeGapText
+        }, "the public event below the blank raw gap is not skipped")
+        XCTAssertTrue(pageAcrossGap.events.contains {
+            $0.type == "session_started" && $0.seq == transcriptSessionStartedSequence
+        }, "the synthetic start marker appears only on the terminal BOF page")
     }
 
     private func makeClaudeUserLine(uuid: String, sessionID: String, content: String) -> String {

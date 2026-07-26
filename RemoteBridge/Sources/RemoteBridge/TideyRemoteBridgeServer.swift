@@ -1039,11 +1039,12 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                                                      maxBytes: maxBytes,
                                                      beforeSeq: beforeSeq,
                                                      afterSeq: afterSeq,
-                                                     afterCursorSeams: afterCursorSeams) { [registryMonitor] sessionID, beforeSeq, limit in
-                registryMonitor.backfillSession(sessionID: sessionID,
-                                                 beforeSeq: beforeSeq,
-                                                 limit: limit)
-            }
+                                                     afterCursorSeams: afterCursorSeams,
+                                                     beforeCursorBackfill: { [registryMonitor] sessionID, beforeSeq, limit in
+                registryMonitor.beforeCursorBackfillSession(sessionID: sessionID,
+                                                            beforeSeq: beforeSeq,
+                                                            limit: limit)
+            })
             let fetchResult = flow.fetchResult
             let didBackfill = flow.didBackfill
             observability.recordFetch(workspaceID: workspaceID,

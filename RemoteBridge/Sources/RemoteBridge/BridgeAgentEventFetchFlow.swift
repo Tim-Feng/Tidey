@@ -149,8 +149,34 @@ enum BridgeAgentEventFetchFlow {
                                          maxBytes: maxBytes,
                                          beforeSeq: beforeSeq,
                                          afterSeq: nil)
+            if backfillResult.rawContinuation == .more {
+                fetchResult = continuingBeforePage(fetchResult,
+                                                   requestedBeforeSeq: beforeSeq)
+            }
         }
         return Output(fetchResult: fetchResult, didBackfill: didBackfill)
+    }
+
+    private static func continuingBeforePage(
+        _ page: AgentEventHub.FetchResult,
+        requestedBeforeSeq: Int
+    ) -> AgentEventHub.FetchResult {
+        // Synthetic lifecycle markers have no raw transcript position. If
+        // raw authority proves there are older bytes, exposing seq 0 as the
+        // page bound would strand the iOS before cursor. Publish the marker
+        // only on a later page whose source authority proves real BOF.
+        let pageableEvents = page.events.filter { $0.seq > transcriptSessionStartedSequence }
+        guard let oldestSeq = pageableEvents.map(\.seq).min(),
+              let newestSeq = pageableEvents.map(\.seq).max() else {
+            return AgentEventHub.FetchResult(events: [],
+                                             oldestSeq: requestedBeforeSeq,
+                                             newestSeq: requestedBeforeSeq,
+                                             hasMore: true)
+        }
+        return AgentEventHub.FetchResult(events: pageableEvents,
+                                         oldestSeq: oldestSeq,
+                                         newestSeq: newestSeq,
+                                         hasMore: true)
     }
 
     // One attempt's classified result: epoch/source/lease invalidations are

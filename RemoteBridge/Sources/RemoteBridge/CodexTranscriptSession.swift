@@ -661,23 +661,41 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     }
 
     func backfill(beforeSeq: Int, limit: Int) -> Bool {
+        beforeCursorBackfill(beforeSeq: beforeSeq, limit: limit).didBackfill
+    }
+
+    func beforeCursorBackfill(beforeSeq: Int,
+                              limit: Int) -> AgentBeforeCursorBackfillResult {
         queue.sync {
+            func result(
+                didBackfill: Bool,
+                frontier: JSONLRawFrontier?
+            ) -> AgentBeforeCursorBackfillResult {
+                let continuation: AgentBeforeCursorBackfillResult.RawContinuation
+                if let frontier {
+                    continuation = frontier.reachedSourceStart ? .end : .more
+                } else {
+                    continuation = .unknown
+                }
+                return AgentBeforeCursorBackfillResult(didBackfill: didBackfill,
+                                                       rawContinuation: continuation)
+            }
             if tailer == nil {
                 resolveTranscriptIfPossible()
             }
             guard let tailer else {
-                return false
+                return result(didBackfill: false, frontier: nil)
             }
             // The accepted-sequence authority: cursor inversion goes
             // through the exact map first (a Hub-rebased public cursor has
             // no meaningful raw arithmetic), with the same base fallback
             // for never-rebased sequences.
             guard let beforePosition = transcriptEventPositionInCurrentSource(for: beforeSeq) else {
-                return false
+                return result(didBackfill: false, frontier: nil)
             }
             let beforeOffset = beforePosition.lineOffset
             guard beforeOffset > 0 else {
-                return false
+                return result(didBackfill: false, frontier: nil)
             }
             let effectiveLimit = min(limit, historicalReplayWindowCapacity)
             lastRequestedBackfillAnchorSeq = beforeSeq
@@ -686,21 +704,48 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             while true {
                 isCollectingBackfillPage = true
                 collectedBackfillPage = []
-                let loaded = (try? tailer.backfill(beforeOffset: pageAnchorOffset,
-                                                   limit: effectiveLimit))?.didRead ?? false
+                let readResult = try? tailer.backfill(beforeOffset: pageAnchorOffset,
+                                                      limit: effectiveLimit)
                 isCollectingBackfillPage = false
-                guard loaded, collectedBackfillPage.isEmpty == false else {
-                    return loadedAny
+                guard let readResult,
+                      let frontier = readResult.rawFrontier else {
+                    return result(didBackfill: loadedAny,
+                                  frontier: nil)
                 }
-                loadedAny = true
-                let pageMinOffset = collectedBackfillPage.map(\.offset).min() ?? pageAnchorOffset
-                mergeHistoricalPage(collectedBackfillPage)
+                // Invalid raw bytes are not an eventless gap: they revoke
+                // semantic authority and must never be skipped to claim an
+                // older cursor or BOF.
+                guard frontier.containsInvalidRecord == false else {
+                    return result(didBackfill: loadedAny,
+                                  frontier: nil)
+                }
+                if readResult.didRead, collectedBackfillPage.isEmpty == false {
+                    loadedAny = true
+                    mergeHistoricalPage(collectedBackfillPage)
+                    let products = replayHistoricalWindow()
+                    if products.contains(where: { $0.seq < beforeSeq }) {
+                        collectedBackfillPage = []
+                        return result(didBackfill: true,
+                                      frontier: frontier)
+                    }
+                }
                 collectedBackfillPage = []
-                let products = replayHistoricalWindow()
-                if products.contains(where: { $0.seq < beforeSeq }) || pageMinOffset <= 0 {
-                    return true
+
+                // A blank-only scan is real raw progress even though the
+                // tailer delivered no JSONL record. Continue from its actual
+                // byte floor until a public event appears or raw BOF is
+                // proven; returning `.more` with the unchanged public cursor
+                // would make the iOS client retry forever.
+                if frontier.reachedSourceStart {
+                    return result(didBackfill: loadedAny,
+                                  frontier: frontier)
                 }
-                pageAnchorOffset = pageMinOffset
+                guard let nextAnchorOffset = frontier.minimumRawOffset,
+                      nextAnchorOffset < pageAnchorOffset else {
+                    return result(didBackfill: loadedAny,
+                                  frontier: nil)
+                }
+                pageAnchorOffset = nextAnchorOffset
             }
         }
     }
