@@ -75,6 +75,18 @@ struct AgentBeforeCursorBackfillResult: Equatable, Sendable {
 
     let didBackfill: Bool
     let rawContinuation: RawContinuation
+    // Source-proven `.more` / `.end` is meaningful only inside the Hub epoch
+    // in which the session derived it. Legacy `.unknown` and every
+    // unavailable result remain unbound.
+    let authorityEpoch: AgentHistoryEpoch?
+
+    init(didBackfill: Bool,
+         rawContinuation: RawContinuation,
+         authorityEpoch: AgentHistoryEpoch? = nil) {
+        self.didBackfill = didBackfill
+        self.rawContinuation = rawContinuation
+        self.authorityEpoch = authorityEpoch
+    }
 }
 
 // Session seam: the session is the sole authority for public sequence ↔

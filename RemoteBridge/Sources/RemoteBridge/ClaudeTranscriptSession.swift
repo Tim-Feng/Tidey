@@ -3520,7 +3520,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         queue.sync {
             func result(
                 didBackfill: Bool,
-                frontier: JSONLRawFrontier?
+                frontier: JSONLRawFrontier?,
+                authorityEpoch: AgentHistoryEpoch? = nil
             ) -> AgentBeforeCursorBackfillResult {
                 guard let frontier else {
                     return AgentBeforeCursorBackfillResult(
@@ -3529,7 +3530,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 }
                 return AgentBeforeCursorBackfillResult(
                     didBackfill: didBackfill,
-                    rawContinuation: frontier.reachedSourceStart ? .end : .more)
+                    rawContinuation: frontier.reachedSourceStart ? .end : .more,
+                    authorityEpoch: authorityEpoch)
             }
             if tailer == nil {
                 resolveTranscriptIfPossible()
@@ -3547,12 +3549,14 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 failHistoricalClosureCoverage(beforeSeq: beforeSeq)
                 return result(didBackfill: false, frontier: nil)
             }
+            let authorityEpoch = hub.currentHistoryEpoch(sessionID: record.sessionID)
             guard let beforePosition = transcriptEventPositionInCurrentSource(for: beforeSeq) else {
                 return result(didBackfill: false, frontier: nil)
             }
             guard beforePosition.lineOffset > 0 || beforePosition.ordinal > 0 else {
                 return AgentBeforeCursorBackfillResult(didBackfill: false,
-                                                       rawContinuation: .end)
+                                                       rawContinuation: .end,
+                                                       authorityEpoch: authorityEpoch)
             }
             // Closure knowledge is three-state: closed, genuinely open, or
             // unknown because the source could not be indexed. Unknown must
@@ -3690,7 +3694,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                                     anchorSeq: beforeSeq)
                         historicalReplayOpenerEventIDs = []
                         return result(didBackfill: true,
-                                      frontier: frontier)
+                                      frontier: frontier,
+                                      authorityEpoch: authorityEpoch)
                     }
                 }
 
@@ -3699,7 +3704,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                                 events: [],
                                                 anchorSeq: beforeSeq)
                     return result(didBackfill: loadedAnyRawPage,
-                                  frontier: frontier)
+                                  frontier: frontier,
+                                  authorityEpoch: authorityEpoch)
                 }
                 guard let nextAnchorOffset = frontier.minimumRawOffset,
                       nextAnchorOffset < pageAnchorOffset

@@ -672,7 +672,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         queue.sync {
             func result(
                 didBackfill: Bool,
-                frontier: JSONLRawFrontier?
+                frontier: JSONLRawFrontier?,
+                authorityEpoch: AgentHistoryEpoch? = nil
             ) -> AgentBeforeCursorBackfillResult {
                 let continuation: AgentBeforeCursorBackfillResult.RawContinuation
                 if let frontier {
@@ -681,7 +682,10 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                     continuation = .unavailable
                 }
                 return AgentBeforeCursorBackfillResult(didBackfill: didBackfill,
-                                                       rawContinuation: continuation)
+                                                       rawContinuation: continuation,
+                                                       authorityEpoch: frontier == nil
+                                                           ? nil
+                                                           : authorityEpoch)
             }
             if tailer == nil {
                 resolveTranscriptIfPossible()
@@ -701,6 +705,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             guard sourceSemanticTrust else {
                 return result(didBackfill: false, frontier: nil)
             }
+            let authorityEpoch = hub.currentHistoryEpoch(sessionID: record.sessionID)
             // The accepted-sequence authority: cursor inversion goes
             // through the exact map first (a Hub-rebased public cursor has
             // no meaningful raw arithmetic), with the same base fallback
@@ -711,7 +716,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             let beforeOffset = beforePosition.lineOffset
             guard beforeOffset > 0 else {
                 return AgentBeforeCursorBackfillResult(didBackfill: false,
-                                                       rawContinuation: .end)
+                                                       rawContinuation: .end,
+                                                       authorityEpoch: authorityEpoch)
             }
             let effectiveLimit = min(limit, historicalReplayWindowCapacity)
             lastRequestedBackfillAnchorSeq = beforeSeq
@@ -770,7 +776,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                                                 anchorSeq: lastRequestedBackfillAnchorSeq)
                     if products.contains(where: { $0.seq < beforeSeq }) {
                         return result(didBackfill: true,
-                                      frontier: frontier)
+                                      frontier: frontier,
+                                      authorityEpoch: authorityEpoch)
                     }
                 }
 
@@ -781,7 +788,8 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                 // would make the iOS client retry forever.
                 if frontier.reachedSourceStart {
                     return result(didBackfill: loadedAny,
-                                  frontier: frontier)
+                                  frontier: frontier,
+                                  authorityEpoch: authorityEpoch)
                 }
                 guard let nextAnchorOffset = frontier.minimumRawOffset,
                       nextAnchorOffset < pageAnchorOffset else {
