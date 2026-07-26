@@ -140,6 +140,9 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     }
     // Fires inside validateHistoryEpoch before the source validation.
     var validateHistoryEpochBeforeSourceValidationForTesting: (() -> Void)?
+    // Fires inside beforeCursorBackfill after resolving the active tailer
+    // and before any source validation or offset-zero BOF decision.
+    var beforeCursorBackfillBeforeSourceValidationForTesting: (() -> Void)?
     // Fires inside afterCursorPlan before the source validation.
     var afterCursorPlanBeforeSourceValidationForTesting: (() -> Void)?
     // Fires during attach after the bootstrap window is collected and
@@ -686,6 +689,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             guard let tailer else {
                 return result(didBackfill: false, frontier: nil)
             }
+            beforeCursorBackfillBeforeSourceValidationForTesting?()
             // The accepted-sequence authority: cursor inversion goes
             // through the exact map first (a Hub-rebased public cursor has
             // no meaningful raw arithmetic), with the same base fallback
