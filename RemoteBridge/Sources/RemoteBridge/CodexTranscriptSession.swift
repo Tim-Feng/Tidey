@@ -1088,7 +1088,6 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         // and independently re-establishes trust.
         sourceSemanticTrust = false
         livePublishedRawFloor = nil
-        hub.replaceHistoricalEvents(sessionID: record.sessionID, events: [], anchorSeq: nil)
         resetTranscriptSourceBeforeHubEpochAdvanceForTesting?()
         hub.beginNewSourceEpoch(sessionID: record.sessionID)
         if startResolverNow {

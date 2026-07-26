@@ -1209,6 +1209,99 @@ final class CodexTranscriptSessionTests: XCTestCase {
                        "the identity switch must revoke A's history immediately, got \(all.compactMap(\.text).prefix(5))")
     }
 
+    func testCodexSourceResetHasOneAtomicHubVisibilityPoint() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptA = directory.appendingPathComponent("rollout-a.jsonl", isDirectory: false)
+        let transcriptB = directory.appendingPathComponent("rollout-b.jsonl", isDirectory: false)
+        let recent = (0..<transcriptBootstrapLineLimit).map {
+            makeCodexMessageLine(role: "assistant", content: "a-recent-\($0)")
+        }
+        try (([makeCodexMessageLine(role: "assistant", content: "a-history")] + recent)
+            .joined(separator: "\n") + "\n")
+            .write(to: transcriptA, atomically: true, encoding: .utf8)
+        try (makeCodexMessageLine(role: "assistant", content: "b-sentinel") + "\n")
+            .write(to: transcriptB, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptA.path),
+                                             fileManager: .default,
+                                             hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5)
+                .events.contains { $0.text == "a-recent-\(transcriptBootstrapLineLimit - 1)" }
+        })
+        let boundaryA = try XCTUnwrap(
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 2000)
+                .events
+                .filter { $0.text?.hasPrefix("a-recent-") == true }
+                .map(\.seq)
+                .min()
+        )
+        let oldEpoch = hub.currentHistoryEpoch(sessionID: "session")
+        let savedResult = session.beforeCursorBackfill(beforeSeq: boundaryA, limit: 500)
+        XCTAssertTrue(savedResult.didBackfill)
+        XCTAssertEqual(savedResult.rawContinuation, .end)
+        XCTAssertEqual(savedResult.authorityEpoch, oldEpoch)
+        XCTAssertTrue(
+            hub.fetch(workspaceID: "workspace",
+                      sessionID: "session",
+                      limit: 500,
+                      beforeSeq: boundaryA)
+                .events
+                .contains { $0.text == "a-history" },
+            "precondition: source A's proven BOF page is visible"
+        )
+
+        var epochAtResetSeam: AgentHistoryEpoch?
+        var flowAtResetSeam: BridgeAgentEventFetchFlow.Output?
+        session.resetTranscriptSourceBeforeHubEpochAdvanceForTesting = {
+            epochAtResetSeam = hub.currentHistoryEpoch(sessionID: "session")
+            flowAtResetSeam = BridgeAgentEventFetchFlow.run(
+                eventHub: hub,
+                workspaceID: "workspace",
+                sessionID: "session",
+                limit: 500,
+                beforeSeq: boundaryA,
+                afterSeq: nil,
+                beforeCursorBackfill: { _, _, _ in savedResult }
+            )
+        }
+        defer { session.resetTranscriptSourceBeforeHubEpochAdvanceForTesting = nil }
+
+        session.update(record: makeRecord(transcriptPath: transcriptB.path))
+
+        XCTAssertTrue(waitUntil { flowAtResetSeam != nil })
+        XCTAssertEqual(epochAtResetSeam, oldEpoch,
+                       "the Hub has not linearized the source reset at the seam")
+        let seamFlow = try XCTUnwrap(flowAtResetSeam)
+        XCTAssertFalse(seamFlow.beforeCursorUnavailable,
+                       "the still-current old epoch remains a coherent snapshot")
+        XCTAssertFalse(seamFlow.fetchResult.hasMore,
+                       "source A had already proven true BOF")
+        XCTAssertTrue(seamFlow.fetchResult.events.contains { $0.text == "a-history" },
+                      "old-epoch history must remain visible until the atomic epoch reset")
+
+        XCTAssertTrue(waitUntil(timeout: 4) {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                .events.contains { $0.text == "b-sentinel" }
+        }, "the resolver reattaches source B after the reset")
+        XCTAssertEqual(hub.currentHistoryEpoch(sessionID: "session").generation,
+                       oldEpoch.generation + 1,
+                       "the Hub reset has exactly one linearization point")
+        let replacementEvents = hub.fetch(workspaceID: "workspace",
+                                          sessionID: "session",
+                                          limit: 2000)
+            .events
+        XCTAssertFalse(replacementEvents.contains { $0.text?.hasPrefix("a-") == true },
+                       "all source A products are revoked after the epoch advances")
+        XCTAssertEqual(replacementEvents.filter { $0.text == "b-sentinel" }.count, 1)
+    }
+
     // MARK: G4 B17 typed after-cursor walk + invalidation revoke
 
     private func makeCacheSentinel(seq: Int) -> AgentEvent {
