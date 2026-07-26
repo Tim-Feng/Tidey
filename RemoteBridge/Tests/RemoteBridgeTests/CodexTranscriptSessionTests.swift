@@ -3726,6 +3726,73 @@ final class CodexTranscriptSessionTests: XCTestCase {
                        "a stale offset-zero cursor must not claim source-proven BOF")
     }
 
+    func testCodexBeforeCursorSourceReplacementAfterReplayRevokesStaleProducts() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let replacementURL = directory.appendingPathComponent("replacement.jsonl", isDirectory: false)
+        let recent = (0..<transcriptBootstrapLineLimit).map {
+            makeCodexMessageLine(role: "assistant", content: "a-recent-\($0)")
+        }
+        try (([makeCodexMessageLine(role: "assistant", content: "a-stale-history")] + recent)
+            .joined(separator: "\n") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+        try (makeCodexMessageLine(role: "assistant", content: "b-sentinel") + "\n")
+            .write(to: replacementURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                             fileManager: .default,
+                                             hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5)
+                .events.contains { $0.text == "a-recent-\(transcriptBootstrapLineLimit - 1)" }
+        })
+        let beforeSeq = try XCTUnwrap(
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 2000)
+                .events
+                .filter { $0.text?.hasPrefix("a-recent-") == true }
+                .map(\.seq)
+                .min()
+        )
+        let oldEpoch = hub.currentHistoryEpoch(sessionID: "session")
+        var replacementResult: Int32?
+        session.beforeCursorBackfillBeforeFinalSourceValidationForTesting = {
+            replacementResult = Darwin.rename(replacementURL.path, transcriptURL.path)
+        }
+        defer { session.beforeCursorBackfillBeforeFinalSourceValidationForTesting = nil }
+
+        let result = session.beforeCursorBackfill(beforeSeq: beforeSeq, limit: 500)
+
+        XCTAssertEqual(replacementResult, 0)
+        XCTAssertFalse(result.didBackfill)
+        XCTAssertEqual(result.rawContinuation, .unavailable,
+                       "products derived from a replaced source have no continuation authority")
+        XCTAssertEqual(hub.currentHistoryEpoch(sessionID: "session").generation,
+                       oldEpoch.generation + 1,
+                       "the stale source is synchronously revoked before the request returns")
+        XCTAssertFalse(
+            hub.fetch(workspaceID: "workspace",
+                      sessionID: "session",
+                      limit: 2000,
+                      beforeSeq: beforeSeq)
+                .events
+                .contains { $0.text == "a-stale-history" },
+            "stale replay products must never enter shared history"
+        )
+        XCTAssertTrue(waitUntil(timeout: 4) {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                .events.contains { $0.text == "b-sentinel" }
+        }, "the resolver reattaches the replacement source")
+        XCTAssertEqual(hub.currentHistoryEpoch(sessionID: "session").generation,
+                       oldEpoch.generation + 1,
+                       "the retired tailer's queued callback cannot reset the replacement twice")
+    }
+
     func testAfterCursorReadErrorDoesNotRevokeValidSource() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)

@@ -752,11 +752,19 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                 }
                 collectedBackfillPage = []
                 beforeCursorBackfillBeforeFinalSourceValidationForTesting?()
+                do {
+                    try tailer.validateCurrentSource()
+                } catch JSONLFileTailerError.sourceInvalidated {
+                    resetTranscriptSource(startResolverNow: true)
+                    return result(didBackfill: false, frontier: nil)
+                } catch {
+                    return result(didBackfill: false, frontier: nil)
+                }
+                guard sourceSemanticTrust else {
+                    return result(didBackfill: false, frontier: nil)
+                }
 
                 if let products = replayedProducts {
-                    guard sourceSemanticTrust else {
-                        return result(didBackfill: false, frontier: nil)
-                    }
                     hub.replaceHistoricalEvents(sessionID: record.sessionID,
                                                 events: products,
                                                 anchorSeq: lastRequestedBackfillAnchorSeq)
