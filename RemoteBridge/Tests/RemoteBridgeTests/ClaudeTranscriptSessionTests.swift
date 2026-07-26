@@ -1,3 +1,4 @@
+import Darwin
 import XCTest
 @testable import RemoteBridge
 
@@ -505,6 +506,230 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         XCTAssertTrue(output.didBackfill)
         XCTAssertEqual(output.fetchResult.events.compactMap(\.text), ["old-visible"],
                        "raw progress must continue past an eventless page")
+    }
+
+    // B22 RED: visible Hub count is not raw-source coverage. Claude
+    // transcripts contain legal eventless system records, so a 500-raw-row
+    // backfill may produce far fewer than 500 client-visible events while
+    // older raw history remains. A production-shaped client walk uses only
+    // oldestSeq/hasMore and must not stop until the session proves raw BOF.
+    func testServerFetchKeepsPagingAcrossSparseRawPagesUntilSourceBOF() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+
+        var lines = [String]()
+        var expectedVisibleIDs = [String]()
+        var expectedVisibleTexts = [String]()
+        for rawIndex in 0..<1_800 {
+            if rawIndex.isMultiple(of: 3) {
+                let visibleIndex = rawIndex / 3
+                let uuid = "visible-\(visibleIndex)"
+                let text = String(format: "history-%04d", visibleIndex)
+                lines.append(makeClaudeUserLine(uuid: uuid, content: text))
+                expectedVisibleIDs.append("\(uuid):user-text:0")
+                expectedVisibleTexts.append(text)
+            } else {
+                lines.append(
+                    #"{"type":"system","subtype":"api_retry","uuid":"ignored-\#(rawIndex)"}"#
+                )
+            }
+        }
+        XCTAssertEqual(lines.count, 1_800)
+        XCTAssertEqual(expectedVisibleIDs.count, 600)
+        try (lines.joined(separator: "\n") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10)
+                .events.contains { $0.text == "history-0599" }
+        }, "the real Claude session must bootstrap")
+
+        func fetch(limit: Int, maxBytes: Int, beforeSeq: Int?) -> BridgeAgentEventFetchFlow.Output {
+            BridgeAgentEventFetchFlow.run(
+                eventHub: hub,
+                workspaceID: "workspace",
+                sessionID: "session",
+                limit: limit,
+                maxBytes: maxBytes,
+                beforeSeq: beforeSeq,
+                afterSeq: nil,
+                beforeCursorBackfill: { _, cursor, rawLimit in
+                    session.beforeCursorBackfill(beforeSeq: cursor, limit: rawLimit)
+                })
+        }
+
+        // Exact production iOS page shapes; subsequent requests derive their
+        // cursor and termination decision exclusively from these bounds.
+        let bootstrap = fetch(limit: 24, maxBytes: 80 * 1024, beforeSeq: nil).fetchResult
+        let bootstrapVisible = bootstrap.events.filter { $0.type == .userMessage }
+        XCTAssertEqual(bootstrapVisible.map(\.eventID), Array(expectedVisibleIDs.suffix(24)))
+        XCTAssertEqual(bootstrapVisible.compactMap(\.text), Array(expectedVisibleTexts.suffix(24)))
+        XCTAssertTrue(bootstrap.hasMore)
+        XCTAssertGreaterThan(bootstrap.oldestSeq, transcriptSessionStartedSequence)
+
+        var visibleEvents = bootstrapVisible
+        var seenVisibleIDs = Set(bootstrapVisible.map(\.eventID))
+        var cursor = bootstrap.oldestSeq
+        var terminalPage: AgentEventHub.FetchResult?
+        var olderPageCount = 0
+        for _ in 0..<(expectedVisibleIDs.count + 2) {
+            let requestCursor = cursor
+            let page = fetch(limit: 500,
+                             maxBytes: 160 * 1024,
+                             beforeSeq: requestCursor).fetchResult
+            olderPageCount += 1
+            let pageVisible = page.events.filter { $0.type == .userMessage }
+            if olderPageCount == 1 {
+                XCTAssertLessThan(pageVisible.count, 500,
+                                  "precondition: raw density, not count or bytes, underfills the visible page")
+                XCTAssertTrue(page.hasMore,
+                              "raw frontier keeps an underfilled sparse page nonterminal")
+            }
+            XCTAssertTrue(pageVisible.allSatisfy { $0.seq < requestCursor },
+                          "each Claude history product lies below its wire before cursor")
+            for event in pageVisible {
+                XCTAssertTrue(seenVisibleIDs.insert(event.eventID).inserted,
+                              "visible event \(event.eventID) appears on exactly one page")
+                visibleEvents.append(event)
+            }
+
+            if page.hasMore {
+                XCTAssertTrue(page.events.allSatisfy {
+                    $0.seq > transcriptSessionStartedSequence && $0.seq < requestCursor
+                }, "a nonterminal page contains only cursor-eligible positive events")
+                XCTAssertGreaterThan(page.oldestSeq, transcriptSessionStartedSequence)
+                XCTAssertLessThan(page.oldestSeq, requestCursor,
+                                  "each nonterminal wire cursor strictly retreats")
+                cursor = page.oldestSeq
+            } else {
+                terminalPage = page
+                break
+            }
+        }
+
+        let terminal = try XCTUnwrap(terminalPage,
+                                     "Claude history terminates only at a source-proven BOF")
+        XCTAssertEqual(terminal.oldestSeq, transcriptSessionStartedSequence)
+        XCTAssertTrue(terminal.events.contains {
+            $0.type == .sessionStarted && $0.seq == transcriptSessionStartedSequence
+        }, "the synthetic session-start marker appears on the terminal BOF page")
+        guard olderPageCount > 1 else {
+            XCTFail("visible Hub count caused premature BOF after \(olderPageCount) older page; "
+                + "collected \(visibleEvents.count) of 600 visible events")
+            return
+        }
+
+        let orderedVisible = visibleEvents.sorted {
+            ($0.seq, $0.eventID) < ($1.seq, $1.eventID)
+        }
+        XCTAssertEqual(orderedVisible.count, 600)
+        XCTAssertEqual(orderedVisible.map(\.eventID), expectedVisibleIDs)
+        XCTAssertEqual(orderedVisible.compactMap(\.text), expectedVisibleTexts)
+    }
+
+    // B22 guard: a raw page made entirely of blank lines still advances the
+    // source frontier. One before request must cross that gap to the next
+    // visible event or BOF; a nonterminal response may never reuse its input
+    // cursor and strand an iOS client.
+    func testServerFetchCrossesClaudeBlankRawGapWithoutStalling() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+
+        let beforeGapText = "before-gap-" + String(repeating: "x", count: 70 * 1024)
+        let recentTexts = (0..<500).map { String(format: "recent-%04d", $0) }
+        let lines = [makeClaudeUserLine(uuid: "before-gap", content: beforeGapText)]
+            + Array(repeating: "", count: 600)
+            + recentTexts.enumerated().map {
+                makeClaudeUserLine(uuid: "recent-\($0.offset)", content: $0.element)
+            }
+        try (lines.joined(separator: "\n") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let fixtureBytes = try XCTUnwrap(
+            (FileManager.default.attributesOfItem(atPath: transcriptURL.path)[.size] as? NSNumber)?
+                .intValue)
+        XCTAssertGreaterThan(fixtureBytes, 2 * 64 * 1024,
+                             "the gap fixture crosses two JSONL reader chunks")
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10)
+                .events.contains { $0.text == "recent-0499" }
+        }, "the real Claude session must bootstrap")
+
+        func fetch(limit: Int, maxBytes: Int, beforeSeq: Int?) -> BridgeAgentEventFetchFlow.Output {
+            BridgeAgentEventFetchFlow.run(
+                eventHub: hub,
+                workspaceID: "workspace",
+                sessionID: "session",
+                limit: limit,
+                maxBytes: maxBytes,
+                beforeSeq: beforeSeq,
+                afterSeq: nil,
+                beforeCursorBackfill: { _, cursor, rawLimit in
+                    session.beforeCursorBackfill(beforeSeq: cursor, limit: rawLimit)
+                })
+        }
+
+        let bootstrap = fetch(limit: 24, maxBytes: 80 * 1024, beforeSeq: nil).fetchResult
+        XCTAssertEqual(bootstrap.events
+            .filter { $0.type == .userMessage }
+            .compactMap(\.text),
+            Array(recentTexts.suffix(24)))
+        XCTAssertTrue(bootstrap.hasMore)
+        XCTAssertGreaterThan(bootstrap.oldestSeq, transcriptSessionStartedSequence)
+
+        // The first older page consumes recent-0000...0475 and leaves its
+        // positive wire cursor immediately above the 600-line blank gap.
+        let pageBeforeGap = fetch(limit: 500,
+                                  maxBytes: 160 * 1024,
+                                  beforeSeq: bootstrap.oldestSeq).fetchResult
+        guard pageBeforeGap.hasMore,
+              pageBeforeGap.oldestSeq > transcriptSessionStartedSequence,
+              pageBeforeGap.oldestSeq < bootstrap.oldestSeq else {
+            XCTFail("the first before page did not provide a positive retreating cursor "
+                + "(oldest=\(pageBeforeGap.oldestSeq), hasMore=\(pageBeforeGap.hasMore))")
+            return
+        }
+        XCTAssertEqual(pageBeforeGap.events
+            .filter { $0.type == .userMessage }
+            .compactMap(\.text),
+            Array(recentTexts.prefix(476)))
+
+        let gapCursor = pageBeforeGap.oldestSeq
+        let pageAcrossGap = fetch(limit: 500,
+                                  maxBytes: 160 * 1024,
+                                  beforeSeq: gapCursor).fetchResult
+        if pageAcrossGap.hasMore, pageAcrossGap.oldestSeq >= gapCursor {
+            XCTFail("same-cursor stall across Claude blank raw page: requested \(gapCursor), "
+                + "received \(pageAcrossGap.oldestSeq)")
+            return
+        }
+        XCTAssertFalse(pageAcrossGap.hasMore,
+                       "the second before request crosses the gap and proves raw BOF")
+        XCTAssertEqual(pageAcrossGap.oldestSeq, transcriptSessionStartedSequence)
+        XCTAssertTrue(pageAcrossGap.events.contains {
+            $0.type == .userMessage && $0.text == beforeGapText
+        }, "the visible event below the blank raw gap is retained")
+        XCTAssertTrue(pageAcrossGap.events.contains {
+            $0.type == .sessionStarted && $0.seq == transcriptSessionStartedSequence
+        }, "seq0 appears only on the terminal BOF page")
     }
 
     func testClaudeLiveTerminalsPublishWhenHistoryIndexWinsAppendRace() throws {
@@ -2393,6 +2618,42 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                        "a response captured before the source reset must be discarded")
     }
 
+    func testClaudeBeforeCursorDoesNotClaimBOFAfterOffsetZeroSourceReplacement() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        let replacementURL = directory.appendingPathComponent("replacement.jsonl", isDirectory: false)
+        try (makeClaudeUserLine(uuid: "old-offset-zero", content: "old-offset-zero") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+        try (makeClaudeUserLine(uuid: "replacement", content: "replacement") + "\n")
+            .write(to: replacementURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10)
+                .events.contains { $0.text == "old-offset-zero" }
+        })
+        let acceptedCursor = try XCTUnwrap(
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10)
+                .events.first { $0.text == "old-offset-zero" }?.seq
+        )
+
+        XCTAssertEqual(Darwin.rename(replacementURL.path, transcriptURL.path), 0)
+
+        let result = session.beforeCursorBackfill(beforeSeq: acceptedCursor, limit: 500)
+
+        XCTAssertFalse(result.didBackfill)
+        XCTAssertEqual(result.rawContinuation, .unavailable,
+                       "a stale offset-zero cursor must not claim source-proven BOF")
+    }
+
     func testInteractivePromptSidebarTerminalEffectsAreExactlyOnce() {
         let sender = ClaudePromptRecordingCommandSender()
         let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: "/tmp/unused.jsonl"),
@@ -3596,9 +3857,11 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
             sessionID: "session",
             limit: 20,
             beforeSeq: anchor,
-            afterSeq: nil) { _, beforeSeq, limit in
-                session.backfill(beforeSeq: beforeSeq, limit: limit)
-            }
+            afterSeq: nil,
+            beforeCursorBackfill: { _, beforeSeq, limit in
+                session.beforeCursorBackfill(beforeSeq: beforeSeq, limit: limit)
+            })
+        XCTAssertFalse(initialPage.beforeCursorUnavailable)
         XCTAssertTrue(initialPage.fetchResult.events.contains {
             $0.eventID == "fail-closed-ask:ask-user-question:\(promptID)"
         }, "the baseline index must expose a genuinely open historical Ask; got \(initialPage.fetchResult.events.map(\.eventID))",
@@ -3614,9 +3877,14 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
             sessionID: "session",
             limit: 20,
             beforeSeq: anchor,
-            afterSeq: nil) { _, beforeSeq, limit in
-                session.backfill(beforeSeq: beforeSeq, limit: limit)
-            }
+            afterSeq: nil,
+            beforeCursorBackfill: { _, beforeSeq, limit in
+                session.beforeCursorBackfill(beforeSeq: beforeSeq, limit: limit)
+            })
+        XCTAssertTrue(failedPage.beforeCursorUnavailable,
+                      "unknown source-wide closure coverage is explicitly unavailable",
+                      file: file,
+                      line: line)
         XCTAssertFalse(failedPage.fetchResult.events.contains {
             $0.eventID == "fail-closed-ask:ask-user-question:\(promptID)"
         }, "unknown source-wide closure coverage must never expose a cached opener",

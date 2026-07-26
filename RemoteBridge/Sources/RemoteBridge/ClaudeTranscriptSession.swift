@@ -3512,26 +3512,47 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     }
 
     func backfill(beforeSeq: Int, limit: Int) -> Bool {
+        beforeCursorBackfill(beforeSeq: beforeSeq, limit: limit).didBackfill
+    }
+
+    func beforeCursorBackfill(beforeSeq: Int,
+                              limit: Int) -> AgentBeforeCursorBackfillResult {
         queue.sync {
+            func result(
+                didBackfill: Bool,
+                frontier: JSONLRawFrontier?
+            ) -> AgentBeforeCursorBackfillResult {
+                guard let frontier else {
+                    return AgentBeforeCursorBackfillResult(
+                        didBackfill: didBackfill,
+                        rawContinuation: .unavailable)
+                }
+                return AgentBeforeCursorBackfillResult(
+                    didBackfill: didBackfill,
+                    rawContinuation: frontier.reachedSourceStart ? .end : .more)
+            }
             if tailer == nil {
                 resolveTranscriptIfPossible()
             }
             guard let tailer else {
-                return false
-            }
-            guard let beforePosition = transcriptEventPositionInCurrentSource(for: beforeSeq),
-                  beforePosition.lineOffset > 0 || beforePosition.ordinal > 0 else {
-                return false
+                return result(didBackfill: false, frontier: nil)
             }
             do {
                 try tailer.validateCurrentSource()
             } catch JSONLFileTailerError.sourceInvalidated {
                 beginNewSourceEpoch()
                 startResolver()
-                return false
+                return result(didBackfill: false, frontier: nil)
             } catch {
                 failHistoricalClosureCoverage(beforeSeq: beforeSeq)
-                return false
+                return result(didBackfill: false, frontier: nil)
+            }
+            guard let beforePosition = transcriptEventPositionInCurrentSource(for: beforeSeq) else {
+                return result(didBackfill: false, frontier: nil)
+            }
+            guard beforePosition.lineOffset > 0 || beforePosition.ordinal > 0 else {
+                return AgentBeforeCursorBackfillResult(didBackfill: false,
+                                                       rawContinuation: .end)
             }
             // Closure knowledge is three-state: closed, genuinely open, or
             // unknown because the source could not be indexed. Unknown must
@@ -3543,25 +3564,26 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             } catch JSONLFileTailerError.sourceInvalidated {
                 beginNewSourceEpoch()
                 startResolver()
-                return false
+                return result(didBackfill: false, frontier: nil)
             } catch {
                 failHistoricalClosureCoverage(beforeSeq: beforeSeq)
-                return false
+                return result(didBackfill: false, frontier: nil)
             }
             do {
                 try tailer.validateCurrentSource()
             } catch JSONLFileTailerError.sourceInvalidated {
                 beginNewSourceEpoch()
                 startResolver()
-                return false
+                return result(didBackfill: false, frontier: nil)
             } catch {
                 failHistoricalClosureCoverage(beforeSeq: beforeSeq)
-                return false
+                return result(didBackfill: false, frontier: nil)
             }
             guard closureIndexIsReady else {
                 failHistoricalClosureCoverage(beforeSeq: beforeSeq)
-                return false
+                return result(didBackfill: false, frontier: nil)
             }
+            historySemanticTrust = true
             hub.setHistoricalClosureCoverage(sessionID: record.sessionID, isComplete: true)
             let liveParserState = captureLiveParserState()
             resetParserStateForHistoricalReplay()
@@ -3585,99 +3607,109 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             var pageAnchorOffset = beforePosition.lineOffset
             var includeAnchorLine = beforePosition.ordinal > 0
             var loadedAnyRawPage = false
-            while pageAnchorOffset > 0 || includeAnchorLine {
+            while true {
                 isCollectingHistoricalBackfillPage = true
                 collectedHistoricalBackfillPage = []
-                let didLoad: Bool
+                let readResult: JSONLBackfillResult
                 do {
-                    didLoad = try tailer.backfill(
+                    readResult = try tailer.backfill(
                         beforeOffset: pageAnchorOffset,
                         limit: limit,
-                        includeAnchorLine: includeAnchorLine).didRead
+                        includeAnchorLine: includeAnchorLine)
                 } catch JSONLFileTailerError.sourceInvalidated {
                     sourceWasInvalidated = true
-                    return false
+                    return result(didBackfill: loadedAnyRawPage, frontier: nil)
                 } catch {
-                    return false
+                    return result(didBackfill: loadedAnyRawPage, frontier: nil)
                 }
                 isCollectingHistoricalBackfillPage = false
                 let rawPage = collectedHistoricalBackfillPage
                 collectedHistoricalBackfillPage = []
-                guard didLoad, rawPage.isEmpty == false else {
-                    hub.replaceHistoricalEvents(sessionID: record.sessionID,
-                                                events: [],
-                                                anchorSeq: beforeSeq)
-                    return loadedAnyRawPage
+                guard let frontier = readResult.rawFrontier else {
+                    failHistoricalClosureCoverage(beforeSeq: beforeSeq)
+                    return result(didBackfill: loadedAnyRawPage, frontier: nil)
                 }
-                loadedAnyRawPage = true
+                guard frontier.containsInvalidRecord == false else {
+                    failHistoricalClosureCoverage(beforeSeq: beforeSeq)
+                    return result(didBackfill: loadedAnyRawPage, frontier: nil)
+                }
+                if readResult.didRead, rawPage.isEmpty == false {
+                    loadedAnyRawPage = true
 
-                resetParserStateForHistoricalReplay()
-                historicalReplayOpenerEventIDs = []
-                historicalReplayProducts = []
-                for entry in rawPage {
-                    consume(line: entry.line, lineOffset: entry.offset)
-                }
-                do {
-                    try tailer.validateCurrentSource()
-                } catch JSONLFileTailerError.sourceInvalidated {
-                    sourceWasInvalidated = true
-                    return false
-                } catch {
-                    return false
-                }
-                guard let index = historicalClosureIndex else {
-                    return false
-                }
-                for openerEventID in historicalReplayOpenerEventIDs {
-                    guard let closure = index.closureByOpenerEventID[openerEventID],
-                          closure.seq < beforeSeq else {
-                        continue
-                    }
-                    historicalReplayProducts.append(closure)
-                }
-                var seenEventIDs = Set<String>()
-                let products = historicalReplayProducts.filter {
-                    seenEventIDs.insert($0.eventID).inserted
-                }
-                let productEventIDs = Set(products.map(\.eventID))
-                let hasVisibleProduct = products.contains { event in
-                    guard event.seq < beforeSeq else {
-                        return false
-                    }
-                    let isOpener = event.type == .interactivePrompt
-                        || event.metadata?["tidey_generated"] == "claude_context_command"
-                    guard isOpener else {
-                        return true
-                    }
-                    if let closure = index.closureByOpenerEventID[event.eventID] {
-                        return closure.seq < beforeSeq
-                            && productEventIDs.contains(closure.eventID)
-                    }
-                    return index.contextConsumerSequenceByOpenerEventID[event.eventID] == nil
-                }
-                if hasVisibleProduct {
-                    hub.replaceHistoricalEvents(sessionID: record.sessionID,
-                                                events: products,
-                                                anchorSeq: beforeSeq)
+                    resetParserStateForHistoricalReplay()
                     historicalReplayOpenerEventIDs = []
-                    return true
+                    historicalReplayProducts = []
+                    for entry in rawPage {
+                        consume(line: entry.line, lineOffset: entry.offset)
+                    }
+                    do {
+                        try tailer.validateCurrentSource()
+                    } catch JSONLFileTailerError.sourceInvalidated {
+                        sourceWasInvalidated = true
+                        return result(didBackfill: false, frontier: nil)
+                    } catch {
+                        return result(didBackfill: false, frontier: nil)
+                    }
+                    guard historySemanticTrust else {
+                        failHistoricalClosureCoverage(beforeSeq: beforeSeq)
+                        return result(didBackfill: false, frontier: nil)
+                    }
+                    guard let index = historicalClosureIndex else {
+                        return result(didBackfill: false, frontier: nil)
+                    }
+                    for openerEventID in historicalReplayOpenerEventIDs {
+                        guard let closure = index.closureByOpenerEventID[openerEventID],
+                              closure.seq < beforeSeq else {
+                            continue
+                        }
+                        historicalReplayProducts.append(closure)
+                    }
+                    var seenEventIDs = Set<String>()
+                    let products = historicalReplayProducts.filter {
+                        seenEventIDs.insert($0.eventID).inserted
+                    }
+                    let productEventIDs = Set(products.map(\.eventID))
+                    let hasVisibleProduct = products.contains { event in
+                        guard event.seq < beforeSeq else {
+                            return false
+                        }
+                        let isOpener = event.type == .interactivePrompt
+                            || event.metadata?["tidey_generated"] == "claude_context_command"
+                        guard isOpener else {
+                            return true
+                        }
+                        if let closure = index.closureByOpenerEventID[event.eventID] {
+                            return closure.seq < beforeSeq
+                                && productEventIDs.contains(closure.eventID)
+                        }
+                        return index.contextConsumerSequenceByOpenerEventID[event.eventID] == nil
+                    }
+                    if hasVisibleProduct {
+                        hub.replaceHistoricalEvents(sessionID: record.sessionID,
+                                                    events: products,
+                                                    anchorSeq: beforeSeq)
+                        historicalReplayOpenerEventIDs = []
+                        return result(didBackfill: true,
+                                      frontier: frontier)
+                    }
                 }
 
-                guard let pageMinOffset = rawPage.map(\.offset).min(),
-                      pageMinOffset > 0,
-                      pageMinOffset < pageAnchorOffset || includeAnchorLine else {
+                if frontier.reachedSourceStart {
                     hub.replaceHistoricalEvents(sessionID: record.sessionID,
                                                 events: [],
                                                 anchorSeq: beforeSeq)
-                    return loadedAnyRawPage
+                    return result(didBackfill: loadedAnyRawPage,
+                                  frontier: frontier)
                 }
-                pageAnchorOffset = pageMinOffset
+                guard let nextAnchorOffset = frontier.minimumRawOffset,
+                      nextAnchorOffset < pageAnchorOffset
+                        || includeAnchorLine && nextAnchorOffset == pageAnchorOffset else {
+                    failHistoricalClosureCoverage(beforeSeq: beforeSeq)
+                    return result(didBackfill: loadedAnyRawPage, frontier: nil)
+                }
+                pageAnchorOffset = nextAnchorOffset
                 includeAnchorLine = false
             }
-            hub.replaceHistoricalEvents(sessionID: record.sessionID,
-                                        events: [],
-                                        anchorSeq: beforeSeq)
-            return loadedAnyRawPage
         }
     }
 
