@@ -3633,6 +3633,18 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 let rawPage = collectedHistoricalBackfillPage
                 collectedHistoricalBackfillPage = []
                 beforeCursorBackfillBeforeFinalSourceValidationForTesting?()
+                do {
+                    try tailer.validateCurrentSource()
+                } catch JSONLFileTailerError.sourceInvalidated {
+                    sourceWasInvalidated = true
+                    return result(didBackfill: false, frontier: nil)
+                } catch {
+                    failHistoricalClosureCoverage(beforeSeq: beforeSeq)
+                    return result(didBackfill: false, frontier: nil)
+                }
+                guard hub.currentHistoryEpoch(sessionID: record.sessionID) == authorityEpoch else {
+                    return result(didBackfill: false, frontier: nil)
+                }
                 guard let frontier = readResult.rawFrontier else {
                     failHistoricalClosureCoverage(beforeSeq: beforeSeq)
                     return result(didBackfill: loadedAnyRawPage, frontier: nil)
@@ -3656,6 +3668,9 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                         sourceWasInvalidated = true
                         return result(didBackfill: false, frontier: nil)
                     } catch {
+                        return result(didBackfill: false, frontier: nil)
+                    }
+                    guard hub.currentHistoryEpoch(sessionID: record.sessionID) == authorityEpoch else {
                         return result(didBackfill: false, frontier: nil)
                     }
                     guard historySemanticTrust else {

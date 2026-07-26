@@ -2654,6 +2654,61 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
                        "a stale offset-zero cursor must not claim source-proven BOF")
     }
 
+    func testClaudeBeforeCursorBlankPageSourceReplacementFailsUnavailable() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("session.jsonl", isDirectory: false)
+        let replacementURL = directory.appendingPathComponent("replacement.jsonl", isDirectory: false)
+        let recent = (0..<transcriptBootstrapLineLimit).map {
+            makeClaudeUserLine(uuid: "a-recent-\($0)", content: "a-recent-\($0)")
+        }
+        let blankPrefix = String(repeating: "\n", count: transcriptBootstrapLineLimit)
+        try (blankPrefix + recent.joined(separator: "\n") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+        try (makeClaudeUserLine(uuid: "b-sentinel", content: "b-sentinel") + "\n")
+            .write(to: replacementURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                              fileManager: .default,
+                                              hub: hub)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 5)
+                .events.contains { $0.text == "a-recent-\(transcriptBootstrapLineLimit - 1)" }
+        })
+        let beforeSeq = try XCTUnwrap(
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 2000)
+                .events
+                .filter { $0.text?.hasPrefix("a-recent-") == true }
+                .map(\.seq)
+                .min()
+        )
+        let oldEpoch = hub.currentHistoryEpoch(sessionID: "session")
+        var replacementResult: Int32?
+        session.beforeCursorBackfillBeforeFinalSourceValidationForTesting = {
+            replacementResult = Darwin.rename(replacementURL.path, transcriptURL.path)
+        }
+        defer { session.beforeCursorBackfillBeforeFinalSourceValidationForTesting = nil }
+
+        let result = session.beforeCursorBackfill(beforeSeq: beforeSeq, limit: 500)
+
+        XCTAssertEqual(replacementResult, 0)
+        XCTAssertFalse(result.didBackfill)
+        XCTAssertEqual(result.rawContinuation, .unavailable,
+                       "a blank raw page from source A cannot declare BOF for replacement B")
+        XCTAssertEqual(hub.currentHistoryEpoch(sessionID: "session").generation,
+                       oldEpoch.generation + 1,
+                       "the blank page source fence revokes A before returning")
+        XCTAssertTrue(waitUntil(timeout: 4) {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50)
+                .events.contains { $0.text == "b-sentinel" }
+        }, "the resolver reattaches replacement B")
+    }
+
     func testInteractivePromptSidebarTerminalEffectsAreExactlyOnce() {
         let sender = ClaudePromptRecordingCommandSender()
         let session = ClaudeTranscriptSession(record: makeRecord(transcriptPath: "/tmp/unused.jsonl"),
