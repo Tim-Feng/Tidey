@@ -59,6 +59,97 @@ final class BridgeAgentEventFetchFlowTests: XCTestCase {
                       "a fetch transaction must not return its pre-reset source snapshot")
     }
 
+    func testBeforeCursorRejectsStaleMoreEpochAfterBackfill() {
+        let hub = AgentEventHub()
+        let oldEpoch = hub.currentHistoryEpoch(sessionID: "session")
+
+        let output = BridgeAgentEventFetchFlow.run(
+            eventHub: hub,
+            workspaceID: "workspace",
+            sessionID: "session",
+            limit: 3,
+            beforeSeq: 100,
+            afterSeq: nil,
+            beforeCursorBackfill: { sessionID, _, _ in
+                hub.beginNewSourceEpoch(sessionID: sessionID)
+                return AgentBeforeCursorBackfillResult(didBackfill: true,
+                                                       rawContinuation: .more,
+                                                       authorityEpoch: oldEpoch)
+            })
+
+        XCTAssertTrue(output.beforeCursorUnavailable,
+                      "source A continuation cannot authorize a source B refetch")
+        XCTAssertTrue(output.fetchResult.events.isEmpty)
+    }
+
+    func testBeforeCursorRejectsStaleEndEpochAfterBackfill() {
+        let hub = AgentEventHub()
+        let oldEpoch = hub.currentHistoryEpoch(sessionID: "session")
+
+        let output = BridgeAgentEventFetchFlow.run(
+            eventHub: hub,
+            workspaceID: "workspace",
+            sessionID: "session",
+            limit: 3,
+            beforeSeq: 100,
+            afterSeq: nil,
+            beforeCursorBackfill: { sessionID, _, _ in
+                hub.beginNewSourceEpoch(sessionID: sessionID)
+                return AgentBeforeCursorBackfillResult(didBackfill: false,
+                                                       rawContinuation: .end,
+                                                       authorityEpoch: oldEpoch)
+            })
+
+        XCTAssertTrue(output.beforeCursorUnavailable,
+                      "source A BOF cannot authorize an empty source B refetch")
+        XCTAssertTrue(output.fetchResult.events.isEmpty)
+    }
+
+    func testBeforeCursorRejectsEmptyMorePage() {
+        let hub = AgentEventHub()
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+
+        let output = BridgeAgentEventFetchFlow.run(
+            eventHub: hub,
+            workspaceID: "workspace",
+            sessionID: "session",
+            limit: 3,
+            beforeSeq: 100,
+            afterSeq: nil,
+            beforeCursorBackfill: { _, _, _ in
+                AgentBeforeCursorBackfillResult(didBackfill: false,
+                                                rawContinuation: .more,
+                                                authorityEpoch: epoch)
+            })
+
+        XCTAssertTrue(output.beforeCursorUnavailable,
+                      "a nonterminal page without a retreating public cursor must fail closed")
+        XCTAssertTrue(output.fetchResult.events.isEmpty)
+    }
+
+    func testBeforeCursorRejectsMoreWithoutAuthorityEpoch() {
+        let hub = AgentEventHub()
+        hub.replaceHistoricalEvents(
+            sessionID: "session",
+            events: (97...99).map { makeEvent(seq: $0, text: "near-\($0)") },
+            anchorSeq: 100)
+
+        let output = BridgeAgentEventFetchFlow.run(
+            eventHub: hub,
+            workspaceID: "workspace",
+            sessionID: "session",
+            limit: 3,
+            beforeSeq: 100,
+            afterSeq: nil,
+            beforeCursorBackfill: { _, _, _ in
+                AgentBeforeCursorBackfillResult(didBackfill: true,
+                                                rawContinuation: .more)
+            })
+
+        XCTAssertTrue(output.beforeCursorUnavailable,
+                      "typed source authority must carry its Hub epoch")
+    }
+
     // Reframed from the legacy plain-refetch test: with typed seams the
     // legacy-neutral hubOnly plan serves the bounded lease window and the
     // legacy backfill closure is NEVER consulted for an after request.

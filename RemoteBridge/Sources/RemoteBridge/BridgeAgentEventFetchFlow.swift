@@ -142,20 +142,65 @@ enum BridgeAgentEventFetchFlow {
             if backfillResult.didBackfill {
                 didBackfill = true
             }
-            // Backfill may return false because it detected and revoked a
-            // replaced source. Never return the fetch captured before that
-            // session-side transaction; read the Hub again either way.
-            fetchResult = eventHub.fetch(workspaceID: workspaceID,
-                                         sessionID: sessionID,
-                                         limit: limit,
-                                         maxBytes: maxBytes,
-                                         beforeSeq: beforeSeq,
-                                         afterSeq: nil)
-            if backfillResult.rawContinuation == .more {
-                fetchResult = continuingBeforePage(fetchResult,
-                                                   requestedBeforeSeq: beforeSeq)
-            } else if backfillResult.rawContinuation == .unavailable {
+            switch backfillResult.rawContinuation {
+            case .more, .end:
+                // Raw continuation / BOF belongs to exactly one Hub source
+                // epoch. Bracket the shared-cache refetch so a reset queued
+                // after the session method returns cannot mix source A's
+                // authority with source B's events.
+                guard let authorityEpoch = backfillResult.authorityEpoch,
+                      authorityEpoch.sessionID == sessionID,
+                      eventHub.currentHistoryEpoch(sessionID: sessionID) == authorityEpoch else {
+                    fetchResult = eventHub.fetch(workspaceID: workspaceID,
+                                                 sessionID: sessionID,
+                                                 limit: limit,
+                                                 maxBytes: maxBytes,
+                                                 beforeSeq: beforeSeq,
+                                                 afterSeq: nil)
+                    beforeCursorUnavailable = true
+                    break
+                }
+                let authoritativePage = eventHub.fetch(workspaceID: workspaceID,
+                                                       sessionID: sessionID,
+                                                       limit: limit,
+                                                       maxBytes: maxBytes,
+                                                       beforeSeq: beforeSeq,
+                                                       afterSeq: nil)
+                guard eventHub.currentHistoryEpoch(sessionID: sessionID) == authorityEpoch else {
+                    fetchResult = authoritativePage
+                    beforeCursorUnavailable = true
+                    break
+                }
+                if backfillResult.rawContinuation == .more {
+                    guard let continuingPage = continuingBeforePage(
+                        authoritativePage,
+                        requestedBeforeSeq: beforeSeq
+                    ) else {
+                        fetchResult = authoritativePage
+                        beforeCursorUnavailable = true
+                        break
+                    }
+                    fetchResult = continuingPage
+                } else {
+                    fetchResult = authoritativePage
+                }
+            case .unavailable:
+                fetchResult = eventHub.fetch(workspaceID: workspaceID,
+                                             sessionID: sessionID,
+                                             limit: limit,
+                                             maxBytes: maxBytes,
+                                             beforeSeq: beforeSeq,
+                                             afterSeq: nil)
                 beforeCursorUnavailable = true
+            case .unknown:
+                // Legacy sessions supplied no raw-source authority. Preserve
+                // their prior bounded-Hub behavior.
+                fetchResult = eventHub.fetch(workspaceID: workspaceID,
+                                             sessionID: sessionID,
+                                             limit: limit,
+                                             maxBytes: maxBytes,
+                                             beforeSeq: beforeSeq,
+                                             afterSeq: nil)
             }
         }
         return Output(fetchResult: fetchResult,
@@ -166,18 +211,16 @@ enum BridgeAgentEventFetchFlow {
     private static func continuingBeforePage(
         _ page: AgentEventHub.FetchResult,
         requestedBeforeSeq: Int
-    ) -> AgentEventHub.FetchResult {
+    ) -> AgentEventHub.FetchResult? {
         // Synthetic lifecycle markers have no raw transcript position. If
         // raw authority proves there are older bytes, exposing seq 0 as the
         // page bound would strand the iOS before cursor. Publish the marker
         // only on a later page whose source authority proves real BOF.
         let pageableEvents = page.events.filter { $0.seq > transcriptSessionStartedSequence }
         guard let oldestSeq = pageableEvents.map(\.seq).min(),
-              let newestSeq = pageableEvents.map(\.seq).max() else {
-            return AgentEventHub.FetchResult(events: [],
-                                             oldestSeq: requestedBeforeSeq,
-                                             newestSeq: requestedBeforeSeq,
-                                             hasMore: true)
+              let newestSeq = pageableEvents.map(\.seq).max(),
+              oldestSeq < requestedBeforeSeq else {
+            return nil
         }
         return AgentEventHub.FetchResult(events: pageableEvents,
                                          oldestSeq: oldestSeq,
