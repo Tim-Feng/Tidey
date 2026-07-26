@@ -2860,41 +2860,16 @@ final class CodexTranscriptSessionTests: XCTestCase {
     // client retained the response identity, leaving a duplicate in the
     // client's page union.
     func testCodexBeforeCursorReplayWindowFloorTwinKeepsCanonicalIdentity() throws {
-        func agentMessage(_ ts: String, phase: String, text: String) -> String {
-            "{\"type\":\"event_msg\",\"timestamp\":\"\(ts)\",\"payload\":{\"type\":\"agent_message\",\"message\":\"\(text)\",\"phase\":\"\(phase)\"}}"
-        }
-        func assistantItem(_ ts: String, phase: String, text: String) -> String {
-            "{\"type\":\"response_item\",\"timestamp\":\"\(ts)\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"\(phase)\",\"content\":[{\"type\":\"output_text\",\"text\":\"\(text)\"}]}}"
-        }
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
-        let lineCount = transcriptBootstrapLineLimit * 2 + 40
-        let predecessorIndex = 515
-        let responseIndex = predecessorIndex + 1
-        let itemOnlyIndex = responseIndex + 1
-        let twinText = "before-window-floor-twin"
-        let itemOnlyText = "before-window-item-only"
-        var lines = (0..<lineCount).map {
-            makeCodexMessageLine(role: "assistant", content: "before-deep-\($0)")
-        }
-        lines[predecessorIndex] =
-            agentMessage("2026-05-15T00:08:35.000Z", phase: "commentary", text: twinText)
-        lines[responseIndex] =
-            assistantItem("2026-05-15T00:08:35.001Z", phase: "commentary", text: twinText)
-        lines[itemOnlyIndex] =
-            assistantItem("2026-05-15T00:08:35.002Z", phase: "commentary", text: itemOnlyText)
-
-        var lineOffsets = [Int]()
-        var nextLineOffset = 0
-        for line in lines {
-            lineOffsets.append(nextLineOffset)
-            nextLineOffset += line.utf8.count + 1
-        }
-        try (lines.joined(separator: "\n") + "\n")
-            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+        let fixture = try makeCodexBeforeContextTwinFixture(prefix: "before")
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let transcriptURL = fixture.transcriptURL
+        let lineCount = fixture.lineCount
+        let predecessorIndex = fixture.predecessorIndex
+        let responseIndex = fixture.responseIndex
+        let itemOnlyIndex = fixture.itemOnlyIndex
+        let twinText = fixture.twinText
+        let itemOnlyText = fixture.itemOnlyText
+        let lineOffsets = fixture.lineOffsets
 
         let hub = AgentEventHub()
         let session = makeStartedCodexSession(
@@ -4498,6 +4473,67 @@ final class CodexTranscriptSessionTests: XCTestCase {
         XCTAssertEqual(hub.currentHistoryEpoch(sessionID: "session").generation,
                        oldEpoch.generation + 1,
                        "after the fresh plan drained the session queue, stale callbacks still caused no second bump")
+    }
+
+    private struct CodexBeforeContextTwinFixture {
+        let directory: URL
+        let transcriptURL: URL
+        let lineCount: Int
+        let predecessorIndex: Int
+        let responseIndex: Int
+        let itemOnlyIndex: Int
+        let twinText: String
+        let itemOnlyText: String
+        let lineOffsets: [Int]
+    }
+
+    private func makeCodexBeforeContextTwinFixture(
+        prefix: String
+    ) throws -> CodexBeforeContextTwinFixture {
+        func agentMessage(_ ts: String, phase: String, text: String) -> String {
+            "{\"type\":\"event_msg\",\"timestamp\":\"\(ts)\",\"payload\":{\"type\":\"agent_message\",\"message\":\"\(text)\",\"phase\":\"\(phase)\"}}"
+        }
+        func assistantItem(_ ts: String, phase: String, text: String) -> String {
+            "{\"type\":\"response_item\",\"timestamp\":\"\(ts)\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"\(phase)\",\"content\":[{\"type\":\"output_text\",\"text\":\"\(text)\"}]}}"
+        }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lineCount = transcriptBootstrapLineLimit * 2 + 40
+        let predecessorIndex = 515
+        let responseIndex = predecessorIndex + 1
+        let itemOnlyIndex = responseIndex + 1
+        let twinText = "\(prefix)-window-floor-twin"
+        let itemOnlyText = "\(prefix)-window-item-only"
+        var lines = (0..<lineCount).map {
+            makeCodexMessageLine(role: "assistant", content: "\(prefix)-deep-\($0)")
+        }
+        lines[predecessorIndex] =
+            agentMessage("2026-05-15T00:08:35.000Z", phase: "commentary", text: twinText)
+        lines[responseIndex] =
+            assistantItem("2026-05-15T00:08:35.001Z", phase: "commentary", text: twinText)
+        lines[itemOnlyIndex] =
+            assistantItem("2026-05-15T00:08:35.002Z", phase: "commentary", text: itemOnlyText)
+        var lineOffsets = [Int]()
+        var nextLineOffset = 0
+        for line in lines {
+            lineOffsets.append(nextLineOffset)
+            nextLineOffset += line.utf8.count + 1
+        }
+        try (lines.joined(separator: "\n") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+        return CodexBeforeContextTwinFixture(
+            directory: directory,
+            transcriptURL: transcriptURL,
+            lineCount: lineCount,
+            predecessorIndex: predecessorIndex,
+            responseIndex: responseIndex,
+            itemOnlyIndex: itemOnlyIndex,
+            twinText: twinText,
+            itemOnlyText: itemOnlyText,
+            lineOffsets: lineOffsets
+        )
     }
 
     private func makeRecord(transcriptPath: String,
