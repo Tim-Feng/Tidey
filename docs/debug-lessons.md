@@ -218,9 +218,10 @@
 - 本機圖片預覽要用 WebSocket frame 大小設計，不能只看原始檔大小
   - PNG decode / re-encode 後可能比 source 更大，base64 還會再膨脹約三分之一；1672×941、約 2.3 MB 的一般 PNG 曾產生約 3.3 MB 的單一 JSON frame，在高延遲連線上反覆撞到 iOS 20 秒 timeout
   - Bridge 應限制 encoded preview bytes，無 alpha 的高熵 PNG 可改送 JPEG；有 alpha 的 PNG 必須縮小後維持 PNG，不能為了省流量丟掉透明度
-  - expensive decode 仍維持單一 in-flight，但短時間連點應進有上限、有 timeout 的小型等待佇列；立即回 `resource_busy` 會讓正常的多圖點擊互相失敗
-  - conditional read 必須在 source size policy 之後、decode admission 之前判斷；revision identity 不能只有 mtime＋size，同尺寸且保留 mtime 的檔案替換還要靠 device／inode／ctime 分辨
-  - 補證：`c581edf6d` `1af812ce2` `6af69e35e` `ac1cfe7cb` `0dea40ece` `547d91ded`
+  - expensive decode 與透過 Tidey Unix socket 執行的 panel-root lookup 都必須放進同一個 bounded admission；只讓 decode 排隊，短時間連點仍會在前置 root lookup 互撞並回 `socket_unavailable`
+  - bounded admission 應維持單一 in-flight，並提供有上限、有 timeout 的小型等待佇列；立即回 `resource_busy` 會讓正常的多圖點擊互相失敗
+  - conditional read 必須在 admission 內、source size policy 之後、bounded content read 與 decode 之前判斷；revision identity 不能只有 mtime＋size，同尺寸且保留 mtime 的檔案替換還要靠 device／inode／ctime 分辨
+  - 補證：`c581edf6d` `1af812ce2` `6af69e35e` `ac1cfe7cb` `0dea40ece` `547d91ded` `4e6f99fa7`
 - `workspace_id` 缺失的 state update 要 fail closed
   - `report_shell_state` / `set_status` 不能默默落到 broadcast
 - broadcast notification 的 unread state 不能用單一共享 bit
