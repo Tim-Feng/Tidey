@@ -280,6 +280,7 @@ struct BridgeImageReadRequest: Sendable {
     let panelID: String
     let path: String
     let maxPixelDimension: Int?
+    let ifRevisionToken: String?
 
     init(params: [String: JSONValue]?) throws {
         guard let params,
@@ -295,6 +296,7 @@ struct BridgeImageReadRequest: Sendable {
         self.panelID = panelID
         self.path = path
         self.maxPixelDimension = params["max_pixel_dimension"]?.intValue
+        self.ifRevisionToken = params["if_revision_token"]?.stringValue
     }
 }
 

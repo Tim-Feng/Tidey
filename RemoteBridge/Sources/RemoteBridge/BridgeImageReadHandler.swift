@@ -165,11 +165,6 @@ struct BridgeImageReadHandler {
         guard request.action == "image_read" else {
             return nil
         }
-        guard admission.tryAcquire() else {
-            throw BridgeInternalError.resourceBusy("目前正在處理另一張圖片，請稍後再試。")
-        }
-        defer { admission.release() }
-        admittedWorkHookForTesting?()
         let params = try BridgeImageReadRequest(params: request.params)
         let requestedDimension = clampRequestedDimension(params.maxPixelDimension)
         let resolved = try targetResolver.resolve(path: params.path,
@@ -184,6 +179,25 @@ struct BridgeImageReadHandler {
                                                               notFoundMessage: "image_read target does not exist",
                                                               outsideScopeMessage: policy.outsideRootMessage)
         defer { opened.close() }
+
+        if params.ifRevisionToken == opened.revisionToken {
+            let result: [String: JSONValue] = [
+                "not_modified": .bool(true),
+                "normalized_path": .string(resolved.targetURL.path),
+                "display_name": .string(displayName),
+                "source_size": .number(Double(opened.size)),
+                "revision_token": .string(opened.revisionToken),
+                "read_only": .bool(true),
+            ]
+            BridgeImageReadDiagnostics.log("conditional request_id=\(request.id) file=\(displayName) not_modified=true")
+            return BridgeResponse(id: request.id, ok: true, result: result, error: nil)
+        }
+
+        guard admission.tryAcquire() else {
+            throw BridgeInternalError.resourceBusy("目前正在處理另一張圖片，請稍後再試。")
+        }
+        defer { admission.release() }
+        admittedWorkHookForTesting?()
 
         guard opened.size <= limits.maximumSourceBytes else {
             throw BridgeInternalError.fileTooLarge("圖片檔案太大，無法產生預覽。")
@@ -234,6 +248,7 @@ struct BridgeImageReadHandler {
                                              requestedDimension: requestedDimension)
 
         let result: [String: JSONValue] = [
+            "not_modified": .bool(false),
             "normalized_path": .string(resolved.targetURL.path),
             "display_name": .string(displayName),
             "source_mime_type": .string(Self.mimeType(for: matchedType)),

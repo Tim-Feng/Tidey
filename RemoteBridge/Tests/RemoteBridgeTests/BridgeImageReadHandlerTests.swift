@@ -429,6 +429,40 @@ final class BridgeImageReadHandlerTests: XCTestCase {
                           "transparent PNG must reduce dimensions rather than fall back to JPEG")
     }
 
+    func testMatchingRevisionReturnsMetadataWithoutAdmissionOrDecode() throws {
+        let admittedWorkCount = LockedCounter()
+        let limits = BridgeImageReadLimits(maximumSourceBytes: 1,
+                                           maximumSourcePixels: Self.testLimits.maximumSourcePixels,
+                                           minimumRequestedDimension: Self.testLimits.minimumRequestedDimension,
+                                           maximumRequestedDimension: Self.testLimits.maximumRequestedDimension,
+                                           defaultRequestedDimension: Self.testLimits.defaultRequestedDimension,
+                                           maximumEncodedPreviewBytes: Self.testLimits.maximumEncodedPreviewBytes)
+        let fixture = try makeFixture(limits: limits, admittedWorkHook: {
+            admittedWorkCount.increment()
+        })
+        let fileURL = fixture.rootURL.appendingPathComponent("unchanged.png")
+        try Data(repeating: 0xFF, count: 128).write(to: fileURL)
+        let opened = try BridgeSafeFileOpener.openRegularFile(at: fileURL,
+                                                              notFoundMessage: "missing",
+                                                              outsideScopeMessage: "outside")
+        let revisionToken = opened.revisionToken
+        opened.close()
+
+        let response = try XCTUnwrap(fixture.handler.handle(Self.request(path: "unchanged.png",
+                                                                         ifRevisionToken: revisionToken)))
+
+        XCTAssertEqual(admittedWorkCount.value, 0,
+                       "matching metadata must return before admission, bounded read, and decode")
+        XCTAssertEqual(response.result?["not_modified"]?.boolValue, true)
+        XCTAssertEqual(response.result?["normalized_path"]?.stringValue, fileURL.path)
+        XCTAssertEqual(response.result?["display_name"]?.stringValue, "unchanged.png")
+        XCTAssertEqual(response.result?["source_size"]?.intValue, 128)
+        XCTAssertEqual(response.result?["revision_token"]?.stringValue, revisionToken)
+        XCTAssertEqual(response.result?["read_only"]?.boolValue, true)
+        XCTAssertNil(response.result?["data_base64"])
+        XCTAssertNil(response.result?["preview_size"])
+    }
+
     func testHiddenAndLibraryHomePathsRejected() throws {
         let fixture = try makeFixture()
         let hiddenURL = fixture.homeURL.appendingPathComponent(".secrets/shot.png")
@@ -605,7 +639,9 @@ final class BridgeImageReadHandlerTests: XCTestCase {
                                    handler: handler)
     }
 
-    private static func request(path: String, maxPixelDimension: Int? = nil) -> BridgeRequest {
+    private static func request(path: String,
+                                maxPixelDimension: Int? = nil,
+                                ifRevisionToken: String? = nil) -> BridgeRequest {
         var params: [String: JSONValue] = [
             "workspace_id": .string("workspace-1"),
             "panel_id": .string("panel-1"),
@@ -613,6 +649,9 @@ final class BridgeImageReadHandlerTests: XCTestCase {
         ]
         if let maxPixelDimension {
             params["max_pixel_dimension"] = .number(Double(maxPixelDimension))
+        }
+        if let ifRevisionToken {
+            params["if_revision_token"] = .string(ifRevisionToken)
         }
         return BridgeRequest(id: UUID().uuidString, action: "image_read", params: params)
     }
@@ -752,6 +791,21 @@ final class BridgeImageReadHandlerTests: XCTestCase {
         CGImageDestinationAddImage(destination, image, nil)
         CGImageDestinationFinalize(destination)
         return data as Data
+    }
+}
+
+private final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var value: Int {
+        lock.withLock { count }
+    }
+
+    func increment() {
+        lock.withLock {
+            count += 1
+        }
     }
 }
 
