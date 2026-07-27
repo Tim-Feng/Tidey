@@ -135,7 +135,7 @@ final class BridgePanelFileTargetResolverTests: XCTestCase {
         defer { opened.close() }
 
         XCTAssertEqual(opened.size, 3)
-        XCTAssertEqual(opened.revisionToken.split(separator: ":").count, 3)
+        XCTAssertEqual(opened.revisionToken.split(separator: ":").count, 7)
         XCTAssertEqual(try opened.fileHandle.readToEnd(), Data([0x01, 0x02, 0x03]))
     }
 
@@ -211,7 +211,33 @@ final class BridgePanelFileTargetResolverTests: XCTestCase {
                                                               outsideScopeMessage: "outside")
         defer { opened.close() }
 
-        XCTAssertEqual(opened.revisionToken.split(separator: ":").count, 3)
+        XCTAssertEqual(opened.revisionToken.split(separator: ":").count, 7)
+    }
+
+    func testRevisionTokenChangesWhenSameSizeAndMtimeFileIsReplaced() throws {
+        let fixture = try makeFixture()
+        let fileURL = fixture.rootURL.appendingPathComponent("replace.bin")
+        let fixedMtime = Date(timeIntervalSince1970: 1_700_000_000)
+        try Data([0x01, 0x02, 0x03]).write(to: fileURL)
+        try FileManager.default.setAttributes([.modificationDate: fixedMtime],
+                                              ofItemAtPath: fileURL.path)
+        let first = try BridgeSafeFileOpener.openRegularFile(at: canonical(fileURL),
+                                                             notFoundMessage: "missing",
+                                                             outsideScopeMessage: "outside")
+        let firstToken = first.revisionToken
+        first.close()
+
+        try FileManager.default.removeItem(at: fileURL)
+        try Data([0x03, 0x02, 0x01]).write(to: fileURL)
+        try FileManager.default.setAttributes([.modificationDate: fixedMtime],
+                                              ofItemAtPath: fileURL.path)
+        let replacement = try BridgeSafeFileOpener.openRegularFile(at: canonical(fileURL),
+                                                                   notFoundMessage: "missing",
+                                                                   outsideScopeMessage: "outside")
+        defer { replacement.close() }
+
+        XCTAssertNotEqual(replacement.revisionToken, firstToken,
+                          "device/inode/ctime identity must prevent a same-size, preserved-mtime replacement collision")
     }
 
     func testSafeOpenerRejectsDirectory() throws {

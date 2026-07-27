@@ -97,12 +97,24 @@ struct BridgePanelFileTargetResolver {
 /// nanoseconds can overflow for mtimes near the APFS range limit.
 struct BridgeSafeOpenedFile {
     let fileHandle: FileHandle
+    let deviceID: Int64
+    let inode: UInt64
     let size: Int64
+    let changeTimeSeconds: Int64
+    let changeTimeNanoseconds: Int64
     let modificationTimeSeconds: Int64
     let modificationTimeNanoseconds: Int64
 
     var revisionToken: String {
-        "\(modificationTimeSeconds):\(modificationTimeNanoseconds):\(size)"
+        [
+            String(deviceID),
+            String(inode),
+            String(changeTimeSeconds),
+            String(changeTimeNanoseconds),
+            String(modificationTimeSeconds),
+            String(modificationTimeNanoseconds),
+            String(size),
+        ].joined(separator: ":")
     }
 
     func close() {
@@ -144,7 +156,11 @@ enum BridgeSafeFileOpener {
         }
 
         return BridgeSafeOpenedFile(fileHandle: FileHandle(fileDescriptor: descriptor, closeOnDealloc: true),
+                                    deviceID: Int64(status.st_dev),
+                                    inode: UInt64(status.st_ino),
                                     size: Int64(status.st_size),
+                                    changeTimeSeconds: Int64(status.st_ctimespec.tv_sec),
+                                    changeTimeNanoseconds: Int64(status.st_ctimespec.tv_nsec),
                                     modificationTimeSeconds: Int64(status.st_mtimespec.tv_sec),
                                     modificationTimeNanoseconds: Int64(status.st_mtimespec.tv_nsec))
     }
