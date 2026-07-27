@@ -407,6 +407,28 @@ final class BridgeImageReadHandlerTests: XCTestCase {
         _ = try Self.decodePreview(response)
     }
 
+    func testTransparentPNGRemainsPNGAndPreservesAlphaUnderByteCap() throws {
+        let limits = BridgeImageReadLimits(maximumSourceBytes: Self.testLimits.maximumSourceBytes,
+                                           maximumSourcePixels: Self.testLimits.maximumSourcePixels,
+                                           minimumRequestedDimension: 64,
+                                           maximumRequestedDimension: 512,
+                                           defaultRequestedDimension: 512,
+                                           maximumEncodedPreviewBytes: 12 * 1024)
+        let fixture = try makeFixture(limits: limits)
+        try Self.makeTransparentNoisyPNGData(width: 512, height: 384)
+            .write(to: fixture.rootURL.appendingPathComponent("transparent-noise.png"))
+
+        let response = try XCTUnwrap(fixture.handler.handle(Self.request(path: "transparent-noise.png")))
+
+        XCTAssertEqual(response.result?["preview_mime_type"]?.stringValue, "image/png")
+        let previewSize = try XCTUnwrap(response.result?["preview_size"]?.intValue)
+        XCTAssertLessThanOrEqual(previewSize, limits.maximumEncodedPreviewBytes)
+        let preview = try Self.previewImage(response)
+        XCTAssertTrue(Self.containsTransparentPixel(preview), "transparent source alpha must survive preview encoding")
+        XCTAssertLessThan(max(preview.width, preview.height), 512,
+                          "transparent PNG must reduce dimensions rather than fall back to JPEG")
+    }
+
     func testHiddenAndLibraryHomePathsRejected() throws {
         let fixture = try makeFixture()
         let hiddenURL = fixture.homeURL.appendingPathComponent(".secrets/shot.png")
@@ -660,6 +682,23 @@ final class BridgeImageReadHandlerTests: XCTestCase {
                            alphaInfo: .noneSkipLast)
     }
 
+    private static func makeTransparentNoisyPNGData(width: Int, height: Int) -> Data {
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        var seed: UInt64 = 0xD134_2543_DE82_EF95
+        for offset in stride(from: 0, to: pixels.count, by: 4) {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            let isTransparent = (offset / 4).isMultiple(of: 2)
+            pixels[offset] = isTransparent ? 0 : UInt8(truncatingIfNeeded: seed)
+            pixels[offset + 1] = isTransparent ? 0 : UInt8(truncatingIfNeeded: seed >> 8)
+            pixels[offset + 2] = isTransparent ? 0 : UInt8(truncatingIfNeeded: seed >> 16)
+            pixels[offset + 3] = isTransparent ? 0 : 255
+        }
+        return makePNGData(width: width,
+                           height: height,
+                           pixels: pixels,
+                           alphaInfo: .premultipliedLast)
+    }
+
     private static func makePNGData(width: Int,
                                     height: Int,
                                     pixels: [UInt8],
@@ -678,6 +717,30 @@ final class BridgeImageReadHandlerTests: XCTestCase {
                             shouldInterpolate: false,
                             intent: .defaultIntent)!
         return encode(image: image, type: .png)
+    }
+
+    private static func previewImage(_ response: BridgeResponse) throws -> CGImage {
+        let base64 = try XCTUnwrap(response.result?["data_base64"]?.stringValue)
+        let data = try XCTUnwrap(Data(base64Encoded: base64))
+        let source = try XCTUnwrap(CGImageSourceCreateWithData(data as CFData, nil))
+        return try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+    }
+
+    private static func containsTransparentPixel(_ image: CGImage) -> Bool {
+        let bitmapInfo = CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue
+        guard let context = CGContext(data: nil,
+                                      width: image.width,
+                                      height: image.height,
+                                      bitsPerComponent: 8,
+                                      bytesPerRow: image.width * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: bitmapInfo),
+              let rawData = context.data else {
+            return false
+        }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        let pixels = rawData.bindMemory(to: UInt8.self, capacity: image.width * image.height * 4)
+        return stride(from: 3, to: image.width * image.height * 4, by: 4).contains { pixels[$0] < 255 }
     }
 
     private static func encode(image: CGImage, type: UTType) -> Data {

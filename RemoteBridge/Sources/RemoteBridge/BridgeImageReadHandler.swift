@@ -276,9 +276,16 @@ struct BridgeImageReadHandler {
             guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, thumbnailOptions) else {
                 throw BridgeInternalError.imageDecodeFailed("這個檔案無法解讀為圖片。")
             }
-            // PNG first for PNG sources to keep sharp UI captures lossless;
-            // fall back to JPEG when the lossless encoding blows the cap.
-            var candidateTypes: [UTType] = sourceType == .png ? [.png, .jpeg] : [.jpeg]
+            // PNG first for PNG sources to keep sharp UI captures lossless.
+            // JPEG is only safe when the decoded image has no alpha channel;
+            // an alpha-bearing PNG must shrink until lossless encoding fits.
+            let candidateTypesForThumbnail: [UTType]
+            if sourceType == .png {
+                candidateTypesForThumbnail = Self.hasAlpha(thumbnail) ? [.png] : [.png, .jpeg]
+            } else {
+                candidateTypesForThumbnail = [.jpeg]
+            }
+            var candidateTypes = candidateTypesForThumbnail
             while let type = candidateTypes.first {
                 candidateTypes.removeFirst()
                 guard let encoded = Self.encode(image: thumbnail, as: type) else {
@@ -310,6 +317,17 @@ struct BridgeImageReadHandler {
             return nil
         }
         return data as Data
+    }
+
+    private static func hasAlpha(_ image: CGImage) -> Bool {
+        switch image.alphaInfo {
+        case .none, .noneSkipFirst, .noneSkipLast:
+            return false
+        case .premultipliedFirst, .premultipliedLast, .first, .last, .alphaOnly:
+            return true
+        @unknown default:
+            return true
+        }
     }
 
     private static func mimeType(for type: UTType) -> String {
