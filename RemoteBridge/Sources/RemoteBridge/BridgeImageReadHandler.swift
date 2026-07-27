@@ -8,6 +8,9 @@ enum BridgeImageReadDiagnostics {
     // payload bytes — image targets are more sensitive; basename only.
     static func log(_ message: String) {
         BridgeLogger.server.info("[image_read] \(message, privacy: .public)")
+        if let data = "[image_read] \(message)\n".data(using: .utf8) {
+            FileHandle.standardError.write(data)
+        }
     }
 }
 
@@ -105,23 +108,46 @@ struct BridgeImageFilePolicy: BridgeLocalFileContentPolicy {
     }
 }
 
-/// Non-blocking admission gate shared across every image_read: a decode can
-/// pin hundreds of MB of RAM, so excess concurrent requests are refused
-/// immediately instead of queueing on the global worker pool.
+/// One image decode can pin hundreds of MB of RAM. Production therefore keeps
+/// a single decode slot, but permits a small, short-lived waiter set so normal
+/// back-to-back taps do not fail merely because the previous decode needs
+/// another hundred milliseconds.
+struct BridgeImageReadAdmissionWaitPolicy: Equatable {
+    let maximumWaiters: Int
+    let timeout: TimeInterval
+
+    static let immediate = BridgeImageReadAdmissionWaitPolicy(maximumWaiters: 0, timeout: 0)
+    static let production = BridgeImageReadAdmissionWaitPolicy(maximumWaiters: 8, timeout: 2)
+}
+
+enum BridgeImageReadAdmissionRejection: Equatable {
+    case unavailable
+    case queueFull
+    case timedOut
+}
+
+enum BridgeImageReadAdmissionOutcome: Equatable {
+    case acquired
+    case rejected(BridgeImageReadAdmissionRejection)
+}
+
 final class BridgeImageReadAdmission {
-    static let shared = BridgeImageReadAdmission(limit: 1)
+    static let shared = BridgeImageReadAdmission(limit: 1, waitPolicy: .production)
 
     private let limit: Int
-    private let lock = NSLock()
+    private let waitPolicy: BridgeImageReadAdmissionWaitPolicy
+    private let condition = NSCondition()
     private var inFlight = 0
+    private var waiterCount = 0
 
-    init(limit: Int) {
+    init(limit: Int, waitPolicy: BridgeImageReadAdmissionWaitPolicy = .immediate) {
         self.limit = limit
+        self.waitPolicy = waitPolicy
     }
 
     func tryAcquire() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
+        condition.lock()
+        defer { condition.unlock() }
         guard inFlight < limit else {
             return false
         }
@@ -129,10 +155,47 @@ final class BridgeImageReadAdmission {
         return true
     }
 
+    func acquire() -> BridgeImageReadAdmissionOutcome {
+        condition.lock()
+        if inFlight < limit {
+            inFlight += 1
+            condition.unlock()
+            return .acquired
+        }
+        guard waitPolicy.maximumWaiters > 0, waitPolicy.timeout > 0 else {
+            condition.unlock()
+            return .rejected(.unavailable)
+        }
+        guard waiterCount < waitPolicy.maximumWaiters else {
+            condition.unlock()
+            return .rejected(.queueFull)
+        }
+
+        waiterCount += 1
+        let deadline = Date().addingTimeInterval(waitPolicy.timeout)
+        while inFlight >= limit {
+            let wasSignalled = condition.wait(until: deadline)
+            if !wasSignalled, inFlight >= limit {
+                waiterCount -= 1
+                condition.unlock()
+                return .rejected(.timedOut)
+            }
+        }
+        waiterCount -= 1
+        inFlight += 1
+        condition.unlock()
+        return .acquired
+    }
+
     func release() {
-        lock.lock()
-        defer { lock.unlock() }
+        condition.lock()
         inFlight = max(0, inFlight - 1)
+        condition.signal()
+        condition.unlock()
+    }
+
+    var waiterCountForTesting: Int {
+        condition.withLock { waiterCount }
     }
 }
 
@@ -196,8 +259,24 @@ struct BridgeImageReadHandler {
             return BridgeResponse(id: request.id, ok: true, result: result, error: nil)
         }
 
-        guard admission.tryAcquire() else {
+        let admissionStartedAt = CFAbsoluteTimeGetCurrent()
+        let admissionOutcome = admission.acquire()
+        guard admissionOutcome == .acquired else {
+            let rejection: String
+            switch admissionOutcome {
+            case .rejected(.unavailable): rejection = "unavailable"
+            case .rejected(.queueFull): rejection = "queue_full"
+            case .rejected(.timedOut): rejection = "timed_out"
+            case .acquired: rejection = "none"
+            }
+            BridgeImageReadDiagnostics.log("admission_rejected request_id=\(request.id) file=\(displayName) reason=\(rejection)")
             throw BridgeInternalError.resourceBusy("目前正在處理另一張圖片，請稍後再試。")
+        }
+        let admissionWaitMilliseconds = (CFAbsoluteTimeGetCurrent() - admissionStartedAt) * 1_000
+        if admissionWaitMilliseconds >= 1 {
+            BridgeImageReadDiagnostics.log(
+                "admission_acquired request_id=\(request.id) file=\(displayName) wait_ms=\(String(format: "%.1f", admissionWaitMilliseconds))"
+            )
         }
         defer { admission.release() }
         admittedWorkHookForTesting?()

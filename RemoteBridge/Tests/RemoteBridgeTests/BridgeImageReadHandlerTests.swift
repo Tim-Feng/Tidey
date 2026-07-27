@@ -144,6 +144,8 @@ final class BridgeImageReadHandlerTests: XCTestCase {
         XCTAssertEqual(entered.wait(timeout: .now() + 2), .success, "first request must enter the admitted section")
 
         let secondFixture = try makeFixture(admission: admission)
+        try Self.makeImageData(width: 16, height: 16, type: .png)
+            .write(to: secondFixture.rootURL.appendingPathComponent("held.png"))
         XCTAssertThrowsError(try secondFixture.handler.handle(Self.request(path: "held.png"))) { error in
             guard case BridgeInternalError.resourceBusy = error else {
                 return XCTFail("Unexpected error: \(error)")
@@ -165,6 +167,64 @@ final class BridgeImageReadHandlerTests: XCTestCase {
         XCTAssertThrowsError(try fixture.handler.handle(Self.request(path: "missing.png")))
 
         XCTAssertTrue(admission.tryAcquire(), "slot must be released after an error")
+        admission.release()
+    }
+
+    func testAdmissionWaiterAcquiresAfterActiveDecodeReleases() {
+        let admission = BridgeImageReadAdmission(
+            limit: 1,
+            waitPolicy: BridgeImageReadAdmissionWaitPolicy(maximumWaiters: 1, timeout: 1)
+        )
+        XCTAssertEqual(admission.acquire(), .acquired)
+        let outcome = LockedAdmissionOutcome()
+        let done = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            outcome.set(admission.acquire())
+            done.signal()
+        }
+        XCTAssertTrue(waitUntil(timeout: 1) { admission.waiterCountForTesting == 1 })
+
+        admission.release()
+
+        XCTAssertEqual(done.wait(timeout: .now() + 2), .success)
+        XCTAssertEqual(outcome.value, .acquired)
+        admission.release()
+    }
+
+    func testAdmissionQueueIsBounded() {
+        let admission = BridgeImageReadAdmission(
+            limit: 1,
+            waitPolicy: BridgeImageReadAdmissionWaitPolicy(maximumWaiters: 1, timeout: 1)
+        )
+        XCTAssertEqual(admission.acquire(), .acquired)
+        let waiterOutcome = LockedAdmissionOutcome()
+        let waiterDone = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            waiterOutcome.set(admission.acquire())
+            waiterDone.signal()
+        }
+        XCTAssertTrue(waitUntil(timeout: 1) { admission.waiterCountForTesting == 1 })
+
+        XCTAssertEqual(admission.acquire(), .rejected(.queueFull))
+
+        admission.release()
+        XCTAssertEqual(waiterDone.wait(timeout: .now() + 2), .success)
+        XCTAssertEqual(waiterOutcome.value, .acquired)
+        admission.release()
+    }
+
+    func testAdmissionWaitTimesOutWithoutLeakingWaiter() {
+        let admission = BridgeImageReadAdmission(
+            limit: 1,
+            waitPolicy: BridgeImageReadAdmissionWaitPolicy(maximumWaiters: 1, timeout: 0.05)
+        )
+        XCTAssertEqual(admission.acquire(), .acquired)
+
+        XCTAssertEqual(admission.acquire(), .rejected(.timedOut))
+        XCTAssertEqual(admission.waiterCountForTesting, 0)
+
+        admission.release()
+        XCTAssertEqual(admission.acquire(), .acquired)
         admission.release()
     }
 
@@ -382,7 +442,7 @@ final class BridgeImageReadHandlerTests: XCTestCase {
                                            defaultRequestedDimension: Self.testLimits.defaultRequestedDimension,
                                            maximumEncodedPreviewBytes: 6 * 1024)
         let fixture = try makeFixture(limits: limits)
-        try Self.makeNoisyPNGData(width: 600, height: 400)
+        try Self.makeOpaqueNoisyPNGData(width: 600, height: 400)
             .write(to: fixture.rootURL.appendingPathComponent("noisy.png"))
 
         let response = try XCTUnwrap(fixture.handler.handle(Self.request(path: "noisy.png",
@@ -698,6 +758,18 @@ final class BridgeImageReadHandlerTests: XCTestCase {
         return BridgeRequest(id: UUID().uuidString, action: "image_read", params: params)
     }
 
+    private func waitUntil(timeout: TimeInterval,
+                           condition: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() {
+                return true
+            }
+            Thread.sleep(forTimeInterval: 0.005)
+        }
+        return condition()
+    }
+
     private static func decodePreview(_ response: BridgeResponse) throws -> (width: Int, height: Int) {
         let base64 = try XCTUnwrap(response.result?["data_base64"]?.stringValue)
         let data = try XCTUnwrap(Data(base64Encoded: base64))
@@ -847,6 +919,21 @@ private final class LockedCounter: @unchecked Sendable {
     func increment() {
         lock.withLock {
             count += 1
+        }
+    }
+}
+
+private final class LockedAdmissionOutcome: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: BridgeImageReadAdmissionOutcome?
+
+    var value: BridgeImageReadAdmissionOutcome? {
+        lock.withLock { stored }
+    }
+
+    func set(_ value: BridgeImageReadAdmissionOutcome) {
+        lock.withLock {
+            stored = value
         }
     }
 }
