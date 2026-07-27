@@ -431,7 +431,7 @@ final class BridgeImageReadHandlerTests: XCTestCase {
 
     func testMatchingRevisionReturnsMetadataWithoutAdmissionOrDecode() throws {
         let admittedWorkCount = LockedCounter()
-        let limits = BridgeImageReadLimits(maximumSourceBytes: 1,
+        let limits = BridgeImageReadLimits(maximumSourceBytes: 128,
                                            maximumSourcePixels: Self.testLimits.maximumSourcePixels,
                                            minimumRequestedDimension: Self.testLimits.minimumRequestedDimension,
                                            maximumRequestedDimension: Self.testLimits.maximumRequestedDimension,
@@ -461,6 +461,30 @@ final class BridgeImageReadHandlerTests: XCTestCase {
         XCTAssertEqual(response.result?["read_only"]?.boolValue, true)
         XCTAssertNil(response.result?["data_base64"])
         XCTAssertNil(response.result?["preview_size"])
+    }
+
+    func testMatchingRevisionStillRejectsOversizedSource() throws {
+        let limits = BridgeImageReadLimits(maximumSourceBytes: 16,
+                                           maximumSourcePixels: Self.testLimits.maximumSourcePixels,
+                                           minimumRequestedDimension: Self.testLimits.minimumRequestedDimension,
+                                           maximumRequestedDimension: Self.testLimits.maximumRequestedDimension,
+                                           defaultRequestedDimension: Self.testLimits.defaultRequestedDimension,
+                                           maximumEncodedPreviewBytes: Self.testLimits.maximumEncodedPreviewBytes)
+        let fixture = try makeFixture(limits: limits)
+        let fileURL = fixture.rootURL.appendingPathComponent("oversized.png")
+        try Data(repeating: 0xFF, count: 128).write(to: fileURL)
+        let opened = try BridgeSafeFileOpener.openRegularFile(at: fileURL,
+                                                              notFoundMessage: "missing",
+                                                              outsideScopeMessage: "outside")
+        let revisionToken = opened.revisionToken
+        opened.close()
+
+        XCTAssertThrowsError(try fixture.handler.handle(Self.request(path: "oversized.png",
+                                                                      ifRevisionToken: revisionToken))) { error in
+            guard case BridgeInternalError.fileTooLarge = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
     }
 
     func testDifferentRevisionReturnsFullPreview() throws {

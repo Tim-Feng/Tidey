@@ -180,6 +180,9 @@ struct BridgeImageReadHandler {
                                                               outsideScopeMessage: policy.outsideRootMessage)
         defer { opened.close() }
 
+        guard opened.size <= limits.maximumSourceBytes else {
+            throw BridgeInternalError.fileTooLarge("圖片檔案太大，無法產生預覽。")
+        }
         if params.ifRevisionToken == opened.revisionToken {
             let result: [String: JSONValue] = [
                 "not_modified": .bool(true),
@@ -199,9 +202,6 @@ struct BridgeImageReadHandler {
         defer { admission.release() }
         admittedWorkHookForTesting?()
 
-        guard opened.size <= limits.maximumSourceBytes else {
-            throw BridgeInternalError.fileTooLarge("圖片檔案太大，無法產生預覽。")
-        }
         // Bounded read from the same descriptor: a file that grows between
         // fstat and the read is rejected instead of buffered without limit.
         let sourceData = try BridgeSafeFileOpener.readBounded(from: opened.fileHandle,
