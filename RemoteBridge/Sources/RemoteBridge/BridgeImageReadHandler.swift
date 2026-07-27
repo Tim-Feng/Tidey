@@ -108,10 +108,11 @@ struct BridgeImageFilePolicy: BridgeLocalFileContentPolicy {
     }
 }
 
-/// One image decode can pin hundreds of MB of RAM. Production therefore keeps
-/// a single decode slot, but permits a small, short-lived waiter set so normal
-/// back-to-back taps do not fail merely because the previous decode needs
-/// another hundred milliseconds.
+/// One image decode can pin hundreds of MB of RAM, and panel-root resolution
+/// crosses the single Tidey Unix socket. Production therefore serializes the
+/// whole validated read pipeline, but permits a small, short-lived waiter set
+/// so normal back-to-back taps do not fail merely because the previous request
+/// needs another hundred milliseconds.
 struct BridgeImageReadAdmissionWaitPolicy: Equatable {
     let maximumWaiters: Int
     let timeout: TimeInterval
@@ -230,13 +231,44 @@ struct BridgeImageReadHandler {
         }
         let params = try BridgeImageReadRequest(params: request.params)
         let requestedDimension = clampRequestedDimension(params.maxPixelDimension)
+        let requestedDisplayName = URL(fileURLWithPath: params.path).lastPathComponent
+        BridgeImageReadDiagnostics.log(
+            "start request_id=\(request.id) file=\(requestedDisplayName) max_dimension=\(requestedDimension)"
+        )
+
+        // Root lookup uses Tidey's request socket, which can reject overlapping
+        // short-lived connections. It belongs inside the same bounded admission
+        // region as decode so an image burst cannot fail before reaching the
+        // decode queue.
+        let admissionStartedAt = CFAbsoluteTimeGetCurrent()
+        let admissionOutcome = admission.acquire()
+        guard admissionOutcome == .acquired else {
+            let rejection: String
+            switch admissionOutcome {
+            case .rejected(.unavailable): rejection = "unavailable"
+            case .rejected(.queueFull): rejection = "queue_full"
+            case .rejected(.timedOut): rejection = "timed_out"
+            case .acquired: rejection = "none"
+            }
+            BridgeImageReadDiagnostics.log(
+                "admission_rejected request_id=\(request.id) file=\(requestedDisplayName) reason=\(rejection)"
+            )
+            throw BridgeInternalError.resourceBusy("目前正在處理另一張圖片，請稍後再試。")
+        }
+        let admissionWaitMilliseconds = (CFAbsoluteTimeGetCurrent() - admissionStartedAt) * 1_000
+        if admissionWaitMilliseconds >= 1 {
+            BridgeImageReadDiagnostics.log(
+                "admission_acquired request_id=\(request.id) file=\(requestedDisplayName) wait_ms=\(String(format: "%.1f", admissionWaitMilliseconds))"
+            )
+        }
+        defer { admission.release() }
+
         let resolved = try targetResolver.resolve(path: params.path,
                                                   workspaceID: params.workspaceID,
                                                   panelID: params.panelID,
                                                   policy: policy,
                                                   allowsReadOnlyHomeScope: true)
         let displayName = resolved.targetURL.lastPathComponent
-        BridgeImageReadDiagnostics.log("start request_id=\(request.id) file=\(displayName) max_dimension=\(requestedDimension)")
 
         let opened = try BridgeSafeFileOpener.openRegularFile(at: resolved.targetURL,
                                                               notFoundMessage: "image_read target does not exist",
@@ -259,26 +291,6 @@ struct BridgeImageReadHandler {
             return BridgeResponse(id: request.id, ok: true, result: result, error: nil)
         }
 
-        let admissionStartedAt = CFAbsoluteTimeGetCurrent()
-        let admissionOutcome = admission.acquire()
-        guard admissionOutcome == .acquired else {
-            let rejection: String
-            switch admissionOutcome {
-            case .rejected(.unavailable): rejection = "unavailable"
-            case .rejected(.queueFull): rejection = "queue_full"
-            case .rejected(.timedOut): rejection = "timed_out"
-            case .acquired: rejection = "none"
-            }
-            BridgeImageReadDiagnostics.log("admission_rejected request_id=\(request.id) file=\(displayName) reason=\(rejection)")
-            throw BridgeInternalError.resourceBusy("目前正在處理另一張圖片，請稍後再試。")
-        }
-        let admissionWaitMilliseconds = (CFAbsoluteTimeGetCurrent() - admissionStartedAt) * 1_000
-        if admissionWaitMilliseconds >= 1 {
-            BridgeImageReadDiagnostics.log(
-                "admission_acquired request_id=\(request.id) file=\(displayName) wait_ms=\(String(format: "%.1f", admissionWaitMilliseconds))"
-            )
-        }
-        defer { admission.release() }
         admittedWorkHookForTesting?()
 
         // Bounded read from the same descriptor: a file that grows between

@@ -228,6 +228,58 @@ final class BridgeImageReadHandlerTests: XCTestCase {
         admission.release()
     }
 
+    func testHandlerQueueSerializesPanelRootLookupBeforeDecode() throws {
+        let fileManager = FileManager.default
+        let tempDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let rootURL = tempDirectory.appendingPathComponent("workspace-root", isDirectory: true)
+        let homeURL = tempDirectory.appendingPathComponent("home", isDirectory: true)
+        let uploadsURL = homeURL.appendingPathComponent(
+            "Library/Application Support/Tidey Remote Bridge/uploads",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: homeURL, withIntermediateDirectories: true)
+        addTeardownBlock {
+            try? fileManager.removeItem(at: tempDirectory)
+        }
+        try Self.makeImageData(width: 16, height: 16, type: .png)
+            .write(to: rootURL.appendingPathComponent("queued.png"))
+
+        let admission = BridgeImageReadAdmission(limit: 1, waitPolicy: .production)
+        let rootResolver = OverlapRejectingRootResolver(rootPath: rootURL.path)
+        let handler = BridgeImageReadHandler(rootResolver: rootResolver,
+                                             fileManager: fileManager,
+                                             homeDirectoryURL: homeURL,
+                                             uploadsDirectoryURL: uploadsURL,
+                                             admission: admission)
+        let firstResult = LockedHandlerResult()
+        let secondResult = LockedHandlerResult()
+        let firstDone = DispatchSemaphore(value: 0)
+        let secondDone = DispatchSemaphore(value: 0)
+
+        Thread.detachNewThread {
+            firstResult.set(Result { try handler.handle(Self.request(path: "queued.png")) })
+            firstDone.signal()
+        }
+        XCTAssertEqual(rootResolver.firstLookupEntered.wait(timeout: .now() + 2), .success)
+        Thread.detachNewThread {
+            secondResult.set(Result { try handler.handle(Self.request(path: "queued.png")) })
+            secondDone.signal()
+        }
+        XCTAssertTrue(waitUntil(timeout: 1) { admission.waiterCountForTesting == 1 },
+                      "the second handler must queue before it can overlap panel-root lookup")
+
+        rootResolver.allowFirstLookupToReturn.signal()
+
+        XCTAssertEqual(firstDone.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(secondDone.wait(timeout: .now() + 5), .success)
+        XCTAssertNoThrow(try XCTUnwrap(firstResult.value).get())
+        XCTAssertNoThrow(try XCTUnwrap(secondResult.value).get())
+        XCTAssertEqual(rootResolver.overlapCount, 0)
+        XCTAssertEqual(rootResolver.lookupCount, 2)
+    }
+
     func testUploadsDirectoryAsSymlinkToOutsideIsRejected() throws {
         let fixture = try makeFixture(createUploadsDirectory: false)
         let externalURL = fixture.tempDirectory.appendingPathComponent("external", isDirectory: true)
@@ -489,7 +541,7 @@ final class BridgeImageReadHandlerTests: XCTestCase {
                           "transparent PNG must reduce dimensions rather than fall back to JPEG")
     }
 
-    func testMatchingRevisionReturnsMetadataWithoutAdmissionOrDecode() throws {
+    func testMatchingRevisionReturnsMetadataWithoutReadOrDecode() throws {
         let admittedWorkCount = LockedCounter()
         let limits = BridgeImageReadLimits(maximumSourceBytes: 128,
                                            maximumSourcePixels: Self.testLimits.maximumSourcePixels,
@@ -512,7 +564,7 @@ final class BridgeImageReadHandlerTests: XCTestCase {
                                                                          ifRevisionToken: revisionToken)))
 
         XCTAssertEqual(admittedWorkCount.value, 0,
-                       "matching metadata must return before admission, bounded read, and decode")
+                       "matching metadata must return before bounded read and decode")
         XCTAssertEqual(response.result?["not_modified"]?.boolValue, true)
         XCTAssertEqual(response.result?["normalized_path"]?.stringValue, fileURL.path)
         XCTAssertEqual(response.result?["display_name"]?.stringValue, "unchanged.png")
@@ -935,6 +987,69 @@ private final class LockedAdmissionOutcome: @unchecked Sendable {
         lock.withLock {
             stored = value
         }
+    }
+}
+
+private final class LockedHandlerResult: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: Result<BridgeResponse?, Error>?
+
+    var value: Result<BridgeResponse?, Error>? {
+        lock.withLock { stored }
+    }
+
+    func set(_ value: Result<BridgeResponse?, Error>) {
+        lock.withLock {
+            stored = value
+        }
+    }
+}
+
+private final class OverlapRejectingRootResolver: @unchecked Sendable, PanelFileRootResolving {
+    let firstLookupEntered = DispatchSemaphore(value: 0)
+    let allowFirstLookupToReturn = DispatchSemaphore(value: 0)
+
+    private let rootPathValue: String
+    private let lock = NSLock()
+    private var activeLookupCount = 0
+    private var storedLookupCount = 0
+    private var storedOverlapCount = 0
+
+    init(rootPath: String) {
+        self.rootPathValue = rootPath
+    }
+
+    var lookupCount: Int {
+        lock.withLock { storedLookupCount }
+    }
+
+    var overlapCount: Int {
+        lock.withLock { storedOverlapCount }
+    }
+
+    func rootPath(workspaceID: String, panelID: String) throws -> String {
+        let shouldBlockFirst: Bool
+        lock.lock()
+        if activeLookupCount > 0 {
+            storedOverlapCount += 1
+            lock.unlock()
+            throw BridgeInternalError.socketUnavailable
+        }
+        activeLookupCount += 1
+        storedLookupCount += 1
+        shouldBlockFirst = storedLookupCount == 1
+        lock.unlock()
+        defer {
+            lock.withLock {
+                activeLookupCount -= 1
+            }
+        }
+
+        if shouldBlockFirst {
+            firstLookupEntered.signal()
+            allowFirstLookupToReturn.wait()
+        }
+        return rootPathValue
     }
 }
 
