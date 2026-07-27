@@ -463,6 +463,24 @@ final class BridgeImageReadHandlerTests: XCTestCase {
         XCTAssertNil(response.result?["preview_size"])
     }
 
+    func testDifferentRevisionReturnsFullPreview() throws {
+        let admittedWorkCount = LockedCounter()
+        let fixture = try makeFixture(admittedWorkHook: {
+            admittedWorkCount.increment()
+        })
+        try Self.makeImageData(width: 64, height: 48, type: .png)
+            .write(to: fixture.rootURL.appendingPathComponent("changed.png"))
+
+        let response = try XCTUnwrap(fixture.handler.handle(Self.request(path: "changed.png",
+                                                                         ifRevisionToken: "stale-token")))
+
+        XCTAssertEqual(admittedWorkCount.value, 1)
+        XCTAssertEqual(response.result?["not_modified"]?.boolValue, false)
+        XCTAssertNotNil(response.result?["data_base64"]?.stringValue)
+        XCTAssertGreaterThan(try XCTUnwrap(response.result?["preview_size"]?.intValue), 0)
+        _ = try Self.decodePreview(response)
+    }
+
     func testHiddenAndLibraryHomePathsRejected() throws {
         let fixture = try makeFixture()
         let hiddenURL = fixture.homeURL.appendingPathComponent(".secrets/shot.png")
