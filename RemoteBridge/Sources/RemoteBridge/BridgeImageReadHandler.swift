@@ -27,7 +27,7 @@ struct BridgeImageReadLimits {
         minimumRequestedDimension: 512,
         maximumRequestedDimension: 4096,
         defaultRequestedDimension: 3072,
-        maximumEncodedPreviewBytes: 4 * 1024 * 1024
+        maximumEncodedPreviewBytes: 1024 * 1024
     )
 }
 

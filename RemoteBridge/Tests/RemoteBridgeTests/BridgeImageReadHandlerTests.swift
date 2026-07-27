@@ -393,6 +393,20 @@ final class BridgeImageReadHandlerTests: XCTestCase {
         _ = try Self.decodePreview(response)
     }
 
+    func testProductionPreviewCapIsOneMiBAndOpaqueNoisyPNGUsesJPEG() throws {
+        XCTAssertEqual(BridgeImageReadLimits.production.maximumEncodedPreviewBytes, 1024 * 1024)
+        let fixture = try makeFixture()
+        try Self.makeOpaqueNoisyPNGData(width: 1672, height: 941)
+            .write(to: fixture.rootURL.appendingPathComponent("opaque-noise.png"))
+
+        let response = try XCTUnwrap(fixture.handler.handle(Self.request(path: "opaque-noise.png")))
+
+        XCTAssertEqual(response.result?["preview_mime_type"]?.stringValue, "image/jpeg")
+        let previewSize = try XCTUnwrap(response.result?["preview_size"]?.intValue)
+        XCTAssertLessThanOrEqual(previewSize, 1024 * 1024)
+        _ = try Self.decodePreview(response)
+    }
+
     func testHiddenAndLibraryHomePathsRejected() throws {
         let fixture = try makeFixture()
         let hiddenURL = fixture.homeURL.appendingPathComponent(".secrets/shot.png")
@@ -627,6 +641,42 @@ final class BridgeImageReadHandlerTests: XCTestCase {
             }
         }
         let image = context.makeImage()!
+        return encode(image: image, type: .png)
+    }
+
+    private static func makeOpaqueNoisyPNGData(width: Int, height: Int) -> Data {
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        var seed: UInt64 = 0x7A6D_8F39_42C1_B507
+        for offset in stride(from: 0, to: pixels.count, by: 4) {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            pixels[offset] = UInt8(truncatingIfNeeded: seed)
+            pixels[offset + 1] = UInt8(truncatingIfNeeded: seed >> 8)
+            pixels[offset + 2] = UInt8(truncatingIfNeeded: seed >> 16)
+            pixels[offset + 3] = 0
+        }
+        return makePNGData(width: width,
+                           height: height,
+                           pixels: pixels,
+                           alphaInfo: .noneSkipLast)
+    }
+
+    private static func makePNGData(width: Int,
+                                    height: Int,
+                                    pixels: [UInt8],
+                                    alphaInfo: CGImageAlphaInfo) -> Data {
+        let provider = CGDataProvider(data: Data(pixels) as CFData)!
+        let bitmapInfo = CGBitmapInfo(rawValue: alphaInfo.rawValue)
+        let image = CGImage(width: width,
+                            height: height,
+                            bitsPerComponent: 8,
+                            bitsPerPixel: 32,
+                            bytesPerRow: width * 4,
+                            space: CGColorSpaceCreateDeviceRGB(),
+                            bitmapInfo: bitmapInfo,
+                            provider: provider,
+                            decode: nil,
+                            shouldInterpolate: false,
+                            intent: .defaultIntent)!
         return encode(image: image, type: .png)
     }
 
