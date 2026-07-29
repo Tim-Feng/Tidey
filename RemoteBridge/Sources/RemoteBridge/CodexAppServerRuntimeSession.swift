@@ -78,6 +78,7 @@ final class CodexAppServerRuntimeSession {
     private var attachSubscriptionState = AttachSubscriptionState.noLoadedThread
     private var nextSubscriptionRetryAt: Date?
     private var registryRootThreadID: String?
+    private var subscriptionRejectedRegistryRootThreadID: String?
     var loadedThreadUnresolvedHook: (() -> Void)?
 
     var attachSubscriptionStateForTesting: String {
@@ -510,6 +511,9 @@ final class CodexAppServerRuntimeSession {
         }
         lock.lock()
         registryRootThreadID = threadID
+        if subscriptionRejectedRegistryRootThreadID != threadID {
+            subscriptionRejectedRegistryRootThreadID = nil
+        }
         let subscriptionState = attachSubscriptionState
         lock.unlock()
         guard case .ready = initialization.diagnosticStatus() else {
@@ -730,7 +734,7 @@ final class CodexAppServerRuntimeSession {
         switch result {
         case .success(let value):
             lock.lock()
-            let knownRootThreadID = registryRootThreadID
+            let knownRootThreadID = subscriptionRegistryRootThreadIDLocked()
             lock.unlock()
             guard let threadID = codexAppServerLoadedThreadID(from: value,
                                                               registryRootThreadID: knownRootThreadID) else {
@@ -738,7 +742,7 @@ final class CodexAppServerRuntimeSession {
                 if clearSubscriptionOnMissing {
                     loadedThreadUnresolvedHook?()
                     lock.lock()
-                    let fallbackThreadID = registryRootThreadID
+                    let fallbackThreadID = subscriptionRegistryRootThreadIDLocked()
                     let previousState = attachSubscriptionState
                     if fallbackThreadID == nil {
                         attachSubscriptionState = .noLoadedThread
@@ -762,6 +766,13 @@ final class CodexAppServerRuntimeSession {
             BridgeLogger.server.error("codex app-server subscription loaded thread list failed error=\(String(describing: error), privacy: .public)")
             setAttachSubscriptionState(.failed("loaded_thread_list_failed"), reason: "loaded_thread_list_failed")
         }
+    }
+
+    private func subscriptionRegistryRootThreadIDLocked() -> String? {
+        guard registryRootThreadID != subscriptionRejectedRegistryRootThreadID else {
+            return nil
+        }
+        return registryRootThreadID
     }
 
     private func sendThreadResumeForSubscriptionIfNeeded(threadID: String, reason: String) {
@@ -812,12 +823,15 @@ final class CodexAppServerRuntimeSession {
                                                         self.lock.unlock()
                                                         return
                                                     }
-                                                    let knownRootThreadID = self.registryRootThreadID
+                                                    let knownRootThreadID = self.subscriptionRegistryRootThreadIDLocked()
                                                     if let knownRootThreadID,
                                                        knownRootThreadID != threadID {
                                                         self.lock.unlock()
                                                         self.stop()
                                                         return
+                                                    }
+                                                    if self.subscriptionRejectedRegistryRootThreadID == threadID {
+                                                        self.subscriptionRejectedRegistryRootThreadID = nil
                                                     }
                                                     let previousState = self.attachSubscriptionState
                                                     self.attachSubscriptionState = .subscribed(threadID: threadID)
@@ -854,6 +868,9 @@ final class CodexAppServerRuntimeSession {
 
         activeThreadStore.clearThreadID(ifEqualTo: threadID)
         lock.lock()
+        if registryRootThreadID == threadID {
+            subscriptionRejectedRegistryRootThreadID = threadID
+        }
         nextSubscriptionRetryAt = Date().addingTimeInterval(Self.subscriptionRetryBackoff)
         lock.unlock()
         BridgeLogger.server.info("codex app-server subscription waiting for rollout thread_id=\(threadID, privacy: .public) retry_after_seconds=\(Self.subscriptionRetryBackoff, privacy: .public)")

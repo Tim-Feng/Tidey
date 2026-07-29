@@ -339,6 +339,11 @@
 
 ### Codex app-server approval / event stream（2026-07 permission-approval 加固，round 1–6）
 
+- `no rollout` 要撤銷 subscription discovery 的舊 root，但不能連 submit authority 一起清掉
+  - `codex resume <id>` 找不到 rollout 時，TUI 仍可能讓使用者從 chooser 選到另一個 thread；wrapper registry 會繼續保留原本的 resume ID
+  - Bridge 若每輪 loaded-list 無法對上 registry root 就 fallback 回同一個舊 ID，會每兩秒重送 `thread/resume`，永遠看不到 app-server 已載入的真實 thread
+  - app-server 明確回 `no rollout found` 後，把該 registry root 標成「subscription 已拒絕」；下一輪只可採用唯一、非 child、非 paginated 的 loaded root，遇到多個候選仍 fail closed
+  - Remote 主動送訊息的 submit lookup 仍保留 registry root，因為同一個 thread 的 rollout 可能只是稍晚出現；subscription 與 submit 必須分開保存這兩種權威狀態
 - seq 取號要用 reservation，不能用 peek
   - 「看 buffer 最大值 +1」的 peek 在同一批多個 event 先建立、後發布時會全部拿到同一個 seq
   - 取號當下就要墊高 high-water（reservation），批次 terminal、close 一次收多個 prompt 都靠這個

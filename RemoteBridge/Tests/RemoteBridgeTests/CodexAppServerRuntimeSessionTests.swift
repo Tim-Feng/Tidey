@@ -636,6 +636,65 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertEqual(transport.sentLines().count, 6)
     }
 
+    func testNoRolloutRegistryRootCanRebindToUniqueLoadedThread() throws {
+        let runner = FakeCodexAppServerProcessRunner()
+        let connector = FakeCodexAppServerTransportConnector()
+        let factory = CodexAppServerRuntimeSessionFactory(processRunner: runner,
+                                                          transportConnector: connector)
+        var activeThreadIDs = [String]()
+        let session = try factory.attach(socketPath: "/tmp/tidey-real-panel/app.sock",
+                                         processID: 9001,
+                                         context: CodexAppServerRuntimeContext(workspaceID: "workspace-1",
+                                                                               panelID: "panel-1",
+                                                                               sessionID: "session-1"),
+                                         nextSequence: { _ in 1 },
+                                         timestampProvider: { "2026-07-30T00:00:00.000Z" },
+                                         onAgentEvent: { _ in },
+                                         onInteractivePrompt: { _ in },
+                                         onInteractivePromptResolved: { _ in },
+                                         onActiveThreadID: { activeThreadIDs.append($0) })
+        session.setRegistryRootThreadID("thread-stale")
+
+        let transport = try XCTUnwrap(connector.transport)
+        try Self.acknowledgeInitialize(from: transport)
+
+        let initialListLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(2).first))
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(initialListLoaded["id"]), result: .object([
+            "data": .array([.string("thread-live")]),
+            "nextCursor": .null,
+        ])))
+
+        XCTAssertTrue(Self.waitForSentLineCount(4, transport: transport))
+        let staleResume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
+        XCTAssertEqual(staleResume["method"]?.stringValue, "thread/resume")
+        XCTAssertEqual(staleResume["params"]?.objectValue?["threadId"]?.stringValue, "thread-stale")
+        transport.emitLine(try Self.errorResponseText(id: try XCTUnwrap(staleResume["id"]),
+                                                      code: -32600,
+                                                      message: "no rollout found for thread id thread-stale"))
+        XCTAssertTrue(Self.waitFor { session.attachSubscriptionStateForTesting == "no_loaded_thread" })
+
+        Thread.sleep(forTimeInterval: 1.1)
+        session.ensureThreadSubscription()
+        XCTAssertTrue(Self.waitForSentLineCount(5, transport: transport))
+        let retryListLoaded = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(4).first))
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(retryListLoaded["id"]), result: .object([
+            "data": .array([.string("thread-live")]),
+            "nextCursor": .null,
+        ])))
+
+        XCTAssertTrue(Self.waitForSentLineCount(6, transport: transport))
+        let liveResume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(5).first))
+        XCTAssertEqual(liveResume["method"]?.stringValue, "thread/resume")
+        XCTAssertEqual(liveResume["params"]?.objectValue?["threadId"]?.stringValue, "thread-live")
+        transport.emitLine(try Self.responseText(id: try XCTUnwrap(liveResume["id"]), result: .object([
+            "thread": .object(["id": .string("thread-live")]),
+        ])))
+
+        XCTAssertTrue(Self.waitFor { session.attachSubscriptionStateForTesting == "subscribed:thread-live" })
+        XCTAssertEqual(activeThreadIDs.last, "thread-live")
+        XCTAssertFalse(session.isStopped())
+    }
+
     func testFactoryAttachesExplicitCurrentLoadedThread() throws {
         let runner = FakeCodexAppServerProcessRunner()
         let connector = FakeCodexAppServerTransportConnector()
