@@ -106,6 +106,7 @@ extern NSString *const PTYTabArrangementOptionsPendingJumps;
 // the sessions are later restored from a saved arrangement during startup
 // activities, their contents can be rescued.
 + (void)registerSessionsInArrangement:(NSDictionary *)arrangement;
++ (NSString *)guidInArrangement:(NSDictionary *)arrangement;
 + (void)registerBuiltInFunctions;
 
 + (void)drawArrangementPreview:(NSDictionary*)arrangement frame:(NSRect)frame dark:(BOOL)dark;

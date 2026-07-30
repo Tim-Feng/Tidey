@@ -3440,6 +3440,10 @@ static void SetAgainstGrainDim(BOOL isVertical, NSSize *dest, CGFloat value) {
     return theTab;
 }
 
++ (NSString *)guidInArrangement:(NSDictionary *)arrangement {
+    return arrangement[TAB_GUID];
+}
+
 + (BOOL)arrangement:(NSDictionary *)arrangement
          passesTest:(BOOL (^NS_NOESCAPE)(NSDictionary *candidate))closure {
     return [PTYTab recursiveArrangementNode:arrangement[TAB_ARRANGEMENT_ROOT] passesTest:closure];
