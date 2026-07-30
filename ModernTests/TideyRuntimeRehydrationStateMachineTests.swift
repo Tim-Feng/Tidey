@@ -5,11 +5,57 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
     func testRuntimeAttachCommandBuilderSeamCompiles() {
         let builder = TideyRuntimeAttachCommandBuilder()
 
-        XCTAssertNil(
+        XCTAssertNotNil(
             builder.command(
                 tmuxExecutable: "/opt/homebrew/bin/tmux",
                 socketArguments: [],
                 tmuxSession: "work"
+            )
+        )
+    }
+
+    func testRuntimeAttachCommandTreatsShellMetacharactersAsLiteralArguments() {
+        let builder = TideyRuntimeAttachCommandBuilder()
+        let command = builder.command(
+            tmuxExecutable: "/opt/homebrew/bin/tmux",
+            socketArguments: [
+                "-S",
+                "/tmp/socket $(touch /tmp/tidey-owned)",
+            ],
+            tmuxSession:
+                "team'; $(touch /tmp/tidey-owned); " +
+                "`touch /tmp/tidey-owned`"
+        )
+
+        XCTAssertEqual(
+            command,
+            """
+            '/opt/homebrew/bin/tmux' '-S' \
+            '/tmp/socket $(touch /tmp/tidey-owned)' \
+            'attach-session' '-t' \
+            '=team'\\''; $(touch /tmp/tidey-owned); \
+            `touch /tmp/tidey-owned`'
+            """
+        )
+        XCTAssertNil(
+            builder.command(
+                tmuxExecutable: "/opt/homebrew/bin/tmux\u{0}",
+                socketArguments: [],
+                tmuxSession: "work"
+            )
+        )
+        XCTAssertNil(
+            builder.command(
+                tmuxExecutable: "/opt/homebrew/bin/tmux",
+                socketArguments: ["-S", "/tmp/socket\u{0}"],
+                tmuxSession: "work"
+            )
+        )
+        XCTAssertNil(
+            builder.command(
+                tmuxExecutable: "/opt/homebrew/bin/tmux",
+                socketArguments: [],
+                tmuxSession: "work\u{0}"
             )
         )
     }

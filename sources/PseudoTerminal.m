@@ -947,20 +947,17 @@ static BOOL TideyRuntimeLaunchesAreEqual(
         completion(NO);
         return;
     }
-    NSArray<NSString *> *arguments =
-        [@[ tmuxExecutable ]
-            arrayByAddingObjectsFromArray:
-                [socketArguments arrayByAddingObjectsFromArray:@[
-                    @"attach-session",
-                    @"-t",
-                    TideyRuntimeExactSessionTarget(
-                        descriptor.target.tmuxSession
-                    ),
-                ]]];
+    TideyRuntimeAttachCommandBuilder *commandBuilder =
+        [[[TideyRuntimeAttachCommandBuilder alloc] init] autorelease];
     NSString *command =
-        [[arguments mapWithBlock:^id(NSString *argument) {
-            return [argument quotedStringForPaste];
-        }] componentsJoinedByString:@" "];
+        [commandBuilder commandWithTmuxExecutable:tmuxExecutable
+                                 socketArguments:socketArguments
+                                     tmuxSession:
+                                         descriptor.target.tmuxSession];
+    if (!command) {
+        completion(NO);
+        return;
+    }
     NSMutableDictionary<NSString *, NSString *> *environment =
         [NSMutableDictionary dictionaryWithDictionary:
          session.environment ?: @{}];

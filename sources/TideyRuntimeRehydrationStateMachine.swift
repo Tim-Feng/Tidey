@@ -120,7 +120,33 @@ final class TideyRuntimeAttachCommandBuilder: NSObject {
         socketArguments: [String],
         tmuxSession: String
     ) -> String? {
-        nil
+        let arguments =
+            [tmuxExecutable] +
+            socketArguments +
+            [
+                "attach-session",
+                "-t",
+                "=\(tmuxSession)",
+            ]
+        guard
+            !tmuxExecutable.isEmpty,
+            !tmuxSession.isEmpty,
+            !arguments.contains(where: { $0.contains("\u{0}") })
+        else {
+            return nil
+        }
+        return arguments
+            .map(Self.shellQuote)
+            .joined(separator: " ")
+    }
+
+    private static func shellQuote(_ argument: String) -> String {
+        "'" +
+        argument.replacingOccurrences(
+            of: "'",
+            with: "'\\''"
+        ) +
+        "'"
     }
 }
 
