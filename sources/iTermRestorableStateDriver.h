@@ -69,6 +69,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, readonly) BOOL restoring;
 @property (nonatomic, readonly) NSInteger numberOfWindowsRestored;
 @property (nonatomic) BOOL needsSave;
+@property (nonatomic) BOOL previousExitWasUnclean;
 
 // callbacks will be removed when they are used and won't be mutated after completion runs.
 // ready is called after all windows have been asked to restore.
@@ -80,7 +81,8 @@ NS_ASSUME_NONNULL_BEGIN
 // Main thread. Returns NO when the async save request was not accepted. In that case completion is
 // not called.
 - (BOOL)saveWithCompletion:(void (^)(void))completion;
-- (void)saveSynchronously;
+// Returns YES only after the synchronous native save was accepted and completed.
+- (BOOL)saveSynchronously;
 - (void)eraseSynchronously:(BOOL)sync;
 
 @end

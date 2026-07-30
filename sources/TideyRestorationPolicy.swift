@@ -28,6 +28,35 @@ enum TideyRestorationSaveDecision: Int {
     case eraseState
 }
 
+@objc(TideyRestorationLaunchMarker)
+@objcMembers
+final class TideyRestorationLaunchMarker: NSObject {
+    private static let cleanExitKey = "TideyRestorationLastExitWasClean"
+
+    private let userDefaults: UserDefaults
+
+    init(userDefaults: UserDefaults) {
+        self.userDefaults = userDefaults
+    }
+
+    func beginLaunch() -> TideyRestorationPreviousExit {
+        let previousValue = userDefaults.object(
+            forKey: Self.cleanExitKey
+        ) as? NSNumber
+        userDefaults.set(false, forKey: Self.cleanExitKey)
+        userDefaults.synchronize()
+        guard let previousValue else {
+            return .cleanOrFirstLaunch
+        }
+        return previousValue.boolValue ? .cleanOrFirstLaunch : .unclean
+    }
+
+    func markCleanExit() {
+        userDefaults.set(true, forKey: Self.cleanExitKey)
+        userDefaults.synchronize()
+    }
+}
+
 @objc(TideyRestorationPolicyInput)
 @objcMembers
 final class TideyRestorationPolicyInput: NSObject {

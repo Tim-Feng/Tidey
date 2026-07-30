@@ -34,9 +34,9 @@ static NSString *const iTermRestorableStateControllerUserDefaultsKeyCount = @"No
     return [self saveSynchronously:NO completion:completion];
 }
 
-- (void)saveSynchronously {
+- (BOOL)saveSynchronously {
     assert([NSThread isMainThread]);
-    [self saveSynchronously:YES completion:nil];
+    return [self saveSynchronously:YES completion:nil];
 }
 
 - (BOOL)saveSynchronously:(BOOL)sync completion:(void (^)(void))completion {
@@ -109,10 +109,30 @@ static NSString *const iTermRestorableStateControllerUserDefaultsKeyCount = @"No
             tideyPreferenceEnabled:tideyPreferenceEnabled
             legacyRestoreRequested:
                 [iTermRestorableStateController legacyRestorationRequested]
-            previousExit:TideyRestorationPreviousExitCleanOrFirstLaunch];
+            previousExit:
+                (self.previousExitWasUnclean
+                     ? TideyRestorationPreviousExitUnclean
+                     : TideyRestorationPreviousExitCleanOrFirstLaunch)];
     TideyRestorationLaunchDecision launchDecision =
         [[[TideyRestorationPolicyEvaluator alloc] init]
             launchDecisionForInput:policyInput];
+    if (launchDecision ==
+        TideyRestorationLaunchDecisionPromptAfterUncleanExit) {
+        const iTermWarningSelection selection =
+            [iTermWarning
+                showWarningWithTitle:
+                    @"Tidey did not shut down cleanly. Restore the previous workspaces?"
+                actions:@[ @"Restore", @"Start Blank" ]
+                accessory:nil
+                identifier:nil
+                silenceable:kiTermWarningTypePersistent
+                heading:@"Restore Previous Workspaces?"
+                window:nil];
+        launchDecision =
+            (selection == kiTermWarningSelection0
+                 ? TideyRestorationLaunchDecisionRestore
+                 : TideyRestorationLaunchDecisionStartBlank);
+    }
     if (preflight.savedStateKind == TideyRestorationSavedStateKindUntagged &&
         tideyPreferenceEnabled) {
         // Replace the accepted or skipped legacy database with tagged native state once

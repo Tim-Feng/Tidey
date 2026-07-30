@@ -92,6 +92,38 @@ final class TideyRestorationPolicyTests: XCTestCase {
         )
     }
 
+    func testUncleanLaunchPromptsBeforeAnyWindowRestore() {
+        let suiteName = "TideyRestorationLaunchMarkerTests.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            XCTFail("Could not create isolated user defaults")
+            return
+        }
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+        let marker = TideyRestorationLaunchMarker(userDefaults: defaults)
+
+        XCTAssertEqual(marker.beginLaunch(), .cleanOrFirstLaunch)
+        XCTAssertEqual(marker.beginLaunch(), .unclean)
+
+        marker.markCleanExit()
+        XCTAssertEqual(marker.beginLaunch(), .cleanOrFirstLaunch)
+
+        let evaluator = TideyRestorationPolicyEvaluator()
+        XCTAssertEqual(
+            evaluator.launchDecision(
+                for: TideyRestorationPolicyInput(
+                    savedStateKind: .taggedSupported,
+                    hasRestorableWindows: true,
+                    tideyPreferenceEnabled: true,
+                    legacyRestoreRequested: false,
+                    previousExit: .unclean
+                )
+            ),
+            .promptAfterUncleanExit
+        )
+    }
+
     private func input(
         savedStateKind: TideyRestorationSavedStateKind,
         tideyPreferenceEnabled: Bool,

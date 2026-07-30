@@ -42,6 +42,7 @@ extern NSString *const iTermApplicationWillTerminate;
     NSMutableDictionary<NSString *, void (^)(NSWindow *, NSError *)> *_systemCallbacks;
     dispatch_group_t _completionGroup;
     TideyRestorableStatePeriodicSaver *_tideyPeriodicSaver;
+    TideyRestorationLaunchMarker *_tideyLaunchMarker;
 }
 
 + (BOOL)shouldIgnoreOpenUntitledFile {
@@ -90,6 +91,11 @@ static BOOL gForceSaveState;
 - (instancetype)init {
     self = [super init];
     if (self) {
+        _tideyLaunchMarker =
+            [[TideyRestorationLaunchMarker alloc]
+                initWithUserDefaults:iTermUserDefaults.userDefaults];
+        const TideyRestorationPreviousExit previousExit =
+            [_tideyLaunchMarker beginLaunch];
         _systemCallbacks = [NSMutableDictionary dictionary];
         dispatch_queue_t queue = dispatch_queue_create("com.iterm2.restorable-state", DISPATCH_QUEUE_SERIAL);
         NSString *appSupport = [[NSFileManager defaultManager] applicationSupportDirectory];
@@ -135,6 +141,8 @@ static BOOL gForceSaveState;
         _driver = [[iTermRestorableStateDriver alloc] init];
         _driver.restorer = _restorer;
         _driver.saver = _saver;
+        _driver.previousExitWasUnclean =
+            (previousExit == TideyRestorationPreviousExitUnclean);
 
         _tideyPeriodicSaver =
             [[TideyRestorableStatePeriodicSaver alloc]
@@ -228,7 +236,9 @@ static BOOL gForceSaveState;
         return;
     }
     DLog(@"Calling saveSynchronously.");
-    [_driver saveSynchronously];
+    if ([_driver saveSynchronously]) {
+        [_tideyLaunchMarker markCleanExit];
+    }
     _driver = nil;
 }
 
