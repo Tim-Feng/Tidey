@@ -185,6 +185,88 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
         )
     }
 
+    func testTopologyReaderMergesTrackedPanesSharingWindowIndex()
+        throws {
+        let registry = OrdinaryTmuxPanelRegistry()
+        registry.replaceRoutes(
+            workspaceID: "workspace-1",
+            routes: [
+                Self.route(
+                    panelID: "panel-peer",
+                    windowID: "@1",
+                    windowIndex: 1,
+                    paneID: "%6",
+                    cwd: "/tmp/peer"
+                ),
+                Self.route(
+                    panelID: "panel-agent",
+                    windowID: "@1",
+                    windowIndex: 1,
+                    paneID: "%7",
+                    cwd: "/tmp/agent"
+                ),
+                Self.route(
+                    panelID: "panel-shell",
+                    windowID: "@2",
+                    windowIndex: 2,
+                    paneID: "%8",
+                    cwd: "/tmp/shell"
+                )
+            ]
+        )
+        let reader =
+            OrdinaryTmuxRuntimeResumeTopologyReader(
+                registry: registry
+            )
+
+        let snapshot = try XCTUnwrap(
+            reader.topologySnapshot(
+                for: RuntimeResumeDescriptorBinding(
+                    workspaceID: "workspace-1",
+                    panelID: "panel-agent",
+                    tmuxPaneID: "%7"
+                )
+            )
+        )
+
+        XCTAssertEqual(
+            snapshot.topology,
+            RuntimeResumeTmuxTopology(
+                windows: [
+                    RuntimeResumeTmuxWindow(
+                        index: 1,
+                        name: nil,
+                        panes: [
+                            RuntimeResumeTmuxPane(
+                                index: 0,
+                                workingDirectory: "/tmp/peer",
+                                launch: nil
+                            ),
+                            RuntimeResumeTmuxPane(
+                                index: 1,
+                                workingDirectory: "/tmp/agent",
+                                launch: nil
+                            )
+                        ]
+                    ),
+                    RuntimeResumeTmuxWindow(
+                        index: 2,
+                        name: nil,
+                        panes: [
+                            RuntimeResumeTmuxPane(
+                                index: 0,
+                                workingDirectory: "/tmp/shell",
+                                launch: nil
+                            )
+                        ]
+                    )
+                ],
+                activeWindowIndex: 1,
+                activePaneIndex: 1
+            )
+        )
+    }
+
     func testSocketSenderUsesNestedDescriptorPayloadWithoutBridgeAuthority()
         throws {
         let requestSender = RecordingTideyRequestSender()

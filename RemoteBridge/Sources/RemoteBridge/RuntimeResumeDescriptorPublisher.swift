@@ -241,18 +241,41 @@ final class OrdinaryTmuxRuntimeResumeTopologyReader:
         guard routes.isEmpty == false else {
             return nil
         }
-        let windows = routes.map {
-            RuntimeResumeTmuxWindow(
-                index: $0.windowIndex,
+        let routesByWindowIndex =
+            Dictionary(grouping: routes, by: \.windowIndex)
+        let sortedPaneRoutesByWindowIndex =
+            routesByWindowIndex.mapValues {
+                $0.sorted {
+                    if $0.activePaneID != $1.activePaneID {
+                        return $0.activePaneID < $1.activePaneID
+                    }
+                    return $0.panelID < $1.panelID
+                }
+            }
+        let windows = routesByWindowIndex.keys.sorted().map {
+            windowIndex in
+            let paneRoutes =
+                sortedPaneRoutesByWindowIndex[windowIndex] ?? []
+            return RuntimeResumeTmuxWindow(
+                index: windowIndex,
                 name: nil,
-                panes: [
+                panes: paneRoutes.enumerated().map {
+                    paneIndex, route in
                     RuntimeResumeTmuxPane(
-                        index: 0,
-                        workingDirectory: $0.cwd,
+                        index: paneIndex,
+                        workingDirectory: route.cwd,
                         launch: nil
                     )
-                ]
+                }
             )
+        }
+        guard let activePaneIndex =
+                sortedPaneRoutesByWindowIndex[
+                    activeRoute.windowIndex
+                ]?.firstIndex(where: {
+                    $0.activePaneID == binding.tmuxPaneID
+                }) else {
+            return nil
         }
         let target: RuntimeResumeTmuxTarget
         let trimmedSessionName =
@@ -284,7 +307,7 @@ final class OrdinaryTmuxRuntimeResumeTopologyReader:
             topology: RuntimeResumeTmuxTopology(
                 windows: windows,
                 activeWindowIndex: activeRoute.windowIndex,
-                activePaneIndex: 0
+                activePaneIndex: activePaneIndex
             )
         )
     }
