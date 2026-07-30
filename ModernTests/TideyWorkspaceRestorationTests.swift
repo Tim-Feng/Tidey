@@ -185,6 +185,131 @@ final class TideyWorkspaceRestorationTests: XCTestCase {
         ])
     }
 
+    func testHydrationRestoresWorkspaceMetadataBeforeShowingSelectedWorkspace() {
+        let planner = TideyWorkspaceRestorationPlanner()
+        let build = TideyWorkspaceState(
+            workspaceID: "workspace-build",
+            title: "Build",
+            pinned: true,
+            panelIDs: [
+                "panel-editor",
+                "panel-missing",
+                "panel-colliding"
+            ],
+            selectedPanelID: "panel-colliding"
+        )
+        let review = TideyWorkspaceState(
+            workspaceID: "workspace-review",
+            title: "Review",
+            pinned: false,
+            panelIDs: ["panel-review"],
+            selectedPanelID: "panel-review"
+        )
+        let missingSelection = TideyWorkspaceState(
+            workspaceID: "workspace-missing-selection",
+            title: nil,
+            pinned: false,
+            panelIDs: [
+                "panel-survives",
+                "panel-selected-missing"
+            ],
+            selectedPanelID: "panel-selected-missing"
+        )
+        let emptyAfterHydration = TideyWorkspaceState(
+            workspaceID: "workspace-empty",
+            title: "Missing",
+            pinned: false,
+            panelIDs: ["panel-gone"],
+            selectedPanelID: "panel-gone"
+        )
+        let savedState = TideyWorkspaceRestorationState(
+            schemaVersion: TideyWorkspaceRestorationState.currentSchemaVersion,
+            selectedWorkspaceID: review.workspaceID,
+            workspaces: [
+                build,
+                emptyAfterHydration,
+                review,
+                missingSelection
+            ]
+        )
+
+        let hydrated = planner.hydrationState(
+            savedState: savedState,
+            availablePanelIDs: [
+                "panel-editor",
+                "panel-collision-actual",
+                "panel-review",
+                "panel-survives",
+                "panel-unreferenced"
+            ],
+            panelIDRemap: [
+                "panel-colliding": "panel-collision-actual"
+            ]
+        )
+        let emptyRemapHydrated = planner.hydrationState(
+            savedState: TideyWorkspaceRestorationState(
+                schemaVersion: TideyWorkspaceRestorationState.currentSchemaVersion,
+                selectedWorkspaceID: "workspace-empty-selected",
+                workspaces: [
+                    TideyWorkspaceState(
+                        workspaceID: "workspace-plain",
+                        title: nil,
+                        pinned: false,
+                        panelIDs: [
+                            "panel-plain",
+                            "panel-plain-missing"
+                        ],
+                        selectedPanelID: "panel-plain"
+                    ),
+                    TideyWorkspaceState(
+                        workspaceID: "workspace-empty-selected",
+                        title: nil,
+                        pinned: false,
+                        panelIDs: ["panel-empty-selected-missing"],
+                        selectedPanelID: "panel-empty-selected-missing"
+                    )
+                ]
+            ),
+            availablePanelIDs: ["panel-plain"],
+            panelIDRemap: [:]
+        )
+
+        XCTAssertEqual(hydrated.schemaVersion, savedState.schemaVersion)
+        XCTAssertEqual(hydrated.selectedWorkspaceID, "workspace-review")
+        XCTAssertEqual(hydrated.workspaces.map(\.workspaceID), [
+            "workspace-build",
+            "workspace-review",
+            "workspace-missing-selection"
+        ])
+        XCTAssertEqual(hydrated.workspaces.map(\.title), [
+            "Build",
+            "Review",
+            nil
+        ])
+        XCTAssertEqual(hydrated.workspaces.map(\.pinned), [
+            true,
+            false,
+            false
+        ])
+        XCTAssertEqual(hydrated.workspaces.map(\.panelIDs), [
+            [
+                "panel-editor",
+                "panel-collision-actual"
+            ],
+            ["panel-review"],
+            ["panel-survives"]
+        ])
+        XCTAssertEqual(hydrated.workspaces.map(\.selectedPanelID), [
+            "panel-collision-actual",
+            "panel-review",
+            nil
+        ])
+        XCTAssertFalse(hydrated.workspaces.flatMap(\.panelIDs).contains("panel-unreferenced"))
+        XCTAssertNil(emptyRemapHydrated.selectedWorkspaceID)
+        XCTAssertEqual(emptyRemapHydrated.workspaces.map(\.workspaceID), ["workspace-plain"])
+        XCTAssertEqual(emptyRemapHydrated.workspaces.first?.panelIDs, ["panel-plain"])
+    }
+
     func testWorkspaceStateRoundTripsStableIdentitiesAndSelections() throws {
         let codec = TideyWorkspaceRestorationStateDictionaryCodec()
         let build = TideyWorkspaceState(

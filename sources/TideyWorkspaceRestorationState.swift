@@ -168,27 +168,40 @@ final class TideyWorkspaceRestorationPlanner: NSObject, TideyWorkspaceRestoratio
         availablePanelIDs: [String],
         panelIDRemap: [String: String]
     ) -> TideyWorkspaceRestorationState {
-        guard !panelIDRemap.isEmpty else {
-            return savedState
-        }
-
-        let remappedWorkspaces = savedState.workspaces.map { workspace in
-            TideyWorkspaceState(
+        let availablePanelIDSet = Set(availablePanelIDs)
+        var claimedPanelIDs = Set<String>()
+        let hydratedWorkspaces: [TideyWorkspaceState] = savedState.workspaces.compactMap {
+            workspace -> TideyWorkspaceState? in
+            let panelIDs = workspace.panelIDs.compactMap { savedPanelID -> String? in
+                let actualPanelID = panelIDRemap[savedPanelID] ?? savedPanelID
+                guard availablePanelIDSet.contains(actualPanelID),
+                      claimedPanelIDs.insert(actualPanelID).inserted else {
+                    return nil
+                }
+                return actualPanelID
+            }
+            guard !panelIDs.isEmpty else {
+                return nil
+            }
+            let selectedPanelID = workspace.selectedPanelID
+                .map { panelIDRemap[$0] ?? $0 }
+                .flatMap { panelIDs.contains($0) ? $0 : nil }
+            return TideyWorkspaceState(
                 workspaceID: workspace.workspaceID,
                 title: workspace.title,
                 pinned: workspace.pinned,
-                panelIDs: workspace.panelIDs.map {
-                    panelIDRemap[$0] ?? $0
-                },
-                selectedPanelID: workspace.selectedPanelID.map {
-                    panelIDRemap[$0] ?? $0
-                }
+                panelIDs: panelIDs,
+                selectedPanelID: selectedPanelID
             )
+        }
+        let hydratedWorkspaceIDs = Set(hydratedWorkspaces.map(\.workspaceID))
+        let selectedWorkspaceID = savedState.selectedWorkspaceID.flatMap {
+            hydratedWorkspaceIDs.contains($0) ? $0 : nil
         }
         return TideyWorkspaceRestorationState(
             schemaVersion: savedState.schemaVersion,
-            selectedWorkspaceID: savedState.selectedWorkspaceID,
-            workspaces: remappedWorkspaces
+            selectedWorkspaceID: selectedWorkspaceID,
+            workspaces: hydratedWorkspaces
         )
     }
 
