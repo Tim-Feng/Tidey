@@ -13,13 +13,23 @@
 #import "NSArray+iTerm.h"
 #import "NSFileManager+iTerm.h"
 #import "PseudoTerminal.h"
+#import "iTerm2SharedARC-Swift.h"
 #import "iTermAdvancedSettingsModel.h"
 #import "iTermController.h"
+#import "iTermFileDescriptorClient.h"
 #import "iTermFileDescriptorSocketPath.h"
 #import "iTermMultiServerConnection.h"
 #import "iTermMultiServerJobManager.h"
+#import "iTermProcessCache.h"
 #import "iTermSessionFactory.h"
 #import "iTermSessionLauncher.h"
+
+#include <signal.h>
+
+@interface iTermOrphanServerAdopter () <
+    TideyRestorationMonoServerTerminating,
+    TideyRestorationMultiServerChildTerminating>
+@end
 
 @implementation iTermOrphanServerAdopter {
     NSArray<NSString *> *_pathsOfOrphanedMonoServers;
@@ -109,6 +119,13 @@ static void iTermOrphanServerAdopterFindMultiServers(void (^completion)(NSArray<
 
 - (void)openWindowWithOrphansWithCompletion:(void (^)(void))completion {
     DLog(@"openWindowWithOrphansWithCompletion");
+    if (self.tideyOrphanAdoptionGate.shouldDiscardOrphanAdoptionForLaunch) {
+        DLog(@"Skip orphan adoption for this launch.");
+        if (completion) {
+            completion();
+        }
+        return;
+    }
     dispatch_group_notify(_group, dispatch_get_main_queue(), ^{
         [self reallyOpenWindowWithOrphansWithCompletion:completion];
     });
@@ -224,6 +241,10 @@ static void iTermOrphanServerAdopterFindMultiServers(void (^completion)(NSArray<
 }
 
 - (void)adoptPartialAttachments:(NSArray<id<iTermPartialAttachment>> *)partialAttachments {
+    if (self.tideyOrphanAdoptionGate.shouldDiscardOrphanAdoptionForLaunch) {
+        DLog(@"Skip partial-attachment adoption for this launch.");
+        return;
+    }
     [partialAttachments enumerateObjectsUsingBlock:^(id  _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) {
         [self.delegate orphanServerAdopterOpenSessionForPartialAttachment:obj
                                                                  inWindow:self->_window
@@ -235,6 +256,101 @@ static void iTermOrphanServerAdopterFindMultiServers(void (^completion)(NSArray<
     }];
 }
 
+#pragma mark - Rejected restoration servers
+
+- (void)terminateRejectedMonoServer:
+    (TideyRestorableSessionServerIdentifier *)identifier {
+    NSNumber *serverProcessID = identifier.monoServerProcessID;
+    if (identifier.kind != TideyRestorableSessionServerKindMonoServer ||
+        serverProcessID.intValue <= 0) {
+        return;
+    }
+
+    iTermFileDescriptorServerConnection connection =
+        iTermFileDescriptorClientRun((pid_t)serverProcessID.intValue);
+    if (!connection.ok) {
+        DLog(@"Could not connect to rejected mono server %@: %s",
+             serverProcessID,
+             connection.error);
+        return;
+    }
+
+    if (connection.childPid > 0) {
+        [[iTermProcessCache sharedInstance]
+            unregisterTrackedPID:connection.childPid];
+        killpg(connection.childPid, SIGHUP);
+    }
+    if (connection.socketFd >= 0) {
+        close(connection.socketFd);
+    }
+    if (connection.ptyMasterFd >= 0) {
+        close(connection.ptyMasterFd);
+    }
+}
+
+- (void)terminateRejectedMultiServerChild:
+    (TideyRestorableSessionServerIdentifier *)identifier {
+    NSNumber *socketNumber = identifier.multiServerSocketNumber;
+    NSNumber *childProcessID = identifier.multiServerChildProcessID;
+    if (identifier.kind !=
+            TideyRestorableSessionServerKindMultiServerChild ||
+        socketNumber.intValue < 0 ||
+        childProcessID.intValue <= 0) {
+        return;
+    }
+
+    const pid_t rejectedChildProcessID =
+        (pid_t)childProcessID.intValue;
+    [iTermMultiServerConnection
+        getConnectionForSocketNumber:socketNumber.intValue
+        createIfPossible:NO
+        callback:[iTermThread.main
+            newCallbackWithBlock:^(
+                iTermMainThreadState *state,
+                iTermResult<iTermMultiServerConnection *> *result) {
+        [result
+            handleObject:^(
+                iTermMultiServerConnection *connection) {
+            iTermFileDescriptorMultiClientChild *child =
+                [connection.unattachedChildren
+                    objectPassingTest:^BOOL(
+                        iTermFileDescriptorMultiClientChild *candidate,
+                        NSUInteger index,
+                        BOOL *stop) {
+                return candidate.pid == rejectedChildProcessID;
+            }];
+            if (!child) {
+                DLog(@"Rejected multiserver child %@ is no longer unattached "
+                     @"on socket %@.",
+                     childProcessID,
+                     socketNumber);
+                return;
+            }
+
+            [[iTermProcessCache sharedInstance]
+                unregisterTrackedPID:child.pid];
+            killpg(child.pid, SIGHUP);
+            [connection
+                waitForChild:child
+                removePreemptively:YES
+                callback:[iTermThread.main
+                    newCallbackWithBlock:^(
+                        iTermMainThreadState *state,
+                        iTermResult<NSNumber *> *waitResult) {
+                DLog(@"Rejected multiserver child %@ wait finished with "
+                     @"result %@.",
+                     childProcessID,
+                     waitResult);
+            }]];
+        }
+            error:^(NSError *error) {
+            DLog(@"Could not connect to rejected multiserver socket %@: %@",
+                 socketNumber,
+                 error);
+        }];
+    }]];
+}
+
 #pragma mark - Properties
 
 - (BOOL)haveOrphanServers {
@@ -242,4 +358,3 @@ static void iTermOrphanServerAdopterFindMultiServers(void (^completion)(NSArray<
 }
 
 @end
-

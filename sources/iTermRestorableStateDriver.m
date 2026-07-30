@@ -116,6 +116,7 @@ static NSString *const iTermRestorableStateControllerUserDefaultsKeyCount = @"No
     TideyRestorationLaunchDecision launchDecision =
         [[[TideyRestorationPolicyEvaluator alloc] init]
             launchDecisionForInput:policyInput];
+    BOOL rejectedPromptedState = NO;
     if (launchDecision ==
         TideyRestorationLaunchDecisionPromptAfterUncleanExit) {
         const iTermWarningSelection selection =
@@ -132,6 +133,8 @@ static NSString *const iTermRestorableStateControllerUserDefaultsKeyCount = @"No
             (selection == kiTermWarningSelection0
                  ? TideyRestorationLaunchDecisionRestore
                  : TideyRestorationLaunchDecisionStartBlank);
+        rejectedPromptedState =
+            (launchDecision == TideyRestorationLaunchDecisionStartBlank);
     }
     if (preflight.savedStateKind == TideyRestorationSavedStateKindUntagged &&
         tideyPreferenceEnabled) {
@@ -141,6 +144,14 @@ static NSString *const iTermRestorableStateControllerUserDefaultsKeyCount = @"No
     }
     if (launchDecision == TideyRestorationLaunchDecisionStartBlank) {
         DLog(@"Restoration policy chose a blank launch.");
+        if (rejectedPromptedState) {
+            [self.rejectedStateEraser eraseRejectedState];
+            [self.orphanAdoptionDiscarder
+                discardOrphanAdoptionForLaunch];
+            [self.rejectedServerTerminator
+                terminateRejectedSessionServers:
+                    preflight.sessionServerIdentifiers];
+        }
         ready();
         completion();
         return;

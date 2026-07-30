@@ -10,6 +10,7 @@
 #import "PTYTask.h"
 
 @class PTYSession;
+@class TideyOrphanAdoptionGate;
 
 @protocol iTermOrphanServerAdopterDelegate<NSObject>
 - (void)orphanServerAdopterOpenSessionForConnection:(iTermGeneralServerConnection)connection
@@ -25,6 +26,8 @@
 
 @property(nonatomic, readonly) BOOL haveOrphanServers;
 @property(nonatomic, weak) id<iTermOrphanServerAdopterDelegate> delegate;
+@property(nonatomic, strong, nullable)
+    TideyOrphanAdoptionGate *tideyOrphanAdoptionGate;
 
 + (instancetype)sharedInstance;
 - (void)openWindowWithOrphansWithCompletion:(void (^)(void))completion;

@@ -11,6 +11,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 @class NSWindow;
 @class TideyRestorableStatePreflight;
+@protocol TideyRestorationOrphanAdoptionDiscarding;
+@protocol TideyRestorationRejectedServerTerminating;
+@protocol TideyRestorationStateErasing;
 
 @protocol iTermRestorableStateRecord<NSObject>
 - (void)didFinishRestoring;
@@ -70,6 +73,12 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, readonly) NSInteger numberOfWindowsRestored;
 @property (nonatomic) BOOL needsSave;
 @property (nonatomic) BOOL previousExitWasUnclean;
+@property (nonatomic, strong, nullable)
+    id<TideyRestorationStateErasing> rejectedStateEraser;
+@property (nonatomic, strong, nullable)
+    id<TideyRestorationOrphanAdoptionDiscarding> orphanAdoptionDiscarder;
+@property (nonatomic, strong, nullable)
+    id<TideyRestorationRejectedServerTerminating> rejectedServerTerminator;
 
 // callbacks will be removed when they are used and won't be mutated after completion runs.
 // ready is called after all windows have been asked to restore.

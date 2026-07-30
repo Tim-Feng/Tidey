@@ -11,6 +11,7 @@
 #import "NSFileManager+iTerm.h"
 #import "iTermAdvancedSettingsModel.h"
 #import "iTerm2SharedARC-Swift.h"
+#import "iTermOrphanServerAdopter.h"
 #import "iTermPreferences.h"
 #import "iTermRestorableStateDriver.h"
 #import "iTermRestorableStateSQLite.h"
@@ -27,6 +28,43 @@ extern NSString *const iTermApplicationWillTerminate;
 // reversing -[NSApplication(NSAppleEventHandling) _handleAEQuit], which is
 // called when closing apps after logging out.
 - (BOOL)shouldRestoreStateOnNextLaunch;
+@end
+
+@interface TideyNativeRestorationStateEraser :
+    NSObject <TideyRestorationStateErasing>
+- (instancetype)initWithRestorer:
+    (id<iTermRestorableStateRestorer>)restorer;
+@end
+
+@implementation TideyNativeRestorationStateEraser {
+    id<iTermRestorableStateRestorer> _restorer;
+}
+
+- (instancetype)initWithRestorer:
+    (id<iTermRestorableStateRestorer>)restorer {
+    self = [super init];
+    if (self) {
+        _restorer = restorer;
+    }
+    return self;
+}
+
+- (void)eraseRejectedState {
+    [_restorer eraseStateRestorationDataSynchronously:YES];
+}
+
+@end
+
+@interface TideyNoopRejectedServerTerminator :
+    NSObject <TideyRestorationRejectedServerTerminating>
+@end
+
+@implementation TideyNoopRejectedServerTerminator
+
+- (void)terminateRejectedSessionServers:
+    (NSArray<TideyRestorableSessionServerIdentifier *> *)identifiers {
+}
+
 @end
 
 @interface iTermRestorableStateController()<iTermRestorableStateRestoring,
@@ -143,6 +181,30 @@ static BOOL gForceSaveState;
         _driver.saver = _saver;
         _driver.previousExitWasUnclean =
             (previousExit == TideyRestorationPreviousExitUnclean);
+
+        TideyOrphanAdoptionGate *orphanAdoptionGate =
+            [[TideyOrphanAdoptionGate alloc] init];
+        iTermOrphanServerAdopter *orphanServerAdopter =
+            [iTermOrphanServerAdopter sharedInstance];
+        orphanServerAdopter.tideyOrphanAdoptionGate =
+            orphanAdoptionGate;
+        _driver.rejectedStateEraser =
+            [[TideyNativeRestorationStateEraser alloc]
+                initWithRestorer:_restorer];
+        _driver.orphanAdoptionDiscarder = orphanAdoptionGate;
+        if (orphanServerAdopter) {
+            _driver.rejectedServerTerminator =
+                [[TideyRestorationRejectedServerTerminator alloc]
+                    initWithMonoServerTerminator:
+                        (id<TideyRestorationMonoServerTerminating>)
+                            orphanServerAdopter
+                    multiServerChildTerminator:
+                        (id<TideyRestorationMultiServerChildTerminating>)
+                            orphanServerAdopter];
+        } else {
+            _driver.rejectedServerTerminator =
+                [[TideyNoopRejectedServerTerminator alloc] init];
+        }
 
         _tideyPeriodicSaver =
             [[TideyRestorableStatePeriodicSaver alloc]
