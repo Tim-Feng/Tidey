@@ -185,3 +185,228 @@ final class TideyRuntimeResumeDescriptor: NSObject {
         self.agent = agent
     }
 }
+
+@objc(TideyRuntimeResumeDescriptorFactory)
+@objcMembers
+final class TideyRuntimeResumeDescriptorFactory: NSObject {
+    @objc(descriptorFromOrdinaryTmuxMetadata:)
+    func descriptor(
+        fromOrdinaryTmuxMetadata metadata: [String: String]
+    ) -> TideyRuntimeResumeDescriptor? {
+        guard let tmuxSession = metadata["target_session"],
+              !tmuxSession.isEmpty else {
+            return nil
+        }
+
+        let hasSocketPath = metadata.keys.contains("socket_path")
+        let hasSocketName = metadata.keys.contains("socket_name")
+        guard !(hasSocketPath && hasSocketName) else {
+            return nil
+        }
+
+        let target: TideyRuntimeResumeTarget
+        if hasSocketPath {
+            guard let socketPath = metadata["socket_path"],
+                  !socketPath.isEmpty else {
+                return nil
+            }
+            target = TideyRuntimeResumeTarget(
+                socketPath: socketPath,
+                tmuxSession: tmuxSession
+            )
+        } else if hasSocketName {
+            guard let socketName = metadata["socket_name"],
+                  !socketName.isEmpty else {
+                return nil
+            }
+            target = TideyRuntimeResumeTarget(
+                socketName: socketName,
+                tmuxSession: tmuxSession
+            )
+        } else {
+            target = TideyRuntimeResumeTarget(
+                defaultSocketAndTmuxSession: tmuxSession
+            )
+        }
+
+        return TideyRuntimeResumeDescriptor(
+            descriptorVersion:
+                TideyRuntimeResumeDescriptor.currentDescriptorVersion,
+            revision: 1,
+            kind: .ordinaryTmux,
+            restorePolicy: .attachOnly,
+            target: target,
+            topology: nil,
+            agent: nil
+        )
+    }
+}
+
+enum TideyRuntimeResumeDescriptorCodecError: Error, Equatable {
+    case unsupportedDescriptorVersion(Int)
+    case malformedField(String)
+}
+
+final class TideyRuntimeResumeDescriptorDictionaryCodec {
+    func encode(
+        _ descriptor: TideyRuntimeResumeDescriptor
+    ) throws -> [String: Any] {
+        guard descriptor.descriptorVersion ==
+                TideyRuntimeResumeDescriptor.currentDescriptorVersion else {
+            throw TideyRuntimeResumeDescriptorCodecError
+                .unsupportedDescriptorVersion(descriptor.descriptorVersion)
+        }
+        guard descriptor.revision > 0 else {
+            throw TideyRuntimeResumeDescriptorCodecError
+                .malformedField("revision")
+        }
+        guard descriptor.kind == .ordinaryTmux,
+              descriptor.restorePolicy == .attachOnly,
+              descriptor.topology == nil,
+              descriptor.agent == nil else {
+            throw TideyRuntimeResumeDescriptorCodecError
+                .malformedField("ordinary_tmux")
+        }
+
+        var target: [String: Any] = [
+            "tmux_session": try requiredIdentity(
+                descriptor.target.tmuxSession,
+                field: "tmux_session"
+            )
+        ]
+        switch descriptor.target.socketEndpointKind {
+        case .path:
+            guard let socketPath = descriptor.target.socketPath,
+                  descriptor.target.socketName == nil else {
+                throw TideyRuntimeResumeDescriptorCodecError
+                    .malformedField("socket_path")
+            }
+            target["socket_endpoint_kind"] = "path"
+            target["socket_path"] = try requiredIdentity(
+                socketPath,
+                field: "socket_path"
+            )
+        case .name:
+            guard let socketName = descriptor.target.socketName,
+                  descriptor.target.socketPath == nil else {
+                throw TideyRuntimeResumeDescriptorCodecError
+                    .malformedField("socket_name")
+            }
+            target["socket_endpoint_kind"] = "name"
+            target["socket_name"] = try requiredIdentity(
+                socketName,
+                field: "socket_name"
+            )
+        case .defaultSocket:
+            guard descriptor.target.socketPath == nil,
+                  descriptor.target.socketName == nil else {
+                throw TideyRuntimeResumeDescriptorCodecError
+                    .malformedField("socket_endpoint_kind")
+            }
+            target["socket_endpoint_kind"] = "default"
+        }
+
+        return [
+            "descriptor_version": descriptor.descriptorVersion,
+            "revision": descriptor.revision,
+            "kind": "ordinary_tmux",
+            "restore_policy": "attach_only",
+            "target": target
+        ]
+    }
+
+    func decode(
+        _ dictionary: [String: Any]
+    ) throws -> TideyRuntimeResumeDescriptor {
+        guard let descriptorVersion =
+                dictionary["descriptor_version"] as? Int else {
+            throw TideyRuntimeResumeDescriptorCodecError
+                .malformedField("descriptor_version")
+        }
+        guard descriptorVersion ==
+                TideyRuntimeResumeDescriptor.currentDescriptorVersion else {
+            throw TideyRuntimeResumeDescriptorCodecError
+                .unsupportedDescriptorVersion(descriptorVersion)
+        }
+        guard let revision = dictionary["revision"] as? Int64,
+              revision > 0 else {
+            throw TideyRuntimeResumeDescriptorCodecError
+                .malformedField("revision")
+        }
+        guard dictionary["kind"] as? String == "ordinary_tmux",
+              dictionary["restore_policy"] as? String == "attach_only",
+              dictionary["topology"] == nil,
+              dictionary["agent"] == nil,
+              let targetDictionary = dictionary["target"]
+                as? [String: Any] else {
+            throw TideyRuntimeResumeDescriptorCodecError
+                .malformedField("ordinary_tmux")
+        }
+
+        let tmuxSession = try requiredIdentity(
+            targetDictionary["tmux_session"],
+            field: "tmux_session"
+        )
+        let target: TideyRuntimeResumeTarget
+        switch targetDictionary["socket_endpoint_kind"] as? String {
+        case "path":
+            guard targetDictionary["socket_name"] == nil else {
+                throw TideyRuntimeResumeDescriptorCodecError
+                    .malformedField("socket_name")
+            }
+            target = TideyRuntimeResumeTarget(
+                socketPath: try requiredIdentity(
+                    targetDictionary["socket_path"],
+                    field: "socket_path"
+                ),
+                tmuxSession: tmuxSession
+            )
+        case "name":
+            guard targetDictionary["socket_path"] == nil else {
+                throw TideyRuntimeResumeDescriptorCodecError
+                    .malformedField("socket_path")
+            }
+            target = TideyRuntimeResumeTarget(
+                socketName: try requiredIdentity(
+                    targetDictionary["socket_name"],
+                    field: "socket_name"
+                ),
+                tmuxSession: tmuxSession
+            )
+        case "default":
+            guard targetDictionary["socket_path"] == nil,
+                  targetDictionary["socket_name"] == nil else {
+                throw TideyRuntimeResumeDescriptorCodecError
+                    .malformedField("socket_endpoint_kind")
+            }
+            target = TideyRuntimeResumeTarget(
+                defaultSocketAndTmuxSession: tmuxSession
+            )
+        default:
+            throw TideyRuntimeResumeDescriptorCodecError
+                .malformedField("socket_endpoint_kind")
+        }
+
+        return TideyRuntimeResumeDescriptor(
+            descriptorVersion: descriptorVersion,
+            revision: revision,
+            kind: .ordinaryTmux,
+            restorePolicy: .attachOnly,
+            target: target,
+            topology: nil,
+            agent: nil
+        )
+    }
+
+    private func requiredIdentity(
+        _ value: Any?,
+        field: String
+    ) throws -> String {
+        guard let identity = value as? String,
+              !identity.isEmpty else {
+            throw TideyRuntimeResumeDescriptorCodecError
+                .malformedField(field)
+        }
+        return identity
+    }
+}

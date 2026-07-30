@@ -6638,10 +6638,20 @@ ITERM_WEAKLY_REFERENCEABLE
 }
 
 - (TideyWorkspaceRestorationPanelInput *)tideyWorkspaceRestorationInputForPanel:(PTYTab *)panel {
+    NSDictionary<NSString *, NSString *> *ordinaryTmuxMetadata =
+        panel.activeSession.tideyOrdinaryTmuxAttachMetadata;
+    TideyRuntimeResumeDescriptor *runtimeResumeDescriptor = nil;
+    if (ordinaryTmuxMetadata) {
+        TideyRuntimeResumeDescriptorFactory *factory =
+            [[[TideyRuntimeResumeDescriptorFactory alloc] init] autorelease];
+        runtimeResumeDescriptor =
+            [factory descriptorFromOrdinaryTmuxMetadata:ordinaryTmuxMetadata];
+    }
     return [[[TideyWorkspaceRestorationPanelInput alloc]
         initWithPanelID:panel.stringUniqueIdentifier ?: @""
         hasSessions:(panel.sessions.count > 0)
-        isNativeTmux:panel.isTmuxTab] autorelease];
+        isNativeTmux:panel.isTmuxTab
+        runtimeResumeDescriptor:runtimeResumeDescriptor] autorelease];
 }
 
 - (TideyWorkspaceRestorationCapturePlan *)tideyWorkspaceRestorationCapturePlan {

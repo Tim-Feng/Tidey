@@ -30,13 +30,30 @@ final class TideyWorkspaceRestorationState: NSObject {
     let schemaVersion: Int
     let selectedWorkspaceID: String?
     let workspaces: [TideyWorkspaceState]
+    let runtimeDescriptorsByPanelID:
+        [String: TideyRuntimeResumeDescriptor]
 
     init(schemaVersion: Int,
          selectedWorkspaceID: String?,
-         workspaces: [TideyWorkspaceState]) {
+         workspaces: [TideyWorkspaceState],
+         runtimeDescriptorsByPanelID:
+            [String: TideyRuntimeResumeDescriptor]) {
         self.schemaVersion = schemaVersion
         self.selectedWorkspaceID = selectedWorkspaceID
         self.workspaces = workspaces
+        self.runtimeDescriptorsByPanelID =
+            runtimeDescriptorsByPanelID
+    }
+
+    convenience init(schemaVersion: Int,
+                     selectedWorkspaceID: String?,
+                     workspaces: [TideyWorkspaceState]) {
+        self.init(
+            schemaVersion: schemaVersion,
+            selectedWorkspaceID: selectedWorkspaceID,
+            workspaces: workspaces,
+            runtimeDescriptorsByPanelID: [:]
+        )
     }
 }
 
@@ -46,13 +63,27 @@ final class TideyWorkspaceRestorationPanelInput: NSObject {
     let panelID: String
     let hasSessions: Bool
     let isNativeTmux: Bool
+    let runtimeResumeDescriptor: TideyRuntimeResumeDescriptor?
 
     init(panelID: String,
          hasSessions: Bool,
-         isNativeTmux: Bool) {
+         isNativeTmux: Bool,
+         runtimeResumeDescriptor: TideyRuntimeResumeDescriptor?) {
         self.panelID = panelID
         self.hasSessions = hasSessions
         self.isNativeTmux = isNativeTmux
+        self.runtimeResumeDescriptor = runtimeResumeDescriptor
+    }
+
+    convenience init(panelID: String,
+                     hasSessions: Bool,
+                     isNativeTmux: Bool) {
+        self.init(
+            panelID: panelID,
+            hasSessions: hasSessions,
+            isNativeTmux: isNativeTmux,
+            runtimeResumeDescriptor: nil
+        )
     }
 }
 
@@ -117,24 +148,37 @@ final class TideyWorkspaceRestorationPlanner: NSObject, TideyWorkspaceRestoratio
         selectedWorkspaceID: String?
     ) -> TideyWorkspaceRestorationCapturePlan {
         guard !workspaces.isEmpty else {
+            let restorablePanels = restorablePanels(in: visiblePanels)
             return TideyWorkspaceRestorationCapturePlan(
                 state: TideyWorkspaceRestorationState(
                     schemaVersion: TideyWorkspaceRestorationState.currentSchemaVersion,
                     selectedWorkspaceID: nil,
-                    workspaces: []
+                    workspaces: [],
+                    runtimeDescriptorsByPanelID:
+                        runtimeDescriptors(in: restorablePanels)
                 ),
-                flattenedNativePanelIDs: restorablePanelIDs(in: visiblePanels)
+                flattenedNativePanelIDs:
+                    restorablePanels.map(\.panelID)
             )
         }
 
         var flattenedPanelIDs = [String]()
         var workspaceStates = [TideyWorkspaceState]()
+        var runtimeDescriptorsByPanelID =
+            [String: TideyRuntimeResumeDescriptor]()
         for workspace in workspaces {
-            let panelIDs = restorablePanelIDs(in: workspace.panels)
+            let restorablePanels =
+                restorablePanels(in: workspace.panels)
+            let panelIDs = restorablePanels.map(\.panelID)
             guard !panelIDs.isEmpty else {
                 continue
             }
             flattenedPanelIDs.append(contentsOf: panelIDs)
+            runtimeDescriptorsByPanelID.merge(
+                runtimeDescriptors(in: restorablePanels)
+            ) { _, replacement in
+                replacement
+            }
             let selectedPanelID = workspace.selectedPanelID.flatMap {
                 panelIDs.contains($0) ? $0 : nil
             }
@@ -157,7 +201,9 @@ final class TideyWorkspaceRestorationPlanner: NSObject, TideyWorkspaceRestoratio
             state: TideyWorkspaceRestorationState(
                 schemaVersion: TideyWorkspaceRestorationState.currentSchemaVersion,
                 selectedWorkspaceID: capturedSelectedWorkspaceID,
-                workspaces: workspaceStates
+                workspaces: workspaceStates,
+                runtimeDescriptorsByPanelID:
+                    runtimeDescriptorsByPanelID
             ),
             flattenedNativePanelIDs: flattenedPanelIDs
         )
@@ -198,24 +244,54 @@ final class TideyWorkspaceRestorationPlanner: NSObject, TideyWorkspaceRestoratio
         let selectedWorkspaceID = savedState.selectedWorkspaceID.flatMap {
             hydratedWorkspaceIDs.contains($0) ? $0 : nil
         }
+        var hydratedDescriptors =
+            [String: TideyRuntimeResumeDescriptor]()
+        for savedPanelID in
+                savedState.runtimeDescriptorsByPanelID.keys.sorted() {
+            let actualPanelID =
+                panelIDRemap[savedPanelID] ?? savedPanelID
+            guard availablePanelIDSet.contains(actualPanelID),
+                  hydratedDescriptors[actualPanelID] == nil,
+                  let descriptor =
+                    savedState.runtimeDescriptorsByPanelID[savedPanelID] else {
+                continue
+            }
+            hydratedDescriptors[actualPanelID] = descriptor
+        }
         return TideyWorkspaceRestorationState(
             schemaVersion: savedState.schemaVersion,
             selectedWorkspaceID: selectedWorkspaceID,
-            workspaces: hydratedWorkspaces
+            workspaces: hydratedWorkspaces,
+            runtimeDescriptorsByPanelID: hydratedDescriptors
         )
     }
 
-    private func restorablePanelIDs(
+    private func restorablePanels(
         in panels: [TideyWorkspaceRestorationPanelInput]
-    ) -> [String] {
-        panels.compactMap { panel in
+    ) -> [TideyWorkspaceRestorationPanelInput] {
+        panels.filter { panel in
             guard panel.hasSessions,
                   !panel.isNativeTmux,
                   !panel.panelID.isEmpty else {
-                return nil
+                return false
             }
-            return panel.panelID
+            return true
         }
+    }
+
+    private func runtimeDescriptors(
+        in panels: [TideyWorkspaceRestorationPanelInput]
+    ) -> [String: TideyRuntimeResumeDescriptor] {
+        Dictionary(
+            panels.compactMap { panel in
+                panel.runtimeResumeDescriptor.map {
+                    (panel.panelID, $0)
+                }
+            },
+            uniquingKeysWith: { _, replacement in
+                replacement
+            }
+        )
     }
 }
 
@@ -240,7 +316,11 @@ final class TideyWorkspaceRestorationStateDictionaryCodec: NSObject,
 
         var dictionary: [String: Any] = [
             "schema_version": state.schemaVersion,
-            "workspaces": state.workspaces.map(encodeWorkspace)
+            "workspaces": state.workspaces.map(encodeWorkspace),
+            "runtime_descriptors_by_panel_id":
+                encodeRuntimeDescriptors(
+                    state.runtimeDescriptorsByPanelID
+                )
         ]
         if let selectedWorkspaceID = state.selectedWorkspaceID {
             dictionary["selected_workspace_id"] = selectedWorkspaceID
@@ -264,10 +344,14 @@ final class TideyWorkspaceRestorationStateDictionaryCodec: NSObject,
         }
 
         let workspaces = try encodedWorkspaces.map(decodeWorkspace)
+        let runtimeDescriptors = decodeRuntimeDescriptors(
+            dictionary["runtime_descriptors_by_panel_id"]
+        )
         let state = TideyWorkspaceRestorationState(
             schemaVersion: schemaVersion,
             selectedWorkspaceID: selectedWorkspaceID,
-            workspaces: workspaces
+            workspaces: workspaces,
+            runtimeDescriptorsByPanelID: runtimeDescriptors
         )
         try validate(state)
         return state
@@ -323,6 +407,43 @@ final class TideyWorkspaceRestorationStateDictionaryCodec: NSObject,
             panelIDs: panelIDs,
             selectedPanelID: selectedPanelID
         )
+    }
+
+    private func encodeRuntimeDescriptors(
+        _ descriptors: [String: TideyRuntimeResumeDescriptor]
+    ) -> [String: Any] {
+        let codec = TideyRuntimeResumeDescriptorDictionaryCodec()
+        var encoded = [String: Any]()
+        for panelID in descriptors.keys.sorted()
+        where !panelID.isEmpty {
+            guard let descriptor = descriptors[panelID],
+                  let dictionary = try? codec.encode(descriptor) else {
+                continue
+            }
+            encoded[panelID] = dictionary
+        }
+        return encoded
+    }
+
+    private func decodeRuntimeDescriptors(
+        _ value: Any?
+    ) -> [String: TideyRuntimeResumeDescriptor] {
+        guard let dictionaries = value as? [String: Any] else {
+            return [:]
+        }
+        let codec = TideyRuntimeResumeDescriptorDictionaryCodec()
+        var descriptors =
+            [String: TideyRuntimeResumeDescriptor]()
+        for panelID in dictionaries.keys.sorted()
+        where !panelID.isEmpty {
+            guard let dictionary =
+                    dictionaries[panelID] as? [String: Any],
+                  let descriptor = try? codec.decode(dictionary) else {
+                continue
+            }
+            descriptors[panelID] = descriptor
+        }
+        return descriptors
     }
 
     private func requiredIdentity(_ value: Any?, field: String) throws -> String {
