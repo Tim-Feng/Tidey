@@ -11,6 +11,99 @@ final class TideyWorkspaceRestorationTests: XCTestCase {
         )
     }
 
+    func testWindowArrangementRoundTripsHiddenOrdinaryPanelsThroughNativeTabEncoding() throws {
+        let planner = TideyWorkspaceRestorationPlanner()
+        let editor = panelInput("panel-editor")
+        let hiddenReview = panelInput("panel-review")
+        let buildWorkspace = TideyWorkspaceRestorationWorkspaceInput(
+            workspaceID: UUID().uuidString,
+            title: "Build",
+            pinned: true,
+            panels: [editor],
+            selectedPanelID: editor.panelID
+        )
+        let reviewWorkspace = TideyWorkspaceRestorationWorkspaceInput(
+            workspaceID: UUID().uuidString,
+            title: "Review",
+            pinned: false,
+            panels: [hiddenReview],
+            selectedPanelID: hiddenReview.panelID
+        )
+        let capturePlan = planner.capturePlan(
+            workspaces: [buildWorkspace, reviewWorkspace],
+            visiblePanels: [editor],
+            selectedWorkspaceID: reviewWorkspace.workspaceID
+        )
+        let encoder = iTermGraphEncoder(
+            key: "window",
+            identifier: "window-1",
+            generation: iTermGenerationAlwaysEncode
+        )
+        let adapter = iTermGraphEncoderAdapter(graphEncoder: encoder)
+        adapter.encodeArray(
+            withKey: TERMINAL_ARRANGEMENT_TABS,
+            identifiers: capturePlan.flattenedNativePanelIDs,
+            generation: iTermGenerationAlwaysEncode
+        ) { subencoder, _, identifier, _ in
+            subencoder.merge([
+                "Tab GUID": identifier,
+                "Native Payload": "native-\(identifier)"
+            ])
+            return true
+        }
+
+        let graphCodec = TideyWorkspaceRestorationGraphCodec()
+        XCTAssertTrue(graphCodec.encode(state: capturePlan.state, with: encoder))
+        let record = try XCTUnwrap(encoder.record)
+        XCTAssertEqual(
+            record.graphRecords.filter {
+                $0.key == TideyWorkspaceRestorationGraphCodec.recordKey &&
+                    $0.identifier.isEmpty
+            }.count,
+            1
+        )
+
+        let windowArrangement = try XCTUnwrap(
+            record.propertyListValue as? [String: Any]
+        )
+        let nativeTabs = try XCTUnwrap(
+            windowArrangement[TERMINAL_ARRANGEMENT_TABS] as? [[String: Any]]
+        )
+        XCTAssertEqual(
+            nativeTabs.compactMap { $0["Tab GUID"] as? String },
+            ["panel-editor", "panel-review"]
+        )
+        XCTAssertEqual(
+            nativeTabs.compactMap { $0["Native Payload"] as? String },
+            ["native-panel-editor", "native-panel-review"]
+        )
+
+        let decodedState = try XCTUnwrap(
+            graphCodec.decode(windowArrangement: windowArrangement)
+        )
+        let hydrated = planner.hydrationState(
+            savedState: decodedState,
+            availablePanelIDs: nativeTabs.compactMap { $0["Tab GUID"] as? String },
+            panelIDRemap: [:]
+        )
+
+        XCTAssertEqual(
+            hydrated.workspaces.map(\.workspaceID),
+            [buildWorkspace.workspaceID, reviewWorkspace.workspaceID]
+        )
+        XCTAssertEqual(hydrated.workspaces.map(\.title), ["Build", "Review"])
+        XCTAssertEqual(hydrated.workspaces.map(\.pinned), [true, false])
+        XCTAssertEqual(
+            hydrated.workspaces.map(\.panelIDs),
+            [["panel-editor"], ["panel-review"]]
+        )
+        XCTAssertEqual(
+            hydrated.workspaces.map(\.selectedPanelID),
+            ["panel-editor", "panel-review"]
+        )
+        XCTAssertEqual(hydrated.selectedWorkspaceID, reviewWorkspace.workspaceID)
+    }
+
     func testModelSeamCompiles() {
         let workspace = TideyWorkspaceState(
             workspaceID: "workspace-1",
@@ -192,6 +285,43 @@ final class TideyWorkspaceRestorationTests: XCTestCase {
             "panel-collision-actual",
             "panel-review"
         ])
+    }
+
+    func testHydrationKeepsFirstSavedReferenceWhenRemapsCollide() {
+        let planner = TideyWorkspaceRestorationPlanner()
+        let first = TideyWorkspaceState(
+            workspaceID: "workspace-first",
+            title: "First",
+            pinned: false,
+            panelIDs: ["panel-saved-first"],
+            selectedPanelID: "panel-saved-first"
+        )
+        let second = TideyWorkspaceState(
+            workspaceID: "workspace-second",
+            title: "Second",
+            pinned: false,
+            panelIDs: ["panel-saved-second"],
+            selectedPanelID: "panel-saved-second"
+        )
+        let savedState = TideyWorkspaceRestorationState(
+            schemaVersion: TideyWorkspaceRestorationState.currentSchemaVersion,
+            selectedWorkspaceID: second.workspaceID,
+            workspaces: [first, second]
+        )
+
+        let hydrated = planner.hydrationState(
+            savedState: savedState,
+            availablePanelIDs: ["panel-actual-shared"],
+            panelIDRemap: [
+                "panel-saved-first": "panel-actual-shared",
+                "panel-saved-second": "panel-actual-shared"
+            ]
+        )
+
+        XCTAssertEqual(hydrated.workspaces.map(\.workspaceID), ["workspace-first"])
+        XCTAssertEqual(hydrated.workspaces.first?.panelIDs, ["panel-actual-shared"])
+        XCTAssertEqual(hydrated.workspaces.first?.selectedPanelID, "panel-actual-shared")
+        XCTAssertNil(hydrated.selectedWorkspaceID)
     }
 
     func testHydrationRestoresWorkspaceMetadataBeforeShowingSelectedWorkspace() {

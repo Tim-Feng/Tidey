@@ -361,6 +361,8 @@ static NSString *TideySubmitLogSuffix(NSString *input) {
 - (TideyWorkspaceRestorationPanelInput *)tideyWorkspaceRestorationInputForPanel:(PTYTab *)panel;
 - (TideyWorkspaceRestorationCapturePlan *)tideyWorkspaceRestorationCapturePlan;
 - (NSArray<PTYTab *> *)tideyTabsForWorkspaceRestorationCapturePlan:(TideyWorkspaceRestorationCapturePlan *)plan;
+- (void)tideyPrepareWorkspaceRestorationFromArrangement:(NSDictionary *)arrangement;
+- (void)tideyHydratePendingWorkspaceRestorationState;
 - (void)tideySyncTmuxPaneIdentityOptionsForPanel:(PTYTab *)panel workspace:(Workspace *)workspace;
 - (void)tideyTabDidBecomeTmuxBacked:(PTYTab *)panel;
 - (void)tideyTabDidUpdateOrdinaryTmuxAttachMetadata:(PTYTab *)panel;
@@ -615,6 +617,10 @@ static NSImage *gTideyApplicationIconBaseImage = nil;
     // Socket-driven title overrides keyed by workspace UUID string.
     NSMutableDictionary<NSString *, NSString *> *_tideyWorkspaceTitleOverrides;
     NSMutableSet<NSString *> *_tideyTmuxWindowBackfillKeysInFlight;
+
+    // Launch-scoped native restoration state. These are cleared after workspace hydration.
+    TideyWorkspaceRestorationState *_tideyPendingWorkspaceRestorationState;
+    NSMutableDictionary<NSString *, NSString *> *_tideyRestoredPanelIDRemap;
 }
 
 @synthesize scope = _scope;
@@ -1265,6 +1271,8 @@ ITERM_WEAKLY_REFERENCEABLE
     [_windowSizeHelper release];
     [_titlebarAccessoryNanny release];
     [_workspaces release];
+    [_tideyPendingWorkspaceRestorationState release];
+    [_tideyRestoredPanelIDRemap release];
     [_tideyWorkspaceTitleOverrides release];
     [_tideyTmuxWindowBackfillKeysInFlight release];
     [_tideyLastBroadcastWorkspaceSelectionIdentifier release];
@@ -6413,6 +6421,7 @@ ITERM_WEAKLY_REFERENCEABLE
     }
 
     const BOOL savedRestoringWindow = _restoringWindow;
+    [self tideyPrepareWorkspaceRestorationFromArrangement:arrangement];
     _restoringWindow = YES;
     if (self.hotkeyWindowType != iTermHotkeyWindowTypeNone) {
         _suppressMakeCurrentTerminal |= iTermSuppressMakeCurrentTerminalHotkey;
@@ -6585,14 +6594,24 @@ ITERM_WEAKLY_REFERENCEABLE
         if (sessions) {
             sessionMap = [PTYTab sessionMapWithArrangement:tabArrangement sessions:sessions];
         }
-        if (![self openTabWithArrangement:tabArrangement
-                                    named:arrangementName
-                            hasFlexibleView:NO
-                                    viewMap:nil
-                                 sessionMap:sessionMap
-                       partialAttachments:partialAttachments
-                                  options:arrangement[TERMINAL_ARRANGEMENT_ARCHIVE] != nil ? @{ PTYSessionArrangementOptionsArchive: @YES } : nil]) {
+        PTYTab *restoredTab =
+            [self openTabWithArrangement:tabArrangement
+                                   named:arrangementName
+                         hasFlexibleView:NO
+                                 viewMap:nil
+                              sessionMap:sessionMap
+                    partialAttachments:partialAttachments
+                                options:arrangement[TERMINAL_ARRANGEMENT_ARCHIVE] != nil ? @{ PTYSessionArrangementOptionsArchive: @YES } : nil];
+        if (!restoredTab) {
             return NO;
+        }
+        NSString *savedPanelID = [PTYTab guidInArrangement:tabArrangement];
+        NSString *actualPanelID = restoredTab.stringUniqueIdentifier;
+        if (_tideyPendingWorkspaceRestorationState &&
+            savedPanelID.length > 0 &&
+            actualPanelID.length > 0 &&
+            ![savedPanelID isEqualToString:actualPanelID]) {
+            _tideyRestoredPanelIDRemap[savedPanelID] = actualPanelID;
         }
         openedAny = YES;
     }
@@ -6680,6 +6699,95 @@ ITERM_WEAKLY_REFERENCEABLE
         }
     }
     return tabs;
+}
+
+- (void)tideyPrepareWorkspaceRestorationFromArrangement:(NSDictionary *)arrangement {
+    [_tideyPendingWorkspaceRestorationState release];
+    _tideyPendingWorkspaceRestorationState = nil;
+    [_tideyRestoredPanelIDRemap release];
+    _tideyRestoredPanelIDRemap = nil;
+
+    TideyWorkspaceRestorationGraphCodec *codec =
+        [[[TideyWorkspaceRestorationGraphCodec alloc] init] autorelease];
+    _tideyPendingWorkspaceRestorationState =
+        [[codec decodeWindowArrangement:arrangement] retain];
+    if (_tideyPendingWorkspaceRestorationState) {
+        _tideyRestoredPanelIDRemap = [[NSMutableDictionary alloc] init];
+    }
+}
+
+- (void)tideyHydratePendingWorkspaceRestorationState {
+    TideyWorkspaceRestorationState *savedState =
+        [[_tideyPendingWorkspaceRestorationState retain] autorelease];
+    NSDictionary<NSString *, NSString *> *panelIDRemap =
+        [[_tideyRestoredPanelIDRemap copy] autorelease];
+    [_tideyPendingWorkspaceRestorationState release];
+    _tideyPendingWorkspaceRestorationState = nil;
+    [_tideyRestoredPanelIDRemap release];
+    _tideyRestoredPanelIDRemap = nil;
+    if (!savedState) {
+        return;
+    }
+
+    NSMutableDictionary<NSString *, PTYTab *> *panelsByID = [NSMutableDictionary dictionary];
+    for (PTYTab *panel in self.tabs) {
+        if (panel.stringUniqueIdentifier.length > 0) {
+            panelsByID[panel.stringUniqueIdentifier] = panel;
+        }
+    }
+    TideyWorkspaceRestorationPlanner *planner =
+        [[[TideyWorkspaceRestorationPlanner alloc] init] autorelease];
+    TideyWorkspaceRestorationState *hydratedState =
+        [planner hydrationStateWithSavedState:savedState
+                           availablePanelIDs:panelsByID.allKeys
+                                panelIDRemap:panelIDRemap ?: @{}];
+
+    NSMutableArray<Workspace *> *restoredWorkspaces = [NSMutableArray array];
+    for (TideyWorkspaceState *workspaceState in hydratedState.workspaces) {
+        NSUUID *workspaceID =
+            [[[NSUUID alloc] initWithUUIDString:workspaceState.workspaceID] autorelease];
+        if (!workspaceID) {
+            continue;
+        }
+        Workspace *workspace =
+            [[[Workspace alloc] initWithPanel:nil identifier:workspaceID] autorelease];
+        workspace.customTitle = workspaceState.title;
+        workspace.pinned = workspaceState.pinned;
+        for (NSString *panelID in workspaceState.panelIDs) {
+            PTYTab *panel = panelsByID[panelID];
+            if (panel) {
+                [workspace.panels addObject:panel];
+                [self tideyAssignWorkspaceIdentifierToPanel:panel workspace:workspace];
+            }
+        }
+        if (workspace.panels.count == 0) {
+            continue;
+        }
+        NSInteger selectedPanelIndex =
+            [workspaceState.panelIDs indexOfObject:workspaceState.selectedPanelID];
+        workspace.selectedPanelIndex =
+            selectedPanelIndex == NSNotFound ? 0 : selectedPanelIndex;
+        [restoredWorkspaces addObject:workspace];
+    }
+    if (restoredWorkspaces.count == 0) {
+        return;
+    }
+
+    self.workspaces = restoredWorkspaces;
+    NSInteger selectedWorkspaceIndex = 0;
+    if (hydratedState.selectedWorkspaceID.length > 0) {
+        for (NSInteger i = 0; i < self.workspaces.count; i++) {
+            Workspace *workspace = self.workspaces[i];
+            if ([workspace.identifier.UUIDString isEqualToString:hydratedState.selectedWorkspaceID]) {
+                selectedWorkspaceIndex = i;
+                break;
+            }
+        }
+    }
+    self.selectedWorkspaceIndex = selectedWorkspaceIndex;
+    _lastSelectedWorkspaceIndex = -1;
+    [self tideyShowWorkspaceAtIndex:selectedWorkspaceIndex
+      refreshSelectionFromVisibleTab:NO];
 }
 
 - (NSDictionary *)arrangementExcludingTmuxTabs:(BOOL)excludeTmux
@@ -16980,9 +17088,13 @@ backgroundColor:(NSColor *)backgroundColor {
     const BOOL commit = [self populateArrangementWithTabs:tabs
                                         includingContents:includeContents
                                                   encoder:adapter];
+    TideyWorkspaceRestorationGraphCodec *workspaceCodec =
+        [[[TideyWorkspaceRestorationGraphCodec alloc] init] autorelease];
+    const BOOL workspaceCommit = [workspaceCodec encodeState:capturePlan.state
+                                                 withEncoder:encoder];
     [encoder encodeNumber:@(self.window.miniaturized) forKey:TERMINAL_ARRANGEMENT_MINIATURIZED];
     [encoder encodeNumber:@(_sizeLocked) forKey:TERMINAL_ARRANGEMENT_SIZE_LOCKED];
-    return commit;
+    return commit && workspaceCommit;
 }
 
 #pragma mark - iTermUniquelyIdentifiable
@@ -16994,6 +17106,7 @@ backgroundColor:(NSColor *)backgroundColor {
 #pragma mark - iTermRestorableWindowController
 
 - (void)didFinishRestoringWindow {
+    [self tideyHydratePendingWorkspaceRestorationState];
     DLog(@"%@ widthAdjustment=%@", self, @(_widthAdjustment));
     if (_widthAdjustment == 0) {
         return;

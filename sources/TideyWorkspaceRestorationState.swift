@@ -366,3 +366,36 @@ final class TideyWorkspaceRestorationStateDictionaryCodec: NSObject,
         }
     }
 }
+
+@objc(TideyWorkspaceRestorationGraphCodec)
+@objcMembers
+final class TideyWorkspaceRestorationGraphCodec: NSObject {
+    static let recordKey = "Tidey Workspace Restoration State"
+
+    @objc(encodeState:withEncoder:)
+    func encode(
+        state: TideyWorkspaceRestorationState,
+        with encoder: iTermGraphEncoder
+    ) -> Bool {
+        guard let dictionary = try? TideyWorkspaceRestorationStateDictionaryCodec().encode(state) else {
+            return false
+        }
+        return encoder.encodeChild(
+            withKey: Self.recordKey,
+            identifier: "",
+            generation: iTermGenerationAlwaysEncode
+        ) { subencoder in
+            let adapter = iTermGraphEncoderAdapter(graphEncoder: subencoder)
+            adapter.merge(dictionary)
+            return true
+        }
+    }
+
+    @objc(decodeWindowArrangement:)
+    func decode(windowArrangement: [String: Any]) -> TideyWorkspaceRestorationState? {
+        guard let dictionary = windowArrangement[Self.recordKey] as? [String: Any] else {
+            return nil
+        }
+        return try? TideyWorkspaceRestorationStateDictionaryCodec().decode(dictionary)
+    }
+}
