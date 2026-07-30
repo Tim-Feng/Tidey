@@ -176,6 +176,227 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
         )
     }
 
+    func testSocketUpdateAcceptsOnlyCurrentWorkspacePanelBinding() throws {
+        let gate = TideyRuntimeResumeDescriptorUpdateGate(
+            initialDescriptorsByPanelID: [:]
+        )
+        let originalPayload = socketUpdatePayload(
+            durableResumeID: "thread-1",
+            workingDirectory: "/tmp/project"
+        )
+
+        let accepted = gate.acceptUpdatePayload(
+            originalPayload,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertTrue(accepted.accepted)
+        XCTAssertTrue(accepted.changed)
+        XCTAssertNil(accepted.errorCode)
+        XCTAssertEqual(accepted.descriptor?.revision, 1)
+        XCTAssertEqual(
+            accepted.descriptor?.agent?.durableResumeID,
+            "thread-1"
+        )
+
+        let staleWorkspace = gate.acceptUpdatePayload(
+            originalPayload,
+            currentWorkspaceID: "workspace-new",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertFalse(staleWorkspace.accepted)
+        XCTAssertFalse(staleWorkspace.changed)
+        XCTAssertEqual(staleWorkspace.errorCode, "stale_binding")
+        XCTAssertEqual(
+            gate.descriptor(forPanelID: "panel-1")?.revision,
+            1
+        )
+
+        let stalePanel = gate.acceptUpdatePayload(
+            originalPayload,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-new"
+        )
+        XCTAssertFalse(stalePanel.accepted)
+        XCTAssertEqual(stalePanel.errorCode, "stale_binding")
+
+        var malformedPayload = originalPayload
+        var malformedDescriptor = try XCTUnwrap(
+            malformedPayload["descriptor"] as? [String: Any]
+        )
+        malformedDescriptor["topology"] = [
+            "windows": "not-an-array",
+            "active_window_index": 0,
+            "active_pane_index": 0
+        ]
+        malformedPayload["descriptor"] = malformedDescriptor
+        let malformed = gate.acceptUpdatePayload(
+            malformedPayload,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertFalse(malformed.accepted)
+        XCTAssertEqual(malformed.errorCode, "invalid_descriptor")
+        XCTAssertEqual(
+            gate.descriptor(forPanelID: "panel-1")?.revision,
+            1
+        )
+
+        var unsafePayload = originalPayload
+        var unsafeDescriptor = try XCTUnwrap(
+            unsafePayload["descriptor"] as? [String: Any]
+        )
+        var unsafeTopology = try XCTUnwrap(
+            unsafeDescriptor["topology"] as? [String: Any]
+        )
+        var unsafeWindows = try XCTUnwrap(
+            unsafeTopology["windows"] as? [[String: Any]]
+        )
+        var unsafeWindow = try XCTUnwrap(unsafeWindows.first)
+        var unsafePanes = try XCTUnwrap(
+            unsafeWindow["panes"] as? [[String: Any]]
+        )
+        var unsafePane = try XCTUnwrap(unsafePanes.first)
+        unsafePane["launch"] = [
+            "executable": "/bin/sh",
+            "arguments": ["-c", "touch /tmp/should-not-run"],
+            "cwd": "/tmp/project"
+        ]
+        unsafePanes[0] = unsafePane
+        unsafeWindow["panes"] = unsafePanes
+        unsafeWindows[0] = unsafeWindow
+        unsafeTopology["windows"] = unsafeWindows
+        unsafeDescriptor["topology"] = unsafeTopology
+        unsafePayload["descriptor"] = unsafeDescriptor
+        let unsafe = gate.acceptUpdatePayload(
+            unsafePayload,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertFalse(unsafe.accepted)
+        XCTAssertEqual(unsafe.errorCode, "invalid_descriptor")
+        XCTAssertEqual(
+            gate.descriptor(forPanelID: "panel-1")?.revision,
+            1
+        )
+
+        let afterBridgeRestart = gate.acceptUpdatePayload(
+            originalPayload,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertTrue(afterBridgeRestart.accepted)
+        XCTAssertFalse(afterBridgeRestart.changed)
+        XCTAssertEqual(afterBridgeRestart.descriptor?.revision, 1)
+
+        let changedPayload = socketUpdatePayload(
+            durableResumeID: "thread-2",
+            workingDirectory: "/tmp/project"
+        )
+        let changed = gate.acceptUpdatePayload(
+            changedPayload,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertTrue(changed.accepted)
+        XCTAssertTrue(changed.changed)
+        XCTAssertEqual(changed.descriptor?.revision, 2)
+
+        let hydratedGate = TideyRuntimeResumeDescriptorUpdateGate(
+            initialDescriptorsByPanelID: [
+                "panel-1": try XCTUnwrap(changed.descriptor)
+            ]
+        )
+        let unchangedAfterTideyRestart =
+            hydratedGate.acceptUpdatePayload(
+                changedPayload,
+                currentWorkspaceID: "workspace-1",
+                currentPanelID: "panel-1"
+            )
+        XCTAssertTrue(unchangedAfterTideyRestart.accepted)
+        XCTAssertFalse(unchangedAfterTideyRestart.changed)
+        XCTAssertEqual(
+            unchangedAfterTideyRestart.descriptor?.revision,
+            2
+        )
+        let changedAfterTideyRestart =
+            hydratedGate.acceptUpdatePayload(
+                socketUpdatePayload(
+                    durableResumeID: "thread-after-restart",
+                    workingDirectory: "/tmp/project"
+                ),
+                currentWorkspaceID: "workspace-1",
+                currentPanelID: "panel-1"
+            )
+        XCTAssertTrue(changedAfterTideyRestart.accepted)
+        XCTAssertTrue(changedAfterTideyRestart.changed)
+        XCTAssertEqual(changedAfterTideyRestart.descriptor?.revision, 3)
+
+        let resultLock = NSLock()
+        var concurrentResults:
+            [TideyRuntimeResumeDescriptorUpdateResult] = []
+        DispatchQueue.concurrentPerform(iterations: 12) { index in
+            let result = gate.acceptUpdatePayload(
+                socketUpdatePayload(
+                    durableResumeID: "thread-\(index + 3)",
+                    workingDirectory: "/tmp/project/\(index)"
+                ),
+                currentWorkspaceID: "workspace-1",
+                currentPanelID: "panel-1"
+            )
+            resultLock.lock()
+            concurrentResults.append(result)
+            resultLock.unlock()
+        }
+        XCTAssertEqual(concurrentResults.count, 12)
+        XCTAssertTrue(concurrentResults.allSatisfy(\.accepted))
+        XCTAssertTrue(concurrentResults.allSatisfy(\.changed))
+        XCTAssertEqual(
+            Set(concurrentResults.compactMap(\.descriptor?.revision)),
+            Set(3 ... 14)
+        )
+        XCTAssertEqual(
+            gate.descriptor(forPanelID: "panel-1")?.revision,
+            14
+        )
+
+        let persistedDescriptor = try XCTUnwrap(
+            gate.descriptor(forPanelID: "panel-1")
+        )
+        let state = TideyWorkspaceRestorationState(
+            schemaVersion:
+                TideyWorkspaceRestorationState.currentSchemaVersion,
+            selectedWorkspaceID: "workspace-1",
+            workspaces: [
+                TideyWorkspaceState(
+                    workspaceID: "workspace-1",
+                    title: nil,
+                    pinned: false,
+                    panelIDs: ["panel-1"],
+                    selectedPanelID: "panel-1"
+                )
+            ],
+            runtimeDescriptorsByPanelID: [
+                "panel-1": persistedDescriptor
+            ]
+        )
+        let codec = TideyWorkspaceRestorationStateDictionaryCodec()
+        let decoded = try codec.decode(codec.encode(state))
+        let roundTripped = try XCTUnwrap(
+            decoded.runtimeDescriptorsByPanelID["panel-1"]
+        )
+        XCTAssertEqual(roundTripped.revision, 14)
+        XCTAssertEqual(roundTripped.kind, .agent)
+        XCTAssertEqual(roundTripped.restorePolicy, .create)
+        let roundTrippedResumeID = try XCTUnwrap(
+            roundTripped.agent?.durableResumeID
+        )
+        XCTAssertEqual(
+            roundTripped.agent?.launch.arguments,
+            ["resume", roundTrippedResumeID]
+        )
+    }
+
     func testVersionedDescriptorAndNativeReattachOutcomeSeamsCompile() {
         let launch = TideyRuntimeLaunchSpecification(
             executable: "/usr/local/bin/codex",
@@ -342,5 +563,61 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
         )
         XCTAssertNil(descriptor.topology, file: file, line: line)
         XCTAssertNil(descriptor.agent, file: file, line: line)
+    }
+
+    private func socketUpdatePayload(
+        durableResumeID: String,
+        workingDirectory: String
+    ) -> [String: Any] {
+        [
+            "binding": [
+                "workspace_id": "workspace-1",
+                "panel_id": "panel-1",
+                "tmux_pane_id": "%7"
+            ],
+            "descriptor": [
+                "descriptor_version": 1,
+                "kind": "agent",
+                "restore_policy": "create",
+                "target": [
+                    "socket_endpoint_kind": "name",
+                    "socket_name": "tidey",
+                    "tmux_session": "tidey-codex"
+                ],
+                "topology": [
+                    "windows": [
+                        [
+                            "index": 1,
+                            "name": "Tidey",
+                            "panes": [
+                                [
+                                    "index": 0,
+                                    "cwd": workingDirectory,
+                                    "launch": [
+                                        "executable": "codex",
+                                        "arguments": [
+                                            "resume",
+                                            durableResumeID
+                                        ],
+                                        "cwd": workingDirectory
+                                    ]
+                                ]
+                            ]
+                        ]
+                    ],
+                    "active_window_index": 1,
+                    "active_pane_index": 0
+                ],
+                "agent": [
+                    "vendor": "codex",
+                    "durable_resume_id": durableResumeID,
+                    "launch": [
+                        "executable": "codex",
+                        "arguments": ["resume", durableResumeID],
+                        "cwd": workingDirectory
+                    ]
+                ]
+            ]
+        ]
     }
 }

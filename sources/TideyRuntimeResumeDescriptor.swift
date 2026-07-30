@@ -247,166 +247,726 @@ enum TideyRuntimeResumeDescriptorCodecError: Error, Equatable {
     case malformedField(String)
 }
 
+private struct TideyRuntimeResumeLaunchWire: Codable {
+    let executable: String
+    let arguments: [String]
+    let workingDirectory: String?
+
+    enum CodingKeys: String, CodingKey {
+        case executable
+        case arguments
+        case workingDirectory = "cwd"
+    }
+
+    init(
+        executable: String,
+        arguments: [String],
+        workingDirectory: String?
+    ) {
+        self.executable = executable
+        self.arguments = arguments
+        self.workingDirectory = workingDirectory
+    }
+
+    init(_ launch: TideyRuntimeLaunchSpecification) {
+        self.init(
+            executable: launch.executable,
+            arguments: launch.arguments,
+            workingDirectory: launch.workingDirectory
+        )
+    }
+
+    func validatedModel(
+        field: String
+    ) throws -> TideyRuntimeLaunchSpecification {
+        guard !executable.isEmpty,
+              !arguments.isEmpty,
+              workingDirectory?.isEmpty != true,
+              arguments.allSatisfy({ !$0.isEmpty }) else {
+            throw TideyRuntimeResumeDescriptorCodecError
+                .malformedField(field)
+        }
+        return TideyRuntimeLaunchSpecification(
+            executable: executable,
+            arguments: arguments,
+            workingDirectory: workingDirectory
+        )
+    }
+
+    func validatedAgentResumeModel(
+        field: String
+    ) throws -> TideyRuntimeLaunchSpecification {
+        let model = try validatedModel(field: field)
+        let isClaudeResume =
+            model.executable == "claude" &&
+            model.arguments.count == 2 &&
+            model.arguments[0] == "--resume"
+        let isCodexResume =
+            model.executable == "codex" &&
+            model.arguments.count == 2 &&
+            model.arguments[0] == "resume"
+        guard (isClaudeResume || isCodexResume),
+              !model.arguments[1].isEmpty else {
+            throw TideyRuntimeResumeDescriptorCodecError
+                .malformedField(field)
+        }
+        return model
+    }
+}
+
+private struct TideyRuntimeResumePaneWire: Codable {
+    let index: Int
+    let workingDirectory: String?
+    let launch: TideyRuntimeResumeLaunchWire?
+
+    enum CodingKeys: String, CodingKey {
+        case index
+        case workingDirectory = "cwd"
+        case launch
+    }
+
+    init(_ pane: TideyRuntimeTmuxPaneTopology) {
+        index = pane.index
+        workingDirectory = pane.workingDirectory
+        launch = pane.launch.map(TideyRuntimeResumeLaunchWire.init)
+    }
+}
+
+private struct TideyRuntimeResumeWindowWire: Codable {
+    let index: Int
+    let name: String?
+    let panes: [TideyRuntimeResumePaneWire]
+
+    init(_ window: TideyRuntimeTmuxWindowTopology) {
+        index = window.index
+        name = window.name
+        panes = window.panes.map(TideyRuntimeResumePaneWire.init)
+    }
+}
+
+private struct TideyRuntimeResumeTopologyWire: Codable {
+    let windows: [TideyRuntimeResumeWindowWire]
+    let activeWindowIndex: Int
+    let activePaneIndex: Int
+
+    enum CodingKeys: String, CodingKey {
+        case windows
+        case activeWindowIndex = "active_window_index"
+        case activePaneIndex = "active_pane_index"
+    }
+
+    init(_ topology: TideyRuntimeTmuxTopology) {
+        windows = topology.windows.map(
+            TideyRuntimeResumeWindowWire.init
+        )
+        activeWindowIndex = topology.activeWindowIndex
+        activePaneIndex = topology.activePaneIndex
+    }
+
+    func validatedModel() throws -> TideyRuntimeTmuxTopology {
+        guard !windows.isEmpty,
+              Set(windows.map(\.index)).count == windows.count,
+              let activeWindow = windows.first(
+                  where: { $0.index == activeWindowIndex }
+              ) else {
+            throw TideyRuntimeResumeDescriptorCodecError
+                .malformedField("topology.windows")
+        }
+
+        var modelWindows: [TideyRuntimeTmuxWindowTopology] = []
+        for window in windows {
+            guard window.name?.isEmpty != true,
+                  !window.panes.isEmpty,
+                  Set(window.panes.map(\.index)).count ==
+                    window.panes.count else {
+                throw TideyRuntimeResumeDescriptorCodecError
+                    .malformedField("topology.panes")
+            }
+            var modelPanes: [TideyRuntimeTmuxPaneTopology] = []
+            for pane in window.panes {
+                guard pane.index >= 0,
+                      pane.workingDirectory?.isEmpty != true else {
+                    throw TideyRuntimeResumeDescriptorCodecError
+                        .malformedField("topology.pane")
+                }
+                let launch = try pane.launch?
+                    .validatedAgentResumeModel(
+                    field: "topology.pane.launch"
+                )
+                modelPanes.append(
+                    TideyRuntimeTmuxPaneTopology(
+                        index: pane.index,
+                        workingDirectory: pane.workingDirectory,
+                        launch: launch
+                    )
+                )
+            }
+            modelWindows.append(
+                TideyRuntimeTmuxWindowTopology(
+                    index: window.index,
+                    name: window.name,
+                    panes: modelPanes
+                )
+            )
+        }
+        guard activeWindow.panes.contains(
+            where: { $0.index == activePaneIndex }
+        ) else {
+            throw TideyRuntimeResumeDescriptorCodecError
+                .malformedField("topology.active_pane_index")
+        }
+        return TideyRuntimeTmuxTopology(
+            windows: modelWindows,
+            activeWindowIndex: activeWindowIndex,
+            activePaneIndex: activePaneIndex
+        )
+    }
+}
+
+private struct TideyRuntimeResumeTargetWire: Codable {
+    let socketEndpointKind: String
+    let socketPath: String?
+    let socketName: String?
+    let tmuxSession: String
+
+    enum CodingKeys: String, CodingKey {
+        case socketEndpointKind = "socket_endpoint_kind"
+        case socketPath = "socket_path"
+        case socketName = "socket_name"
+        case tmuxSession = "tmux_session"
+    }
+
+    init(_ target: TideyRuntimeResumeTarget) {
+        switch target.socketEndpointKind {
+        case .path:
+            socketEndpointKind = "path"
+        case .name:
+            socketEndpointKind = "name"
+        case .defaultSocket:
+            socketEndpointKind = "default"
+        }
+        socketPath = target.socketPath
+        socketName = target.socketName
+        tmuxSession = target.tmuxSession
+    }
+
+    func validatedModel() throws -> TideyRuntimeResumeTarget {
+        guard !tmuxSession.isEmpty else {
+            throw TideyRuntimeResumeDescriptorCodecError
+                .malformedField("target.tmux_session")
+        }
+        switch socketEndpointKind {
+        case "path":
+            guard let socketPath,
+                  !socketPath.isEmpty,
+                  socketName == nil else {
+                throw TideyRuntimeResumeDescriptorCodecError
+                    .malformedField("target.socket_path")
+            }
+            return TideyRuntimeResumeTarget(
+                socketPath: socketPath,
+                tmuxSession: tmuxSession
+            )
+        case "name":
+            guard let socketName,
+                  !socketName.isEmpty,
+                  socketPath == nil else {
+                throw TideyRuntimeResumeDescriptorCodecError
+                    .malformedField("target.socket_name")
+            }
+            return TideyRuntimeResumeTarget(
+                socketName: socketName,
+                tmuxSession: tmuxSession
+            )
+        case "default":
+            guard socketPath == nil,
+                  socketName == nil else {
+                throw TideyRuntimeResumeDescriptorCodecError
+                    .malformedField(
+                        "target.socket_endpoint_kind"
+                    )
+            }
+            return TideyRuntimeResumeTarget(
+                defaultSocketAndTmuxSession: tmuxSession
+            )
+        default:
+            throw TideyRuntimeResumeDescriptorCodecError
+                .malformedField("target.socket_endpoint_kind")
+        }
+    }
+}
+
+private struct TideyRuntimeResumeAgentWire: Codable {
+    let vendor: String
+    let durableResumeID: String
+    let launch: TideyRuntimeResumeLaunchWire
+
+    enum CodingKeys: String, CodingKey {
+        case vendor
+        case durableResumeID = "durable_resume_id"
+        case launch
+    }
+
+    init(_ agent: TideyRuntimeAgentResumeSpecification) {
+        switch agent.vendor {
+        case .claude:
+            vendor = "claude"
+        case .codex:
+            vendor = "codex"
+        }
+        durableResumeID = agent.durableResumeID
+        launch = TideyRuntimeResumeLaunchWire(agent.launch)
+    }
+
+    func validatedModel()
+        throws -> TideyRuntimeAgentResumeSpecification {
+        guard !durableResumeID.isEmpty else {
+            throw TideyRuntimeResumeDescriptorCodecError
+                .malformedField("agent.durable_resume_id")
+        }
+        let vendorModel: TideyRuntimeAgentVendor
+        let expectedExecutable: String
+        let expectedArguments: [String]
+        switch vendor {
+        case "claude":
+            vendorModel = .claude
+            expectedExecutable = "claude"
+            expectedArguments = ["--resume", durableResumeID]
+        case "codex":
+            vendorModel = .codex
+            expectedExecutable = "codex"
+            expectedArguments = ["resume", durableResumeID]
+        default:
+            throw TideyRuntimeResumeDescriptorCodecError
+                .malformedField("agent.vendor")
+        }
+        let launchModel = try launch.validatedAgentResumeModel(
+            field: "agent.launch"
+        )
+        guard launchModel.executable == expectedExecutable,
+              launchModel.arguments == expectedArguments else {
+            throw TideyRuntimeResumeDescriptorCodecError
+                .malformedField("agent.launch")
+        }
+        return TideyRuntimeAgentResumeSpecification(
+            vendor: vendorModel,
+            durableResumeID: durableResumeID,
+            launch: launchModel
+        )
+    }
+}
+
+private struct TideyRuntimeResumeDescriptorContentWire: Codable {
+    let descriptorVersion: Int
+    let kind: String
+    let restorePolicy: String
+    let target: TideyRuntimeResumeTargetWire
+    let topology: TideyRuntimeResumeTopologyWire?
+    let agent: TideyRuntimeResumeAgentWire?
+
+    enum CodingKeys: String, CodingKey {
+        case descriptorVersion = "descriptor_version"
+        case kind
+        case restorePolicy = "restore_policy"
+        case target
+        case topology
+        case agent
+    }
+
+    init(
+        descriptorVersion: Int,
+        kind: String,
+        restorePolicy: String,
+        target: TideyRuntimeResumeTargetWire,
+        topology: TideyRuntimeResumeTopologyWire?,
+        agent: TideyRuntimeResumeAgentWire?
+    ) {
+        self.descriptorVersion = descriptorVersion
+        self.kind = kind
+        self.restorePolicy = restorePolicy
+        self.target = target
+        self.topology = topology
+        self.agent = agent
+    }
+
+    init(_ descriptor: TideyRuntimeResumeDescriptor) {
+        descriptorVersion = descriptor.descriptorVersion
+        switch descriptor.kind {
+        case .ordinaryTmux:
+            kind = "ordinary_tmux"
+        case .agent:
+            kind = "agent"
+        case .generic:
+            kind = "generic"
+        }
+        switch descriptor.restorePolicy {
+        case .create:
+            restorePolicy = "create"
+        case .attachOnly:
+            restorePolicy = "attach_only"
+        case .runtime:
+            restorePolicy = "runtime"
+        }
+        target = TideyRuntimeResumeTargetWire(descriptor.target)
+        topology = descriptor.topology.map(
+            TideyRuntimeResumeTopologyWire.init
+        )
+        agent = descriptor.agent.map(TideyRuntimeResumeAgentWire.init)
+    }
+
+    func validatedModel(
+        revision: Int64
+    ) throws -> TideyRuntimeResumeDescriptor {
+        guard descriptorVersion ==
+                TideyRuntimeResumeDescriptor
+                    .currentDescriptorVersion else {
+            throw TideyRuntimeResumeDescriptorCodecError
+                .unsupportedDescriptorVersion(descriptorVersion)
+        }
+        guard revision > 0 else {
+            throw TideyRuntimeResumeDescriptorCodecError
+                .malformedField("revision")
+        }
+        let kindModel: TideyRuntimeResumeKind
+        switch kind {
+        case "ordinary_tmux":
+            kindModel = .ordinaryTmux
+        case "agent":
+            kindModel = .agent
+        case "generic":
+            kindModel = .generic
+        default:
+            throw TideyRuntimeResumeDescriptorCodecError
+                .malformedField("kind")
+        }
+        let policyModel: TideyRuntimeRestorePolicy
+        switch restorePolicy {
+        case "create":
+            policyModel = .create
+        case "attach_only":
+            policyModel = .attachOnly
+        case "runtime":
+            policyModel = .runtime
+        default:
+            throw TideyRuntimeResumeDescriptorCodecError
+                .malformedField("restore_policy")
+        }
+        switch kindModel {
+        case .ordinaryTmux:
+            guard policyModel == .attachOnly,
+                  topology == nil,
+                  agent == nil else {
+                throw TideyRuntimeResumeDescriptorCodecError
+                    .malformedField("ordinary_tmux")
+            }
+        case .agent:
+            guard policyModel == .create,
+                  agent != nil else {
+                throw TideyRuntimeResumeDescriptorCodecError
+                    .malformedField("agent")
+            }
+        case .generic:
+            guard policyModel != .create,
+                  agent == nil else {
+                throw TideyRuntimeResumeDescriptorCodecError
+                    .malformedField("generic")
+            }
+        }
+        return TideyRuntimeResumeDescriptor(
+            descriptorVersion: descriptorVersion,
+            revision: revision,
+            kind: kindModel,
+            restorePolicy: policyModel,
+            target: try target.validatedModel(),
+            topology: try topology?.validatedModel(),
+            agent: try agent?.validatedModel()
+        )
+    }
+}
+
+private struct TideyRuntimeResumeDescriptorWire: Codable {
+    let descriptorVersion: Int
+    let revision: Int64
+    let kind: String
+    let restorePolicy: String
+    let target: TideyRuntimeResumeTargetWire
+    let topology: TideyRuntimeResumeTopologyWire?
+    let agent: TideyRuntimeResumeAgentWire?
+
+    enum CodingKeys: String, CodingKey {
+        case descriptorVersion = "descriptor_version"
+        case revision
+        case kind
+        case restorePolicy = "restore_policy"
+        case target
+        case topology
+        case agent
+    }
+
+    init(_ descriptor: TideyRuntimeResumeDescriptor) {
+        let content =
+            TideyRuntimeResumeDescriptorContentWire(descriptor)
+        descriptorVersion = content.descriptorVersion
+        revision = descriptor.revision
+        kind = content.kind
+        restorePolicy = content.restorePolicy
+        target = content.target
+        topology = content.topology
+        agent = content.agent
+    }
+
+    var content: TideyRuntimeResumeDescriptorContentWire {
+        TideyRuntimeResumeDescriptorContentWire(
+            descriptorVersion: descriptorVersion,
+            kind: kind,
+            restorePolicy: restorePolicy,
+            target: target,
+            topology: topology,
+            agent: agent
+        )
+    }
+}
+
 final class TideyRuntimeResumeDescriptorDictionaryCodec {
     func encode(
         _ descriptor: TideyRuntimeResumeDescriptor
     ) throws -> [String: Any] {
-        guard descriptor.descriptorVersion ==
-                TideyRuntimeResumeDescriptor.currentDescriptorVersion else {
-            throw TideyRuntimeResumeDescriptorCodecError
-                .unsupportedDescriptorVersion(descriptor.descriptorVersion)
-        }
-        guard descriptor.revision > 0 else {
-            throw TideyRuntimeResumeDescriptorCodecError
-                .malformedField("revision")
-        }
-        guard descriptor.kind == .ordinaryTmux,
-              descriptor.restorePolicy == .attachOnly,
-              descriptor.topology == nil,
-              descriptor.agent == nil else {
-            throw TideyRuntimeResumeDescriptorCodecError
-                .malformedField("ordinary_tmux")
-        }
-
-        var target: [String: Any] = [
-            "tmux_session": try requiredIdentity(
-                descriptor.target.tmuxSession,
-                field: "tmux_session"
-            )
-        ]
-        switch descriptor.target.socketEndpointKind {
-        case .path:
-            guard let socketPath = descriptor.target.socketPath,
-                  descriptor.target.socketName == nil else {
-                throw TideyRuntimeResumeDescriptorCodecError
-                    .malformedField("socket_path")
-            }
-            target["socket_endpoint_kind"] = "path"
-            target["socket_path"] = try requiredIdentity(
-                socketPath,
-                field: "socket_path"
-            )
-        case .name:
-            guard let socketName = descriptor.target.socketName,
-                  descriptor.target.socketPath == nil else {
-                throw TideyRuntimeResumeDescriptorCodecError
-                    .malformedField("socket_name")
-            }
-            target["socket_endpoint_kind"] = "name"
-            target["socket_name"] = try requiredIdentity(
-                socketName,
-                field: "socket_name"
-            )
-        case .defaultSocket:
-            guard descriptor.target.socketPath == nil,
-                  descriptor.target.socketName == nil else {
-                throw TideyRuntimeResumeDescriptorCodecError
-                    .malformedField("socket_endpoint_kind")
-            }
-            target["socket_endpoint_kind"] = "default"
-        }
-
-        return [
-            "descriptor_version": descriptor.descriptorVersion,
-            "revision": descriptor.revision,
-            "kind": "ordinary_tmux",
-            "restore_policy": "attach_only",
-            "target": target
-        ]
+        let wire = TideyRuntimeResumeDescriptorWire(descriptor)
+        _ = try wire.content.validatedModel(
+            revision: descriptor.revision
+        )
+        return try Self.dictionary(from: wire)
     }
 
     func decode(
         _ dictionary: [String: Any]
     ) throws -> TideyRuntimeResumeDescriptor {
-        guard let descriptorVersion =
-                dictionary["descriptor_version"] as? Int else {
-            throw TideyRuntimeResumeDescriptorCodecError
-                .malformedField("descriptor_version")
-        }
-        guard descriptorVersion ==
-                TideyRuntimeResumeDescriptor.currentDescriptorVersion else {
-            throw TideyRuntimeResumeDescriptorCodecError
-                .unsupportedDescriptorVersion(descriptorVersion)
-        }
-        guard let revision = dictionary["revision"] as? Int64,
-              revision > 0 else {
-            throw TideyRuntimeResumeDescriptorCodecError
-                .malformedField("revision")
-        }
-        guard dictionary["kind"] as? String == "ordinary_tmux",
-              dictionary["restore_policy"] as? String == "attach_only",
-              dictionary["topology"] == nil,
-              dictionary["agent"] == nil,
-              let targetDictionary = dictionary["target"]
-                as? [String: Any] else {
-            throw TideyRuntimeResumeDescriptorCodecError
-                .malformedField("ordinary_tmux")
-        }
-
-        let tmuxSession = try requiredIdentity(
-            targetDictionary["tmux_session"],
-            field: "tmux_session"
-        )
-        let target: TideyRuntimeResumeTarget
-        switch targetDictionary["socket_endpoint_kind"] as? String {
-        case "path":
-            guard targetDictionary["socket_name"] == nil else {
-                throw TideyRuntimeResumeDescriptorCodecError
-                    .malformedField("socket_name")
-            }
-            target = TideyRuntimeResumeTarget(
-                socketPath: try requiredIdentity(
-                    targetDictionary["socket_path"],
-                    field: "socket_path"
-                ),
-                tmuxSession: tmuxSession
+        let wire: TideyRuntimeResumeDescriptorWire =
+            try Self.decode(
+                TideyRuntimeResumeDescriptorWire.self,
+                from: dictionary
             )
-        case "name":
-            guard targetDictionary["socket_path"] == nil else {
-                throw TideyRuntimeResumeDescriptorCodecError
-                    .malformedField("socket_path")
-            }
-            target = TideyRuntimeResumeTarget(
-                socketName: try requiredIdentity(
-                    targetDictionary["socket_name"],
-                    field: "socket_name"
-                ),
-                tmuxSession: tmuxSession
-            )
-        case "default":
-            guard targetDictionary["socket_path"] == nil,
-                  targetDictionary["socket_name"] == nil else {
-                throw TideyRuntimeResumeDescriptorCodecError
-                    .malformedField("socket_endpoint_kind")
-            }
-            target = TideyRuntimeResumeTarget(
-                defaultSocketAndTmuxSession: tmuxSession
-            )
-        default:
-            throw TideyRuntimeResumeDescriptorCodecError
-                .malformedField("socket_endpoint_kind")
-        }
-
-        return TideyRuntimeResumeDescriptor(
-            descriptorVersion: descriptorVersion,
-            revision: revision,
-            kind: .ordinaryTmux,
-            restorePolicy: .attachOnly,
-            target: target,
-            topology: nil,
-            agent: nil
+        return try wire.content.validatedModel(
+            revision: wire.revision
         )
     }
 
-    private func requiredIdentity(
-        _ value: Any?,
-        field: String
-    ) throws -> String {
-        guard let identity = value as? String,
-              !identity.isEmpty else {
+    fileprivate static func dictionary<T: Encodable>(
+        from value: T
+    ) throws -> [String: Any] {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(value)
+        guard let dictionary = try JSONSerialization.jsonObject(
+            with: data
+        ) as? [String: Any] else {
             throw TideyRuntimeResumeDescriptorCodecError
-                .malformedField(field)
+                .malformedField("dictionary")
         }
-        return identity
+        return dictionary
+    }
+
+    fileprivate static func decode<T: Decodable>(
+        _ type: T.Type,
+        from dictionary: [String: Any]
+    ) throws -> T {
+        guard JSONSerialization.isValidJSONObject(dictionary) else {
+            throw TideyRuntimeResumeDescriptorCodecError
+                .malformedField("json")
+        }
+        let data = try JSONSerialization.data(
+            withJSONObject: dictionary,
+            options: [.sortedKeys]
+        )
+        do {
+            return try JSONDecoder().decode(type, from: data)
+        } catch {
+            throw TideyRuntimeResumeDescriptorCodecError
+                .malformedField("json")
+        }
+    }
+}
+
+private struct TideyRuntimeResumeDescriptorBindingWire: Codable {
+    let workspaceID: String
+    let panelID: String
+    let tmuxPaneID: String
+
+    enum CodingKeys: String, CodingKey {
+        case workspaceID = "workspace_id"
+        case panelID = "panel_id"
+        case tmuxPaneID = "tmux_pane_id"
+    }
+}
+
+private struct TideyRuntimeResumeDescriptorUpdateWire: Codable {
+    let binding: TideyRuntimeResumeDescriptorBindingWire
+    let descriptor: TideyRuntimeResumeDescriptorContentWire
+}
+
+@objc(TideyRuntimeResumeDescriptorUpdateResult)
+@objcMembers
+final class TideyRuntimeResumeDescriptorUpdateResult: NSObject {
+    let accepted: Bool
+    let changed: Bool
+    let descriptor: TideyRuntimeResumeDescriptor?
+    let errorCode: String?
+
+    fileprivate init(
+        accepted: Bool,
+        changed: Bool,
+        descriptor: TideyRuntimeResumeDescriptor?,
+        errorCode: String?
+    ) {
+        self.accepted = accepted
+        self.changed = changed
+        self.descriptor = descriptor
+        self.errorCode = errorCode
+    }
+}
+
+@objc(TideyRuntimeResumeDescriptorUpdateGate)
+@objcMembers
+final class TideyRuntimeResumeDescriptorUpdateGate: NSObject {
+    private struct Entry {
+        let descriptor: TideyRuntimeResumeDescriptor
+        let canonicalContent: Data
+    }
+
+    private let lock = NSLock()
+    private var entriesByPanelID: [String: Entry] = [:]
+
+    @objc(initWithInitialDescriptorsByPanelID:)
+    init(
+        initialDescriptorsByPanelID:
+            [String: TideyRuntimeResumeDescriptor]
+    ) {
+        super.init()
+        replaceDescriptorsByPanelID(initialDescriptorsByPanelID)
+    }
+
+    override convenience init() {
+        self.init(initialDescriptorsByPanelID: [:])
+    }
+
+    @objc(
+        acceptUpdatePayload:currentWorkspaceID:currentPanelID:
+    )
+    func acceptUpdatePayload(
+        _ payload: [String: Any],
+        currentWorkspaceID: String,
+        currentPanelID: String
+    ) -> TideyRuntimeResumeDescriptorUpdateResult {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let update: TideyRuntimeResumeDescriptorUpdateWire
+        do {
+            update = try TideyRuntimeResumeDescriptorDictionaryCodec
+                .decode(
+                    TideyRuntimeResumeDescriptorUpdateWire.self,
+                    from: payload
+                )
+        } catch {
+            return rejected(errorCode: "invalid_descriptor")
+        }
+        guard !update.binding.workspaceID.isEmpty,
+              !update.binding.panelID.isEmpty,
+              !update.binding.tmuxPaneID.isEmpty,
+              update.binding.workspaceID == currentWorkspaceID,
+              update.binding.panelID == currentPanelID else {
+            return rejected(errorCode: "stale_binding")
+        }
+
+        let canonicalContent: Data
+        do {
+            _ = try update.descriptor.validatedModel(revision: 1)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            canonicalContent = try encoder.encode(update.descriptor)
+        } catch {
+            return rejected(errorCode: "invalid_descriptor")
+        }
+
+        let existing = entriesByPanelID[currentPanelID]
+        if existing?.canonicalContent == canonicalContent {
+            return TideyRuntimeResumeDescriptorUpdateResult(
+                accepted: true,
+                changed: false,
+                descriptor: existing?.descriptor,
+                errorCode: nil
+            )
+        }
+        let currentRevision = existing?.descriptor.revision ?? 0
+        guard currentRevision < Int64.max else {
+            return rejected(errorCode: "revision_overflow")
+        }
+        do {
+            let descriptor = try update.descriptor.validatedModel(
+                revision: currentRevision + 1
+            )
+            entriesByPanelID[currentPanelID] = Entry(
+                descriptor: descriptor,
+                canonicalContent: canonicalContent
+            )
+            return TideyRuntimeResumeDescriptorUpdateResult(
+                accepted: true,
+                changed: true,
+                descriptor: descriptor,
+                errorCode: nil
+            )
+        } catch {
+            return rejected(errorCode: "invalid_descriptor")
+        }
+    }
+
+    @objc(descriptorForPanelID:)
+    func descriptor(
+        forPanelID panelID: String
+    ) -> TideyRuntimeResumeDescriptor? {
+        lock.lock()
+        defer { lock.unlock() }
+        return entriesByPanelID[panelID]?.descriptor
+    }
+
+    @objc(replaceDescriptorsByPanelID:)
+    func replaceDescriptorsByPanelID(
+        _ descriptorsByPanelID:
+            [String: TideyRuntimeResumeDescriptor]
+    ) {
+        var replacements: [String: Entry] = [:]
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        for (panelID, descriptor) in descriptorsByPanelID {
+            guard !panelID.isEmpty else {
+                continue
+            }
+            let content =
+                TideyRuntimeResumeDescriptorContentWire(descriptor)
+            guard (try? content.validatedModel(
+                revision: descriptor.revision
+            )) != nil,
+                  let data = try? encoder.encode(content) else {
+                continue
+            }
+            replacements[panelID] = Entry(
+                descriptor: descriptor,
+                canonicalContent: data
+            )
+        }
+        lock.lock()
+        entriesByPanelID = replacements
+        lock.unlock()
+    }
+
+    private func rejected(
+        errorCode: String
+    ) -> TideyRuntimeResumeDescriptorUpdateResult {
+        TideyRuntimeResumeDescriptorUpdateResult(
+            accepted: false,
+            changed: false,
+            descriptor: nil,
+            errorCode: errorCode
+        )
     }
 }

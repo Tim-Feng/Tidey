@@ -359,6 +359,7 @@ static NSString *TideySubmitLogSuffix(NSString *input) {
 - (void)tideyAssignWorkspaceIdentifierToPanel:(PTYTab *)panel workspace:(Workspace *)workspace;
 - (NSString *)tideyPanelIdentifierForPanel:(PTYTab *)panel;
 - (TideyWorkspaceRestorationPanelInput *)tideyWorkspaceRestorationInputForPanel:(PTYTab *)panel;
+- (TideyRuntimeResumeDescriptorUpdateGate *)tideyRuntimeResumeDescriptorUpdateGate;
 - (TideyWorkspaceRestorationCapturePlan *)tideyWorkspaceRestorationCapturePlan;
 - (NSArray<PTYTab *> *)tideyTabsForWorkspaceRestorationCapturePlan:(TideyWorkspaceRestorationCapturePlan *)plan;
 - (void)tideyPrepareWorkspaceRestorationFromArrangement:(NSDictionary *)arrangement;
@@ -621,6 +622,7 @@ static NSImage *gTideyApplicationIconBaseImage = nil;
     // Launch-scoped native restoration state. These are cleared after workspace hydration.
     TideyWorkspaceRestorationState *_tideyPendingWorkspaceRestorationState;
     NSMutableDictionary<NSString *, NSString *> *_tideyRestoredPanelIDRemap;
+    TideyRuntimeResumeDescriptorUpdateGate *_tideyRuntimeResumeDescriptorUpdateGate;
 }
 
 @synthesize scope = _scope;
@@ -1273,6 +1275,7 @@ ITERM_WEAKLY_REFERENCEABLE
     [_workspaces release];
     [_tideyPendingWorkspaceRestorationState release];
     [_tideyRestoredPanelIDRemap release];
+    [_tideyRuntimeResumeDescriptorUpdateGate release];
     [_tideyWorkspaceTitleOverrides release];
     [_tideyTmuxWindowBackfillKeysInFlight release];
     [_tideyLastBroadcastWorkspaceSelectionIdentifier release];
@@ -2241,6 +2244,58 @@ ITERM_WEAKLY_REFERENCEABLE
         @"selected_panel_id": [self tideyPanelIdentifierForPanel:workspace.selectedPanel] ?: @"",
         @"panels": panels,
     };
+}
+
+- (NSDictionary *)tideyAcceptRuntimeResumeDescriptorUpdatePayload:(NSDictionary *)payload {
+    NSAssert([NSThread isMainThread], @"Runtime descriptor updates mutate native window state.");
+    if (![payload isKindOfClass:[NSDictionary class]]) {
+        return @{
+            @"accepted": @NO,
+            @"changed": @NO,
+            @"error_code": @"invalid_descriptor",
+        };
+    }
+    NSDictionary *binding =
+        [payload[@"binding"] isKindOfClass:[NSDictionary class]]
+            ? payload[@"binding"]
+            : nil;
+    NSString *panelID =
+        [binding[@"panel_id"] isKindOfClass:[NSString class]]
+            ? binding[@"panel_id"]
+            : nil;
+    Workspace *workspace = nil;
+    PTYTab *panel =
+        [self tideyPanelWithIdentifier:panelID
+                             workspace:&workspace
+                        workspaceIndex:nil
+                            panelIndex:nil];
+    if (!panel || !workspace) {
+        return @{
+            @"accepted": @NO,
+            @"changed": @NO,
+            @"error_code": @"stale_binding",
+        };
+    }
+    TideyRuntimeResumeDescriptorUpdateResult *result =
+        [[self tideyRuntimeResumeDescriptorUpdateGate]
+            acceptUpdatePayload:payload
+            currentWorkspaceID:[self tideyWorkspaceIdentifierForWorkspace:workspace] ?: @""
+            currentPanelID:[self tideyPanelIdentifierForPanel:panel] ?: @""];
+    if (result.changed) {
+        [TideyRestorableStateDirtyTracker.shared markDirty];
+    }
+    NSMutableDictionary *response =
+        [NSMutableDictionary dictionaryWithDictionary:@{
+            @"accepted": @(result.accepted),
+            @"changed": @(result.changed),
+        }];
+    if (result.descriptor) {
+        response[@"revision"] = @(result.descriptor.revision);
+    }
+    if (result.errorCode.length > 0) {
+        response[@"error_code"] = result.errorCode;
+    }
+    return response;
 }
 
 - (PTYSession *)tideySelectedSessionForWorkspaceIdentifier:(NSString *)workspaceIdentifier {
@@ -6640,8 +6695,10 @@ ITERM_WEAKLY_REFERENCEABLE
 - (TideyWorkspaceRestorationPanelInput *)tideyWorkspaceRestorationInputForPanel:(PTYTab *)panel {
     NSDictionary<NSString *, NSString *> *ordinaryTmuxMetadata =
         panel.activeSession.tideyOrdinaryTmuxAttachMetadata;
-    TideyRuntimeResumeDescriptor *runtimeResumeDescriptor = nil;
-    if (ordinaryTmuxMetadata) {
+    TideyRuntimeResumeDescriptor *runtimeResumeDescriptor =
+        [[self tideyRuntimeResumeDescriptorUpdateGate]
+            descriptorForPanelID:panel.stringUniqueIdentifier ?: @""];
+    if (!runtimeResumeDescriptor && ordinaryTmuxMetadata) {
         TideyRuntimeResumeDescriptorFactory *factory =
             [[[TideyRuntimeResumeDescriptorFactory alloc] init] autorelease];
         runtimeResumeDescriptor =
@@ -6652,6 +6709,15 @@ ITERM_WEAKLY_REFERENCEABLE
         hasSessions:(panel.sessions.count > 0)
         isNativeTmux:panel.isTmuxTab
         runtimeResumeDescriptor:runtimeResumeDescriptor] autorelease];
+}
+
+- (TideyRuntimeResumeDescriptorUpdateGate *)tideyRuntimeResumeDescriptorUpdateGate {
+    if (!_tideyRuntimeResumeDescriptorUpdateGate) {
+        _tideyRuntimeResumeDescriptorUpdateGate =
+            [[TideyRuntimeResumeDescriptorUpdateGate alloc]
+                initWithInitialDescriptorsByPanelID:@{}];
+    }
+    return _tideyRuntimeResumeDescriptorUpdateGate;
 }
 
 - (TideyWorkspaceRestorationCapturePlan *)tideyWorkspaceRestorationCapturePlan {
@@ -6754,6 +6820,8 @@ ITERM_WEAKLY_REFERENCEABLE
         [planner hydrationStateWithSavedState:savedState
                            availablePanelIDs:panelsByID.allKeys
                                 panelIDRemap:panelIDRemap ?: @{}];
+    [[self tideyRuntimeResumeDescriptorUpdateGate]
+        replaceDescriptorsByPanelID:hydratedState.runtimeDescriptorsByPanelID];
 
     NSMutableArray<Workspace *> *restoredWorkspaces = [NSMutableArray array];
     for (TideyWorkspaceState *workspaceState in hydratedState.workspaces) {
