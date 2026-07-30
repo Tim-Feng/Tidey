@@ -24,7 +24,7 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
             activePaneIndex: 2
         )
         let target = TideyRuntimeResumeTarget(
-            tmuxSocket: "tidey",
+            socketName: "tidey",
             tmuxSession: "tidey-codex"
         )
         let agent = TideyRuntimeAgentResumeSpecification(
@@ -50,7 +50,9 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
         XCTAssertTrue(descriptor.target === target)
         XCTAssertTrue(descriptor.topology === topology)
         XCTAssertTrue(descriptor.agent === agent)
-        XCTAssertEqual(descriptor.target.tmuxSocket, "tidey")
+        XCTAssertEqual(descriptor.target.socketEndpointKind, .name)
+        XCTAssertNil(descriptor.target.socketPath)
+        XCTAssertEqual(descriptor.target.socketName, "tidey")
         XCTAssertEqual(descriptor.target.tmuxSession, "tidey-codex")
         XCTAssertEqual(descriptor.topology?.activeWindowIndex, 1)
         XCTAssertEqual(descriptor.topology?.activePaneIndex, 2)
@@ -79,6 +81,29 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
             ].map(\.rawValue),
             [0, 1]
         )
+        XCTAssertEqual(
+            [
+                TideyRuntimeTmuxSocketEndpointKind.path,
+                .name,
+                .defaultSocket
+            ].map(\.rawValue),
+            [0, 1, 2]
+        )
+
+        let pathTarget = TideyRuntimeResumeTarget(
+            socketPath: "/tmp/tidey.sock",
+            tmuxSession: "path-session"
+        )
+        XCTAssertEqual(pathTarget.socketEndpointKind, .path)
+        XCTAssertEqual(pathTarget.socketPath, "/tmp/tidey.sock")
+        XCTAssertNil(pathTarget.socketName)
+
+        let defaultTarget = TideyRuntimeResumeTarget(
+            defaultSocketAndTmuxSession: "default-session"
+        )
+        XCTAssertEqual(defaultTarget.socketEndpointKind, .defaultSocket)
+        XCTAssertNil(defaultTarget.socketPath)
+        XCTAssertNil(defaultTarget.socketName)
 
         let outcomeKeyPath:
             ReferenceWritableKeyPath<

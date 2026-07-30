@@ -20,6 +20,13 @@ enum TideyRuntimeAgentVendor: Int {
     case codex
 }
 
+@objc(TideyRuntimeTmuxSocketEndpointKind)
+enum TideyRuntimeTmuxSocketEndpointKind: Int {
+    case path
+    case name
+    case defaultSocket
+}
+
 @objc(TideyRuntimeLaunchSpecification)
 @objcMembers
 final class TideyRuntimeLaunchSpecification: NSObject {
@@ -95,14 +102,36 @@ final class TideyRuntimeTmuxTopology: NSObject {
 @objc(TideyRuntimeResumeTarget)
 @objcMembers
 final class TideyRuntimeResumeTarget: NSObject {
-    let tmuxSocket: String?
+    let socketEndpointKind: TideyRuntimeTmuxSocketEndpointKind
+    let socketPath: String?
+    let socketName: String?
     let tmuxSession: String
 
     init(
-        tmuxSocket: String?,
+        socketPath: String,
         tmuxSession: String
     ) {
-        self.tmuxSocket = tmuxSocket
+        socketEndpointKind = .path
+        self.socketPath = socketPath
+        socketName = nil
+        self.tmuxSession = tmuxSession
+    }
+
+    init(
+        socketName: String,
+        tmuxSession: String
+    ) {
+        socketEndpointKind = .name
+        socketPath = nil
+        self.socketName = socketName
+        self.tmuxSession = tmuxSession
+    }
+
+    @objc(initWithDefaultSocketAndTmuxSession:)
+    init(defaultSocketAndTmuxSession tmuxSession: String) {
+        socketEndpointKind = .defaultSocket
+        socketPath = nil
+        socketName = nil
         self.tmuxSession = tmuxSession
     }
 }
