@@ -129,10 +129,30 @@ final class TideyRuntimeRehydrationReducer:
 @objc(TideyRuntimeRehydrationStateMachine)
 @objcMembers
 final class TideyRuntimeRehydrationStateMachine: NSObject {
+    private struct Key: Hashable {
+        let panelID: String
+        let descriptorRevision: Int64
+    }
+
+    private final class Entry {
+        let descriptor: TideyRuntimeResumeDescriptor
+        var phase: TideyRuntimeRehydrationPhase
+        var step = 0
+
+        init(
+            descriptor: TideyRuntimeResumeDescriptor,
+            phase: TideyRuntimeRehydrationPhase
+        ) {
+            self.descriptor = descriptor
+            self.phase = phase
+        }
+    }
+
     private let reducer: TideyRuntimeRehydrationReducing
     private let targetProbe: TideyRuntimeTargetProbing
     private let topologyCreator: TideyRuntimeTopologyCreating
     private let panelLauncher: TideyRuntimePanelLaunching
+    private var entries: [Key: Entry] = [:]
 
     init(
         reducer: TideyRuntimeRehydrationReducing,
@@ -152,7 +172,173 @@ final class TideyRuntimeRehydrationStateMachine: NSObject {
         descriptor: TideyRuntimeResumeDescriptor,
         nativeReattachOutcome: TideyNativeServerReattachOutcome
     ) {
-        // Behavioral dispatch and exactly-once bookkeeping land in the next
-        // TDD row. This row only establishes the injectable boundary.
+        it_assert(Thread.isMainThread)
+        let key = Key(
+            panelID: panelID,
+            descriptorRevision: descriptor.revision
+        )
+        guard entries[key] == nil else {
+            return
+        }
+
+        let entry = Entry(
+            descriptor: descriptor,
+            phase: .awaitingNativeRestore
+        )
+        entries[key] = entry
+
+        let event: TideyRuntimeRehydrationEvent
+        switch nativeReattachOutcome {
+        case .succeeded:
+            event = .nativeReattachSucceeded
+        case .failed:
+            event = .nativeReattachFailed
+        case .notAttempted:
+            return
+        @unknown default:
+            return
+        }
+        advance(
+            key: key,
+            panelID: panelID,
+            event: event,
+            expectedStep: entry.step
+        )
+    }
+
+    private func advance(
+        key: Key,
+        panelID: String,
+        event: TideyRuntimeRehydrationEvent,
+        expectedStep: Int
+    ) {
+        it_assert(Thread.isMainThread)
+        guard let entry = entries[key],
+              entry.step == expectedStep else {
+            return
+        }
+
+        let transition = reducer.transition(
+            from: entry.phase,
+            event: event,
+            descriptor: entry.descriptor
+        )
+        entry.phase = transition.nextPhase
+        entry.step += 1
+        perform(
+            transition.effect,
+            key: key,
+            panelID: panelID,
+            descriptor: entry.descriptor,
+            expectedStep: entry.step
+        )
+    }
+
+    private func perform(
+        _ effect: TideyRuntimeRehydrationEffect,
+        key: Key,
+        panelID: String,
+        descriptor: TideyRuntimeResumeDescriptor,
+        expectedStep: Int
+    ) {
+        switch effect {
+        case .none:
+            return
+        case .probeTarget:
+            targetProbe.probeTarget(
+                for: descriptor
+            ) { [weak self] result in
+                let event: TideyRuntimeRehydrationEvent
+                switch result {
+                case .existing:
+                    event = .targetFound
+                case .missing:
+                    event = .targetMissing
+                case .failed:
+                    event = .targetProbeFailed
+                @unknown default:
+                    event = .targetProbeFailed
+                }
+                self?.receive(
+                    key: key,
+                    panelID: panelID,
+                    event: event,
+                    expectedStep: expectedStep
+                )
+            }
+        case .attachExisting:
+            panelLauncher.attachPanel(
+                panelID,
+                to: descriptor
+            ) { [weak self] succeeded in
+                self?.receive(
+                    key: key,
+                    panelID: panelID,
+                    event: succeeded
+                        ? .panelAttached
+                        : .operationFailed,
+                    expectedStep: expectedStep
+                )
+            }
+        case .createTopology:
+            topologyCreator.createTopology(
+                for: descriptor
+            ) { [weak self] succeeded in
+                self?.receive(
+                    key: key,
+                    panelID: panelID,
+                    event: succeeded
+                        ? .topologyCreated
+                        : .operationFailed,
+                    expectedStep: expectedStep
+                )
+            }
+        case .resumeAgent:
+            panelLauncher.resumeAgent(
+                in: panelID,
+                with: descriptor
+            ) { [weak self] succeeded in
+                self?.receive(
+                    key: key,
+                    panelID: panelID,
+                    event: succeeded
+                        ? .agentResumed
+                        : .operationFailed,
+                    expectedStep: expectedStep
+                )
+            }
+        case .markUnavailable:
+            panelLauncher.markPanelUnavailable(
+                panelID,
+                descriptor: descriptor
+            )
+        @unknown default:
+            return
+        }
+    }
+
+    private func receive(
+        key: Key,
+        panelID: String,
+        event: TideyRuntimeRehydrationEvent,
+        expectedStep: Int
+    ) {
+        if Thread.isMainThread {
+            advance(
+                key: key,
+                panelID: panelID,
+                event: event,
+                expectedStep: expectedStep
+            )
+            return
+        }
+        DispatchQueue.main.async { [weak self] in
+            self?.advance(
+                key: key,
+                panelID: panelID,
+                event: event,
+                expectedStep: expectedStep
+            )
+        }
     }
 }
