@@ -110,6 +110,12 @@ typedef NS_ENUM(NSInteger, SplitSelectionMode) {
     kSplitSelectionModeSelect
 };
 
+typedef NS_ENUM(NSInteger, TideyNativeServerReattachOutcome) {
+    TideyNativeServerReattachOutcomeNotAttempted = 0,
+    TideyNativeServerReattachOutcomeSucceeded,
+    TideyNativeServerReattachOutcomeFailed,
+};
+
 typedef enum {
     TMUX_NONE,
     TMUX_GATEWAY,  // Receiving tmux protocol messages
@@ -458,6 +464,7 @@ backgroundColor:(NSColor *)backgroundColor;
 // Metadata for an ordinary tmux attach running inside this session. This is
 // nil for Tidey-managed tmux control-mode sessions and non-tmux jobs.
 @property(nonatomic, readonly, copy) NSDictionary<NSString *, NSString *> *tideyOrdinaryTmuxAttachMetadata;
+@property(nonatomic) TideyNativeServerReattachOutcome tideyNativeServerReattachOutcome;
 
 @property(nonatomic, assign) iTermBackgroundImageMode backgroundImageMode;
 

@@ -600,6 +600,7 @@ typedef NS_ENUM(NSUInteger, PTYSessionTurdType) {
     // May be stale, but allows us to update titles fast after an OSC 0/1/2
     iTermProcessInfo *_lastProcessInfo;
     NSDictionary<NSString *, NSString *> *_tideyOrdinaryTmuxAttachMetadata;
+    TideyNativeServerReattachOutcome _tideyNativeServerReattachOutcome;
     iTermLoggingHelper *_logging;
     iTermNaggingController *_naggingController;
     BOOL _tmuxTTLHasThresholds;
@@ -6241,6 +6242,15 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
 
 - (NSDictionary<NSString *,NSString *> *)tideyOrdinaryTmuxAttachMetadata {
     return _tideyOrdinaryTmuxAttachMetadata;
+}
+
+- (TideyNativeServerReattachOutcome)tideyNativeServerReattachOutcome {
+    return _tideyNativeServerReattachOutcome;
+}
+
+- (void)setTideyNativeServerReattachOutcome:
+    (TideyNativeServerReattachOutcome)outcome {
+    _tideyNativeServerReattachOutcome = outcome;
 }
 
 - (void)tideyUpdateOrdinaryTmuxAttachMetadataWithProcessInfo:(iTermProcessInfo *)processInfo {
