@@ -44,6 +44,7 @@ enum {
     // Open saved window arrangement at startup
     IBOutlet NSPopUpButton *_openWindowsAtStartup;
     IBOutlet NSTextField *_openWindowsAtStartupLabel;
+    IBOutlet NSButton *_restorePreviousWorkspaces;
     IBOutlet NSButton *_alwaysOpenWindowAtStartup;
     IBOutlet NSTextField *_alwaysOpenLegend;
     IBOutlet NSButton *_restoreWindowsToSameSpaces;
@@ -328,6 +329,11 @@ enum {
     [self updateNonDefaultIndicatorVisibleForInfo:info];
 
     [_openDefaultWindowArrangementItem setEnabled:[WindowArrangements count] > 0];
+
+    [self defineControl:_restorePreviousWorkspaces
+                    key:kPreferenceKeyTideyRestorePreviousWorkspaces
+            relatedView:nil
+                   type:kPreferenceInfoTypeCheckbox];
 
     [self defineControl:_restoreWindowsToSameSpaces
                     key:kPreferenceKeyRestoreWindowsToSameSpaces
