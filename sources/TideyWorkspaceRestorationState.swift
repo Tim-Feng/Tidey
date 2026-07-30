@@ -378,7 +378,8 @@ final class TideyWorkspaceRestorationGraphCodec: NSObject {
         with encoder: iTermGraphEncoder
     ) -> Bool {
         guard let dictionary = try? TideyWorkspaceRestorationStateDictionaryCodec().encode(state) else {
-            return false
+            // Workspace metadata is ancillary to the native window graph.
+            return true
         }
         return encoder.encodeChild(
             withKey: Self.recordKey,

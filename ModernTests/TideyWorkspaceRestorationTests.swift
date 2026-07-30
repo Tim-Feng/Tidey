@@ -104,6 +104,73 @@ final class TideyWorkspaceRestorationTests: XCTestCase {
         XCTAssertEqual(hydrated.selectedWorkspaceID, reviewWorkspace.workspaceID)
     }
 
+    func testInvalidWorkspaceMetadataDoesNotRejectNativeWindowGraph() throws {
+        let encoder = iTermGraphEncoder(
+            key: "window",
+            identifier: "window-1",
+            generation: iTermGenerationAlwaysEncode
+        )
+        let adapter = iTermGraphEncoderAdapter(graphEncoder: encoder)
+        adapter.encodeArray(
+            withKey: TERMINAL_ARRANGEMENT_TABS,
+            identifiers: ["panel-native"],
+            generation: iTermGenerationAlwaysEncode
+        ) { subencoder, _, identifier, _ in
+            subencoder.merge([
+                "Tab GUID": identifier,
+                "Native Payload": "native-\(identifier)"
+            ])
+            return true
+        }
+        let invalidState = TideyWorkspaceRestorationState(
+            schemaVersion: TideyWorkspaceRestorationState.currentSchemaVersion,
+            selectedWorkspaceID: nil,
+            workspaces: [
+                TideyWorkspaceState(
+                    workspaceID: "workspace-first",
+                    title: nil,
+                    pinned: false,
+                    panelIDs: ["panel-native"],
+                    selectedPanelID: "panel-native"
+                ),
+                TideyWorkspaceState(
+                    workspaceID: "workspace-second",
+                    title: nil,
+                    pinned: false,
+                    panelIDs: ["panel-native"],
+                    selectedPanelID: "panel-native"
+                )
+            ]
+        )
+
+        XCTAssertTrue(
+            TideyWorkspaceRestorationGraphCodec().encode(
+                state: invalidState,
+                with: encoder
+            )
+        )
+        let record = try XCTUnwrap(encoder.record)
+        XCTAssertFalse(
+            record.graphRecords.contains {
+                $0.key == TideyWorkspaceRestorationGraphCodec.recordKey
+            }
+        )
+        let windowArrangement = try XCTUnwrap(
+            record.propertyListValue as? [String: Any]
+        )
+        let nativeTabs = try XCTUnwrap(
+            windowArrangement[TERMINAL_ARRANGEMENT_TABS] as? [[String: Any]]
+        )
+        XCTAssertEqual(
+            nativeTabs.compactMap { $0["Tab GUID"] as? String },
+            ["panel-native"]
+        )
+        XCTAssertEqual(
+            nativeTabs.compactMap { $0["Native Payload"] as? String },
+            ["native-panel-native"]
+        )
+    }
+
     func testModelSeamCompiles() {
         let workspace = TideyWorkspaceState(
             workspaceID: "workspace-1",
