@@ -358,6 +358,9 @@ static NSString *TideySubmitLogSuffix(NSString *input) {
 - (NSString *)tideyWorkspaceIdentifierForWorkspace:(Workspace *)workspace;
 - (void)tideyAssignWorkspaceIdentifierToPanel:(PTYTab *)panel workspace:(Workspace *)workspace;
 - (NSString *)tideyPanelIdentifierForPanel:(PTYTab *)panel;
+- (TideyWorkspaceRestorationPanelInput *)tideyWorkspaceRestorationInputForPanel:(PTYTab *)panel;
+- (TideyWorkspaceRestorationCapturePlan *)tideyWorkspaceRestorationCapturePlan;
+- (NSArray<PTYTab *> *)tideyTabsForWorkspaceRestorationCapturePlan:(TideyWorkspaceRestorationCapturePlan *)plan;
 - (void)tideySyncTmuxPaneIdentityOptionsForPanel:(PTYTab *)panel workspace:(Workspace *)workspace;
 - (void)tideyTabDidBecomeTmuxBacked:(PTYTab *)panel;
 - (void)tideyTabDidUpdateOrdinaryTmuxAttachMetadata:(PTYTab *)panel;
@@ -6610,6 +6613,73 @@ ITERM_WEAKLY_REFERENCEABLE
         }
         return YES;
     }];
+}
+
+- (TideyWorkspaceRestorationPanelInput *)tideyWorkspaceRestorationInputForPanel:(PTYTab *)panel {
+    return [[[TideyWorkspaceRestorationPanelInput alloc]
+        initWithPanelID:panel.stringUniqueIdentifier ?: @""
+        hasSessions:(panel.sessions.count > 0)
+        isNativeTmux:panel.isTmuxTab] autorelease];
+}
+
+- (TideyWorkspaceRestorationCapturePlan *)tideyWorkspaceRestorationCapturePlan {
+    NSMutableArray<TideyWorkspaceRestorationWorkspaceInput *> *workspaceInputs =
+        [NSMutableArray arrayWithCapacity:self.workspaces.count];
+    for (Workspace *workspace in self.workspaces) {
+        NSMutableArray<TideyWorkspaceRestorationPanelInput *> *panelInputs =
+            [NSMutableArray arrayWithCapacity:workspace.panels.count];
+        for (PTYTab *panel in workspace.panels) {
+            [panelInputs addObject:[self tideyWorkspaceRestorationInputForPanel:panel]];
+        }
+        TideyWorkspaceRestorationWorkspaceInput *workspaceInput =
+            [[[TideyWorkspaceRestorationWorkspaceInput alloc]
+                initWithWorkspaceID:workspace.identifier.UUIDString
+                title:workspace.customTitle
+                pinned:workspace.pinned
+                panels:panelInputs
+                selectedPanelID:workspace.selectedPanel.stringUniqueIdentifier] autorelease];
+        [workspaceInputs addObject:workspaceInput];
+    }
+
+    NSMutableArray<TideyWorkspaceRestorationPanelInput *> *visiblePanelInputs =
+        [NSMutableArray arrayWithCapacity:self.tabs.count];
+    for (PTYTab *panel in self.tabs) {
+        [visiblePanelInputs addObject:[self tideyWorkspaceRestorationInputForPanel:panel]];
+    }
+
+    TideyWorkspaceRestorationPlanner *planner =
+        [[[TideyWorkspaceRestorationPlanner alloc] init] autorelease];
+    return [planner capturePlanWithWorkspaces:workspaceInputs
+                               visiblePanels:visiblePanelInputs
+                         selectedWorkspaceID:self.selectedWorkspace.identifier.UUIDString];
+}
+
+- (NSArray<PTYTab *> *)tideyTabsForWorkspaceRestorationCapturePlan:(TideyWorkspaceRestorationCapturePlan *)plan {
+    NSMutableDictionary<NSString *, PTYTab *> *panelsByID = [NSMutableDictionary dictionary];
+    if (self.workspaces.count > 0) {
+        for (Workspace *workspace in self.workspaces) {
+            for (PTYTab *panel in workspace.panels) {
+                if (panel.stringUniqueIdentifier.length > 0) {
+                    panelsByID[panel.stringUniqueIdentifier] = panel;
+                }
+            }
+        }
+    } else {
+        for (PTYTab *panel in self.tabs) {
+            if (panel.stringUniqueIdentifier.length > 0) {
+                panelsByID[panel.stringUniqueIdentifier] = panel;
+            }
+        }
+    }
+
+    NSMutableArray<PTYTab *> *tabs = [NSMutableArray arrayWithCapacity:plan.flattenedNativePanelIDs.count];
+    for (NSString *panelID in plan.flattenedNativePanelIDs) {
+        PTYTab *panel = panelsByID[panelID];
+        if (panel) {
+            [tabs addObject:panel];
+        }
+    }
+    return tabs;
 }
 
 - (NSDictionary *)arrangementExcludingTmuxTabs:(BOOL)excludeTmux
@@ -16903,7 +16973,8 @@ backgroundColor:(NSColor *)backgroundColor {
     if (![self shouldSaveRestorableStateLegacy:NO] || !_wellFormed) {
         return NO;
     }
-    NSArray<PTYTab *> *tabs = [self tabsToEncodeExcludingTmux:YES];
+    TideyWorkspaceRestorationCapturePlan *capturePlan = [self tideyWorkspaceRestorationCapturePlan];
+    NSArray<PTYTab *> *tabs = [self tideyTabsForWorkspaceRestorationCapturePlan:capturePlan];
     const BOOL includeContents = [iTermAdvancedSettingsModel restoreWindowContents];
     iTermGraphEncoderAdapter *adapter = [[[iTermGraphEncoderAdapter alloc] initWithGraphEncoder:encoder] autorelease];
     const BOOL commit = [self populateArrangementWithTabs:tabs

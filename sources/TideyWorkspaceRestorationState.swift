@@ -108,6 +108,83 @@ protocol TideyWorkspaceRestorationPlanning: NSObjectProtocol {
     ) -> TideyWorkspaceRestorationState
 }
 
+@objc(TideyWorkspaceRestorationPlanner)
+@objcMembers
+final class TideyWorkspaceRestorationPlanner: NSObject, TideyWorkspaceRestorationPlanning {
+    func capturePlan(
+        workspaces: [TideyWorkspaceRestorationWorkspaceInput],
+        visiblePanels: [TideyWorkspaceRestorationPanelInput],
+        selectedWorkspaceID: String?
+    ) -> TideyWorkspaceRestorationCapturePlan {
+        guard !workspaces.isEmpty else {
+            return TideyWorkspaceRestorationCapturePlan(
+                state: TideyWorkspaceRestorationState(
+                    schemaVersion: TideyWorkspaceRestorationState.currentSchemaVersion,
+                    selectedWorkspaceID: nil,
+                    workspaces: []
+                ),
+                flattenedNativePanelIDs: restorablePanelIDs(in: visiblePanels)
+            )
+        }
+
+        var flattenedPanelIDs = [String]()
+        var workspaceStates = [TideyWorkspaceState]()
+        for workspace in workspaces {
+            let panelIDs = restorablePanelIDs(in: workspace.panels)
+            guard !panelIDs.isEmpty else {
+                continue
+            }
+            flattenedPanelIDs.append(contentsOf: panelIDs)
+            let selectedPanelID = workspace.selectedPanelID.flatMap {
+                panelIDs.contains($0) ? $0 : nil
+            }
+            workspaceStates.append(
+                TideyWorkspaceState(
+                    workspaceID: workspace.workspaceID,
+                    title: workspace.title,
+                    pinned: workspace.pinned,
+                    panelIDs: panelIDs,
+                    selectedPanelID: selectedPanelID
+                )
+            )
+        }
+
+        let capturedWorkspaceIDs = Set(workspaceStates.map(\.workspaceID))
+        let capturedSelectedWorkspaceID = selectedWorkspaceID.flatMap {
+            capturedWorkspaceIDs.contains($0) ? $0 : nil
+        }
+        return TideyWorkspaceRestorationCapturePlan(
+            state: TideyWorkspaceRestorationState(
+                schemaVersion: TideyWorkspaceRestorationState.currentSchemaVersion,
+                selectedWorkspaceID: capturedSelectedWorkspaceID,
+                workspaces: workspaceStates
+            ),
+            flattenedNativePanelIDs: flattenedPanelIDs
+        )
+    }
+
+    func hydrationState(
+        savedState: TideyWorkspaceRestorationState,
+        availablePanelIDs: [String],
+        panelIDRemap: [String: String]
+    ) -> TideyWorkspaceRestorationState {
+        savedState
+    }
+
+    private func restorablePanelIDs(
+        in panels: [TideyWorkspaceRestorationPanelInput]
+    ) -> [String] {
+        panels.compactMap { panel in
+            guard panel.hasSessions,
+                  !panel.isNativeTmux,
+                  !panel.panelID.isEmpty else {
+                return nil
+            }
+            return panel.panelID
+        }
+    }
+}
+
 protocol TideyWorkspaceRestorationStateDictionaryCoding {
     func encode(_ state: TideyWorkspaceRestorationState) throws -> [String: Any]
     func decode(_ dictionary: [String: Any]) throws -> TideyWorkspaceRestorationState

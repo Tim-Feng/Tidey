@@ -56,6 +56,63 @@ final class TideyWorkspaceRestorationTests: XCTestCase {
         XCTAssertTrue(hydrationState === state)
     }
 
+    func testFlattenedNativePanelIDsPreserveWorkspaceAndPanelOrder() {
+        let planner = TideyWorkspaceRestorationPlanner()
+        let editor = panelInput("panel-editor")
+        let tests = panelInput("panel-tests")
+        let nativeTmux = panelInput("panel-native-tmux", isNativeTmux: true)
+        let empty = panelInput("panel-empty", hasSessions: false)
+        let review = panelInput("panel-review")
+        let workspaces = [
+            TideyWorkspaceRestorationWorkspaceInput(
+                workspaceID: "workspace-build",
+                title: "Build",
+                pinned: true,
+                panels: [editor, nativeTmux, tests, empty],
+                selectedPanelID: tests.panelID
+            ),
+            TideyWorkspaceRestorationWorkspaceInput(
+                workspaceID: "workspace-review",
+                title: nil,
+                pinned: false,
+                panels: [review],
+                selectedPanelID: review.panelID
+            )
+        ]
+
+        let plan = planner.capturePlan(
+            workspaces: workspaces,
+            visiblePanels: [editor, tests],
+            selectedWorkspaceID: "workspace-review"
+        )
+        let fallback = planner.capturePlan(
+            workspaces: [],
+            visiblePanels: [nativeTmux, empty, review],
+            selectedWorkspaceID: nil
+        )
+
+        XCTAssertEqual(plan.flattenedNativePanelIDs, [
+            "panel-editor",
+            "panel-tests",
+            "panel-review"
+        ])
+        XCTAssertEqual(plan.state.selectedWorkspaceID, "workspace-review")
+        XCTAssertEqual(plan.state.workspaces.map(\.workspaceID), [
+            "workspace-build",
+            "workspace-review"
+        ])
+        XCTAssertEqual(plan.state.workspaces.map(\.panelIDs), [
+            ["panel-editor", "panel-tests"],
+            ["panel-review"]
+        ])
+        XCTAssertEqual(plan.state.workspaces.map(\.selectedPanelID), [
+            "panel-tests",
+            "panel-review"
+        ])
+        XCTAssertEqual(fallback.flattenedNativePanelIDs, ["panel-review"])
+        XCTAssertTrue(fallback.state.workspaces.isEmpty)
+    }
+
     func testWorkspaceStateRoundTripsStableIdentitiesAndSelections() throws {
         let codec = TideyWorkspaceRestorationStateDictionaryCodec()
         let build = TideyWorkspaceState(
@@ -157,6 +214,18 @@ final class TideyWorkspaceRestorationTests: XCTestCase {
             "pinned": false,
             "panel_ids": panelIDs
         ]
+    }
+
+    private func panelInput(
+        _ panelID: String,
+        hasSessions: Bool = true,
+        isNativeTmux: Bool = false
+    ) -> TideyWorkspaceRestorationPanelInput {
+        TideyWorkspaceRestorationPanelInput(
+            panelID: panelID,
+            hasSessions: hasSessions,
+            isNativeTmux: isNativeTmux
+        )
     }
 }
 
