@@ -194,10 +194,100 @@ protocol RuntimeResumeAgentRegistryReading: Sendable {
         throws -> [RuntimeResumeAgentRegistryRecord]
 }
 
+final class AgentSessionRegistryRuntimeResumeReader:
+    RuntimeResumeAgentRegistryReading,
+    @unchecked Sendable {
+    private let monitor: AgentSessionRegistryMonitor
+
+    init(monitor: AgentSessionRegistryMonitor) {
+        self.monitor = monitor
+    }
+
+    func readAgentRegistryRecords()
+        throws -> [RuntimeResumeAgentRegistryRecord] {
+        monitor.persistedRuntimeResumeAgentRecords()
+    }
+}
+
 protocol RuntimeResumeTmuxTopologyReading: Sendable {
     func topologySnapshot(
         for binding: RuntimeResumeDescriptorBinding
     ) throws -> RuntimeResumeTmuxTopologySnapshot?
+}
+
+final class OrdinaryTmuxRuntimeResumeTopologyReader:
+    RuntimeResumeTmuxTopologyReading,
+    @unchecked Sendable {
+    private let registry: OrdinaryTmuxPanelRegistry
+
+    init(registry: OrdinaryTmuxPanelRegistry) {
+        self.registry = registry
+    }
+
+    func topologySnapshot(
+        for binding: RuntimeResumeDescriptorBinding
+    ) throws -> RuntimeResumeTmuxTopologySnapshot? {
+        guard let activeRoute =
+                registry.route(forPanelID: binding.panelID),
+              activeRoute.workspaceID == binding.workspaceID,
+              activeRoute.activePaneID == binding.tmuxPaneID else {
+            return nil
+        }
+        let routes = registry.routes(
+            workspaceID: binding.workspaceID,
+            socket: activeRoute.socket,
+            sessionID: activeRoute.sessionID
+        )
+        guard routes.isEmpty == false else {
+            return nil
+        }
+        let windows = routes.map {
+            RuntimeResumeTmuxWindow(
+                index: $0.windowIndex,
+                name: nil,
+                panes: [
+                    RuntimeResumeTmuxPane(
+                        index: 0,
+                        workingDirectory: $0.cwd,
+                        launch: nil
+                    )
+                ]
+            )
+        }
+        let target: RuntimeResumeTmuxTarget
+        let trimmedSessionName =
+            activeRoute.sessionName.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
+        let tmuxSession = trimmedSessionName.isEmpty
+            ? activeRoute.sessionID
+            : trimmedSessionName
+        switch activeRoute.socket {
+        case .defaultSocket:
+            target = RuntimeResumeTmuxTarget(
+                defaultSocketAndTmuxSession: tmuxSession
+            )
+        case .path(let path):
+            target = RuntimeResumeTmuxTarget(
+                socketPath: path,
+                tmuxSession: tmuxSession
+            )
+        case .name(let name):
+            target = RuntimeResumeTmuxTarget(
+                socketName: name,
+                tmuxSession: tmuxSession
+            )
+        }
+        return RuntimeResumeTmuxTopologySnapshot(
+            binding: binding,
+            target: target,
+            topology: RuntimeResumeTmuxTopology(
+                windows: windows,
+                activeWindowIndex: activeRoute.windowIndex,
+                activePaneIndex: 0
+            )
+        )
+    }
 }
 
 struct RuntimeResumeDescriptorContentFingerprint:
@@ -284,6 +374,48 @@ protocol RuntimeResumeDescriptorSocketSending: Sendable {
     ) throws
 }
 
+private struct RuntimeResumeDescriptorSocketPayload:
+    Encodable {
+    let binding: RuntimeResumeDescriptorBinding
+    let descriptor: RuntimeResumeDescriptorContent
+}
+
+final class TideyRuntimeResumeDescriptorSocketSender:
+    RuntimeResumeDescriptorSocketSending,
+    @unchecked Sendable {
+    private let requestSender: TideyRequestSending
+
+    init(requestSender: TideyRequestSending) {
+        self.requestSender = requestSender
+    }
+
+    func send(
+        _ update: RuntimeResumeDescriptorSocketUpdate
+    ) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(
+            RuntimeResumeDescriptorSocketPayload(
+                binding: update.binding,
+                descriptor: update.content
+            )
+        )
+        let params = try JSONDecoder().decode(
+            [String: JSONValue].self,
+            from: data
+        )
+        let request = BridgeRequest(
+            id: UUID().uuidString,
+            action: "update_runtime_resume_descriptor",
+            params: params
+        )
+        let response = try requestSender.send(request)
+        guard response.ok else {
+            throw BridgeInternalError.invalidResponse
+        }
+    }
+}
+
 final class RuntimeResumeDescriptorPublisher:
     @unchecked Sendable {
     private let registryReader:
@@ -297,6 +429,7 @@ final class RuntimeResumeDescriptorPublisher:
     private let queue: DispatchQueue
     private var reducer =
         RuntimeResumeDescriptorPublicationReducer()
+    private var timer: DispatchSourceTimer?
 
     init(
         registryReader:
@@ -318,5 +451,112 @@ final class RuntimeResumeDescriptorPublisher:
         self.canonicalizer = canonicalizer
         self.socketSender = socketSender
         self.queue = queue
+    }
+
+    func publishCurrentDescriptors() throws {
+        try queue.sync {
+            try publishCurrentDescriptorsOnQueue()
+        }
+    }
+
+    func start(repeatingInterval: TimeInterval = 5) {
+        let interval = max(repeatingInterval, 1)
+        queue.async { [weak self] in
+            guard let self, timer == nil else {
+                return
+            }
+            let timer = DispatchSource.makeTimerSource(
+                queue: queue
+            )
+            timer.schedule(
+                deadline: .now() + interval,
+                repeating: interval
+            )
+            timer.setEventHandler { [weak self] in
+                guard let self else {
+                    return
+                }
+                do {
+                    try publishCurrentDescriptorsOnQueue()
+                } catch {
+                    BridgeLogger.server.debug(
+                        "runtime resume descriptor publish deferred error=\(String(describing: error), privacy: .public)"
+                    )
+                }
+            }
+            self.timer = timer
+            timer.resume()
+        }
+    }
+
+    deinit {
+        timer?.cancel()
+    }
+
+    private func publishCurrentDescriptorsOnQueue()
+        throws {
+        let records =
+            try registryReader.readAgentRegistryRecords()
+                .sorted(by: Self.recordPrecedes(_:_:))
+        for record in records {
+            guard let snapshot =
+                    try topologyReader.topologySnapshot(
+                        for: record.binding
+                    ),
+                  snapshot.binding == record.binding else {
+                continue
+            }
+            let content = RuntimeResumeDescriptorContent(
+                descriptorVersion: 1,
+                kind: .agent,
+                restorePolicy: .create,
+                target: snapshot.target,
+                topology: snapshot.topology,
+                agent: RuntimeResumeAgentSpecification(
+                    vendor: record.vendor,
+                    durableResumeID: record.durableResumeID,
+                    launch: record.launch
+                )
+            )
+            let canonicalContent =
+                try canonicalizer.canonicalize(content)
+            guard reducer.decision(
+                binding: record.binding,
+                canonicalContent: canonicalContent
+            ) == .publish else {
+                continue
+            }
+            try socketSender.send(
+                RuntimeResumeDescriptorSocketUpdate(
+                    binding: record.binding,
+                    content: canonicalContent.content
+                )
+            )
+            reducer.acknowledgePublished(
+                binding: record.binding,
+                canonicalContent: canonicalContent
+            )
+        }
+    }
+
+    private static func recordPrecedes(
+        _ lhs: RuntimeResumeAgentRegistryRecord,
+        _ rhs: RuntimeResumeAgentRegistryRecord
+    ) -> Bool {
+        let lhsKey = [
+            lhs.binding.workspaceID,
+            lhs.binding.panelID,
+            lhs.binding.tmuxPaneID,
+            lhs.vendor.rawValue,
+            lhs.durableResumeID,
+        ]
+        let rhsKey = [
+            rhs.binding.workspaceID,
+            rhs.binding.panelID,
+            rhs.binding.tmuxPaneID,
+            rhs.vendor.rawValue,
+            rhs.durableResumeID,
+        ]
+        return lhsKey.lexicographicallyPrecedes(rhsKey)
     }
 }

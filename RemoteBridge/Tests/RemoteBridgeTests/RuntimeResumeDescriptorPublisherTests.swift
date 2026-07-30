@@ -1,8 +1,372 @@
+import Darwin
 import Foundation
 import XCTest
 @testable import RemoteBridge
 
 final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
+    func testRegistryReaderUsesOnlyPersistedExactBinding()
+        throws {
+        let supportDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "RuntimeResumeDescriptorPublisherTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        defer {
+            try? FileManager.default.removeItem(
+                at: supportDirectory
+            )
+        }
+        let paths = BridgePaths(
+            supportDirectory: supportDirectory
+        )
+        try paths.ensureSupportDirectoriesExist()
+        let record = AgentSessionRegistryRecord(
+            version: 1,
+            vendor: "codex",
+            workspaceID: "workspace-1",
+            sessionID: "wrapper-session",
+            panelID: "panel-1",
+            pid: getpid(),
+            cwd: "/tmp/project",
+            createdAt: "2026-07-30T00:00:00Z",
+            transcriptPath: nil,
+            tmuxPaneID: "%7",
+            tmuxSocketPath: "/tmp/tmux-501/tidey-agents",
+            runtime: "codex_app_server",
+            threadID: "thread-1"
+        )
+        let recordURL = paths
+            .agentSessionsDirectory(for: "codex")
+            .appendingPathComponent("wrapper-session.json")
+        try JSONEncoder().encode(record).write(to: recordURL)
+        let monitor = AgentSessionRegistryMonitor(
+            paths: paths,
+            hub: AgentEventHub()
+        )
+        monitor.replaceLivePanels(
+            workspaceID: "workspace-1",
+            panels: [
+                AgentPanelProcessSnapshot(
+                    workspaceID: "workspace-1",
+                    panelID: "panel-1",
+                    effectiveShellPID: nil,
+                    tmuxPaneID: "%7",
+                    tmuxSocketPath:
+                        "/tmp/tmux-501/tidey-agents"
+                )
+            ]
+        )
+        let reader =
+            AgentSessionRegistryRuntimeResumeReader(
+                monitor: monitor
+            )
+
+        XCTAssertEqual(
+            try reader.readAgentRegistryRecords(),
+            [
+                RuntimeResumeAgentRegistryRecord(
+                    binding: RuntimeResumeDescriptorBinding(
+                        workspaceID: "workspace-1",
+                        panelID: "panel-1",
+                        tmuxPaneID: "%7"
+                    ),
+                    vendor: .codex,
+                    durableResumeID: "thread-1",
+                    launch: RuntimeResumeLaunchSpecification(
+                        executable: "codex",
+                        arguments: ["resume", "thread-1"],
+                        workingDirectory: "/tmp/project"
+                    )
+                )
+            ]
+        )
+
+        monitor.replaceLivePanels(
+            workspaceID: "workspace-1",
+            panels: [
+                AgentPanelProcessSnapshot(
+                    workspaceID: "workspace-1",
+                    panelID: "ancestry-corrected-panel",
+                    effectiveShellPID: getpid(),
+                    tmuxPaneID: "%7",
+                    tmuxSocketPath:
+                        "/tmp/tmux-501/tidey-agents"
+                )
+            ]
+        )
+        XCTAssertTrue(
+            try reader.readAgentRegistryRecords().isEmpty
+        )
+    }
+
+    func testTopologyReaderRequiresExactCurrentPaneBinding()
+        throws {
+        let registry = OrdinaryTmuxPanelRegistry()
+        registry.replaceRoutes(
+            workspaceID: "workspace-1",
+            routes: [
+                Self.route(
+                    panelID: "panel-1",
+                    windowID: "@1",
+                    windowIndex: 1,
+                    paneID: "%7",
+                    cwd: "/tmp/agent"
+                ),
+                Self.route(
+                    panelID: "panel-2",
+                    windowID: "@2",
+                    windowIndex: 2,
+                    paneID: "%8",
+                    cwd: "/tmp/shell"
+                )
+            ]
+        )
+        let reader =
+            OrdinaryTmuxRuntimeResumeTopologyReader(
+                registry: registry
+            )
+        let binding = RuntimeResumeDescriptorBinding(
+            workspaceID: "workspace-1",
+            panelID: "panel-1",
+            tmuxPaneID: "%7"
+        )
+
+        let snapshot = try XCTUnwrap(
+            reader.topologySnapshot(for: binding)
+        )
+
+        XCTAssertEqual(snapshot.binding, binding)
+        XCTAssertEqual(
+            snapshot.target,
+            RuntimeResumeTmuxTarget(
+                socketName: "tidey-agents",
+                tmuxSession: "work"
+            )
+        )
+        XCTAssertEqual(
+            snapshot.topology,
+            RuntimeResumeTmuxTopology(
+                windows: [
+                    RuntimeResumeTmuxWindow(
+                        index: 1,
+                        name: nil,
+                        panes: [
+                            RuntimeResumeTmuxPane(
+                                index: 0,
+                                workingDirectory: "/tmp/agent",
+                                launch: nil
+                            )
+                        ]
+                    ),
+                    RuntimeResumeTmuxWindow(
+                        index: 2,
+                        name: nil,
+                        panes: [
+                            RuntimeResumeTmuxPane(
+                                index: 0,
+                                workingDirectory: "/tmp/shell",
+                                launch: nil
+                            )
+                        ]
+                    )
+                ],
+                activeWindowIndex: 1,
+                activePaneIndex: 0
+            )
+        )
+        XCTAssertNil(
+            try reader.topologySnapshot(
+                for: RuntimeResumeDescriptorBinding(
+                    workspaceID: "workspace-1",
+                    panelID: "panel-1",
+                    tmuxPaneID: "%99"
+                )
+            )
+        )
+    }
+
+    func testSocketSenderUsesNestedDescriptorPayloadWithoutBridgeAuthority()
+        throws {
+        let requestSender = RecordingTideyRequestSender()
+        let sender = TideyRuntimeResumeDescriptorSocketSender(
+            requestSender: requestSender
+        )
+        let binding = RuntimeResumeDescriptorBinding(
+            workspaceID: "workspace-1",
+            panelID: "panel-1",
+            tmuxPaneID: "%7"
+        )
+        let target = RuntimeResumeTmuxTarget(
+            defaultSocketAndTmuxSession: "work"
+        )
+        let content = RuntimeResumeDescriptorContent(
+            descriptorVersion: 1,
+            kind: .agent,
+            restorePolicy: .create,
+            target: target,
+            topology: nil,
+            agent: RuntimeResumeAgentSpecification(
+                vendor: .claude,
+                durableResumeID: "session-1",
+                launch: RuntimeResumeLaunchSpecification(
+                    executable: "claude",
+                    arguments: ["--resume", "session-1"],
+                    workingDirectory: "/tmp/project"
+                )
+            )
+        )
+
+        try sender.send(
+            RuntimeResumeDescriptorSocketUpdate(
+                binding: binding,
+                content: content
+            )
+        )
+
+        let request = try XCTUnwrap(
+            requestSender.requests.first
+        )
+        XCTAssertEqual(
+            request.action,
+            "update_runtime_resume_descriptor"
+        )
+        XCTAssertNotNil(request.params?["binding"]?.objectValue)
+        XCTAssertNotNil(
+            request.params?["descriptor"]?.objectValue
+        )
+        XCTAssertNil(request.params?["revision"])
+        XCTAssertNil(
+            request.params?["content_fingerprint"]
+        )
+    }
+
+    func testPublishesCanonicalAgentAndTmuxTopologyForBoundPanel()
+        throws {
+        let binding = RuntimeResumeDescriptorBinding(
+            workspaceID: "workspace-1",
+            panelID: "panel-1",
+            tmuxPaneID: "%7"
+        )
+        let staleBinding = RuntimeResumeDescriptorBinding(
+            workspaceID: "workspace-stale",
+            panelID: "panel-stale",
+            tmuxPaneID: "%9"
+        )
+        let currentBindingForStaleRecord =
+            RuntimeResumeDescriptorBinding(
+                workspaceID: "workspace-current",
+                panelID: "panel-current",
+                tmuxPaneID: "%9"
+            )
+        let target = RuntimeResumeTmuxTarget(
+            socketName: "tidey-agents",
+            tmuxSession: "work"
+        )
+        let launch = RuntimeResumeLaunchSpecification(
+            executable: "codex",
+            arguments: ["resume", "thread-1"],
+            workingDirectory: "/tmp/project"
+        )
+        let topology = RuntimeResumeTmuxTopology(
+            windows: [
+                RuntimeResumeTmuxWindow(
+                    index: 1,
+                    name: "agent",
+                    panes: [
+                        RuntimeResumeTmuxPane(
+                            index: 0,
+                            workingDirectory: "/tmp/project",
+                            launch: launch
+                        )
+                    ]
+                ),
+                RuntimeResumeTmuxWindow(
+                    index: 2,
+                    name: "shell",
+                    panes: [
+                        RuntimeResumeTmuxPane(
+                            index: 0,
+                            workingDirectory: "/tmp/project",
+                            launch: nil
+                        )
+                    ]
+                )
+            ],
+            activeWindowIndex: 1,
+            activePaneIndex: 0
+        )
+        let matchingRecord = RuntimeResumeAgentRegistryRecord(
+            binding: binding,
+            vendor: .codex,
+            durableResumeID: "thread-1",
+            launch: launch
+        )
+        let staleRecord = RuntimeResumeAgentRegistryRecord(
+            binding: staleBinding,
+            vendor: .claude,
+            durableResumeID: "stale-session",
+            launch: RuntimeResumeLaunchSpecification(
+                executable: "claude",
+                arguments: ["--resume", "stale-session"],
+                workingDirectory: "/tmp/stale"
+            )
+        )
+        let topologySnapshot = RuntimeResumeTmuxTopologySnapshot(
+            binding: binding,
+            target: target,
+            topology: topology
+        )
+        let registryReader = StubRuntimeResumeRegistryReader(
+            records: [staleRecord, matchingRecord]
+        )
+        let topologyReader = StubRuntimeResumeTopologyReader(
+            snapshotsByBinding: [
+                binding: topologySnapshot,
+                staleBinding: RuntimeResumeTmuxTopologySnapshot(
+                    binding: currentBindingForStaleRecord,
+                    target: target,
+                    topology: topology
+                )
+            ]
+        )
+        let socketSender = RecordingRuntimeResumeSocketSender()
+        let publisher = RuntimeResumeDescriptorPublisher(
+            registryReader: registryReader,
+            topologyReader: topologyReader,
+            socketSender: socketSender,
+            queue: DispatchQueue(
+                label:
+                    "RuntimeResumeDescriptorPublisherTests.behavior"
+            )
+        )
+
+        try publisher.publishCurrentDescriptors()
+
+        XCTAssertEqual(
+            socketSender.updates,
+            [
+                RuntimeResumeDescriptorSocketUpdate(
+                    binding: binding,
+                    content: RuntimeResumeDescriptorContent(
+                        descriptorVersion: 1,
+                        kind: .agent,
+                        restorePolicy: .create,
+                        target: target,
+                        topology: topology,
+                        agent: RuntimeResumeAgentSpecification(
+                            vendor: .codex,
+                            durableResumeID: "thread-1",
+                            launch: launch
+                        )
+                    )
+                )
+            ]
+        )
+
+        try publisher.publishCurrentDescriptors()
+        XCTAssertEqual(socketSender.updates.count, 1)
+    }
+
     func testPublisherSeamsCompile() throws {
         let binding = RuntimeResumeDescriptorBinding(
             workspaceID: "workspace-1",
@@ -109,6 +473,28 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
             topologySnapshot
         )
     }
+
+    private static func route(
+        panelID: String,
+        windowID: String,
+        windowIndex: Int,
+        paneID: String,
+        cwd: String?
+    ) -> OrdinaryTmuxPanelRoute {
+        OrdinaryTmuxPanelRoute(
+            workspaceID: "workspace-1",
+            panelID: panelID,
+            carrierPanelID: "carrier-1",
+            socket: .name("tidey-agents"),
+            sessionID: "$1",
+            sessionName: "work",
+            windowID: windowID,
+            windowIndex: windowIndex,
+            activePaneID: paneID,
+            cwd: cwd,
+            currentCommand: "zsh"
+        )
+    }
 }
 
 private final class StubRuntimeResumeRegistryReader:
@@ -167,5 +553,21 @@ private final class RecordingRuntimeResumeSocketSender:
         lock.lock()
         storedUpdates.append(update)
         lock.unlock()
+    }
+}
+
+private final class RecordingTideyRequestSender:
+    TideyRequestSending {
+    private(set) var requests = [BridgeRequest]()
+
+    func send(_ request: BridgeRequest)
+        throws -> BridgeResponse {
+        requests.append(request)
+        return BridgeResponse(
+            id: request.id,
+            ok: true,
+            result: [:],
+            error: nil
+        )
     }
 }

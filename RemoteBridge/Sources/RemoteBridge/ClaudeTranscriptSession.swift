@@ -597,6 +597,59 @@ final class AgentSessionRegistryMonitor {
         }
     }
 
+    func persistedRuntimeResumeAgentRecords()
+        -> [RuntimeResumeAgentRegistryRecord] {
+        queue.sync {
+            let sourceRecords = AgentVendorRegistry.all.flatMap {
+                vendor in
+                loadRecordEntries(
+                    at: paths.agentSessionsDirectory(
+                        for: vendor.registryDirectoryName
+                    ),
+                    vendor: vendor.id
+                ).map(\.record)
+            }
+            var candidatesByBinding =
+                [RuntimeResumeDescriptorBinding:
+                    [RuntimeResumeAgentRegistryRecord]]()
+            for record in sourceRecords {
+                guard let candidate =
+                        runtimeResumeAgentRecord(
+                            fromPersistedRecord: record
+                        ) else {
+                    continue
+                }
+                candidatesByBinding[
+                    candidate.binding,
+                    default: []
+                ].append(candidate)
+            }
+            return candidatesByBinding
+                .compactMap { _, candidates in
+                    guard let first = candidates.first,
+                          candidates.dropFirst().allSatisfy({
+                              $0 == first
+                          }) else {
+                        return nil
+                    }
+                    return first
+                }
+                .sorted {
+                    let lhs = [
+                        $0.binding.workspaceID,
+                        $0.binding.panelID,
+                        $0.binding.tmuxPaneID,
+                    ]
+                    let rhs = [
+                        $1.binding.workspaceID,
+                        $1.binding.panelID,
+                        $1.binding.tmuxPaneID,
+                    ]
+                    return lhs.lexicographicallyPrecedes(rhs)
+                }
+        }
+    }
+
     deinit {
         stopWatchers()
         timer?.cancel()
@@ -1247,6 +1300,73 @@ final class AgentSessionRegistryMonitor {
             return record.threadID ?? record.resumeThreadID ?? record.sessionID
         }
         return record.sessionID
+    }
+
+    private func runtimeResumeAgentRecord(
+        fromPersistedRecord record: AgentSessionRegistryRecord
+    ) -> RuntimeResumeAgentRegistryRecord? {
+        guard record.workspaceID.isEmpty == false,
+              let panelID = record.panelID,
+              panelID.isEmpty == false,
+              let tmuxPaneID = record.tmuxPaneID,
+              tmuxPaneID.isEmpty == false else {
+            return nil
+        }
+        let matchingPanels =
+            (livePanelsByWorkspace[record.workspaceID] ?? [])
+                .filter {
+                    $0.workspaceID == record.workspaceID &&
+                        $0.panelID == panelID &&
+                        $0.tmuxPaneID == tmuxPaneID
+                }
+        guard matchingPanels.count == 1,
+              let matchingPanel = matchingPanels.first else {
+            return nil
+        }
+        if let persistedSocketPath = record.tmuxSocketPath,
+           persistedSocketPath.isEmpty == false,
+           matchingPanel.tmuxSocketPath != persistedSocketPath {
+            return nil
+        }
+        let vendor: RuntimeResumeAgentVendor
+        let executable: String
+        let argumentsPrefix: [String]
+        switch record.vendor {
+        case "claude":
+            vendor = .claude
+            executable = "claude"
+            argumentsPrefix = ["--resume"]
+        case "codex":
+            vendor = .codex
+            executable = "codex"
+            argumentsPrefix = ["resume"]
+        default:
+            return nil
+        }
+        let durableResumeID =
+            Self.restoreSessionID(for: record)
+                .trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                )
+        guard durableResumeID.isEmpty == false else {
+            return nil
+        }
+        return RuntimeResumeAgentRegistryRecord(
+            binding: RuntimeResumeDescriptorBinding(
+                workspaceID: record.workspaceID,
+                panelID: panelID,
+                tmuxPaneID: tmuxPaneID
+            ),
+            vendor: vendor,
+            durableResumeID: durableResumeID,
+            launch: RuntimeResumeLaunchSpecification(
+                executable: executable,
+                arguments:
+                    argumentsPrefix + [durableResumeID],
+                workingDirectory:
+                    record.cwd.isEmpty ? nil : record.cwd
+            )
+        )
     }
 
     private func logPanelMatchFailure(_ panel: AgentPanelProcessSnapshot,

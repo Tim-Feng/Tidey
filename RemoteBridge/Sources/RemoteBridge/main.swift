@@ -40,6 +40,17 @@ let registryMonitor = AgentSessionRegistryMonitor(hub: eventHub,
 codexRuntimeSyncer.activeThreadHandler = { [weak registryMonitor] sessionID, threadID in
     registryMonitor?.appServerActiveThreadDidChange(sessionID: sessionID, threadID: threadID)
 }
+let runtimeResumeDescriptorPublisher = RuntimeResumeDescriptorPublisher(
+    registryReader: AgentSessionRegistryRuntimeResumeReader(
+        monitor: registryMonitor
+    ),
+    topologyReader: OrdinaryTmuxRuntimeResumeTopologyReader(
+        registry: ordinaryTmuxProjectionContext.registry
+    ),
+    socketSender: TideyRuntimeResumeDescriptorSocketSender(
+        requestSender: socketClient
+    )
+)
 let workspaceEventMonitor = TideyWorkspaceEventMonitor(locator: locator,
                                                        hub: workspaceEventHub,
                                                        paneIdentityReconciler: ordinaryTmuxPaneIdentityReconciler)
@@ -82,6 +93,7 @@ do {
         workspaceEventMonitor.start()
         resolverPublicationMonitor.start()
         uploadGarbageCollector.start()
+        runtimeResumeDescriptorPublisher.start()
     } else {
         BridgeLogger.server.info("bridge dev isolated mode enabled port=\(runtimeConfiguration.port, privacy: .public)")
     }

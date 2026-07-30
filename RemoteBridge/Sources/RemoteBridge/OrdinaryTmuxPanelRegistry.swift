@@ -182,6 +182,27 @@ final class OrdinaryTmuxPanelRegistry: @unchecked Sendable {
         }
     }
 
+    func routes(
+        workspaceID: String,
+        socket: OrdinaryTmuxSocketSelector,
+        sessionID: String
+    ) -> [OrdinaryTmuxPanelRoute] {
+        queue.sync {
+            routesByPanelID.values
+                .filter {
+                    $0.workspaceID == workspaceID &&
+                        $0.socket == socket &&
+                        $0.sessionID == sessionID
+                }
+                .sorted {
+                    if $0.windowIndex != $1.windowIndex {
+                        return $0.windowIndex < $1.windowIndex
+                    }
+                    return $0.windowID < $1.windowID
+                }
+        }
+    }
+
     func hasCarrierOwnership(workspaceID: String, carrierPanelID: String) -> Bool {
         queue.sync {
             routesByPanelID.values.contains {
