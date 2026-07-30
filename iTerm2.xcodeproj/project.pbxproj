@@ -1014,6 +1014,7 @@
 		F0A10D1E3A2800010000000C /* TideyShellIntegrationConfigWriterTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A2800010000000B /* TideyShellIntegrationConfigWriterTests.m */; };
 		F0B420A13A6D000100000001 /* TideyRemoteBridgeInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0B420A13A6D000100000000 /* TideyRemoteBridgeInstaller.swift */; };
 		F0B420A13A6D000100000003 /* TideyRemoteBridgeInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0B420A13A6D000100000002 /* TideyRemoteBridgeInstallerTests.swift */; };
+		F0C30D1E3A6E000100000002 /* TideyWorkspaceRestorationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C30D1E3A6E000100000001 /* TideyWorkspaceRestorationState.swift */; };
 		F0A10D1E3A28000100000013 /* MainMenuManglerTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000012 /* MainMenuManglerTests.m */; };
 		F0A10D1E3A28000100000015 /* iTermLayoutCalculatorTideyTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000014 /* iTermLayoutCalculatorTideyTests.m */; };
 		F0A10D1E3A30000100000001 /* TideyCmdLongPressPanelHintsTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A30000100000000 /* TideyCmdLongPressPanelHintsTests.m */; };
@@ -6456,6 +6457,7 @@
 		F0A10D1E3A2800010000000B /* TideyShellIntegrationConfigWriterTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyShellIntegrationConfigWriterTests.m; sourceTree = "<group>"; };
 		F0B420A13A6D000100000000 /* TideyRemoteBridgeInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TideyRemoteBridgeInstaller.swift; path = sources/TideyRemoteBridgeInstaller.swift; sourceTree = SOURCE_ROOT; };
 		F0B420A13A6D000100000002 /* TideyRemoteBridgeInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TideyRemoteBridgeInstallerTests.swift; sourceTree = "<group>"; };
+		F0C30D1E3A6E000100000001 /* TideyWorkspaceRestorationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TideyWorkspaceRestorationState.swift; path = sources/TideyWorkspaceRestorationState.swift; sourceTree = SOURCE_ROOT; };
 		F0A10D1E3A28000100000010 /* TideySocketCommandDecoderTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySocketCommandDecoderTests.m; sourceTree = "<group>"; };
 		F0A10D1E3A28000100000012 /* MainMenuManglerTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MainMenuManglerTests.m; sourceTree = "<group>"; };
 		F0A10D1E3A28000100000014 /* iTermLayoutCalculatorTideyTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = iTermLayoutCalculatorTideyTests.m; sourceTree = "<group>"; };
@@ -12747,6 +12749,7 @@
 				A6F7D51B2E0613920065D09C /* MainMenuMangler.swift */,
 				F0A10D1E3A28000100000005 /* TideyCLICommandFormatter.swift */,
 				F0B420A13A6D000100000000 /* TideyRemoteBridgeInstaller.swift */,
+				F0C30D1E3A6E000100000001 /* TideyWorkspaceRestorationState.swift */,
 				A6F7D4EF2E0532C60065D09C /* DatabaseBackedArray.swift */,
 				A6F7D4ED2E0532B00065D09C /* Database.swift */,
 				A6069F3D2DF88C7100EE6CC7 /* PerformanceCounter.swift */,
@@ -19520,6 +19523,7 @@
 				F0A10D1E3A28000100000006 /* TideyCLICommandFormatter.swift in Sources */,
 				F0A10D1E3A2800010000000A /* TideyShellIntegrationConfigWriter.swift in Sources */,
 				F0B420A13A6D000100000001 /* TideyRemoteBridgeInstaller.swift in Sources */,
+				F0C30D1E3A6E000100000002 /* TideyWorkspaceRestorationState.swift in Sources */,
 				A63B92482F05C75200591B9E /* ExpressionBindingIconView.swift in Sources */,
 				A6AF79D62E06776C008D77BA /* iTermDatabase.swift in Sources */,
 				A68400A71FF82424008D3EE2 /* iTermIndicatorRenderer.m in Sources */,
