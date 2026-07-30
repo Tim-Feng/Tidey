@@ -33,6 +33,8 @@ NSString *const kPreferenceKeyOpenBookmark = @"OpenBookmark";
 NSString *const kPreferenceKeyOpenArrangementAtStartup = @"OpenArrangementAtStartup";
 NSString *const kPreferenceKeyAlwaysOpenWindowAtStartup = @"AlwaysOpenWindowAtStartup";
 NSString *const kPreferenceKeyRestoreWindowsToSameSpaces = @"RestoreWindowsToSameSpaces";
+NSString *const kPreferenceKeyTideyRestorePreviousWorkspaces =
+    @"TideyRestorePreviousWorkspaces";
 NSString *const kPreferenceKeyOpenNoWindowsAtStartup = @"OpenNoWindowsAtStartup";
 NSString *const kPreferenceKeyQuitWhenAllWindowsClosed = @"QuitWhenAllWindowsClosed";
 NSString *const kPreferenceKeyConfirmClosingMultipleTabs = @"OnlyWhenMoreTabs";  // The key predates split panes
@@ -470,6 +472,7 @@ static NSString *sPreviousVersion;
                   kPreferenceKeyOpenArrangementAtStartup: @NO,
                   kPreferenceKeyAlwaysOpenWindowAtStartup: @NO,
                   kPreferenceKeyRestoreWindowsToSameSpaces: @NO,
+                  kPreferenceKeyTideyRestorePreviousWorkspaces: @YES,
                   kPreferenceKeyOpenNoWindowsAtStartup: @NO,
                   kPreferenceKeyQuitWhenAllWindowsClosed: @NO,
                   kPreferenceKeyConfirmClosingMultipleTabs: @NO,   // Tidey: don't prompt

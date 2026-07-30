@@ -79,6 +79,22 @@ final class TideyRestorableStatePreflight: NSObject {
             isValid &&
             tideySchemaVersion?.intValue == Self.currentSchemaVersion
     }
+
+    var savedStateKind: TideyRestorationSavedStateKind {
+        guard stateExists else {
+            return .absent
+        }
+        guard isValid else {
+            return .invalid
+        }
+        guard let tideySchemaVersion else {
+            return .untagged
+        }
+        if tideySchemaVersion.intValue == Self.currentSchemaVersion {
+            return .taggedSupported
+        }
+        return .taggedUnsupported
+    }
 }
 
 @objc(TideyRestorableStatePreflightBuilder)

@@ -64,3 +64,40 @@ protocol TideyRestorationPolicyEvaluating: NSObjectProtocol {
         tideyPreferenceEnabled: Bool
     ) -> TideyRestorationSaveDecision
 }
+
+@objc(TideyRestorationPolicyEvaluator)
+@objcMembers
+final class TideyRestorationPolicyEvaluator:
+    NSObject,
+    TideyRestorationPolicyEvaluating {
+    func launchDecision(
+        for input: TideyRestorationPolicyInput
+    ) -> TideyRestorationLaunchDecision {
+        guard input.hasRestorableWindows else {
+            return .startBlank
+        }
+
+        switch input.savedStateKind {
+        case .absent, .invalid, .taggedUnsupported:
+            return .startBlank
+        case .untagged:
+            return input.legacyRestoreRequested ? .restore : .startBlank
+        case .taggedSupported:
+            guard input.tideyPreferenceEnabled else {
+                return .startBlank
+            }
+            switch input.previousExit {
+            case .cleanOrFirstLaunch:
+                return .restore
+            case .unclean:
+                return .promptAfterUncleanExit
+            }
+        }
+    }
+
+    func saveDecision(
+        tideyPreferenceEnabled: Bool
+    ) -> TideyRestorationSaveDecision {
+        tideyPreferenceEnabled ? .persistTaggedState : .eraseState
+    }
+}

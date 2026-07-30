@@ -21,7 +21,29 @@ final class TideyRestorableStatePreflightTests: XCTestCase {
 
         XCTAssertTrue(preflight.hasRestorableWindows)
         XCTAssertTrue(preflight.hasSupportedTideySchemaVersion)
+        XCTAssertEqual(preflight.savedStateKind, .taggedSupported)
         XCTAssertEqual(preflight.sessionServerIdentifiers.count, 2)
+
+        XCTAssertEqual(
+            TideyRestorableStatePreflight(
+                stateExists: true,
+                isValid: true,
+                numberOfWindows: 1,
+                tideySchemaVersion: nil,
+                sessionServerIdentifiers: []
+            ).savedStateKind,
+            .untagged
+        )
+        XCTAssertEqual(
+            TideyRestorableStatePreflight(
+                stateExists: true,
+                isValid: true,
+                numberOfWindows: 1,
+                tideySchemaVersion: 99,
+                sessionServerIdentifiers: []
+            ).savedStateKind,
+            .taggedUnsupported
+        )
 
         actions.restoreAcceptedState()
         actions.eraseRejectedState()

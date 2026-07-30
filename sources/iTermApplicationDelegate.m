@@ -3987,6 +3987,9 @@ static iTermKeyEventReplayer *gReplayer;
 // If you change this also change -application:willEncodeRestorableState:.
 - (BOOL)encodeGraphWithEncoder:(iTermGraphEncoder *)encoder {
     static NSInteger generation;
+    [encoder
+        encodeNumber:@(TideyRestorableStatePreflight.currentSchemaVersion)
+        forKey:TideyRestorableStatePreflightBuilder.schemaVersionKey];
     if ([[iTermApplication sharedApplication] it_restorableStateInvalid] ||
         [[iTermHotKeyController sharedInstance] anyProfileHotkeyWindowHasInvalidState]) {
         ++generation;

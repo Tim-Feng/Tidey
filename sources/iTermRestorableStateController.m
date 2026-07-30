@@ -11,6 +11,7 @@
 #import "NSFileManager+iTerm.h"
 #import "iTermAdvancedSettingsModel.h"
 #import "iTerm2SharedARC-Swift.h"
+#import "iTermPreferences.h"
 #import "iTermRestorableStateDriver.h"
 #import "iTermRestorableStateSQLite.h"
 #import "iTermUserDefaults.h"
@@ -62,6 +63,11 @@ extern NSString *const iTermApplicationWillTerminate;
 }
 
 + (BOOL)stateRestorationEnabled {
+    return [iTermPreferences
+        boolForKey:kPreferenceKeyTideyRestorePreviousWorkspaces];
+}
+
++ (BOOL)legacyRestorationRequested {
     return ([[iTermUserDefaults userDefaults] boolForKey:@"NSQuitAlwaysKeepsWindows"] ||
             [self shouldRestoreStateOnNextLaunch]);
 }
@@ -168,9 +174,9 @@ static BOOL gForceSaveState;
     [_driver save];
 }
 
-// NOTE: Window restoration happens unconditionally. The decision of whether to use state
-// restoration must be made before state is *saved* not before it is restored. See the comment on
-// shouldRestoreStateOnNextLaunch above.
+// Saving is controlled by Tidey's app preference. Launch selection is separate: tagged Tidey
+// state follows the Tidey policy, while an untagged pre-upgrade database follows the legacy
+// macOS/iTerm request for its one-time migration decision.
 - (void)restoreWindowsWithCompletion:(void (^)(void))completion {
     _completionGroup = dispatch_group_create();
     dispatch_group_enter(_completionGroup);

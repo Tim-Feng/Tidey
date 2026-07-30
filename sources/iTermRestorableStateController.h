@@ -35,6 +35,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 // This is the single source of truth for the whole app.
 + (BOOL)stateRestorationEnabled;
++ (BOOL)legacyRestorationRequested;
 
 - (void)saveRestorableState;
 

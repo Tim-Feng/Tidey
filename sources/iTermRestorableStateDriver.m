@@ -10,6 +10,9 @@
 #import "DebugLogging.h"
 #import "NSArray+iTerm.h"
 #import "PTYWindow.h"
+#import "iTerm2SharedARC-Swift.h"
+#import "iTermPreferences.h"
+#import "iTermRestorableStateController.h"
 #import "iTermUserDefaults.h"
 #import "iTermWarning.h"
 
@@ -94,6 +97,35 @@ static NSString *const iTermRestorableStateControllerUserDefaultsKeyCount = @"No
                    ready:(void (^)(void))ready
               completion:(void (^)(void))completion {
     DLog(@"Have an index. Proceeding to restore windows.");
+    TideyRestorableStatePreflight *preflight =
+        index.restorableStateIndexPreflight;
+    const BOOL tideyPreferenceEnabled =
+        [iTermPreferences
+            boolForKey:kPreferenceKeyTideyRestorePreviousWorkspaces];
+    TideyRestorationPolicyInput *policyInput =
+        [[TideyRestorationPolicyInput alloc]
+            initWithSavedStateKind:preflight.savedStateKind
+            hasRestorableWindows:preflight.hasRestorableWindows
+            tideyPreferenceEnabled:tideyPreferenceEnabled
+            legacyRestoreRequested:
+                [iTermRestorableStateController legacyRestorationRequested]
+            previousExit:TideyRestorationPreviousExitCleanOrFirstLaunch];
+    TideyRestorationLaunchDecision launchDecision =
+        [[[TideyRestorationPolicyEvaluator alloc] init]
+            launchDecisionForInput:policyInput];
+    if (preflight.savedStateKind == TideyRestorationSavedStateKindUntagged &&
+        tideyPreferenceEnabled) {
+        // Replace the accepted or skipped legacy database with tagged native state once
+        // initialization completes, so future launches follow only the Tidey preference.
+        _needsSave = YES;
+    }
+    if (launchDecision == TideyRestorationLaunchDecisionStartBlank) {
+        DLog(@"Restoration policy chose a blank launch.");
+        ready();
+        completion();
+        return;
+    }
+
     const NSInteger count = [[iTermUserDefaults userDefaults] integerForKey:iTermRestorableStateControllerUserDefaultsKeyCount];
     if (count > 1) {
         const iTermWarningSelection selection =
