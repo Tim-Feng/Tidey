@@ -40,6 +40,74 @@ final class TideyWorkspaceRestorationState: NSObject {
     }
 }
 
+@objc(TideyWorkspaceRestorationPanelInput)
+@objcMembers
+final class TideyWorkspaceRestorationPanelInput: NSObject {
+    let panelID: String
+    let hasSessions: Bool
+    let isNativeTmux: Bool
+
+    init(panelID: String,
+         hasSessions: Bool,
+         isNativeTmux: Bool) {
+        self.panelID = panelID
+        self.hasSessions = hasSessions
+        self.isNativeTmux = isNativeTmux
+    }
+}
+
+@objc(TideyWorkspaceRestorationWorkspaceInput)
+@objcMembers
+final class TideyWorkspaceRestorationWorkspaceInput: NSObject {
+    let workspaceID: String
+    let title: String?
+    let pinned: Bool
+    let panels: [TideyWorkspaceRestorationPanelInput]
+    let selectedPanelID: String?
+
+    init(workspaceID: String,
+         title: String?,
+         pinned: Bool,
+         panels: [TideyWorkspaceRestorationPanelInput],
+         selectedPanelID: String?) {
+        self.workspaceID = workspaceID
+        self.title = title
+        self.pinned = pinned
+        self.panels = panels
+        self.selectedPanelID = selectedPanelID
+    }
+}
+
+@objc(TideyWorkspaceRestorationCapturePlan)
+@objcMembers
+final class TideyWorkspaceRestorationCapturePlan: NSObject {
+    let state: TideyWorkspaceRestorationState
+    let flattenedNativePanelIDs: [String]
+
+    init(state: TideyWorkspaceRestorationState,
+         flattenedNativePanelIDs: [String]) {
+        self.state = state
+        self.flattenedNativePanelIDs = flattenedNativePanelIDs
+    }
+}
+
+@objc(TideyWorkspaceRestorationPlanning)
+protocol TideyWorkspaceRestorationPlanning: NSObjectProtocol {
+    @objc(capturePlanWithWorkspaces:visiblePanels:selectedWorkspaceID:)
+    func capturePlan(
+        workspaces: [TideyWorkspaceRestorationWorkspaceInput],
+        visiblePanels: [TideyWorkspaceRestorationPanelInput],
+        selectedWorkspaceID: String?
+    ) -> TideyWorkspaceRestorationCapturePlan
+
+    @objc(hydrationStateWithSavedState:availablePanelIDs:panelIDRemap:)
+    func hydrationState(
+        savedState: TideyWorkspaceRestorationState,
+        availablePanelIDs: [String],
+        panelIDRemap: [String: String]
+    ) -> TideyWorkspaceRestorationState
+}
+
 protocol TideyWorkspaceRestorationStateDictionaryCoding {
     func encode(_ state: TideyWorkspaceRestorationState) throws -> [String: Any]
     func decode(_ dictionary: [String: Any]) throws -> TideyWorkspaceRestorationState

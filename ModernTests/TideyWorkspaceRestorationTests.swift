@@ -21,6 +21,41 @@ final class TideyWorkspaceRestorationTests: XCTestCase {
         XCTAssertEqual(state.workspaces.first?.panelIDs, ["panel-1", "panel-2"])
     }
 
+    func testPanelFlatteningAndHydrationSeamsCompile() {
+        let panel = TideyWorkspaceRestorationPanelInput(
+            panelID: "panel-1",
+            hasSessions: true,
+            isNativeTmux: false
+        )
+        let workspace = TideyWorkspaceRestorationWorkspaceInput(
+            workspaceID: "workspace-1",
+            title: "Build",
+            pinned: true,
+            panels: [panel],
+            selectedPanelID: panel.panelID
+        )
+        let state = TideyWorkspaceRestorationState(
+            schemaVersion: TideyWorkspaceRestorationState.currentSchemaVersion,
+            selectedWorkspaceID: workspace.workspaceID,
+            workspaces: []
+        )
+        let planner: TideyWorkspaceRestorationPlanning = WorkspaceRestorationPlanningSpy(state: state)
+
+        let capturePlan = planner.capturePlan(
+            workspaces: [workspace],
+            visiblePanels: [panel],
+            selectedWorkspaceID: workspace.workspaceID
+        )
+        let hydrationState = planner.hydrationState(
+            savedState: state,
+            availablePanelIDs: [panel.panelID],
+            panelIDRemap: [:]
+        )
+
+        XCTAssertEqual(capturePlan.flattenedNativePanelIDs, [panel.panelID])
+        XCTAssertTrue(hydrationState === state)
+    }
+
     func testWorkspaceStateRoundTripsStableIdentitiesAndSelections() throws {
         let codec = TideyWorkspaceRestorationStateDictionaryCodec()
         let build = TideyWorkspaceState(
@@ -122,5 +157,32 @@ final class TideyWorkspaceRestorationTests: XCTestCase {
             "pinned": false,
             "panel_ids": panelIDs
         ]
+    }
+}
+
+private final class WorkspaceRestorationPlanningSpy: NSObject, TideyWorkspaceRestorationPlanning {
+    private let state: TideyWorkspaceRestorationState
+
+    init(state: TideyWorkspaceRestorationState) {
+        self.state = state
+    }
+
+    func capturePlan(
+        workspaces: [TideyWorkspaceRestorationWorkspaceInput],
+        visiblePanels: [TideyWorkspaceRestorationPanelInput],
+        selectedWorkspaceID: String?
+    ) -> TideyWorkspaceRestorationCapturePlan {
+        TideyWorkspaceRestorationCapturePlan(
+            state: state,
+            flattenedNativePanelIDs: visiblePanels.map(\.panelID)
+        )
+    }
+
+    func hydrationState(
+        savedState: TideyWorkspaceRestorationState,
+        availablePanelIDs: [String],
+        panelIDRemap: [String: String]
+    ) -> TideyWorkspaceRestorationState {
+        savedState
     }
 }
