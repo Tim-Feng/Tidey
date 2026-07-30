@@ -10,6 +10,7 @@
 #import "DebugLogging.h"
 #import "NSFileManager+iTerm.h"
 #import "iTermAdvancedSettingsModel.h"
+#import "iTerm2SharedARC-Swift.h"
 #import "iTermRestorableStateDriver.h"
 #import "iTermRestorableStateSQLite.h"
 #import "iTermUserDefaults.h"
@@ -27,7 +28,9 @@ extern NSString *const iTermApplicationWillTerminate;
 - (BOOL)shouldRestoreStateOnNextLaunch;
 @end
 
-@interface iTermRestorableStateController()<iTermRestorableStateRestoring, iTermRestorableStateSaving>
+@interface iTermRestorableStateController()<iTermRestorableStateRestoring,
+                                             iTermRestorableStateSaving,
+                                             TideyRestorableStatePeriodicSaveRequesting>
 @end
 
 @implementation iTermRestorableStateController {
@@ -37,6 +40,7 @@ extern NSString *const iTermApplicationWillTerminate;
     BOOL _ready;
     NSMutableDictionary<NSString *, void (^)(NSWindow *, NSError *)> *_systemCallbacks;
     dispatch_group_t _completionGroup;
+    TideyRestorableStatePeriodicSaver *_tideyPeriodicSaver;
 }
 
 + (BOOL)shouldIgnoreOpenUntitledFile {
@@ -125,6 +129,13 @@ static BOOL gForceSaveState;
         _driver = [[iTermRestorableStateDriver alloc] init];
         _driver.restorer = _restorer;
         _driver.saver = _saver;
+
+        _tideyPeriodicSaver =
+            [[TideyRestorableStatePeriodicSaver alloc]
+                initWithDirtyTracker:TideyRestorableStateDirtyTracker.shared
+                          tickDriver:[[TideyRestorableStateTimerTickDriver alloc] init]
+                       saveRequester:self];
+        [_tideyPeriodicSaver start];
     }
     return self;
 }
@@ -199,6 +210,8 @@ static BOOL gForceSaveState;
 // windows have already been closed.
 - (void)applicationWillTerminate:(NSNotification *)notification {
     DLog(@"application will terminate");
+    [_tideyPeriodicSaver stop];
+    _tideyPeriodicSaver = nil;
     if (![iTermRestorableStateController stateRestorationEnabled]) {
         DLog(@"State restoration disabled. Erase state.");
         [_driver eraseSynchronously:YES];
@@ -211,6 +224,22 @@ static BOOL gForceSaveState;
     DLog(@"Calling saveSynchronously.");
     [_driver saveSynchronously];
     _driver = nil;
+}
+
+#pragma mark - TideyRestorableStatePeriodicSaveRequesting
+
+- (BOOL)canRequestPeriodicSave {
+    return ([iTermRestorableStateController stateRestorationEnabled] &&
+            _ready &&
+            !_driver.restoring);
+}
+
+- (BOOL)requestPeriodicSaveWithCompletion:(void (^)(void))completion {
+    assert([NSThread isMainThread]);
+    if (![self canRequestPeriodicSave]) {
+        return NO;
+    }
+    return [_driver saveWithCompletion:completion];
 }
 
 // All restoration activities (if any) are complete and it's now save to save to the db.

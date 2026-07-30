@@ -1975,6 +1975,7 @@ ITERM_WEAKLY_REFERENCEABLE
     if (!event) {
         return;
     }
+    [self invalidateRestorableState];
     [[NSNotificationCenter defaultCenter] postNotificationName:PseudoTerminalTideyWorkspaceEventNotification
                                                         object:self
                                                       userInfo:event];
@@ -3189,6 +3190,7 @@ ITERM_WEAKLY_REFERENCEABLE
     if (self.selectedWorkspaceIndex >= 0) {
         [_contentView selectTideySidebarWorkspaceAtIndex:self.selectedWorkspaceIndex];
     }
+    [self invalidateRestorableState];
     return YES;
 }
 
@@ -3230,6 +3232,7 @@ ITERM_WEAKLY_REFERENCEABLE
     if (self.selectedWorkspaceIndex >= 0) {
         [_contentView selectTideySidebarWorkspaceAtIndex:self.selectedWorkspaceIndex];
     }
+    [self invalidateRestorableState];
 }
 
 - (BOOL)workspaceHasCustomTitleAtIndex:(NSInteger)index {
@@ -8318,6 +8321,7 @@ hidingToolbeltShouldResizeWindow:(BOOL)hidingToolbeltShouldResizeWindow
 - (void)invalidateRestorableState {
     [[self window] invalidateRestorableState];
     _restorableStateInvalid = YES;
+    [TideyRestorableStateDirtyTracker.shared markDirty];
 }
 
 - (BOOL)getAndResetRestorableState {

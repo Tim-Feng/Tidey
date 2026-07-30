@@ -1042,6 +1042,7 @@ static const char *iTermApplicationKVOKey = "iTermApplicationKVOKey";
 - (void)invalidateRestorableState {
     [super invalidateRestorableState];
     _it_restorableStateInvalid = YES;
+    [TideyRestorableStateDirtyTracker.shared markDirty];
 }
 
 - (void)toggleLeader {
