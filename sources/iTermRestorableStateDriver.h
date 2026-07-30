@@ -77,6 +77,9 @@ NS_ASSUME_NONNULL_BEGIN
                              ready:(void (^)(void))ready
                         completion:(void (^)(void))completion;
 - (void)save;
+// Main thread. Returns NO when the async save request was not accepted. In that case completion is
+// not called.
+- (BOOL)saveWithCompletion:(void (^)(void))completion;
 - (void)saveSynchronously;
 - (void)eraseSynchronously:(BOOL)sync;
 

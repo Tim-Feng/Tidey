@@ -23,31 +23,40 @@ static NSString *const iTermRestorableStateControllerUserDefaultsKeyCount = @"No
 
 - (void)save {
     assert([NSThread isMainThread]);
-    [self saveSynchronously:NO];
+    [self saveSynchronously:NO completion:nil];
+}
+
+- (BOOL)saveWithCompletion:(void (^)(void))completion {
+    assert([NSThread isMainThread]);
+    return [self saveSynchronously:NO completion:completion];
 }
 
 - (void)saveSynchronously {
     assert([NSThread isMainThread]);
-    [self saveSynchronously:YES];
+    [self saveSynchronously:YES completion:nil];
 }
 
-- (void)saveSynchronously:(BOOL)sync {
+- (BOOL)saveSynchronously:(BOOL)sync completion:(void (^)(void))completion {
     assert([NSThread isMainThread]);
     DLog(@"save sync=%@ saver=%@", @(sync), _saver);
     if (_saving) {
         DLog(@"Currently saving. Set needsSave.");
         _needsSave = YES;
-        return;
+        return NO;
     }
     __weak __typeof(self) weakSelf = self;
     const BOOL saved = [_saver saveSynchronously:sync withCompletion:^{
         [weakSelf didSave];
+        if (completion) {
+            completion();
+        }
     }];
     // Do this after saveSynchronously:withCompletion:. It guarantees not to run its completion block
     // synchronously. It could fail if it was already busy saving, in which case we don't want
     // to reset _needsSave. Considering it is busy, the other guy will eventually finish and cause
     // didSave to be called, and it will try again.
     _needsSave = !saved;
+    return saved;
 }
 
 // Main queue
