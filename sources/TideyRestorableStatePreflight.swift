@@ -215,3 +215,65 @@ protocol TideyRestorationRejectedServerTerminating: NSObjectProtocol {
         _ identifiers: [TideyRestorableSessionServerIdentifier]
     )
 }
+
+@objc(TideyOrphanAdoptionGate)
+@objcMembers
+final class TideyOrphanAdoptionGate:
+    NSObject,
+    TideyRestorationOrphanAdoptionDiscarding {
+    private(set) var shouldDiscardOrphanAdoptionForLaunch = false
+
+    func discardOrphanAdoptionForLaunch() {
+        shouldDiscardOrphanAdoptionForLaunch = true
+    }
+}
+
+@objc(TideyRestorationMonoServerTerminating)
+protocol TideyRestorationMonoServerTerminating: NSObjectProtocol {
+    func terminateRejectedMonoServer(
+        _ identifier: TideyRestorableSessionServerIdentifier
+    )
+}
+
+@objc(TideyRestorationMultiServerChildTerminating)
+protocol TideyRestorationMultiServerChildTerminating: NSObjectProtocol {
+    func terminateRejectedMultiServerChild(
+        _ identifier: TideyRestorableSessionServerIdentifier
+    )
+}
+
+@objc(TideyRestorationRejectedServerTerminator)
+@objcMembers
+final class TideyRestorationRejectedServerTerminator:
+    NSObject,
+    TideyRestorationRejectedServerTerminating {
+    private let monoServerTerminator:
+        TideyRestorationMonoServerTerminating
+    private let multiServerChildTerminator:
+        TideyRestorationMultiServerChildTerminating
+
+    init(
+        monoServerTerminator: TideyRestorationMonoServerTerminating,
+        multiServerChildTerminator:
+            TideyRestorationMultiServerChildTerminating
+    ) {
+        self.monoServerTerminator = monoServerTerminator
+        self.multiServerChildTerminator = multiServerChildTerminator
+    }
+
+    func terminateRejectedSessionServers(
+        _ identifiers: [TideyRestorableSessionServerIdentifier]
+    ) {
+        for identifier in identifiers {
+            switch identifier.kind {
+            case .monoServer:
+                monoServerTerminator.terminateRejectedMonoServer(
+                    identifier
+                )
+            case .multiServerChild:
+                multiServerChildTerminator
+                    .terminateRejectedMultiServerChild(identifier)
+            }
+        }
+    }
+}

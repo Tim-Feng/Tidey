@@ -2,6 +2,36 @@ import XCTest
 @testable import iTerm2SharedARC
 
 final class TideyRestorableStatePreflightTests: XCTestCase {
+    func testBlankLaunchGateAndRejectedServerRouterSeamsCompile() {
+        let gate = TideyOrphanAdoptionGate()
+
+        XCTAssertFalse(gate.shouldDiscardOrphanAdoptionForLaunch)
+        gate.discardOrphanAdoptionForLaunch()
+        gate.discardOrphanAdoptionForLaunch()
+        XCTAssertTrue(gate.shouldDiscardOrphanAdoptionForLaunch)
+
+        let monoServer = TideyRestorableSessionServerIdentifier(
+            monoServerProcessID: 42
+        )
+        let multiServer = TideyRestorableSessionServerIdentifier(
+            multiServerSocketNumber: 7,
+            childProcessID: 99
+        )
+        let executors = TideyRejectedServerExecutorSpy()
+        let router = TideyRestorationRejectedServerTerminator(
+            monoServerTerminator: executors,
+            multiServerChildTerminator: executors
+        )
+
+        router.terminateRejectedSessionServers([])
+        XCTAssertTrue(executors.identifiers.isEmpty)
+
+        router.terminateRejectedSessionServers([monoServer, multiServer])
+        XCTAssertEqual(executors.events, ["mono", "multi"])
+        XCTAssertTrue(executors.identifiers[0] === monoServer)
+        XCTAssertTrue(executors.identifiers[1] === multiServer)
+    }
+
     func testPreflightAndLaunchActionGatesCompile() {
         let monoServer = TideyRestorableSessionServerIdentifier(
             monoServerProcessID: 42
@@ -56,6 +86,29 @@ final class TideyRestorableStatePreflightTests: XCTestCase {
             actions.events,
             ["restore", "erase", "discard-orphans", "terminate-2"]
         )
+    }
+}
+
+private final class TideyRejectedServerExecutorSpy:
+    NSObject,
+    TideyRestorationMonoServerTerminating,
+    TideyRestorationMultiServerChildTerminating {
+    private(set) var events = [String]()
+    private(set) var identifiers =
+        [TideyRestorableSessionServerIdentifier]()
+
+    func terminateRejectedMonoServer(
+        _ identifier: TideyRestorableSessionServerIdentifier
+    ) {
+        events.append("mono")
+        identifiers.append(identifier)
+    }
+
+    func terminateRejectedMultiServerChild(
+        _ identifier: TideyRestorableSessionServerIdentifier
+    ) {
+        events.append("multi")
+        identifiers.append(identifier)
     }
 }
 
