@@ -63,6 +63,10 @@ final class TideyWorkspaceRestorationTests: XCTestCase {
         let nativeTmux = panelInput("panel-native-tmux", isNativeTmux: true)
         let empty = panelInput("panel-empty", hasSessions: false)
         let review = panelInput("panel-review")
+        let excludedWorkspacePanel = panelInput(
+            "panel-excluded-native-tmux",
+            isNativeTmux: true
+        )
         let workspaces = [
             TideyWorkspaceRestorationWorkspaceInput(
                 workspaceID: "workspace-build",
@@ -77,6 +81,13 @@ final class TideyWorkspaceRestorationTests: XCTestCase {
                 pinned: false,
                 panels: [review],
                 selectedPanelID: review.panelID
+            ),
+            TideyWorkspaceRestorationWorkspaceInput(
+                workspaceID: "workspace-excluded",
+                title: "Excluded",
+                pinned: false,
+                panels: [excludedWorkspacePanel],
+                selectedPanelID: excludedWorkspacePanel.panelID
             )
         ]
 
@@ -111,6 +122,67 @@ final class TideyWorkspaceRestorationTests: XCTestCase {
         ])
         XCTAssertEqual(fallback.flattenedNativePanelIDs, ["panel-review"])
         XCTAssertTrue(fallback.state.workspaces.isEmpty)
+    }
+
+    func testHydrationUsesDecoderGUIDRemapAfterCollision() {
+        let planner = TideyWorkspaceRestorationPlanner()
+        let build = TideyWorkspaceState(
+            workspaceID: "workspace-build",
+            title: "Build",
+            pinned: true,
+            panelIDs: [
+                "panel-editor",
+                "panel-colliding",
+                "panel-unmapped"
+            ],
+            selectedPanelID: "panel-colliding"
+        )
+        let review = TideyWorkspaceState(
+            workspaceID: "workspace-review",
+            title: nil,
+            pinned: false,
+            panelIDs: ["panel-review"],
+            selectedPanelID: "panel-review"
+        )
+        let savedState = TideyWorkspaceRestorationState(
+            schemaVersion: TideyWorkspaceRestorationState.currentSchemaVersion,
+            selectedWorkspaceID: build.workspaceID,
+            workspaces: [build, review]
+        )
+
+        let hydrated = planner.hydrationState(
+            savedState: savedState,
+            availablePanelIDs: [
+                "panel-editor",
+                "panel-collision-actual",
+                "panel-unmapped",
+                "panel-unmapped-actual",
+                "panel-review"
+            ],
+            panelIDRemap: [
+                "panel-colliding": "panel-collision-actual",
+                "panel-not-in-state": "panel-irrelevant"
+            ]
+        )
+
+        XCTAssertEqual(hydrated.schemaVersion, savedState.schemaVersion)
+        XCTAssertEqual(hydrated.selectedWorkspaceID, "workspace-build")
+        XCTAssertEqual(hydrated.workspaces.map(\.workspaceID), [
+            "workspace-build",
+            "workspace-review"
+        ])
+        XCTAssertEqual(hydrated.workspaces.map(\.panelIDs), [
+            [
+                "panel-editor",
+                "panel-collision-actual",
+                "panel-unmapped"
+            ],
+            ["panel-review"]
+        ])
+        XCTAssertEqual(hydrated.workspaces.map(\.selectedPanelID), [
+            "panel-collision-actual",
+            "panel-review"
+        ])
     }
 
     func testWorkspaceStateRoundTripsStableIdentitiesAndSelections() throws {

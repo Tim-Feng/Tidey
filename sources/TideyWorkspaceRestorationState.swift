@@ -168,7 +168,28 @@ final class TideyWorkspaceRestorationPlanner: NSObject, TideyWorkspaceRestoratio
         availablePanelIDs: [String],
         panelIDRemap: [String: String]
     ) -> TideyWorkspaceRestorationState {
-        savedState
+        guard !panelIDRemap.isEmpty else {
+            return savedState
+        }
+
+        let remappedWorkspaces = savedState.workspaces.map { workspace in
+            TideyWorkspaceState(
+                workspaceID: workspace.workspaceID,
+                title: workspace.title,
+                pinned: workspace.pinned,
+                panelIDs: workspace.panelIDs.map {
+                    panelIDRemap[$0] ?? $0
+                },
+                selectedPanelID: workspace.selectedPanelID.map {
+                    panelIDRemap[$0] ?? $0
+                }
+            )
+        }
+        return TideyWorkspaceRestorationState(
+            schemaVersion: savedState.schemaVersion,
+            selectedWorkspaceID: savedState.selectedWorkspaceID,
+            workspaces: remappedWorkspaces
+        )
     }
 
     private func restorablePanelIDs(
