@@ -276,8 +276,6 @@ struct RuntimeResumeDescriptorSocketUpdate:
     Sendable {
     let binding: RuntimeResumeDescriptorBinding
     let content: RuntimeResumeDescriptorContent
-    let contentFingerprint:
-        RuntimeResumeDescriptorContentFingerprint
 }
 
 protocol RuntimeResumeDescriptorSocketSending: Sendable {
