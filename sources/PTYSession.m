@@ -365,6 +365,8 @@ static NSString *const kTwoCoprocessesCanNotRunAtOnceAnnouncementIdentifier =
 NSString *const PTYSessionArrangementOptionsForDuplication = @"PTYSessionArrangementOptionsForDuplication";
 NSString *const PTYSessionArrangementOptionsUnlimitedHistory = @"PTYSessionArrangementOptionsUnlimitedHistory";
 NSString *const PTYSessionArrangementOptionsArchive = @"PTYSessionArrangementOptionsArchive";
+NSString *const PTYSessionArrangementOptionsTideyManagedRuntimeDescriptor =
+    @"PTYSessionArrangementOptionsTideyManagedRuntimeDescriptor";
 
 static char iTermEffectiveAppearanceKey;
 
@@ -2339,6 +2341,27 @@ ITERM_WEAKLY_REFERENCEABLE
                 aSession.guid = guid;
                 DLog(@"iTerm2 is starting up or has contents. Assign guid %@ to session %@ (session is loaded from saved arrangement. No content registered.)", guid, aSession);
             }
+        }
+
+        aSession.tideyNativeServerReattachOutcome =
+            attachedToServer
+                ? TideyNativeServerReattachOutcomeSucceeded
+                : TideyNativeServerReattachOutcomeFailed;
+        TideyManagedRestoreLaunchPolicy *tideyLaunchPolicy =
+            [[[TideyManagedRestoreLaunchPolicy alloc] init] autorelease];
+        TideyManagedRestoreLaunchDisposition tideyLaunchDisposition =
+            [tideyLaunchPolicy
+                dispositionForNativeReattachOutcome:
+                    aSession.tideyNativeServerReattachOutcome
+                hasValidDescriptor:
+                    [options[
+                        PTYSessionArrangementOptionsTideyManagedRuntimeDescriptor
+                    ] boolValue]];
+        if (runCommand &&
+            tideyLaunchDisposition ==
+                TideyManagedRestoreLaunchDispositionDeferToRuntimeRehydrator) {
+            DLog(@"Deferring saved program launch to Tidey runtime rehydration");
+            runCommand = NO;
         }
 
         DLog(@"Have contents=%@", @(contents != nil));

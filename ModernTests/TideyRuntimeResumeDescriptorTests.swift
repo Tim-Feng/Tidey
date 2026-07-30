@@ -397,6 +397,39 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
         )
     }
 
+    func testManagedRestoreDefersSavedProgramOnlyAfterNativeReattachFails() {
+        let policy = TideyManagedRestoreLaunchPolicy()
+
+        XCTAssertEqual(
+            policy.disposition(
+                nativeReattachOutcome: .notAttempted,
+                hasValidDescriptor: true
+            ),
+            .launchSavedProgram
+        )
+        XCTAssertEqual(
+            policy.disposition(
+                nativeReattachOutcome: .succeeded,
+                hasValidDescriptor: true
+            ),
+            .preserveNativeAttachment
+        )
+        XCTAssertEqual(
+            policy.disposition(
+                nativeReattachOutcome: .failed,
+                hasValidDescriptor: false
+            ),
+            .launchSavedProgram
+        )
+        XCTAssertEqual(
+            policy.disposition(
+                nativeReattachOutcome: .failed,
+                hasValidDescriptor: true
+            ),
+            .deferToRuntimeRehydrator
+        )
+    }
+
     func testVersionedDescriptorAndNativeReattachOutcomeSeamsCompile() {
         let launch = TideyRuntimeLaunchSpecification(
             executable: "/usr/local/bin/codex",

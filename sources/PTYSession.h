@@ -54,6 +54,9 @@ extern NSString *const PTYCommandDidExitUserInfoKeyURL;
 extern NSString *const PTYSessionArrangementOptionsForDuplication;
 extern NSString *const PTYSessionArrangementOptionsUnlimitedHistory;
 extern NSString *const PTYSessionArrangementOptionsArchive;
+// Transient restore option. PTYTab forwards this only to its saved active
+// session when the saved panel owns a validated Tidey runtime descriptor.
+extern NSString *const PTYSessionArrangementOptionsTideyManagedRuntimeDescriptor;
 
 @class CapturedOutput;
 @protocol ExternalSearchResultsController;

@@ -6652,6 +6652,20 @@ ITERM_WEAKLY_REFERENCEABLE
         if (sessions) {
             sessionMap = [PTYTab sessionMapWithArrangement:tabArrangement sessions:sessions];
         }
+        NSString *savedPanelID = [PTYTab guidInArrangement:tabArrangement];
+        TideyRuntimeResumeDescriptor *savedDescriptor =
+            _tideyPendingWorkspaceRestorationState
+                .runtimeDescriptorsByPanelID[savedPanelID ?: @""];
+        NSMutableDictionary *restoreOptions =
+            [NSMutableDictionary dictionary];
+        if (arrangement[TERMINAL_ARRANGEMENT_ARCHIVE] != nil) {
+            restoreOptions[PTYSessionArrangementOptionsArchive] = @YES;
+        }
+        if (savedDescriptor) {
+            restoreOptions[
+                PTYSessionArrangementOptionsTideyManagedRuntimeDescriptor
+            ] = @YES;
+        }
         PTYTab *restoredTab =
             [self openTabWithArrangement:tabArrangement
                                    named:arrangementName
@@ -6659,11 +6673,12 @@ ITERM_WEAKLY_REFERENCEABLE
                                  viewMap:nil
                               sessionMap:sessionMap
                     partialAttachments:partialAttachments
-                                options:arrangement[TERMINAL_ARRANGEMENT_ARCHIVE] != nil ? @{ PTYSessionArrangementOptionsArchive: @YES } : nil];
+                                options:restoreOptions.count > 0
+                                    ? restoreOptions
+                                    : nil];
         if (!restoredTab) {
             return NO;
         }
-        NSString *savedPanelID = [PTYTab guidInArrangement:tabArrangement];
         NSString *actualPanelID = restoredTab.stringUniqueIdentifier;
         if (_tideyPendingWorkspaceRestorationState &&
             savedPanelID.length > 0 &&

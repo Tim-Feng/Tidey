@@ -3236,13 +3236,25 @@ static void SetAgainstGrainDim(BOOL isVertical, NSSize *dest, CGFloat value) {
             session = [self sessionForSessionView:sessionView];
             [session setSizeFromArrangement:[arrangement objectForKey:TAB_ARRANGEMENT_SESSION]];
         } else {
+            NSDictionary *sessionOptions = options;
+            if ([options[
+                    PTYSessionArrangementOptionsTideyManagedRuntimeDescriptor
+                ] boolValue] &&
+                ![arrangement[TAB_ARRANGEMENT_IS_ACTIVE] boolValue]) {
+                NSMutableDictionary *mutableOptions =
+                    [options mutableCopy];
+                [mutableOptions
+                    removeObjectForKey:
+                        PTYSessionArrangementOptionsTideyManagedRuntimeDescriptor];
+                sessionOptions = mutableOptions;
+            }
             session = [PTYSession sessionFromArrangement:[arrangement objectForKey:TAB_ARRANGEMENT_SESSION]
                                                    named:arrangementName
                                                   inView:view
                                             withDelegate:theTab
                                            forObjectType:objectType
                                       partialAttachments:partialAttachments
-                                                 options:options];
+                                                 options:sessionOptions];
             [self.viewToSessionMap setObject:session forKey:view];
         }
         if ([[arrangement objectForKey:TAB_ARRANGEMENT_IS_ACTIVE] boolValue]) {

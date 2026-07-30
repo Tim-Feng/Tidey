@@ -247,6 +247,37 @@ enum TideyRuntimeResumeDescriptorCodecError: Error, Equatable {
     case malformedField(String)
 }
 
+@objc(TideyManagedRestoreLaunchDisposition)
+enum TideyManagedRestoreLaunchDisposition: Int {
+    case preserveNativeAttachment
+    case launchSavedProgram
+    case deferToRuntimeRehydrator
+}
+
+@objc(TideyManagedRestoreLaunchPolicy)
+@objcMembers
+final class TideyManagedRestoreLaunchPolicy: NSObject {
+    @objc(
+        dispositionForNativeReattachOutcome:hasValidDescriptor:
+    )
+    func disposition(
+        nativeReattachOutcome:
+            TideyNativeServerReattachOutcome,
+        hasValidDescriptor: Bool
+    ) -> TideyManagedRestoreLaunchDisposition {
+        switch nativeReattachOutcome {
+        case .succeeded:
+            return .preserveNativeAttachment
+        case .failed where hasValidDescriptor:
+            return .deferToRuntimeRehydrator
+        case .notAttempted, .failed:
+            return .launchSavedProgram
+        @unknown default:
+            return .launchSavedProgram
+        }
+    }
+}
+
 private struct TideyRuntimeResumeLaunchWire: Codable {
     let executable: String
     let arguments: [String]
