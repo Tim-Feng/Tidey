@@ -24307,6 +24307,7 @@
 				SWIFT_VERSION = 5.0;
 				TEST_HOST = "$(BUILD_ROOT)/$(CONFIGURATION)/Tidey Dev.app/Contents/MacOS/Tidey Dev";
 				USER_HEADER_SEARCH_PATHS = (
+					"$(CONFIGURATION_TEMP_DIR)/iTerm2SharedARC.build/DerivedSources",
 					"$(SRCROOT)/ThirdParty",
 					"$(PROJECT_DIR)/ThirdParty/adblock-rust/include",
 				);
@@ -24387,6 +24388,7 @@
 				SWIFT_VERSION = 5.0;
 				TEST_HOST = "$(SRCROOT)/build/Development/Tidey.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Tidey";
 				USER_HEADER_SEARCH_PATHS = (
+					"$(CONFIGURATION_TEMP_DIR)/iTerm2SharedARC.build/DerivedSources",
 					"$(SRCROOT)/ThirdParty",
 					"$(PROJECT_DIR)/ThirdParty/adblock-rust/include",
 				);
@@ -24467,6 +24469,7 @@
 				SWIFT_VERSION = 5.0;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Tidey.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Tidey";
 				USER_HEADER_SEARCH_PATHS = (
+					"$(CONFIGURATION_TEMP_DIR)/iTerm2SharedARC.build/DerivedSources",
 					"$(SRCROOT)/ThirdParty",
 					"$(PROJECT_DIR)/ThirdParty/adblock-rust/include",
 				);
@@ -24547,6 +24550,7 @@
 				SWIFT_VERSION = 5.0;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Tidey.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Tidey";
 				USER_HEADER_SEARCH_PATHS = (
+					"$(CONFIGURATION_TEMP_DIR)/iTerm2SharedARC.build/DerivedSources",
 					"$(SRCROOT)/ThirdParty",
 					"$(PROJECT_DIR)/ThirdParty/adblock-rust/include",
 				);
