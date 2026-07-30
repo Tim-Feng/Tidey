@@ -10,6 +10,7 @@
 NS_ASSUME_NONNULL_BEGIN
 
 @class NSWindow;
+@class TideyRestorableStatePreflight;
 
 @protocol iTermRestorableStateRecord<NSObject>
 - (void)didFinishRestoring;
@@ -27,6 +28,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)restorableStateIndexUnlink;
 
 - (id<iTermRestorableStateRecord> _Nullable)restorableStateRecordAtIndex:(NSUInteger)i;
+
+@property (nonatomic, readonly) TideyRestorableStatePreflight *restorableStateIndexPreflight;
 
 @end
 

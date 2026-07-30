@@ -9,6 +9,8 @@
 
 #import "DebugLogging.h"
 #import "NSObject+iTerm.h"
+#import "PTYWindow.h"
+#import "iTerm2SharedARC-Swift.h"
 #import "iTermRestorableStateRecord.h"
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -19,6 +21,10 @@
 @end
 
 @implementation iTermRestorableStateRestorerIndex
+
+{
+    TideyRestorableStatePreflight *_preflight;
+}
 
 - (instancetype)initWithURL:(NSURL *)url {
     self = [super init];
@@ -39,6 +45,63 @@
 
 - (id<iTermRestorableStateRecord>)restorableStateRecordAtIndex:(NSUInteger)i {
     return [[iTermRestorableStateRecord alloc] initWithIndexEntry:_entries[i]];
+}
+
+- (TideyRestorableStatePreflight *)restorableStateIndexPreflight {
+    if (_preflight) {
+        return _preflight;
+    }
+
+    const BOOL stateExists =
+        [[NSFileManager defaultManager] fileExistsAtPath:_url.path];
+    BOOL isValid = stateExists && (_entries != nil);
+    NSMutableArray *windowPayloads = [NSMutableArray array];
+    if (isValid) {
+        for (NSDictionary *entry in _entries) {
+            iTermRestorableStateRecord *record =
+                [[iTermRestorableStateRecord alloc] initWithIndexEntry:entry];
+            if (!record) {
+                isValid = NO;
+                break;
+            }
+            NSError *error = nil;
+            NSKeyedUnarchiver *unarchiver =
+                [[NSKeyedUnarchiver alloc] initForReadingFromData:record.plaintext
+                                                            error:&error];
+            if (!unarchiver || error) {
+                isValid = NO;
+                break;
+            }
+            unarchiver.requiresSecureCoding = NO;
+            @try {
+                id payload =
+                    [unarchiver decodeObjectForKey:
+                        kTerminalWindowStateRestorationWindowArrangementKey];
+                [unarchiver finishDecoding];
+                if (![payload isKindOfClass:[NSDictionary class]]) {
+                    isValid = NO;
+                    break;
+                }
+                [windowPayloads addObject:payload];
+            } @catch (NSException *exception) {
+                DLog(@"Legacy restoration preflight decode failed: %@", exception);
+                isValid = NO;
+                break;
+            }
+        }
+    }
+    if (!isValid) {
+        [windowPayloads removeAllObjects];
+    }
+
+    TideyRestorableStatePreflightBuilder *builder =
+        [[TideyRestorableStatePreflightBuilder alloc] init];
+    _preflight = [builder preflightWithStateExists:stateExists
+                                          isValid:isValid
+                                  numberOfWindows:_entries.count
+                                      rootPayload:nil
+                                   windowPayloads:windowPayloads];
+    return _preflight;
 }
 
 @end

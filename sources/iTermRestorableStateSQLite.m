@@ -8,6 +8,7 @@
 #import "iTermRestorableStateSQLite.h"
 
 #import "DebugLogging.h"
+#import "iTerm2SharedARC-Swift.h"
 #import "iTermGraphDatabase.h"
 #import "iTermThreadSafety.h"
 #import "NSArray+iTerm.h"
@@ -101,6 +102,26 @@
     return [[iTermRestorableStateSQLiteRecord alloc] initWithIndex:i
                                                       windowNumber:windowNumber
                                                         identifier:identifier ?: @""];
+}
+
+- (TideyRestorableStatePreflight *)restorableStateIndexPreflight {
+    id rootPayload = _record.propertyListValue;
+    const BOOL stateExists = (rootPayload != nil);
+    const BOOL isValid = stateExists && (_windows != nil);
+    NSMutableArray *windowPayloads = [NSMutableArray array];
+    for (iTermEncoderGraphRecord *window in _windows) {
+        id payload = window.propertyListValue;
+        if (payload) {
+            [windowPayloads addObject:payload];
+        }
+    }
+    TideyRestorableStatePreflightBuilder *builder =
+        [[TideyRestorableStatePreflightBuilder alloc] init];
+    return [builder preflightWithStateExists:stateExists
+                                     isValid:isValid
+                             numberOfWindows:_windows.count
+                                 rootPayload:rootPayload
+                              windowPayloads:windowPayloads];
 }
 
 - (id)objectAtIndexedSubscript:(NSUInteger)idx {
