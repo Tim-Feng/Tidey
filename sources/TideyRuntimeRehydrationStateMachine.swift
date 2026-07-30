@@ -109,6 +109,21 @@ protocol TideyRuntimePanelLaunching: NSObjectProtocol {
     )
 }
 
+@objc(TideyRuntimeAttachCommandBuilder)
+@objcMembers
+final class TideyRuntimeAttachCommandBuilder: NSObject {
+    @objc(
+        commandWithTmuxExecutable:socketArguments:tmuxSession:
+    )
+    func command(
+        tmuxExecutable: String,
+        socketArguments: [String],
+        tmuxSession: String
+    ) -> String? {
+        nil
+    }
+}
+
 @objc(TideyRuntimeRehydrationReducer)
 @objcMembers
 final class TideyRuntimeRehydrationReducer:

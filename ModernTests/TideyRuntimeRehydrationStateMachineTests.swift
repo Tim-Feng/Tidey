@@ -2,6 +2,18 @@ import XCTest
 @testable import iTerm2SharedARC
 
 final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
+    func testRuntimeAttachCommandBuilderSeamCompiles() {
+        let builder = TideyRuntimeAttachCommandBuilder()
+
+        XCTAssertNil(
+            builder.command(
+                tmuxExecutable: "/opt/homebrew/bin/tmux",
+                socketArguments: [],
+                tmuxSession: "work"
+            )
+        )
+    }
+
     func testReducerAndExecutorSeamsCompile() {
         let reducer = TideyRuntimeRehydrationReducer()
         let targetProbe = TideyRuntimeTargetProbeSpy()
