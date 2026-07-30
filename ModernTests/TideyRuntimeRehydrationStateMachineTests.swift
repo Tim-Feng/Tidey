@@ -109,6 +109,155 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
         XCTAssertEqual(targetProbe.probeCount, 3)
     }
 
+    func testPolicyMatrixPreservesGenericAttachOnlyAndRecreatesAgentCreateTargets() {
+        let reducer = TideyRuntimeRehydrationReducer()
+        let attachOnly = TideyRuntimeResumeDescriptor(
+            descriptorVersion:
+                TideyRuntimeResumeDescriptor.currentDescriptorVersion,
+            revision: 1,
+            kind: .generic,
+            restorePolicy: .attachOnly,
+            target: TideyRuntimeResumeTarget(
+                defaultSocketAndTmuxSession: "generic-attach"
+            ),
+            topology: nil,
+            agent: nil
+        )
+        let runtime = TideyRuntimeResumeDescriptor(
+            descriptorVersion:
+                TideyRuntimeResumeDescriptor.currentDescriptorVersion,
+            revision: 2,
+            kind: .generic,
+            restorePolicy: .runtime,
+            target: TideyRuntimeResumeTarget(
+                defaultSocketAndTmuxSession: "generic-runtime"
+            ),
+            topology: nil,
+            agent: nil
+        )
+        let create = descriptor(revision: 3)
+
+        assertTransition(
+            reducer,
+            from: .awaitingNativeRestore,
+            event: .nativeReattachSucceeded,
+            descriptor: attachOnly,
+            equals: .nativeAttached,
+            effect: .none
+        )
+        for descriptor in [attachOnly, runtime, create] {
+            assertTransition(
+                reducer,
+                from: .awaitingNativeRestore,
+                event: .nativeReattachFailed,
+                descriptor: descriptor,
+                equals: .checkingTarget,
+                effect: .probeTarget
+            )
+            assertTransition(
+                reducer,
+                from: .checkingTarget,
+                event: .targetFound,
+                descriptor: descriptor,
+                equals: .attachingExisting,
+                effect: .attachExisting
+            )
+        }
+        for descriptor in [attachOnly, runtime] {
+            assertTransition(
+                reducer,
+                from: .checkingTarget,
+                event: .targetMissing,
+                descriptor: descriptor,
+                equals: .unavailable,
+                effect: .markUnavailable
+            )
+        }
+        assertTransition(
+            reducer,
+            from: .checkingTarget,
+            event: .targetMissing,
+            descriptor: create,
+            equals: .creatingTopology,
+            effect: .createTopology
+        )
+        assertTransition(
+            reducer,
+            from: .creatingTopology,
+            event: .topologyCreated,
+            descriptor: create,
+            equals: .resumingAgent,
+            effect: .resumeAgent
+        )
+        assertTransition(
+            reducer,
+            from: .resumingAgent,
+            event: .agentResumed,
+            descriptor: create,
+            equals: .attachingExisting,
+            effect: .attachExisting
+        )
+        assertTransition(
+            reducer,
+            from: .attachingExisting,
+            event: .panelAttached,
+            descriptor: create,
+            equals: .restored,
+            effect: .none
+        )
+        assertTransition(
+            reducer,
+            from: .checkingTarget,
+            event: .targetProbeFailed,
+            descriptor: create,
+            equals: .failed,
+            effect: .none
+        )
+        for phase in [
+            TideyRuntimeRehydrationPhase.attachingExisting,
+            .creatingTopology,
+            .resumingAgent,
+        ] {
+            assertTransition(
+                reducer,
+                from: phase,
+                event: .operationFailed,
+                descriptor: create,
+                equals: .failed,
+                effect: .none
+            )
+        }
+    }
+
+    private func assertTransition(
+        _ reducer: TideyRuntimeRehydrationReducing,
+        from phase: TideyRuntimeRehydrationPhase,
+        event: TideyRuntimeRehydrationEvent,
+        descriptor: TideyRuntimeResumeDescriptor,
+        equals nextPhase: TideyRuntimeRehydrationPhase,
+        effect: TideyRuntimeRehydrationEffect,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let transition = reducer.transition(
+            from: phase,
+            event: event,
+            descriptor: descriptor
+        )
+        XCTAssertEqual(
+            transition.nextPhase,
+            nextPhase,
+            file: file,
+            line: line
+        )
+        XCTAssertEqual(
+            transition.effect,
+            effect,
+            file: file,
+            line: line
+        )
+    }
+
     private func descriptor(
         revision: Int64
     ) -> TideyRuntimeResumeDescriptor {

@@ -300,6 +300,706 @@ static NSString *TideySubmitLogSuffix(NSString *input) {
 
 @end
 
+static NSString *TideyRuntimeTmuxExecutablePath(void) {
+    static NSString *path;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSMutableArray<NSString *> *candidates = [NSMutableArray array];
+        NSString *environmentPath = [NSProcessInfo processInfo].environment[@"PATH"];
+        for (NSString *directory in [environmentPath componentsSeparatedByString:@":"]) {
+            if (directory.length > 0) {
+                [candidates addObject:[directory stringByAppendingPathComponent:@"tmux"]];
+            }
+        }
+        [candidates addObjectsFromArray:@[
+            @"/opt/homebrew/bin/tmux",
+            @"/usr/local/bin/tmux",
+            @"/usr/bin/tmux",
+        ]];
+        for (NSString *candidate in candidates) {
+            if ([[NSFileManager defaultManager] isExecutableFileAtPath:candidate]) {
+                path = [candidate copy];
+                break;
+            }
+        }
+    });
+    return path;
+}
+
+static NSArray<NSString *> *TideyRuntimeTmuxSocketArguments(
+    TideyRuntimeResumeTarget *target
+) {
+    switch (target.socketEndpointKind) {
+        case TideyRuntimeTmuxSocketEndpointKindPath:
+            return target.socketPath.length > 0
+                ? @[ @"-S", target.socketPath ]
+                : nil;
+        case TideyRuntimeTmuxSocketEndpointKindName:
+            return target.socketName.length > 0
+                ? @[ @"-L", target.socketName ]
+                : nil;
+        case TideyRuntimeTmuxSocketEndpointKindDefaultSocket:
+            return @[];
+    }
+}
+
+static NSString *TideyRuntimeExactSessionTarget(NSString *sessionName) {
+    return [@"=" stringByAppendingString:sessionName];
+}
+
+static NSString *TideyRuntimeWindowTarget(
+    NSString *sessionName,
+    NSInteger windowIndex
+) {
+    return [NSString stringWithFormat:@"=%@:%ld",
+            sessionName,
+            (long)windowIndex];
+}
+
+static BOOL TideyRuntimeRunTask(
+    NSString *executable,
+    NSArray<NSString *> *arguments,
+    NSString **output
+) {
+    if (executable.length == 0) {
+        return NO;
+    }
+    NSTask *task = [[[NSTask alloc] init] autorelease];
+    NSPipe *pipe = [NSPipe pipe];
+    task.launchPath = executable;
+    task.arguments = arguments;
+    NSMutableDictionary<NSString *, NSString *> *environment =
+        [NSMutableDictionary dictionaryWithDictionary:
+         [NSProcessInfo processInfo].environment];
+    [environment removeObjectsForKeys:@[
+        @"TMUX",
+        @"TMUX_PANE",
+        @"TIDEY_WORKSPACE_ID",
+        @"TIDEY_PANEL_ID",
+        @"TIDEY_AGENT_SESSION_ID",
+        @"TIDEY_AGENT_VENDOR",
+    ]];
+    task.environment = environment;
+    task.standardOutput = pipe;
+    @try {
+        [task launch];
+    } @catch (NSException *exception) {
+        DLog(@"Tidey runtime task failed to launch: %@", exception);
+        return NO;
+    }
+    NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
+    [task waitUntilExit];
+    if (output) {
+        *output = [[[NSString alloc] initWithData:data
+                                        encoding:NSUTF8StringEncoding] autorelease];
+    }
+    return task.terminationReason == NSTaskTerminationReasonExit &&
+        task.terminationStatus == 0;
+}
+
+static BOOL TideyRuntimeRunTmux(
+    TideyRuntimeResumeDescriptor *descriptor,
+    NSArray<NSString *> *commandArguments,
+    NSString **output
+) {
+    NSString *executable = TideyRuntimeTmuxExecutablePath();
+    NSArray<NSString *> *socketArguments =
+        TideyRuntimeTmuxSocketArguments(descriptor.target);
+    if (!executable || !socketArguments) {
+        return NO;
+    }
+    return TideyRuntimeRunTask(
+        executable,
+        [socketArguments arrayByAddingObjectsFromArray:commandArguments],
+        output
+    );
+}
+
+static NSArray<NSString *> *TideyRuntimeNonemptyLines(NSString *output) {
+    NSMutableArray<NSString *> *lines = [NSMutableArray array];
+    for (NSString *line in [output componentsSeparatedByCharactersInSet:
+                            [NSCharacterSet newlineCharacterSet]]) {
+        NSString *trimmed =
+            [line stringByTrimmingCharactersInSet:
+             [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (trimmed.length > 0) {
+            [lines addObject:trimmed];
+        }
+    }
+    return lines;
+}
+
+static NSArray<TideyRuntimeTmuxWindowTopology *> *
+TideyRuntimeSortedWindows(TideyRuntimeTmuxTopology *topology) {
+    return [topology.windows sortedArrayUsingComparator:
+            ^NSComparisonResult(TideyRuntimeTmuxWindowTopology *lhs,
+                                TideyRuntimeTmuxWindowTopology *rhs) {
+        if (lhs.index < rhs.index) {
+            return NSOrderedAscending;
+        }
+        if (lhs.index > rhs.index) {
+            return NSOrderedDescending;
+        }
+        return NSOrderedSame;
+    }];
+}
+
+static NSArray<TideyRuntimeTmuxPaneTopology *> *
+TideyRuntimeSortedPanes(TideyRuntimeTmuxWindowTopology *window) {
+    return [window.panes sortedArrayUsingComparator:
+            ^NSComparisonResult(TideyRuntimeTmuxPaneTopology *lhs,
+                                TideyRuntimeTmuxPaneTopology *rhs) {
+        if (lhs.index < rhs.index) {
+            return NSOrderedAscending;
+        }
+        if (lhs.index > rhs.index) {
+            return NSOrderedDescending;
+        }
+        return NSOrderedSame;
+    }];
+}
+
+static BOOL TideyRuntimeLaunchIsAllowlisted(
+    TideyRuntimeLaunchSpecification *launch
+) {
+    if (launch.executable.length == 0 ||
+        launch.arguments.count != 2 ||
+        [launch.arguments[1] length] == 0 ||
+        [launch.workingDirectory isEqualToString:@""]) {
+        return NO;
+    }
+    return ([launch.executable isEqualToString:@"claude"] &&
+            [launch.arguments[0] isEqualToString:@"--resume"]) ||
+        ([launch.executable isEqualToString:@"codex"] &&
+         [launch.arguments[0] isEqualToString:@"resume"]);
+}
+
+static BOOL TideyRuntimeLaunchesAreEqual(
+    TideyRuntimeLaunchSpecification *lhs,
+    TideyRuntimeLaunchSpecification *rhs
+) {
+    return [lhs.executable isEqualToString:rhs.executable] &&
+        [lhs.arguments isEqualToArray:rhs.arguments] &&
+        ((lhs.workingDirectory == nil && rhs.workingDirectory == nil) ||
+         [lhs.workingDirectory isEqualToString:rhs.workingDirectory]);
+}
+
+@interface PseudoTerminal (TideyRuntimeRehydrationPrivate)
+
+- (PTYSession *)tideySelectedSessionForPanelIdentifier:(NSString *)panelIdentifier;
+
+@end
+
+@interface TideyRuntimeRehydrationExecutor : NSObject <
+    TideyRuntimeTargetProbing,
+    TideyRuntimeTopologyCreating,
+    TideyRuntimePanelLaunching>
+
+- (instancetype)initWithWindowController:(PseudoTerminal *)windowController;
+
+@end
+
+@implementation TideyRuntimeRehydrationExecutor {
+    PseudoTerminal *_windowController;
+    dispatch_queue_t _queue;
+}
+
+- (instancetype)initWithWindowController:(PseudoTerminal *)windowController {
+    self = [super init];
+    if (self) {
+        _windowController = windowController;
+        _queue = dispatch_queue_create(
+            "com.tidey.runtime-rehydration",
+            DISPATCH_QUEUE_SERIAL
+        );
+    }
+    return self;
+}
+
+- (void)dealloc {
+    dispatch_release(_queue);
+    [super dealloc];
+}
+
+- (void)probeTargetForDescriptor:(TideyRuntimeResumeDescriptor *)descriptor
+                      completion:(void (^)(TideyRuntimeTargetProbeResult))completion {
+    dispatch_async(_queue, ^{
+        NSString *executable = TideyRuntimeTmuxExecutablePath();
+        NSArray<NSString *> *socketArguments =
+            TideyRuntimeTmuxSocketArguments(descriptor.target);
+        if (!executable || !socketArguments ||
+            descriptor.target.tmuxSession.length == 0) {
+            completion(TideyRuntimeTargetProbeResultFailed);
+            return;
+        }
+        NSTask *task = [[[NSTask alloc] init] autorelease];
+        task.launchPath = executable;
+        task.arguments = [socketArguments arrayByAddingObjectsFromArray:@[
+            @"has-session",
+            @"-t",
+            TideyRuntimeExactSessionTarget(
+                descriptor.target.tmuxSession
+            ),
+        ]];
+        NSMutableDictionary<NSString *, NSString *> *environment =
+            [NSMutableDictionary dictionaryWithDictionary:
+             [NSProcessInfo processInfo].environment];
+        [environment removeObjectsForKeys:@[
+            @"TMUX",
+            @"TMUX_PANE",
+            @"TIDEY_WORKSPACE_ID",
+            @"TIDEY_PANEL_ID",
+            @"TIDEY_AGENT_SESSION_ID",
+            @"TIDEY_AGENT_VENDOR",
+        ]];
+        task.environment = environment;
+        @try {
+            [task launch];
+        } @catch (NSException *exception) {
+            DLog(@"Tidey runtime probe failed to launch: %@", exception);
+            completion(TideyRuntimeTargetProbeResultFailed);
+            return;
+        }
+        [task waitUntilExit];
+        if (task.terminationReason != NSTaskTerminationReasonExit) {
+            completion(TideyRuntimeTargetProbeResultFailed);
+        } else if (task.terminationStatus == 0) {
+            completion(TideyRuntimeTargetProbeResultExisting);
+        } else if (task.terminationStatus == 1) {
+            completion(TideyRuntimeTargetProbeResultMissing);
+        } else {
+            completion(TideyRuntimeTargetProbeResultFailed);
+        }
+    });
+}
+
+- (void)createTopologyForDescriptor:(TideyRuntimeResumeDescriptor *)descriptor
+                         completion:(void (^)(BOOL))completion {
+    dispatch_async(_queue, ^{
+        completion([self createTopologyForDescriptor:descriptor]);
+    });
+}
+
+- (BOOL)createTopologyForDescriptor:(TideyRuntimeResumeDescriptor *)descriptor {
+    if (descriptor.kind != TideyRuntimeResumeKindAgent ||
+        descriptor.restorePolicy != TideyRuntimeRestorePolicyCreate ||
+        descriptor.target.tmuxSession.length == 0 ||
+        !descriptor.agent ||
+        !TideyRuntimeLaunchIsAllowlisted(descriptor.agent.launch)) {
+        return NO;
+    }
+
+    NSArray<TideyRuntimeTmuxWindowTopology *> *windows =
+        descriptor.topology
+            ? TideyRuntimeSortedWindows(descriptor.topology)
+            : @[];
+    if (descriptor.topology && windows.count == 0) {
+        return NO;
+    }
+    for (TideyRuntimeTmuxWindowTopology *window in windows) {
+        if (window.index < 0 || window.panes.count == 0) {
+            return NO;
+        }
+        for (TideyRuntimeTmuxPaneTopology *pane
+             in TideyRuntimeSortedPanes(window)) {
+            if (pane.index < 0 ||
+                [pane.workingDirectory isEqualToString:@""] ||
+                (pane.launch &&
+                 !TideyRuntimeLaunchIsAllowlisted(pane.launch))) {
+                return NO;
+            }
+        }
+    }
+
+    TideyRuntimeTmuxWindowTopology *firstWindow = windows.firstObject;
+    TideyRuntimeTmuxPaneTopology *firstPane =
+        TideyRuntimeSortedPanes(firstWindow).firstObject;
+    NSString *initialDirectory =
+        firstPane.workingDirectory ?:
+        descriptor.agent.launch.workingDirectory;
+    NSMutableArray<NSString *> *newSessionArguments =
+        [NSMutableArray arrayWithArray:@[
+            @"new-session",
+            @"-d",
+            @"-P",
+            @"-F",
+            @"#{window_index}",
+            @"-s",
+            descriptor.target.tmuxSession,
+        ]];
+    if (firstWindow.name.length > 0) {
+        [newSessionArguments addObjectsFromArray:@[
+            @"-n",
+            firstWindow.name,
+        ]];
+    }
+    if (initialDirectory.length > 0) {
+        [newSessionArguments addObjectsFromArray:@[
+            @"-c",
+            initialDirectory,
+        ]];
+    }
+    NSString *createdWindowIndexOutput = nil;
+    if (!TideyRuntimeRunTmux(
+            descriptor,
+            newSessionArguments,
+            &createdWindowIndexOutput
+        )) {
+        return NO;
+    }
+    BOOL createdSession = YES;
+    BOOL succeeded = YES;
+
+    if (firstWindow) {
+        NSString *trimmedIndex =
+            [createdWindowIndexOutput stringByTrimmingCharactersInSet:
+             [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        NSInteger createdWindowIndex = trimmedIndex.integerValue;
+        if (trimmedIndex.length == 0 ||
+            ![[NSString stringWithFormat:@"%ld",
+               (long)createdWindowIndex] isEqualToString:trimmedIndex]) {
+            succeeded = NO;
+        } else if (createdWindowIndex != firstWindow.index) {
+            succeeded = TideyRuntimeRunTmux(
+                descriptor,
+                @[
+                    @"move-window",
+                    @"-s",
+                    TideyRuntimeWindowTarget(
+                        descriptor.target.tmuxSession,
+                        createdWindowIndex
+                    ),
+                    @"-t",
+                    TideyRuntimeWindowTarget(
+                        descriptor.target.tmuxSession,
+                        firstWindow.index
+                    ),
+                ],
+                nil
+            );
+        }
+    }
+
+    for (NSUInteger windowOffset = 0;
+         succeeded && windowOffset < windows.count;
+         windowOffset++) {
+        TideyRuntimeTmuxWindowTopology *window = windows[windowOffset];
+        NSArray<TideyRuntimeTmuxPaneTopology *> *panes =
+            TideyRuntimeSortedPanes(window);
+        if (windowOffset > 0) {
+            TideyRuntimeTmuxPaneTopology *pane = panes.firstObject;
+            NSMutableArray<NSString *> *newWindowArguments =
+                [NSMutableArray arrayWithArray:@[
+                    @"new-window",
+                    @"-d",
+                    @"-t",
+                    TideyRuntimeWindowTarget(
+                        descriptor.target.tmuxSession,
+                        window.index
+                    ),
+                ]];
+            if (window.name.length > 0) {
+                [newWindowArguments addObjectsFromArray:@[
+                    @"-n",
+                    window.name,
+                ]];
+            }
+            if (pane.workingDirectory.length > 0) {
+                [newWindowArguments addObjectsFromArray:@[
+                    @"-c",
+                    pane.workingDirectory,
+                ]];
+            }
+            succeeded = TideyRuntimeRunTmux(
+                descriptor,
+                newWindowArguments,
+                nil
+            );
+        }
+        for (NSUInteger paneOffset = 1;
+             succeeded && paneOffset < panes.count;
+             paneOffset++) {
+            TideyRuntimeTmuxPaneTopology *pane = panes[paneOffset];
+            NSMutableArray<NSString *> *splitArguments =
+                [NSMutableArray arrayWithArray:@[
+                    @"split-window",
+                    @"-d",
+                    @"-t",
+                    TideyRuntimeWindowTarget(
+                        descriptor.target.tmuxSession,
+                        window.index
+                    ),
+                ]];
+            if (pane.workingDirectory.length > 0) {
+                [splitArguments addObjectsFromArray:@[
+                    @"-c",
+                    pane.workingDirectory,
+                ]];
+            }
+            succeeded = TideyRuntimeRunTmux(
+                descriptor,
+                splitArguments,
+                nil
+            );
+        }
+    }
+
+    if (!succeeded && createdSession) {
+        TideyRuntimeRunTmux(
+            descriptor,
+            @[
+                @"kill-session",
+                @"-t",
+                TideyRuntimeExactSessionTarget(
+                    descriptor.target.tmuxSession
+                ),
+            ],
+            nil
+        );
+    }
+    return succeeded;
+}
+
+- (void)resumeAgentInPanel:(NSString *)panelID
+            withDescriptor:(TideyRuntimeResumeDescriptor *)descriptor
+                completion:(void (^)(BOOL))completion {
+    dispatch_async(_queue, ^{
+        completion([self resumeAgentWithDescriptor:descriptor]);
+    });
+}
+
+- (BOOL)resumeAgentWithDescriptor:(TideyRuntimeResumeDescriptor *)descriptor {
+    TideyRuntimeAgentResumeSpecification *agent = descriptor.agent;
+    if (descriptor.kind != TideyRuntimeResumeKindAgent ||
+        descriptor.restorePolicy != TideyRuntimeRestorePolicyCreate ||
+        !agent ||
+        !TideyRuntimeLaunchIsAllowlisted(agent.launch)) {
+        return NO;
+    }
+    NSString *expectedExecutable =
+        agent.vendor == TideyRuntimeAgentVendorClaude
+            ? @"claude"
+            : @"codex";
+    NSString *expectedPrefix =
+        agent.vendor == TideyRuntimeAgentVendorClaude
+            ? @"--resume"
+            : @"resume";
+    if (![agent.launch.executable isEqualToString:expectedExecutable] ||
+        ![agent.launch.arguments isEqualToArray:@[
+            expectedPrefix,
+            agent.durableResumeID,
+        ]]) {
+        return NO;
+    }
+
+    NSMutableArray<NSDictionary *> *jobs = [NSMutableArray array];
+    NSString *activePaneID = nil;
+    NSArray<TideyRuntimeTmuxWindowTopology *> *windows =
+        descriptor.topology
+            ? TideyRuntimeSortedWindows(descriptor.topology)
+            : @[];
+    if (windows.count == 0) {
+        NSString *output = nil;
+        if (!TideyRuntimeRunTmux(
+                descriptor,
+                @[
+                    @"list-panes",
+                    @"-t",
+                    TideyRuntimeExactSessionTarget(
+                        descriptor.target.tmuxSession
+                    ),
+                    @"-F",
+                    @"#{pane_id}",
+                ],
+                &output
+            )) {
+            return NO;
+        }
+        activePaneID = TideyRuntimeNonemptyLines(output).firstObject;
+        if (!activePaneID) {
+            return NO;
+        }
+        [jobs addObject:@{
+            @"pane_id": activePaneID,
+            @"launch": agent.launch,
+        }];
+    } else {
+        for (TideyRuntimeTmuxWindowTopology *window in windows) {
+            NSArray<TideyRuntimeTmuxPaneTopology *> *panes =
+                TideyRuntimeSortedPanes(window);
+            NSString *output = nil;
+            if (!TideyRuntimeRunTmux(
+                    descriptor,
+                    @[
+                        @"list-panes",
+                        @"-t",
+                        TideyRuntimeWindowTarget(
+                            descriptor.target.tmuxSession,
+                            window.index
+                        ),
+                        @"-F",
+                        @"#{pane_id}",
+                    ],
+                    &output
+                )) {
+                return NO;
+            }
+            NSArray<NSString *> *paneIDs =
+                TideyRuntimeNonemptyLines(output);
+            if (paneIDs.count != panes.count) {
+                return NO;
+            }
+            for (NSUInteger paneOffset = 0;
+                 paneOffset < panes.count;
+                 paneOffset++) {
+                TideyRuntimeTmuxPaneTopology *pane = panes[paneOffset];
+                TideyRuntimeLaunchSpecification *launch = pane.launch;
+                BOOL isActive =
+                    window.index ==
+                        descriptor.topology.activeWindowIndex &&
+                    pane.index ==
+                        descriptor.topology.activePaneIndex;
+                if (isActive) {
+                    activePaneID = paneIDs[paneOffset];
+                    if (launch &&
+                        !TideyRuntimeLaunchesAreEqual(
+                            launch,
+                            agent.launch
+                        )) {
+                        return NO;
+                    }
+                    launch = agent.launch;
+                }
+                if (launch) {
+                    if (!TideyRuntimeLaunchIsAllowlisted(launch)) {
+                        return NO;
+                    }
+                    [jobs addObject:@{
+                        @"pane_id": paneIDs[paneOffset],
+                        @"launch": launch,
+                    }];
+                }
+            }
+        }
+    }
+    if (!activePaneID || jobs.count == 0) {
+        return NO;
+    }
+
+    for (NSDictionary *job in jobs) {
+        TideyRuntimeLaunchSpecification *launch = job[@"launch"];
+        NSMutableArray<NSString *> *arguments =
+            [NSMutableArray arrayWithArray:@[
+                @"respawn-pane",
+                @"-k",
+                @"-t",
+                job[@"pane_id"],
+            ]];
+        if (launch.workingDirectory.length > 0) {
+            [arguments addObjectsFromArray:@[
+                @"-c",
+                launch.workingDirectory,
+            ]];
+        }
+        [arguments addObject:launch.executable];
+        [arguments addObjectsFromArray:launch.arguments];
+        if (!TideyRuntimeRunTmux(descriptor, arguments, nil)) {
+            return NO;
+        }
+    }
+    if (!TideyRuntimeRunTmux(
+            descriptor,
+            @[ @"select-pane", @"-t", activePaneID ],
+            nil
+        )) {
+        return NO;
+    }
+    return TideyRuntimeRunTmux(
+        descriptor,
+        @[
+            @"select-window",
+            @"-t",
+            descriptor.topology
+                ? TideyRuntimeWindowTarget(
+                    descriptor.target.tmuxSession,
+                    descriptor.topology.activeWindowIndex
+                )
+                : TideyRuntimeExactSessionTarget(
+                    descriptor.target.tmuxSession
+                ),
+        ],
+        nil
+    );
+}
+
+- (void)attachPanel:(NSString *)panelID
+       toDescriptor:(TideyRuntimeResumeDescriptor *)descriptor
+         completion:(void (^)(BOOL))completion {
+    NSAssert([NSThread isMainThread],
+             @"Restored panel launch must begin on the main thread.");
+    PTYSession *session =
+        [_windowController tideySelectedSessionForPanelIdentifier:panelID];
+    NSString *tmuxExecutable = TideyRuntimeTmuxExecutablePath();
+    NSArray<NSString *> *socketArguments =
+        TideyRuntimeTmuxSocketArguments(descriptor.target);
+    if (!session || !tmuxExecutable || !socketArguments ||
+        descriptor.target.tmuxSession.length == 0) {
+        completion(NO);
+        return;
+    }
+    NSArray<NSString *> *arguments =
+        [@[ tmuxExecutable ]
+            arrayByAddingObjectsFromArray:
+                [socketArguments arrayByAddingObjectsFromArray:@[
+                    @"attach-session",
+                    @"-t",
+                    TideyRuntimeExactSessionTarget(
+                        descriptor.target.tmuxSession
+                    ),
+                ]]];
+    NSString *command =
+        [[arguments mapWithBlock:^id(NSString *argument) {
+            return [argument quotedStringForPaste];
+        }] componentsJoinedByString:@" "];
+    NSMutableDictionary<NSString *, NSString *> *environment =
+        [NSMutableDictionary dictionaryWithDictionary:
+         session.environment ?: @{}];
+    [environment removeObjectsForKeys:@[ @"TMUX", @"TMUX_PANE" ]];
+    [session resetForRelaunch];
+    [session startProgram:command
+                      ssh:NO
+                  browser:NO
+              environment:environment
+              customShell:nil
+                   isUTF8:YES
+            substitutions:@{}
+              arrangement:nil
+          fromArrangement:YES
+     webViewConfiguration:nil
+               completion:completion];
+}
+
+- (void)markPanelUnavailable:(NSString *)panelID
+                  descriptor:(TideyRuntimeResumeDescriptor *)descriptor {
+    NSAssert([NSThread isMainThread],
+             @"Restored panel state must update on the main thread.");
+    PTYSession *session =
+        [_windowController tideySelectedSessionForPanelIdentifier:panelID];
+    if (!session) {
+        return;
+    }
+    NSString *message =
+        [NSString stringWithFormat:
+         @"Tidey restored this panel, but its tmux target “%@” is unavailable. "
+          "This restore policy does not allow Tidey to recreate it.",
+         descriptor.target.tmuxSession];
+    [session showError:message
+        suppressionKey:@"TideySuppressRuntimeRestoreUnavailable"
+            identifier:@"TideyRuntimeRestoreUnavailable"];
+}
+
+@end
+
 @interface PseudoTerminal () <
     iTermBroadcastInputHelperDelegate,
     iTermGraphCodable,
@@ -364,6 +1064,10 @@ static NSString *TideySubmitLogSuffix(NSString *input) {
 - (NSArray<PTYTab *> *)tideyTabsForWorkspaceRestorationCapturePlan:(TideyWorkspaceRestorationCapturePlan *)plan;
 - (void)tideyPrepareWorkspaceRestorationFromArrangement:(NSDictionary *)arrangement;
 - (void)tideyHydratePendingWorkspaceRestorationState;
+- (void)tideyRehydrateRuntimeDescriptors:
+    (NSDictionary<NSString *, TideyRuntimeResumeDescriptor *> *)descriptorsByPanelID
+                              panelsByID:
+    (NSDictionary<NSString *, PTYTab *> *)panelsByID;
 - (void)tideySyncTmuxPaneIdentityOptionsForPanel:(PTYTab *)panel workspace:(Workspace *)workspace;
 - (void)tideyTabDidBecomeTmuxBacked:(PTYTab *)panel;
 - (void)tideyTabDidUpdateOrdinaryTmuxAttachMetadata:(PTYTab *)panel;
@@ -623,6 +1327,7 @@ static NSImage *gTideyApplicationIconBaseImage = nil;
     TideyWorkspaceRestorationState *_tideyPendingWorkspaceRestorationState;
     NSMutableDictionary<NSString *, NSString *> *_tideyRestoredPanelIDRemap;
     TideyRuntimeResumeDescriptorUpdateGate *_tideyRuntimeResumeDescriptorUpdateGate;
+    TideyRuntimeRehydrationStateMachine *_tideyRuntimeRehydrationStateMachine;
 }
 
 @synthesize scope = _scope;
@@ -1276,6 +1981,7 @@ ITERM_WEAKLY_REFERENCEABLE
     [_tideyPendingWorkspaceRestorationState release];
     [_tideyRestoredPanelIDRemap release];
     [_tideyRuntimeResumeDescriptorUpdateGate release];
+    [_tideyRuntimeRehydrationStateMachine release];
     [_tideyWorkspaceTitleOverrides release];
     [_tideyTmuxWindowBackfillKeysInFlight release];
     [_tideyLastBroadcastWorkspaceSelectionIdentifier release];
@@ -6884,6 +7590,50 @@ ITERM_WEAKLY_REFERENCEABLE
     _lastSelectedWorkspaceIndex = -1;
     [self tideyShowWorkspaceAtIndex:selectedWorkspaceIndex
       refreshSelectionFromVisibleTab:NO];
+    [self tideyRehydrateRuntimeDescriptors:
+              hydratedState.runtimeDescriptorsByPanelID
+                                   panelsByID:panelsByID];
+}
+
+- (void)tideyRehydrateRuntimeDescriptors:
+            (NSDictionary<NSString *, TideyRuntimeResumeDescriptor *> *)descriptorsByPanelID
+                                      panelsByID:
+            (NSDictionary<NSString *, PTYTab *> *)panelsByID {
+    NSAssert([NSThread isMainThread],
+             @"Runtime rehydration begins from native window completion.");
+    if (descriptorsByPanelID.count == 0) {
+        return;
+    }
+    if (!_tideyRuntimeRehydrationStateMachine) {
+        TideyRuntimeRehydrationExecutor *executor =
+            [[[TideyRuntimeRehydrationExecutor alloc]
+                initWithWindowController:self] autorelease];
+        TideyRuntimeRehydrationReducer *reducer =
+            [[[TideyRuntimeRehydrationReducer alloc] init] autorelease];
+        _tideyRuntimeRehydrationStateMachine =
+            [[TideyRuntimeRehydrationStateMachine alloc]
+                initWithReducer:reducer
+                targetProbe:executor
+                topologyCreator:executor
+                panelLauncher:executor];
+    }
+    NSArray<NSString *> *panelIDs =
+        [descriptorsByPanelID.allKeys
+            sortedArrayUsingSelector:@selector(compare:)];
+    for (NSString *panelID in panelIDs) {
+        PTYTab *panel = panelsByID[panelID];
+        PTYSession *session = panel.activeSession;
+        TideyRuntimeResumeDescriptor *descriptor =
+            descriptorsByPanelID[panelID];
+        if (!session || !descriptor) {
+            continue;
+        }
+        [_tideyRuntimeRehydrationStateMachine
+            handlePanelID:panelID
+            descriptor:descriptor
+            nativeReattachOutcome:
+                session.tideyNativeServerReattachOutcome];
+    }
 }
 
 - (NSDictionary *)arrangementExcludingTmuxTabs:(BOOL)excludeTmux

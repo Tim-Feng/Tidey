@@ -119,9 +119,57 @@ final class TideyRuntimeRehydrationReducer:
         event: TideyRuntimeRehydrationEvent,
         descriptor: TideyRuntimeResumeDescriptor
     ) -> TideyRuntimeRehydrationTransition {
+        switch (phase, event) {
+        case (.awaitingNativeRestore, .nativeReattachSucceeded):
+            return transition(.nativeAttached)
+        case (.awaitingNativeRestore, .nativeReattachFailed):
+            return transition(.checkingTarget, effect: .probeTarget)
+        case (.checkingTarget, .targetFound):
+            return transition(
+                .attachingExisting,
+                effect: .attachExisting
+            )
+        case (.checkingTarget, .targetMissing)
+            where descriptor.restorePolicy == .create &&
+                  descriptor.kind == .agent:
+            return transition(
+                .creatingTopology,
+                effect: .createTopology
+            )
+        case (.checkingTarget, .targetMissing):
+            return transition(
+                .unavailable,
+                effect: .markUnavailable
+            )
+        case (.creatingTopology, .topologyCreated):
+            return transition(
+                .resumingAgent,
+                effect: .resumeAgent
+            )
+        case (.resumingAgent, .agentResumed):
+            return transition(
+                .attachingExisting,
+                effect: .attachExisting
+            )
+        case (.attachingExisting, .panelAttached):
+            return transition(.restored)
+        case (.checkingTarget, .targetProbeFailed),
+             (.attachingExisting, .operationFailed),
+             (.creatingTopology, .operationFailed),
+             (.resumingAgent, .operationFailed):
+            return transition(.failed)
+        default:
+            return transition(phase)
+        }
+    }
+
+    private func transition(
+        _ phase: TideyRuntimeRehydrationPhase,
+        effect: TideyRuntimeRehydrationEffect = .none
+    ) -> TideyRuntimeRehydrationTransition {
         TideyRuntimeRehydrationTransition(
             nextPhase: phase,
-            effect: .none
+            effect: effect
         )
     }
 }
