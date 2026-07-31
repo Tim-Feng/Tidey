@@ -413,6 +413,21 @@
   - 改色之前先確認元件在畫面上的位置
   - 行號會隨改動偏移，用色碼值和上下文定位
 
+## Native workspace restoration
+
+- 還原 panel、cwd 與 scrollback，不代表原本的 agent runtime 已經還原
+  - non-tmux Claude／Codex 在正常結束後只會剩下重新啟動的 shell；驗收時要另外確認 durable session ID 與 agent process
+  - Bridge 的 runtime descriptor 必須把沒有 tmux carrier 的 agent 表達成第一級 `direct_resume`，不能因為共用 tmux schema 就直接略過
+- 使用者原本沒有使用 tmux 時，不要為了還原而建立 synthetic tmux topology
+  - `direct_resume` 在同一個 restored panel 內執行 bundled、allowlisted 的 `claude --resume <id>` 或 `codex resume <id>`
+  - descriptor 要如實保留 target／topology 不存在的狀態，並依 policy 驗證欄位組合；optional field 不代表任意組合都可接受
+- process 啟動所需的 Tidey identity 必須在 native graph hydration 前傳入
+  - `PTYSession` 可能早於 workspace graph 完成啟動，事後才設定 workspace／panel ID 已經太晚
+  - 從 saved arrangement 先解析 workspace ID，panel GUID 經 collision 檢查後只計算一次，並把同一個實際 GUID 同時交給 session environment 與最後的 tab graph
+- runtime descriptor 只能當成受限的重新啟動指令
+  - executable 必須從 app bundle 解析並通過 allowlist，argv 形狀與 vendor／durable ID 要完全一致，shell 參數需安全 quoting
+  - relaunch 沿用 `(panelID, descriptorRevision)` state machine 與 completion fencing，避免重複 callback 再啟動第二次 agent
+
 ## Testing
 
 - 不要在 test host 直接初始化 `iTermRootTerminalView`
