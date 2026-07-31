@@ -9,11 +9,86 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
             arguments: ["resume", "thread-direct"]
         )
 
-        XCTAssertNil(command)
+        XCTAssertNotNil(command)
         XCTAssertEqual(
             TideyRuntimeRehydrationEffect.resumeDirectAgent.rawValue,
             6
         )
+    }
+
+    func testDirectAgentCommandTreatsResumeIdentityAsLiteralArgument() {
+        let builder = TideyRuntimeDirectAgentCommandBuilder()
+        let command = builder.command(
+            agentExecutable:
+                "/Applications/Tidey.app/Contents/Resources/bin/codex",
+            arguments: [
+                "resume",
+                "thread'; $(touch /tmp/tidey-owned); `touch /tmp/tidey-owned`"
+            ]
+        )
+
+        XCTAssertEqual(
+            command,
+            "'/Applications/Tidey.app/Contents/Resources/bin/codex' " +
+                "'resume' " +
+                "'thread'\\''; $(touch /tmp/tidey-owned); " +
+                "`touch /tmp/tidey-owned`'"
+        )
+        XCTAssertNil(
+            builder.command(
+                agentExecutable: "codex",
+                arguments: ["resume", "thread-direct"]
+            )
+        )
+        XCTAssertNil(
+            builder.command(
+                agentExecutable:
+                    "/Applications/Tidey.app/Contents/Resources/bin/sh",
+                arguments: ["-c", "touch /tmp/tidey-owned"]
+            )
+        )
+    }
+
+    func testDirectAgentResumeBypassesTmuxAndRunsExactlyOnce() {
+        let targetProbe = TideyRuntimeTargetProbeSpy()
+        let topologyCreator = TideyRuntimeTopologyCreatorSpy()
+        let panelLauncher = TideyRuntimePanelLauncherSpy()
+        let stateMachine = TideyRuntimeRehydrationStateMachine(
+            reducer: TideyRuntimeRehydrationReducer(),
+            targetProbe: targetProbe,
+            topologyCreator: topologyCreator,
+            panelLauncher: panelLauncher
+        )
+        let revisionOne = directDescriptor(revision: 1)
+
+        stateMachine.handle(
+            panelID: "panel-direct",
+            descriptor: revisionOne,
+            nativeReattachOutcome: .failed
+        )
+        stateMachine.handle(
+            panelID: "panel-direct",
+            descriptor: revisionOne,
+            nativeReattachOutcome: .failed
+        )
+
+        XCTAssertEqual(panelLauncher.directResumeCount, 1)
+        XCTAssertEqual(targetProbe.probeCount, 0)
+        XCTAssertEqual(topologyCreator.createCount, 0)
+        XCTAssertEqual(panelLauncher.resumeCount, 0)
+        XCTAssertEqual(panelLauncher.attachCount, 0)
+
+        panelLauncher.completeDirectResume(true)
+        panelLauncher.completeDirectResume(true)
+        XCTAssertEqual(panelLauncher.directResumeCount, 1)
+        XCTAssertEqual(panelLauncher.attachCount, 0)
+
+        stateMachine.handle(
+            panelID: "panel-direct",
+            descriptor: directDescriptor(revision: 2),
+            nativeReattachOutcome: .failed
+        )
+        XCTAssertEqual(panelLauncher.directResumeCount, 2)
     }
 
     func testRuntimeAttachCommandBuilderSeamCompiles() {
@@ -344,6 +419,30 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
             ),
             topology: nil,
             agent: nil
+        )
+    }
+
+    private func directDescriptor(
+        revision: Int64
+    ) -> TideyRuntimeResumeDescriptor {
+        let resumeID = "thread-direct-\(revision)"
+        return TideyRuntimeResumeDescriptor(
+            descriptorVersion:
+                TideyRuntimeResumeDescriptor.currentDescriptorVersion,
+            revision: revision,
+            kind: .agent,
+            restorePolicy: .directResume,
+            target: nil,
+            topology: nil,
+            agent: TideyRuntimeAgentResumeSpecification(
+                vendor: .codex,
+                durableResumeID: resumeID,
+                launch: TideyRuntimeLaunchSpecification(
+                    executable: "codex",
+                    arguments: ["resume", resumeID],
+                    workingDirectory: "/tmp/direct-project"
+                )
+            )
         )
     }
 }

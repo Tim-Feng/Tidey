@@ -699,9 +699,16 @@ private struct TideyRuntimeResumeDescriptorContentWire: Codable {
                     .malformedField("ordinary_tmux")
             }
         case .agent:
-            guard policyModel == .create,
-                  target != nil,
-                  agent != nil else {
+            let isTmuxCreate =
+                policyModel == .create &&
+                target != nil &&
+                agent != nil
+            let isDirectResume =
+                policyModel == .directResume &&
+                target == nil &&
+                topology == nil &&
+                agent != nil
+            guard isTmuxCreate || isDirectResume else {
                 throw TideyRuntimeResumeDescriptorCodecError
                     .malformedField("agent")
             }
@@ -832,7 +839,7 @@ final class TideyRuntimeResumeDescriptorDictionaryCodec {
 private struct TideyRuntimeResumeDescriptorBindingWire: Codable {
     let workspaceID: String
     let panelID: String
-    let tmuxPaneID: String
+    let tmuxPaneID: String?
 
     enum CodingKeys: String, CodingKey {
         case workspaceID = "workspace_id"
@@ -912,9 +919,13 @@ final class TideyRuntimeResumeDescriptorUpdateGate: NSObject {
         } catch {
             return rejected(errorCode: "invalid_descriptor")
         }
+        let isDirectResume =
+            update.descriptor.restorePolicy == "direct_resume"
+        let hasTmuxPane =
+            update.binding.tmuxPaneID?.isEmpty == false
         guard !update.binding.workspaceID.isEmpty,
               !update.binding.panelID.isEmpty,
-              !update.binding.tmuxPaneID.isEmpty,
+              (isDirectResume ? !hasTmuxPane : hasTmuxPane),
               update.binding.workspaceID == currentWorkspaceID,
               update.binding.panelID == currentPanelID else {
             return rejected(errorCode: "stale_binding")

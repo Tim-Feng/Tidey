@@ -125,7 +125,37 @@ final class TideyRuntimeDirectAgentCommandBuilder: NSObject {
         agentExecutable: String,
         arguments: [String]
     ) -> String? {
-        nil
+        let executableURL = URL(fileURLWithPath: agentExecutable)
+        let executableName = executableURL.lastPathComponent
+        let isCodexResume =
+            executableName == "codex" &&
+            arguments.count == 2 &&
+            arguments[0] == "resume"
+        let isClaudeResume =
+            executableName == "claude" &&
+            arguments.count == 2 &&
+            arguments[0] == "--resume"
+        guard agentExecutable.hasPrefix("/"),
+              executableURL.standardizedFileURL.path == agentExecutable,
+              isCodexResume || isClaudeResume,
+              !arguments[1].isEmpty,
+              !([agentExecutable] + arguments).contains(
+                  where: { $0.contains("\u{0}") }
+              ) else {
+            return nil
+        }
+        return ([agentExecutable] + arguments)
+            .map(Self.shellQuote)
+            .joined(separator: " ")
+    }
+
+    private static func shellQuote(_ argument: String) -> String {
+        "'" +
+        argument.replacingOccurrences(
+            of: "'",
+            with: "'\\''"
+        ) +
+        "'"
     }
 }
 
@@ -183,6 +213,13 @@ final class TideyRuntimeRehydrationReducer:
         switch (phase, event) {
         case (.awaitingNativeRestore, .nativeReattachSucceeded):
             return transition(.nativeAttached)
+        case (.awaitingNativeRestore, .nativeReattachFailed)
+            where descriptor.kind == .agent &&
+                  descriptor.restorePolicy == .directResume:
+            return transition(
+                .resumingAgent,
+                effect: .resumeDirectAgent
+            )
         case (.awaitingNativeRestore, .nativeReattachFailed):
             return transition(.checkingTarget, effect: .probeTarget)
         case (.checkingTarget, .targetFound):
@@ -207,6 +244,9 @@ final class TideyRuntimeRehydrationReducer:
                 .resumingAgent,
                 effect: .resumeAgent
             )
+        case (.resumingAgent, .agentResumed)
+            where descriptor.restorePolicy == .directResume:
+            return transition(.restored)
         case (.resumingAgent, .agentResumed):
             return transition(
                 .attachingExisting,

@@ -474,6 +474,22 @@ static BOOL TideyRuntimeLaunchIsAllowlisted(
          [launch.arguments[0] isEqualToString:@"resume"]);
 }
 
+static NSString *TideyRuntimeAgentExecutablePath(
+    TideyRuntimeLaunchSpecification *launch
+) {
+    if (!TideyRuntimeLaunchIsAllowlisted(launch)) {
+        return nil;
+    }
+    NSString *binDirectory =
+        [[[NSBundle mainBundle] resourcePath]
+            stringByAppendingPathComponent:@"bin"];
+    NSString *path =
+        [binDirectory stringByAppendingPathComponent:launch.executable];
+    return [[NSFileManager defaultManager] isExecutableFileAtPath:path]
+        ? path
+        : nil;
+}
+
 static BOOL TideyRuntimeLaunchesAreEqual(
     TideyRuntimeLaunchSpecification *lhs,
     TideyRuntimeLaunchSpecification *rhs
@@ -771,7 +787,67 @@ static BOOL TideyRuntimeLaunchesAreEqual(
 - (void)resumeDirectAgentInPanel:(NSString *)panelID
                   withDescriptor:(TideyRuntimeResumeDescriptor *)descriptor
                       completion:(void (^)(BOOL))completion {
-    completion(NO);
+    NSAssert([NSThread isMainThread],
+             @"Direct agent relaunch must begin on the main thread.");
+    PTYSession *session =
+        [_windowController tideySelectedSessionForPanelIdentifier:panelID];
+    TideyRuntimeAgentResumeSpecification *agent = descriptor.agent;
+    if (!session ||
+        descriptor.kind != TideyRuntimeResumeKindAgent ||
+        descriptor.restorePolicy != TideyRuntimeRestorePolicyDirectResume ||
+        descriptor.target ||
+        descriptor.topology ||
+        !agent ||
+        !TideyRuntimeLaunchIsAllowlisted(agent.launch)) {
+        completion(NO);
+        return;
+    }
+    NSString *expectedExecutable =
+        agent.vendor == TideyRuntimeAgentVendorClaude
+            ? @"claude"
+            : @"codex";
+    NSString *expectedPrefix =
+        agent.vendor == TideyRuntimeAgentVendorClaude
+            ? @"--resume"
+            : @"resume";
+    if (![agent.launch.executable isEqualToString:expectedExecutable] ||
+        ![agent.launch.arguments isEqualToArray:@[
+            expectedPrefix,
+            agent.durableResumeID,
+        ]]) {
+        completion(NO);
+        return;
+    }
+    NSString *executable =
+        TideyRuntimeAgentExecutablePath(agent.launch);
+    TideyRuntimeDirectAgentCommandBuilder *commandBuilder =
+        [[[TideyRuntimeDirectAgentCommandBuilder alloc] init] autorelease];
+    NSString *command =
+        [commandBuilder commandWithAgentExecutable:executable ?: @""
+                                         arguments:agent.launch.arguments];
+    if (!command) {
+        completion(NO);
+        return;
+    }
+    NSMutableDictionary<NSString *, NSString *> *environment =
+        [NSMutableDictionary dictionaryWithDictionary:
+         session.environment ?: @{}];
+    [environment removeObjectsForKeys:@[ @"TMUX", @"TMUX_PANE" ]];
+    if (agent.launch.workingDirectory.length > 0) {
+        environment[@"PWD"] = agent.launch.workingDirectory;
+    }
+    [session resetForRelaunch];
+    [session startProgram:command
+                      ssh:NO
+                  browser:NO
+              environment:environment
+              customShell:nil
+                   isUTF8:YES
+            substitutions:@{}
+              arrangement:nil
+          fromArrangement:YES
+     webViewConfiguration:nil
+               completion:completion];
 }
 
 - (BOOL)resumeAgentWithDescriptor:(TideyRuntimeResumeDescriptor *)descriptor {

@@ -27,6 +27,75 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
         XCTAssertNil(descriptor.target)
     }
 
+    func testSocketUpdateAcceptsDirectAgentWithoutTmuxCarrier()
+        throws {
+        let gate = TideyRuntimeResumeDescriptorUpdateGate()
+        let payload = directSocketUpdatePayload(
+            durableResumeID: "thread-direct",
+            workingDirectory: "/tmp/direct-project"
+        )
+
+        let accepted = gate.acceptUpdatePayload(
+            payload,
+            currentWorkspaceID: "workspace-direct",
+            currentPanelID: "panel-direct"
+        )
+
+        XCTAssertTrue(accepted.accepted)
+        XCTAssertTrue(accepted.changed)
+        XCTAssertEqual(accepted.descriptor?.kind, .agent)
+        XCTAssertEqual(
+            accepted.descriptor?.restorePolicy,
+            .directResume
+        )
+        XCTAssertNil(accepted.descriptor?.target)
+        XCTAssertNil(accepted.descriptor?.topology)
+        XCTAssertEqual(
+            accepted.descriptor?.agent?.launch.arguments,
+            ["resume", "thread-direct"]
+        )
+
+        let codec = TideyRuntimeResumeDescriptorDictionaryCodec()
+        let roundTripped = try codec.decode(
+            codec.encode(try XCTUnwrap(accepted.descriptor))
+        )
+        XCTAssertEqual(roundTripped.restorePolicy, .directResume)
+        XCTAssertNil(roundTripped.target)
+
+        var tmuxBoundPayload = payload
+        var tmuxBinding = try XCTUnwrap(
+            tmuxBoundPayload["binding"] as? [String: Any]
+        )
+        tmuxBinding["tmux_pane_id"] = "%7"
+        tmuxBoundPayload["binding"] = tmuxBinding
+        XCTAssertEqual(
+            gate.acceptUpdatePayload(
+                tmuxBoundPayload,
+                currentWorkspaceID: "workspace-direct",
+                currentPanelID: "panel-direct"
+            ).errorCode,
+            "stale_binding"
+        )
+
+        var targetedPayload = payload
+        var targetedDescriptor = try XCTUnwrap(
+            targetedPayload["descriptor"] as? [String: Any]
+        )
+        targetedDescriptor["target"] = [
+            "socket_endpoint_kind": "default",
+            "tmux_session": "unexpected"
+        ]
+        targetedPayload["descriptor"] = targetedDescriptor
+        XCTAssertEqual(
+            gate.acceptUpdatePayload(
+                targetedPayload,
+                currentWorkspaceID: "workspace-direct",
+                currentPanelID: "panel-direct"
+            ).errorCode,
+            "invalid_descriptor"
+        )
+    }
+
     func testOrdinaryTmuxMetadataProducesAttachOnlyDescriptorWithoutBridge() throws {
         let factory = TideyRuntimeResumeDescriptorFactory()
         let pathDescriptor = try XCTUnwrap(
@@ -667,6 +736,32 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
                     "active_window_index": 1,
                     "active_pane_index": 0
                 ],
+                "agent": [
+                    "vendor": "codex",
+                    "durable_resume_id": durableResumeID,
+                    "launch": [
+                        "executable": "codex",
+                        "arguments": ["resume", durableResumeID],
+                        "cwd": workingDirectory
+                    ]
+                ]
+            ]
+        ]
+    }
+
+    private func directSocketUpdatePayload(
+        durableResumeID: String,
+        workingDirectory: String
+    ) -> [String: Any] {
+        [
+            "binding": [
+                "workspace_id": "workspace-direct",
+                "panel_id": "panel-direct"
+            ],
+            "descriptor": [
+                "descriptor_version": 1,
+                "kind": "agent",
+                "restore_policy": "direct_resume",
                 "agent": [
                     "vendor": "codex",
                     "durable_resume_id": durableResumeID,
