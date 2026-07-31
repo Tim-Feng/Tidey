@@ -2,6 +2,23 @@ import XCTest
 @testable import iTerm2SharedARC
 
 final class TideyRuntimeResumeDescriptorTests: XCTestCase {
+    func testRestoredSessionIdentityOptionSeamsCompile() {
+        let options: [String: Any] = [
+            PTYSessionArrangementOptionsTideyWorkspaceID:
+                "workspace-restored",
+            PTYSessionArrangementOptionsTideyPanelID:
+                "panel-restored"
+        ]
+        let environment = PTYSession
+            .tideyEnvironment(
+                byApplyingRestorationOptions:
+                options,
+                toEnvironment: ["PATH": "/usr/bin"]
+            )
+
+        XCTAssertEqual(environment, ["PATH": "/usr/bin"])
+    }
+
     func testDirectAgentDescriptorSeamsCompile() {
         let launch = TideyRuntimeLaunchSpecification(
             executable: "codex",

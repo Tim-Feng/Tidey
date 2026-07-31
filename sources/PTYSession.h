@@ -57,6 +57,8 @@ extern NSString *const PTYSessionArrangementOptionsArchive;
 // Transient restore option. PTYTab forwards this only to its saved active
 // session when the saved panel owns a validated Tidey runtime descriptor.
 extern NSString *const PTYSessionArrangementOptionsTideyManagedRuntimeDescriptor;
+extern NSString *const PTYSessionArrangementOptionsTideyWorkspaceID;
+extern NSString *const PTYSessionArrangementOptionsTideyPanelID;
 
 @class CapturedOutput;
 @protocol ExternalSearchResultsController;
@@ -749,7 +751,11 @@ backgroundColor:(NSColor *)backgroundColor;
                          withDelegate:(id<PTYSessionDelegate>)delegate
                         forObjectType:(iTermObjectType)objectType
                    partialAttachments:(NSDictionary *)partialAttachments
-                              options:(NSDictionary *)options;
+                               options:(NSDictionary *)options;
+
++ (NSDictionary<NSString *, NSString *> *)tideyEnvironmentByApplyingRestorationOptions:
+        (NSDictionary<NSString *, id> *)options
+    toEnvironment:(NSDictionary<NSString *, NSString *> *)environment;
 
 - (PTYSession *)newSessionForChannelID:(NSString *)channelID command:(NSString *)command;
 

@@ -367,6 +367,10 @@ NSString *const PTYSessionArrangementOptionsUnlimitedHistory = @"PTYSessionArran
 NSString *const PTYSessionArrangementOptionsArchive = @"PTYSessionArrangementOptionsArchive";
 NSString *const PTYSessionArrangementOptionsTideyManagedRuntimeDescriptor =
     @"PTYSessionArrangementOptionsTideyManagedRuntimeDescriptor";
+NSString *const PTYSessionArrangementOptionsTideyWorkspaceID =
+    @"PTYSessionArrangementOptionsTideyWorkspaceID";
+NSString *const PTYSessionArrangementOptionsTideyPanelID =
+    @"PTYSessionArrangementOptionsTideyPanelID";
 
 static char iTermEffectiveAppearanceKey;
 
@@ -686,6 +690,12 @@ typedef NS_ENUM(NSUInteger, PTYSessionTurdType) {
 
     NSDictionary<NSString *, iTermExpressionObserver *> *_bindings;
     BOOL _preferencesLoaded;
+}
+
++ (NSDictionary<NSString *, NSString *> *)tideyEnvironmentByApplyingRestorationOptions:
+        (NSDictionary<NSString *, id> *)options
+    toEnvironment:(NSDictionary<NSString *, NSString *> *)environment {
+    return environment ?: @{};
 }
 
 @synthesize isDivorced = _divorced;
