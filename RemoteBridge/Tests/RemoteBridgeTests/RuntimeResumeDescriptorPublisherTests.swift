@@ -127,6 +127,112 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
         )
     }
 
+    func testRegistryReaderAndPublisherPreserveDirectNonTmuxAgentBinding()
+        throws {
+        let supportDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "RuntimeResumeDescriptorPublisherTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        defer {
+            try? FileManager.default.removeItem(
+                at: supportDirectory
+            )
+        }
+        let paths = BridgePaths(
+            supportDirectory: supportDirectory
+        )
+        try paths.ensureSupportDirectoriesExist()
+        let record = AgentSessionRegistryRecord(
+            version: 1,
+            vendor: "codex",
+            workspaceID: "workspace-direct",
+            sessionID: "wrapper-direct",
+            panelID: "panel-direct",
+            pid: getpid(),
+            cwd: "/tmp/direct-project",
+            createdAt: "2026-08-01T00:00:00Z",
+            transcriptPath: nil,
+            tmuxPaneID: nil,
+            tmuxSocketPath: nil,
+            runtime: "codex_app_server",
+            threadID: "thread-direct"
+        )
+        let recordURL = paths
+            .agentSessionsDirectory(for: "codex")
+            .appendingPathComponent("wrapper-direct.json")
+        try JSONEncoder().encode(record).write(to: recordURL)
+        let monitor = AgentSessionRegistryMonitor(
+            paths: paths,
+            hub: AgentEventHub()
+        )
+        monitor.replaceLivePanels(
+            workspaceID: "workspace-direct",
+            panels: [
+                AgentPanelProcessSnapshot(
+                    workspaceID: "workspace-direct",
+                    panelID: "panel-direct",
+                    effectiveShellPID: getpid(),
+                    tmuxPaneID: nil,
+                    tmuxSocketPath: nil
+                )
+            ]
+        )
+        let reader = AgentSessionRegistryRuntimeResumeReader(
+            monitor: monitor
+        )
+        let records = try reader.readAgentRegistryRecords()
+        let directRecord = try XCTUnwrap(records.first)
+        XCTAssertEqual(records.count, 1)
+        XCTAssertEqual(directRecord.binding.workspaceID, "workspace-direct")
+        XCTAssertEqual(directRecord.binding.panelID, "panel-direct")
+        XCTAssertNil(directRecord.binding.tmuxPaneID)
+
+        let socketSender = RecordingRuntimeResumeSocketSender()
+        let publisher = RuntimeResumeDescriptorPublisher(
+            registryReader: StubRuntimeResumeRegistryReader(
+                records: records
+            ),
+            topologyReader: StubRuntimeResumeTopologyReader(
+                snapshotsByBinding: [:]
+            ),
+            socketSender: socketSender,
+            queue: DispatchQueue(
+                label: "RuntimeResumeDescriptorPublisherTests.direct"
+            )
+        )
+
+        try publisher.publishCurrentDescriptors()
+
+        let update = try XCTUnwrap(socketSender.updates.first)
+        XCTAssertEqual(socketSender.updates.count, 1)
+        XCTAssertEqual(update.binding, directRecord.binding)
+        XCTAssertEqual(update.content.kind, .agent)
+        XCTAssertEqual(update.content.restorePolicy, .directResume)
+        XCTAssertNil(update.content.target)
+        XCTAssertNil(update.content.topology)
+        XCTAssertEqual(
+            update.content.agent?.durableResumeID,
+            "thread-direct"
+        )
+
+        monitor.replaceLivePanels(
+            workspaceID: "workspace-direct",
+            panels: [
+                AgentPanelProcessSnapshot(
+                    workspaceID: "workspace-direct",
+                    panelID: "panel-direct",
+                    effectiveShellPID: getpid(),
+                    tmuxPaneID: "%99",
+                    tmuxSocketPath: "/tmp/tmux.sock"
+                )
+            ]
+        )
+        XCTAssertTrue(
+            try reader.readAgentRegistryRecords().isEmpty
+        )
+    }
+
     func testTopologyReaderRequiresExactCurrentPaneBinding()
         throws {
         let registry = OrdinaryTmuxPanelRegistry()

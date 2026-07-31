@@ -524,25 +524,38 @@ final class RuntimeResumeDescriptorPublisher:
             try registryReader.readAgentRegistryRecords()
                 .sorted(by: Self.recordPrecedes(_:_:))
         for record in records {
-            guard let snapshot =
-                    try topologyReader.topologySnapshot(
-                        for: record.binding
-                    ),
-                  snapshot.binding == record.binding else {
-                continue
-            }
-            let content = RuntimeResumeDescriptorContent(
-                descriptorVersion: 1,
-                kind: .agent,
-                restorePolicy: .create,
-                target: snapshot.target,
-                topology: snapshot.topology,
-                agent: RuntimeResumeAgentSpecification(
-                    vendor: record.vendor,
-                    durableResumeID: record.durableResumeID,
-                    launch: record.launch
-                )
+            let agent = RuntimeResumeAgentSpecification(
+                vendor: record.vendor,
+                durableResumeID: record.durableResumeID,
+                launch: record.launch
             )
+            let content: RuntimeResumeDescriptorContent
+            if record.binding.tmuxPaneID == nil {
+                content = RuntimeResumeDescriptorContent(
+                    descriptorVersion: 1,
+                    kind: .agent,
+                    restorePolicy: .directResume,
+                    target: nil,
+                    topology: nil,
+                    agent: agent
+                )
+            } else {
+                guard let snapshot =
+                        try topologyReader.topologySnapshot(
+                            for: record.binding
+                        ),
+                      snapshot.binding == record.binding else {
+                    continue
+                }
+                content = RuntimeResumeDescriptorContent(
+                    descriptorVersion: 1,
+                    kind: .agent,
+                    restorePolicy: .create,
+                    target: snapshot.target,
+                    topology: snapshot.topology,
+                    agent: agent
+                )
+            }
             let canonicalContent =
                 try canonicalizer.canonicalize(content)
             guard reducer.decision(

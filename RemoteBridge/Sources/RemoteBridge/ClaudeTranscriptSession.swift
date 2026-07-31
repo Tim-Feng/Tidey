@@ -1307,23 +1307,27 @@ final class AgentSessionRegistryMonitor {
     ) -> RuntimeResumeAgentRegistryRecord? {
         guard record.workspaceID.isEmpty == false,
               let panelID = record.panelID,
-              panelID.isEmpty == false,
-              let tmuxPaneID = record.tmuxPaneID,
-              tmuxPaneID.isEmpty == false else {
+              panelID.isEmpty == false else {
             return nil
         }
+        let tmuxPaneID = record.tmuxPaneID?.isEmpty == false
+            ? record.tmuxPaneID
+            : nil
         let matchingPanels =
             (livePanelsByWorkspace[record.workspaceID] ?? [])
                 .filter {
                     $0.workspaceID == record.workspaceID &&
                         $0.panelID == panelID &&
-                        $0.tmuxPaneID == tmuxPaneID
+                        ($0.tmuxPaneID?.isEmpty == false
+                            ? $0.tmuxPaneID
+                            : nil) == tmuxPaneID
                 }
         guard matchingPanels.count == 1,
               let matchingPanel = matchingPanels.first else {
             return nil
         }
-        if let persistedSocketPath = record.tmuxSocketPath,
+        if tmuxPaneID != nil,
+           let persistedSocketPath = record.tmuxSocketPath,
            persistedSocketPath.isEmpty == false,
            matchingPanel.tmuxSocketPath != persistedSocketPath {
             return nil
