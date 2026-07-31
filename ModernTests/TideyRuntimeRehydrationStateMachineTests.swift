@@ -2,6 +2,20 @@ import XCTest
 @testable import iTerm2SharedARC
 
 final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
+    func testDirectAgentLauncherSeamsCompile() {
+        let builder = TideyRuntimeDirectAgentCommandBuilder()
+        let command = builder.command(
+            agentExecutable: "/Applications/Tidey.app/Contents/Resources/bin/codex",
+            arguments: ["resume", "thread-direct"]
+        )
+
+        XCTAssertNil(command)
+        XCTAssertEqual(
+            TideyRuntimeRehydrationEffect.resumeDirectAgent.rawValue,
+            6
+        )
+    }
+
     func testRuntimeAttachCommandBuilderSeamCompiles() {
         let builder = TideyRuntimeAttachCommandBuilder()
 
@@ -382,9 +396,11 @@ private final class TideyRuntimePanelLauncherSpy:
     TideyRuntimePanelLaunching {
     private(set) var attachCount = 0
     private(set) var resumeCount = 0
+    private(set) var directResumeCount = 0
     private(set) var unavailableCount = 0
     private var attachCompletion: ((Bool) -> Void)?
     private var resumeCompletion: ((Bool) -> Void)?
+    private var directResumeCompletion: ((Bool) -> Void)?
 
     func attachPanel(
         _ panelID: String,
@@ -404,6 +420,15 @@ private final class TideyRuntimePanelLauncherSpy:
         resumeCompletion = completion
     }
 
+    func resumeDirectAgent(
+        in panelID: String,
+        with descriptor: TideyRuntimeResumeDescriptor,
+        completion: @escaping (Bool) -> Void
+    ) {
+        directResumeCount += 1
+        directResumeCompletion = completion
+    }
+
     func markPanelUnavailable(
         _ panelID: String,
         descriptor: TideyRuntimeResumeDescriptor
@@ -421,6 +446,12 @@ private final class TideyRuntimePanelLauncherSpy:
         _ succeeded: Bool
     ) {
         resumeCompletion?(succeeded)
+    }
+
+    func completeDirectResume(
+        _ succeeded: Bool
+    ) {
+        directResumeCompletion?(succeeded)
     }
 }
 

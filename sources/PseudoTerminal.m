@@ -768,6 +768,12 @@ static BOOL TideyRuntimeLaunchesAreEqual(
     });
 }
 
+- (void)resumeDirectAgentInPanel:(NSString *)panelID
+                  withDescriptor:(TideyRuntimeResumeDescriptor *)descriptor
+                      completion:(void (^)(BOOL))completion {
+    completion(NO);
+}
+
 - (BOOL)resumeAgentWithDescriptor:(TideyRuntimeResumeDescriptor *)descriptor {
     TideyRuntimeAgentResumeSpecification *agent = descriptor.agent;
     if (descriptor.kind != TideyRuntimeResumeKindAgent ||

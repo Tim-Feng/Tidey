@@ -34,6 +34,7 @@ enum TideyRuntimeRehydrationEffect: Int {
     case createTopology
     case resumeAgent
     case markUnavailable
+    case resumeDirectAgent
 }
 
 @objc(TideyRuntimeTargetProbeResult)
@@ -102,11 +103,30 @@ protocol TideyRuntimePanelLaunching: NSObjectProtocol {
         completion: @escaping (Bool) -> Void
     )
 
+    @objc(resumeDirectAgentInPanel:withDescriptor:completion:)
+    func resumeDirectAgent(
+        in panelID: String,
+        with descriptor: TideyRuntimeResumeDescriptor,
+        completion: @escaping (Bool) -> Void
+    )
+
     @objc(markPanelUnavailable:descriptor:)
     func markPanelUnavailable(
         _ panelID: String,
         descriptor: TideyRuntimeResumeDescriptor
     )
+}
+
+@objc(TideyRuntimeDirectAgentCommandBuilder)
+@objcMembers
+final class TideyRuntimeDirectAgentCommandBuilder: NSObject {
+    @objc(commandWithAgentExecutable:arguments:)
+    func command(
+        agentExecutable: String,
+        arguments: [String]
+    ) -> String? {
+        nil
+    }
 }
 
 @objc(TideyRuntimeAttachCommandBuilder)
@@ -384,6 +404,20 @@ final class TideyRuntimeRehydrationStateMachine: NSObject {
             }
         case .resumeAgent:
             panelLauncher.resumeAgent(
+                in: panelID,
+                with: descriptor
+            ) { [weak self] succeeded in
+                self?.receive(
+                    key: key,
+                    panelID: panelID,
+                    event: succeeded
+                        ? .agentResumed
+                        : .operationFailed,
+                    expectedStep: expectedStep
+                )
+            }
+        case .resumeDirectAgent:
+            panelLauncher.resumeDirectAgent(
                 in: panelID,
                 with: descriptor
             ) { [weak self] succeeded in
