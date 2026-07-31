@@ -3416,6 +3416,29 @@ static void SetAgainstGrainDim(BOOL isVertical, NSSize *dest, CGFloat value) {
 
     [theTab setObjectCount:[term numberOfTabs] + 1];
 
+    NSString *restoredWorkspaceID =
+        [arrangement[TAB_ARRANGEMENT_TIDEY_WORKSPACE_ID] nilIfNull];
+    NSString *savedPanelID = arrangement[TAB_GUID];
+    NSString *restoredPanelID = nil;
+    if (savedPanelID) {
+        if ([[iTermController sharedInstance] tabWithGUID:savedPanelID] ||
+            [reservedTabGUIDs containsObject:savedPanelID]) {
+            restoredPanelID = [[NSUUID UUID] UUIDString];
+        } else {
+            restoredPanelID = savedPanelID;
+        }
+    }
+    NSMutableDictionary *sessionOptions =
+        [NSMutableDictionary dictionaryWithDictionary:options ?: @{}];
+    if (restoredWorkspaceID.length > 0) {
+        sessionOptions[PTYSessionArrangementOptionsTideyWorkspaceID] =
+            restoredWorkspaceID;
+    }
+    if (restoredPanelID.length > 0) {
+        sessionOptions[PTYSessionArrangementOptionsTideyPanelID] =
+            restoredPanelID;
+    }
+
     // Instantiate sessions in the skeleton view tree.
     iTermObjectType objectType;
     if ([term numberOfTabs] == 0) {
@@ -3435,18 +3458,12 @@ static void SetAgainstGrainDim(BOOL isVertical, NSSize *dest, CGFloat value) {
                                                          inTab:theTab
                                                  forObjectType:objectType
                                             partialAttachments:partialAttachments
-                                                       options:options]];
+                                                       options:sessionOptions]];
     theTab.titleOverride = [arrangement[TAB_ARRANGEMENT_TITLE_OVERRIDE] nilIfNull];
     theTab->_pinned = [arrangement[TAB_ARRANGEMENT_PINNED] boolValue];
-    theTab.tideyWorkspaceIdentifier = [arrangement[TAB_ARRANGEMENT_TIDEY_WORKSPACE_ID] nilIfNull];
-    NSString *guid = arrangement[TAB_GUID];
-    if (guid) {
-        if ([[iTermController sharedInstance] tabWithGUID:guid] ||
-            [reservedTabGUIDs containsObject:guid]) {
-            theTab->_guid = [[NSUUID UUID] UUIDString];
-        } else {
-            theTab->_guid = arrangement[TAB_GUID];
-        }
+    theTab.tideyWorkspaceIdentifier = restoredWorkspaceID;
+    if (restoredPanelID) {
+        theTab->_guid = [restoredPanelID copy];
     }
     [theTab updateTmuxTitleMonitor];
     return theTab;

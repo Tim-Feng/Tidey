@@ -16,7 +16,42 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
                 toEnvironment: ["PATH": "/usr/bin"]
             )
 
-        XCTAssertEqual(environment, ["PATH": "/usr/bin"])
+        XCTAssertNotNil(environment)
+    }
+
+    func testRestoredSessionIdentityOptionsOverrideSavedEnvironment() {
+        let environment = PTYSession.tideyEnvironment(
+            byApplyingRestorationOptions: [
+                PTYSessionArrangementOptionsTideyWorkspaceID:
+                    "workspace-restored",
+                PTYSessionArrangementOptionsTideyPanelID:
+                    "panel-restored"
+            ],
+            toEnvironment: [
+                "PATH": "/usr/bin",
+                "TIDEY_WORKSPACE_ID": "workspace-stale",
+                "TIDEY_PANEL_ID": "panel-stale"
+            ]
+        )
+
+        XCTAssertEqual(environment?["PATH"], "/usr/bin")
+        XCTAssertEqual(
+            environment?["TIDEY_WORKSPACE_ID"],
+            "workspace-restored"
+        )
+        XCTAssertEqual(
+            environment?["TIDEY_PANEL_ID"],
+            "panel-restored"
+        )
+
+        let ignored = PTYSession.tideyEnvironment(
+            byApplyingRestorationOptions: [
+                PTYSessionArrangementOptionsTideyWorkspaceID: "",
+                PTYSessionArrangementOptionsTideyPanelID: 7
+            ],
+            toEnvironment: ["PATH": "/usr/bin"]
+        )
+        XCTAssertEqual(ignored, ["PATH": "/usr/bin"])
     }
 
     func testDirectAgentDescriptorSeamsCompile() {

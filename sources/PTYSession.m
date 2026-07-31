@@ -695,7 +695,19 @@ typedef NS_ENUM(NSUInteger, PTYSessionTurdType) {
 + (NSDictionary<NSString *, NSString *> *)tideyEnvironmentByApplyingRestorationOptions:
         (NSDictionary<NSString *, id> *)options
     toEnvironment:(NSDictionary<NSString *, NSString *> *)environment {
-    return environment ?: @{};
+    NSMutableDictionary<NSString *, NSString *> *result =
+        [[(environment ?: @{}) mutableCopy] autorelease];
+    id workspaceID = options[PTYSessionArrangementOptionsTideyWorkspaceID];
+    id panelID = options[PTYSessionArrangementOptionsTideyPanelID];
+    if ([workspaceID isKindOfClass:[NSString class]] &&
+        [workspaceID length] > 0) {
+        result[@"TIDEY_WORKSPACE_ID"] = workspaceID;
+    }
+    if ([panelID isKindOfClass:[NSString class]] &&
+        [panelID length] > 0) {
+        result[@"TIDEY_PANEL_ID"] = panelID;
+    }
+    return result;
 }
 
 @synthesize isDivorced = _divorced;
@@ -2425,6 +2437,11 @@ ITERM_WEAKLY_REFERENCEABLE
                 substitutionsArg = aSession.substitutions;
                 customShell = aSession.customShell;
             }
+            environmentArg =
+                [PTYSession tideyEnvironmentByApplyingRestorationOptions:
+                    options ?: @{}
+                                                        toEnvironment:
+                    environmentArg];
             runCommandBlock = ^(iTermSessionCreationCompletionBlock completion) {
                 assert(completion);
                 iTermSessionAttachOrLaunchRequest *launchRequest =
