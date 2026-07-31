@@ -2,6 +2,39 @@ import XCTest
 @testable import iTerm2SharedARC
 
 final class TideyRestorableStateDirtyTrackerTests: XCTestCase {
+    func testWorkspaceEventPolicyRequestsPromptSaveOnlyForImportantMutations() {
+        let importantKinds = [
+            "workspace_created",
+            "workspace_closed",
+            "workspace_updated",
+            "panel_created",
+            "panel_closed",
+            "panel_updated",
+        ]
+
+        for kind in importantKinds {
+            XCTAssertTrue(
+                TideyRestorableStateWorkspaceEventPolicy
+                    .shouldRequestSaveSoon(forEventKind: kind),
+                kind
+            )
+        }
+        XCTAssertFalse(
+            TideyRestorableStateWorkspaceEventPolicy
+                .shouldRequestSaveSoon(
+                    forEventKind: "workspace_selected"
+                )
+        )
+        XCTAssertFalse(
+            TideyRestorableStateWorkspaceEventPolicy
+                .shouldRequestSaveSoon(forEventKind: "panel_selected")
+        )
+        XCTAssertFalse(
+            TideyRestorableStateWorkspaceEventPolicy
+                .shouldRequestSaveSoon(forEventKind: "future_event")
+        )
+    }
+
     func testSaveSchedulerAndDebounceDriverSeamsCompile() {
         let scheduler = TideyRestorableStateSaveScheduler(
             dirtyTracker: TideyRestorableStateDirtyTracker(),

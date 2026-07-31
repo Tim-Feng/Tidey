@@ -82,6 +82,27 @@ protocol TideyRestorableStatePeriodicSaveRequesting: NSObjectProtocol {
     ) -> Bool
 }
 
+@objc(TideyRestorableStateWorkspaceEventPolicy)
+@objcMembers
+final class TideyRestorableStateWorkspaceEventPolicy: NSObject {
+    @objc(shouldRequestSaveSoonForEventKind:)
+    static func shouldRequestSaveSoon(
+        forEventKind kind: String
+    ) -> Bool {
+        switch kind {
+        case "workspace_created",
+             "workspace_closed",
+             "workspace_updated",
+             "panel_created",
+             "panel_closed",
+             "panel_updated":
+            return true
+        default:
+            return false
+        }
+    }
+}
+
 @objc(TideyRestorableStateSaveScheduler)
 @objcMembers
 final class TideyRestorableStateSaveScheduler: NSObject {
