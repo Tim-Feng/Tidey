@@ -11,6 +11,7 @@ enum RuntimeResumeRestorePolicy: String, Codable, Sendable {
     case create
     case attachOnly = "attach_only"
     case runtime
+    case directResume = "direct_resume"
 }
 
 enum RuntimeResumeAgentVendor: String, Codable, Sendable {
@@ -34,7 +35,7 @@ struct RuntimeResumeDescriptorBinding:
     Sendable {
     let workspaceID: String
     let panelID: String
-    let tmuxPaneID: String
+    let tmuxPaneID: String?
 
     enum CodingKeys: String, CodingKey {
         case workspaceID = "workspace_id"
@@ -158,7 +159,7 @@ struct RuntimeResumeDescriptorContent:
     let descriptorVersion: Int
     let kind: RuntimeResumeDescriptorKind
     let restorePolicy: RuntimeResumeRestorePolicy
-    let target: RuntimeResumeTmuxTarget
+    let target: RuntimeResumeTmuxTarget?
     let topology: RuntimeResumeTmuxTopology?
     let agent: RuntimeResumeAgentSpecification?
 
@@ -227,10 +228,11 @@ final class OrdinaryTmuxRuntimeResumeTopologyReader:
     func topologySnapshot(
         for binding: RuntimeResumeDescriptorBinding
     ) throws -> RuntimeResumeTmuxTopologySnapshot? {
-        guard let activeRoute =
+        guard let tmuxPaneID = binding.tmuxPaneID,
+              let activeRoute =
                 registry.route(forPanelID: binding.panelID),
               activeRoute.workspaceID == binding.workspaceID,
-              activeRoute.activePaneID == binding.tmuxPaneID else {
+              activeRoute.activePaneID == tmuxPaneID else {
             return nil
         }
         let routes = registry.routes(
@@ -273,7 +275,7 @@ final class OrdinaryTmuxRuntimeResumeTopologyReader:
                 sortedPaneRoutesByWindowIndex[
                     activeRoute.windowIndex
                 ]?.firstIndex(where: {
-                    $0.activePaneID == binding.tmuxPaneID
+                    $0.activePaneID == tmuxPaneID
                 }) else {
             return nil
         }
@@ -569,14 +571,14 @@ final class RuntimeResumeDescriptorPublisher:
         let lhsKey = [
             lhs.binding.workspaceID,
             lhs.binding.panelID,
-            lhs.binding.tmuxPaneID,
+            lhs.binding.tmuxPaneID ?? "",
             lhs.vendor.rawValue,
             lhs.durableResumeID,
         ]
         let rhsKey = [
             rhs.binding.workspaceID,
             rhs.binding.panelID,
-            rhs.binding.tmuxPaneID,
+            rhs.binding.tmuxPaneID ?? "",
             rhs.vendor.rawValue,
             rhs.durableResumeID,
         ]

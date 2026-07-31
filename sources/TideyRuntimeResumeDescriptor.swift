@@ -12,6 +12,7 @@ enum TideyRuntimeRestorePolicy: Int {
     case create
     case attachOnly
     case runtime
+    case directResume
 }
 
 @objc(TideyRuntimeAgentVendor)
@@ -163,7 +164,7 @@ final class TideyRuntimeResumeDescriptor: NSObject {
     let revision: Int64
     let kind: TideyRuntimeResumeKind
     let restorePolicy: TideyRuntimeRestorePolicy
-    let target: TideyRuntimeResumeTarget
+    let target: TideyRuntimeResumeTarget?
     let topology: TideyRuntimeTmuxTopology?
     let agent: TideyRuntimeAgentResumeSpecification?
 
@@ -172,7 +173,7 @@ final class TideyRuntimeResumeDescriptor: NSObject {
         revision: Int64,
         kind: TideyRuntimeResumeKind,
         restorePolicy: TideyRuntimeRestorePolicy,
-        target: TideyRuntimeResumeTarget,
+        target: TideyRuntimeResumeTarget?,
         topology: TideyRuntimeTmuxTopology?,
         agent: TideyRuntimeAgentResumeSpecification?
     ) {
@@ -591,7 +592,7 @@ private struct TideyRuntimeResumeDescriptorContentWire: Codable {
     let descriptorVersion: Int
     let kind: String
     let restorePolicy: String
-    let target: TideyRuntimeResumeTargetWire
+    let target: TideyRuntimeResumeTargetWire?
     let topology: TideyRuntimeResumeTopologyWire?
     let agent: TideyRuntimeResumeAgentWire?
 
@@ -608,7 +609,7 @@ private struct TideyRuntimeResumeDescriptorContentWire: Codable {
         descriptorVersion: Int,
         kind: String,
         restorePolicy: String,
-        target: TideyRuntimeResumeTargetWire,
+        target: TideyRuntimeResumeTargetWire?,
         topology: TideyRuntimeResumeTopologyWire?,
         agent: TideyRuntimeResumeAgentWire?
     ) {
@@ -637,8 +638,12 @@ private struct TideyRuntimeResumeDescriptorContentWire: Codable {
             restorePolicy = "attach_only"
         case .runtime:
             restorePolicy = "runtime"
+        case .directResume:
+            restorePolicy = "direct_resume"
         }
-        target = TideyRuntimeResumeTargetWire(descriptor.target)
+        target = descriptor.target.map(
+            TideyRuntimeResumeTargetWire.init
+        )
         topology = descriptor.topology.map(
             TideyRuntimeResumeTopologyWire.init
         )
@@ -678,6 +683,8 @@ private struct TideyRuntimeResumeDescriptorContentWire: Codable {
             policyModel = .attachOnly
         case "runtime":
             policyModel = .runtime
+        case "direct_resume":
+            policyModel = .directResume
         default:
             throw TideyRuntimeResumeDescriptorCodecError
                 .malformedField("restore_policy")
@@ -685,6 +692,7 @@ private struct TideyRuntimeResumeDescriptorContentWire: Codable {
         switch kindModel {
         case .ordinaryTmux:
             guard policyModel == .attachOnly,
+                  target != nil,
                   topology == nil,
                   agent == nil else {
                 throw TideyRuntimeResumeDescriptorCodecError
@@ -692,12 +700,15 @@ private struct TideyRuntimeResumeDescriptorContentWire: Codable {
             }
         case .agent:
             guard policyModel == .create,
+                  target != nil,
                   agent != nil else {
                 throw TideyRuntimeResumeDescriptorCodecError
                     .malformedField("agent")
             }
         case .generic:
             guard policyModel != .create,
+                  policyModel != .directResume,
+                  target != nil,
                   agent == nil else {
                 throw TideyRuntimeResumeDescriptorCodecError
                     .malformedField("generic")
@@ -708,7 +719,7 @@ private struct TideyRuntimeResumeDescriptorContentWire: Codable {
             revision: revision,
             kind: kindModel,
             restorePolicy: policyModel,
-            target: try target.validatedModel(),
+            target: try target?.validatedModel(),
             topology: try topology?.validatedModel(),
             agent: try agent?.validatedModel()
         )
@@ -720,7 +731,7 @@ private struct TideyRuntimeResumeDescriptorWire: Codable {
     let revision: Int64
     let kind: String
     let restorePolicy: String
-    let target: TideyRuntimeResumeTargetWire
+    let target: TideyRuntimeResumeTargetWire?
     let topology: TideyRuntimeResumeTopologyWire?
     let agent: TideyRuntimeResumeAgentWire?
 

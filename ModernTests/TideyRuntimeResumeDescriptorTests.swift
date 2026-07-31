@@ -2,6 +2,31 @@ import XCTest
 @testable import iTerm2SharedARC
 
 final class TideyRuntimeResumeDescriptorTests: XCTestCase {
+    func testDirectAgentDescriptorSeamsCompile() {
+        let launch = TideyRuntimeLaunchSpecification(
+            executable: "codex",
+            arguments: ["resume", "thread-direct"],
+            workingDirectory: "/tmp/project"
+        )
+        let descriptor = TideyRuntimeResumeDescriptor(
+            descriptorVersion:
+                TideyRuntimeResumeDescriptor.currentDescriptorVersion,
+            revision: 1,
+            kind: .agent,
+            restorePolicy: .directResume,
+            target: nil,
+            topology: nil,
+            agent: TideyRuntimeAgentResumeSpecification(
+                vendor: .codex,
+                durableResumeID: "thread-direct",
+                launch: launch
+            )
+        )
+
+        XCTAssertEqual(descriptor.restorePolicy, .directResume)
+        XCTAssertNil(descriptor.target)
+    }
+
     func testOrdinaryTmuxMetadataProducesAttachOnlyDescriptorWithoutBridge() throws {
         let factory = TideyRuntimeResumeDescriptorFactory()
         let pathDescriptor = try XCTUnwrap(
@@ -478,10 +503,10 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
         XCTAssertTrue(descriptor.target === target)
         XCTAssertTrue(descriptor.topology === topology)
         XCTAssertTrue(descriptor.agent === agent)
-        XCTAssertEqual(descriptor.target.socketEndpointKind, .name)
-        XCTAssertNil(descriptor.target.socketPath)
-        XCTAssertEqual(descriptor.target.socketName, "tidey")
-        XCTAssertEqual(descriptor.target.tmuxSession, "tidey-codex")
+        XCTAssertEqual(descriptor.target?.socketEndpointKind, .name)
+        XCTAssertNil(descriptor.target?.socketPath)
+        XCTAssertEqual(descriptor.target?.socketName, "tidey")
+        XCTAssertEqual(descriptor.target?.tmuxSession, "tidey-codex")
         XCTAssertEqual(descriptor.topology?.activeWindowIndex, 1)
         XCTAssertEqual(descriptor.topology?.activePaneIndex, 2)
         XCTAssertEqual(descriptor.topology?.windows.first?.panes.first?.index, 2)
@@ -498,9 +523,10 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
             [
                 TideyRuntimeRestorePolicy.create,
                 .attachOnly,
-                .runtime
+                .runtime,
+                .directResume
             ].map(\.rawValue),
-            [0, 1, 2]
+            [0, 1, 2, 3]
         )
         XCTAssertEqual(
             [
@@ -571,25 +597,25 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
             line: line
         )
         XCTAssertEqual(
-            descriptor.target.socketEndpointKind,
+            descriptor.target?.socketEndpointKind,
             endpointKind,
             file: file,
             line: line
         )
         XCTAssertEqual(
-            descriptor.target.socketPath,
+            descriptor.target?.socketPath,
             socketPath,
             file: file,
             line: line
         )
         XCTAssertEqual(
-            descriptor.target.socketName,
+            descriptor.target?.socketName,
             socketName,
             file: file,
             line: line
         )
         XCTAssertEqual(
-            descriptor.target.tmuxSession,
+            descriptor.target?.tmuxSession,
             session,
             file: file,
             line: line

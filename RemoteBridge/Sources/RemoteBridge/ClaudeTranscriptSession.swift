@@ -638,12 +638,12 @@ final class AgentSessionRegistryMonitor {
                     let lhs = [
                         $0.binding.workspaceID,
                         $0.binding.panelID,
-                        $0.binding.tmuxPaneID,
+                        $0.binding.tmuxPaneID ?? "",
                     ]
                     let rhs = [
                         $1.binding.workspaceID,
                         $1.binding.panelID,
-                        $1.binding.tmuxPaneID,
+                        $1.binding.tmuxPaneID ?? "",
                     ]
                     return lhs.lexicographicallyPrecedes(rhs)
                 }

@@ -4,6 +4,34 @@ import XCTest
 @testable import RemoteBridge
 
 final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
+    func testDirectAgentDescriptorSeamsCompile() {
+        let binding = RuntimeResumeDescriptorBinding(
+            workspaceID: "workspace-direct",
+            panelID: "panel-direct",
+            tmuxPaneID: nil
+        )
+        let content = RuntimeResumeDescriptorContent(
+            descriptorVersion: 1,
+            kind: .agent,
+            restorePolicy: .directResume,
+            target: nil,
+            topology: nil,
+            agent: RuntimeResumeAgentSpecification(
+                vendor: .codex,
+                durableResumeID: "thread-direct",
+                launch: RuntimeResumeLaunchSpecification(
+                    executable: "codex",
+                    arguments: ["resume", "thread-direct"],
+                    workingDirectory: "/tmp/project"
+                )
+            )
+        )
+
+        XCTAssertNil(binding.tmuxPaneID)
+        XCTAssertEqual(content.restorePolicy, .directResume)
+        XCTAssertNil(content.target)
+    }
+
     func testRegistryReaderUsesOnlyPersistedExactBinding()
         throws {
         let supportDirectory = FileManager.default.temporaryDirectory
