@@ -2682,6 +2682,9 @@ ITERM_WEAKLY_REFERENCEABLE
         return;
     }
     [self invalidateRestorableState];
+    if ([TideyRestorableStateWorkspaceEventPolicy shouldRequestSaveSoonForEventKind:kind]) {
+        [[iTermRestorableStateController sharedInstance] tideyRequestSaveSoon];
+    }
     [[NSNotificationCenter defaultCenter] postNotificationName:PseudoTerminalTideyWorkspaceEventNotification
                                                         object:self
                                                       userInfo:event];
@@ -2986,6 +2989,7 @@ ITERM_WEAKLY_REFERENCEABLE
             currentPanelID:[self tideyPanelIdentifierForPanel:panel] ?: @""];
     if (result.changed) {
         [TideyRestorableStateDirtyTracker.shared markDirty];
+        [[iTermRestorableStateController sharedInstance] tideyRequestSaveSoon];
     }
     NSMutableDictionary *response =
         [NSMutableDictionary dictionaryWithDictionary:@{
@@ -3949,6 +3953,7 @@ ITERM_WEAKLY_REFERENCEABLE
         [_contentView selectTideySidebarWorkspaceAtIndex:self.selectedWorkspaceIndex];
     }
     [self invalidateRestorableState];
+    [[iTermRestorableStateController sharedInstance] tideyRequestSaveSoon];
     return YES;
 }
 
@@ -3991,6 +3996,7 @@ ITERM_WEAKLY_REFERENCEABLE
         [_contentView selectTideySidebarWorkspaceAtIndex:self.selectedWorkspaceIndex];
     }
     [self invalidateRestorableState];
+    [[iTermRestorableStateController sharedInstance] tideyRequestSaveSoon];
 }
 
 - (BOOL)workspaceHasCustomTitleAtIndex:(NSInteger)index {

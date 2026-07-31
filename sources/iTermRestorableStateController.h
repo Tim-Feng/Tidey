@@ -38,6 +38,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (BOOL)legacyRestorationRequested;
 
 - (void)saveRestorableState;
+- (void)tideyRequestSaveSoon;
 
 // Call exactly one of these at startup:
 - (void)restoreWindowsWithCompletion:(void (^)(void))completion;

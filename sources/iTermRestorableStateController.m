@@ -245,6 +245,11 @@ static BOOL gForceSaveState;
     [_driver save];
 }
 
+- (void)tideyRequestSaveSoon {
+    assert([NSThread isMainThread]);
+    [_tideySaveScheduler requestSaveSoon];
+}
+
 // Saving is controlled by Tidey's app preference. Launch selection is separate: tagged Tidey
 // state follows the Tidey policy, while an untagged pre-upgrade database follows the legacy
 // macOS/iTerm request for its one-time migration decision.
