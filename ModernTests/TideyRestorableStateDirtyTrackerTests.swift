@@ -237,6 +237,38 @@ final class TideyRestorableStateDirtyTrackerTests: XCTestCase {
         XCTAssertEqual(debounceDriver.scheduleCount, 4)
         XCTAssertTrue(tracker.isDirty)
     }
+
+    func testAmbientRefusalCancelsAnExhaustedPromptRetry() {
+        let tracker = TideyRestorableStateDirtyTracker()
+        let tickDriver = TideyRestorableStateTickDriverSpy()
+        let debounceDriver = TideyRestorableStateDebounceDriverSpy()
+        let saveRequester = TideyRestorableStatePeriodicSaveRequesterSpy()
+        let scheduler = TideyRestorableStateSaveScheduler(
+            dirtyTracker: tracker,
+            periodicTickDriver: tickDriver,
+            debounceDriver: debounceDriver,
+            saveRequester: saveRequester
+        )
+
+        scheduler.start()
+        tracker.markDirty()
+        saveRequester.acceptsNextSave = false
+        scheduler.requestSaveSoon()
+
+        debounceDriver.fire()
+        debounceDriver.fire()
+        debounceDriver.fire()
+        XCTAssertEqual(saveRequester.requestCount, 3)
+
+        tickDriver.fire()
+        XCTAssertEqual(saveRequester.requestCount, 4)
+
+        debounceDriver.fire()
+
+        XCTAssertEqual(saveRequester.requestCount, 4)
+        XCTAssertTrue(debounceDriver.didCancel)
+        XCTAssertTrue(tracker.isDirty)
+    }
 }
 
 private final class TideyRestorableStateDebounceDriverSpy:

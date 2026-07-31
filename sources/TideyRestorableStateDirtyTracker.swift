@@ -188,7 +188,8 @@ final class TideyRestorableStateSaveScheduler: NSObject {
     private func promptTimerDidFire() {
         it_assert(Thread.isMainThread)
         promptTimerScheduled = false
-        guard isRunning else {
+        guard isRunning,
+              promptSavePending else {
             return
         }
         promptDelayElapsed = true
@@ -256,6 +257,7 @@ final class TideyRestorableStateSaveScheduler: NSObject {
     }
 
     private func clearPromptRequest() {
+        debounceDriver.cancelPending()
         promptSavePending = false
         promptDelayElapsed = false
         promptTimerScheduled = false
