@@ -85,13 +85,26 @@ protocol TideyRestorableStatePeriodicSaveRequesting: NSObjectProtocol {
 @objc(TideyRestorableStateSaveScheduler)
 @objcMembers
 final class TideyRestorableStateSaveScheduler: NSObject {
-    private static let saveInterval: TimeInterval = 30
+    private enum SaveTrigger: Equatable {
+        case ambient
+        case prompt
+    }
+
+    private static let ambientSaveInterval: TimeInterval = 600
+    private static let promptSaveDelay: TimeInterval = 5
+    private static let maximumConsecutiveRefusalRetries = 3
 
     private let dirtyTracker: TideyRestorableStateDirtyTracker
     private let periodicTickDriver: TideyRestorableStateTickDriving
     private let debounceDriver: TideyRestorableStateDebounceDriving
     private weak var saveRequester:
         TideyRestorableStatePeriodicSaveRequesting?
+    private var isRunning = false
+    private var acceptedSaveInFlight = false
+    private var promptSavePending = false
+    private var promptDelayElapsed = false
+    private var promptTimerScheduled = false
+    private var consecutiveRefusalCount = 0
 
     init(
         dirtyTracker: TideyRestorableStateDirtyTracker,
@@ -108,35 +121,123 @@ final class TideyRestorableStateSaveScheduler: NSObject {
 
     func start() {
         it_assert(Thread.isMainThread)
-        periodicTickDriver.start(interval: Self.saveInterval) { [weak self] in
-            self?.saveIfNeeded()
+        isRunning = true
+        periodicTickDriver.start(
+            interval: Self.ambientSaveInterval
+        ) { [weak self] in
+            self?.saveIfNeeded(trigger: .ambient)
         }
     }
 
     func requestSaveSoon() {
         it_assert(Thread.isMainThread)
+        guard isRunning else {
+            return
+        }
+        promptSavePending = true
+        promptDelayElapsed = false
+        consecutiveRefusalCount = 0
+        armPromptTimer()
     }
 
     func stop() {
         it_assert(Thread.isMainThread)
+        isRunning = false
+        promptSavePending = false
+        promptDelayElapsed = false
+        promptTimerScheduled = false
+        consecutiveRefusalCount = 0
         periodicTickDriver.stop()
         debounceDriver.cancelPending()
     }
 
-    private func saveIfNeeded() {
+    private func armPromptTimer() {
         it_assert(Thread.isMainThread)
+        guard isRunning else {
+            return
+        }
+        promptTimerScheduled = true
+        debounceDriver.scheduleOnce(
+            after: Self.promptSaveDelay
+        ) { [weak self] in
+            self?.promptTimerDidFire()
+        }
+    }
+
+    private func promptTimerDidFire() {
+        it_assert(Thread.isMainThread)
+        promptTimerScheduled = false
+        guard isRunning else {
+            return
+        }
+        promptDelayElapsed = true
+        saveIfNeeded(trigger: .prompt)
+    }
+
+    private func saveIfNeeded(trigger: SaveTrigger) {
+        it_assert(Thread.isMainThread)
+        guard isRunning,
+              !acceptedSaveInFlight else {
+            return
+        }
         guard let saveRequester,
               saveRequester.canRequestPeriodicSave,
               let generation = dirtyTracker.captureGenerationForSave() else {
+            if trigger == .prompt {
+                clearPromptRequest()
+            }
             return
         }
-        _ = saveRequester.requestPeriodicSave { [weak self] in
+        acceptedSaveInFlight = true
+        let accepted = saveRequester.requestPeriodicSave { [weak self] in
             guard let self else {
                 return
             }
-            it_assert(Thread.isMainThread)
-            self.dirtyTracker.acknowledgeSavedGeneration(generation)
+            self.didCompleteSave(generation: generation)
         }
+        guard accepted else {
+            acceptedSaveInFlight = false
+            retryAfterRefusal()
+            return
+        }
+        consecutiveRefusalCount = 0
+        if trigger == .prompt {
+            clearPromptRequest()
+        }
+    }
+
+    private func retryAfterRefusal() {
+        it_assert(Thread.isMainThread)
+        consecutiveRefusalCount += 1
+        guard consecutiveRefusalCount <=
+                Self.maximumConsecutiveRefusalRetries else {
+            clearPromptRequest()
+            return
+        }
+        promptSavePending = true
+        promptDelayElapsed = false
+        armPromptTimer()
+    }
+
+    private func didCompleteSave(
+        generation: TideyRestorableStateSaveGeneration
+    ) {
+        it_assert(Thread.isMainThread)
+        dirtyTracker.acknowledgeSavedGeneration(generation)
+        acceptedSaveInFlight = false
+        guard isRunning,
+              promptSavePending,
+              promptDelayElapsed,
+              !promptTimerScheduled else {
+            return
+        }
+        saveIfNeeded(trigger: .prompt)
+    }
+
+    private func clearPromptRequest() {
+        promptSavePending = false
+        promptDelayElapsed = false
+        promptTimerScheduled = false
     }
 }
 

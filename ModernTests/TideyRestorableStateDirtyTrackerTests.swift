@@ -54,7 +54,7 @@ final class TideyRestorableStateDirtyTrackerTests: XCTestCase {
 
         periodicSaver.start()
 
-        XCTAssertEqual(tickDriver.startedInterval, 30)
+        XCTAssertEqual(tickDriver.startedInterval, 600)
 
         tickDriver.fire()
         XCTAssertEqual(saveRequester.requestCount, 0)
@@ -102,6 +102,108 @@ final class TideyRestorableStateDirtyTrackerTests: XCTestCase {
         periodicSaver.stop()
         XCTAssertTrue(tickDriver.didStop)
     }
+
+    func testSaveSchedulerUsesTenMinuteFallbackAndTrailingEdgePromptSaves() {
+        let tracker = TideyRestorableStateDirtyTracker()
+        let tickDriver = TideyRestorableStateTickDriverSpy()
+        let debounceDriver = TideyRestorableStateDebounceDriverSpy()
+        let saveRequester = TideyRestorableStatePeriodicSaveRequesterSpy()
+        let scheduler = TideyRestorableStateSaveScheduler(
+            dirtyTracker: tracker,
+            periodicTickDriver: tickDriver,
+            debounceDriver: debounceDriver,
+            saveRequester: saveRequester
+        )
+
+        scheduler.start()
+        XCTAssertEqual(tickDriver.startedInterval, 600)
+
+        tracker.markDirty()
+        scheduler.requestSaveSoon()
+        scheduler.requestSaveSoon()
+
+        XCTAssertEqual(debounceDriver.scheduledDelay, 5)
+        XCTAssertEqual(debounceDriver.scheduleCount, 2)
+        XCTAssertEqual(saveRequester.requestCount, 0)
+
+        debounceDriver.fire()
+
+        XCTAssertEqual(saveRequester.requestCount, 1)
+        XCTAssertTrue(tracker.isDirty)
+
+        saveRequester.completeNextSave()
+
+        XCTAssertFalse(tracker.isDirty)
+    }
+
+    func testSaveSchedulerRetriesRefusedPromptAndPreservesConcurrentMutation() {
+        let tracker = TideyRestorableStateDirtyTracker()
+        let debounceDriver = TideyRestorableStateDebounceDriverSpy()
+        let saveRequester = TideyRestorableStatePeriodicSaveRequesterSpy()
+        let scheduler = TideyRestorableStateSaveScheduler(
+            dirtyTracker: tracker,
+            periodicTickDriver: TideyRestorableStateTickDriverSpy(),
+            debounceDriver: debounceDriver,
+            saveRequester: saveRequester
+        )
+
+        scheduler.start()
+        tracker.markDirty()
+        saveRequester.acceptsNextSave = false
+        scheduler.requestSaveSoon()
+        debounceDriver.fire()
+
+        XCTAssertEqual(saveRequester.requestCount, 1)
+        XCTAssertTrue(tracker.isDirty)
+        XCTAssertEqual(debounceDriver.scheduleCount, 2)
+
+        saveRequester.acceptsNextSave = true
+        debounceDriver.fire()
+        XCTAssertEqual(saveRequester.requestCount, 2)
+
+        tracker.markDirty()
+        scheduler.requestSaveSoon()
+        debounceDriver.fire()
+
+        XCTAssertEqual(saveRequester.requestCount, 2)
+
+        saveRequester.completeNextSave()
+
+        XCTAssertTrue(tracker.isDirty)
+        XCTAssertEqual(saveRequester.requestCount, 3)
+
+        saveRequester.completeNextSave()
+
+        XCTAssertFalse(tracker.isDirty)
+        XCTAssertEqual(tracker.savedGeneration, 2)
+    }
+
+    func testSaveSchedulerBoundsConsecutiveRefusalRetries() {
+        let tracker = TideyRestorableStateDirtyTracker()
+        let debounceDriver = TideyRestorableStateDebounceDriverSpy()
+        let saveRequester = TideyRestorableStatePeriodicSaveRequesterSpy()
+        let scheduler = TideyRestorableStateSaveScheduler(
+            dirtyTracker: tracker,
+            periodicTickDriver: TideyRestorableStateTickDriverSpy(),
+            debounceDriver: debounceDriver,
+            saveRequester: saveRequester
+        )
+
+        scheduler.start()
+        tracker.markDirty()
+        saveRequester.acceptsNextSave = false
+        scheduler.requestSaveSoon()
+
+        debounceDriver.fire()
+        debounceDriver.fire()
+        debounceDriver.fire()
+        debounceDriver.fire()
+        debounceDriver.fire()
+
+        XCTAssertEqual(saveRequester.requestCount, 4)
+        XCTAssertEqual(debounceDriver.scheduleCount, 4)
+        XCTAssertTrue(tracker.isDirty)
+    }
 }
 
 private final class TideyRestorableStateDebounceDriverSpy:
@@ -109,12 +211,14 @@ private final class TideyRestorableStateDebounceDriverSpy:
     TideyRestorableStateDebounceDriving {
     private var handler: (() -> Void)?
     private(set) var scheduledDelay: TimeInterval?
+    private(set) var scheduleCount = 0
     private(set) var didCancel = false
 
     func scheduleOnce(
         after delay: TimeInterval,
         handler: @escaping () -> Void
     ) {
+        scheduleCount += 1
         scheduledDelay = delay
         self.handler = handler
     }
