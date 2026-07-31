@@ -2,6 +2,18 @@ import XCTest
 @testable import iTerm2SharedARC
 
 final class TideyRestorableStateDirtyTrackerTests: XCTestCase {
+    func testSaveSchedulerAndDebounceDriverSeamsCompile() {
+        let scheduler = TideyRestorableStateSaveScheduler(
+            dirtyTracker: TideyRestorableStateDirtyTracker(),
+            periodicTickDriver: TideyRestorableStateTickDriverSpy(),
+            debounceDriver: TideyRestorableStateDebounceDriverSpy(),
+            saveRequester: TideyRestorableStatePeriodicSaveRequesterSpy()
+        )
+
+        scheduler.requestSaveSoon()
+        scheduler.stop()
+    }
+
     func testDirtyGenerationAndTickDriverSeamsCompile() throws {
         let tracker = TideyRestorableStateDirtyTracker()
         let tickDriver = TideyRestorableStateTickDriverSpy()
@@ -31,10 +43,12 @@ final class TideyRestorableStateDirtyTrackerTests: XCTestCase {
     func testPeriodicTickSavesOnlyDirtyReadyStateAndPreservesConcurrentMutation() {
         let tracker = TideyRestorableStateDirtyTracker()
         let tickDriver = TideyRestorableStateTickDriverSpy()
+        let debounceDriver = TideyRestorableStateDebounceDriverSpy()
         let saveRequester = TideyRestorableStatePeriodicSaveRequesterSpy()
-        let periodicSaver = TideyRestorableStatePeriodicSaver(
+        let periodicSaver = TideyRestorableStateSaveScheduler(
             dirtyTracker: tracker,
-            tickDriver: tickDriver,
+            periodicTickDriver: tickDriver,
+            debounceDriver: debounceDriver,
             saveRequester: saveRequester
         )
 
@@ -87,6 +101,33 @@ final class TideyRestorableStateDirtyTrackerTests: XCTestCase {
 
         periodicSaver.stop()
         XCTAssertTrue(tickDriver.didStop)
+    }
+}
+
+private final class TideyRestorableStateDebounceDriverSpy:
+    NSObject,
+    TideyRestorableStateDebounceDriving {
+    private var handler: (() -> Void)?
+    private(set) var scheduledDelay: TimeInterval?
+    private(set) var didCancel = false
+
+    func scheduleOnce(
+        after delay: TimeInterval,
+        handler: @escaping () -> Void
+    ) {
+        scheduledDelay = delay
+        self.handler = handler
+    }
+
+    func cancelPending() {
+        didCancel = true
+        handler = nil
+    }
+
+    func fire() {
+        let handler = handler
+        self.handler = nil
+        handler?()
     }
 }
 

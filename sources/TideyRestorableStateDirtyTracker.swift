@@ -61,6 +61,17 @@ protocol TideyRestorableStateTickDriving: NSObjectProtocol {
     func stop()
 }
 
+@objc(TideyRestorableStateDebounceDriving)
+protocol TideyRestorableStateDebounceDriving: NSObjectProtocol {
+    @objc(scheduleOnceAfter:handler:)
+    func scheduleOnce(
+        after delay: TimeInterval,
+        handler: @escaping () -> Void
+    )
+
+    func cancelPending()
+}
+
 @objc(TideyRestorableStatePeriodicSaveRequesting)
 protocol TideyRestorableStatePeriodicSaveRequesting: NSObjectProtocol {
     var canRequestPeriodicSave: Bool { get }
@@ -71,37 +82,45 @@ protocol TideyRestorableStatePeriodicSaveRequesting: NSObjectProtocol {
     ) -> Bool
 }
 
-@objc(TideyRestorableStatePeriodicSaver)
+@objc(TideyRestorableStateSaveScheduler)
 @objcMembers
-final class TideyRestorableStatePeriodicSaver: NSObject {
+final class TideyRestorableStateSaveScheduler: NSObject {
     private static let saveInterval: TimeInterval = 30
 
     private let dirtyTracker: TideyRestorableStateDirtyTracker
-    private let tickDriver: TideyRestorableStateTickDriving
+    private let periodicTickDriver: TideyRestorableStateTickDriving
+    private let debounceDriver: TideyRestorableStateDebounceDriving
     private weak var saveRequester:
         TideyRestorableStatePeriodicSaveRequesting?
 
     init(
         dirtyTracker: TideyRestorableStateDirtyTracker,
-        tickDriver: TideyRestorableStateTickDriving,
+        periodicTickDriver: TideyRestorableStateTickDriving,
+        debounceDriver: TideyRestorableStateDebounceDriving,
         saveRequester: TideyRestorableStatePeriodicSaveRequesting
     ) {
         self.dirtyTracker = dirtyTracker
-        self.tickDriver = tickDriver
+        self.periodicTickDriver = periodicTickDriver
+        self.debounceDriver = debounceDriver
         self.saveRequester = saveRequester
         super.init()
     }
 
     func start() {
         it_assert(Thread.isMainThread)
-        tickDriver.start(interval: Self.saveInterval) { [weak self] in
+        periodicTickDriver.start(interval: Self.saveInterval) { [weak self] in
             self?.saveIfNeeded()
         }
     }
 
+    func requestSaveSoon() {
+        it_assert(Thread.isMainThread)
+    }
+
     func stop() {
         it_assert(Thread.isMainThread)
-        tickDriver.stop()
+        periodicTickDriver.stop()
+        debounceDriver.cancelPending()
     }
 
     private func saveIfNeeded() {
@@ -142,6 +161,33 @@ final class TideyRestorableStateTimerTickDriver:
     }
 
     func stop() {
+        it_assert(Thread.isMainThread)
+        timer?.invalidate()
+        timer = nil
+    }
+}
+
+@objc(TideyRestorableStateTimerDebounceDriver)
+@objcMembers
+final class TideyRestorableStateTimerDebounceDriver:
+    NSObject,
+    TideyRestorableStateDebounceDriving {
+    private var timer: Timer?
+
+    func scheduleOnce(
+        after delay: TimeInterval,
+        handler: @escaping () -> Void
+    ) {
+        it_assert(Thread.isMainThread)
+        cancelPending()
+        let timer = Timer(timeInterval: delay, repeats: false) { _ in
+            handler()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    func cancelPending() {
         it_assert(Thread.isMainThread)
         timer?.invalidate()
         timer = nil

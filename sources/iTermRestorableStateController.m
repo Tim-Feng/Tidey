@@ -79,7 +79,7 @@ extern NSString *const iTermApplicationWillTerminate;
     BOOL _ready;
     NSMutableDictionary<NSString *, void (^)(NSWindow *, NSError *)> *_systemCallbacks;
     dispatch_group_t _completionGroup;
-    TideyRestorableStatePeriodicSaver *_tideyPeriodicSaver;
+    TideyRestorableStateSaveScheduler *_tideySaveScheduler;
     TideyRestorationLaunchMarker *_tideyLaunchMarker;
 }
 
@@ -206,12 +206,13 @@ static BOOL gForceSaveState;
                 [[TideyNoopRejectedServerTerminator alloc] init];
         }
 
-        _tideyPeriodicSaver =
-            [[TideyRestorableStatePeriodicSaver alloc]
+        _tideySaveScheduler =
+            [[TideyRestorableStateSaveScheduler alloc]
                 initWithDirtyTracker:TideyRestorableStateDirtyTracker.shared
-                          tickDriver:[[TideyRestorableStateTimerTickDriver alloc] init]
+                  periodicTickDriver:[[TideyRestorableStateTimerTickDriver alloc] init]
+                      debounceDriver:[[TideyRestorableStateTimerDebounceDriver alloc] init]
                        saveRequester:self];
-        [_tideyPeriodicSaver start];
+        [_tideySaveScheduler start];
     }
     return self;
 }
@@ -286,8 +287,8 @@ static BOOL gForceSaveState;
 // windows have already been closed.
 - (void)applicationWillTerminate:(NSNotification *)notification {
     DLog(@"application will terminate");
-    [_tideyPeriodicSaver stop];
-    _tideyPeriodicSaver = nil;
+    [_tideySaveScheduler stop];
+    _tideySaveScheduler = nil;
     if (![iTermRestorableStateController stateRestorationEnabled]) {
         DLog(@"State restoration disabled. Erase state.");
         [_driver eraseSynchronously:YES];
