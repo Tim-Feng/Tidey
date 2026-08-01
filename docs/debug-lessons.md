@@ -424,6 +424,10 @@
 - process 啟動所需的 Tidey identity 必須在 native graph hydration 前傳入
   - `PTYSession` 可能早於 workspace graph 完成啟動，事後才設定 workspace／panel ID 已經太晚
   - 從 saved arrangement 先解析 workspace ID，panel GUID 經 collision 檢查後只計算一次，並把同一個實際 GUID 同時交給 session environment 與最後的 tab graph
+  - arrangement 與最後存回的 session environment 正確，不代表 child process 實際繼承正確；`startProgram` 仍會在更晚的階段用 terminal lookup 覆寫 identity
+  - restored tab 必須在 recursive session launch 前先安裝 workspace ID 與 collision-safe panel GUID；啟動期 workspace lookup 依序採 graph、tab 自己的 saved identity、selected workspace，而且 tab fallback 要直接讀 property，不能再透過尚未完成的 workspace graph 查一次
+- App bundle 與常駐 Bridge 是兩個獨立的 deployment boundary
+  - 只替換 Tidey app 不會更新或重啟 Application Support 內由 launchd 執行的 Bridge；驗收 descriptor 新功能時要同時核對 bundled binary、installed binary 與實際 running process
 - runtime descriptor 只能當成受限的重新啟動指令
   - executable 必須從 app bundle 解析並通過 allowlist，argv 形狀與 vendor／durable ID 要完全一致，shell 參數需安全 quoting
   - relaunch 沿用 `(panelID, descriptorRevision)` state machine 與 completion fencing，避免重複 callback 再啟動第二次 agent
