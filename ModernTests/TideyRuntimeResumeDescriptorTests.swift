@@ -596,6 +596,41 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
         )
     }
 
+    func testManagedRestoreRelaunchReplacesFailedNativeReattachTaskWithoutChangingIdentity() throws {
+        let session = try XCTUnwrap(PTYSession(synthetic: true))
+        let originalShell = session.shell
+        let originalGUID = session.guid
+
+        XCTAssertTrue(
+            PTYSession.tideyShouldReplaceUnattachedShell(
+                forNativeReattachOutcome: .failed
+            )
+        )
+        session.tideyNativeServerReattachOutcome = .failed
+        session.tideyPrepareForManagedRestoreRelaunch()
+
+        XCTAssertTrue(session.shell !== originalShell)
+        XCTAssertEqual(session.guid, originalGUID)
+        XCTAssertTrue(session.shell.delegate === session)
+    }
+
+    func testManagedRestoreRelaunchLeavesOtherNativeReattachTasksUntouched() throws {
+        for outcome in [
+            TideyNativeServerReattachOutcome.notAttempted,
+            .succeeded
+        ] {
+            let session = try XCTUnwrap(PTYSession(synthetic: true))
+            let originalShell = session.shell
+            let originalGUID = session.guid
+
+            session.tideyNativeServerReattachOutcome = outcome
+            session.tideyPrepareForManagedRestoreRelaunch()
+
+            XCTAssertTrue(session.shell === originalShell)
+            XCTAssertEqual(session.guid, originalGUID)
+        }
+    }
+
     func testVersionedDescriptorAndNativeReattachOutcomeSeamsCompile() {
         let launch = TideyRuntimeLaunchSpecification(
             executable: "/usr/local/bin/codex",

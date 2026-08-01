@@ -6256,10 +6256,23 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
 
 + (BOOL)tideyShouldReplaceUnattachedShellForNativeReattachOutcome:
     (TideyNativeServerReattachOutcome)outcome {
-    return NO;
+    return outcome == TideyNativeServerReattachOutcomeFailed;
 }
 
 - (void)tideyPrepareForManagedRestoreRelaunch {
+    if ([[self class]
+            tideyShouldReplaceUnattachedShellForNativeReattachOutcome:
+                self.tideyNativeServerReattachOutcome]) {
+        [self setExited:NO];
+        [_logging stop];
+        [_shell autorelease];
+        _shell = nil;
+        _shell = [[PTYTask alloc] init];
+        [_shell setDelegate:self];
+        [_shell.winSizeController setGridSize:_screen.size
+                                     viewSize:_screen.viewSize
+                                  scaleFactor:self.backingScaleFactor];
+    }
     [self resetForRelaunch];
 }
 
