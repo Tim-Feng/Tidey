@@ -13,6 +13,40 @@ final class TideyWorkspaceRestorationTests: XCTestCase {
         )
     }
 
+    func testRestoredWorkspaceIdentityResolverUsesGraphThenTabThenSelected() {
+        XCTAssertEqual(
+            PseudoTerminal.tideyResolvedWorkspaceIdentifier(
+                forGraphLookupResult: "graph-workspace",
+                tabOwnIdentifier: "tab-workspace",
+                selectedWorkspaceIdentifier: "selected-workspace"
+            ),
+            "graph-workspace"
+        )
+        XCTAssertEqual(
+            PseudoTerminal.tideyResolvedWorkspaceIdentifier(
+                forGraphLookupResult: nil,
+                tabOwnIdentifier: "tab-workspace",
+                selectedWorkspaceIdentifier: "selected-workspace"
+            ),
+            "tab-workspace"
+        )
+        XCTAssertEqual(
+            PseudoTerminal.tideyResolvedWorkspaceIdentifier(
+                forGraphLookupResult: "",
+                tabOwnIdentifier: "",
+                selectedWorkspaceIdentifier: "selected-workspace"
+            ),
+            "selected-workspace"
+        )
+        XCTAssertNil(
+            PseudoTerminal.tideyResolvedWorkspaceIdentifier(
+                forGraphLookupResult: nil,
+                tabOwnIdentifier: nil,
+                selectedWorkspaceIdentifier: nil
+            )
+        )
+    }
+
     func testNativeTabArrangementGUIDSeamCompiles() {
         let arrangement = ["Tab GUID": "saved-panel-guid"]
 

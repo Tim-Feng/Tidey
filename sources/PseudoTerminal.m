@@ -4929,9 +4929,11 @@ ITERM_WEAKLY_REFERENCEABLE
 + (NSString *)tideyResolvedWorkspaceIdentifierForGraphLookupResult:(NSString *)graphLookupResult
                                                    tabOwnIdentifier:(NSString *)tabOwnIdentifier
                                          selectedWorkspaceIdentifier:(NSString *)selectedWorkspaceIdentifier {
-    (void)tabOwnIdentifier;
     if (graphLookupResult.length > 0) {
         return graphLookupResult;
+    }
+    if (tabOwnIdentifier.length > 0) {
+        return tabOwnIdentifier;
     }
     return selectedWorkspaceIdentifier.length > 0 ? selectedWorkspaceIdentifier : nil;
 }
@@ -4939,11 +4941,13 @@ ITERM_WEAKLY_REFERENCEABLE
 - (NSString *)tideyWorkspaceIdentifierForSession:(PTYSession *)session {
     PTYTab *tab = [self tabForSession:session];
     NSInteger index = [self indexOfWorkspaceContainingPanel:tab];
-    Workspace *workspace = [self workspaceAtIndex:index];
-    if (!workspace) {
-        workspace = self.selectedWorkspace;
-    }
-    return [self tideyWorkspaceIdentifierForWorkspace:workspace];
+    Workspace *graphWorkspace = [self workspaceAtIndex:index];
+    return [[self class]
+        tideyResolvedWorkspaceIdentifierForGraphLookupResult:
+            [self tideyWorkspaceIdentifierForWorkspace:graphWorkspace]
+        tabOwnIdentifier:tab.tideyWorkspaceIdentifier
+        selectedWorkspaceIdentifier:
+            [self tideyWorkspaceIdentifierForWorkspace:self.selectedWorkspace]];
 }
 
 - (void)tabTitleDidChange:(PTYTab *)tab {

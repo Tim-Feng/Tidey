@@ -3428,6 +3428,10 @@ static void SetAgainstGrainDim(BOOL isVertical, NSSize *dest, CGFloat value) {
             restoredPanelID = savedPanelID;
         }
     }
+    theTab.tideyWorkspaceIdentifier = restoredWorkspaceID;
+    if (restoredPanelID) {
+        theTab->_guid = [restoredPanelID copy];
+    }
     NSMutableDictionary *sessionOptions =
         [NSMutableDictionary dictionaryWithDictionary:options ?: @{}];
     if (restoredWorkspaceID.length > 0) {
@@ -3461,10 +3465,6 @@ static void SetAgainstGrainDim(BOOL isVertical, NSSize *dest, CGFloat value) {
                                                        options:sessionOptions]];
     theTab.titleOverride = [arrangement[TAB_ARRANGEMENT_TITLE_OVERRIDE] nilIfNull];
     theTab->_pinned = [arrangement[TAB_ARRANGEMENT_PINNED] boolValue];
-    theTab.tideyWorkspaceIdentifier = restoredWorkspaceID;
-    if (restoredPanelID) {
-        theTab->_guid = [restoredPanelID copy];
-    }
     [theTab updateTmuxTitleMonitor];
     return theTab;
 }
