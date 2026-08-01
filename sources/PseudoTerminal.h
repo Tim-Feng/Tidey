@@ -220,6 +220,9 @@ extern NSString *const PseudoTerminalTideyWorkspaceEventNotification;
 - (IBAction)saveDocument:(id)sender;
 - (void)tideyOpenFileInEditor:(NSString *)path;
 - (BOOL)tideyOpenURLInBrowser:(NSURL *)url;
++ (nullable NSString *)tideyResolvedWorkspaceIdentifierForGraphLookupResult:(nullable NSString *)graphLookupResult
+                                                           tabOwnIdentifier:(nullable NSString *)tabOwnIdentifier
+                                                 selectedWorkspaceIdentifier:(nullable NSString *)selectedWorkspaceIdentifier;
 - (NSString *)tideyWorkspaceIdentifierForSession:(PTYSession *)session;
 - (nullable NSString *)tideyPanelIdentifierForSession:(PTYSession *)session;
 - (IBAction)selectTideySidebarWorkspaceAtIndexAction:(id)sender;

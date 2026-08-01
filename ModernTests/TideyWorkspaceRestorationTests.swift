@@ -2,6 +2,17 @@ import XCTest
 @testable import iTerm2SharedARC
 
 final class TideyWorkspaceRestorationTests: XCTestCase {
+    func testRestoredWorkspaceIdentityResolverSeamCompiles() {
+        XCTAssertEqual(
+            PseudoTerminal.tideyResolvedWorkspaceIdentifier(
+                forGraphLookupResult: "graph-workspace",
+                tabOwnIdentifier: "tab-workspace",
+                selectedWorkspaceIdentifier: "selected-workspace"
+            ),
+            "graph-workspace"
+        )
+    }
+
     func testNativeTabArrangementGUIDSeamCompiles() {
         let arrangement = ["Tab GUID": "saved-panel-guid"]
 

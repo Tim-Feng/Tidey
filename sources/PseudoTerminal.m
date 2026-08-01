@@ -4926,6 +4926,16 @@ ITERM_WEAKLY_REFERENCEABLE
     return (PTYTab *)session.delegate;
 }
 
++ (NSString *)tideyResolvedWorkspaceIdentifierForGraphLookupResult:(NSString *)graphLookupResult
+                                                   tabOwnIdentifier:(NSString *)tabOwnIdentifier
+                                         selectedWorkspaceIdentifier:(NSString *)selectedWorkspaceIdentifier {
+    (void)tabOwnIdentifier;
+    if (graphLookupResult.length > 0) {
+        return graphLookupResult;
+    }
+    return selectedWorkspaceIdentifier.length > 0 ? selectedWorkspaceIdentifier : nil;
+}
+
 - (NSString *)tideyWorkspaceIdentifierForSession:(PTYSession *)session {
     PTYTab *tab = [self tabForSession:session];
     NSInteger index = [self indexOfWorkspaceContainingPanel:tab];
