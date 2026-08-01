@@ -836,7 +836,7 @@ static BOOL TideyRuntimeLaunchesAreEqual(
     if (agent.launch.workingDirectory.length > 0) {
         environment[@"PWD"] = agent.launch.workingDirectory;
     }
-    [session resetForRelaunch];
+    [session tideyPrepareForManagedRestoreRelaunch];
     [session startProgram:command
                       ssh:NO
                   browser:NO
@@ -1044,7 +1044,7 @@ static BOOL TideyRuntimeLaunchesAreEqual(
         [NSMutableDictionary dictionaryWithDictionary:
          session.environment ?: @{}];
     [environment removeObjectsForKeys:@[ @"TMUX", @"TMUX_PANE" ]];
-    [session resetForRelaunch];
+    [session tideyPrepareForManagedRestoreRelaunch];
     [session startProgram:command
                       ssh:NO
                   browser:NO

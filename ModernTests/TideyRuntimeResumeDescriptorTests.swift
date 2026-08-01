@@ -576,6 +576,26 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
         )
     }
 
+    func testManagedRestoreRelaunchPreparationSeamsCompile() {
+        XCTAssertFalse(
+            PTYSession.tideyShouldReplaceUnattachedShell(
+                forNativeReattachOutcome: .notAttempted
+            )
+        )
+        XCTAssertFalse(
+            PTYSession.tideyShouldReplaceUnattachedShell(
+                forNativeReattachOutcome: .succeeded
+            )
+        )
+        XCTAssertTrue(
+            PTYSession.instancesRespond(
+                to: #selector(
+                    PTYSession.tideyPrepareForManagedRestoreRelaunch
+                )
+            )
+        )
+    }
+
     func testVersionedDescriptorAndNativeReattachOutcomeSeamsCompile() {
         let launch = TideyRuntimeLaunchSpecification(
             executable: "/usr/local/bin/codex",

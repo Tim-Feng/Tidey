@@ -6254,6 +6254,15 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
     }];
 }
 
++ (BOOL)tideyShouldReplaceUnattachedShellForNativeReattachOutcome:
+    (TideyNativeServerReattachOutcome)outcome {
+    return NO;
+}
+
+- (void)tideyPrepareForManagedRestoreRelaunch {
+    [self resetForRelaunch];
+}
+
 - (void)setTermVariable:(NSString *)termVariable terminal:(VT100Terminal *)terminal {
     if (self.isTmuxClient) {
         return;
