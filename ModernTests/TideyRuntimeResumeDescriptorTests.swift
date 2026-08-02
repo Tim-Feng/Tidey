@@ -576,6 +576,14 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
         )
     }
 
+    func testManagedNativeReattachOutcomeSeamCompiles() {
+        _ = PTYSession.tideyNativeServerReattachOutcome(
+            forAttached: true,
+            registered: false,
+            hasManagedRuntimeDescriptor: true
+        )
+    }
+
     func testManagedRestoreRelaunchPreparationSeamsCompile() {
         XCTAssertFalse(
             PTYSession.tideyShouldReplaceUnattachedShell(

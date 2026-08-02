@@ -2237,6 +2237,7 @@ ITERM_WEAKLY_REFERENCEABLE
                             (arrangement[SESSION_ARRANGEMENT_BROWSER_STATE] != nil || contents) &&
                             [iTermAdvancedSettingsModel restoreWindowContents]);
     BOOL attachedToServer = NO;
+    BOOL nativeServerRegistered = NO;
     typedef void (^iTermSessionCreationCompletionBlock)(PTYSession *, BOOL ok);
     void (^runCommandBlock)(iTermSessionCreationCompletionBlock) =
     ^(iTermSessionCreationCompletionBlock innerCompletion) {
@@ -2291,6 +2292,7 @@ ITERM_WEAKLY_REFERENCEABLE
                                                                               tty:arrangement[SESSION_ARRANGEMENT_TTY]]) {
                     DLog(@"Success!");
                     didAttach = YES;
+                    nativeServerRegistered = YES;
                 }
             } else if ([iTermMultiServerJobManager available] &&
                        [NSDictionary castFrom:arrangement[SESSION_ARRANGEMENT_SERVER_DICT]]) {
@@ -2299,14 +2301,25 @@ ITERM_WEAKLY_REFERENCEABLE
                 DLog(@"Try to attach to %@", serverDict);
                 if (partialAttachments) {
                     id partial = partialAttachments[serverDict];
-                    if (partial &&
-                        [aSession tryToFinishAttachingToMultiserverWithPartialAttachment:partial] != 0) {
+                    const iTermJobManagerAttachResults results =
+                        partial
+                            ? [aSession tryToFinishAttachingToMultiserverWithPartialAttachment:partial]
+                            : 0;
+                    if (results & iTermJobManagerAttachResultsAttached) {
                         DLog(@"Finished attaching to multiserver!");
                         didAttach = YES;
                     }
-                } else if ([aSession tryToAttachToMultiserverWithRestorationIdentifier:serverDict]) {
-                    DLog(@"Attached to multiserver!");
-                    didAttach = YES;
+                    nativeServerRegistered =
+                        (results & iTermJobManagerAttachResultsRegistered) != 0;
+                } else {
+                    const iTermJobManagerAttachResults results =
+                        [aSession tryToAttachToMultiserverWithRestorationIdentifier:serverDict];
+                    if (results & iTermJobManagerAttachResultsAttached) {
+                        DLog(@"Attached to multiserver!");
+                        didAttach = YES;
+                    }
+                    nativeServerRegistered =
+                        (results & iTermJobManagerAttachResultsRegistered) != 0;
                 }
             }
             if (didAttach) {
@@ -2365,10 +2378,14 @@ ITERM_WEAKLY_REFERENCEABLE
             }
         }
 
+        const BOOL hasManagedRuntimeDescriptor =
+            [options[
+                PTYSessionArrangementOptionsTideyManagedRuntimeDescriptor
+            ] boolValue];
         aSession.tideyNativeServerReattachOutcome =
-            attachedToServer
-                ? TideyNativeServerReattachOutcomeSucceeded
-                : TideyNativeServerReattachOutcomeFailed;
+            [self tideyNativeServerReattachOutcomeForAttached:attachedToServer
+                                                   registered:nativeServerRegistered
+                                  hasManagedRuntimeDescriptor:hasManagedRuntimeDescriptor];
         TideyManagedRestoreLaunchPolicy *tideyLaunchPolicy =
             [[[TideyManagedRestoreLaunchPolicy alloc] init] autorelease];
         TideyManagedRestoreLaunchDisposition tideyLaunchDisposition =
@@ -2376,9 +2393,7 @@ ITERM_WEAKLY_REFERENCEABLE
                 dispositionForNativeReattachOutcome:
                     aSession.tideyNativeServerReattachOutcome
                 hasValidDescriptor:
-                    [options[
-                        PTYSessionArrangementOptionsTideyManagedRuntimeDescriptor
-                    ] boolValue]];
+                    hasManagedRuntimeDescriptor];
         if (runCommand &&
             tideyLaunchDisposition ==
                 TideyManagedRestoreLaunchDispositionDeferToRuntimeRehydrator) {
@@ -2739,7 +2754,8 @@ ITERM_WEAKLY_REFERENCEABLE
     }
 }
 
-- (BOOL)tryToAttachToMultiserverWithRestorationIdentifier:(NSDictionary *)restorationIdentifier {
+- (iTermJobManagerAttachResults)tryToAttachToMultiserverWithRestorationIdentifier:
+    (NSDictionary *)restorationIdentifier {
     const iTermJobManagerAttachResults results = [_shell tryToAttachToMultiserverWithRestorationIdentifier:restorationIdentifier];
     if (results & iTermJobManagerAttachResultsRegistered) {
         DLog(@"Registered");
@@ -2748,11 +2764,10 @@ ITERM_WEAKLY_REFERENCEABLE
     }
     if (results & iTermJobManagerAttachResultsAttached) {
         DLog(@"Success, attached.");
-        return YES;
     } else {
         DLog(@"Failed to attach");
-        return NO;
     }
+    return results;
 }
 
 // Note: this async code path is taken by orphan adoption.
@@ -6252,6 +6267,14 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
                                              id<VT100ScreenDelegate> delegate) {
         [terminal resetForRelaunch];
     }];
+}
+
++ (TideyNativeServerReattachOutcome)tideyNativeServerReattachOutcomeForAttached:(BOOL)attached
+                                                                       registered:(BOOL)registered
+                                                      hasManagedRuntimeDescriptor:(BOOL)hasManagedRuntimeDescriptor {
+    return attached
+        ? TideyNativeServerReattachOutcomeSucceeded
+        : TideyNativeServerReattachOutcomeFailed;
 }
 
 + (BOOL)tideyShouldReplaceUnattachedShellForNativeReattachOutcome:

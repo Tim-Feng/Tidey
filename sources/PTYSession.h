@@ -470,6 +470,9 @@ backgroundColor:(NSColor *)backgroundColor;
 // nil for Tidey-managed tmux control-mode sessions and non-tmux jobs.
 @property(nonatomic, readonly, copy) NSDictionary<NSString *, NSString *> *tideyOrdinaryTmuxAttachMetadata;
 @property(nonatomic) TideyNativeServerReattachOutcome tideyNativeServerReattachOutcome;
++ (TideyNativeServerReattachOutcome)tideyNativeServerReattachOutcomeForAttached:(BOOL)attached
+                                                                       registered:(BOOL)registered
+                                                      hasManagedRuntimeDescriptor:(BOOL)hasManagedRuntimeDescriptor;
 + (BOOL)tideyShouldReplaceUnattachedShellForNativeReattachOutcome:
     (TideyNativeServerReattachOutcome)outcome;
 - (void)tideyPrepareForManagedRestoreRelaunch;
