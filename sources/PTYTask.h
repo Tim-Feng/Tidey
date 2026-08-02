@@ -24,7 +24,7 @@
 - (void)threadedReadTask:(char *)buffer length:(int)length;
 
 // Runs in the same background task as -threadedReadTask:length:.
-- (void)threadedTaskBrokenPipe;
+- (void)threadedTaskBrokenPipe:(PTYTask *)task;
 - (void)brokenPipe;  // Called in main thread
 - (void)tmuxClientWrite:(NSData *)data;
 

@@ -398,7 +398,7 @@ static void HandleSigChld(int n) {
         brokenPipe_ = YES;
     }
     [[TaskNotifier sharedInstance] deregisterTask:self];
-    [self.delegate threadedTaskBrokenPipe];
+    [self.delegate threadedTaskBrokenPipe:self];
 }
 
 // Main queue

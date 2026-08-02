@@ -639,6 +639,16 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
         )
     }
 
+    func testBrokenPipeCallbackCarriesOriginatingTaskSeam() throws {
+        let session = try XCTUnwrap(PTYSession(synthetic: true))
+
+        XCTAssertTrue(
+            session.responds(
+                to: NSSelectorFromString("threadedTaskBrokenPipe:")
+            )
+        )
+    }
+
     func testManagedRestoreRelaunchReplacesFailedNativeReattachTaskWithoutChangingIdentity() throws {
         let session = try XCTUnwrap(PTYSession(synthetic: true))
         let originalShell = session.shell

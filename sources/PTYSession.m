@@ -4537,7 +4537,7 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
 }
 
 
-- (void)threadedTaskBrokenPipe {
+- (void)threadedTaskBrokenPipe:(PTYTask *)task {
     DLog(@"threaded task broken pipe");
     // Put the call to brokenPipe in the same queue as the token executor to avoid a race.
     dispatch_async(dispatch_get_main_queue(), ^{
