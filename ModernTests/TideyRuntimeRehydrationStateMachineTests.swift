@@ -62,6 +62,42 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
         )
     }
 
+    func testDirectAgentLoginShellCommandRebuildsUserPathAndPreservesLiteralResumeIdentity() {
+        let resumeIdentity =
+            "thread' \"quoted\"; $(touch /tmp/tidey-owned); " +
+            "`touch /tmp/tidey-owned`"
+        let agentExecutable =
+            "/Applications/Tidey.app/Contents/Resources/bin/codex"
+        let innerCommand = TideyRuntimeDirectAgentCommandBuilder().command(
+            agentExecutable: agentExecutable,
+            arguments: ["resume", resumeIdentity]
+        )!
+        let command = TideyRuntimeLoginShellCommandBuilder().command(
+            loginShellExecutable: "/bin/zsh",
+            innerCommand: innerCommand
+        )!
+
+        XCTAssertEqual(
+            (command as NSString).componentsInShellCommand(),
+            [
+                "/bin/zsh",
+                "-lic",
+                "exec \(innerCommand)",
+            ]
+        )
+        XCTAssertEqual(
+            ("exec \(innerCommand)" as NSString)
+                .componentsInShellCommand(),
+            ["exec", agentExecutable, "resume", resumeIdentity]
+        )
+        XCTAssertNil(
+            TideyRuntimeLoginShellCommandBuilder().command(
+                loginShellExecutable: "zsh",
+                innerCommand: innerCommand
+            )
+        )
+    }
+
     func testDirectAgentResumeBypassesTmuxAndRunsExactlyOnce() {
         let targetProbe = TideyRuntimeTargetProbeSpy()
         let topologyCreator = TideyRuntimeTopologyCreatorSpy()

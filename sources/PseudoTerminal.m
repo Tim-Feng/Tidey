@@ -820,11 +820,16 @@ static BOOL TideyRuntimeLaunchesAreEqual(
     }
     NSString *executable =
         TideyRuntimeAgentExecutablePath(agent.launch);
-    TideyRuntimeDirectAgentCommandBuilder *commandBuilder =
+    TideyRuntimeDirectAgentCommandBuilder *innerCommandBuilder =
         [[[TideyRuntimeDirectAgentCommandBuilder alloc] init] autorelease];
+    NSString *innerCommand =
+        [innerCommandBuilder commandWithAgentExecutable:executable ?: @""
+                                              arguments:agent.launch.arguments];
+    TideyRuntimeLoginShellCommandBuilder *commandBuilder =
+        [[[TideyRuntimeLoginShellCommandBuilder alloc] init] autorelease];
     NSString *command =
-        [commandBuilder commandWithAgentExecutable:executable ?: @""
-                                         arguments:agent.launch.arguments];
+        [commandBuilder commandWithLoginShellExecutable:session.userShell
+                                           innerCommand:innerCommand ?: @""];
     if (!command) {
         completion(NO);
         return;

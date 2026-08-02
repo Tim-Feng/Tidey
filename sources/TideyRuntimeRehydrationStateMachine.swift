@@ -176,7 +176,25 @@ final class TideyRuntimeLoginShellCommandBuilder: NSObject {
               ) else {
             return nil
         }
-        return innerCommand
+        return [
+            loginShellExecutable,
+            "-lic",
+            "exec \(innerCommand)",
+        ]
+        .map(Self.commandArgumentQuote)
+        .joined(separator: " ")
+    }
+
+    private static func commandArgumentQuote(_ argument: String) -> String {
+        let escapedBackslashes = argument.replacingOccurrences(
+            of: "\\",
+            with: "\\\\"
+        )
+        let escapedQuotes = escapedBackslashes.replacingOccurrences(
+            of: "\"",
+            with: "\\\""
+        )
+        return "\"\(escapedQuotes)\""
     }
 }
 
