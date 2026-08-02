@@ -211,6 +211,13 @@ final class TideyRuntimeRehydrationReducer:
         descriptor: TideyRuntimeResumeDescriptor
     ) -> TideyRuntimeRehydrationTransition {
         switch (phase, event) {
+        case (.awaitingNativeRestore, .nativeReattachSucceeded)
+            where descriptor.kind == .agent &&
+                  descriptor.restorePolicy == .directResume:
+            return transition(
+                .resumingAgent,
+                effect: .resumeDirectAgent
+            )
         case (.awaitingNativeRestore, .nativeReattachSucceeded):
             return transition(.nativeAttached)
         case (.awaitingNativeRestore, .nativeReattachFailed)

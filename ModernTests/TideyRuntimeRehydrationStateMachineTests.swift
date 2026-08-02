@@ -91,6 +91,41 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
         XCTAssertEqual(panelLauncher.directResumeCount, 2)
     }
 
+    func testDirectAgentResumeOverridesNativeReattachSuccessExactlyOnce() {
+        let targetProbe = TideyRuntimeTargetProbeSpy()
+        let topologyCreator = TideyRuntimeTopologyCreatorSpy()
+        let panelLauncher = TideyRuntimePanelLauncherSpy()
+        let stateMachine = TideyRuntimeRehydrationStateMachine(
+            reducer: TideyRuntimeRehydrationReducer(),
+            targetProbe: targetProbe,
+            topologyCreator: topologyCreator,
+            panelLauncher: panelLauncher
+        )
+        let descriptor = directDescriptor(revision: 1)
+
+        stateMachine.handle(
+            panelID: "panel-direct-native-success",
+            descriptor: descriptor,
+            nativeReattachOutcome: .succeeded
+        )
+        stateMachine.handle(
+            panelID: "panel-direct-native-success",
+            descriptor: descriptor,
+            nativeReattachOutcome: .succeeded
+        )
+
+        XCTAssertEqual(panelLauncher.directResumeCount, 1)
+        XCTAssertEqual(targetProbe.probeCount, 0)
+        XCTAssertEqual(topologyCreator.createCount, 0)
+        XCTAssertEqual(panelLauncher.resumeCount, 0)
+        XCTAssertEqual(panelLauncher.attachCount, 0)
+
+        panelLauncher.completeDirectResume(true)
+        panelLauncher.completeDirectResume(true)
+        XCTAssertEqual(panelLauncher.directResumeCount, 1)
+        XCTAssertEqual(panelLauncher.attachCount, 0)
+    }
+
     func testRuntimeAttachCommandBuilderSeamCompiles() {
         let builder = TideyRuntimeAttachCommandBuilder()
 
