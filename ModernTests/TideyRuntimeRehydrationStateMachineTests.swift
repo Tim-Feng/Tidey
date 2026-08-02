@@ -49,6 +49,19 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
         )
     }
 
+    func testDirectAgentLoginShellCommandBuilderSeamCompiles() {
+        let builder = TideyRuntimeLoginShellCommandBuilder()
+
+        XCTAssertNotNil(
+            builder.command(
+                loginShellExecutable: "/bin/zsh",
+                innerCommand:
+                    "'/Applications/Tidey.app/Contents/Resources/bin/codex' " +
+                    "'resume' 'thread-direct'"
+            )
+        )
+    }
+
     func testDirectAgentResumeBypassesTmuxAndRunsExactlyOnce() {
         let targetProbe = TideyRuntimeTargetProbeSpy()
         let topologyCreator = TideyRuntimeTopologyCreatorSpy()

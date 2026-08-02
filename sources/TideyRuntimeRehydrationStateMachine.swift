@@ -159,6 +159,27 @@ final class TideyRuntimeDirectAgentCommandBuilder: NSObject {
     }
 }
 
+@objc(TideyRuntimeLoginShellCommandBuilder)
+@objcMembers
+final class TideyRuntimeLoginShellCommandBuilder: NSObject {
+    @objc(commandWithLoginShellExecutable:innerCommand:)
+    func command(
+        loginShellExecutable: String,
+        innerCommand: String
+    ) -> String? {
+        guard loginShellExecutable.hasPrefix("/"),
+              URL(fileURLWithPath: loginShellExecutable)
+                .standardizedFileURL.path == loginShellExecutable,
+              !innerCommand.isEmpty,
+              ![loginShellExecutable, innerCommand].contains(
+                  where: { $0.contains("\u{0}") }
+              ) else {
+            return nil
+        }
+        return innerCommand
+    }
+}
+
 @objc(TideyRuntimeAttachCommandBuilder)
 @objcMembers
 final class TideyRuntimeAttachCommandBuilder: NSObject {
