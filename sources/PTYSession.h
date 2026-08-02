@@ -473,8 +473,6 @@ backgroundColor:(NSColor *)backgroundColor;
 + (TideyNativeServerReattachOutcome)tideyNativeServerReattachOutcomeForAttached:(BOOL)attached
                                                                        registered:(BOOL)registered
                                                       hasManagedRuntimeDescriptor:(BOOL)hasManagedRuntimeDescriptor;
-+ (BOOL)tideyShouldReplaceUnattachedShellForNativeReattachOutcome:
-    (TideyNativeServerReattachOutcome)outcome;
 + (BOOL)tideyShouldHandleBrokenPipeFromTask:(PTYTask *)task
                                 currentTask:(PTYTask *)currentTask;
 - (void)tideyPrepareForManagedRestoreRelaunch;

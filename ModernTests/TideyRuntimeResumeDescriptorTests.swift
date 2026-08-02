@@ -621,16 +621,6 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
 
     func testManagedRestoreRelaunchPreparationSeamsCompile() {
         XCTAssertTrue(
-            PTYSession.tideyShouldReplaceUnattachedShell(
-                forNativeReattachOutcome: .notAttempted
-            )
-        )
-        XCTAssertTrue(
-            PTYSession.tideyShouldReplaceUnattachedShell(
-                forNativeReattachOutcome: .succeeded
-            )
-        )
-        XCTAssertTrue(
             PTYSession.instancesRespond(
                 to: #selector(
                     PTYSession.tideyPrepareForManagedRestoreRelaunch
@@ -708,11 +698,6 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
             let originalShell = session.shell
             let originalGUID = session.guid
 
-            XCTAssertTrue(
-                PTYSession.tideyShouldReplaceUnattachedShell(
-                    forNativeReattachOutcome: outcome
-                )
-            )
             session.tideyNativeServerReattachOutcome = outcome
             session.tideyPrepareForManagedRestoreRelaunch()
 

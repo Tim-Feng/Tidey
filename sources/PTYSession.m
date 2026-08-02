@@ -6285,30 +6285,21 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
     return TideyNativeServerReattachOutcomeSucceeded;
 }
 
-+ (BOOL)tideyShouldReplaceUnattachedShellForNativeReattachOutcome:
-    (TideyNativeServerReattachOutcome)outcome {
-    return YES;
-}
-
 + (BOOL)tideyShouldHandleBrokenPipeFromTask:(PTYTask *)task
                                 currentTask:(PTYTask *)currentTask {
     return task == currentTask;
 }
 
 - (void)tideyPrepareForManagedRestoreRelaunch {
-    if ([[self class]
-            tideyShouldReplaceUnattachedShellForNativeReattachOutcome:
-                self.tideyNativeServerReattachOutcome]) {
-        [self setExited:NO];
-        [_logging stop];
-        [_shell autorelease];
-        _shell = nil;
-        _shell = [[PTYTask alloc] init];
-        [_shell setDelegate:self];
-        [_shell.winSizeController setGridSize:_screen.size
-                                     viewSize:_screen.viewSize
-                                  scaleFactor:self.backingScaleFactor];
-    }
+    [self setExited:NO];
+    [_logging stop];
+    [_shell autorelease];
+    _shell = nil;
+    _shell = [[PTYTask alloc] init];
+    [_shell setDelegate:self];
+    [_shell.winSizeController setGridSize:_screen.size
+                                 viewSize:_screen.viewSize
+                              scaleFactor:self.backingScaleFactor];
     [self resetForRelaunch];
 }
 
