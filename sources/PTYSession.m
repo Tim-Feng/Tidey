@@ -6272,9 +6272,10 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
 + (TideyNativeServerReattachOutcome)tideyNativeServerReattachOutcomeForAttached:(BOOL)attached
                                                                        registered:(BOOL)registered
                                                       hasManagedRuntimeDescriptor:(BOOL)hasManagedRuntimeDescriptor {
-    return attached
-        ? TideyNativeServerReattachOutcomeSucceeded
-        : TideyNativeServerReattachOutcomeFailed;
+    if (!attached || (hasManagedRuntimeDescriptor && !registered)) {
+        return TideyNativeServerReattachOutcomeFailed;
+    }
+    return TideyNativeServerReattachOutcomeSucceeded;
 }
 
 + (BOOL)tideyShouldReplaceUnattachedShellForNativeReattachOutcome:
