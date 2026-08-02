@@ -431,6 +431,13 @@
 - runtime descriptor 只能當成受限的重新啟動指令
   - executable 必須從 app bundle 解析並通過 allowlist，argv 形狀與 vendor／durable ID 要完全一致，shell 參數需安全 quoting
   - relaunch 沿用 `(panelID, descriptorRevision)` state machine 與 completion fencing，避免重複 callback 再啟動第二次 agent
+- native server 找到紀錄，不代表 child process 仍可使用
+  - multiserver 的 `Attached` 只表示找到 server-side process record；`Attached` 但沒有 `Registered` 可能是已終止的 child
+  - 一般 iTerm 還原仍可沿用 attached-only 語意，但 Tidey-managed descriptor 必須要求 `Attached + Registered`，否則要進 durable rehydration
+- 非同步 PTY lifecycle callback 必須帶來源 task identity，並在實際執行 side effect 時驗證
+  - callback 排進 main queue 後才替換 `_shell` 時，事後清掉舊 delegate 已經無法取消 queued block
+  - broken-pipe callback 要保留 originating `PTYTask`，到 main queue 執行時再和目前 `_shell` 比對；舊 task 不得關閉新的 panel runtime
+  - 這類跨 process 還原在第一輪修正後仍失敗時，要凍結 saved graph、server process record 與 callback 時序；只看最終 workspace 數量會把兩個 lifecycle 缺口誤判成一個
 
 ## Testing
 
