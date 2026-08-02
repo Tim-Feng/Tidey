@@ -6287,7 +6287,7 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
 
 + (BOOL)tideyShouldReplaceUnattachedShellForNativeReattachOutcome:
     (TideyNativeServerReattachOutcome)outcome {
-    return outcome == TideyNativeServerReattachOutcomeFailed;
+    return YES;
 }
 
 + (BOOL)tideyShouldHandleBrokenPipeFromTask:(PTYTask *)task

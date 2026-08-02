@@ -620,12 +620,12 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
     }
 
     func testManagedRestoreRelaunchPreparationSeamsCompile() {
-        XCTAssertFalse(
+        XCTAssertTrue(
             PTYSession.tideyShouldReplaceUnattachedShell(
                 forNativeReattachOutcome: .notAttempted
             )
         )
-        XCTAssertFalse(
+        XCTAssertTrue(
             PTYSession.tideyShouldReplaceUnattachedShell(
                 forNativeReattachOutcome: .succeeded
             )
@@ -698,38 +698,27 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
         XCTAssertTrue(session.shell === replacementTask)
     }
 
-    func testManagedRestoreRelaunchReplacesFailedNativeReattachTaskWithoutChangingIdentity() throws {
-        let session = try XCTUnwrap(PTYSession(synthetic: true))
-        let originalShell = session.shell
-        let originalGUID = session.guid
-
-        XCTAssertTrue(
-            PTYSession.tideyShouldReplaceUnattachedShell(
-                forNativeReattachOutcome: .failed
-            )
-        )
-        session.tideyNativeServerReattachOutcome = .failed
-        session.tideyPrepareForManagedRestoreRelaunch()
-
-        XCTAssertTrue(session.shell !== originalShell)
-        XCTAssertEqual(session.guid, originalGUID)
-        XCTAssertTrue(session.shell.delegate === session)
-    }
-
-    func testManagedRestoreRelaunchLeavesOtherNativeReattachTasksUntouched() throws {
+    func testManagedRestoreRelaunchReplacesEveryNativeOutcomeWithoutChangingIdentity() throws {
         for outcome in [
             TideyNativeServerReattachOutcome.notAttempted,
-            .succeeded
+            .succeeded,
+            .failed
         ] {
             let session = try XCTUnwrap(PTYSession(synthetic: true))
             let originalShell = session.shell
             let originalGUID = session.guid
 
+            XCTAssertTrue(
+                PTYSession.tideyShouldReplaceUnattachedShell(
+                    forNativeReattachOutcome: outcome
+                )
+            )
             session.tideyNativeServerReattachOutcome = outcome
             session.tideyPrepareForManagedRestoreRelaunch()
 
-            XCTAssertTrue(session.shell === originalShell)
+            XCTAssertTrue(session.shell !== originalShell)
             XCTAssertEqual(session.guid, originalGUID)
+            XCTAssertTrue(session.shell.delegate === session)
         }
     }
 
