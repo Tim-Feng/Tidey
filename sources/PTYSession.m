@@ -4541,6 +4541,13 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
     DLog(@"threaded task broken pipe");
     // Put the call to brokenPipe in the same queue as the token executor to avoid a race.
     dispatch_async(dispatch_get_main_queue(), ^{
+        if (![[self class] tideyShouldHandleBrokenPipeFromTask:task
+                                                   currentTask:self->_shell]) {
+            DLog(@"Ignoring broken pipe from abandoned task %@; current task is %@",
+                 task,
+                 self->_shell);
+            return;
+        }
         [self brokenPipe];
     });
 }
@@ -6285,7 +6292,7 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
 
 + (BOOL)tideyShouldHandleBrokenPipeFromTask:(PTYTask *)task
                                 currentTask:(PTYTask *)currentTask {
-    return YES;
+    return task == currentTask;
 }
 
 - (void)tideyPrepareForManagedRestoreRelaunch {

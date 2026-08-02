@@ -659,6 +659,45 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
         )
     }
 
+    func testManagedRestoreHandlesBrokenPipeOnlyFromCurrentTask() throws {
+        let currentTask = try XCTUnwrap(PTYSession(synthetic: true)?.shell)
+        let abandonedTask = try XCTUnwrap(PTYSession(synthetic: true)?.shell)
+
+        XCTAssertTrue(
+            PTYSession.tideyShouldHandleBrokenPipe(
+                from: currentTask,
+                currentTask: currentTask
+            )
+        )
+        XCTAssertFalse(
+            PTYSession.tideyShouldHandleBrokenPipe(
+                from: abandonedTask,
+                currentTask: currentTask
+            )
+        )
+    }
+
+    func testManagedRestoreIgnoresQueuedBrokenPipeAfterReplacingTask() throws {
+        let session = try XCTUnwrap(PTYSession(synthetic: true))
+        let abandonedTask = try XCTUnwrap(session.shell)
+
+        session.tideyNativeServerReattachOutcome = .failed
+        session.tideyPrepareForManagedRestoreRelaunch()
+        let replacementTask = try XCTUnwrap(session.shell)
+        session.threadedTaskBrokenPipe(abandonedTask)
+
+        let mainQueueDrained = expectation(
+            description: "queued broken-pipe callback drained"
+        )
+        DispatchQueue.main.async {
+            mainQueueDrained.fulfill()
+        }
+        wait(for: [mainQueueDrained], timeout: 1)
+
+        XCTAssertFalse(session.exited)
+        XCTAssertTrue(session.shell === replacementTask)
+    }
+
     func testManagedRestoreRelaunchReplacesFailedNativeReattachTaskWithoutChangingIdentity() throws {
         let session = try XCTUnwrap(PTYSession(synthetic: true))
         let originalShell = session.shell
