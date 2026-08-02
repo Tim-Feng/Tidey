@@ -649,6 +649,16 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
         )
     }
 
+    func testManagedRestoreBrokenPipeOwnershipSeamCompiles() {
+        XCTAssertTrue(
+            PTYSession.responds(
+                to: NSSelectorFromString(
+                    "tideyShouldHandleBrokenPipeFromTask:currentTask:"
+                )
+            )
+        )
+    }
+
     func testManagedRestoreRelaunchReplacesFailedNativeReattachTaskWithoutChangingIdentity() throws {
         let session = try XCTUnwrap(PTYSession(synthetic: true))
         let originalShell = session.shell

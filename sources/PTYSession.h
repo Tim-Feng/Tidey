@@ -475,6 +475,8 @@ backgroundColor:(NSColor *)backgroundColor;
                                                       hasManagedRuntimeDescriptor:(BOOL)hasManagedRuntimeDescriptor;
 + (BOOL)tideyShouldReplaceUnattachedShellForNativeReattachOutcome:
     (TideyNativeServerReattachOutcome)outcome;
++ (BOOL)tideyShouldHandleBrokenPipeFromTask:(PTYTask *)task
+                                currentTask:(PTYTask *)currentTask;
 - (void)tideyPrepareForManagedRestoreRelaunch;
 
 @property(nonatomic, assign) iTermBackgroundImageMode backgroundImageMode;

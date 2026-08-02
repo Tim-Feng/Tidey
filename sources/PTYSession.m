@@ -6283,6 +6283,11 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
     return outcome == TideyNativeServerReattachOutcomeFailed;
 }
 
++ (BOOL)tideyShouldHandleBrokenPipeFromTask:(PTYTask *)task
+                                currentTask:(PTYTask *)currentTask {
+    return YES;
+}
+
 - (void)tideyPrepareForManagedRestoreRelaunch {
     if ([[self class]
             tideyShouldReplaceUnattachedShellForNativeReattachOutcome:
