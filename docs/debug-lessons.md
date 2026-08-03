@@ -152,6 +152,10 @@
   - 要讓 selection 半透明需要改渲染管線，讓 selected path 保留 color 自身的 alpha
 - 非 live resize 不要切回 legacy renderer
   - sidebar toggle / panel switch flicker 很常是多切了一次 fallback renderer
+- `MTKView.paused` 不會阻止外部明確送進來的 CALayer invalidation
+  - `paused` 只控制 MTKView 自己的 draw loop；`setNeedsDisplay:YES` 仍會把 Metal view 與 scroll view 標成需要重畫，所以縮小視窗後仍可能持續消耗 CPU
+  - 高頻 `requestRedraw` 在視窗縮小期間要保留 screen model 與 legacy-view 更新，只把 Metal／scroll-view invalidation 合併成 session-view 自己的一個 pending bit；視窗恢復可見後補畫一次
+  - window lifecycle notification 若以 `object:nil` 全域訂閱，handler 必須先用 notification object 與 owning window controller 的 pointer identity 過濾；flush 時還要重查 `isMiniaturized`，確認可見後才能清掉 pending state
 - `it_imageWithTintColor:` 會把多層 SF Symbol 壓成單色
   - 要保層次用 hierarchical symbol configuration
 
