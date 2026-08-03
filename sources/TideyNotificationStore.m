@@ -405,6 +405,10 @@ static NSInteger TideyStatusValueRank(NSString *value) {
     return 0;
 }
 
+static BOOL TideyStatusStringsEqual(NSString *left, NSString *right) {
+    return left == right || [left isEqualToString:right];
+}
+
 @implementation TideyStatusStore
 
 + (instancetype)sharedStore {
@@ -441,7 +445,15 @@ static NSInteger TideyStatusValueRank(NSString *value) {
     if (workspaceID.length == 0 || key.length == 0) {
         return;
     }
+    NSString *effectiveOwnerID = ownerID.length > 0 ? ownerID : @"";
     NSMutableDictionary<NSString *, NSMutableDictionary<NSString *, TideyStatusEntry *> *> *keys = self.statusMap[workspaceID];
+    TideyStatusEntry *existingEntry = keys[key][effectiveOwnerID];
+    if (existingEntry &&
+        TideyStatusStringsEqual(existingEntry.value, value) &&
+        TideyStatusStringsEqual(existingEntry.icon, icon) &&
+        TideyStatusStringsEqual(existingEntry.colorHex, colorHex)) {
+        return;
+    }
     if (!keys) {
         keys = [[NSMutableDictionary alloc] init];
         self.statusMap[workspaceID] = keys;
@@ -451,8 +463,8 @@ static NSInteger TideyStatusValueRank(NSString *value) {
         owners = [[NSMutableDictionary alloc] init];
         keys[key] = owners;
     }
-    owners[ownerID.length > 0 ? ownerID : @""] = [[TideyStatusEntry alloc] initWithKey:key value:value icon:icon colorHex:colorHex];
-    [self postDidChange];
+    owners[effectiveOwnerID] = [[TideyStatusEntry alloc] initWithKey:key value:value icon:icon colorHex:colorHex];
+    [self postDidChangeForWorkspaceID:workspaceID];
 }
 
 - (void)clearStatusForWorkspaceID:(NSString *)workspaceID key:(NSString *)key {
@@ -486,7 +498,7 @@ static NSInteger TideyStatusValueRank(NSString *value) {
     if (keys.count == 0) {
         [self.statusMap removeObjectForKey:workspaceID];
     }
-    [self postDidChange];
+    [self postDidChangeForWorkspaceID:workspaceID];
 }
 
 // Strongest entry across the key's owners (Needs input > Running > Idle);
@@ -545,10 +557,10 @@ static NSInteger TideyStatusValueRank(NSString *value) {
     return [self.statusMap allKeys];
 }
 
-- (void)postDidChange {
+- (void)postDidChangeForWorkspaceID:(NSString *)workspaceID {
     [[NSNotificationCenter defaultCenter] postNotificationName:TideyStatusStoreDidChangeNotification
                                                         object:self
-                                                      userInfo:nil];
+                                                      userInfo:@{ @"workspaceID": workspaceID }];
 }
 
 @end

@@ -12,15 +12,19 @@
 
 @implementation TideyStatusStoreTests {
     NSInteger _changeCount;
+    NSString *_lastChangedWorkspaceID;
 }
 
 - (void)setUp {
     [super setUp];
     _changeCount = 0;
+    _lastChangedWorkspaceID = nil;
 }
 
 - (void)tearDown {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
+    [_lastChangedWorkspaceID release];
+    _lastChangedWorkspaceID = nil;
     [super tearDown];
 }
 
@@ -35,6 +39,48 @@
 
 - (void)statusStoreDidChange:(NSNotification *)notification {
     _changeCount++;
+    [_lastChangedWorkspaceID release];
+    _lastChangedWorkspaceID = [notification.userInfo[@"workspaceID"] copy];
+}
+
+- (void)testIdenticalStatusDoesNotPostSecondChangeNotification {
+    TideyStatusStore *store = [self freshStore];
+
+    [store setStatusForWorkspaceID:@"workspace-1"
+                               key:@"shell_state"
+                             value:@"Running"
+                              icon:@"bolt.fill"
+                          colorHex:@"#007AFF"
+                           ownerID:@"panel-1"];
+    [store setStatusForWorkspaceID:@"workspace-1"
+                               key:@"shell_state"
+                             value:@"Running"
+                              icon:@"bolt.fill"
+                          colorHex:@"#007AFF"
+                           ownerID:@"panel-1"];
+
+    XCTAssertEqual(_changeCount, 1);
+}
+
+- (void)testStatusChangeNotificationCarriesWorkspaceIdentifier {
+    TideyStatusStore *store = [self freshStore];
+
+    [store setStatusForWorkspaceID:@"workspace-1"
+                               key:@"shell_state"
+                             value:@"Running"
+                              icon:nil
+                          colorHex:nil];
+    XCTAssertEqualObjects(_lastChangedWorkspaceID, @"workspace-1");
+
+    [store clearStatusForWorkspaceID:@"workspace-1" key:@"shell_state"];
+    XCTAssertEqualObjects(_lastChangedWorkspaceID, @"workspace-1");
+
+    [store setStatusForWorkspaceID:@"*"
+                               key:@"shell_state"
+                             value:@"Idle"
+                              icon:nil
+                          colorHex:nil];
+    XCTAssertEqualObjects(_lastChangedWorkspaceID, @"*");
 }
 
 - (void)testSetStatusPostsChangeNotificationAndStoresEntry {
