@@ -607,6 +607,7 @@ typedef NS_ENUM(NSUInteger, PTYSessionTurdType) {
     iTermProcessInfo *_lastProcessInfo;
     NSDictionary<NSString *, NSString *> *_tideyOrdinaryTmuxAttachMetadata;
     TideyNativeServerReattachOutcome _tideyNativeServerReattachOutcome;
+    BOOL _tideyAwaitingFirstManagedRelaunchOutcome;
     iTermLoggingHelper *_logging;
     iTermNaggingController *_naggingController;
     BOOL _tmuxTTLHasThresholds;
@@ -6350,6 +6351,18 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
 - (void)setTideyNativeServerReattachOutcome:
     (TideyNativeServerReattachOutcome)outcome {
     _tideyNativeServerReattachOutcome = outcome;
+}
+
+- (BOOL)tideyAwaitingFirstManagedRelaunchOutcome {
+    return _tideyAwaitingFirstManagedRelaunchOutcome;
+}
+
+- (BOOL)tideyConsumeManagedRestoreAutoCloseSuppression {
+    if (!_tideyAwaitingFirstManagedRelaunchOutcome) {
+        return NO;
+    }
+    _tideyAwaitingFirstManagedRelaunchOutcome = NO;
+    return YES;
 }
 
 - (void)tideyUpdateOrdinaryTmuxAttachMetadataWithProcessInfo:(iTermProcessInfo *)processInfo {

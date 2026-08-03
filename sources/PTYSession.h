@@ -476,6 +476,8 @@ backgroundColor:(NSColor *)backgroundColor;
 + (BOOL)tideyShouldHandleBrokenPipeFromTask:(PTYTask *)task
                                 currentTask:(PTYTask *)currentTask;
 - (void)tideyPrepareForManagedRestoreRelaunch;
+@property(nonatomic, readonly) BOOL tideyAwaitingFirstManagedRelaunchOutcome;
+- (BOOL)tideyConsumeManagedRestoreAutoCloseSuppression;
 
 @property(nonatomic, assign) iTermBackgroundImageMode backgroundImageMode;
 

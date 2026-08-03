@@ -629,6 +629,23 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
         )
     }
 
+    func testManagedRestoreAutoCloseSuppressionSeamCompiles() {
+        XCTAssertTrue(
+            PTYSession.instancesRespond(
+                to: NSSelectorFromString(
+                    "tideyAwaitingFirstManagedRelaunchOutcome"
+                )
+            )
+        )
+        XCTAssertTrue(
+            PTYSession.instancesRespond(
+                to: NSSelectorFromString(
+                    "tideyConsumeManagedRestoreAutoCloseSuppression"
+                )
+            )
+        )
+    }
+
     func testBrokenPipeCallbackCarriesOriginatingTaskSeam() throws {
         let session = try XCTUnwrap(PTYSession(synthetic: true))
 
