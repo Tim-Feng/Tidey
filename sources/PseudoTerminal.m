@@ -3691,23 +3691,23 @@ ITERM_WEAKLY_REFERENCEABLE
     if (self.workspaces == nil) {
         self.workspaces = [NSMutableArray array];
     }
-    NSLog(@"[TideyTmuxPanels] ensure_workspaces begin workspaces=%lu tabs=%lu selected=%ld",
-          (unsigned long)self.workspaces.count,
-          (unsigned long)self.tabs.count,
-          (long)self.selectedWorkspaceIndex);
+    DLog(@"[TideyTmuxPanels] ensure_workspaces begin workspaces=%lu tabs=%lu selected=%ld",
+         (unsigned long)self.workspaces.count,
+         (unsigned long)self.tabs.count,
+         (long)self.selectedWorkspaceIndex);
     BOOL initializedFromTabs = NO;
     if (self.workspaces.count == 0) {
         PTYTab *currentTab = self.currentTab;
         Workspace *selectedWorkspace = nil;
         NSMutableDictionary<NSString *, Workspace *> *workspaceMap = [NSMutableDictionary dictionary];
         for (PTYTab *tab in self.tabs) {
-            NSLog(@"[TideyTmuxPanels] ensure_workspaces tab tab=%p title=%@ workspace_id=%@ is_tmux=%@ tmux_controller=%p session_count=%lu",
-                  tab,
-                  tab.title ?: @"-",
-                  tab.tideyWorkspaceIdentifier ?: @"-",
-                  tab.isTmuxTab ? @"YES" : @"NO",
-                  tab.tmuxController,
-                  (unsigned long)tab.sessions.count);
+            DLog(@"[TideyTmuxPanels] ensure_workspaces tab tab=%p title=%@ workspace_id=%@ is_tmux=%@ tmux_controller=%p session_count=%lu",
+                 tab,
+                 tab.title ?: @"-",
+                 tab.tideyWorkspaceIdentifier ?: @"-",
+                 tab.isTmuxTab ? @"YES" : @"NO",
+                 tab.tmuxController,
+                 (unsigned long)tab.sessions.count);
             NSString *workspaceID = tab.tideyWorkspaceIdentifier;
             Workspace *workspace = nil;
             if (workspaceID.length > 0) {
@@ -3741,10 +3741,10 @@ ITERM_WEAKLY_REFERENCEABLE
     if (initializedFromTabs) {
         [self tideySyncAllTmuxPaneIdentityOptions];
     }
-    NSLog(@"[TideyTmuxPanels] ensure_workspaces end initialized_from_tabs=%@ workspaces=%lu selected=%ld",
-          initializedFromTabs ? @"YES" : @"NO",
-          (unsigned long)self.workspaces.count,
-          (long)self.selectedWorkspaceIndex);
+    DLog(@"[TideyTmuxPanels] ensure_workspaces end initialized_from_tabs=%@ workspaces=%lu selected=%ld",
+         initializedFromTabs ? @"YES" : @"NO",
+         (unsigned long)self.workspaces.count,
+         (long)self.selectedWorkspaceIndex);
 }
 
 - (NSInteger)indexOfWorkspaceContainingPanel:(PTYTab *)panel {
