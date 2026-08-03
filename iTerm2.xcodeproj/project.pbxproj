@@ -7,7 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		A56FADEEAA55EFB0B846D102 /* monaco-editor in Resources */ = {isa = PBXBuildFile; fileRef = A59DFDD38D8F83A4A94B3F51 /* monaco-editor */; };
 		06E0C88E1DF9695400AA061B /* iTermServiceProvider.h in Headers */ = {isa = PBXBuildFile; fileRef = 06E0C88C1DF9695400AA061B /* iTermServiceProvider.h */; };
 		084F626684E68821BAEC7D9B /* iTermNonTextPasteHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED49EE365D629DAE80503BFD /* iTermNonTextPasteHelper.swift */; };
 		0E917DB125F460B221026B56 /* iTermCharacterSourceTestHelper.h in Sources */ = {isa = PBXBuildFile; fileRef = 2491A846A993798FA4963536 /* iTermCharacterSourceTestHelper.h */; };
@@ -936,6 +935,8 @@
 		5ECE005F1454E59B004861E9 /* PseudoTerminalRestorer.h in Headers */ = {isa = PBXBuildFile; fileRef = 5ECE005D1454E59B004861E9 /* PseudoTerminalRestorer.h */; };
 		63784809C4F1C06074729416 /* IntervalTreeForwardLocationEnumeratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110B6BC5FB568BC2E0CCADB2 /* IntervalTreeForwardLocationEnumeratorTests.swift */; };
 		6998793AE8C54A0EAE7D5D0F /* PillBackgroundRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F3AA921DF1744D7BA890104 /* PillBackgroundRenderer.swift */; };
+		6B0AA05F4218D8AEC31BCB30 /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 00213A5956211FBDEDEAEF96 /* AppIcon.icns */; };
+		6F477E041A6FFFE517F2A304 /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 00213A5956211FBDEDEAEF96 /* AppIcon.icns */; };
 		70C067D3E9484CA9A48D69BD /* ButtonPillInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7E1E38CBCE5463DA81CC1CF /* ButtonPillInfo.swift */; };
 		7531FA92945C4C5ABAB8F390 /* iTermEventTriggerEvaluator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B231EDB860248C368A511B42 /* iTermEventTriggerEvaluator.swift */; };
 		756C32AD2597AC2E0047B3A9 /* iTermImage+Sixel.m in Sources */ = {isa = PBXBuildFile; fileRef = 756C32AC2597AC2E0047B3A9 /* iTermImage+Sixel.m */; };
@@ -975,6 +976,7 @@
 		A073973E14C768E400786414 /* ColorsMenuItemView.h in Headers */ = {isa = PBXBuildFile; fileRef = A073973D14C768E400786414 /* ColorsMenuItemView.h */; };
 		A34452991BBAE7EC73F6F1A4 /* IntervalTreeSmallestLocationBugTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31039BDCA3000FF0DB6B6D7C /* IntervalTreeSmallestLocationBugTests.swift */; };
 		A445EEDC85D346B39596FDC3 /* iTermLayoutCalculator.h in Headers */ = {isa = PBXBuildFile; fileRef = 93EDFB853885460AA504C6B9 /* iTermLayoutCalculator.h */; };
+		A56FADEEAA55EFB0B846D102 /* monaco-editor in Resources */ = {isa = PBXBuildFile; fileRef = A59DFDD38D8F83A4A94B3F51 /* monaco-editor */; };
 		A60014F618550F3900CE38D8 /* NSMutableAttributedString+iTerm.h in Headers */ = {isa = PBXBuildFile; fileRef = A60014F418550F3900CE38D8 /* NSMutableAttributedString+iTerm.h */; };
 		A60014FB18552BDF00CE38D8 /* iTermNSKeyBindingEmulator.h in Headers */ = {isa = PBXBuildFile; fileRef = A60014F918552BDF00CE38D8 /* iTermNSKeyBindingEmulator.h */; };
 		A600A93B2E3EDD5200D05EAD /* iTermBrowserTriggerHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = A67238B72E3EDC8E003227C3 /* iTermBrowserTriggerHandler.swift */; };
@@ -1004,43 +1006,6 @@
 		A6038322294D062A00FE11C2 /* iTermCopyModeKeyBindings.dict in Resources */ = {isa = PBXBuildFile; fileRef = A603831F294D062A00FE11C2 /* iTermCopyModeKeyBindings.dict */; };
 		A6038323294D062A00FE11C2 /* iTermCopyModeKeyBindings.dict in Resources */ = {isa = PBXBuildFile; fileRef = A603831F294D062A00FE11C2 /* iTermCopyModeKeyBindings.dict */; };
 		A603A96829B12CEA000E9E98 /* SearchTests.m in Sources */ = {isa = PBXBuildFile; fileRef = A603A96729B12CEA000E9E98 /* SearchTests.m */; };
-		F0A10D1E3A28000100000004 /* TideyStatusStoreTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000003 /* TideyStatusStoreTests.m */; };
-		F0A10D1E3A28000100000024 /* TideyStatusStoreTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000003 /* TideyStatusStoreTests.m */; settings = {COMPILER_FLAGS = "-fno-objc-arc"; }; };
-		F0A10D1E3A28000100000017 /* TideyClaudeStatusPipelineTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000016 /* TideyClaudeStatusPipelineTests.m */; };
-		F0A10D1E3A28000100000002 /* TideyNotificationStoreTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000001 /* TideyNotificationStoreTests.m */; };
-		F0A10D1E3A28000100000022 /* TideyNotificationStoreTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000001 /* TideyNotificationStoreTests.m */; settings = {COMPILER_FLAGS = "-fno-objc-arc"; }; };
-		F0A10D1E3A28000100000006 /* TideyCLICommandFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000005 /* TideyCLICommandFormatter.swift */; };
-		F0A10D1E3A28000100000008 /* TideyCLICommandFormatterTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000007 /* TideyCLICommandFormatterTests.m */; };
-		F0A10D1E3A2800010000000A /* TideyShellIntegrationConfigWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000009 /* TideyShellIntegrationConfigWriter.swift */; };
-		F0A10D1E3A2800010000000C /* TideyShellIntegrationConfigWriterTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A2800010000000B /* TideyShellIntegrationConfigWriterTests.m */; };
-		F0B420A13A6D000100000001 /* TideyRemoteBridgeInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0B420A13A6D000100000000 /* TideyRemoteBridgeInstaller.swift */; };
-		F0B420A13A6D000100000003 /* TideyRemoteBridgeInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0B420A13A6D000100000002 /* TideyRemoteBridgeInstallerTests.swift */; };
-		F0C30D1E3A6E000100000002 /* TideyWorkspaceRestorationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C30D1E3A6E000100000001 /* TideyWorkspaceRestorationState.swift */; };
-		F0C30D1E3A6E000100000004 /* TideyRestorationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C30D1E3A6E000100000003 /* TideyRestorationPolicy.swift */; };
-		F0C30D1E3A6E000100000006 /* TideyRestorableStatePreflight.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C30D1E3A6E000100000005 /* TideyRestorableStatePreflight.swift */; };
-		F0C30D1E3A6E000100000008 /* TideyRestorableStateDirtyTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C30D1E3A6E000100000007 /* TideyRestorableStateDirtyTracker.swift */; };
-		F0C30D1E3A6E00010000000A /* TideyRuntimeResumeDescriptor.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C30D1E3A6E000100000009 /* TideyRuntimeResumeDescriptor.swift */; };
-		F0C30D1E3A6E00010000000C /* TideyRuntimeRehydrationStateMachine.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C30D1E3A6E00010000000B /* TideyRuntimeRehydrationStateMachine.swift */; };
-		F0A10D1E3A28000100000013 /* MainMenuManglerTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000012 /* MainMenuManglerTests.m */; };
-		F0A10D1E3A28000100000015 /* iTermLayoutCalculatorTideyTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000014 /* iTermLayoutCalculatorTideyTests.m */; };
-		F0A10D1E3A30000100000001 /* TideyCmdLongPressPanelHintsTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A30000100000000 /* TideyCmdLongPressPanelHintsTests.m */; };
-		F0A10D1E3A31000100000001 /* TideyEditorFileTreeWatcherTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A31000100000000 /* TideyEditorFileTreeWatcherTests.m */; };
-		F0A10D1E3A32000100000001 /* TideyEditorExternalChangeTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A32000100000000 /* TideyEditorExternalChangeTests.m */; };
-		F0A10D1E3A34000100000001 /* TideyRightPanelTabGroupingTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A34000100000000 /* TideyRightPanelTabGroupingTests.m */; };
-		TIDE7B00001A000000000001 /* TideyBrowserPanelTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDE7B00001A000000000000 /* TideyBrowserPanelTests.m */; };
-		TIDEAPP0001A00000000001 /* TideyAppShortcutBehaviorTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEAPP0001A00000000000 /* TideyAppShortcutBehaviorTests.m */; };
-		TIDEAPP0001A00000000002 /* TideyAppShortcutBehaviorTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEAPP0001A00000000000 /* TideyAppShortcutBehaviorTests.m */; };
-		TIDEBOOT0001A00000000001 /* TideyFirstRunCompatibilityBootstrapTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEBOOT0001A00000000000 /* TideyFirstRunCompatibilityBootstrapTests.m */; };
-		TIDEBOOT0001A00000000002 /* TideyFirstRunCompatibilityBootstrapTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEBOOT0001A00000000000 /* TideyFirstRunCompatibilityBootstrapTests.m */; };
-		TIDEMOUSE0001A00000000001 /* PTYMouseHandlerSelectionTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEMOUSE0001A00000000000 /* PTYMouseHandlerSelectionTests.m */; };
-		TIDEMOUSE0001A00000000002 /* PTYMouseHandlerSelectionTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEMOUSE0001A00000000000 /* PTYMouseHandlerSelectionTests.m */; };
-		TIDESOCK0001A00000000001 /* TideySocketServerTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDESOCK0001A00000000000 /* TideySocketServerTests.m */; };
-		TIDESOCK0001A00000000002 /* TideySocketServerTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDESOCK0001A00000000000 /* TideySocketServerTests.m */; };
-		TIDECFG0001A00000000001 /* TideyReleaseConfigTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDECFG0001A00000000000 /* TideyReleaseConfigTests.m */; };
-		TIDECFG0001A00000000002 /* TideyReleaseConfigTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDECFG0001A00000000000 /* TideyReleaseConfigTests.m */; };
-		F0A10D1E3A33000100000001 /* TideyLoginShellCommandTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A33000100000000 /* TideyLoginShellCommandTests.m */; };
-		F0A10D1E3A35000100000001 /* TideySidebarCloseButtonTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A35000100000000 /* TideySidebarCloseButtonTests.m */; };
-		F0A10D1E3A36000100000001 /* TideySessionFactoryLaunchCommandTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A36000100000000 /* TideySessionFactoryLaunchCommandTests.m */; };
 		A603E9FB283EE53C0028B648 /* SecretServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A603E9FA283EE53C0028B648 /* SecretServer.swift */; };
 		A603E9FE283EE9BD0028B648 /* ObjCExceptions.h in Headers */ = {isa = PBXBuildFile; fileRef = A603E9FC283EE9BD0028B648 /* ObjCExceptions.h */; };
 		A603E9FF283EE9BD0028B648 /* ObjCExceptions.m in Sources */ = {isa = PBXBuildFile; fileRef = A603E9FD283EE9BD0028B648 /* ObjCExceptions.m */; };
@@ -3081,9 +3046,6 @@
 		A6A479B72E6E58C000DCF16F /* AppIcon.png in Resources */ = {isa = PBXBuildFile; fileRef = A6A479B62E6E58C000DCF16F /* AppIcon.png */; };
 		A6A479B82E6E58C000DCF16F /* AppIcon.png in Resources */ = {isa = PBXBuildFile; fileRef = A6A479B62E6E58C000DCF16F /* AppIcon.png */; };
 		A6A479B92E6E58C000DCF16F /* AppIcon.png in Resources */ = {isa = PBXBuildFile; fileRef = A6A479B62E6E58C000DCF16F /* AppIcon.png */; };
-		6F477E041A6FFFE517F2A304 /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 00213A5956211FBDEDEAEF96 /* AppIcon.icns */; };
-		BB6261274C73ED1AAACA751C /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 00213A5956211FBDEDEAEF96 /* AppIcon.icns */; };
-		6B0AA05F4218D8AEC31BCB30 /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 00213A5956211FBDEDEAEF96 /* AppIcon.icns */; };
 		A6A4865D20B6706700493302 /* ProfilesKeysPreferencesViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = A6A269961902FA6800437DA9 /* ProfilesKeysPreferencesViewController.m */; };
 		A6A4865E20B6758D00493302 /* iTermPreferencesBaseViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = A6E7138818F26445008D94DD /* iTermPreferencesBaseViewController.m */; };
 		A6A4865F20B675DE00493302 /* AdvancedWorkingDirectoryWindowController.m in Sources */ = {isa = PBXBuildFile; fileRef = A6E713B118FCB559008D94DD /* AdvancedWorkingDirectoryWindowController.m */; };
@@ -3592,9 +3554,6 @@
 		A6C7642B1B45CBA800E3C992 /* libSSKeychain.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 1DFA7C671923E83500DF1410 /* libSSKeychain.a */; };
 		A6C7C96B2E172F3E00AA7668 /* WebExtensionsFramework in Frameworks */ = {isa = PBXBuildFile; productRef = A6C7C96C2E172F3E00AA7668 /* WebExtensionsFramework */; };
 		A6C7C96D2E172F3E00AA7668 /* WebExtensionsFramework in Frameworks */ = {isa = PBXBuildFile; productRef = A6C7C96C2E172F3E00AA7668 /* WebExtensionsFramework */; };
-		A7B1001A2F0A000100000001 /* WebExtensionsFramework in Frameworks */ = {isa = PBXBuildFile; productRef = A6C7C96C2E172F3E00AA7668 /* WebExtensionsFramework */; };
-		A7B1001B2F0A000100000001 /* WebExtensionsFramework in Frameworks */ = {isa = PBXBuildFile; productRef = A6C7C96C2E172F3E00AA7668 /* WebExtensionsFramework */; };
-		A7B1001C2F0A000100000001 /* WebExtensionsFramework in Frameworks */ = {isa = PBXBuildFile; productRef = A6C7C96C2E172F3E00AA7668 /* WebExtensionsFramework */; };
 		A6C7C96F2E1730AA00AA7668 /* iTermBrowserUserState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6C7C96E2E1730A400AA7668 /* iTermBrowserUserState.swift */; };
 		A6C7C9712E18F27800AA7668 /* iTermBrowserWebViewHandlerProxy.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6C7C9702E18F26E00AA7668 /* iTermBrowserWebViewHandlerProxy.swift */; };
 		A6C7DE52199F3087001E5C75 /* PTYWindow+Scripting.h in Headers */ = {isa = PBXBuildFile; fileRef = A6C7DE51199F3087001E5C75 /* PTYWindow+Scripting.h */; };
@@ -4923,31 +4882,6 @@
 		A6F718D42266FDEB0053488E /* iTermSemanticHistoryController.m in Sources */ = {isa = PBXBuildFile; fileRef = 1D06A04F134CDBED00C414EF /* iTermSemanticHistoryController.m */; };
 		A6F718D7226704920053488E /* PTYSession+ARC.h in Headers */ = {isa = PBXBuildFile; fileRef = A6F718D5226704920053488E /* PTYSession+ARC.h */; };
 		A6F718D8226704920053488E /* PTYSession+ARC.m in Sources */ = {isa = PBXBuildFile; fileRef = A6F718D6226704920053488E /* PTYSession+ARC.m */; };
-		A7B100112F0A000100000001 /* TideyNotificationStore.m in Sources */ = {isa = PBXBuildFile; fileRef = A7B100022F0A000100000001 /* TideyNotificationStore.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
-		A7B100122F0A000100000001 /* TideySocketConnection.m in Sources */ = {isa = PBXBuildFile; fileRef = A7B100042F0A000100000001 /* TideySocketConnection.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
-		A7B100132F0A000100000001 /* TideySocketServer.m in Sources */ = {isa = PBXBuildFile; fileRef = A7B100062F0A000100000001 /* TideySocketServer.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
-		A7B100142F0A000100000001 /* TideyEditorExternalChangeWatcher.h in Headers */ = {isa = PBXBuildFile; fileRef = A7B100072F0A000100000001 /* TideyEditorExternalChangeWatcher.h */; };
-		A7B100152F0A000100000001 /* TideyEditorExternalChangeWatcher.m in Sources */ = {isa = PBXBuildFile; fileRef = A7B100082F0A000100000001 /* TideyEditorExternalChangeWatcher.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
-		F0A10D1E3A2A000100000001 /* TideyEditorDocument.h in Headers */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A2A000100000002 /* TideyEditorDocument.h */; };
-		F0A10D1E3A2A000100000003 /* TideyEditorDocument.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A2A000100000004 /* TideyEditorDocument.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
-		F0A10D1E3A2A000100000005 /* TideyEditorDocumentStore.h in Headers */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A2A000100000006 /* TideyEditorDocumentStore.h */; };
-		F0A10D1E3A2A000100000007 /* TideyEditorDocumentStore.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A2A000100000008 /* TideyEditorDocumentStore.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
-		F0A10D1E3A2B000100000001 /* TideyFirstRunCompatibilityBootstrap.h in Headers */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A2B000100000002 /* TideyFirstRunCompatibilityBootstrap.h */; };
-		F0A10D1E3A2B000100000003 /* TideyFirstRunCompatibilityBootstrap.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A2B000100000004 /* TideyFirstRunCompatibilityBootstrap.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
-		F0A10D1E3A29000100000001 /* TideyRightPanelPane.h in Headers */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A29000100000002 /* TideyRightPanelPane.h */; };
-		F0A10D1E3A29000100000003 /* TideyRightPanelPane.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A29000100000004 /* TideyRightPanelPane.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
-		F0A10D1E3A40000100000001 /* TideyKeyboardShortcutsViewController.h in Headers */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A40000100000002 /* TideyKeyboardShortcutsViewController.h */; };
-		F0A10D1E3A40000100000003 /* TideyKeyboardShortcutsViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A40000100000004 /* TideyKeyboardShortcutsViewController.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
-		F0A10D1E3A40000100000005 /* TideySettingsWindowController.h in Headers */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A40000100000006 /* TideySettingsWindowController.h */; };
-		F0A10D1E3A40000100000007 /* TideySettingsWindowController.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A40000100000008 /* TideySettingsWindowController.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
-		F0A10D1E3A4000010000000D /* TideyTerminalAppearanceProfileAdapter.h in Headers */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A4000010000000E /* TideyTerminalAppearanceProfileAdapter.h */; };
-		F0A10D1E3A4000010000000F /* TideyTerminalAppearanceProfileAdapter.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A40000100000010 /* TideyTerminalAppearanceProfileAdapter.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
-		F0A10D1E3A40000100000009 /* TideyTerminalAppearanceViewController.h in Headers */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A4000010000000A /* TideyTerminalAppearanceViewController.h */; };
-		F0A10D1E3A4000010000000B /* TideyTerminalAppearanceViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A4000010000000C /* TideyTerminalAppearanceViewController.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
-		F0A10D1E3A2800010000000F /* TideySocketCommandDecoder.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A2800010000000E /* TideySocketCommandDecoder.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
-		F0A10D1E3A50000100000001 /* TideyColorSwatchView.h in Headers */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A50000100000002 /* TideyColorSwatchView.h */; };
-		F0A10D1E3A50000100000003 /* TideyColorSwatchView.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A50000100000004 /* TideyColorSwatchView.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
-		F0A10D1E3A28000100000011 /* TideySocketCommandDecoderTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000010 /* TideySocketCommandDecoderTests.m */; };
 		A6F7A707213CB143004DE961 /* StatusBarIconUser.png in Resources */ = {isa = PBXBuildFile; fileRef = A6F7A6EF213CB13D004DE961 /* StatusBarIconUser.png */; };
 		A6F7A708213CB143004DE961 /* StatusBarIconUser.png in Resources */ = {isa = PBXBuildFile; fileRef = A6F7A6EF213CB13D004DE961 /* StatusBarIconUser.png */; };
 		A6F7A709213CB143004DE961 /* StatusBarIconUser.png in Resources */ = {isa = PBXBuildFile; fileRef = A6F7A6EF213CB13D004DE961 /* StatusBarIconUser.png */; };
@@ -5024,9 +4958,6 @@
 		A6F7D4B52E0340AB0065D09C /* iTermBrowserViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6F7D4B42E0340A80065D09C /* iTermBrowserViewController.swift */; };
 		A6F7D4B72E0342500065D09C /* iTermBrowserToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6F7D4B62E03424F0065D09C /* iTermBrowserToolbar.swift */; };
 		A6F7D4B92E034E2B0065D09C /* iTermBrowserManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6F7D4B82E034E2B0065D09C /* iTermBrowserManager.swift */; };
-		F041A0013C6B4E7A00A1B001 /* TideyBrowserEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = F041A0023C6B4E7A00A1B001 /* TideyBrowserEngine.swift */; };
-		F041A0033C6B4E7A00A1B001 /* TideyBrowserEngineHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = F041A0043C6B4E7A00A1B001 /* TideyBrowserEngineHost.swift */; };
-		F041A0053C6B4E7A00A1B001 /* iTermBrowserSessionEngineAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = F041A0063C6B4E7A00A1B001 /* iTermBrowserSessionEngineAdapter.swift */; };
 		A6F7D4BB2E0373110065D09C /* iTermBrowserErrorHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6F7D4BA2E0373110065D09C /* iTermBrowserErrorHandler.swift */; };
 		A6F7D4BD2E037B4B0065D09C /* iTermBrowserSettingsHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6F7D4BC2E037B4B0065D09C /* iTermBrowserSettingsHandler.swift */; };
 		A6F7D4BF2E037BB20065D09C /* iterm-browser-common.css in Resources */ = {isa = PBXBuildFile; fileRef = A6F7D4BE2E037BB20065D09C /* iterm-browser-common.css */; };
@@ -5191,7 +5122,16 @@
 		A77D8D50729267B406541654 /* AccessibilityDeletionDetectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F139DFA4255DC27A1E3E0FF /* AccessibilityDeletionDetectionTests.swift */; };
 		A785F516A64BC93AAF1474B8 /* RegexAtomIterator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76421C2E762130B690D1ADC5 /* RegexAtomIterator.swift */; };
 		A78BC63A048881BDA2FB4F38 /* FIFOQueueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 424FA2350959ED4159AA0568 /* FIFOQueueTests.swift */; };
+		A7B100112F0A000100000001 /* TideyNotificationStore.m in Sources */ = {isa = PBXBuildFile; fileRef = A7B100022F0A000100000001 /* TideyNotificationStore.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		A7B100122F0A000100000001 /* TideySocketConnection.m in Sources */ = {isa = PBXBuildFile; fileRef = A7B100042F0A000100000001 /* TideySocketConnection.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		A7B100132F0A000100000001 /* TideySocketServer.m in Sources */ = {isa = PBXBuildFile; fileRef = A7B100062F0A000100000001 /* TideySocketServer.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		A7B100142F0A000100000001 /* TideyEditorExternalChangeWatcher.h in Headers */ = {isa = PBXBuildFile; fileRef = A7B100072F0A000100000001 /* TideyEditorExternalChangeWatcher.h */; };
+		A7B100152F0A000100000001 /* TideyEditorExternalChangeWatcher.m in Sources */ = {isa = PBXBuildFile; fileRef = A7B100082F0A000100000001 /* TideyEditorExternalChangeWatcher.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		A7B1001A2F0A000100000001 /* WebExtensionsFramework in Frameworks */ = {isa = PBXBuildFile; productRef = A6C7C96C2E172F3E00AA7668 /* WebExtensionsFramework */; };
+		A7B1001B2F0A000100000001 /* WebExtensionsFramework in Frameworks */ = {isa = PBXBuildFile; productRef = A6C7C96C2E172F3E00AA7668 /* WebExtensionsFramework */; };
+		A7B1001C2F0A000100000001 /* WebExtensionsFramework in Frameworks */ = {isa = PBXBuildFile; productRef = A6C7C96C2E172F3E00AA7668 /* WebExtensionsFramework */; };
 		A7E25DCB1956D4A7FA738CB9 /* iTermStreamingPNGWriter.h in Sources */ = {isa = PBXBuildFile; fileRef = CB2F48F836C5732146BCEDD9 /* iTermStreamingPNGWriter.h */; };
+		BB6261274C73ED1AAACA751C /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 00213A5956211FBDEDEAEF96 /* AppIcon.icns */; };
 		C48D7AA2E70B019313C401F3 /* WordSelectionAtom.swift in Sources */ = {isa = PBXBuildFile; fileRef = C08AA4008946722C3F4C67C1 /* WordSelectionAtom.swift */; };
 		C6675EBC1C4FE96B0041173B /* iTermSelectorSwizzler.m in Sources */ = {isa = PBXBuildFile; fileRef = C6675EBB1C4FE96B0041173B /* iTermSelectorSwizzler.m */; };
 		CDCD9FF08FCE42F7A6963859 /* PillBackgroundGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EA289FFE2BF4090A65931BA /* PillBackgroundGenerator.swift */; };
@@ -5203,16 +5143,76 @@
 		EDD2335A6BDA84CE2B29C285 /* Box.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10731A1F54B9BF72FBAC682 /* Box.swift */; };
 		EE293B4DA9D2204FCFDE6784 /* iTermCursorSlideAnimator.h in Sources */ = {isa = PBXBuildFile; fileRef = 889A9128E944B618CDE75E18 /* iTermCursorSlideAnimator.h */; };
 		EEBDD6CF78595292D0CF8977 /* PrivateIPCheckerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86F85D24451C27760B7C75BC /* PrivateIPCheckerTests.swift */; };
+		F041A0013C6B4E7A00A1B001 /* TideyBrowserEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = F041A0023C6B4E7A00A1B001 /* TideyBrowserEngine.swift */; };
+		F041A0033C6B4E7A00A1B001 /* TideyBrowserEngineHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = F041A0043C6B4E7A00A1B001 /* TideyBrowserEngineHost.swift */; };
+		F041A0053C6B4E7A00A1B001 /* iTermBrowserSessionEngineAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = F041A0063C6B4E7A00A1B001 /* iTermBrowserSessionEngineAdapter.swift */; };
+		F0A10D1E3A28000100000002 /* TideyNotificationStoreTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000001 /* TideyNotificationStoreTests.m */; };
+		F0A10D1E3A28000100000004 /* TideyStatusStoreTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000003 /* TideyStatusStoreTests.m */; };
+		F0A10D1E3A28000100000006 /* TideyCLICommandFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000005 /* TideyCLICommandFormatter.swift */; };
+		F0A10D1E3A28000100000008 /* TideyCLICommandFormatterTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000007 /* TideyCLICommandFormatterTests.m */; };
+		F0A10D1E3A2800010000000A /* TideyShellIntegrationConfigWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000009 /* TideyShellIntegrationConfigWriter.swift */; };
+		F0A10D1E3A2800010000000C /* TideyShellIntegrationConfigWriterTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A2800010000000B /* TideyShellIntegrationConfigWriterTests.m */; };
+		F0A10D1E3A2800010000000F /* TideySocketCommandDecoder.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A2800010000000E /* TideySocketCommandDecoder.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		F0A10D1E3A28000100000011 /* TideySocketCommandDecoderTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000010 /* TideySocketCommandDecoderTests.m */; };
+		F0A10D1E3A28000100000013 /* MainMenuManglerTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000012 /* MainMenuManglerTests.m */; };
+		F0A10D1E3A28000100000015 /* iTermLayoutCalculatorTideyTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000014 /* iTermLayoutCalculatorTideyTests.m */; };
+		F0A10D1E3A28000100000017 /* TideyClaudeStatusPipelineTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000016 /* TideyClaudeStatusPipelineTests.m */; };
+		F0A10D1E3A28000100000022 /* TideyNotificationStoreTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000001 /* TideyNotificationStoreTests.m */; settings = {COMPILER_FLAGS = "-fno-objc-arc"; }; };
+		F0A10D1E3A28000100000024 /* TideyStatusStoreTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A28000100000003 /* TideyStatusStoreTests.m */; settings = {COMPILER_FLAGS = "-fno-objc-arc"; }; };
+		F0A10D1E3A29000100000001 /* TideyRightPanelPane.h in Headers */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A29000100000002 /* TideyRightPanelPane.h */; };
+		F0A10D1E3A29000100000003 /* TideyRightPanelPane.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A29000100000004 /* TideyRightPanelPane.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		F0A10D1E3A2A000100000001 /* TideyEditorDocument.h in Headers */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A2A000100000002 /* TideyEditorDocument.h */; };
+		F0A10D1E3A2A000100000003 /* TideyEditorDocument.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A2A000100000004 /* TideyEditorDocument.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		F0A10D1E3A2A000100000005 /* TideyEditorDocumentStore.h in Headers */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A2A000100000006 /* TideyEditorDocumentStore.h */; };
+		F0A10D1E3A2A000100000007 /* TideyEditorDocumentStore.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A2A000100000008 /* TideyEditorDocumentStore.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		F0A10D1E3A2B000100000001 /* TideyFirstRunCompatibilityBootstrap.h in Headers */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A2B000100000002 /* TideyFirstRunCompatibilityBootstrap.h */; };
+		F0A10D1E3A2B000100000003 /* TideyFirstRunCompatibilityBootstrap.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A2B000100000004 /* TideyFirstRunCompatibilityBootstrap.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		F0A10D1E3A30000100000001 /* TideyCmdLongPressPanelHintsTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A30000100000000 /* TideyCmdLongPressPanelHintsTests.m */; };
+		F0A10D1E3A31000100000001 /* TideyEditorFileTreeWatcherTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A31000100000000 /* TideyEditorFileTreeWatcherTests.m */; };
+		F0A10D1E3A32000100000001 /* TideyEditorExternalChangeTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A32000100000000 /* TideyEditorExternalChangeTests.m */; };
+		F0A10D1E3A33000100000001 /* TideyLoginShellCommandTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A33000100000000 /* TideyLoginShellCommandTests.m */; };
+		F0A10D1E3A34000100000001 /* TideyRightPanelTabGroupingTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A34000100000000 /* TideyRightPanelTabGroupingTests.m */; };
+		F0A10D1E3A35000100000001 /* TideySidebarCloseButtonTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A35000100000000 /* TideySidebarCloseButtonTests.m */; };
+		F0A10D1E3A36000100000001 /* TideySessionFactoryLaunchCommandTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A36000100000000 /* TideySessionFactoryLaunchCommandTests.m */; };
+		F0A10D1E3A40000100000001 /* TideyKeyboardShortcutsViewController.h in Headers */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A40000100000002 /* TideyKeyboardShortcutsViewController.h */; };
+		F0A10D1E3A40000100000003 /* TideyKeyboardShortcutsViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A40000100000004 /* TideyKeyboardShortcutsViewController.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		F0A10D1E3A40000100000005 /* TideySettingsWindowController.h in Headers */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A40000100000006 /* TideySettingsWindowController.h */; };
+		F0A10D1E3A40000100000007 /* TideySettingsWindowController.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A40000100000008 /* TideySettingsWindowController.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		F0A10D1E3A40000100000009 /* TideyTerminalAppearanceViewController.h in Headers */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A4000010000000A /* TideyTerminalAppearanceViewController.h */; };
+		F0A10D1E3A4000010000000B /* TideyTerminalAppearanceViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A4000010000000C /* TideyTerminalAppearanceViewController.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		F0A10D1E3A4000010000000D /* TideyTerminalAppearanceProfileAdapter.h in Headers */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A4000010000000E /* TideyTerminalAppearanceProfileAdapter.h */; };
+		F0A10D1E3A4000010000000F /* TideyTerminalAppearanceProfileAdapter.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A40000100000010 /* TideyTerminalAppearanceProfileAdapter.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		F0A10D1E3A50000100000001 /* TideyColorSwatchView.h in Headers */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A50000100000002 /* TideyColorSwatchView.h */; };
+		F0A10D1E3A50000100000003 /* TideyColorSwatchView.m in Sources */ = {isa = PBXBuildFile; fileRef = F0A10D1E3A50000100000004 /* TideyColorSwatchView.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		F0B420A13A6D000100000001 /* TideyRemoteBridgeInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0B420A13A6D000100000000 /* TideyRemoteBridgeInstaller.swift */; };
+		F0B420A13A6D000100000003 /* TideyRemoteBridgeInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0B420A13A6D000100000002 /* TideyRemoteBridgeInstallerTests.swift */; };
+		F0C30D1E3A6E000100000002 /* TideyWorkspaceRestorationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C30D1E3A6E000100000001 /* TideyWorkspaceRestorationState.swift */; };
+		F0C30D1E3A6E000100000004 /* TideyRestorationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C30D1E3A6E000100000003 /* TideyRestorationPolicy.swift */; };
+		F0C30D1E3A6E000100000006 /* TideyRestorableStatePreflight.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C30D1E3A6E000100000005 /* TideyRestorableStatePreflight.swift */; };
+		F0C30D1E3A6E000100000008 /* TideyRestorableStateDirtyTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C30D1E3A6E000100000007 /* TideyRestorableStateDirtyTracker.swift */; };
+		F0C30D1E3A6E00010000000A /* TideyRuntimeResumeDescriptor.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C30D1E3A6E000100000009 /* TideyRuntimeResumeDescriptor.swift */; };
+		F0C30D1E3A6E00010000000C /* TideyRuntimeRehydrationStateMachine.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C30D1E3A6E00010000000B /* TideyRuntimeRehydrationStateMachine.swift */; };
 		F7C626F9C65F19A1BEE800DA /* iTermWordExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BF1E9C79C30008CC546F987 /* iTermWordExtractor.swift */; };
 		FB4CEC973C7E9235362E3F26 /* iTermRemotePreferences.h in Headers */ = {isa = PBXBuildFile; fileRef = FB4CECF4AC4392B21E87A07B /* iTermRemotePreferences.h */; };
-		T1DEY00001BIN0CLAUDE0002 /* claude in CopyFiles */ = {isa = PBXBuildFile; fileRef = T1DEY00001BIN0CLAUDE0001 /* claude */; };
+		FF77847D9D838865BB1E1327 /* TideySidebarStatusRefreshPolicyTests.m in Sources */ = {isa = PBXBuildFile; fileRef = E2373E98F2FAB30D5EE949AA /* TideySidebarStatusRefreshPolicyTests.m */; };
+		T1DEY00001BIN0CDXHOOK002 /* codex-hook-dispatch in CopyFiles */ = {isa = PBXBuildFile; fileRef = T1DEY00001BIN0CDXHOOK001 /* codex-hook-dispatch */; };
 		T1DEY00001BIN0CLAHARG002 /* claude-hook-argv-session-id in CopyFiles */ = {isa = PBXBuildFile; fileRef = T1DEY00001BIN0CLAHARG001 /* claude-hook-argv-session-id */; };
 		T1DEY00001BIN0CLAHDSP002 /* claude-hook-dispatch in CopyFiles */ = {isa = PBXBuildFile; fileRef = T1DEY00001BIN0CLAHDSP001 /* claude-hook-dispatch */; };
 		T1DEY00001BIN0CLAHJRN002 /* claude-hook-journal-lifecycle in CopyFiles */ = {isa = PBXBuildFile; fileRef = T1DEY00001BIN0CLAHJRN001 /* claude-hook-journal-lifecycle */; };
+		T1DEY00001BIN0CLAUDE0002 /* claude in CopyFiles */ = {isa = PBXBuildFile; fileRef = T1DEY00001BIN0CLAUDE0001 /* claude */; };
 		T1DEY00001BIN0CODEX0002 /* codex in CopyFiles */ = {isa = PBXBuildFile; fileRef = T1DEY00001BIN0CODEX0001 /* codex */; };
-		T1DEY00001BIN0CDXHOOK002 /* codex-hook-dispatch in CopyFiles */ = {isa = PBXBuildFile; fileRef = T1DEY00001BIN0CDXHOOK001 /* codex-hook-dispatch */; };
 		T1DEY00001BIN0TMUXID0002 /* tidey-tmux-pane-identity in CopyFiles */ = {isa = PBXBuildFile; fileRef = T1DEY00001BIN0TMUXID0001 /* tidey-tmux-pane-identity */; };
-
+		TIDE7B00001A000000000001 /* TideyBrowserPanelTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDE7B00001A000000000000 /* TideyBrowserPanelTests.m */; };
+		TIDEAPP0001A00000000001 /* TideyAppShortcutBehaviorTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEAPP0001A00000000000 /* TideyAppShortcutBehaviorTests.m */; };
+		TIDEAPP0001A00000000002 /* TideyAppShortcutBehaviorTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEAPP0001A00000000000 /* TideyAppShortcutBehaviorTests.m */; };
+		TIDEBOOT0001A00000000001 /* TideyFirstRunCompatibilityBootstrapTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEBOOT0001A00000000000 /* TideyFirstRunCompatibilityBootstrapTests.m */; };
+		TIDEBOOT0001A00000000002 /* TideyFirstRunCompatibilityBootstrapTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEBOOT0001A00000000000 /* TideyFirstRunCompatibilityBootstrapTests.m */; };
+		TIDECFG0001A00000000001 /* TideyReleaseConfigTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDECFG0001A00000000000 /* TideyReleaseConfigTests.m */; };
+		TIDECFG0001A00000000002 /* TideyReleaseConfigTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDECFG0001A00000000000 /* TideyReleaseConfigTests.m */; };
+		TIDEMOUSE0001A00000000001 /* PTYMouseHandlerSelectionTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEMOUSE0001A00000000000 /* PTYMouseHandlerSelectionTests.m */; };
+		TIDEMOUSE0001A00000000002 /* PTYMouseHandlerSelectionTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEMOUSE0001A00000000000 /* PTYMouseHandlerSelectionTests.m */; };
+		TIDESOCK0001A00000000001 /* TideySocketServerTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDESOCK0001A00000000000 /* TideySocketServerTests.m */; };
+		TIDESOCK0001A00000000002 /* TideySocketServerTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDESOCK0001A00000000000 /* TideySocketServerTests.m */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -5480,22 +5480,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		T1DEY00004BIN0COPYPHASE0 /* CopyFiles */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = bin;
-			dstSubfolderSpec = 7;
-			files = (
-				T1DEY00001BIN0CLAUDE0002 /* claude in CopyFiles */,
-				T1DEY00001BIN0CLAHARG002 /* claude-hook-argv-session-id in CopyFiles */,
-				T1DEY00001BIN0CLAHDSP002 /* claude-hook-dispatch in CopyFiles */,
-				T1DEY00001BIN0CLAHJRN002 /* claude-hook-journal-lifecycle in CopyFiles */,
-				T1DEY00001BIN0CODEX0002 /* codex in CopyFiles */,
-				T1DEY00001BIN0CDXHOOK002 /* codex-hook-dispatch in CopyFiles */,
-				T1DEY00001BIN0TMUXID0002 /* tidey-tmux-pane-identity in CopyFiles */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		A6866B7823CAA10A00ACD94C /* Embed XPC Services */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
@@ -5518,14 +5502,30 @@
 			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		T1DEY00004BIN0COPYPHASE0 /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = bin;
+			dstSubfolderSpec = 7;
+			files = (
+				T1DEY00001BIN0CLAUDE0002 /* claude in CopyFiles */,
+				T1DEY00001BIN0CLAHARG002 /* claude-hook-argv-session-id in CopyFiles */,
+				T1DEY00001BIN0CLAHDSP002 /* claude-hook-dispatch in CopyFiles */,
+				T1DEY00001BIN0CLAHJRN002 /* claude-hook-journal-lifecycle in CopyFiles */,
+				T1DEY00001BIN0CODEX0002 /* codex in CopyFiles */,
+				T1DEY00001BIN0CDXHOOK002 /* codex-hook-dispatch in CopyFiles */,
+				T1DEY00001BIN0TMUXID0002 /* tidey-tmux-pane-identity in CopyFiles */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		00213A5956211FBDEDEAEF96 /* AppIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; name = AppIcon.icns; path = images/AppIcon.icns; sourceTree = "<group>"; };
 		02CF16386D8605E6BC44ED81 /* CharacterAtomIterator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CharacterAtomIterator.swift; sourceTree = "<group>"; };
 		0464AB2F006CD2EC7F000001 /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = /System/Library/Frameworks/AppKit.framework; sourceTree = "<absolute>"; };
 		06E0C88C1DF9695400AA061B /* iTermServiceProvider.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = iTermServiceProvider.h; sourceTree = "<group>"; };
 		06E0C88D1DF9695400AA061B /* iTermServiceProvider.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = iTermServiceProvider.m; sourceTree = "<group>"; };
-		A59DFDD38D8F83A4A94B3F51 /* monaco-editor */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "monaco-editor"; sourceTree = "<group>"; };
 		110B6BC5FB568BC2E0CCADB2 /* IntervalTreeForwardLocationEnumeratorTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = IntervalTreeForwardLocationEnumeratorTests.swift; sourceTree = "<group>"; };
 		11C735CA9A1AF5E864EC718E /* iTermStreamingPNGWriter.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = iTermStreamingPNGWriter.m; sourceTree = "<group>"; };
 		19537E68A2ADEB03B3086882 /* iTermBlurRowBuffer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = iTermBlurRowBuffer.swift; sourceTree = "<group>"; };
@@ -6335,6 +6335,7 @@
 		9DB3D6EF176CCABE0071CCF8 /* PrefsArrangements@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; name = "PrefsArrangements@2x.png"; path = "images/PrefsArrangements@2x.png"; sourceTree = "<group>"; };
 		A073973D14C768E400786414 /* ColorsMenuItemView.h */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 4; lastKnownFileType = sourcecode.c.h; path = ColorsMenuItemView.h; sourceTree = "<group>"; tabWidth = 4; };
 		A073973F14C7694600786414 /* ColorsMenuItemView.m */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 4; lastKnownFileType = sourcecode.c.objc; path = ColorsMenuItemView.m; sourceTree = "<group>"; tabWidth = 4; };
+		A59DFDD38D8F83A4A94B3F51 /* monaco-editor */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "monaco-editor"; sourceTree = "<group>"; };
 		A60014F418550F3900CE38D8 /* NSMutableAttributedString+iTerm.h */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 4; lastKnownFileType = sourcecode.c.h; path = "NSMutableAttributedString+iTerm.h"; sourceTree = "<group>"; tabWidth = 4; };
 		A60014F518550F3900CE38D8 /* NSMutableAttributedString+iTerm.m */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 4; lastKnownFileType = sourcecode.c.objc; path = "NSMutableAttributedString+iTerm.m"; sourceTree = "<group>"; tabWidth = 4; };
 		A60014F918552BDF00CE38D8 /* iTermNSKeyBindingEmulator.h */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 4; lastKnownFileType = sourcecode.c.h; path = iTermNSKeyBindingEmulator.h; sourceTree = "<group>"; tabWidth = 4; };
@@ -6455,36 +6456,6 @@
 		A60383162943AF1500FE11C2 /* iTerm2SandboxedWorker-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "iTerm2SandboxedWorker-Bridging-Header.h"; sourceTree = "<group>"; };
 		A603831F294D062A00FE11C2 /* iTermCopyModeKeyBindings.dict */ = {isa = PBXFileReference; lastKnownFileType = text.plist; name = iTermCopyModeKeyBindings.dict; path = OtherResources/iTermCopyModeKeyBindings.dict; sourceTree = SOURCE_ROOT; };
 		A603A96729B12CEA000E9E98 /* SearchTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SearchTests.m; sourceTree = "<group>"; };
-		F0A10D1E3A28000100000003 /* TideyStatusStoreTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyStatusStoreTests.m; sourceTree = "<group>"; };
-		F0A10D1E3A28000100000016 /* TideyClaudeStatusPipelineTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyClaudeStatusPipelineTests.m; sourceTree = "<group>"; };
-		F0A10D1E3A28000100000001 /* TideyNotificationStoreTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyNotificationStoreTests.m; sourceTree = "<group>"; };
-		F0A10D1E3A28000100000005 /* TideyCLICommandFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TideyCLICommandFormatter.swift; path = sources/TideyCLICommandFormatter.swift; sourceTree = SOURCE_ROOT; };
-		F0A10D1E3A28000100000007 /* TideyCLICommandFormatterTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyCLICommandFormatterTests.m; sourceTree = "<group>"; };
-		F0A10D1E3A2800010000000B /* TideyShellIntegrationConfigWriterTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyShellIntegrationConfigWriterTests.m; sourceTree = "<group>"; };
-		F0B420A13A6D000100000000 /* TideyRemoteBridgeInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TideyRemoteBridgeInstaller.swift; path = sources/TideyRemoteBridgeInstaller.swift; sourceTree = SOURCE_ROOT; };
-		F0B420A13A6D000100000002 /* TideyRemoteBridgeInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TideyRemoteBridgeInstallerTests.swift; sourceTree = "<group>"; };
-		F0C30D1E3A6E000100000001 /* TideyWorkspaceRestorationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TideyWorkspaceRestorationState.swift; path = sources/TideyWorkspaceRestorationState.swift; sourceTree = SOURCE_ROOT; };
-		F0C30D1E3A6E000100000003 /* TideyRestorationPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TideyRestorationPolicy.swift; path = sources/TideyRestorationPolicy.swift; sourceTree = SOURCE_ROOT; };
-		F0C30D1E3A6E000100000005 /* TideyRestorableStatePreflight.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TideyRestorableStatePreflight.swift; path = sources/TideyRestorableStatePreflight.swift; sourceTree = SOURCE_ROOT; };
-		F0C30D1E3A6E000100000007 /* TideyRestorableStateDirtyTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TideyRestorableStateDirtyTracker.swift; path = sources/TideyRestorableStateDirtyTracker.swift; sourceTree = SOURCE_ROOT; };
-		F0C30D1E3A6E000100000009 /* TideyRuntimeResumeDescriptor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TideyRuntimeResumeDescriptor.swift; path = sources/TideyRuntimeResumeDescriptor.swift; sourceTree = SOURCE_ROOT; };
-		F0C30D1E3A6E00010000000B /* TideyRuntimeRehydrationStateMachine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TideyRuntimeRehydrationStateMachine.swift; path = sources/TideyRuntimeRehydrationStateMachine.swift; sourceTree = SOURCE_ROOT; };
-		F0A10D1E3A28000100000010 /* TideySocketCommandDecoderTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySocketCommandDecoderTests.m; sourceTree = "<group>"; };
-		F0A10D1E3A28000100000012 /* MainMenuManglerTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MainMenuManglerTests.m; sourceTree = "<group>"; };
-		F0A10D1E3A28000100000014 /* iTermLayoutCalculatorTideyTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = iTermLayoutCalculatorTideyTests.m; sourceTree = "<group>"; };
-		F0A10D1E3A30000100000000 /* TideyCmdLongPressPanelHintsTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyCmdLongPressPanelHintsTests.m; sourceTree = "<group>"; };
-		F0A10D1E3A31000100000000 /* TideyEditorFileTreeWatcherTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyEditorFileTreeWatcherTests.m; sourceTree = "<group>"; };
-		F0A10D1E3A32000100000000 /* TideyEditorExternalChangeTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyEditorExternalChangeTests.m; sourceTree = "<group>"; };
-		F0A10D1E3A34000100000000 /* TideyRightPanelTabGroupingTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyRightPanelTabGroupingTests.m; sourceTree = "<group>"; };
-		TIDE7B00001A000000000000 /* TideyBrowserPanelTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyBrowserPanelTests.m; sourceTree = "<group>"; };
-		TIDEAPP0001A00000000000 /* TideyAppShortcutBehaviorTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyAppShortcutBehaviorTests.m; sourceTree = "<group>"; };
-		TIDEBOOT0001A00000000000 /* TideyFirstRunCompatibilityBootstrapTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyFirstRunCompatibilityBootstrapTests.m; sourceTree = "<group>"; };
-		TIDEMOUSE0001A00000000000 /* PTYMouseHandlerSelectionTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = PTYMouseHandlerSelectionTests.m; sourceTree = "<group>"; };
-		TIDESOCK0001A00000000000 /* TideySocketServerTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySocketServerTests.m; sourceTree = "<group>"; };
-		TIDECFG0001A00000000000 /* TideyReleaseConfigTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyReleaseConfigTests.m; sourceTree = "<group>"; };
-		F0A10D1E3A33000100000000 /* TideyLoginShellCommandTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyLoginShellCommandTests.m; sourceTree = "<group>"; };
-		F0A10D1E3A35000100000000 /* TideySidebarCloseButtonTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySidebarCloseButtonTests.m; sourceTree = "<group>"; };
-		F0A10D1E3A36000100000000 /* TideySessionFactoryLaunchCommandTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySessionFactoryLaunchCommandTests.m; sourceTree = "<group>"; };
 		A603E9FA283EE53C0028B648 /* SecretServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecretServer.swift; sourceTree = "<group>"; };
 		A603E9FC283EE9BD0028B648 /* ObjCExceptions.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ObjCExceptions.h; sourceTree = "<group>"; };
 		A603E9FD283EE9BD0028B648 /* ObjCExceptions.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = ObjCExceptions.m; sourceTree = "<group>"; };
@@ -7258,7 +7229,6 @@
 		A65B72AF1B33C07D00F947A7 /* NextTip.png */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; name = NextTip.png; path = images/NextTip.png; sourceTree = "<group>"; };
 		A65B72B01B33C07D00F947A7 /* NextTip@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; name = "NextTip@2x.png"; path = "images/NextTip@2x.png"; sourceTree = "<group>"; };
 		A65DF49A28491E5300AA29AB /* ShellIntegrationInjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellIntegrationInjection.swift; sourceTree = "<group>"; };
-		F0A10D1E3A28000100000009 /* TideyShellIntegrationConfigWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TideyShellIntegrationConfigWriter.swift; sourceTree = "<group>"; };
 		A65DF4A02849601A00AA29AB /* .zshenv */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; name = .zshenv; path = OtherResources/.zshenv; sourceTree = "<group>"; };
 		A65DF4A42849C11D00AA29AB /* bash-si-loader */ = {isa = PBXFileReference; lastKnownFileType = text; name = "bash-si-loader"; path = "OtherResources/bash-si-loader"; sourceTree = "<group>"; };
 		A65DF4A82849F2AA00AA29AB /* iterm2-shell-integration-loader.fish */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; name = "iterm2-shell-integration-loader.fish"; path = "OtherResources/vendor_conf.d/iterm2-shell-integration-loader.fish"; sourceTree = "<group>"; };
@@ -8062,7 +8032,6 @@
 		A6A3EDEB2E0DC6A400D711DA /* iTermBrowserMetadata.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iTermBrowserMetadata.swift; sourceTree = "<group>"; };
 		A6A453921FF318D8009FD3B7 /* iTermTexturePageCollection.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; name = iTermTexturePageCollection.mm; path = Metal/Renderers/iTermTexturePageCollection.mm; sourceTree = "<group>"; };
 		A6A479B62E6E58C000DCF16F /* AppIcon.png */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; name = AppIcon.png; path = images/AppIcon.png; sourceTree = "<group>"; };
-		00213A5956211FBDEDEAEF96 /* AppIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; name = AppIcon.icns; path = images/AppIcon.icns; sourceTree = "<group>"; };
 		A6A4B29F240B67A400184EAC /* PTYMouseHandler.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = PTYMouseHandler.h; sourceTree = "<group>"; };
 		A6A4B2A0240B67A400184EAC /* PTYMouseHandler.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = PTYMouseHandler.m; sourceTree = "<group>"; };
 		A6A4B2A42425D18D00184EAC /* iTermKeystroke.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = iTermKeystroke.h; sourceTree = "<group>"; };
@@ -9096,34 +9065,6 @@
 		A6F718CD2266E71E0053488E /* iTermUserDefaults.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = iTermUserDefaults.m; sourceTree = "<group>"; };
 		A6F718D5226704920053488E /* PTYSession+ARC.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "PTYSession+ARC.h"; sourceTree = "<group>"; };
 		A6F718D6226704920053488E /* PTYSession+ARC.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "PTYSession+ARC.m"; sourceTree = "<group>"; };
-		A7B100012F0A000100000001 /* TideyNotificationStore.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyNotificationStore.h; sourceTree = "<group>"; };
-		A7B100022F0A000100000001 /* TideyNotificationStore.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyNotificationStore.m; sourceTree = "<group>"; };
-		A7B100032F0A000100000001 /* TideySocketConnection.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideySocketConnection.h; sourceTree = "<group>"; };
-		A7B100042F0A000100000001 /* TideySocketConnection.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySocketConnection.m; sourceTree = "<group>"; };
-		A7B100052F0A000100000001 /* TideySocketServer.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideySocketServer.h; sourceTree = "<group>"; };
-		A7B100062F0A000100000001 /* TideySocketServer.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySocketServer.m; sourceTree = "<group>"; };
-		A7B100072F0A000100000001 /* TideyEditorExternalChangeWatcher.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyEditorExternalChangeWatcher.h; sourceTree = "<group>"; };
-		A7B100082F0A000100000001 /* TideyEditorExternalChangeWatcher.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyEditorExternalChangeWatcher.m; sourceTree = "<group>"; };
-		F0A10D1E3A2A000100000002 /* TideyEditorDocument.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyEditorDocument.h; sourceTree = "<group>"; };
-		F0A10D1E3A2A000100000004 /* TideyEditorDocument.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyEditorDocument.m; sourceTree = "<group>"; };
-		F0A10D1E3A2A000100000006 /* TideyEditorDocumentStore.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyEditorDocumentStore.h; sourceTree = "<group>"; };
-		F0A10D1E3A2A000100000008 /* TideyEditorDocumentStore.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyEditorDocumentStore.m; sourceTree = "<group>"; };
-		F0A10D1E3A2B000100000002 /* TideyFirstRunCompatibilityBootstrap.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyFirstRunCompatibilityBootstrap.h; sourceTree = "<group>"; };
-		F0A10D1E3A2B000100000004 /* TideyFirstRunCompatibilityBootstrap.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyFirstRunCompatibilityBootstrap.m; sourceTree = "<group>"; };
-		F0A10D1E3A29000100000002 /* TideyRightPanelPane.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyRightPanelPane.h; sourceTree = "<group>"; };
-		F0A10D1E3A29000100000004 /* TideyRightPanelPane.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyRightPanelPane.m; sourceTree = "<group>"; };
-		F0A10D1E3A40000100000002 /* TideyKeyboardShortcutsViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyKeyboardShortcutsViewController.h; sourceTree = "<group>"; };
-		F0A10D1E3A40000100000004 /* TideyKeyboardShortcutsViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyKeyboardShortcutsViewController.m; sourceTree = "<group>"; };
-		F0A10D1E3A40000100000006 /* TideySettingsWindowController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideySettingsWindowController.h; sourceTree = "<group>"; };
-		F0A10D1E3A40000100000008 /* TideySettingsWindowController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySettingsWindowController.m; sourceTree = "<group>"; };
-		F0A10D1E3A4000010000000E /* TideyTerminalAppearanceProfileAdapter.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyTerminalAppearanceProfileAdapter.h; sourceTree = "<group>"; };
-		F0A10D1E3A40000100000010 /* TideyTerminalAppearanceProfileAdapter.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyTerminalAppearanceProfileAdapter.m; sourceTree = "<group>"; };
-		F0A10D1E3A4000010000000A /* TideyTerminalAppearanceViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyTerminalAppearanceViewController.h; sourceTree = "<group>"; };
-		F0A10D1E3A4000010000000C /* TideyTerminalAppearanceViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyTerminalAppearanceViewController.m; sourceTree = "<group>"; };
-		F0A10D1E3A2800010000000D /* TideySocketCommandDecoder.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideySocketCommandDecoder.h; sourceTree = "<group>"; };
-		F0A10D1E3A2800010000000E /* TideySocketCommandDecoder.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySocketCommandDecoder.m; sourceTree = "<group>"; };
-		F0A10D1E3A50000100000002 /* TideyColorSwatchView.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyColorSwatchView.h; sourceTree = "<group>"; };
-		F0A10D1E3A50000100000004 /* TideyColorSwatchView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyColorSwatchView.m; sourceTree = "<group>"; };
 		A6F7A6EF213CB13D004DE961 /* StatusBarIconUser.png */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; name = StatusBarIconUser.png; path = images/StatusBarIcons/StatusBarIconUser.png; sourceTree = "<group>"; };
 		A6F7A6F0213CB13E004DE961 /* StatusBarIconNetwork.png */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; name = StatusBarIconNetwork.png; path = images/StatusBarIcons/StatusBarIconNetwork.png; sourceTree = "<group>"; };
 		A6F7A6F1213CB13E004DE961 /* StatusBarIconJobs.png */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; name = StatusBarIconJobs.png; path = images/StatusBarIcons/StatusBarIconJobs.png; sourceTree = "<group>"; };
@@ -9152,9 +9093,6 @@
 		A6F7D4B42E0340A80065D09C /* iTermBrowserViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iTermBrowserViewController.swift; sourceTree = "<group>"; };
 		A6F7D4B62E03424F0065D09C /* iTermBrowserToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iTermBrowserToolbar.swift; sourceTree = "<group>"; };
 		A6F7D4B82E034E2B0065D09C /* iTermBrowserManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iTermBrowserManager.swift; sourceTree = "<group>"; };
-		F041A0023C6B4E7A00A1B001 /* TideyBrowserEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TideyBrowserEngine.swift; sourceTree = "<group>"; };
-		F041A0043C6B4E7A00A1B001 /* TideyBrowserEngineHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TideyBrowserEngineHost.swift; sourceTree = "<group>"; };
-		F041A0063C6B4E7A00A1B001 /* iTermBrowserSessionEngineAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iTermBrowserSessionEngineAdapter.swift; sourceTree = "<group>"; };
 		A6F7D4BA2E0373110065D09C /* iTermBrowserErrorHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iTermBrowserErrorHandler.swift; sourceTree = "<group>"; };
 		A6F7D4BC2E037B4B0065D09C /* iTermBrowserSettingsHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iTermBrowserSettingsHandler.swift; sourceTree = "<group>"; };
 		A6F7D4BE2E037BB20065D09C /* iterm-browser-common.css */ = {isa = PBXFileReference; lastKnownFileType = text.css; path = "iterm-browser-common.css"; sourceTree = "<group>"; };
@@ -9264,6 +9202,14 @@
 		A6FFAE702CF123CC0031FB21 /* CoreTextLineRenderingHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreTextLineRenderingHelper.swift; sourceTree = "<group>"; };
 		A6FFAE722CF682B60031FB21 /* iTermDoubleWidthCharacterCache.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = iTermDoubleWidthCharacterCache.h; sourceTree = "<group>"; };
 		A6FFAE742CF682D40031FB21 /* iTermDoubleWidthCharacterCache.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = iTermDoubleWidthCharacterCache.m; sourceTree = "<group>"; };
+		A7B100012F0A000100000001 /* TideyNotificationStore.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyNotificationStore.h; sourceTree = "<group>"; };
+		A7B100022F0A000100000001 /* TideyNotificationStore.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyNotificationStore.m; sourceTree = "<group>"; };
+		A7B100032F0A000100000001 /* TideySocketConnection.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideySocketConnection.h; sourceTree = "<group>"; };
+		A7B100042F0A000100000001 /* TideySocketConnection.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySocketConnection.m; sourceTree = "<group>"; };
+		A7B100052F0A000100000001 /* TideySocketServer.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideySocketServer.h; sourceTree = "<group>"; };
+		A7B100062F0A000100000001 /* TideySocketServer.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySocketServer.m; sourceTree = "<group>"; };
+		A7B100072F0A000100000001 /* TideyEditorExternalChangeWatcher.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyEditorExternalChangeWatcher.h; sourceTree = "<group>"; };
+		A7B100082F0A000100000001 /* TideyEditorExternalChangeWatcher.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyEditorExternalChangeWatcher.m; sourceTree = "<group>"; };
 		AE6718DDCFD2CA382391CDFD /* iTermScreenshotPreviewOverlay.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = iTermScreenshotPreviewOverlay.swift; sourceTree = "<group>"; };
 		AF19E441FF824539A275D8DA /* iTermLayoutCalculator.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = iTermLayoutCalculator.m; sourceTree = "<group>"; };
 		B231EDB860248C368A511B42 /* iTermEventTriggerEvaluator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = iTermEventTriggerEvaluator.swift; sourceTree = "<group>"; };
@@ -9293,6 +9239,7 @@
 		DDF0FD64062916F70080EF74 /* iTermApplication.m */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 4; lastKnownFileType = sourcecode.c.objc; lineEnding = 0; path = iTermApplication.m; sourceTree = "<group>"; tabWidth = 4; xcLanguageSpecificationIdentifier = xcode.lang.objc; };
 		DE7B0AE10E1598EDE1E01795 /* iTermEventTriggerParameterView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = iTermEventTriggerParameterView.swift; sourceTree = "<group>"; };
 		E188B891EEA2947C8B12466D /* iTermCharacterSourceTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = iTermCharacterSourceTests.swift; sourceTree = "<group>"; };
+		E2373E98F2FAB30D5EE949AA /* TideySidebarStatusRefreshPolicyTests.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = TideySidebarStatusRefreshPolicyTests.m; sourceTree = "<group>"; };
 		E7E1E38CBCE5463DA81CC1CF /* ButtonPillInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ButtonPillInfo.swift; sourceTree = "<group>"; };
 		E8741F82F6611DA66E83C465 /* AsyncFilterTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AsyncFilterTests.swift; sourceTree = "<group>"; };
 		E8A66F030272453F03A80106 /* iTermController.m */ = {isa = PBXFileReference; fileEncoding = 30; indentWidth = 4; lastKnownFileType = sourcecode.c.objc; lineEnding = 0; path = iTermController.m; sourceTree = "<group>"; tabWidth = 4; xcLanguageSpecificationIdentifier = xcode.lang.objc; };
@@ -9304,6 +9251,54 @@
 		E8CF757F026DDAD703A80106 /* main.m */ = {isa = PBXFileReference; fileEncoding = 30; indentWidth = 4; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = "<group>"; tabWidth = 4; };
 		E8E901A202743CA303A80106 /* NSStringITerm.m */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 4; lastKnownFileType = sourcecode.c.objc; path = NSStringITerm.m; sourceTree = "<group>"; tabWidth = 4; };
 		ED49EE365D629DAE80503BFD /* iTermNonTextPasteHelper.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = iTermNonTextPasteHelper.swift; path = sources/iTermNonTextPasteHelper.swift; sourceTree = SOURCE_ROOT; };
+		F041A0023C6B4E7A00A1B001 /* TideyBrowserEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TideyBrowserEngine.swift; sourceTree = "<group>"; };
+		F041A0043C6B4E7A00A1B001 /* TideyBrowserEngineHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TideyBrowserEngineHost.swift; sourceTree = "<group>"; };
+		F041A0063C6B4E7A00A1B001 /* iTermBrowserSessionEngineAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iTermBrowserSessionEngineAdapter.swift; sourceTree = "<group>"; };
+		F0A10D1E3A28000100000001 /* TideyNotificationStoreTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyNotificationStoreTests.m; sourceTree = "<group>"; };
+		F0A10D1E3A28000100000003 /* TideyStatusStoreTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyStatusStoreTests.m; sourceTree = "<group>"; };
+		F0A10D1E3A28000100000005 /* TideyCLICommandFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TideyCLICommandFormatter.swift; path = sources/TideyCLICommandFormatter.swift; sourceTree = SOURCE_ROOT; };
+		F0A10D1E3A28000100000007 /* TideyCLICommandFormatterTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyCLICommandFormatterTests.m; sourceTree = "<group>"; };
+		F0A10D1E3A28000100000009 /* TideyShellIntegrationConfigWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TideyShellIntegrationConfigWriter.swift; sourceTree = "<group>"; };
+		F0A10D1E3A2800010000000B /* TideyShellIntegrationConfigWriterTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyShellIntegrationConfigWriterTests.m; sourceTree = "<group>"; };
+		F0A10D1E3A2800010000000D /* TideySocketCommandDecoder.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideySocketCommandDecoder.h; sourceTree = "<group>"; };
+		F0A10D1E3A2800010000000E /* TideySocketCommandDecoder.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySocketCommandDecoder.m; sourceTree = "<group>"; };
+		F0A10D1E3A28000100000010 /* TideySocketCommandDecoderTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySocketCommandDecoderTests.m; sourceTree = "<group>"; };
+		F0A10D1E3A28000100000012 /* MainMenuManglerTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MainMenuManglerTests.m; sourceTree = "<group>"; };
+		F0A10D1E3A28000100000014 /* iTermLayoutCalculatorTideyTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = iTermLayoutCalculatorTideyTests.m; sourceTree = "<group>"; };
+		F0A10D1E3A28000100000016 /* TideyClaudeStatusPipelineTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyClaudeStatusPipelineTests.m; sourceTree = "<group>"; };
+		F0A10D1E3A29000100000002 /* TideyRightPanelPane.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyRightPanelPane.h; sourceTree = "<group>"; };
+		F0A10D1E3A29000100000004 /* TideyRightPanelPane.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyRightPanelPane.m; sourceTree = "<group>"; };
+		F0A10D1E3A2A000100000002 /* TideyEditorDocument.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyEditorDocument.h; sourceTree = "<group>"; };
+		F0A10D1E3A2A000100000004 /* TideyEditorDocument.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyEditorDocument.m; sourceTree = "<group>"; };
+		F0A10D1E3A2A000100000006 /* TideyEditorDocumentStore.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyEditorDocumentStore.h; sourceTree = "<group>"; };
+		F0A10D1E3A2A000100000008 /* TideyEditorDocumentStore.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyEditorDocumentStore.m; sourceTree = "<group>"; };
+		F0A10D1E3A2B000100000002 /* TideyFirstRunCompatibilityBootstrap.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyFirstRunCompatibilityBootstrap.h; sourceTree = "<group>"; };
+		F0A10D1E3A2B000100000004 /* TideyFirstRunCompatibilityBootstrap.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyFirstRunCompatibilityBootstrap.m; sourceTree = "<group>"; };
+		F0A10D1E3A30000100000000 /* TideyCmdLongPressPanelHintsTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyCmdLongPressPanelHintsTests.m; sourceTree = "<group>"; };
+		F0A10D1E3A31000100000000 /* TideyEditorFileTreeWatcherTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyEditorFileTreeWatcherTests.m; sourceTree = "<group>"; };
+		F0A10D1E3A32000100000000 /* TideyEditorExternalChangeTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyEditorExternalChangeTests.m; sourceTree = "<group>"; };
+		F0A10D1E3A33000100000000 /* TideyLoginShellCommandTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyLoginShellCommandTests.m; sourceTree = "<group>"; };
+		F0A10D1E3A34000100000000 /* TideyRightPanelTabGroupingTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyRightPanelTabGroupingTests.m; sourceTree = "<group>"; };
+		F0A10D1E3A35000100000000 /* TideySidebarCloseButtonTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySidebarCloseButtonTests.m; sourceTree = "<group>"; };
+		F0A10D1E3A36000100000000 /* TideySessionFactoryLaunchCommandTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySessionFactoryLaunchCommandTests.m; sourceTree = "<group>"; };
+		F0A10D1E3A40000100000002 /* TideyKeyboardShortcutsViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyKeyboardShortcutsViewController.h; sourceTree = "<group>"; };
+		F0A10D1E3A40000100000004 /* TideyKeyboardShortcutsViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyKeyboardShortcutsViewController.m; sourceTree = "<group>"; };
+		F0A10D1E3A40000100000006 /* TideySettingsWindowController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideySettingsWindowController.h; sourceTree = "<group>"; };
+		F0A10D1E3A40000100000008 /* TideySettingsWindowController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySettingsWindowController.m; sourceTree = "<group>"; };
+		F0A10D1E3A4000010000000A /* TideyTerminalAppearanceViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyTerminalAppearanceViewController.h; sourceTree = "<group>"; };
+		F0A10D1E3A4000010000000C /* TideyTerminalAppearanceViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyTerminalAppearanceViewController.m; sourceTree = "<group>"; };
+		F0A10D1E3A4000010000000E /* TideyTerminalAppearanceProfileAdapter.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyTerminalAppearanceProfileAdapter.h; sourceTree = "<group>"; };
+		F0A10D1E3A40000100000010 /* TideyTerminalAppearanceProfileAdapter.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyTerminalAppearanceProfileAdapter.m; sourceTree = "<group>"; };
+		F0A10D1E3A50000100000002 /* TideyColorSwatchView.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyColorSwatchView.h; sourceTree = "<group>"; };
+		F0A10D1E3A50000100000004 /* TideyColorSwatchView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyColorSwatchView.m; sourceTree = "<group>"; };
+		F0B420A13A6D000100000000 /* TideyRemoteBridgeInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TideyRemoteBridgeInstaller.swift; path = sources/TideyRemoteBridgeInstaller.swift; sourceTree = SOURCE_ROOT; };
+		F0B420A13A6D000100000002 /* TideyRemoteBridgeInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TideyRemoteBridgeInstallerTests.swift; sourceTree = "<group>"; };
+		F0C30D1E3A6E000100000001 /* TideyWorkspaceRestorationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TideyWorkspaceRestorationState.swift; path = sources/TideyWorkspaceRestorationState.swift; sourceTree = SOURCE_ROOT; };
+		F0C30D1E3A6E000100000003 /* TideyRestorationPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TideyRestorationPolicy.swift; path = sources/TideyRestorationPolicy.swift; sourceTree = SOURCE_ROOT; };
+		F0C30D1E3A6E000100000005 /* TideyRestorableStatePreflight.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TideyRestorableStatePreflight.swift; path = sources/TideyRestorableStatePreflight.swift; sourceTree = SOURCE_ROOT; };
+		F0C30D1E3A6E000100000007 /* TideyRestorableStateDirtyTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TideyRestorableStateDirtyTracker.swift; path = sources/TideyRestorableStateDirtyTracker.swift; sourceTree = SOURCE_ROOT; };
+		F0C30D1E3A6E000100000009 /* TideyRuntimeResumeDescriptor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TideyRuntimeResumeDescriptor.swift; path = sources/TideyRuntimeResumeDescriptor.swift; sourceTree = SOURCE_ROOT; };
+		F0C30D1E3A6E00010000000B /* TideyRuntimeRehydrationStateMachine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TideyRuntimeRehydrationStateMachine.swift; path = sources/TideyRuntimeRehydrationStateMachine.swift; sourceTree = SOURCE_ROOT; };
 		F10731A1F54B9BF72FBAC682 /* Box.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Box.swift; sourceTree = "<group>"; };
 		F5145BCC5773DB25978071C5 /* iTermScreenshotLineRangeView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = iTermScreenshotLineRangeView.swift; sourceTree = "<group>"; };
 		F52ED8DD037F0A7D01A8A066 /* PTYSession.m */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 4; lastKnownFileType = sourcecode.c.objc; lineEnding = 0; path = PTYSession.m; sourceTree = "<group>"; tabWidth = 4; xcLanguageSpecificationIdentifier = xcode.lang.objc; };
@@ -9342,14 +9337,19 @@
 		FB896717038D935801F955DB /* newwin.png */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; name = newwin.png; path = images/newwin.png; sourceTree = "<group>"; };
 		FBB2EBCD040AC7C201F955DB /* important.png */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; name = important.png; path = images/important.png; sourceTree = "<group>"; };
 		FBD0AD0A0337A5B701F955DB /* PseudoTerminal.m */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 4; lastKnownFileType = sourcecode.c.objc; lineEnding = 0; path = PseudoTerminal.m; sourceTree = "<group>"; tabWidth = 4; xcLanguageSpecificationIdentifier = xcode.lang.objc; };
-		T1DEY00001BIN0CLAUDE0001 /* claude */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = claude; sourceTree = "<group>"; };
+		T1DEY00001BIN0CDXHOOK001 /* codex-hook-dispatch */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "codex-hook-dispatch"; sourceTree = "<group>"; };
 		T1DEY00001BIN0CLAHARG001 /* claude-hook-argv-session-id */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "claude-hook-argv-session-id"; sourceTree = "<group>"; };
 		T1DEY00001BIN0CLAHDSP001 /* claude-hook-dispatch */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "claude-hook-dispatch"; sourceTree = "<group>"; };
 		T1DEY00001BIN0CLAHJRN001 /* claude-hook-journal-lifecycle */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "claude-hook-journal-lifecycle"; sourceTree = "<group>"; };
-		T1DEY00001BIN0CDXHOOK001 /* codex-hook-dispatch */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "codex-hook-dispatch"; sourceTree = "<group>"; };
+		T1DEY00001BIN0CLAUDE0001 /* claude */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = claude; sourceTree = "<group>"; };
 		T1DEY00001BIN0CODEX0001 /* codex */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = codex; sourceTree = "<group>"; };
 		T1DEY00001BIN0TMUXID0001 /* tidey-tmux-pane-identity */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "tidey-tmux-pane-identity"; sourceTree = "<group>"; };
-
+		TIDE7B00001A000000000000 /* TideyBrowserPanelTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyBrowserPanelTests.m; sourceTree = "<group>"; };
+		TIDEAPP0001A00000000000 /* TideyAppShortcutBehaviorTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyAppShortcutBehaviorTests.m; sourceTree = "<group>"; };
+		TIDEBOOT0001A00000000000 /* TideyFirstRunCompatibilityBootstrapTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyFirstRunCompatibilityBootstrapTests.m; sourceTree = "<group>"; };
+		TIDECFG0001A00000000000 /* TideyReleaseConfigTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyReleaseConfigTests.m; sourceTree = "<group>"; };
+		TIDEMOUSE0001A00000000000 /* PTYMouseHandlerSelectionTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = PTYMouseHandlerSelectionTests.m; sourceTree = "<group>"; };
+		TIDESOCK0001A00000000000 /* TideySocketServerTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySocketServerTests.m; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -11509,20 +11509,6 @@
 				A629F57823AF2DD900C2F16B /* utilities.tgz */,
 			);
 			path = utilities;
-			sourceTree = "<group>";
-		};
-		T1DEY00003BIN0GROUP00001 /* bin */ = {
-			isa = PBXGroup;
-			children = (
-				T1DEY00001BIN0CLAUDE0001 /* claude */,
-				T1DEY00001BIN0CLAHARG001 /* claude-hook-argv-session-id */,
-				T1DEY00001BIN0CLAHDSP001 /* claude-hook-dispatch */,
-				T1DEY00001BIN0CLAHJRN001 /* claude-hook-journal-lifecycle */,
-				T1DEY00001BIN0CDXHOOK001 /* codex-hook-dispatch */,
-				T1DEY00001BIN0CODEX0001 /* codex */,
-				T1DEY00001BIN0TMUXID0001 /* tidey-tmux-pane-identity */,
-			);
-			path = bin;
 			sourceTree = "<group>";
 		};
 		A629F59423AFF47300C2F16B /* Shell Integration Installer */ = {
@@ -13789,6 +13775,7 @@
 				F0A10D1E3A33000100000000 /* TideyLoginShellCommandTests.m */,
 				F0A10D1E3A35000100000000 /* TideySidebarCloseButtonTests.m */,
 				F0A10D1E3A36000100000000 /* TideySessionFactoryLaunchCommandTests.m */,
+				E2373E98F2FAB30D5EE949AA /* TideySidebarStatusRefreshPolicyTests.m */,
 			);
 			path = iTerm2XCTests;
 			sourceTree = "<group>";
@@ -14850,6 +14837,20 @@
 				49A6E4081211CC6000D9AD6F /* Compatability.h */,
 			);
 			path = CGSInternal;
+			sourceTree = "<group>";
+		};
+		T1DEY00003BIN0GROUP00001 /* bin */ = {
+			isa = PBXGroup;
+			children = (
+				T1DEY00001BIN0CLAUDE0001 /* claude */,
+				T1DEY00001BIN0CLAHARG001 /* claude-hook-argv-session-id */,
+				T1DEY00001BIN0CLAHDSP001 /* claude-hook-dispatch */,
+				T1DEY00001BIN0CLAHJRN001 /* claude-hook-journal-lifecycle */,
+				T1DEY00001BIN0CDXHOOK001 /* codex-hook-dispatch */,
+				T1DEY00001BIN0CODEX0001 /* codex */,
+				T1DEY00001BIN0TMUXID0001 /* tidey-tmux-pane-identity */,
+			);
+			path = bin;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -20421,6 +20422,7 @@
 				A78BC63A048881BDA2FB4F38 /* FIFOQueueTests.swift in Sources */,
 				A34452991BBAE7EC73F6F1A4 /* IntervalTreeSmallestLocationBugTests.swift in Sources */,
 				63784809C4F1C06074729416 /* IntervalTreeForwardLocationEnumeratorTests.swift in Sources */,
+				FF77847D9D838865BB1E1327 /* TideySidebarStatusRefreshPolicyTests.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

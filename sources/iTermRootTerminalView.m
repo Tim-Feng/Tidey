@@ -6516,6 +6516,16 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     [self reloadTideySidebar];
 }
 
++ (BOOL)tideyShouldTargetSidebarStatusRefreshForWorkspaceIdentifier:(NSString *)workspaceIdentifier
+                                                        resolvedRow:(NSInteger)resolvedRow
+                                                   tableColumnCount:(NSInteger)tableColumnCount {
+    // Structural seam. The targeted policy is enabled by its behavioral change.
+    (void)workspaceIdentifier;
+    (void)resolvedRow;
+    (void)tableColumnCount;
+    return NO;
+}
+
 - (void)layoutTideySidebar {
     const CGFloat width = self.tideySidebarWidth;
     _tideySidebarView.hidden = (width <= 0);
