@@ -30,4 +30,10 @@
                                                                                     tableColumnCount:0]);
 }
 
+- (void)testSpecificWorkspaceTargetsOneVariableHeightRow {
+    XCTAssertTrue([iTermRootTerminalView tideyShouldTargetSidebarStatusRefreshForWorkspaceIdentifier:@"workspace-1"
+                                                                                        resolvedRow:3
+                                                                                   tableColumnCount:1]);
+}
+
 @end

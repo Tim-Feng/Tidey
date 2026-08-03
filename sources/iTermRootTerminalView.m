@@ -6511,7 +6511,25 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
 }
 
 - (void)tideyStatusStoreDidChange:(NSNotification *)notification {
-    (void)notification;
+    NSString *workspaceIdentifier = notification.userInfo[@"workspaceID"];
+    NSInteger row = [self tideySidebarWorkspaceIndexForIdentifier:workspaceIdentifier];
+    NSInteger tableColumnCount = _tideySidebarTableView.tableColumns.count;
+    if ([[self class] tideyShouldTargetSidebarStatusRefreshForWorkspaceIdentifier:workspaceIdentifier
+                                                                      resolvedRow:row
+                                                                 tableColumnCount:tableColumnCount]) {
+        NSIndexSet *rowIndexes = [NSIndexSet indexSetWithIndex:row];
+        NSIndexSet *columnIndexes = [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, tableColumnCount)];
+        [_tideySidebarTableView noteHeightOfRowsWithIndexesChanged:rowIndexes];
+        [_tideySidebarTableView reloadDataForRowIndexes:rowIndexes columnIndexes:columnIndexes];
+        [self syncTideySidebarSelection];
+        [self layoutTideySidebar];
+        if ([_tideySidebarTableView isKindOfClass:[TideySidebarTableView class]]) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [(TideySidebarTableView *)self->_tideySidebarTableView updateTideyCloseButtonVisibility];
+            });
+        }
+        return;
+    }
     [self layoutTideySidebar];
     [self reloadTideySidebar];
 }
@@ -6519,11 +6537,11 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
 + (BOOL)tideyShouldTargetSidebarStatusRefreshForWorkspaceIdentifier:(NSString *)workspaceIdentifier
                                                         resolvedRow:(NSInteger)resolvedRow
                                                    tableColumnCount:(NSInteger)tableColumnCount {
-    // Structural seam. The targeted policy is enabled by its behavioral change.
-    (void)workspaceIdentifier;
-    (void)resolvedRow;
-    (void)tableColumnCount;
-    return NO;
+    return workspaceIdentifier.length > 0 &&
+           ![workspaceIdentifier isEqualToString:@"*"] &&
+           resolvedRow != NSNotFound &&
+           resolvedRow >= 0 &&
+           tableColumnCount > 0;
 }
 
 - (void)layoutTideySidebar {
