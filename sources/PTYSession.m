@@ -7580,6 +7580,11 @@ static NSString *const PTYSessionComposerPrefixUserDataKeyDetectedByTrigger = @"
     }
 }
 
++ (BOOL)tideyShouldFlushDeferredMetalRedrawForNotificationObject:(id)notificationObject
+                                                     parentWindow:(id)parentWindow {
+    return notificationObject != nil && notificationObject == parentWindow;
+}
+
 - (void)activeSpaceDidChange:(NSNotification *)notification {
     DLog(@"activeSpaceDidChange for %@", self);
     if (_alertOnMarksinOffscreenSessions) {

@@ -137,6 +137,7 @@ NSString *const SessionViewWasSelectedForInspectionNotification = @"SessionViewW
     NSRect _urlAnchorFrame;
 
     BOOL _useMetal;
+    BOOL _tideyDeferredMetalRedraw;
     iTermMetalClipView *_metalClipView;
     iTermDropDownFindViewController *_dropDownFindViewController;
     iTermFindDriver *_dropDownFindDriver;
@@ -898,16 +899,36 @@ NSString *const SessionViewWasSelectedForInspectionNotification = @"SessionViewW
 }
 
 - (void)requestRedraw {
-    if (_useMetal) {
-        // TODO: Would be nice to draw only the rect, but I don't see a way to do that with iTermMTKView
-        // that doesn't involve doing something nutty like saving a copy of the drawable.
-        [_metalView setNeedsDisplay:YES];
-        [_scrollview setNeedsDisplay:YES];
+    if ([self tideyUsesMetalForRedraw]) {
+        [self tideyInvalidateMetalRedraw];
     }
 
     // Legacy view is hidden when metal is enabled, but when temporarily disabling metal you can get
     // here while _useMetal is YES and _legacyView is also NOT hidden. Issue 9587.
     [_legacyView setNeedsDisplay:YES];
+}
+
+- (BOOL)tideyUsesMetalForRedraw {
+    return _useMetal;
+}
+
+- (BOOL)tideyWindowIsMiniaturized {
+    return self.window.isMiniaturized;
+}
+
+- (void)tideyInvalidateMetalRedraw {
+    // TODO: Would be nice to draw only the rect, but I don't see a way to do that with iTermMTKView
+    // that doesn't involve doing something nutty like saving a copy of the drawable.
+    [_metalView setNeedsDisplay:YES];
+    [_scrollview setNeedsDisplay:YES];
+}
+
+- (BOOL)tideyHasDeferredMetalRedraw {
+    return _tideyDeferredMetalRedraw;
+}
+
+- (void)tideyFlushDeferredMetalRedrawIfVisible {
+    // Structural seam. The minimized-window behavior is enabled separately.
 }
 
 - (void)didChangeMetalViewAlpha {

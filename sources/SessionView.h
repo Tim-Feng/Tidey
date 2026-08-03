@@ -250,6 +250,11 @@ typedef NS_ENUM(NSUInteger, iTermSessionViewFindDriver) {
 + (void)windowDidResize;
 
 - (void)requestRedraw;
+- (BOOL)tideyUsesMetalForRedraw;
+- (BOOL)tideyWindowIsMiniaturized;
+- (void)tideyInvalidateMetalRedraw;
+- (BOOL)tideyHasDeferredMetalRedraw;
+- (void)tideyFlushDeferredMetalRedrawIfVisible;
 
 - (void)setDimmed:(BOOL)isDimmed;
 - (void)setBackgroundDimmed:(BOOL)backgroundDimmed;

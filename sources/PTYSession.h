@@ -354,6 +354,8 @@ backgroundColor:(NSColor *)backgroundColor;
     PTYTextViewDelegate,
     TmuxGatewayDelegate,
     VT100ScreenDelegate>
++ (BOOL)tideyShouldFlushDeferredMetalRedrawForNotificationObject:(id)notificationObject
+                                                     parentWindow:(id)parentWindow;
 @property(nonatomic, assign) id<PTYSessionDelegate> delegate;
 
 // A session is active when it's in a visible tab and it needs periodic redraws (something is
