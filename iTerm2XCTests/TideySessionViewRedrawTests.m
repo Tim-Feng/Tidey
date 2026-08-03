@@ -57,4 +57,38 @@
                                                                            parentWindow:nil]);
 }
 
+- (void)testMinimizedMetalRedrawDefersAndFlushesOnceAfterOwnWindowRestores {
+    TideySessionViewRedrawTestView *view = [[TideySessionViewRedrawTestView alloc] initWithFrame:NSZeroRect];
+    view.fakeUsesMetal = YES;
+    view.fakeWindowIsMiniaturized = YES;
+
+    [view requestRedraw];
+    [view requestRedraw];
+
+    XCTAssertEqual(view.metalInvalidationCount, 0);
+    XCTAssertTrue(view.tideyHasDeferredMetalRedraw);
+
+    view.fakeWindowIsMiniaturized = NO;
+    [view tideyFlushDeferredMetalRedrawIfVisible];
+
+    XCTAssertEqual(view.metalInvalidationCount, 1);
+    XCTAssertFalse(view.tideyHasDeferredMetalRedraw);
+
+    [view tideyFlushDeferredMetalRedrawIfVisible];
+
+    XCTAssertEqual(view.metalInvalidationCount, 1);
+}
+
+- (void)testFlushWhileStillMiniaturizedKeepsPendingRedraw {
+    TideySessionViewRedrawTestView *view = [[TideySessionViewRedrawTestView alloc] initWithFrame:NSZeroRect];
+    view.fakeUsesMetal = YES;
+    view.fakeWindowIsMiniaturized = YES;
+
+    [view requestRedraw];
+    [view tideyFlushDeferredMetalRedrawIfVisible];
+
+    XCTAssertEqual(view.metalInvalidationCount, 0);
+    XCTAssertTrue(view.tideyHasDeferredMetalRedraw);
+}
+
 @end

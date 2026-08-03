@@ -1282,6 +1282,10 @@ typedef NS_ENUM(NSUInteger, PTYSessionTurdType) {
                                                      name:@"iTermWindowWillMiniaturize"
                                                    object:nil];
         [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(windowDidDeminiaturize:)
+                                                     name:@"iTermWindowDidDeminiaturize"
+                                                   object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
                                                  selector:@selector(autoComposerDidChange:)
                                                      name:iTermAutoComposerDidChangeNotification
                                                    object:nil];
@@ -7578,6 +7582,15 @@ static NSString *const PTYSessionComposerPrefixUserDataKeyDetectedByTrigger = @"
     if (_alertOnMarksinOffscreenSessions) {
         [self sync];
     }
+}
+
+- (void)windowDidDeminiaturize:(NSNotification *)notification {
+    id parentWindow = self.delegate.realParentWindow;
+    if (![[self class] tideyShouldFlushDeferredMetalRedrawForNotificationObject:notification.object
+                                                                   parentWindow:parentWindow]) {
+        return;
+    }
+    [self.view tideyFlushDeferredMetalRedrawIfVisible];
 }
 
 + (BOOL)tideyShouldFlushDeferredMetalRedrawForNotificationObject:(id)notificationObject

@@ -900,7 +900,11 @@ NSString *const SessionViewWasSelectedForInspectionNotification = @"SessionViewW
 
 - (void)requestRedraw {
     if ([self tideyUsesMetalForRedraw]) {
-        [self tideyInvalidateMetalRedraw];
+        if ([self tideyWindowIsMiniaturized]) {
+            _tideyDeferredMetalRedraw = YES;
+        } else {
+            [self tideyInvalidateMetalRedraw];
+        }
     }
 
     // Legacy view is hidden when metal is enabled, but when temporarily disabling metal you can get
@@ -928,7 +932,14 @@ NSString *const SessionViewWasSelectedForInspectionNotification = @"SessionViewW
 }
 
 - (void)tideyFlushDeferredMetalRedrawIfVisible {
-    // Structural seam. The minimized-window behavior is enabled separately.
+    if (!_tideyDeferredMetalRedraw || [self tideyWindowIsMiniaturized]) {
+        return;
+    }
+
+    _tideyDeferredMetalRedraw = NO;
+    if ([self tideyUsesMetalForRedraw]) {
+        [self tideyInvalidateMetalRedraw];
+    }
 }
 
 - (void)didChangeMetalViewAlpha {
