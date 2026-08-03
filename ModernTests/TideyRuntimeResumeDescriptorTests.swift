@@ -646,6 +646,21 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
         )
     }
 
+    func testManagedRestoreAutoCloseSuppressionIsOneShot() throws {
+        let session = try XCTUnwrap(PTYSession(synthetic: true))
+
+        XCTAssertFalse(session.tideyAwaitingFirstManagedRelaunchOutcome)
+        session.tideyPrepareForManagedRestoreRelaunch()
+        XCTAssertTrue(session.tideyAwaitingFirstManagedRelaunchOutcome)
+        XCTAssertTrue(
+            session.tideyConsumeManagedRestoreAutoCloseSuppression()
+        )
+        XCTAssertFalse(session.tideyAwaitingFirstManagedRelaunchOutcome)
+        XCTAssertFalse(
+            session.tideyConsumeManagedRestoreAutoCloseSuppression()
+        )
+    }
+
     func testBrokenPipeCallbackCarriesOriginatingTaskSeam() throws {
         let session = try XCTUnwrap(PTYSession(synthetic: true))
 

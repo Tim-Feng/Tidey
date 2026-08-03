@@ -4692,23 +4692,25 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
         [self forceTmuxDetach];
     }
     [self appendBrokenPipeMessage:message];
-    switch (self.endAction) {
-        case iTermSessionEndActionClose:
-            if ([_delegate sessionShouldAutoClose:self]) {
-                [_delegate closeSession:self];
-                return;
-            }
-            break;
+    if (![self tideyConsumeManagedRestoreAutoCloseSuppression]) {
+        switch (self.endAction) {
+            case iTermSessionEndActionClose:
+                if ([_delegate sessionShouldAutoClose:self]) {
+                    [_delegate closeSession:self];
+                    return;
+                }
+                break;
 
-        case iTermSessionEndActionRestart:
-            if ([self isRestartable]) {
-                [self performSelector:@selector(maybeReplaceTerminatedShellWithNewInstance) withObject:nil afterDelay:1];
-                return;
-            }
-            break;
+            case iTermSessionEndActionRestart:
+                if ([self isRestartable]) {
+                    [self performSelector:@selector(maybeReplaceTerminatedShellWithNewInstance) withObject:nil afterDelay:1];
+                    return;
+                }
+                break;
 
-        case iTermSessionEndActionDefault:
-            break;
+            case iTermSessionEndActionDefault:
+                break;
+        }
     }
 
     // Offer to restart the session by rerunning its program.
@@ -6302,6 +6304,7 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
                                  viewSize:_screen.viewSize
                               scaleFactor:self.backingScaleFactor];
     [self resetForRelaunch];
+    _tideyAwaitingFirstManagedRelaunchOutcome = YES;
 }
 
 - (void)setTermVariable:(NSString *)termVariable terminal:(VT100Terminal *)terminal {
