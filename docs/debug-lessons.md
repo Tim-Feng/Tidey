@@ -48,10 +48,11 @@
 - 跨 process / tmux / launchd 問題第二輪還沒收斂就先加 runtime log
   - workspace ghost 和 tmux cleanup 這次都先盲修了不只一輪，直到補 `/tmp/tidey-bridge-codex.log` 和 `[TideyTmuxCleanup]` 才看到真正斷點
   - 先記 command、PATH、socket path、workspace/panel id、exit status、stderr，再決定要改哪條流程
-- 要加 debug 時優先寫 `/tmp/`
-  - Tidey `NSLog` 不會進 macOS unified log stream：`log stream --predicate 'process == "Tidey"'` 抓不到任何東西
-  - 原因：macOS 對第三方 app log 預設標為 private，被系統 redact 掉
-  - 用 `fopen("/tmp/tidey-xxx.log", "a")` + `fprintf` 最穩，log 看完就刪
+- hot path debug log 不能靠換 macro 當 production 降噪
+  - 2026-08 native restoration 實機驗證中，Deployment build 的 `DLog` 與 `NSLog` 都進了 macOS unified log；把三個 `NSLog` 改成 `DLog` 後，啟動仍產生約 19,000 筆 `ensure_workspaces` 記錄
+  - workspace／panel summary、layout、render 與 polling 這類高頻路徑，debug 完成後要直接移除 log，或做明確 opt-in gate／rate limit；不能假設 build configuration 會替你消音
+  - 驗收要以實際 production app 的 log 數量、CPU sample 與啟動後穩態為準，不能只看 source macro 或測試 build
+  - 短期跨 process 診斷仍可優先寫 `/tmp/`，例如用 `fopen("/tmp/tidey-xxx.log", "a")` + `fprintf`；結案時一樣要移除或關閉
 
 ## UI / Layout
 
