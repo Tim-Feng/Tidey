@@ -2,8 +2,18 @@
 
 #import "iTerm2SharedARC-Swift.h"
 #import "iTermPreferences.h"
+#import "iTermRestorableStateController.h"
 #import "iTermRestorableStateDriver.h"
 #import "iTermWarning.h"
+
+@interface iTermRestorableStateController (TideyHydrationTesting)
+- (instancetype)initWithDriverForTesting:
+    (iTermRestorableStateDriver *)driver;
+- (void)tideyBeginHydrationTracking;
+- (void)tideyCompleteHydrationTracking;
+- (BOOL)tideyHydrationComplete;
+- (void)tideyNotifyWhenHydrationCompletes:(void (^)(void))completion;
+@end
 
 @interface TideyNativeRestorableStateIndexSpy : NSObject <iTermRestorableStateIndex>
 @property(nonatomic, strong) TideyRestorableStatePreflight *preflight;
@@ -144,6 +154,20 @@
 @end
 
 @implementation TideyRestorableStateDriverTests
+
+- (void)testHydrationGateSeamsCompile {
+    iTermRestorableStateDriver *driver =
+        [[iTermRestorableStateDriver alloc] init];
+    iTermRestorableStateController *controller =
+        [[iTermRestorableStateController alloc]
+            initWithDriverForTesting:driver];
+
+    XCTAssertTrue([controller tideyHydrationComplete]);
+    [controller tideyBeginHydrationTracking];
+    XCTAssertFalse([controller tideyHydrationComplete]);
+    [controller tideyCompleteHydrationTracking];
+    XCTAssertTrue([controller tideyHydrationComplete]);
+}
 
 - (void)testBlankLaunchErasesRejectedStateAndDiscardsMatchingOrphanJobs {
     const BOOL previousPreference =

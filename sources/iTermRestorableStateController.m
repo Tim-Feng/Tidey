@@ -70,6 +70,13 @@ extern NSString *const iTermApplicationWillTerminate;
 @interface iTermRestorableStateController()<iTermRestorableStateRestoring,
                                              iTermRestorableStateSaving,
                                              TideyRestorableStatePeriodicSaveRequesting>
+- (instancetype)initWithDriverForTesting:
+    (iTermRestorableStateDriver *)driver;
+- (void)tideyResetHydrationTracking;
+- (void)tideyBeginHydrationTracking;
+- (void)tideyCompleteHydrationTracking;
+- (BOOL)tideyHydrationComplete;
+- (void)tideyNotifyWhenHydrationCompletes:(void (^)(void))completion;
 @end
 
 @implementation iTermRestorableStateController {
@@ -79,6 +86,7 @@ extern NSString *const iTermApplicationWillTerminate;
     BOOL _ready;
     NSMutableDictionary<NSString *, void (^)(NSWindow *, NSError *)> *_systemCallbacks;
     dispatch_group_t _completionGroup;
+    dispatch_group_t _tideyHydrationGroup;
     TideyRestorableStateSaveScheduler *_tideySaveScheduler;
     TideyRestorationLaunchMarker *_tideyLaunchMarker;
 }
@@ -193,7 +201,7 @@ static BOOL gForceSaveState;
                 initWithRestorer:_restorer];
         _driver.orphanAdoptionDiscarder = orphanAdoptionGate;
         if (orphanServerAdopter) {
-            _driver.rejectedServerTerminator =
+        _driver.rejectedServerTerminator =
                 [[TideyRestorationRejectedServerTerminator alloc]
                     initWithMonoServerTerminator:
                         (id<TideyRestorationMonoServerTerminating>)
@@ -213,6 +221,17 @@ static BOOL gForceSaveState;
                       debounceDriver:[[TideyRestorableStateTimerDebounceDriver alloc] init]
                        saveRequester:self];
         [_tideySaveScheduler start];
+        [self tideyResetHydrationTracking];
+    }
+    return self;
+}
+
+- (instancetype)initWithDriverForTesting:
+    (iTermRestorableStateDriver *)driver {
+    self = [super init];
+    if (self) {
+        _driver = driver;
+        [self tideyResetHydrationTracking];
     }
     return self;
 }
@@ -256,6 +275,7 @@ static BOOL gForceSaveState;
 - (void)restoreWindowsWithCompletion:(void (^)(void))completion {
     _completionGroup = dispatch_group_create();
     dispatch_group_enter(_completionGroup);
+    [self tideyResetHydrationTracking];
     assert([NSThread isMainThread]);
     __weak __typeof(self) weakSelf = self;
     [_driver restoreWithSystemCallbacks:_systemCallbacks
@@ -315,7 +335,8 @@ static BOOL gForceSaveState;
 - (BOOL)canRequestPeriodicSave {
     return ([iTermRestorableStateController stateRestorationEnabled] &&
             _ready &&
-            !_driver.restoring);
+            !_driver.restoring &&
+            [self tideyHydrationComplete]);
 }
 
 - (BOOL)requestPeriodicSaveWithCompletion:(void (^)(void))completion {
@@ -336,7 +357,7 @@ static BOOL gForceSaveState;
         // Just in case we don't get a chance to erase the state later.
         DLog(@"State restoration is disabled so erase db");
         [_driver eraseSynchronously:NO];
-    } else if (_driver.needsSave) {
+    } else if (_driver.needsSave && [self tideyHydrationComplete]) {
         [_driver save];
     }
     [self invokeRemainingCompletionBlocksAsFailure];
@@ -353,6 +374,31 @@ static BOOL gForceSaveState;
         completion(nil, nil);
     }];
     iTermRestorableStateController.shouldIgnoreOpenUntitledFile = NO;
+}
+
+#pragma mark - Tidey hydration tracking
+
+- (void)tideyResetHydrationTracking {
+    _tideyHydrationGroup = dispatch_group_create();
+}
+
+- (void)tideyBeginHydrationTracking {
+    dispatch_group_enter(_tideyHydrationGroup);
+}
+
+- (void)tideyCompleteHydrationTracking {
+    dispatch_group_leave(_tideyHydrationGroup);
+}
+
+- (BOOL)tideyHydrationComplete {
+    return dispatch_group_wait(_tideyHydrationGroup,
+                               DISPATCH_TIME_NOW) == 0;
+}
+
+- (void)tideyNotifyWhenHydrationCompletes:(void (^)(void))completion {
+    dispatch_group_notify(_tideyHydrationGroup,
+                          dispatch_get_main_queue(),
+                          completion);
 }
 
 #pragma mark - iTermRestorableStateRestoring
