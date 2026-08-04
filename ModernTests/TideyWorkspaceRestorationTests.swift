@@ -13,6 +13,33 @@ final class TideyWorkspaceRestorationTests: XCTestCase {
         )
     }
 
+    func testPendingWorkspaceStateSurvivesSubsequentNilArrangementDecode() {
+        let resolver = TideyPendingWorkspaceRestorationStateResolver()
+        let currentState = TideyWorkspaceRestorationState(
+            schemaVersion: TideyWorkspaceRestorationState.currentSchemaVersion,
+            selectedWorkspaceID: nil,
+            workspaces: []
+        )
+        let replacementState = TideyWorkspaceRestorationState(
+            schemaVersion: TideyWorkspaceRestorationState.currentSchemaVersion,
+            selectedWorkspaceID: nil,
+            workspaces: []
+        )
+
+        XCTAssertTrue(
+            resolver.pendingState(
+                currentState: currentState,
+                newlyDecodedState: nil
+            ) === currentState
+        )
+        XCTAssertTrue(
+            resolver.pendingState(
+                currentState: currentState,
+                newlyDecodedState: replacementState
+            ) === replacementState
+        )
+    }
+
     func testRestoredWorkspaceIdentityResolverSeamCompiles() {
         XCTAssertEqual(
             PseudoTerminal.tideyResolvedWorkspaceIdentifier(

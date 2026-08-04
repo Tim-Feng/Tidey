@@ -7587,15 +7587,26 @@ ITERM_WEAKLY_REFERENCEABLE
 }
 
 - (void)tideyPrepareWorkspaceRestorationFromArrangement:(NSDictionary *)arrangement {
-    [_tideyPendingWorkspaceRestorationState release];
-    _tideyPendingWorkspaceRestorationState = nil;
-    [_tideyRestoredPanelIDRemap release];
-    _tideyRestoredPanelIDRemap = nil;
-
     TideyWorkspaceRestorationGraphCodec *codec =
         [[[TideyWorkspaceRestorationGraphCodec alloc] init] autorelease];
-    _tideyPendingWorkspaceRestorationState =
-        [[codec decodeWindowArrangement:arrangement] retain];
+    TideyWorkspaceRestorationState *decodedState =
+        [codec decodeWindowArrangement:arrangement];
+    TideyPendingWorkspaceRestorationStateResolver *resolver =
+        [[[TideyPendingWorkspaceRestorationStateResolver alloc] init]
+            autorelease];
+    TideyWorkspaceRestorationState *resolvedState =
+        [resolver pendingStateWithCurrentState:
+                      _tideyPendingWorkspaceRestorationState
+                              newlyDecodedState:decodedState];
+    if (resolvedState == _tideyPendingWorkspaceRestorationState &&
+        !decodedState) {
+        return;
+    }
+
+    [_tideyPendingWorkspaceRestorationState release];
+    _tideyPendingWorkspaceRestorationState = [resolvedState retain];
+    [_tideyRestoredPanelIDRemap release];
+    _tideyRestoredPanelIDRemap = nil;
     if (_tideyPendingWorkspaceRestorationState) {
         _tideyRestoredPanelIDRemap = [[NSMutableDictionary alloc] init];
     }

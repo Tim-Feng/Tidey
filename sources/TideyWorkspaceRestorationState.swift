@@ -64,7 +64,7 @@ final class TideyPendingWorkspaceRestorationStateResolver: NSObject {
         currentState: TideyWorkspaceRestorationState?,
         newlyDecodedState: TideyWorkspaceRestorationState?
     ) -> TideyWorkspaceRestorationState? {
-        newlyDecodedState
+        newlyDecodedState ?? currentState
     }
 }
 
