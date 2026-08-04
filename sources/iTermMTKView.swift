@@ -43,7 +43,7 @@ public class iTermMTKView: iTermMetalView {
                                                height: CGFloat,
                                                hasWindow: Bool,
                                                windowIsMiniaturized: Bool) -> Bool {
-        return isHidden || alphaValue < 0.01 || width == 0 || height == 0 || !hasWindow
+        return isHidden || alphaValue < 0.01 || width == 0 || height == 0 || !hasWindow || windowIsMiniaturized
     }
 
     private func it_schedule() {
