@@ -448,6 +448,16 @@
   - callback 排進 main queue 後才替換 `_shell` 時，事後清掉舊 delegate 已經無法取消 queued block
   - broken-pipe callback 要保留 originating `PTYTask`，到 main queue 執行時再和目前 `_shell` 比對；舊 task 不得關閉新的 panel runtime
   - 這類跨 process 還原在第一輪修正後仍失敗時，要凍結 saved graph、server process record 與 callback 時序；只看最終 workspace 數量會把兩個 lifecycle 缺口誤判成一個
+- one-shot workspace sidecar 必須由實際 consumer 清除，不能把後續空 decode 當成撤銷
+  - AppKit 可能對同一批 restoration data 走不只一次 decode；後來的 nil／GUID-only arrangement 不代表先前已解出的 Tidey workspace graph 無效
+  - pending graph 尚未被 `didFinishRestoringWindow` 消費前，空 decode 應保留現值；只有新的有效 graph 才能取代它並重設相關 panel-ID remap
+- driver restore 完成不等於 workspace graph 已完成 hydration
+  - `dispatch_group_notify(..., main_queue, ...)` 保留了必要的 AppKit 非同步邊界，但 callback 會在 driver completion 之後才執行；此時若先把 controller 標成 ready，下一個 save 就可能把 provisional 單一 workspace graph 寫回資料庫
+  - 另設 hydration group：每個 restored record 在排入 deferred callback 前 enter，callback 完成後 leave；先釋放原本的 restoration group，再等 hydration group 歸零，避免兩個 group 互等造成 deadlock
+  - 不要為了縮短時序而把 `didFinishRestoringWindow` 改成同步；AppKit restoration 的 reentrancy 風險仍要由原本的 async boundary 隔離
+- 所有 durable save 入口都必須共用 hydration readiness gate
+  - 定期儲存、`needsSave` flush 與 termination synchronous save 都要等 driver restoration、controller readiness、workspace hydration 三者完成；只封鎖 scheduler 仍會從其他入口寫入 provisional graph
+  - scheduler 被拒絕後會依自己的 dirty/retry 狀態重試，這和 `_driver.needsSave` 是兩條機制；不能假設 periodic refusal 會自動設定 `needsSave`
 
 ## Testing
 
