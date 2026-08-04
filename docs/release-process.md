@@ -138,6 +138,32 @@ push 觸發 GitHub Pages 部署。**順序不可倒**：appcast 先公開而 ass
 - [ ] `xmllint --xpath '//item[last()]/title/text()' docs/appcast.xml` 顯示新版
 - [ ] 本機裝上 DMG → 右鍵 → 開啟 → 跑一下確認沒炸（可選，release.sh 的 spctl --assess 已確認簽章）
 
+### 本機 production app 替換
+
+透過 tmux 裡的 agent 直接替換 `/Applications/Tidey.app` 時，Tidey GUI、Remote Bridge 主服務與 Cloudflare supervisor 是三個獨立 process。只關閉並替換 GUI app，不會更新或重啟已由 launchd 常駐的 Bridge。
+
+固定流程：
+
+1. 確認 `SavedState/restorable-state.sqlite` 已更新，並確認 agent 本身在獨立 tmux session；不要終止 `iTermServer` 或 tmux server。
+2. 驗證候選 app 的 Developer ID 簽章與執行檔雜湊；將舊 `/Applications/Tidey.app` 移到可復原的備份位置後，再安裝候選版。
+3. 將候選 app 內的 `Contents/Resources/RemoteBridge/tidey-remote-bridge` 部署到 `~/Library/Application Support/Tidey Remote Bridge/tidey-remote-bridge`。部署前後都要驗證 binary，且內建版與實際安裝版的 SHA-256 必須一致。
+4. 重新載入或 kickstart 這兩個 launchd job，兩個都不可漏：
+   - `com.tidey.remote-bridge`
+   - `com.tidey.remote-bridge.cloudflared`
+5. 啟動 `/Applications/Tidey.app`，確認：
+   - Tidey GUI 是新 PID，執行檔雜湊符合候選版。
+   - workspace／panel 數量與替換前一致；不能只確認 agent process 還活著。若多個 workspace 被集中成一個，先備份當下的 restoration database，再依每個 panel 的 tmux target identity 重建 workspace；不得終止 tmux session。
+   - Tidey 正在監聽 `~/Library/Application Support/Tidey/tidey.sock`。
+   - Bridge 主服務是新 PID，正在監聽 TCP 4817。
+   - Cloudflare supervisor 與 `cloudflared` 都是新 PID，`cloudflared-state.json` 顯示 `online`。
+   - Bridge log 沒有新的 `socket_unavailable`，手機能實際取得 workspace list。
+
+受控部署若用 `SIGTERM`／`SIGKILL` 終止 GUI，下一次啟動可能顯示「Tidey did not shut down cleanly」的 restoration modal。這個 modal 會占住 main thread；此時 `tidey.sock` 檔案與 listener 可能都存在，但 socket accept queue 會等待 main queue，Remote 只會收到 `socket_unavailable`。
+
+- 使用者在 Mac 前：明確選擇 `Restore` 後再驗 Bridge。
+- 只有 Remote 可用：先確認 saved state 完整且使用者已要求還原，再於 Tidey 未執行時把 `TideyRestorationLastExitWasClean` 設為 true、把 `NoSyncRestoreWindowsCount` 設為 0，然後重新啟動。這只用於受控替換；一般 crash 必須保留詢問使用者是否還原的行為。
+- 不得用 System Events、模擬滑鼠或鍵盤處理 modal。
+
 ### Remote Bridge fresh-install audit
 
 Remote pairing 是 release blocker。每次 release 前用乾淨 macOS 使用者帳號驗一次，避免 Tidey Remote 使用者裝完 Mac app 後看不到 QR code。

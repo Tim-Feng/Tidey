@@ -22,6 +22,7 @@ Tidey 用 Claude Code + Codex 協作開發。
   - 查 AppKit 行為時先看
 
 ## Core Rules
+- 本機替換 `/Applications/Tidey.app` 時，不可只重啟 GUI；必須照 `docs/release-process.md` 的「本機 production app 替換」同步部署並重啟 Remote Bridge 主服務與 Cloudflare supervisor，完成 socket／port／tunnel 驗證
 - 先找 owner，再改
   - `iTermRootTerminalView`: sidebar、editor/browser panel、file tree、right-panel tab strip
   - `PseudoTerminal`: window/menu action routing
