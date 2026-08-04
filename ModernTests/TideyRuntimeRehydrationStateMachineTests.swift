@@ -62,6 +62,25 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
         )
     }
 
+    func testDirectAgentLoginShellCommandReturnsToLoginShellAfterAgentExit() {
+        let innerCommand =
+            "'/Applications/Tidey.app/Contents/Resources/bin/codex' " +
+            "'resume' 'thread-direct'"
+        let command = TideyRuntimeLoginShellCommandBuilder().command(
+            loginShellExecutable: "/bin/zsh",
+            innerCommand: innerCommand
+        )!
+
+        XCTAssertEqual(
+            (command as NSString).componentsInShellCommand(),
+            [
+                "/bin/zsh",
+                "-lic",
+                "\(innerCommand); exec '/bin/zsh' -l",
+            ]
+        )
+    }
+
     func testDirectAgentLoginShellCommandRebuildsUserPathAndPreservesLiteralResumeIdentity() {
         let resumeIdentity =
             "thread' \"quoted\"; $(touch /tmp/tidey-owned); " +
@@ -82,13 +101,13 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
             [
                 "/bin/zsh",
                 "-lic",
-                "exec \(innerCommand)",
+                "\(innerCommand); exec '/bin/zsh' -l",
             ]
         )
         XCTAssertEqual(
-            ("exec \(innerCommand)" as NSString)
+            (innerCommand as NSString)
                 .componentsInShellCommand(),
-            ["exec", agentExecutable, "resume", resumeIdentity]
+            [agentExecutable, "resume", resumeIdentity]
         )
         XCTAssertNil(
             TideyRuntimeLoginShellCommandBuilder().command(

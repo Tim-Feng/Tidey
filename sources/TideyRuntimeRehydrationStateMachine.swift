@@ -179,10 +179,20 @@ final class TideyRuntimeLoginShellCommandBuilder: NSObject {
         return [
             loginShellExecutable,
             "-lic",
-            "exec \(innerCommand)",
+            "\(innerCommand); exec " +
+                "\(Self.shellQuote(loginShellExecutable)) -l",
         ]
         .map(Self.commandArgumentQuote)
         .joined(separator: " ")
+    }
+
+    private static func shellQuote(_ argument: String) -> String {
+        "'" +
+        argument.replacingOccurrences(
+            of: "'",
+            with: "'\\''"
+        ) +
+        "'"
     }
 
     private static func commandArgumentQuote(_ argument: String) -> String {
