@@ -1,5 +1,39 @@
 #!/usr/bin/env bash
 
+tidey_current_terminal_tty() {
+    tty 2>/dev/null || true
+}
+
+tidey_validate_tmux_pane_for_current_terminal() {
+    tmux_pane="${TMUX_PANE:-}"
+    current_tty=""
+    pane_tty=""
+
+    if [ -z "$tmux_pane" ] || ! command -v tmux >/dev/null 2>&1; then
+        return 0
+    fi
+
+    current_tty="$(tidey_current_terminal_tty)"
+    case "$current_tty" in
+        ""|"not a tty")
+            # Hook subprocesses may not own a controlling terminal. Their
+            # inherited pane identity remains the only available evidence.
+            return 0
+            ;;
+    esac
+
+    pane_tty="$(tmux display-message -p -t "$tmux_pane" '#{pane_tty}' 2>/dev/null || true)"
+    if [ -n "$pane_tty" ] && [ "$pane_tty" != "$current_tty" ]; then
+        # A GUI started from inside tmux can leak its own TMUX/TMUX_PANE into
+        # later native terminal children. Do not let that unrelated pane
+        # overwrite the native panel's Tidey workspace and panel identity.
+        unset TMUX
+        unset TMUX_PANE
+        return 1
+    fi
+    return 0
+}
+
 tidey_tmux_resolve_env_var_from_pane_option() {
     env_name="$1"
     pane_option="$2"
@@ -57,6 +91,7 @@ tidey_tmux_resolve_runtime_env_var() {
 }
 
 tidey_hydrate_tmux_pane_identity() {
+    tidey_validate_tmux_pane_for_current_terminal || return 0
     tidey_tmux_resolve_env_var_from_pane_option "TIDEY_WORKSPACE_ID" "@tidey_workspace_id"
     tidey_tmux_resolve_env_var_from_pane_option "TIDEY_PANEL_ID" "@tidey_panel_id"
 }

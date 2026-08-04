@@ -38,12 +38,28 @@ EOF
 mock_script="$(mktemp "${TMPDIR:-/tmp}/tidey-tmux-pane-tests-mock.XXXXXX")"
 cat > "$mock_script" <<'EOF'
   pane-hit)
+    if [[ "$*" == "display-message -p -t %42 #{pane_tty}" ]]; then
+      printf '/dev/ttys042\n'
+      exit 0
+    fi
     if [[ "$*" == "show-options -p -v -t %42 @tidey_workspace_id" ]]; then
       printf 'workspace-pane\n'
       exit 0
     fi
     if [[ "$*" == "show-options -p -v -t %42 @tidey_panel_id" ]]; then
       printf 'panel-pane\n'
+      exit 0
+    fi
+    exit 1
+    ;;
+  pane-tty-mismatch)
+    if [[ "$*" == "display-message -p -t %42 #{pane_tty}" ]]; then
+      printf '/dev/ttys042\n'
+      exit 0
+    fi
+    if [[ "$*" == "show-options -p -v -t %42 @tidey_workspace_id" ]] ||
+       [[ "$*" == "show-options -p -v -t %42 @tidey_panel_id" ]]; then
+      printf 'must-not-be-read\n'
       exit 0
     fi
     exit 1
@@ -135,10 +151,22 @@ EOF
 run_with_tmux_mock "$mock_script" env TIDEY_TMUX_TEST_MODE=pane-hit TMUX_PANE=%42 TIDEY_HELPER_UNDER_TEST="$SCRIPT_DIR/../Resources/bin/tidey-tmux-pane-identity" bash -c '
     set -euo pipefail
     source "$TIDEY_HELPER_UNDER_TEST"
+    tidey_current_terminal_tty() { printf "/dev/ttys042\n"; }
     tidey_hydrate_tmux_pane_identity
     [[ "${TIDEY_WORKSPACE_ID:-}" == "workspace-pane" ]] || exit 10
     [[ "${TIDEY_PANEL_ID:-}" == "panel-pane" ]] || exit 11
 ' || fail "pane-hit"
+
+run_with_tmux_mock "$mock_script" env TIDEY_TMUX_TEST_MODE=pane-tty-mismatch TMUX=/private/tmp/tmux-501/default,123,4 TMUX_PANE=%42 TIDEY_WORKSPACE_ID=direct-workspace TIDEY_PANEL_ID=direct-panel TIDEY_HELPER_UNDER_TEST="$SCRIPT_DIR/../Resources/bin/tidey-tmux-pane-identity" bash -c '
+    set -euo pipefail
+    source "$TIDEY_HELPER_UNDER_TEST"
+    tidey_current_terminal_tty() { printf "/dev/ttys005\n"; }
+    tidey_hydrate_tmux_pane_identity
+    [[ -z "${TMUX+x}" ]] || exit 22
+    [[ -z "${TMUX_PANE+x}" ]] || exit 23
+    [[ "${TIDEY_WORKSPACE_ID:-}" == "direct-workspace" ]] || exit 24
+    [[ "${TIDEY_PANEL_ID:-}" == "direct-panel" ]] || exit 25
+' || fail "pane-tty-mismatch-clears-inherited-tmux-context"
 
 if run_with_tmux_mock "$mock_script" env -u TIDEY_WORKSPACE_ID -u TIDEY_PANEL_ID TIDEY_TMUX_TEST_MODE=fallback-global TMUX_PANE=%42 TIDEY_HELPER_UNDER_TEST="$SCRIPT_DIR/../Resources/bin/tidey-tmux-pane-identity" bash -c '
     set -euo pipefail
@@ -186,6 +214,20 @@ run_with_tmux_mock "$mock_script" env -u TIDEY_WORKSPACE_ID -u TIDEY_PANEL_ID TI
     [[ "${TIDEY_PANEL_ID:-}" == "panel-delayed" ]] || exit 21
 ' || fail "delayed-pane-identity"
 rm -f "$counter_file"
+
+launcher_script="$SCRIPT_DIR/../tools/open-production-clean-env.sh"
+sanitized_env="$(env TMUX=/private/tmp/tmux-501/default,123,4 TMUX_PANE=%42 TIDEY_WORKSPACE_ID=stale TIDEY_PANEL_ID=stale TIDEY_SOCKET_PATH=/tmp/stale.sock PRESERVE_ME=yes TIDEY_LAUNCHER_UNDER_TEST="$launcher_script" bash -c '
+    set -euo pipefail
+    source "$TIDEY_LAUNCHER_UNDER_TEST"
+    tidey_sanitize_production_launch_environment
+    env
+')"
+if grep -q '^TMUX=' <<<"$sanitized_env" ||
+   grep -q '^TMUX_PANE=' <<<"$sanitized_env" ||
+   grep -q '^TIDEY_' <<<"$sanitized_env"; then
+    fail "production-launch-environment-sanitization"
+fi
+grep -q '^PRESERVE_ME=yes$' <<<"$sanitized_env" || fail "production-launch-preserves-unrelated-environment"
 
 rm -f "$mock_script"
 echo "PASS"

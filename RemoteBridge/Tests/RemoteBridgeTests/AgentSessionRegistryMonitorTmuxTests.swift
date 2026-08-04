@@ -358,6 +358,133 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: registryURL), recordData)
     }
 
+    func testScanReconcilesNativeCodexAppServerPollutedByInheritedTmuxIdentity() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-remote-bridge-monitor-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        let registryURL = paths.codexAgentSessionsDirectory
+            .appendingPathComponent("codex-app-server-inherited-tmux.json")
+        let recordData = Data("""
+        {
+          "version": 1,
+          "vendor": "codex",
+          "workspace_id": "stale-tmux-workspace",
+          "session_id": "app-server-inherited-tmux",
+          "panel_id": "stale-tmux-panel",
+          "pid": \(getpid()),
+          "cwd": "/tmp",
+          "created_at": "2026-08-05T02:00:00Z",
+          "tmux_pane_id": "%7",
+          "tmux_socket_path": "/private/tmp/tmux-501/default",
+          "runtime": "codex_app_server",
+          "app_server_socket": "/tmp/app.sock",
+          "app_server_pid": \(getpid()),
+          "thread_id": "019fc672-7536-7782-bd19-0ede7e023706",
+          "resume_thread_id": "019fc672-7536-7782-bd19-0ede7e023706"
+        }
+        """.utf8)
+        try recordData.write(to: registryURL)
+
+        let directPanelShellPID: Int32 = 41_005
+        var requestedActions = [String]()
+        let runtimeSyncer = CapturingRuntimeSyncer()
+        let monitor = AgentSessionRegistryMonitor(
+            paths: paths,
+            fileManager: fileManager,
+            hub: AgentEventHub(),
+            tmuxResolver: TmuxStateResolver(ttl: 60) { socketPath, arguments in
+                XCTAssertEqual(socketPath, "/tmp/tmux-501/default")
+                XCTAssertEqual(arguments,
+                               ["list-panes", "-a", "-F",
+                                "#{pane_id}|#{@tidey_workspace_id}|#{@tidey_panel_id}"])
+                return "%7|stale-tmux-workspace|stale-tmux-panel\n"
+            },
+            parentPIDLookup: { pid in
+                pid == getpid() ? directPanelShellPID : nil
+            },
+            livePanelSnapshotRequestSender: { request in
+                requestedActions.append(request.action)
+                if request.action == "list_workspaces" {
+                    return BridgeResponse(id: request.id,
+                                          ok: true,
+                                          result: [
+                                            "workspaces": .array([
+                                                .object(["workspace_id": .string("stale-tmux-workspace")]),
+                                                .object(["workspace_id": .string("direct-workspace")]),
+                                            ]),
+                                          ],
+                                          error: nil)
+                }
+                if request.action == "list_panels" {
+                    switch request.params?["workspace_id"]?.stringValue {
+                    case "stale-tmux-workspace":
+                        return BridgeResponse(id: request.id,
+                                              ok: true,
+                                              result: [
+                                                "workspace_id": .string("stale-tmux-workspace"),
+                                                "panels": .array([
+                                                    .object([
+                                                        "workspace_id": .string("stale-tmux-workspace"),
+                                                        "panel_id": .string("stale-tmux-panel"),
+                                                        "effective_shell_pid": .number(51_007),
+                                                        "tmux_pane_id": .string("%7"),
+                                                        "tmux_socket_path": .string("/private/tmp/tmux-501/default"),
+                                                    ]),
+                                                ]),
+                                              ],
+                                              error: nil)
+                    case "direct-workspace":
+                        return BridgeResponse(id: request.id,
+                                              ok: true,
+                                              result: [
+                                                "workspace_id": .string("direct-workspace"),
+                                                "panels": .array([
+                                                    .object([
+                                                        "workspace_id": .string("direct-workspace"),
+                                                        "panel_id": .string("direct-panel"),
+                                                        "effective_shell_pid": .number(Double(directPanelShellPID)),
+                                                    ]),
+                                                ]),
+                                              ],
+                                              error: nil)
+                    default:
+                        XCTFail("Unexpected workspace snapshot request")
+                    }
+                }
+                return BridgeResponse(id: request.id, ok: false, result: nil, error: nil)
+            },
+            runtimeSyncer: runtimeSyncer)
+        monitor.replaceLivePanels(workspaceID: "stale-tmux-workspace",
+                                  panels: [
+                                    AgentPanelProcessSnapshot(workspaceID: "stale-tmux-workspace",
+                                                              panelID: "stale-tmux-panel",
+                                                              effectiveShellPID: 51_007,
+                                                              tmuxPaneID: "%7",
+                                                              tmuxSocketPath: "/private/tmp/tmux-501/default"),
+                                  ])
+        try monitor.start()
+
+        XCTAssertEqual(requestedActions,
+                       ["list_workspaces", "list_panels", "list_panels"],
+                       "Codex app-server records need a fresh graph even when stale tmux identity matches the cache")
+        XCTAssertNil(monitor.activeSessionForPanel(workspaceID: "stale-tmux-workspace",
+                                                   panelID: "stale-tmux-panel"))
+        XCTAssertEqual(monitor.activeSessionForPanel(workspaceID: "direct-workspace",
+                                                     panelID: "direct-panel")?.sessionID,
+                       "app-server-inherited-tmux")
+
+        let syncedRecord = try XCTUnwrap(runtimeSyncer.latestRecords.first)
+        XCTAssertEqual(syncedRecord.workspaceID, "direct-workspace")
+        XCTAssertEqual(syncedRecord.panelID, "direct-panel")
+        XCTAssertNil(syncedRecord.tmuxPaneID)
+        XCTAssertNil(syncedRecord.tmuxSocketPath)
+        XCTAssertEqual(try Data(contentsOf: registryURL), recordData)
+    }
+
     func testScanRefreshesPanellessClaudeProcessAncestryAfterCachedPanelMoves() throws {
         let fileManager = FileManager.default
         let supportDirectory = fileManager.temporaryDirectory

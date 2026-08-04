@@ -817,6 +817,12 @@ final class AgentSessionRegistryMonitor {
     }
 
     private func recordMayNeedLivePanelSnapshotRefresh(_ record: AgentSessionRegistryRecord) -> Bool {
+        if Self.isCodexAppServerRuntimeRecord(record) {
+            // A native Codex panel can inherit a valid-looking tmux pane from
+            // the process that launched Tidey. Process ancestry must get a
+            // fresh graph even when that stale pane matches the cached graph.
+            return true
+        }
         guard let paneID = record.tmuxPaneID,
               paneID.isEmpty == false else {
             return record.vendor == "claude"
@@ -832,8 +838,14 @@ final class AgentSessionRegistryMonitor {
     private func recordWithLivePanelProcessIdentityIfAvailable(
         _ record: AgentSessionRegistryRecord
     ) -> AgentSessionRegistryRecord {
-        guard let panel = uniqueLivePanelProcessMatch(for: record),
-              panel.workspaceID != record.workspaceID || panel.panelID != record.panelID else {
+        guard let panel = uniqueLivePanelProcessMatch(for: record) else {
+            return record
+        }
+        let identityDiffers = panel.workspaceID != record.workspaceID || panel.panelID != record.panelID
+        let tmuxContextDiffers = panel.tmuxPaneID != record.tmuxPaneID ||
+            Self.normalizedNonEmptySocketPath(panel.tmuxSocketPath) !=
+            Self.normalizedNonEmptySocketPath(record.tmuxSocketPath)
+        guard identityDiffers || tmuxContextDiffers else {
             return record
         }
 
@@ -858,8 +870,8 @@ final class AgentSessionRegistryMonitor {
                                           cwd: record.cwd,
                                           createdAt: record.createdAt,
                                           transcriptPath: record.transcriptPath,
-                                          tmuxPaneID: record.tmuxPaneID,
-                                          tmuxSocketPath: record.tmuxSocketPath,
+                                          tmuxPaneID: panel.tmuxPaneID,
+                                          tmuxSocketPath: panel.tmuxSocketPath,
                                           runtime: record.runtime,
                                           appServerSocket: record.appServerSocket,
                                           appServerPID: record.appServerPID,
@@ -871,9 +883,10 @@ final class AgentSessionRegistryMonitor {
     private func uniqueLivePanelProcessMatch(
         for record: AgentSessionRegistryRecord
     ) -> AgentPanelProcessSnapshot? {
-        guard record.vendor == "claude",
-              record.pid > 0,
-              (record.tmuxPaneID ?? "").isEmpty else {
+        let isDirectClaudeCandidate = record.vendor == "claude" &&
+            (record.tmuxPaneID ?? "").isEmpty
+        guard record.pid > 0,
+              isDirectClaudeCandidate || Self.isCodexAppServerRuntimeRecord(record) else {
             return nil
         }
 

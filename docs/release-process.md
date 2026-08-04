@@ -150,7 +150,7 @@ push 觸發 GitHub Pages 部署。**順序不可倒**：appcast 先公開而 ass
 4. 重新載入或 kickstart 這兩個 launchd job，兩個都不可漏：
    - `com.tidey.remote-bridge`
    - `com.tidey.remote-bridge.cloudflared`
-5. 啟動 `/Applications/Tidey.app`，確認：
+5. 從 repo 執行 `tools/open-production-clean-env.sh` 啟動 `/Applications/Tidey.app`；不要直接從 tmux pane 執行 `/usr/bin/open`，否則 GUI 會把該 pane 的 `TMUX`、`TMUX_PANE` 與 `TIDEY_*` 傳給後續 native terminal。接著確認：
    - Tidey GUI 是新 PID，執行檔雜湊符合候選版。
    - workspace／panel 數量與替換前一致；不能只確認 agent process 還活著。若多個 workspace 被集中成一個，先備份當下的 restoration database，再依每個 panel 的 tmux target identity 重建 workspace；不得終止 tmux session。
    - Tidey 正在監聽 `~/Library/Application Support/Tidey/tidey.sock`。

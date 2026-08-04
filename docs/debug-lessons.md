@@ -204,6 +204,11 @@
   - `tmux show-environment TIDEY_WORKSPACE_ID` 只代表 server/global state，多 pane、多 workspace 並存時很快 stale
   - Tidey 端把 `@tidey_workspace_id`、`@tidey_panel_id` 寫到 pane user options，wrapper 再用 `tmux show-options -p -v -t "$TMUX_PANE"` 讀
   - 補證：`3c0e4f4ad` `d5478d5a4` `4e796c19f`
+- 從 tmux pane 啟動 GUI 時，LaunchServices 會把 pane identity 帶進 GUI 與後續 native terminal
+  - 症狀：native Codex 的 controlling TTY 和 `tmux display-message -t "$TMUX_PANE" '#{pane_tty}'` 不同，但 registry 仍宣稱屬於該 tmux pane；Remote submit 隨後被較新的錯誤 app-server record 攔走
+  - wrapper 在讀 pane option 前必須比對兩個 TTY；明確不相符時清除 `TMUX`／`TMUX_PANE`，保留 native panel 原有的 `TIDEY_WORKSPACE_ID`／`TIDEY_PANEL_ID`
+  - Bridge 還要以 fresh workspace graph 與唯一 process ancestry 校正 Codex app-server，不能因 stale pane 剛好吻合 cache 就略過
+  - production 替換後一律用 `tools/open-production-clean-env.sh` 啟動 GUI
 - 共享長壽 service 繼承到的 early env，會污染所有後續 client
   - 只要 service 生命週期比 client 長，而且會保存 global env，第一個 client 帶進去的值就可能污染後面所有 attach / new session
   - 這次是從 prod shell 開 `tmux new -s tidey-cc`，prod 的 `TIDEY_*` 被繼承進 tmux server global env；之後 Dev shell attach 到同一個 default socket，wrapper fallback 讀到的還是 prod UUID / socket path
