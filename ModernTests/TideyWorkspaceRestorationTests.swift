@@ -2,6 +2,17 @@ import XCTest
 @testable import iTerm2SharedARC
 
 final class TideyWorkspaceRestorationTests: XCTestCase {
+    func testPendingWorkspaceStateResolverSeamCompiles() {
+        let resolver = TideyPendingWorkspaceRestorationStateResolver()
+
+        XCTAssertNil(
+            resolver.pendingState(
+                currentState: nil,
+                newlyDecodedState: nil
+            )
+        )
+    }
+
     func testRestoredWorkspaceIdentityResolverSeamCompiles() {
         XCTAssertEqual(
             PseudoTerminal.tideyResolvedWorkspaceIdentifier(

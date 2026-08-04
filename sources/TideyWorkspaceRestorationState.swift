@@ -57,6 +57,17 @@ final class TideyWorkspaceRestorationState: NSObject {
     }
 }
 
+@objc(TideyPendingWorkspaceRestorationStateResolver)
+@objcMembers
+final class TideyPendingWorkspaceRestorationStateResolver: NSObject {
+    func pendingState(
+        currentState: TideyWorkspaceRestorationState?,
+        newlyDecodedState: TideyWorkspaceRestorationState?
+    ) -> TideyWorkspaceRestorationState? {
+        newlyDecodedState
+    }
+}
+
 @objc(TideyWorkspaceRestorationPanelInput)
 @objcMembers
 final class TideyWorkspaceRestorationPanelInput: NSObject {
