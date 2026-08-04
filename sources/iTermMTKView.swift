@@ -36,6 +36,16 @@ public class iTermMTKView: iTermMetalView {
             super.alphaValue
         }
     }
+
+    static func tideyShouldSkipPeriodicRedraw(isHidden: Bool,
+                                               alphaValue: CGFloat,
+                                               width: CGFloat,
+                                               height: CGFloat,
+                                               hasWindow: Bool,
+                                               windowIsMiniaturized: Bool) -> Bool {
+        return isHidden || alphaValue < 0.01 || width == 0 || height == 0 || !hasWindow
+    }
+
     private func it_schedule() {
         _timer = Timer.scheduledWeakTimer(
             withTimeInterval: iTermAdvancedSettingsModel.metalRedrawPeriod(),
@@ -49,7 +59,12 @@ public class iTermMTKView: iTermMetalView {
     private func it_redrawPeriodically(_ timer: Timer) {
         DLog("Timer with interval \(timer.timeInterval) fired for MTKView under \(superview.d) in window \(window.d)")
 
-        if (isHidden || alphaValue < 0.01 || bounds.size.width == 0 || bounds.size.height == 0 || window == nil) {
+        if Self.tideyShouldSkipPeriodicRedraw(isHidden: isHidden,
+                                               alphaValue: alphaValue,
+                                               width: bounds.size.width,
+                                               height: bounds.size.height,
+                                               hasWindow: window != nil,
+                                               windowIsMiniaturized: window?.isMiniaturized ?? false) {
             DLog("Not visible \(self)")
             return;
         }
