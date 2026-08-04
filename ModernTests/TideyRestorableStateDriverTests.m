@@ -1,6 +1,7 @@
 #import <XCTest/XCTest.h>
 
 #import "iTerm2SharedARC-Swift.h"
+#import "iTermEncoderGraphRecord.h"
 #import "iTermPreferences.h"
 #import "iTermRestorableStateController.h"
 #import "iTermRestorableStateDriver.h"
@@ -13,12 +14,40 @@
 - (void)tideyCompleteHydrationTracking;
 - (BOOL)tideyHydrationComplete;
 - (void)tideyNotifyWhenHydrationCompletes:(void (^)(void))completion;
+- (BOOL)requestPeriodicSaveWithCompletion:(void (^)(void))completion;
+- (void)applicationWillTerminate:(NSNotification *)notification;
+@end
+
+@interface TideyNativeRestorableStateRecordSpy :
+    NSObject <iTermRestorableStateRecord>
+@property(nonatomic, copy) NSString *identifier;
+@end
+
+@implementation TideyNativeRestorableStateRecordSpy
+
+- (void)didFinishRestoring {
+}
+
+- (NSKeyedUnarchiver *)unarchiver {
+    return nil;
+}
+
+- (NSInteger)windowNumber {
+    return 0;
+}
+
+- (id<iTermRestorableStateRecord>)recordWithPayload:(id)payload {
+    return self;
+}
+
 @end
 
 @interface TideyNativeRestorableStateIndexSpy : NSObject <iTermRestorableStateIndex>
 @property(nonatomic, strong) TideyRestorableStatePreflight *preflight;
 @property(nonatomic) NSUInteger numberOfWindows;
 @property(nonatomic) NSInteger recordRequestCount;
+@property(nonatomic, copy)
+    NSArray<id<iTermRestorableStateRecord>> *records;
 @end
 
 @implementation TideyNativeRestorableStateIndexSpy
@@ -32,11 +61,111 @@
 
 - (id<iTermRestorableStateRecord>)restorableStateRecordAtIndex:(NSUInteger)i {
     self.recordRequestCount += 1;
-    return nil;
+    return i < self.records.count ? self.records[i] : nil;
 }
 
 - (TideyRestorableStatePreflight *)restorableStateIndexPreflight {
     return self.preflight;
+}
+
+@end
+
+@interface TideyNativeHydrationRestorerSpy :
+    NSObject <iTermRestorableStateRestorer>
+@property(nonatomic, strong) id<iTermRestorableStateIndex> index;
+@property(nonatomic, weak) id<iTermRestorableStateRestoring> delegate;
+@end
+
+@implementation TideyNativeHydrationRestorerSpy
+
+- (void)loadRestorableStateIndexWithCompletion:
+    (void (^)(id<iTermRestorableStateIndex>))completion {
+    completion(self.index);
+}
+
+- (void)restoreWindowWithRecord:(id<iTermRestorableStateRecord>)record
+                     completion:
+    (void (^)(NSString *windowIdentifier, NSWindow *window))completion {
+    iTermEncoderGraphRecord *graphRecord =
+        [iTermEncoderGraphRecord withPODs:@{}
+                                  graphs:@[]
+                              generation:0
+                                     key:@"window"
+                              identifier:record.identifier
+                                   rowid:nil];
+    [self.delegate
+        restorableStateRestoreWithRecord:graphRecord
+        identifier:record.identifier
+        completion:^(NSWindow *window, NSError *error) {
+            completion(record.identifier, window);
+        }];
+}
+
+- (void)restoreApplicationState {
+}
+
+- (void)eraseStateRestorationDataSynchronously:(BOOL)sync {
+}
+
+@end
+
+@interface TideyNativeHydrationWindowControllerSpy :
+    NSObject <NSWindowDelegate, iTermRestorableWindowController>
+@property(nonatomic, copy) void (^onHydrate)(void);
+@end
+
+
+@implementation TideyNativeHydrationWindowControllerSpy
+
+- (void)didFinishRestoringWindow {
+    if (self.onHydrate) {
+        self.onHydrate();
+    }
+}
+
+@end
+
+
+@interface TideyNativeRestorableStateControllerDelegateSpy :
+    NSObject <iTermRestorableStateControllerDelegate>
+@property(nonatomic, copy) NSDictionary<NSString *, NSWindow *> *windows;
+@end
+
+
+@implementation TideyNativeRestorableStateControllerDelegateSpy
+
+- (void)restorableStateDidFinishRequestingRestorations:
+    (iTermRestorableStateController *)sender {
+}
+
+- (void)restorableStateRestoreWithRecord:(iTermEncoderGraphRecord *)record
+                              identifier:(NSString *)identifier
+                              completion:
+    (void (^)(NSWindow *, NSError *))completion {
+    completion(self.windows[identifier], nil);
+}
+
+- (void)restorableStateRestoreApplicationStateWithRecord:
+    (iTermEncoderGraphRecord *)record {
+}
+
+- (void)restorableStateRestoreWithCoder:(NSCoder *)coder
+                             identifier:(NSString *)identifier
+                             completion:
+    (void (^)(NSWindow *, NSError *))completion {
+    completion(nil, nil);
+}
+
+- (NSArray<NSWindow *> *)restorableStateWindows {
+    return self.windows.allValues;
+}
+
+- (BOOL)restorableStateWindowNeedsRestoration:(NSWindow *)window {
+    return YES;
+}
+
+- (void)restorableStateEncodeWithCoder:(NSCoder *)coder
+                                window:(NSWindow *)window {
 }
 
 @end
@@ -132,12 +261,14 @@
 @interface TideyNativeRestorableStateSaverSpy : NSObject <iTermRestorableStateSaver>
 @property(nonatomic, weak) id<iTermRestorableStateSaving> delegate;
 @property(nonatomic, copy, nullable) void (^saveCompletion)(void);
+@property(nonatomic) NSInteger saveCallCount;
 @end
 
 @implementation TideyNativeRestorableStateSaverSpy
 
 - (BOOL)saveSynchronously:(BOOL)synchronously
            withCompletion:(void (^)(void))completion {
+    self.saveCallCount += 1;
     self.saveCompletion = completion;
     return YES;
 }
@@ -167,6 +298,106 @@
     XCTAssertFalse([controller tideyHydrationComplete]);
     [controller tideyCompleteHydrationTracking];
     XCTAssertTrue([controller tideyHydrationComplete]);
+}
+
+- (void)testPeriodicSaveStaysClosedUntilAllRestoredWindowsHydrate {
+    const BOOL previousPreference =
+        [iTermPreferences
+            boolForKey:kPreferenceKeyTideyRestorePreviousWorkspaces];
+    [iTermPreferences
+        setBool:YES
+        forKey:kPreferenceKeyTideyRestorePreviousWorkspaces];
+
+    TideyNativeRestorableStateRecordSpy *firstRecord =
+        [[TideyNativeRestorableStateRecordSpy alloc] init];
+    firstRecord.identifier = @"first-window";
+    TideyNativeRestorableStateRecordSpy *secondRecord =
+        [[TideyNativeRestorableStateRecordSpy alloc] init];
+    secondRecord.identifier = @"second-window";
+    TideyNativeRestorableStateIndexSpy *index =
+        [[TideyNativeRestorableStateIndexSpy alloc] init];
+    index.numberOfWindows = 2;
+    index.records = @[ firstRecord, secondRecord ];
+    index.preflight =
+        [[TideyRestorableStatePreflight alloc]
+            initWithStateExists:YES
+            isValid:YES
+            numberOfWindows:2
+            tideySchemaVersion:
+                @(TideyRestorableStatePreflight.currentSchemaVersion)
+            sessionServerIdentifiers:@[]];
+
+    TideyNativeHydrationRestorerSpy *restorer =
+        [[TideyNativeHydrationRestorerSpy alloc] init];
+    restorer.index = index;
+    TideyNativeRestorableStateSaverSpy *saver =
+        [[TideyNativeRestorableStateSaverSpy alloc] init];
+    iTermRestorableStateDriver *driver =
+        [[iTermRestorableStateDriver alloc] init];
+    driver.restorer = restorer;
+    driver.saver = saver;
+    iTermRestorableStateController *controller =
+        [[iTermRestorableStateController alloc]
+            initWithDriverForTesting:driver];
+    restorer.delegate =
+        (id<iTermRestorableStateRestoring>)controller;
+
+    NSWindow *firstWindow =
+        [[NSWindow alloc] initWithContentRect:NSZeroRect
+                                    styleMask:NSWindowStyleMaskBorderless
+                                      backing:NSBackingStoreBuffered
+                                        defer:NO];
+    NSWindow *secondWindow =
+        [[NSWindow alloc] initWithContentRect:NSZeroRect
+                                    styleMask:NSWindowStyleMaskBorderless
+                                      backing:NSBackingStoreBuffered
+                                        defer:NO];
+    TideyNativeHydrationWindowControllerSpy *firstWindowController =
+        [[TideyNativeHydrationWindowControllerSpy alloc] init];
+    TideyNativeHydrationWindowControllerSpy *secondWindowController =
+        [[TideyNativeHydrationWindowControllerSpy alloc] init];
+    firstWindow.delegate = firstWindowController;
+    secondWindow.delegate = secondWindowController;
+
+    __block NSInteger hydrationCount = 0;
+    __block NSMutableArray<NSNumber *> *saveAcceptanceDuringHydration =
+        [NSMutableArray array];
+    void (^onHydrate)(void) = ^{
+        hydrationCount += 1;
+        [saveAcceptanceDuringHydration addObject:@(
+            [controller requestPeriodicSaveWithCompletion:^{}])];
+        if (hydrationCount == 1) {
+            [controller applicationWillTerminate:nil];
+        }
+    };
+    firstWindowController.onHydrate = onHydrate;
+    secondWindowController.onHydrate = onHydrate;
+
+    TideyNativeRestorableStateControllerDelegateSpy *delegate =
+        [[TideyNativeRestorableStateControllerDelegateSpy alloc] init];
+    delegate.windows = @{
+        firstRecord.identifier: firstWindow,
+        secondRecord.identifier: secondWindow,
+    };
+    controller.delegate = delegate;
+
+    XCTestExpectation *completionExpectation =
+        [self expectationWithDescription:@"hydration precedes readiness"];
+    [controller restoreWindowsWithCompletion:^{
+        XCTAssertEqual(hydrationCount, 2);
+        XCTAssertEqualObjects(saveAcceptanceDuringHydration,
+                              (@[ @NO, @NO ]));
+        XCTAssertEqual(saver.saveCallCount, 0);
+        XCTAssertFalse(controller.restoring);
+        XCTAssertTrue(
+            [controller requestPeriodicSaveWithCompletion:^{}]);
+        [completionExpectation fulfill];
+    }];
+
+    [self waitForExpectations:@[ completionExpectation ] timeout:2];
+    [iTermPreferences
+        setBool:previousPreference
+        forKey:kPreferenceKeyTideyRestorePreviousWorkspaces];
 }
 
 - (void)testBlankLaunchErasesRejectedStateAndDiscardsMatchingOrphanJobs {

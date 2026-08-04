@@ -284,8 +284,16 @@ static BOOL gForceSaveState;
     }
                              completion:^{
         DLog(@"Restoration did complete");
-        [weakSelf completeInitialization];
-        completion();
+        __strong __typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            completion();
+            return;
+        }
+        dispatch_group_leave(strongSelf->_completionGroup);
+        [strongSelf tideyNotifyWhenHydrationCompletes:^{
+            [strongSelf completeInitialization];
+            completion();
+        }];
     }];
 }
 
@@ -319,8 +327,8 @@ static BOOL gForceSaveState;
         [_driver eraseSynchronously:YES];
         return;
     }
-    if (_driver.restoring) {
-        DLog(@"Still restoring so don't save");
+    if (_driver.restoring || !_ready || ![self tideyHydrationComplete]) {
+        DLog(@"Restoration or hydration is incomplete so don't save");
         return;
     }
     DLog(@"Calling saveSynchronously.");
@@ -351,8 +359,8 @@ static BOOL gForceSaveState;
 - (void)completeInitialization {
     DLog(@"completeInitialization");
     assert([NSThread isMainThread]);
+    assert([self tideyHydrationComplete]);
     _ready = YES;
-    dispatch_group_leave(_completionGroup);
     if (![iTermRestorableStateController stateRestorationEnabled]) {
         // Just in case we don't get a chance to erase the state later.
         DLog(@"State restoration is disabled so erase db");
@@ -424,12 +432,14 @@ static BOOL gForceSaveState;
         DLog(@"iTermRestorableStateController's completion block calling the completion block for window %@", window);
         completion(window, error);
         DLog(@"iTermRestorableStateController's completion block calling didRestoreWindow:%@", window);
+        [self tideyBeginHydrationTracking];
         __weak __typeof(window) weakWindow = window;
         dispatch_group_notify(self->_completionGroup, dispatch_get_main_queue(), ^{
             __strong __typeof(window) strongWindow = weakWindow;
             if (strongWindow) {
                 [self didRestoreWindow:strongWindow];
             }
+            [self tideyCompleteHydrationTracking];
         });
         DLog(@"iTermRestorableStateController's completion block returning");
     }];
