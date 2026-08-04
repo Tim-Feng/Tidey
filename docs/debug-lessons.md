@@ -428,6 +428,9 @@
 - 使用者原本沒有使用 tmux 時，不要為了還原而建立 synthetic tmux topology
   - `direct_resume` 在同一個 restored panel 內執行 bundled、allowlisted 的 `claude --resume <id>` 或 `codex resume <id>`
   - descriptor 要如實保留 target／topology 不存在的狀態，並依 policy 驗證欄位組合；optional field 不代表任意組合都可接受
+- `direct_resume` 仍要保留一般 terminal 的 shell lifecycle
+  - login shell 可以先載入使用者 PATH，再把 agent 當成子程序執行；agent 結束後應 `exec` 一個新的 login shell，讓同一個 panel 回到可輸入狀態
+  - 若外層直接 `exec` agent，正常 `/exit` 也會結束整個 PTY，留下無法操作的 `Session Ended`
 - process 啟動所需的 Tidey identity 必須在 native graph hydration 前傳入
   - `PTYSession` 可能早於 workspace graph 完成啟動，事後才設定 workspace／panel ID 已經太晚
   - 從 saved arrangement 先解析 workspace ID，panel GUID 經 collision 檢查後只計算一次，並把同一個實際 GUID 同時交給 session environment 與最後的 tab graph
