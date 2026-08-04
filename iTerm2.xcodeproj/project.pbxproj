@@ -5133,7 +5133,6 @@
 		A7E25DCB1956D4A7FA738CB9 /* iTermStreamingPNGWriter.h in Sources */ = {isa = PBXBuildFile; fileRef = CB2F48F836C5732146BCEDD9 /* iTermStreamingPNGWriter.h */; };
 		BB6261274C73ED1AAACA751C /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 00213A5956211FBDEDEAEF96 /* AppIcon.icns */; };
 		C472BB71AF7F3F957C28474A /* TideySessionViewRedrawTests.m in Sources */ = {isa = PBXBuildFile; fileRef = 51E45EA5078C7CA32BE9EA3B /* TideySessionViewRedrawTests.m */; };
-		F04D8A110000000000000002 /* TideyMetalRedrawWatchdogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F04D8A110000000000000001 /* TideyMetalRedrawWatchdogTests.swift */; };
 		C48D7AA2E70B019313C401F3 /* WordSelectionAtom.swift in Sources */ = {isa = PBXBuildFile; fileRef = C08AA4008946722C3F4C67C1 /* WordSelectionAtom.swift */; };
 		C6675EBC1C4FE96B0041173B /* iTermSelectorSwizzler.m in Sources */ = {isa = PBXBuildFile; fileRef = C6675EBB1C4FE96B0041173B /* iTermSelectorSwizzler.m */; };
 		CDCD9FF08FCE42F7A6963859 /* PillBackgroundGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EA289FFE2BF4090A65931BA /* PillBackgroundGenerator.swift */; };
@@ -6028,7 +6027,6 @@
 		479FDFE9C0F424FEC10526EC /* iTermCursorSlideAnimator.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; name = iTermCursorSlideAnimator.m; path = sources/iTermCursorSlideAnimator.m; sourceTree = SOURCE_ROOT; };
 		49A6E4081211CC6000D9AD6F /* Compatability.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = Compatability.h; sourceTree = "<group>"; };
 		51E45EA5078C7CA32BE9EA3B /* TideySessionViewRedrawTests.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = TideySessionViewRedrawTests.m; sourceTree = "<group>"; };
-		F04D8A110000000000000001 /* TideyMetalRedrawWatchdogTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TideyMetalRedrawWatchdogTests.swift; sourceTree = "<group>"; };
 		5300984A2259365B00A69348 /* iTermHapticActuator.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = iTermHapticActuator.h; sourceTree = "<group>"; };
 		5300984B2259365B00A69348 /* iTermHapticActuator.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = iTermHapticActuator.m; sourceTree = "<group>"; };
 		5300984E2259A44D00A69348 /* iTermSoundPlayer.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = iTermSoundPlayer.h; sourceTree = "<group>"; };
@@ -10037,7 +10035,6 @@
 		17E422BA95C161BE34CAF68C /* ModernTests */ = {
 			isa = PBXGroup;
 			children = (
-				F04D8A110000000000000001 /* TideyMetalRedrawWatchdogTests.swift */,
 				98E9463133DCF8311E0E5B6E /* iTermFindOnPageHelperTests.swift */,
 				F6601DD02DFE3C2480DFDC73 /* IntervalTreeCoordinateClampingTests.swift */,
 				5F139DFA4255DC27A1E3E0FF /* AccessibilityDeletionDetectionTests.swift */,
@@ -20430,7 +20427,6 @@
 				63784809C4F1C06074729416 /* IntervalTreeForwardLocationEnumeratorTests.swift in Sources */,
 				FF77847D9D838865BB1E1327 /* TideySidebarStatusRefreshPolicyTests.m in Sources */,
 				C472BB71AF7F3F957C28474A /* TideySessionViewRedrawTests.m in Sources */,
-				F04D8A110000000000000002 /* TideyMetalRedrawWatchdogTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
