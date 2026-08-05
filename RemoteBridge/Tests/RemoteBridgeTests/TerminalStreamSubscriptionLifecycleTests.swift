@@ -577,6 +577,38 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
         XCTAssertEqual(eventLog.events, [])
     }
 
+    func testInvalidIdentifiedCleanupIDsNeverDegradeToUnsubscribeAll() throws {
+        let eventLog = EventLog()
+        let fixture = try makeFixture(outputStreamHandler: StubTerminalStreamHandler(eventLog: eventLog))
+        defer { fixture.cleanup() }
+        let panelID = ordinaryPanelID(windowID: "@16")
+        let current = try XCTUnwrap(fixture.handler.handleLocalRequest(
+            subscribeRequest(id: "subscribe-current", panelID: panelID),
+            context: fixture.context
+        ))
+        XCTAssertEqual(current.applyOnEventLoop?() ?? .accepted, .accepted)
+
+        let invalidValues: [JSONValue] = [
+            .bool(true),
+            .string(""),
+            .string(String(repeating: "a", count: 129)),
+        ]
+        for (index, value) in invalidValues.enumerated() {
+            let result = try XCTUnwrap(fixture.handler.handleLocalRequest(
+                BridgeRequest(id: "invalid-cleanup-\(index)",
+                              action: "unsubscribe_terminal_stream",
+                              params: ["subscription_id": value]),
+                context: fixture.context
+            ))
+            XCTAssertEqual(result.response.error?.code, "invalid_request")
+            XCTAssertNil(result.applyOnEventLoop)
+        }
+        fixture.drainTerminalWork()
+
+        XCTAssertEqual(eventLog.events, ["subscribe-1"])
+        XCTAssertEqual(fixture.observability.snapshot(activeSessions: []).activeTerminalStreamSubscriptionCount, 1)
+    }
+
     func testChannelInactiveStopsAllTerminalStreams() throws {
         let eventLog = EventLog()
         let fixture = try makeFixture(outputStreamHandler: StubTerminalStreamHandler(eventLog: eventLog))
@@ -787,6 +819,63 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
         XCTAssertEqual(responses["unsubscribe-1"]?.error?.code, "superseded")
         XCTAssertEqual(eventLog.events, ["subscribe-1"])
         XCTAssertEqual(fixture.observability.snapshot(activeSessions: []).activeTerminalStreamSubscriptionCount, 1)
+    }
+
+    func testOlderUnsubscribeAllCompletingAfterNewerSubscribeCannotStopIt() throws {
+        let eventLog = EventLog()
+        let fixture = try makeFixture(outputStreamHandler: StubTerminalStreamHandler(eventLog: eventLog))
+        defer { fixture.cleanup() }
+        let panelID = ordinaryPanelID(windowID: "@16")
+
+        try writeRequest(BridgeRequest(id: "unsubscribe-all-1",
+                                       action: "unsubscribe_terminal_stream",
+                                       params: nil),
+                         to: fixture.channel)
+        try writeRequest(subscribeRequest(id: "subscribe-2", panelID: panelID),
+                         to: fixture.channel)
+        fixture.requestExecutor.runLast()
+        fixture.channel.embeddedEventLoop.run()
+        fixture.requestExecutor.runFirst()
+        fixture.channel.embeddedEventLoop.run()
+        fixture.drainTerminalWork()
+
+        let responses = try readResponses(from: fixture.channel)
+        XCTAssertEqual(responses["subscribe-2"]?.ok, true)
+        XCTAssertEqual(responses["unsubscribe-all-1"]?.ok, true)
+        XCTAssertEqual(eventLog.events, ["subscribe-1"])
+        XCTAssertEqual(fixture.observability.snapshot(activeSessions: []).activeTerminalStreamSubscriptionCount, 1)
+    }
+
+    func testMatchingCleanupAfterClaimVetoesInstallWithoutRestoringDisplacedOwner() throws {
+        let eventLog = EventLog()
+        let fixture = try makeFixture(outputStreamHandler: StubTerminalStreamHandler(eventLog: eventLog))
+        defer { fixture.cleanup() }
+        let panelID = ordinaryPanelID(windowID: "@16")
+        let current = try XCTUnwrap(fixture.handler.handleLocalRequest(
+            subscribeRequest(id: "subscribe-b", panelID: panelID, subscriptionID: "owner-b"),
+            context: fixture.context
+        ))
+        XCTAssertEqual(current.applyOnEventLoop?() ?? .accepted, .accepted)
+
+        try writeRequest(subscribeRequest(id: "subscribe-a",
+                                          panelID: panelID,
+                                          subscriptionID: "owner-a"),
+                         to: fixture.channel)
+        try writeRequest(BridgeRequest(id: "unsubscribe-a",
+                                       action: "unsubscribe_terminal_stream",
+                                       params: ["subscription_id": .string("owner-a")]),
+                         to: fixture.channel)
+        fixture.requestExecutor.runFirst()
+        fixture.requestExecutor.runFirst()
+        fixture.channel.embeddedEventLoop.run()
+        fixture.drainTerminalWork()
+
+        let responses = try readResponses(from: fixture.channel)
+        XCTAssertEqual(responses["subscribe-a"]?.error?.code, "superseded")
+        XCTAssertEqual(responses["unsubscribe-a"]?.ok, true)
+        XCTAssertEqual(eventLog.events,
+                       ["subscribe-1", "stop-1", "subscribe-2", "stop-2"])
+        XCTAssertEqual(fixture.observability.snapshot(activeSessions: []).activeTerminalStreamSubscriptionCount, 0)
     }
 
     func testDisconnectBeforeSubscribeFinalizeRejectsAndReleasesLateCandidate() throws {
