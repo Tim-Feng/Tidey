@@ -96,9 +96,11 @@ final class OrdinaryTmuxOutputStreamHandlerTests: XCTestCase {
             self.handler = handler
         }
 
-        func start() throws {
+        func prepare() throws {
             startCount += 1
         }
+
+        func activate() {}
 
         func stop() {
             stopCount += 1

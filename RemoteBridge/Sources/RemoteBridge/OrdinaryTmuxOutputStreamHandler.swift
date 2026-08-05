@@ -41,7 +41,8 @@ struct TerminalStreamDeltaEnvelope: Codable, Sendable, Equatable {
 }
 
 protocol TerminalByteTailing: Sendable {
-    func start() throws
+    func prepare() throws
+    func activate()
     func stop()
 }
 
@@ -63,7 +64,7 @@ final class TerminalByteFileTailer: TerminalByteTailing, @unchecked Sendable {
         self.handler = handler
     }
 
-    func start() throws {
+    func prepare() throws {
         var startError: Error?
         queue.sync {
             guard isStarted == false else {
@@ -94,6 +95,8 @@ final class TerminalByteFileTailer: TerminalByteTailing, @unchecked Sendable {
             throw startError
         }
     }
+
+    func activate() {}
 
     func stop() {
         queue.sync {
@@ -266,7 +269,8 @@ struct OrdinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreaming {
                                                 cursorColumn: cursor?.column,
                                                 cursorVisible: cursor?.cursorVisible))
         }
-        try tailer.start()
+        try tailer.prepare()
+        tailer.activate()
 
         do {
             let streamRoute = try adapter.startPipePane(route: route, outputFilePath: outputFileURL.path)
