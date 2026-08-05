@@ -49,12 +49,19 @@ protocol TerminalByteTailing: Sendable {
 final class TerminalByteFileTailer: TerminalByteTailing, @unchecked Sendable {
     typealias ChunkHandler = @Sendable (Data) -> Void
 
+    private enum State {
+        case idle
+        case prepared
+        case active
+        case stopped
+    }
+
     private let url: URL
     private let queue: DispatchQueue
     private let handler: ChunkHandler
     private var fileHandle: FileHandle?
     private var source: DispatchSourceFileSystemObject?
-    private var isStarted = false
+    private var state: State = .idle
 
     init(url: URL,
          queue: DispatchQueue = DispatchQueue(label: "com.tidey.remote-bridge.terminal-byte-file-tailer"),
@@ -65,47 +72,64 @@ final class TerminalByteFileTailer: TerminalByteTailing, @unchecked Sendable {
     }
 
     func prepare() throws {
-        var startError: Error?
+        var prepareError: Error?
         queue.sync {
-            guard isStarted == false else {
+            guard state == .idle else {
                 return
             }
             do {
                 let handle = try FileHandle(forReadingFrom: url)
-                try handle.seekToEnd()
-                let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: handle.fileDescriptor,
-                                                                       eventMask: [.extend, .write],
-                                                                       queue: queue)
-                source.setEventHandler { [weak self] in
-                    self?.processFileEvent()
-                }
-                source.setCancelHandler { [weak self, weak handle] in
-                    try? handle?.close()
-                    self?.fileHandle = nil
-                }
+                try handle.seek(toOffset: 0)
                 fileHandle = handle
-                self.source = source
-                isStarted = true
-                source.resume()
+                state = .prepared
             } catch {
-                startError = error
+                prepareError = error
             }
         }
-        if let startError {
-            throw startError
+        if let prepareError {
+            throw prepareError
         }
     }
 
-    func activate() {}
+    func activate() {
+        queue.async {
+            guard self.state == .prepared,
+                  let handle = self.fileHandle else {
+                return
+            }
+            let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: handle.fileDescriptor,
+                                                                   eventMask: [.extend, .write],
+                                                                   queue: self.queue)
+            source.setEventHandler { [weak self] in
+                self?.processFileEvent()
+            }
+            source.setCancelHandler { [weak self, weak handle] in
+                try? handle?.close()
+                self?.fileHandle = nil
+            }
+            self.source = source
+            self.state = .active
+            source.resume()
+            self.processFileEvent()
+        }
+    }
 
     func stop() {
         queue.sync {
-            guard isStarted else {
-                return
+            switch state {
+            case .idle:
+                state = .stopped
+            case .prepared:
+                state = .stopped
+                try? fileHandle?.close()
+                fileHandle = nil
+            case .active:
+                state = .stopped
+                source?.cancel()
+                source = nil
+            case .stopped:
+                break
             }
-            isStarted = false
-            source?.cancel()
-            source = nil
         }
     }
 
@@ -118,7 +142,7 @@ final class TerminalByteFileTailer: TerminalByteTailing, @unchecked Sendable {
     #endif
 
     private func processFileEvent() {
-        guard isStarted else {
+        guard state == .active else {
             return
         }
         readAvailableBytes()
