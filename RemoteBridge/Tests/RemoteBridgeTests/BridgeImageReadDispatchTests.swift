@@ -24,7 +24,7 @@ final class BridgeImageReadDispatchTests: XCTestCase {
         XCTAssertNotNil(result.response.error)
     }
 
-    func testConnectionEndpointsAdvertiseImageReadCapability() throws {
+    func testConnectionEndpointsAdvertiseBridgeCapabilities() throws {
         let handler = Self.makeHandler()
         let channel = EmbeddedChannel(handler: handler)
         defer { _ = try? channel.finish() }
@@ -38,6 +38,9 @@ final class BridgeImageReadDispatchTests: XCTestCase {
         XCTAssertTrue(result.response.ok)
         let capabilities = try XCTUnwrap(result.response.result?["capabilities"]?.arrayValue)
         XCTAssertTrue(capabilities.compactMap(\.stringValue).contains("image_read_v1"))
+        XCTAssertTrue(capabilities.compactMap(\.stringValue).contains(
+            BridgeProtocolCapability.terminalStreamSubscriptionOwnership
+        ))
     }
 
     private static func makeHandler() -> WebSocketFrameHandler {

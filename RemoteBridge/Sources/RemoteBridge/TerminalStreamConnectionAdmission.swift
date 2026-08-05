@@ -124,7 +124,7 @@ final class TerminalStreamConnectionAdmission: @unchecked Sendable {
     }
 
     @discardableResult
-    func prepareIdentifiedUnsubscribe(panelID: String, id: String) -> Bool {
+    func prepareIdentifiedUnsubscribe(panelID: String? = nil, id: String) -> Bool {
         lock.lock()
         defer { lock.unlock() }
         guard isRetired == false else {

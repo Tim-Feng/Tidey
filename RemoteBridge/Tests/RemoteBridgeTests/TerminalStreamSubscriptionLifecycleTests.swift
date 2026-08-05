@@ -182,14 +182,19 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
             lock.unlock()
             eventLog.append("subscribe-\(label)")
             let route = TerminalStreamSubscriptionLifecycleTests.ordinaryRoute(panelID: panelID)
+            let subscriptionID = request.params?["subscription_id"]?.stringValue
+            var result: [String: JSONValue] = [
+                "subscribed": .bool(true),
+                "workspace_id": .string(route.workspaceID),
+                "panel_id": .string(route.panelID),
+                "initial_output": .string("initial"),
+            ]
+            if let subscriptionID {
+                result["subscription_id"] = .string(subscriptionID)
+            }
             let response = BridgeResponse(id: request.id,
                                           ok: true,
-                                          result: [
-                                            "subscribed": .bool(true),
-                                            "workspace_id": .string(route.workspaceID),
-                                            "panel_id": .string(route.panelID),
-                                            "initial_output": .string("initial"),
-                                          ],
+                                          result: result,
                                           error: nil)
             let onActivate: (@Sendable () -> Void)?
             if emitOnActivate {
@@ -199,6 +204,7 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
                         type: "terminal_stream_delta",
                         workspaceID: route.workspaceID,
                         panelID: route.panelID,
+                        subscriptionID: subscriptionID,
                         chunk: "pending",
                         chunkBase64: Data("pending".utf8).base64EncodedString(),
                         cursorRow: 1,
@@ -298,6 +304,245 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
 
         XCTAssertEqual(eventLog.events, ["subscribe-1", "subscribe-2", "stop-1"])
         XCTAssertEqual(fixture.observability.snapshot(activeSessions: []).activeTerminalStreamSubscriptionCount, 1)
+    }
+
+    func testStaleIdentifiedCleanupDoesNotStopNewerOwner() throws {
+        let eventLog = EventLog()
+        let fixture = try makeFixture(outputStreamHandler: StubTerminalStreamHandler(eventLog: eventLog))
+        defer { fixture.cleanup() }
+        let panelID = ordinaryPanelID(windowID: "@16")
+
+        let first = try XCTUnwrap(fixture.handler.handleLocalRequest(
+            subscribeRequest(id: "subscribe-a", panelID: panelID, subscriptionID: "owner-a"),
+            context: fixture.context
+        ))
+        XCTAssertEqual(first.applyOnEventLoop?() ?? .accepted, .accepted)
+        let second = try XCTUnwrap(fixture.handler.handleLocalRequest(
+            subscribeRequest(id: "subscribe-b", panelID: panelID, subscriptionID: "owner-b"),
+            context: fixture.context
+        ))
+        XCTAssertEqual(second.applyOnEventLoop?() ?? .accepted, .accepted)
+        let staleCleanup = try XCTUnwrap(fixture.handler.handleLocalRequest(
+            BridgeRequest(id: "unsubscribe-a",
+                          action: "unsubscribe_terminal_stream",
+                          params: [
+                            "panel_id": .string(panelID),
+                            "subscription_id": .string("owner-a"),
+                          ]),
+            context: fixture.context
+        ))
+        XCTAssertEqual(staleCleanup.applyOnEventLoop?() ?? .accepted, .accepted)
+        fixture.drainTerminalWork()
+
+        XCTAssertEqual(eventLog.events, ["subscribe-1", "stop-1", "subscribe-2"])
+        XCTAssertEqual(fixture.observability.snapshot(activeSessions: []).activeTerminalStreamSubscriptionCount, 1)
+    }
+
+    func testIdentifiedCleanupUsesConnectionGlobalSubscriptionIDWithoutPanelFallback() throws {
+        let eventLog = EventLog()
+        let fixture = try makeFixture(outputStreamHandler: StubTerminalStreamHandler(eventLog: eventLog))
+        defer { fixture.cleanup() }
+        let panelID = ordinaryPanelID(windowID: "@16")
+
+        let subscribe = try XCTUnwrap(fixture.handler.handleLocalRequest(
+            subscribeRequest(id: "subscribe-a", panelID: panelID, subscriptionID: "owner-a"),
+            context: fixture.context
+        ))
+        XCTAssertEqual(subscribe.applyOnEventLoop?() ?? .accepted, .accepted)
+
+        let cleanup = try XCTUnwrap(fixture.handler.handleLocalRequest(
+            BridgeRequest(id: "unsubscribe-a",
+                          action: "unsubscribe_terminal_stream",
+                          params: ["subscription_id": .string("owner-a")]),
+            context: fixture.context
+        ))
+        XCTAssertTrue(cleanup.response.ok)
+        XCTAssertEqual(cleanup.applyOnEventLoop?() ?? .accepted, .accepted)
+        fixture.drainTerminalWork()
+
+        XCTAssertEqual(eventLog.events, ["subscribe-1", "stop-1"])
+        XCTAssertEqual(fixture.observability.snapshot(activeSessions: []).activeTerminalStreamSubscriptionCount, 0)
+    }
+
+    func testLegacyCleanupDoesNotStopIdentifiedOwner() throws {
+        let eventLog = EventLog()
+        let fixture = try makeFixture(outputStreamHandler: StubTerminalStreamHandler(eventLog: eventLog))
+        defer { fixture.cleanup() }
+        let panelID = ordinaryPanelID(windowID: "@16")
+
+        let identified = try XCTUnwrap(fixture.handler.handleLocalRequest(
+            subscribeRequest(id: "subscribe-a", panelID: panelID, subscriptionID: "owner-a"),
+            context: fixture.context
+        ))
+        XCTAssertEqual(identified.applyOnEventLoop?() ?? .accepted, .accepted)
+        let legacyCleanup = try XCTUnwrap(fixture.handler.handleLocalRequest(
+            BridgeRequest(id: "unsubscribe-legacy",
+                          action: "unsubscribe_terminal_stream",
+                          params: ["panel_id": .string(panelID)]),
+            context: fixture.context
+        ))
+        XCTAssertEqual(legacyCleanup.applyOnEventLoop?() ?? .accepted, .accepted)
+        fixture.drainTerminalWork()
+
+        XCTAssertEqual(eventLog.events, ["subscribe-1"])
+        XCTAssertEqual(fixture.observability.snapshot(activeSessions: []).activeTerminalStreamSubscriptionCount, 1)
+    }
+
+    func testDifferentOwnerCleanupDoesNotFencePendingIdentifiedSubscribe() throws {
+        let eventLog = EventLog()
+        let fixture = try makeFixture(outputStreamHandler: StubTerminalStreamHandler(eventLog: eventLog))
+        defer { fixture.cleanup() }
+        let panelID = ordinaryPanelID(windowID: "@16")
+
+        try writeRequest(subscribeRequest(id: "subscribe-b",
+                                          panelID: panelID,
+                                          subscriptionID: "owner-b"),
+                         to: fixture.channel)
+        try writeRequest(BridgeRequest(id: "unsubscribe-a",
+                                       action: "unsubscribe_terminal_stream",
+                                       params: [
+                                        "panel_id": .string(panelID),
+                                        "subscription_id": .string("owner-a"),
+                                       ]),
+                         to: fixture.channel)
+        fixture.requestExecutor.runLast()
+        fixture.requestExecutor.runFirst()
+        fixture.channel.embeddedEventLoop.run()
+        fixture.drainTerminalWork()
+
+        let responses = try readResponses(from: fixture.channel)
+        XCTAssertEqual(responses["unsubscribe-a"]?.ok, true)
+        XCTAssertEqual(responses["subscribe-b"]?.ok, true)
+        XCTAssertEqual(eventLog.events, ["subscribe-1"])
+        XCTAssertEqual(fixture.observability.snapshot(activeSessions: []).activeTerminalStreamSubscriptionCount, 1)
+    }
+
+    func testMatchingCleanupCommittedBeforeSubscribeCannotStopDifferentCurrentOwner() throws {
+        let eventLog = EventLog()
+        let outputStreamHandler = StubTerminalStreamHandler(eventLog: eventLog)
+        let fixture = try makeFixture(outputStreamHandler: outputStreamHandler)
+        defer { fixture.cleanup() }
+        let panelID = ordinaryPanelID(windowID: "@16")
+
+        let current = try XCTUnwrap(fixture.handler.handleLocalRequest(
+            subscribeRequest(id: "subscribe-b", panelID: panelID, subscriptionID: "owner-b"),
+            context: fixture.context
+        ))
+        XCTAssertEqual(current.applyOnEventLoop?() ?? .accepted, .accepted)
+
+        try writeRequest(subscribeRequest(id: "subscribe-a",
+                                          panelID: panelID,
+                                          subscriptionID: "owner-a"),
+                         to: fixture.channel)
+        try writeRequest(BridgeRequest(id: "unsubscribe-a",
+                                       action: "unsubscribe_terminal_stream",
+                                       params: [
+                                        "panel_id": .string(panelID),
+                                        "subscription_id": .string("owner-a"),
+                                       ]),
+                         to: fixture.channel)
+        fixture.requestExecutor.runLast()
+        fixture.channel.embeddedEventLoop.run()
+        fixture.requestExecutor.runFirst()
+        fixture.channel.embeddedEventLoop.run()
+        fixture.drainTerminalWork()
+
+        let responses = try readResponses(from: fixture.channel)
+        XCTAssertEqual(responses["unsubscribe-a"]?.ok, true)
+        XCTAssertEqual(responses["subscribe-a"]?.error?.code, "superseded")
+        XCTAssertEqual(eventLog.events, ["subscribe-1"])
+        XCTAssertEqual(fixture.observability.snapshot(activeSessions: []).activeTerminalStreamSubscriptionCount, 1)
+    }
+
+    func testReusedIdentifiedIDCannotStopDifferentCurrentOwner() throws {
+        let eventLog = EventLog()
+        let outputStreamHandler = StubTerminalStreamHandler(eventLog: eventLog)
+        let fixture = try makeFixture(outputStreamHandler: outputStreamHandler)
+        defer { fixture.cleanup() }
+        let panelID = ordinaryPanelID(windowID: "@16")
+
+        let first = try XCTUnwrap(fixture.handler.handleLocalRequest(
+            subscribeRequest(id: "subscribe-a-1", panelID: panelID, subscriptionID: "owner-a"),
+            context: fixture.context
+        ))
+        XCTAssertEqual(first.applyOnEventLoop?() ?? .accepted, .accepted)
+        let current = try XCTUnwrap(fixture.handler.handleLocalRequest(
+            subscribeRequest(id: "subscribe-b", panelID: panelID, subscriptionID: "owner-b"),
+            context: fixture.context
+        ))
+        XCTAssertEqual(current.applyOnEventLoop?() ?? .accepted, .accepted)
+        XCTAssertEqual(eventLog.events, ["subscribe-1", "stop-1", "subscribe-2"])
+
+        try writeRequest(subscribeRequest(id: "subscribe-a-2",
+                                          panelID: panelID,
+                                          subscriptionID: "owner-a"),
+                         to: fixture.channel)
+        fixture.requestExecutor.runFirst()
+        fixture.channel.embeddedEventLoop.run()
+        fixture.drainTerminalWork()
+
+        let responses = try readResponses(from: fixture.channel)
+        XCTAssertEqual(responses["subscribe-a-2"]?.error?.code, "superseded")
+        XCTAssertEqual(eventLog.events, ["subscribe-1", "stop-1", "subscribe-2"])
+        XCTAssertEqual(fixture.observability.snapshot(activeSessions: []).activeTerminalStreamSubscriptionCount, 1)
+    }
+
+    func testLegacyCleanupCommittedBeforeSubscribeCannotStopIdentifiedCurrentOwner() throws {
+        let eventLog = EventLog()
+        let outputStreamHandler = StubTerminalStreamHandler(eventLog: eventLog)
+        let fixture = try makeFixture(outputStreamHandler: outputStreamHandler)
+        defer { fixture.cleanup() }
+        let panelID = ordinaryPanelID(windowID: "@16")
+
+        let current = try XCTUnwrap(fixture.handler.handleLocalRequest(
+            subscribeRequest(id: "subscribe-b", panelID: panelID, subscriptionID: "owner-b"),
+            context: fixture.context
+        ))
+        XCTAssertEqual(current.applyOnEventLoop?() ?? .accepted, .accepted)
+
+        try writeRequest(subscribeRequest(id: "subscribe-legacy", panelID: panelID),
+                         to: fixture.channel)
+        try writeRequest(BridgeRequest(id: "unsubscribe-legacy",
+                                       action: "unsubscribe_terminal_stream",
+                                       params: ["panel_id": .string(panelID)]),
+                         to: fixture.channel)
+        fixture.requestExecutor.runLast()
+        fixture.channel.embeddedEventLoop.run()
+        fixture.requestExecutor.runFirst()
+        fixture.channel.embeddedEventLoop.run()
+        fixture.drainTerminalWork()
+
+        let responses = try readResponses(from: fixture.channel)
+        XCTAssertEqual(responses["unsubscribe-legacy"]?.ok, true)
+        XCTAssertEqual(responses["subscribe-legacy"]?.error?.code, "superseded")
+        XCTAssertEqual(eventLog.events, ["subscribe-1"])
+        XCTAssertEqual(fixture.observability.snapshot(activeSessions: []).activeTerminalStreamSubscriptionCount, 1)
+    }
+
+    func testInvalidSubscriptionIDsFailBeforePhysicalLaneBuild() throws {
+        let eventLog = EventLog()
+        let fixture = try makeFixture(outputStreamHandler: StubTerminalStreamHandler(eventLog: eventLog))
+        defer { fixture.cleanup() }
+        let panelID = ordinaryPanelID(windowID: "@16")
+        let invalidValues: [JSONValue] = [
+            .bool(true),
+            .string(""),
+            .string(String(repeating: "a", count: 129)),
+        ]
+
+        for (index, value) in invalidValues.enumerated() {
+            let result = try XCTUnwrap(fixture.handler.handleLocalRequest(
+                BridgeRequest(id: "invalid-\(index)",
+                              action: "subscribe_terminal_stream",
+                              params: [
+                                "panel_id": .string(panelID),
+                                "subscription_id": value,
+                              ]),
+                context: fixture.context
+            ))
+            XCTAssertEqual(result.response.error?.code, "invalid_request")
+        }
+        XCTAssertEqual(eventLog.events, [])
     }
 
     func testChannelInactiveStopsAllTerminalStreams() throws {
@@ -459,7 +704,7 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
         let responses = try readResponses(from: fixture.channel)
         XCTAssertEqual(responses["unsubscribe-2"]?.ok, true)
         XCTAssertEqual(responses["subscribe-1"]?.error?.code, "superseded")
-        XCTAssertEqual(eventLog.events, ["subscribe-1", "stop-1"])
+        XCTAssertEqual(eventLog.events, [])
         XCTAssertEqual(fixture.observability.snapshot(activeSessions: []).activeTerminalStreamSubscriptionCount, 0)
     }
 
@@ -485,7 +730,7 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
         let responses = try readResponses(from: fixture.channel)
         XCTAssertEqual(responses["unsubscribe-2"]?.ok, true)
         XCTAssertEqual(responses["subscribe-1"]?.error?.code, "superseded")
-        XCTAssertEqual(eventLog.events, ["subscribe-1", "stop-1"])
+        XCTAssertEqual(eventLog.events, [])
         XCTAssertEqual(fixture.observability.snapshot(activeSessions: []).activeTerminalStreamSubscriptionCount, 0)
     }
 
@@ -560,13 +805,19 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
         XCTAssertEqual(fixture.observability.snapshot(activeSessions: []).activeTerminalStreamSubscriptionCount, 0)
     }
 
-    private func subscribeRequest(id: String, panelID: String) -> BridgeRequest {
-        BridgeRequest(id: id,
-                      action: "subscribe_terminal_stream",
-                      params: [
-                        "workspace_id": .string("workspace-1"),
-                        "panel_id": .string(panelID),
-                      ])
+    private func subscribeRequest(id: String,
+                                  panelID: String,
+                                  subscriptionID: String? = nil) -> BridgeRequest {
+        var params: [String: JSONValue] = [
+            "workspace_id": .string("workspace-1"),
+            "panel_id": .string(panelID),
+        ]
+        if let subscriptionID {
+            params["subscription_id"] = .string(subscriptionID)
+        }
+        return BridgeRequest(id: id,
+                             action: "subscribe_terminal_stream",
+                             params: params)
     }
 
     private func writeRequest(_ request: BridgeRequest, to channel: EmbeddedChannel) throws {

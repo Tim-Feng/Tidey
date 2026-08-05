@@ -308,6 +308,7 @@ struct OrdinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreaming {
             throw BridgeInternalError.invalidRequest("subscribe_terminal_stream requires ordinary tmux panel_id")
         }
         let workspaceID = request.params?["workspace_id"]?.stringValue
+        let subscriptionID = request.params?["subscription_id"]?.stringValue
         guard let route = try routeResolver.route(forPanelID: panelID, workspaceID: workspaceID) else {
             throw BridgeInternalError.notFound("ordinary tmux logical panel is not authorized")
         }
@@ -322,6 +323,7 @@ struct OrdinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreaming {
             onDelta(TerminalStreamDeltaEnvelope(type: "terminal_stream_delta",
                                                 workspaceID: streamRoute.workspaceID,
                                                 panelID: streamRoute.panelID,
+                                                subscriptionID: subscriptionID,
                                                 chunk: String(data: data, encoding: .utf8) ?? "",
                                                 chunkBase64: data.base64EncodedString(),
                                                 cursorRow: cursor?.row,
@@ -347,17 +349,21 @@ struct OrdinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreaming {
             let bootstrap = try adapter.bootstrapTerminalStream(refreshedRoute: streamRoute,
                                                                 outputFilePath: outputFileURL.path,
                                                                 maxLines: 200)
+            var result: [String: JSONValue] = [
+                "subscribed": .bool(true),
+                "workspace_id": .string(streamRoute.workspaceID),
+                "panel_id": .string(streamRoute.panelID),
+                "initial_output": .string(bootstrap.initialOutput.output),
+                "cursor_row": bootstrap.initialOutput.cursorRow.map { .number(Double($0)) } ?? .null,
+                "cursor_col": bootstrap.initialOutput.cursorColumn.map { .number(Double($0)) } ?? .null,
+                "cursor_visible": bootstrap.initialOutput.cursorVisible.map(JSONValue.bool) ?? .null,
+            ]
+            if let subscriptionID {
+                result["subscription_id"] = .string(subscriptionID)
+            }
             let response = BridgeResponse(id: request.id,
                                           ok: true,
-                                          result: [
-                                            "subscribed": .bool(true),
-                                            "workspace_id": .string(streamRoute.workspaceID),
-                                            "panel_id": .string(streamRoute.panelID),
-                                            "initial_output": .string(bootstrap.initialOutput.output),
-                                            "cursor_row": bootstrap.initialOutput.cursorRow.map { .number(Double($0)) } ?? .null,
-                                            "cursor_col": bootstrap.initialOutput.cursorColumn.map { .number(Double($0)) } ?? .null,
-                                            "cursor_visible": bootstrap.initialOutput.cursorVisible.map(JSONValue.bool) ?? .null,
-                                          ],
+                                          result: result,
                                           error: nil)
             return OrdinaryTmuxOutputStreamStart(response: response, subscription: subscription)
         } catch {

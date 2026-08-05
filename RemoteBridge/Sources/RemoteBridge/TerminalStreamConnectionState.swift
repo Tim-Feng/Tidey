@@ -114,16 +114,20 @@ struct TerminalStreamConnectionState {
         return .accepted(displacedLease: displacedLease)
     }
 
-    mutating func releaseInstalledIdentifiedLease(panelID: String,
+    mutating func releaseInstalledIdentifiedLease(panelID: String?,
                                                   id: String) -> ReleaseDecision {
         guard isRetired == false else {
             return .rejected
         }
-        guard let lease = ownedByPanel[panelID],
+        let matchingPanelID = panelID ?? ownedByPanel.first(where: { _, lease in
+            lease.owner == .identified(id)
+        })?.key
+        guard let matchingPanelID,
+              let lease = ownedByPanel[matchingPanelID],
               lease.owner == .identified(id) else {
             return .accepted([])
         }
-        ownedByPanel.removeValue(forKey: panelID)
+        ownedByPanel.removeValue(forKey: matchingPanelID)
         return .accepted([lease])
     }
 

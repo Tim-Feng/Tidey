@@ -259,6 +259,36 @@ final class OrdinaryTmuxOutputStreamHandlerTests: XCTestCase {
         XCTAssertEqual(adapter.stoppedPipeRoutes, [route])
     }
 
+    func testIdentifiedSubscriptionEchoesIdentityInResponseAndDelta() throws {
+        let route = ordinaryRoute()
+        let adapter = StubAdapter()
+        let tailerBox = StubTailerBox()
+        let deltaBox = DeltaBox()
+        let handler = OrdinaryTmuxOutputStreamHandler(routeResolver: StubResolver(route: route),
+                                                      adapter: adapter,
+                                                      outputDirectory: temporaryDirectory(),
+                                                      makeTailer: { url, handler in
+                                                          tailerBox.makeTailer(url: url, handler: handler)
+                                                      })
+
+        let start = try XCTUnwrap(handler.subscribe(BridgeRequest(
+            id: "request-1",
+            action: "subscribe_terminal_stream",
+            params: [
+                "panel_id": .string(route.panelID),
+                "subscription_id": .string("owner-a"),
+            ]
+        ), onDelta: { delta in
+            deltaBox.append(delta)
+        }))
+        start.subscription.activate()
+        tailerBox.firstTailer?.emit("identified")
+
+        XCTAssertEqual(start.response.result?["subscription_id"]?.stringValue, "owner-a")
+        XCTAssertEqual(deltaBox.deltas.first?.subscriptionID, "owner-a")
+        start.subscription.stop()
+    }
+
     func testReplacementStopCleansUpAndRemainsRetryableAfterPipeStopFailure() throws {
         let route = ordinaryRoute()
         let adapter = StubAdapter()
