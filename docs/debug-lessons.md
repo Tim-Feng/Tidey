@@ -246,6 +246,11 @@
   - WebSocket request receipt、每個 panel 的實體 pipe 置換、每條 connection 的訂閱表是三個不同 linearization boundary；只在 handler dictionary 加 lock，無法防止跨 connection 的晚到 subscribe 復活舊 owner
   - Bridge-wide receipt sequence 先建立全域順序，per-panel serial lane 負責 invalidate→stop→build，event-loop-local state 再以 exact token commit connection ownership；三層都要保留原始 request identity
   - delta 要在昂貴 cursor query／enqueue 前與 event-loop write 前各檢查 delivery gate；只檢查一次，invalidate 後已排隊的 chunk 仍會漏到新 owner
+- logical admission 必須在 physical lane teardown 之前完成三階段交接
+  - event-loop 的 owner state 測試全綠，仍可能掩蓋 lane 已經先停掉有效 B、之後才拒絕 A 的 phantom owner；每條 WebSocket connection 要先以同一把 lock `reserve`，lane 在任何 invalidate／stop／build 前原子 `claim`，event loop 安裝前再 `finalize`
+  - lane 即使 claim 失敗也要先墊高自己的 sequence high-water，阻止更舊的跨 connection physical work 復活；reserve 失敗則完全不能進 lane
+  - cleanup 只能取消 sequence 比自己舊的 exact reservation，不能清空整張 pending 表或只看 coarse watermark；identified subscription ID 是 connection-global、永久 one-shot authority，附帶的 panel 只能是相容性 hint
+  - cleanup 發生在 claim 前時必須是零 physical side effect；claim 後才 cleanup 則 physical replacement 已合法 linearize，只 veto 最後 install 並清掉 candidate，不嘗試復活已停止的舊 pipe
 - best-effort unsubscribe 仍要保留可重試的實體 teardown ownership
   - `tmux pipe-pane` stop 失敗時可以讓 unsubscribe 對 client 完成，但 lane 不能把 active lease 清掉；否則下一次 `pipe-pane -o` 可能成功返回卻沿用 orphan pipe，形成「subscribe 成功但永遠沒有 delta」
   - stop outcome 要穿過 subscription／lease boundary；失敗的 invalidated lease 留在 lane，後續 subscribe 必須先重試 `stopForReplacement()`，重試成功前禁止 build 新 tailer
