@@ -22,7 +22,8 @@ final class OrdinaryTmuxOutputStreamHandlerTests: XCTestCase {
     }
 
     private final class StubAdapter: OrdinaryTmuxRouteRefreshing, OrdinaryTmuxTerminalStreaming, @unchecked Sendable {
-        private enum StubError: Error {
+        enum StubError: Error, Equatable {
+            case bootstrapFailed
             case stopFailed
         }
 
@@ -32,6 +33,7 @@ final class OrdinaryTmuxOutputStreamHandlerTests: XCTestCase {
         private(set) var stoppedPipeRoutes = [OrdinaryTmuxPanelRoute]()
         private(set) var cursorQueryCount = 0
         var remainingStopFailures = 0
+        var shouldFailBootstrap = false
         var initialOutput = OrdinaryTmuxCapturedOutput(output: "\u{1B}[31mhello\u{1B}[0m",
                                                        cursorRow: 3,
                                                        cursorColumn: 4,
@@ -61,6 +63,9 @@ final class OrdinaryTmuxOutputStreamHandlerTests: XCTestCase {
         func bootstrapTerminalStream(refreshedRoute: OrdinaryTmuxPanelRoute,
                                      outputFilePath: String,
                                      maxLines: Int) throws -> OrdinaryTmuxTerminalStreamBootstrap {
+            if shouldFailBootstrap {
+                throw StubError.bootstrapFailed
+            }
             let initialOutput = try captureANSIOutput(route: refreshedRoute, maxLines: maxLines)
             let streamRoute = try startPipePane(route: refreshedRoute,
                                                 outputFilePath: outputFilePath)
@@ -283,6 +288,33 @@ final class OrdinaryTmuxOutputStreamHandlerTests: XCTestCase {
         XCTAssertNoThrow(try subscription.stopForReplacement())
         XCTAssertEqual(tailerBox.firstTailer?.stopCount, 2)
         XCTAssertEqual(adapter.stoppedPipeRoutes, [route, route])
+    }
+
+    func testBootstrapErrorWithSuccessfulRollbackLeavesNoPhantomOwner() throws {
+        let route = ordinaryRoute()
+        let adapter = StubAdapter()
+        adapter.shouldFailBootstrap = true
+        let tailerBox = StubTailerBox()
+        let handler = OrdinaryTmuxOutputStreamHandler(routeResolver: StubResolver(route: route),
+                                                      adapter: adapter,
+                                                      outputDirectory: temporaryDirectory(),
+                                                      makeTailer: { url, handler in
+                                                          tailerBox.makeTailer(url: url, handler: handler)
+                                                      })
+
+        do {
+            _ = try handler.subscribe(BridgeRequest(id: "request-1",
+                                                    action: "subscribe_terminal_stream",
+                                                    params: ["panel_id": .string(route.panelID)]),
+                                      onDelta: { _ in })
+            XCTFail("Ambiguous bootstrap failure must preserve an exact cleanup owner")
+        } catch let failure as OrdinaryTmuxOutputStreamOwnedFailure {
+            XCTAssertEqual(failure.underlying as? StubAdapter.StubError, .bootstrapFailed)
+            XCTAssertEqual(failure.subscription.route, route)
+            XCTAssertNoThrow(try failure.subscription.stopForReplacement())
+            XCTAssertEqual(adapter.stoppedPipeRoutes, [route])
+            XCTAssertEqual(tailerBox.firstTailer?.stopCount, 1)
+        }
     }
 
     func testRejectedDeliverySkipsCursorQueryAndDeltaConstruction() throws {

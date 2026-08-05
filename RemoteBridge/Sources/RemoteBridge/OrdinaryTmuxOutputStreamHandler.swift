@@ -300,52 +300,59 @@ struct OrdinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreaming {
         guard let route = try routeResolver.route(forPanelID: panelID, workspaceID: workspaceID) else {
             throw BridgeInternalError.notFound("ordinary tmux logical panel is not authorized")
         }
+        let streamRoute = try adapter.refreshedRoute(route)
 
         let outputFileURL = try makeOutputFile()
-        let initial = try adapter.captureANSIOutput(route: route, maxLines: 200)
         let tailer = makeTailer(outputFileURL) { data in
             guard allowedIf() else {
                 return
             }
-            let cursor = try? adapter.queryCursorPosition(route: route)
+            let cursor = try? adapter.queryCursorPosition(exactRoute: streamRoute)
             onDelta(TerminalStreamDeltaEnvelope(type: "terminal_stream_delta",
-                                                workspaceID: route.workspaceID,
-                                                panelID: route.panelID,
+                                                workspaceID: streamRoute.workspaceID,
+                                                panelID: streamRoute.panelID,
                                                 chunk: String(data: data, encoding: .utf8) ?? "",
                                                 chunkBase64: data.base64EncodedString(),
                                                 cursorRow: cursor?.row,
                                                 cursorColumn: cursor?.column,
                                                 cursorVisible: cursor?.cursorVisible))
         }
-        try tailer.prepare()
-        tailer.activate()
+        do {
+            try tailer.prepare()
+        } catch {
+            tailer.stop()
+            try? fileManager.removeItem(at: outputFileURL)
+            throw error
+        }
+        let subscription = OrdinaryTmuxTerminalStreamSubscription(route: streamRoute,
+                                                                 outputFileURL: outputFileURL,
+                                                                 adapter: adapter,
+                                                                 tailer: tailer,
+                                                                 cleanup: { [fileManager] url in
+                                                                     try? fileManager.removeItem(at: url)
+                                                                 })
 
         do {
-            let streamRoute = try adapter.startPipePane(route: route, outputFilePath: outputFileURL.path)
-            let subscription = OrdinaryTmuxTerminalStreamSubscription(route: streamRoute,
-                                                                     outputFileURL: outputFileURL,
-                                                                     adapter: adapter,
-                                                                     tailer: tailer,
-                                                                     cleanup: { [fileManager] url in
-                                                                         try? fileManager.removeItem(at: url)
-                                                                     })
+            let bootstrap = try adapter.bootstrapTerminalStream(refreshedRoute: streamRoute,
+                                                                outputFilePath: outputFileURL.path,
+                                                                maxLines: 200)
+            tailer.activate()
             let response = BridgeResponse(id: request.id,
                                           ok: true,
                                           result: [
                                             "subscribed": .bool(true),
                                             "workspace_id": .string(streamRoute.workspaceID),
                                             "panel_id": .string(streamRoute.panelID),
-                                            "initial_output": .string(initial.output),
-                                            "cursor_row": initial.cursorRow.map { .number(Double($0)) } ?? .null,
-                                            "cursor_col": initial.cursorColumn.map { .number(Double($0)) } ?? .null,
-                                            "cursor_visible": initial.cursorVisible.map(JSONValue.bool) ?? .null,
+                                            "initial_output": .string(bootstrap.initialOutput.output),
+                                            "cursor_row": bootstrap.initialOutput.cursorRow.map { .number(Double($0)) } ?? .null,
+                                            "cursor_col": bootstrap.initialOutput.cursorColumn.map { .number(Double($0)) } ?? .null,
+                                            "cursor_visible": bootstrap.initialOutput.cursorVisible.map(JSONValue.bool) ?? .null,
                                           ],
                                           error: nil)
             return OrdinaryTmuxOutputStreamStart(response: response, subscription: subscription)
         } catch {
-            tailer.stop()
-            try? fileManager.removeItem(at: outputFileURL)
-            throw error
+            throw OrdinaryTmuxOutputStreamOwnedFailure(underlying: error,
+                                                       subscription: subscription)
         }
     }
 
