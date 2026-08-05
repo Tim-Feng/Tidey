@@ -532,6 +532,22 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
         ])
     }
 
+    func testStopPipePaneTargetsOwningPaneWithoutRefreshingActivePane() throws {
+        let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
+        let route = makeRoute(socket: socket)
+        let state = RunnerState(responses: [
+            RunnerState.key(socket: socket, arguments: ["pipe-pane", "-t", "%old"]):
+                "",
+        ])
+        let adapter = makeAdapter(state: state)
+
+        try adapter.stopPipePane(exactRoute: route)
+
+        XCTAssertEqual(state.calls.map(\.arguments), [
+            ["pipe-pane", "-t", "%old"],
+        ])
+    }
+
     func testQueryCursorPositionParsesColumnRowAndVisibility() throws {
         let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
         let route = makeRoute(socket: socket)

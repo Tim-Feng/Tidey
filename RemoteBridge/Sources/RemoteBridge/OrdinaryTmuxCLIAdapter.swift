@@ -760,7 +760,9 @@ final class OrdinaryTmuxCLIAdapter {
     }
 
     func stopPipePane(exactRoute: OrdinaryTmuxPanelRoute) throws {
-        try stopPipePane(route: exactRoute)
+        _ = try commandRunner(exactRoute.socket,
+                              ["pipe-pane", "-t", exactRoute.activePaneID],
+                              nil)
     }
 
     func queryCursorPosition(route: OrdinaryTmuxPanelRoute) throws -> OrdinaryTmuxCursorPosition? {

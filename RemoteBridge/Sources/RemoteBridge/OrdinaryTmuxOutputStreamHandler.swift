@@ -204,7 +204,7 @@ final class OrdinaryTmuxTerminalStreamSubscription: OrdinaryTmuxTerminalStreamSu
         tailer.stop()
         defer { cleanup(outputFileURL) }
         do {
-            try adapter.stopPipePane(route: route)
+            try adapter.stopPipePane(exactRoute: route)
             physicallyClosed = true
             return true
         } catch {
@@ -222,7 +222,7 @@ final class OrdinaryTmuxTerminalStreamSubscription: OrdinaryTmuxTerminalStreamSu
 
         tailer.stop()
         defer { cleanup(outputFileURL) }
-        try adapter.stopPipePane(route: route)
+        try adapter.stopPipePane(exactRoute: route)
         physicallyClosed = true
     }
 }
