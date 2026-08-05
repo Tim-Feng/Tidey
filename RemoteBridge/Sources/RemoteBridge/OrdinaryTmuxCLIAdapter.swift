@@ -671,14 +671,14 @@ final class OrdinaryTmuxCLIAdapter {
             "\(endMarker) #{cursor_x} #{cursor_y} #{cursor_flag} #{pane_height}",
         ]
         let combinedOutput = try commandRunner(refreshedRoute.socket, arguments, nil)
-        return Self.parseAtomicCaptureOutput(combinedOutput,
-                                             beginMarker: beginMarker,
-                                             endMarker: endMarker)
+        return try Self.parseAtomicCaptureOutput(combinedOutput,
+                                                 beginMarker: beginMarker,
+                                                 endMarker: endMarker)
     }
 
     private static func parseAtomicCaptureOutput(_ combinedOutput: String,
                                                  beginMarker: String,
-                                                 endMarker: String) -> OrdinaryTmuxCapturedOutput {
+                                                 endMarker: String) throws -> OrdinaryTmuxCapturedOutput {
         let beginBoundary = "\(beginMarker)\n"
         let endBoundary = "\n\(endMarker) "
         guard let beginRange = combinedOutput.range(of: beginBoundary),
@@ -686,18 +686,16 @@ final class OrdinaryTmuxCLIAdapter {
               let endRange = combinedOutput.range(of: endBoundary,
                                                   options: .backwards,
                                                   range: beginRange.upperBound..<combinedOutput.endIndex) else {
-            return OrdinaryTmuxCapturedOutput(output: "",
-                                              cursorRow: nil,
-                                              cursorColumn: nil,
-                                              cursorVisible: nil)
+            throw BridgeInternalError.invalidResponse
         }
 
         let output = String(combinedOutput[beginRange.upperBound..<endRange.lowerBound])
-        let metadata = combinedOutput[endRange.upperBound...]
-            .split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
-            .first?
-            .split(whereSeparator: \.isWhitespace) ?? []
-        guard metadata.count >= 4,
+        let metadataLine = combinedOutput[endRange.upperBound...]
+        guard metadataLine.contains("\n") == false else {
+            throw BridgeInternalError.invalidResponse
+        }
+        let metadata = metadataLine.split(whereSeparator: \.isWhitespace)
+        guard metadata.count == 4,
               let cursorColumn = Int(metadata[0]),
               let cursorY = Int(metadata[1]),
               let visibilityFlag = Int(metadata[2]),
@@ -705,7 +703,8 @@ final class OrdinaryTmuxCLIAdapter {
               cursorColumn >= 0,
               cursorY >= 0,
               paneHeight > 0,
-              cursorY < paneHeight else {
+              cursorY < paneHeight,
+              visibilityFlag == 0 || visibilityFlag == 1 else {
             return OrdinaryTmuxCapturedOutput(output: output,
                                               cursorRow: nil,
                                               cursorColumn: nil,

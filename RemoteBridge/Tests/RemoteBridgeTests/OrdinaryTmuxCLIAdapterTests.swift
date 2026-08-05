@@ -572,6 +572,7 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
                                                   cursorColumn: 11,
                                                   cursorVisible: true))
         let captureArguments = try XCTUnwrap(state.calls.map(\.arguments).first { $0.contains(";") })
+        XCTAssertEqual(state.calls.count, 3, "refresh uses two calls and capture must use exactly one")
         let firstSeparator = try XCTUnwrap(captureArguments.firstIndex(of: ";"))
         let secondSeparator = try XCTUnwrap(captureArguments[(firstSeparator + 1)...].firstIndex(of: ";"))
         XCTAssertEqual(Array(captureArguments[(firstSeparator + 1)..<secondSeparator]),
@@ -696,6 +697,67 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
                                                   cursorVisible: nil))
     }
 
+    func testCaptureOutputTreatsEmptyBodyAsOnePhysicalRow() throws {
+        let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
+        let route = makeRoute(socket: socket)
+        let state = RunnerState(responses: [
+            RunnerState.key(socket: socket, arguments: windowExistsArguments): "@15\n",
+            RunnerState.key(socket: socket, arguments: listPanesArguments(windowID: "@15")):
+                "%21\t1\t1021\t/Users/timfeng/GitHub/work\tcodex\n",
+        ])
+        let adapter = makeAtomicCaptureAdapter(state: state,
+                                               body: "",
+                                               metadata: "0 0 1 1")
+
+        let captured = try adapter.captureOutput(route: route, maxLines: 1)
+
+        XCTAssertEqual(captured,
+                       OrdinaryTmuxCapturedOutput(output: "",
+                                                  cursorRow: 0,
+                                                  cursorColumn: 0,
+                                                  cursorVisible: true))
+    }
+
+    func testCaptureOutputRejectsTrailingContentAfterEndMetadata() throws {
+        let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
+        let route = makeRoute(socket: socket)
+        let state = RunnerState(responses: [
+            RunnerState.key(socket: socket, arguments: windowExistsArguments): "@15\n",
+            RunnerState.key(socket: socket, arguments: listPanesArguments(windowID: "@15")):
+                "%21\t1\t1021\t/Users/timfeng/GitHub/work\tcodex\n",
+        ])
+        let adapter = makeAtomicCaptureAdapter(state: state,
+                                               body: "choice",
+                                               metadata: "0 0 1 1",
+                                               trailingOutput: "\nunexpected")
+
+        XCTAssertThrowsError(try adapter.captureOutput(route: route, maxLines: 1))
+    }
+
+    func testCaptureOutputDropsCursorWhenMetadataShapeOrFlagIsInvalid() throws {
+        let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
+        let route = makeRoute(socket: socket)
+        for metadata in ["0 0 2 1", "0 0 1 1 extra"] {
+            let state = RunnerState(responses: [
+                RunnerState.key(socket: socket, arguments: windowExistsArguments): "@15\n",
+                RunnerState.key(socket: socket, arguments: listPanesArguments(windowID: "@15")):
+                    "%21\t1\t1021\t/Users/timfeng/GitHub/work\tcodex\n",
+            ])
+            let adapter = makeAtomicCaptureAdapter(state: state,
+                                                   body: "choice",
+                                                   metadata: metadata)
+
+            let captured = try adapter.captureOutput(route: route, maxLines: 1)
+
+            XCTAssertEqual(captured,
+                           OrdinaryTmuxCapturedOutput(output: "choice",
+                                                      cursorRow: nil,
+                                                      cursorColumn: nil,
+                                                      cursorVisible: nil),
+                           "metadata=\(metadata)")
+        }
+    }
+
     private var listClientsArguments: [String] {
         [
             "list-clients",
@@ -757,7 +819,8 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
 
     private func makeAtomicCaptureAdapter(state: RunnerState,
                                           body: String,
-                                          metadata: String) -> OrdinaryTmuxCLIAdapter {
+                                          metadata: String,
+                                          trailingOutput: String = "") -> OrdinaryTmuxCLIAdapter {
         OrdinaryTmuxCLIAdapter { socket, arguments, stdin in
             let fallback = try state.run(socket: socket, arguments: arguments, stdin: stdin)
             guard let firstSeparator = arguments.firstIndex(of: ";"),
@@ -769,7 +832,7 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
             let beginMarker = arguments[firstSeparator - 1]
             let endFormat = arguments[(secondSeparator + 1)...].last ?? ""
             let endMarker = endFormat.split(separator: " ", maxSplits: 1).first.map(String.init) ?? ""
-            return "\(beginMarker)\n\(body)\n\(endMarker) \(metadata)"
+            return "\(beginMarker)\n\(body)\n\(endMarker) \(metadata)\(trailingOutput)"
         }
     }
 
