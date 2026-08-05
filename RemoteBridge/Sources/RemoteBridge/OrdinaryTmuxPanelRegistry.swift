@@ -279,10 +279,21 @@ protocol OrdinaryTmuxRouteRefreshing: Sendable {
     func captureANSIOutput(route: OrdinaryTmuxPanelRoute, maxLines: Int) throws -> OrdinaryTmuxCapturedOutput
 }
 
+protocol OrdinaryTmuxTerminalStreaming: Sendable {
+    func startPipePane(route: OrdinaryTmuxPanelRoute, outputFilePath: String) throws -> OrdinaryTmuxPanelRoute
+    func stopPipePane(route: OrdinaryTmuxPanelRoute) throws
+    func queryCursorPosition(route: OrdinaryTmuxPanelRoute) throws -> OrdinaryTmuxCursorPosition?
+}
+
 struct OrdinaryTmuxCapturedOutput: Equatable, Sendable {
     let output: String
     let cursorRow: Int?
     let cursorColumn: Int?
+}
+
+struct OrdinaryTmuxCursorPosition: Equatable, Sendable {
+    let row: Int
+    let column: Int
 }
 
 protocol OrdinaryTmuxRouteResolving: Sendable {

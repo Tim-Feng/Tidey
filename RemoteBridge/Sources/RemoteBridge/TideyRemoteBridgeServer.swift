@@ -565,6 +565,28 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     typealias InboundIn = WebSocketFrame
     typealias OutboundOut = WebSocketFrame
 
+    private final class TerminalStreamDeltaSender: @unchecked Sendable {
+        private weak var handler: WebSocketFrameHandler?
+        private weak var context: ChannelHandlerContext?
+
+        init(handler: WebSocketFrameHandler, context: ChannelHandlerContext) {
+            self.handler = handler
+            self.context = context
+        }
+
+        func send(_ envelope: TerminalStreamDeltaEnvelope) {
+            guard let handler, let context else {
+                return
+            }
+            context.eventLoop.execute { [weak handler, weak context] in
+                guard let handler, let context else {
+                    return
+                }
+                handler.send(terminalStreamEnvelope: envelope, to: context)
+            }
+        }
+    }
+
     struct LocalRequestResult {
         let response: BridgeResponse
         let agentReplayEnvelopes: [AgentEventEnvelope]
@@ -599,12 +621,14 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     private let inputActionHandler: BridgeInputActionHandler
     private let fileActionHandler: BridgeFileActionHandler
     private let ordinaryTmuxRecentOutputHandler: OrdinaryTmuxRecentOutputHandler
+    private let ordinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreamHandler
     private let interactivePromptActionHandler: InteractivePromptActionHandler
     private let imageUploadHandler: BridgeImageUploadHandler
     private let imageReadHandler: BridgeImageReadHandler
     private let ordinaryTmuxPanelProjector: OrdinaryTmuxPanelProjector
     private var agentSubscriptions = BridgeAgentSubscriptionSlots()
     private var workspaceSubscriptionID: UUID?
+    private var terminalStreamSubscriptions = [String: OrdinaryTmuxTerminalStreamSubscription]()
 
     init(socketClient: TideySocketClient,
          eventHub: AgentEventHub,
@@ -638,6 +662,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         self.fileActionHandler = BridgeFileActionHandler(rootResolver: TideyPanelFileRootResolver(socketSender: socketClient,
                                                                                                   ordinaryTmuxRouteResolver: routeResolver))
         self.ordinaryTmuxRecentOutputHandler = OrdinaryTmuxRecentOutputHandler(routeResolver: routeResolver)
+        self.ordinaryTmuxOutputStreamHandler = OrdinaryTmuxOutputStreamHandler(routeResolver: routeResolver)
         self.interactivePromptActionHandler = InteractivePromptActionHandler(routeResolver: routeResolver,
                                                                             sessionResolver: registryMonitor,
                                                                             eventHub: eventHub,
@@ -742,6 +767,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     func channelInactive(context: ChannelHandlerContext) {
         unsubscribeFromAgentEvents()
         unsubscribeFromWorkspaceEvents()
+        unsubscribeFromTerminalStreams()
         context.fireChannelInactive()
     }
 
@@ -1210,6 +1236,52 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                 workspaceReplayEnvelopes: []
             )
 
+        case "subscribe_terminal_stream":
+            do {
+                let sender = TerminalStreamDeltaSender(handler: self, context: context)
+                let start = try ordinaryTmuxOutputStreamHandler.subscribe(request) { envelope in
+                    sender.send(envelope)
+                }
+                guard let start else {
+                    return nil
+                }
+                terminalStreamSubscriptions[start.subscription.route.panelID]?.stop()
+                terminalStreamSubscriptions[start.subscription.route.panelID] = start.subscription
+                return LocalRequestResult(response: start.response,
+                                          agentReplayEnvelopes: [],
+                                          workspaceReplayEnvelopes: [])
+            } catch let bridgeError as BridgeInternalError {
+                return LocalRequestResult(response: BridgeResponse(id: request.id,
+                                                                   ok: false,
+                                                                   result: nil,
+                                                                   error: bridgeError.payload),
+                                          agentReplayEnvelopes: [],
+                                          workspaceReplayEnvelopes: [])
+            } catch {
+                return LocalRequestResult(response: BridgeResponse(id: request.id,
+                                                                   ok: false,
+                                                                   result: nil,
+                                                                   error: BridgeErrorPayload(code: "terminal_stream_unavailable",
+                                                                                             message: error.localizedDescription)),
+                                          agentReplayEnvelopes: [],
+                                          workspaceReplayEnvelopes: [])
+            }
+
+        case "unsubscribe_terminal_stream":
+            if let panelID = request.params?["panel_id"]?.stringValue {
+                terminalStreamSubscriptions.removeValue(forKey: panelID)?.stop()
+            } else {
+                unsubscribeFromTerminalStreams()
+            }
+            return LocalRequestResult(
+                response: BridgeResponse(id: request.id,
+                                         ok: true,
+                                         result: ["subscribed": .bool(false)],
+                                         error: nil),
+                agentReplayEnvelopes: [],
+                workspaceReplayEnvelopes: []
+            )
+
         default:
             return nil
         }
@@ -1225,6 +1297,14 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         if let workspaceSubscriptionID {
             workspaceEventHub.unsubscribe(workspaceSubscriptionID)
             self.workspaceSubscriptionID = nil
+        }
+    }
+
+    private func unsubscribeFromTerminalStreams() {
+        let subscriptions = terminalStreamSubscriptions.values
+        terminalStreamSubscriptions.removeAll()
+        for subscription in subscriptions {
+            subscription.stop()
         }
     }
 
@@ -1399,6 +1479,23 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
             let payload = try encoder.encode(workspaceEnvelope)
             observability.recordPayload(direction: .outbound,
                                         messageType: "workspace_event",
+                                        byteCount: payload.count,
+                                        durationMs: (CFAbsoluteTimeGetCurrent() - startedAt) * 1000)
+            var buffer = context.channel.allocator.buffer(capacity: payload.count)
+            buffer.writeBytes(payload)
+            let frame = WebSocketFrame(fin: true, opcode: .text, data: buffer)
+            context.writeAndFlush(wrapOutboundOut(frame), promise: nil)
+        } catch {
+            context.close(promise: nil)
+        }
+    }
+
+    private func send(terminalStreamEnvelope: TerminalStreamDeltaEnvelope, to context: ChannelHandlerContext) {
+        do {
+            let startedAt = CFAbsoluteTimeGetCurrent()
+            let payload = try encoder.encode(terminalStreamEnvelope)
+            observability.recordPayload(direction: .outbound,
+                                        messageType: "terminal_stream_delta",
                                         byteCount: payload.count,
                                         durationMs: (CFAbsoluteTimeGetCurrent() - startedAt) * 1000)
             var buffer = context.channel.allocator.buffer(capacity: payload.count)

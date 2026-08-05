@@ -486,6 +486,71 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
         }
     }
 
+    func testStartPipePaneUsesActivePaneAndShellQuotesOutputPath() throws {
+        let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
+        let route = makeRoute(socket: socket)
+        let state = RunnerState(responses: [
+            RunnerState.key(socket: socket, arguments: windowExistsArguments):
+                "@15\n",
+            RunnerState.key(socket: socket, arguments: listPanesArguments(windowID: "@15")):
+                "%20\t0\t1020\t/tmp\tzsh\n%21\t1\t1021\t/Users/timfeng/GitHub/work\tcodex\n",
+            RunnerState.key(socket: socket,
+                            arguments: ["pipe-pane", "-o", "-t", "%21", "cat >> '/tmp/tidey stream/it'\\''s.bytes'"]):
+                "",
+        ])
+        let adapter = makeAdapter(state: state)
+
+        let refreshed = try adapter.startPipePane(route: route, outputFilePath: "/tmp/tidey stream/it's.bytes")
+
+        XCTAssertEqual(refreshed.activePaneID, "%21")
+        XCTAssertEqual(state.calls.map(\.arguments), [
+            windowExistsArguments,
+            listPanesArguments(windowID: "@15"),
+            ["pipe-pane", "-o", "-t", "%21", "cat >> '/tmp/tidey stream/it'\\''s.bytes'"],
+        ])
+    }
+
+    func testStopPipePaneUsesActivePane() throws {
+        let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
+        let route = makeRoute(socket: socket)
+        let state = RunnerState(responses: [
+            RunnerState.key(socket: socket, arguments: windowExistsArguments):
+                "@15\n",
+            RunnerState.key(socket: socket, arguments: listPanesArguments(windowID: "@15")):
+                "%21\t1\t1021\t/Users/timfeng/GitHub/work\tcodex\n",
+            RunnerState.key(socket: socket, arguments: ["pipe-pane", "-t", "%21"]):
+                "",
+        ])
+        let adapter = makeAdapter(state: state)
+
+        try adapter.stopPipePane(route: route)
+
+        XCTAssertEqual(state.calls.map(\.arguments), [
+            windowExistsArguments,
+            listPanesArguments(windowID: "@15"),
+            ["pipe-pane", "-t", "%21"],
+        ])
+    }
+
+    func testQueryCursorPositionParsesColumnThenRow() throws {
+        let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
+        let route = makeRoute(socket: socket)
+        let state = RunnerState(responses: [
+            RunnerState.key(socket: socket, arguments: windowExistsArguments):
+                "@15\n",
+            RunnerState.key(socket: socket, arguments: listPanesArguments(windowID: "@15")):
+                "%21\t1\t1021\t/Users/timfeng/GitHub/work\tcodex\n",
+            RunnerState.key(socket: socket,
+                            arguments: ["display-message", "-p", "-t", "%21", "#{cursor_x} #{cursor_y}"]):
+                "42 7",
+        ])
+        let adapter = makeAdapter(state: state)
+
+        let position = try adapter.queryCursorPosition(route: route)
+
+        XCTAssertEqual(position, OrdinaryTmuxCursorPosition(row: 7, column: 42))
+    }
+
     private var listClientsArguments: [String] {
         [
             "list-clients",
@@ -496,6 +561,16 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
 
     private var listWindowsArguments: [String] {
         listWindowsArguments(sessionID: "$7")
+    }
+
+    private var windowExistsArguments: [String] {
+        [
+            "list-windows",
+            "-t",
+            "$7",
+            "-F",
+            "#{window_id}",
+        ]
     }
 
     private func listWindowsArguments(sessionID: String) -> [String] {
@@ -533,5 +608,19 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
         OrdinaryTmuxCLIAdapter { socket, arguments, stdin in
             try state.run(socket: socket, arguments: arguments, stdin: stdin)
         }
+    }
+
+    private func makeRoute(socket: OrdinaryTmuxSocketSelector) -> OrdinaryTmuxPanelRoute {
+        OrdinaryTmuxPanelRoute(workspaceID: "workspace-1",
+                               panelID: "ordinary-tmux:/tmp/tmux-501/default:$7:@15",
+                               carrierPanelID: "carrier-1",
+                               socket: socket,
+                               sessionID: "$7",
+                               sessionName: "work",
+                               windowID: "@15",
+                               windowIndex: 0,
+                               activePaneID: "%old",
+                               cwd: "/Users/timfeng/GitHub/work",
+                               currentCommand: "codex")
     }
 }

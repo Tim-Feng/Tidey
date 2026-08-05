@@ -659,6 +659,36 @@ final class OrdinaryTmuxCLIAdapter {
                                           cursorColumn: nil)
     }
 
+    func startPipePane(route: OrdinaryTmuxPanelRoute, outputFilePath: String) throws -> OrdinaryTmuxPanelRoute {
+        let refreshed = try refreshedRoute(route)
+        let command = "cat >> \(Self.singleQuotedShellArgument(outputFilePath))"
+        _ = try commandRunner(refreshed.socket,
+                              ["pipe-pane", "-o", "-t", refreshed.activePaneID, command],
+                              nil)
+        return refreshed
+    }
+
+    func stopPipePane(route: OrdinaryTmuxPanelRoute) throws {
+        let refreshed = try refreshedRoute(route)
+        _ = try commandRunner(refreshed.socket,
+                              ["pipe-pane", "-t", refreshed.activePaneID],
+                              nil)
+    }
+
+    func queryCursorPosition(route: OrdinaryTmuxPanelRoute) throws -> OrdinaryTmuxCursorPosition? {
+        let refreshed = try refreshedRoute(route)
+        let output = try commandRunner(refreshed.socket,
+                                       ["display-message", "-p", "-t", refreshed.activePaneID, "#{cursor_x} #{cursor_y}"],
+                                       nil)
+        let parts = output.split(whereSeparator: \.isWhitespace)
+        guard parts.count >= 2,
+              let column = Int(parts[0]),
+              let row = Int(parts[1]) else {
+            return nil
+        }
+        return OrdinaryTmuxCursorPosition(row: row, column: column)
+    }
+
     private func verifyPasteBufferDelivery(pasteText: String,
                                            paneID: String,
                                            socket: OrdinaryTmuxSocketSelector,
@@ -856,10 +886,15 @@ final class OrdinaryTmuxCLIAdapter {
                    omittingEmptySubsequences: false)
             .map(String.init)
     }
+
+    private static func singleQuotedShellArgument(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
 }
 
 extension OrdinaryTmuxCLIAdapter: OrdinaryTmuxWindowProjecting {}
 extension OrdinaryTmuxCLIAdapter: OrdinaryTmuxRouteRefreshing {}
+extension OrdinaryTmuxCLIAdapter: OrdinaryTmuxTerminalStreaming {}
 
 private extension String {
     var nilIfEmpty: String? {
