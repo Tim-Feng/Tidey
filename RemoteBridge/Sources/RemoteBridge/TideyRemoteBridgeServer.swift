@@ -642,6 +642,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     private var connectedAt: Date?
     private var didRecordConnection = false
     private var didRecordDisconnect = false
+    private var requestReceiptSequence: UInt64 = 0
 
     init(socketClient: TideySocketClient,
          eventHub: AgentEventHub,
@@ -734,6 +735,8 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                   byteCount: buffer.readableBytes,
                   to: context)
         case .text:
+            requestReceiptSequence &+= 1
+            let receiptSequence = requestReceiptSequence
             var data = frame.unmaskedData
             guard let text = data.readString(length: data.readableBytes) else {
                 send(response: BridgeResponse(id: nil, ok: false, result: nil, error: BridgeInternalError.invalidRequest("Invalid UTF-8 message.").payload),
@@ -747,6 +750,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                 var agentReplayEnvelopes = [AgentEventEnvelope]()
                 var workspaceReplayEnvelopes = [WorkspaceEventEnvelope]()
                 var agentLiveGate: BridgeAgentEventReplayGate?
+                var applyOnEventLoop: (() -> CommitOutcome)?
                 var responseMessageType = "response.invalid_request"
                 var requestID: String?
                 var requestAction: String?
@@ -763,11 +767,14 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                     if request.action == "image_upload" {
                         BridgeImageUploadDiagnostics.log("server received request_id=\(request.id) action=\(request.action) params_keys=\(request.params?.keys.sorted().joined(separator: ",") ?? "-") base64_length=\(request.params?["data_base64"]?.stringValue?.count ?? 0)")
                     }
-                    if let localResult = self.handleLocalRequest(request, context: context) {
+                    if let localResult = self.handleLocalRequest(request,
+                                                                context: context,
+                                                                receiptSequence: receiptSequence) {
                         response = localResult.response
                         agentReplayEnvelopes = localResult.agentReplayEnvelopes
                         workspaceReplayEnvelopes = localResult.workspaceReplayEnvelopes
                         agentLiveGate = localResult.agentLiveGate
+                        applyOnEventLoop = localResult.applyOnEventLoop
                     } else {
                         response = self.augment(response: try socketClient.send(request), for: request)
                     }
@@ -790,7 +797,25 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                     response = BridgeResponse(id: nil, ok: false, result: nil, error: BridgeErrorPayload(code: "bridge_error", message: error.localizedDescription))
                 }
                 context.eventLoop.execute {
-                    self.send(response: response, messageType: responseMessageType, to: context)
+                    let responseToSend: BridgeResponse
+                    let shouldReplay: Bool
+                    switch applyOnEventLoop?() ?? .accepted {
+                    case .accepted:
+                        responseToSend = response
+                        shouldReplay = true
+                    case .rejected(let reason):
+                        responseToSend = BridgeResponse(
+                            id: response.id,
+                            ok: false,
+                            result: nil,
+                            error: BridgeErrorPayload(code: "superseded", message: reason)
+                        )
+                        shouldReplay = false
+                    }
+                    self.send(response: responseToSend, messageType: responseMessageType, to: context)
+                    guard shouldReplay else {
+                        return
+                    }
                     for envelope in agentReplayEnvelopes {
                         self.send(envelope: envelope, to: context)
                     }
@@ -867,7 +892,8 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     }
 
     func handleLocalRequest(_ request: BridgeRequest,
-                            context: ChannelHandlerContext) -> LocalRequestResult? {
+                            context: ChannelHandlerContext,
+                            receiptSequence: UInt64 = .max) -> LocalRequestResult? {
         do {
             if request.action == "image_upload" {
                 BridgeImageUploadDiagnostics.log("local dispatch enter request_id=\(request.id)")
