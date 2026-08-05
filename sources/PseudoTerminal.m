@@ -3283,6 +3283,7 @@ ITERM_WEAKLY_REFERENCEABLE
         @"output": [rows componentsJoinedByString:@"\n"],
         @"cursor_row": @(cursorY),
         @"cursor_col": @(cursorX),
+        @"cursor_visible": @(session.screen.immutableState.cursorVisible),
     };
 }
 

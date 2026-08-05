@@ -17,6 +17,9 @@
 - (void)acceptFileDescriptor:(int)fd;
 - (void)cleanupStaleSockets:(NSString *)directory;
 - (NSUInteger)tideyTestingConnectionCount;
+- (NSDictionary *)trimmedRecentOutputSnapshot:(NSDictionary *)snapshot
+                                     maxLines:(NSInteger)maxLines
+                                     maxChars:(NSInteger)maxChars;
 @end
 
 @interface TideySocketServerTests : XCTestCase
@@ -136,6 +139,21 @@
                                                                 }];
     XCTAssertEqualObjects(response[@"ok"], @NO);
     XCTAssertEqualObjects(response[@"error"][@"code"], @"invalid_params");
+}
+
+- (void)testTrimmedRecentOutputSnapshotPreservesCursorVisibility {
+    TideySocketServer *server = [[TideySocketServer alloc] init];
+
+    NSDictionary *trimmed = [server trimmedRecentOutputSnapshot:@{
+        @"output": @"first\nsecond",
+        @"cursor_row": @1,
+        @"cursor_col": @3,
+        @"cursor_visible": @NO,
+    }
+                                                        maxLines:1
+                                                        maxChars:20];
+
+    XCTAssertEqualObjects(trimmed[@"cursor_visible"], @NO);
 }
 
 - (void)testUnsupportedActionReturnsError {

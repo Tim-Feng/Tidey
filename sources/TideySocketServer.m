@@ -707,6 +707,7 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
                                            result:@{ @"output": trimmed[@"output"] ?: @"",
                                                      @"cursor_row": trimmed[@"cursor_row"] ?: @0,
                                                      @"cursor_col": trimmed[@"cursor_col"] ?: @0,
+                                                     @"cursor_visible": trimmed[@"cursor_visible"] ?: @YES,
                                                      @"panel_id": panelID,
                                                      @"workspace_id": panelSummary[@"workspace_id"] ?: @"" }
                                       onConnection:connection];
@@ -1056,6 +1057,7 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
                                        result:@{ @"output": trimmed[@"output"] ?: @"",
                                                  @"cursor_row": trimmed[@"cursor_row"] ?: @0,
                                                  @"cursor_col": trimmed[@"cursor_col"] ?: @0,
+                                                 @"cursor_visible": trimmed[@"cursor_visible"] ?: @YES,
                                                  @"workspace_id": workspaceID }
                                   onConnection:connection];
         return;
@@ -1130,6 +1132,7 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
         @"output": trimmed ?: @"",
         @"cursor_row": @(derivedRow),
         @"cursor_col": @(derivedCol),
+        @"cursor_visible": snapshot[@"cursor_visible"] ?: @YES,
     };
 }
 
