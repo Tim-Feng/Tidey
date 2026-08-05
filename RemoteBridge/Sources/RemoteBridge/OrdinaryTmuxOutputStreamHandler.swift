@@ -118,9 +118,16 @@ final class TerminalByteFileTailer: TerminalByteTailing, @unchecked Sendable {
     }
 }
 
-protocol OrdinaryTmuxTerminalStreamSubscribing {
+protocol OrdinaryTmuxTerminalStreamSubscribing: AnyObject, Sendable {
     var route: OrdinaryTmuxPanelRoute { get }
     func stop()
+    func stopForReplacement() throws
+}
+
+extension OrdinaryTmuxTerminalStreamSubscribing {
+    func stopForReplacement() throws {
+        stop()
+    }
 }
 
 final class OrdinaryTmuxTerminalStreamSubscription: OrdinaryTmuxTerminalStreamSubscribing, @unchecked Sendable {
@@ -155,6 +162,27 @@ final class OrdinaryTmuxTerminalStreamSubscription: OrdinaryTmuxTerminalStreamSu
 
         tailer.stop()
         try? adapter.stopPipePane(route: route)
+        cleanup(outputFileURL)
+    }
+
+    func stopForReplacement() throws {
+        lock.lock()
+        guard isStopped == false else {
+            lock.unlock()
+            return
+        }
+        lock.unlock()
+
+        try adapter.stopPipePane(route: route)
+
+        lock.lock()
+        guard isStopped == false else {
+            lock.unlock()
+            return
+        }
+        isStopped = true
+        lock.unlock()
+        tailer.stop()
         cleanup(outputFileURL)
     }
 }

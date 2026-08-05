@@ -24,6 +24,8 @@ final class TideyRemoteBridgeServer {
     private let startRegistryMonitor: Bool
     private let startCloudflaredSupervisor: Bool
     private let ordinaryTmuxProjectionContext: OrdinaryTmuxProjectionContext
+    private let requestSequencer: BridgeRequestSequencer
+    private let terminalStreamLaneRegistry: OrdinaryTmuxTerminalStreamLaneRegistry
     private let group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
 
     init(host: String = "0.0.0.0",
@@ -41,7 +43,9 @@ final class TideyRemoteBridgeServer {
          uploadGarbageCollector: BridgeUploadGarbageCollector = BridgeUploadGarbageCollector(uploadDirectory: BridgePaths().uploadsDirectory),
          startRegistryMonitor: Bool = true,
          startCloudflaredSupervisor: Bool = true,
-         ordinaryTmuxProjectionContext: OrdinaryTmuxProjectionContext = OrdinaryTmuxProjectionContext()) {
+         ordinaryTmuxProjectionContext: OrdinaryTmuxProjectionContext = OrdinaryTmuxProjectionContext(),
+         requestSequencer: BridgeRequestSequencer = BridgeRequestSequencer(),
+         terminalStreamLaneRegistry: OrdinaryTmuxTerminalStreamLaneRegistry = OrdinaryTmuxTerminalStreamLaneRegistry()) {
         self.host = host
         self.port = port
         self.token = token
@@ -58,6 +62,8 @@ final class TideyRemoteBridgeServer {
         self.startRegistryMonitor = startRegistryMonitor
         self.startCloudflaredSupervisor = startCloudflaredSupervisor
         self.ordinaryTmuxProjectionContext = ordinaryTmuxProjectionContext
+        self.requestSequencer = requestSequencer
+        self.terminalStreamLaneRegistry = terminalStreamLaneRegistry
     }
 
     func run() throws {
@@ -81,7 +87,7 @@ final class TideyRemoteBridgeServer {
                 }
                 return channel.eventLoop.makeSucceededFuture([:])
             },
-            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub, registryMonitor, codexApprovalProvider, promptSubmitDeduper, observability, ordinaryTmuxProjectionContext, port, cloudflaredManager] channel, _ in
+            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub, registryMonitor, codexApprovalProvider, promptSubmitDeduper, observability, ordinaryTmuxProjectionContext, requestSequencer, terminalStreamLaneRegistry, port, cloudflaredManager] channel, _ in
                 channel.pipeline.addHandler(WebSocketFrameHandler(socketClient: socketClient,
                                                                   eventHub: eventHub,
                                                                   workspaceEventHub: workspaceEventHub,
@@ -91,6 +97,8 @@ final class TideyRemoteBridgeServer {
                                                                   bridgePort: port,
                                                                   cloudflaredManager: cloudflaredManager,
                                                                   ordinaryTmuxProjectionContext: ordinaryTmuxProjectionContext,
+                                                                  requestSequencer: requestSequencer,
+                                                                  terminalStreamLaneRegistry: terminalStreamLaneRegistry,
                                                                   promptSubmitDeduper: promptSubmitDeduper))
             }
         )
@@ -632,6 +640,8 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     private let fileActionHandler: BridgeFileActionHandler
     private let ordinaryTmuxRecentOutputHandler: OrdinaryTmuxRecentOutputHandler
     private let ordinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreaming
+    private let requestSequencer: BridgeRequestSequencer
+    private let terminalStreamLaneRegistry: OrdinaryTmuxTerminalStreamLaneRegistry
     private let interactivePromptActionHandler: InteractivePromptActionHandler
     private let imageUploadHandler: BridgeImageUploadHandler
     private let imageReadHandler: BridgeImageReadHandler
@@ -642,7 +652,6 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     private var connectedAt: Date?
     private var didRecordConnection = false
     private var didRecordDisconnect = false
-    private var requestReceiptSequence: UInt64 = 0
 
     init(socketClient: TideySocketClient,
          eventHub: AgentEventHub,
@@ -656,6 +665,8 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
          now: @escaping @Sendable () -> Date = { Date() },
          ordinaryTmuxProjectionContext: OrdinaryTmuxProjectionContext = OrdinaryTmuxProjectionContext(),
          ordinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreaming? = nil,
+         requestSequencer: BridgeRequestSequencer = BridgeRequestSequencer(),
+         terminalStreamLaneRegistry: OrdinaryTmuxTerminalStreamLaneRegistry = OrdinaryTmuxTerminalStreamLaneRegistry(),
          promptSubmitDeduper: InteractivePromptSubmitDeduper = InteractivePromptSubmitDeduper(),
          lifecycleStore: AgentSessionLifecycleStore = AgentSessionLifecycle.store) {
         self.socketClient = socketClient
@@ -682,6 +693,8 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                                                                                                   ordinaryTmuxRouteResolver: routeResolver))
         self.ordinaryTmuxRecentOutputHandler = OrdinaryTmuxRecentOutputHandler(routeResolver: routeResolver)
         self.ordinaryTmuxOutputStreamHandler = ordinaryTmuxOutputStreamHandler ?? OrdinaryTmuxOutputStreamHandler(routeResolver: routeResolver)
+        self.requestSequencer = requestSequencer
+        self.terminalStreamLaneRegistry = terminalStreamLaneRegistry
         self.interactivePromptActionHandler = InteractivePromptActionHandler(routeResolver: routeResolver,
                                                                             sessionResolver: registryMonitor,
                                                                             eventHub: eventHub,
@@ -735,8 +748,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                   byteCount: buffer.readableBytes,
                   to: context)
         case .text:
-            requestReceiptSequence &+= 1
-            let receiptSequence = requestReceiptSequence
+            let receiptSequence = requestSequencer.next()
             var data = frame.unmaskedData
             guard let text = data.readString(length: data.readableBytes) else {
                 send(response: BridgeResponse(id: nil, ok: false, result: nil, error: BridgeInternalError.invalidRequest("Invalid UTF-8 message.").payload),
@@ -892,8 +904,15 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     }
 
     func handleLocalRequest(_ request: BridgeRequest,
+                            context: ChannelHandlerContext) -> LocalRequestResult? {
+        handleLocalRequest(request,
+                           context: context,
+                           receiptSequence: requestSequencer.next())
+    }
+
+    func handleLocalRequest(_ request: BridgeRequest,
                             context: ChannelHandlerContext,
-                            receiptSequence: UInt64 = .max) -> LocalRequestResult? {
+                            receiptSequence: UInt64) -> LocalRequestResult? {
         do {
             if request.action == "image_upload" {
                 BridgeImageUploadDiagnostics.log("local dispatch enter request_id=\(request.id)")
