@@ -109,6 +109,7 @@ final class OrdinaryTmuxTerminalStreamLane: @unchecked Sendable {
     }
 
     func submitSubscribe(sequence: UInt64,
+                         claimForPhysicalMutation: @escaping @Sendable () -> Bool = { true },
                          build: @escaping @Sendable () throws -> OrdinaryTmuxTerminalStreamLaneCandidate,
                          completion: @escaping Completion) {
         queue.async {
