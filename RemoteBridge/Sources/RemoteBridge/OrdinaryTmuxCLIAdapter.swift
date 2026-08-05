@@ -731,6 +731,24 @@ final class OrdinaryTmuxCLIAdapter {
                                           cursorVisible: visibilityFlag != 0)
     }
 
+    private static func parseTerminalStreamBootstrapOutput(_ combinedOutput: String,
+                                                           beginMarker: String,
+                                                           endMarker: String) -> OrdinaryTmuxCapturedOutput {
+        let degraded = OrdinaryTmuxCapturedOutput(output: "",
+                                                  cursorRow: nil,
+                                                  cursorColumn: nil,
+                                                  cursorVisible: nil)
+        guard let captured = try? parseAtomicCaptureOutput(combinedOutput,
+                                                           beginMarker: beginMarker,
+                                                           endMarker: endMarker),
+              captured.cursorRow != nil,
+              captured.cursorColumn != nil,
+              captured.cursorVisible != nil else {
+            return degraded
+        }
+        return captured
+    }
+
     func bootstrapTerminalStream(refreshedRoute: OrdinaryTmuxPanelRoute,
                                  outputFilePath: String,
                                  maxLines: Int) throws -> OrdinaryTmuxTerminalStreamBootstrap {
@@ -754,9 +772,9 @@ final class OrdinaryTmuxCLIAdapter {
             "pipe-pane", "-o", "-t", refreshedRoute.activePaneID, pipeCommand,
         ]
         let combinedOutput = try commandRunner(refreshedRoute.socket, arguments, nil)
-        let initialOutput = try Self.parseAtomicCaptureOutput(combinedOutput,
-                                                              beginMarker: beginMarker,
-                                                              endMarker: endMarker)
+        let initialOutput = Self.parseTerminalStreamBootstrapOutput(combinedOutput,
+                                                                    beginMarker: beginMarker,
+                                                                    endMarker: endMarker)
         return OrdinaryTmuxTerminalStreamBootstrap(route: refreshedRoute,
                                                    initialOutput: initialOutput)
     }

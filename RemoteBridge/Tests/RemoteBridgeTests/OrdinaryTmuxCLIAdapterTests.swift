@@ -639,6 +639,43 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
                        ["pipe-pane", "-o", "-t", "%old", "cat >> '/tmp/stream.bytes'"])
     }
 
+    func testCombinedBootstrapParsesSnapshotCursorAndDegradesMalformedMetadata() throws {
+        let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
+        let route = makeRoute(socket: socket)
+        let validState = RunnerState(responses: [:])
+        let validAdapter = makeAtomicCaptureAdapter(state: validState,
+                                                    body: "line-0\nline-1",
+                                                    metadata: "4 1 1 2")
+
+        let valid = try validAdapter.bootstrapTerminalStream(refreshedRoute: route,
+                                                             outputFilePath: "/tmp/valid.bytes",
+                                                             maxLines: 200)
+
+        XCTAssertEqual(valid.initialOutput,
+                       OrdinaryTmuxCapturedOutput(output: "line-0\nline-1",
+                                                  cursorRow: 1,
+                                                  cursorColumn: 4,
+                                                  cursorVisible: true))
+
+        let malformedState = RunnerState(responses: [:])
+        let malformedAdapter = makeAtomicCaptureAdapter(state: malformedState,
+                                                        body: "untrusted-snapshot",
+                                                        metadata: "malformed metadata")
+
+        let degraded = try malformedAdapter.bootstrapTerminalStream(refreshedRoute: route,
+                                                                    outputFilePath: "/tmp/malformed.bytes",
+                                                                    maxLines: 200)
+
+        XCTAssertEqual(degraded.route, route)
+        XCTAssertEqual(degraded.initialOutput,
+                       OrdinaryTmuxCapturedOutput(output: "",
+                                                  cursorRow: nil,
+                                                  cursorColumn: nil,
+                                                  cursorVisible: nil))
+        XCTAssertTrue(malformedState.calls.first?.arguments.contains("pipe-pane") == true,
+                      "successful combined command still owns the exact pane when parsing degrades")
+    }
+
     func testCaptureOutputAtomicallyMapsPaneCursorIntoPhysicalRows() throws {
         let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
         let route = makeRoute(socket: socket)
