@@ -172,7 +172,8 @@ final class OrdinaryTmuxOutputStreamHandlerTests: XCTestCase {
         XCTAssertEqual(start.response.result?["cursor_row"]?.intValue, 3)
         XCTAssertEqual(start.response.result?["cursor_col"]?.intValue, 4)
         XCTAssertEqual(adapter.startedPipeRoutes, [route])
-        XCTAssertEqual(adapter.startedPipeOutputPaths.first, start.subscription.outputFileURL.path)
+        let subscription = try XCTUnwrap(start.subscription as? OrdinaryTmuxTerminalStreamSubscription)
+        XCTAssertEqual(adapter.startedPipeOutputPaths.first, subscription.outputFileURL.path)
         XCTAssertEqual(tailerBox.firstTailer?.startCount, 1)
     }
 

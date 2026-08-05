@@ -98,7 +98,12 @@ final class TerminalByteFileTailer: TerminalByteTailing, @unchecked Sendable {
     }
 }
 
-final class OrdinaryTmuxTerminalStreamSubscription: @unchecked Sendable {
+protocol OrdinaryTmuxTerminalStreamSubscribing {
+    var route: OrdinaryTmuxPanelRoute { get }
+    func stop()
+}
+
+final class OrdinaryTmuxTerminalStreamSubscription: OrdinaryTmuxTerminalStreamSubscribing, @unchecked Sendable {
     let route: OrdinaryTmuxPanelRoute
     let outputFileURL: URL
     private let adapter: OrdinaryTmuxTerminalStreaming
@@ -136,10 +141,15 @@ final class OrdinaryTmuxTerminalStreamSubscription: @unchecked Sendable {
 
 struct OrdinaryTmuxOutputStreamStart {
     let response: BridgeResponse
-    let subscription: OrdinaryTmuxTerminalStreamSubscription
+    let subscription: OrdinaryTmuxTerminalStreamSubscribing
 }
 
-struct OrdinaryTmuxOutputStreamHandler {
+protocol OrdinaryTmuxOutputStreaming {
+    func subscribe(_ request: BridgeRequest,
+                   onDelta: @escaping @Sendable (TerminalStreamDeltaEnvelope) -> Void) throws -> OrdinaryTmuxOutputStreamStart?
+}
+
+struct OrdinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreaming {
     typealias Adapter = OrdinaryTmuxRouteRefreshing & OrdinaryTmuxTerminalStreaming
     typealias TailerFactory = @Sendable (_ url: URL, _ handler: @escaping TerminalByteFileTailer.ChunkHandler) -> TerminalByteTailing
 

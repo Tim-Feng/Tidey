@@ -621,14 +621,14 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     private let inputActionHandler: BridgeInputActionHandler
     private let fileActionHandler: BridgeFileActionHandler
     private let ordinaryTmuxRecentOutputHandler: OrdinaryTmuxRecentOutputHandler
-    private let ordinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreamHandler
+    private let ordinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreaming
     private let interactivePromptActionHandler: InteractivePromptActionHandler
     private let imageUploadHandler: BridgeImageUploadHandler
     private let imageReadHandler: BridgeImageReadHandler
     private let ordinaryTmuxPanelProjector: OrdinaryTmuxPanelProjector
     private var agentSubscriptions = BridgeAgentSubscriptionSlots()
     private var workspaceSubscriptionID: UUID?
-    private var terminalStreamSubscriptions = [String: OrdinaryTmuxTerminalStreamSubscription]()
+    private var terminalStreamSubscriptions = [String: OrdinaryTmuxTerminalStreamSubscribing]()
 
     init(socketClient: TideySocketClient,
          eventHub: AgentEventHub,
@@ -639,6 +639,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
          bridgePort: Int,
          cloudflaredManager: BridgeCloudflaredManager,
          ordinaryTmuxProjectionContext: OrdinaryTmuxProjectionContext = OrdinaryTmuxProjectionContext(),
+         ordinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreaming? = nil,
          promptSubmitDeduper: InteractivePromptSubmitDeduper = InteractivePromptSubmitDeduper(),
          lifecycleStore: AgentSessionLifecycleStore = AgentSessionLifecycle.store) {
         self.socketClient = socketClient
@@ -662,7 +663,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         self.fileActionHandler = BridgeFileActionHandler(rootResolver: TideyPanelFileRootResolver(socketSender: socketClient,
                                                                                                   ordinaryTmuxRouteResolver: routeResolver))
         self.ordinaryTmuxRecentOutputHandler = OrdinaryTmuxRecentOutputHandler(routeResolver: routeResolver)
-        self.ordinaryTmuxOutputStreamHandler = OrdinaryTmuxOutputStreamHandler(routeResolver: routeResolver)
+        self.ordinaryTmuxOutputStreamHandler = ordinaryTmuxOutputStreamHandler ?? OrdinaryTmuxOutputStreamHandler(routeResolver: routeResolver)
         self.interactivePromptActionHandler = InteractivePromptActionHandler(routeResolver: routeResolver,
                                                                             sessionResolver: registryMonitor,
                                                                             eventHub: eventHub,
@@ -1238,6 +1239,9 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
 
         case "subscribe_terminal_stream":
             do {
+                if let panelID = request.params?["panel_id"]?.stringValue {
+                    terminalStreamSubscriptions.removeValue(forKey: panelID)?.stop()
+                }
                 let sender = TerminalStreamDeltaSender(handler: self, context: context)
                 let start = try ordinaryTmuxOutputStreamHandler.subscribe(request) { envelope in
                     sender.send(envelope)
@@ -1245,7 +1249,6 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                 guard let start else {
                     return nil
                 }
-                terminalStreamSubscriptions[start.subscription.route.panelID]?.stop()
                 terminalStreamSubscriptions[start.subscription.route.panelID] = start.subscription
                 return LocalRequestResult(response: start.response,
                                           agentReplayEnvelopes: [],
