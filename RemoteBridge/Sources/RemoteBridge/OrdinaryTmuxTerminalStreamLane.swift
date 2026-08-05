@@ -70,7 +70,7 @@ final class OrdinaryTmuxTerminalStreamLease: @unchecked Sendable {
     }
 }
 
-struct OrdinaryTmuxTerminalStreamLaneCandidate {
+struct OrdinaryTmuxTerminalStreamLaneCandidate: Sendable {
     let response: BridgeResponse
     let lease: OrdinaryTmuxTerminalStreamLease
 }
