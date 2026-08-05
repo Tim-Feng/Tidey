@@ -90,8 +90,27 @@ final class OrdinaryTmuxTerminalStreamLane: @unchecked Sendable {
                          build: @escaping @Sendable () throws -> OrdinaryTmuxTerminalStreamLaneCandidate,
                          completion: @escaping Completion) {
         queue.async {
+            guard sequence > self.highestSeenSequence else {
+                completion(nil)
+                return
+            }
+            self.highestSeenSequence = sequence
+
+            if let activeLease = self.activeLease {
+                activeLease.deliveryGate.invalidate()
+                do {
+                    try activeLease.stopForReplacement()
+                    self.activeLease = nil
+                } catch {
+                    completion(.failure(error))
+                    return
+                }
+            }
+
             do {
-                completion(.success(try build()))
+                let candidate = try build()
+                self.activeLease = candidate.lease
+                completion(.success(candidate))
             } catch {
                 completion(.failure(error))
             }
@@ -99,7 +118,15 @@ final class OrdinaryTmuxTerminalStreamLane: @unchecked Sendable {
     }
 
     func releaseIfCurrent(token: UInt64) {
-        queue.async {}
+        queue.async {
+            guard let activeLease = self.activeLease,
+                  activeLease.token == token else {
+                return
+            }
+            activeLease.deliveryGate.invalidate()
+            activeLease.stop()
+            self.activeLease = nil
+        }
     }
 }
 
