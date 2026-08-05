@@ -52,4 +52,10 @@ final class BridgeAgentSubscriptionSlots: @unchecked Sendable {
         defer { lock.unlock() }
         return subscriptions[BridgeAgentSubscriptionSlotKey(workspaceID: workspaceID, sessionID: sessionID)] != nil
     }
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return subscriptions.count
+    }
 }

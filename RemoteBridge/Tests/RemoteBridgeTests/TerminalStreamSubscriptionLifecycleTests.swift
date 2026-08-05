@@ -90,6 +90,7 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
                                                              context: fixture.context))
 
         XCTAssertEqual(eventLog.events, ["subscribe-1", "stop-1", "subscribe-2"])
+        XCTAssertEqual(fixture.observability.snapshot(activeSessions: []).activeTerminalStreamSubscriptionCount, 1)
     }
 
     func testExplicitUnsubscribeStopsOnlyRequestedTerminalStream() throws {
@@ -109,6 +110,7 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
                                                              context: fixture.context))
 
         XCTAssertEqual(eventLog.events, ["subscribe-1", "subscribe-2", "stop-1"])
+        XCTAssertEqual(fixture.observability.snapshot(activeSessions: []).activeTerminalStreamSubscriptionCount, 1)
     }
 
     func testChannelInactiveStopsAllTerminalStreams() throws {
@@ -125,6 +127,10 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
         fixture.handler.channelInactive(context: fixture.context)
 
         XCTAssertEqual(Set(eventLog.events), Set(["subscribe-1", "subscribe-2", "stop-1", "stop-2"]))
+        let snapshot = fixture.observability.snapshot(activeSessions: [])
+        XCTAssertEqual(snapshot.activeTerminalStreamSubscriptionCount, 0)
+        XCTAssertEqual(snapshot.connectionEvents.last?.kind, .disconnected)
+        XCTAssertEqual(snapshot.connectionEvents.last?.terminalStreamSubscriptionCount, 2)
     }
 
     private func subscribeRequest(id: String, panelID: String) -> BridgeRequest {
@@ -140,6 +146,7 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
         let handler: WebSocketFrameHandler
         let context: ChannelHandlerContext
         let channel: EmbeddedChannel
+        let observability: BridgeObservabilityCenter
         let supportDirectory: URL
 
         func cleanup() {
@@ -160,11 +167,12 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
                                                   hub: eventHub,
                                                   tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
                                                   parentPIDLookup: { _ in nil })
+        let observability = BridgeObservabilityCenter()
         let handler = WebSocketFrameHandler(socketClient: TideySocketClient(locator: TideySocketLocator()),
                                             eventHub: eventHub,
                                             workspaceEventHub: WorkspaceEventHub(),
                                             registryMonitor: monitor,
-                                            observability: BridgeObservabilityCenter(),
+                                            observability: observability,
                                             bridgePort: 0,
                                             cloudflaredManager: BridgeCloudflaredManager(binaryResolver: { nil }),
                                             ordinaryTmuxOutputStreamHandler: outputStreamHandler)
@@ -173,6 +181,7 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
         return Fixture(handler: handler,
                        context: context,
                        channel: channel,
+                       observability: observability,
                        supportDirectory: supportDirectory)
     }
 

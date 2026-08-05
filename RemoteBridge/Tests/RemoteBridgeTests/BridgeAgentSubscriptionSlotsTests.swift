@@ -17,9 +17,11 @@ final class BridgeAgentSubscriptionSlotsTests: XCTestCase {
 
         XCTAssertFalse(slots.contains(workspaceID: "workspace-1", sessionID: nil))
         XCTAssertTrue(slots.contains(workspaceID: "workspace-1", sessionID: "session-1"))
+        XCTAssertEqual(slots.count, 1)
 
         let removed = Set(slots.removeAll())
         XCTAssertEqual(removed, [sessionID])
+        XCTAssertEqual(slots.count, 0)
     }
 
     func testWorkspaceWideSubscriptionIsRejectedWhenSessionSubscriptionExistsForWorkspace() {

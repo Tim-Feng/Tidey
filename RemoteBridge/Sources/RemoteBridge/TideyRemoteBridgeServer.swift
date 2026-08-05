@@ -614,6 +614,8 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     private let observability: BridgeObservabilityCenter
     private let bridgePort: Int
     private let cloudflaredManager: BridgeCloudflaredManager
+    private let connectionID: String
+    private let now: @Sendable () -> Date
     private let ordinaryTmuxPanelRegistry: OrdinaryTmuxPanelRegistry
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
@@ -629,6 +631,9 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     private var agentSubscriptions = BridgeAgentSubscriptionSlots()
     private var workspaceSubscriptionID: UUID?
     private var terminalStreamSubscriptions = [String: OrdinaryTmuxTerminalStreamSubscribing]()
+    private var connectedAt: Date?
+    private var didRecordConnection = false
+    private var didRecordDisconnect = false
 
     init(socketClient: TideySocketClient,
          eventHub: AgentEventHub,
@@ -638,6 +643,8 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
          observability: BridgeObservabilityCenter,
          bridgePort: Int,
          cloudflaredManager: BridgeCloudflaredManager,
+         connectionID: String = UUID().uuidString,
+         now: @escaping @Sendable () -> Date = { Date() },
          ordinaryTmuxProjectionContext: OrdinaryTmuxProjectionContext = OrdinaryTmuxProjectionContext(),
          ordinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreaming? = nil,
          promptSubmitDeduper: InteractivePromptSubmitDeduper = InteractivePromptSubmitDeduper(),
@@ -651,6 +658,8 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         self.observability = observability
         self.bridgePort = bridgePort
         self.cloudflaredManager = cloudflaredManager
+        self.connectionID = connectionID
+        self.now = now
         self.ordinaryTmuxPanelRegistry = ordinaryTmuxProjectionContext.registry
         self.ordinaryTmuxPanelProjector = ordinaryTmuxProjectionContext.projector
         let routeResolver = OrdinaryTmuxRouteResolver(registry: ordinaryTmuxProjectionContext.registry)
@@ -676,17 +685,46 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                                                                                                 ordinaryTmuxRouteResolver: routeResolver))
     }
 
+    func handlerAdded(context: ChannelHandlerContext) {
+        recordConnectionStartedIfNeeded()
+    }
+
+    func channelActive(context: ChannelHandlerContext) {
+        recordConnectionStartedIfNeeded()
+        context.fireChannelActive()
+    }
+
+    private func recordConnectionStartedIfNeeded() {
+        guard !didRecordConnection else {
+            return
+        }
+        let timestamp = now()
+        connectedAt = timestamp
+        didRecordConnection = true
+        didRecordDisconnect = false
+        publishTerminalStreamSubscriptionCount()
+        recordConnectionEvent(kind: .connected, timestamp: timestamp)
+    }
+
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         let frame = unwrapInboundIn(data)
         switch frame.opcode {
         case .connectionClose:
+            var closeData = frame.unmaskedData
+            let closeCode = closeData.readInteger(as: UInt16.self).map(Int.init)
+            recordConnectionEvent(kind: .peerClose,
+                                  closeCode: closeCode,
+                                  reasonByteCount: closeData.readableBytes)
             context.close(promise: nil)
         case .ping:
             var buffer = context.channel.allocator.buffer(capacity: frame.data.readableBytes)
             var data = frame.unmaskedData
             buffer.writeBuffer(&data)
             let pong = WebSocketFrame(fin: true, opcode: .pong, data: buffer)
-            context.writeAndFlush(wrapOutboundOut(pong), promise: nil)
+            write(frame: pong,
+                  messageType: "pong",
+                  byteCount: buffer.readableBytes,
+                  to: context)
         case .text:
             var data = frame.unmaskedData
             guard let text = data.readString(length: data.readableBytes) else {
@@ -766,10 +804,58 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     }
 
     func channelInactive(context: ChannelHandlerContext) {
+        if !didRecordDisconnect {
+            let timestamp = now()
+            let durationMs = connectedAt.map { timestamp.timeIntervalSince($0) * 1_000 }
+            recordConnectionEvent(kind: .disconnected,
+                                  timestamp: timestamp,
+                                  durationMs: durationMs)
+            didRecordDisconnect = true
+        }
         unsubscribeFromAgentEvents()
         unsubscribeFromWorkspaceEvents()
         unsubscribeFromTerminalStreams()
+        observability.clearActiveTerminalStreamSubscriptionCount(forConnectionID: connectionID)
         context.fireChannelInactive()
+    }
+
+    func errorCaught(context: ChannelHandlerContext, error: Error) {
+        let bridgedError = error as NSError
+        recordConnectionEvent(kind: .channelError,
+                              errorType: String(reflecting: type(of: error)),
+                              errorDomain: bridgedError.domain,
+                              errorCode: bridgedError.code)
+        context.fireErrorCaught(error)
+    }
+
+    private func recordConnectionEvent(kind: BridgeConnectionEventKind,
+                                       timestamp: Date? = nil,
+                                       durationMs: Double? = nil,
+                                       closeCode: Int? = nil,
+                                       reasonByteCount: Int? = nil,
+                                       errorType: String? = nil,
+                                       errorDomain: String? = nil,
+                                       errorCode: Int? = nil,
+                                       messageType: String? = nil,
+                                       byteCount: Int? = nil) {
+        observability.recordConnectionEvent(
+            BridgeConnectionEventSnapshot(
+                connectionID: connectionID,
+                kind: kind,
+                timestamp: timestamp ?? now(),
+                durationMs: durationMs,
+                closeCode: closeCode,
+                reasonByteCount: reasonByteCount,
+                errorType: errorType,
+                errorDomain: errorDomain,
+                errorCode: errorCode,
+                messageType: messageType,
+                byteCount: byteCount,
+                terminalStreamSubscriptionCount: terminalStreamSubscriptions.count,
+                agentSubscriptionCount: agentSubscriptions.count,
+                workspaceSubscriptionCount: workspaceSubscriptionID == nil ? 0 : 1
+            )
+        )
     }
 
     func handleLocalRequest(_ request: BridgeRequest,
@@ -1241,6 +1327,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
             do {
                 if let panelID = request.params?["panel_id"]?.stringValue {
                     terminalStreamSubscriptions.removeValue(forKey: panelID)?.stop()
+                    publishTerminalStreamSubscriptionCount()
                 }
                 let sender = TerminalStreamDeltaSender(handler: self, context: context)
                 let start = try ordinaryTmuxOutputStreamHandler.subscribe(request) { envelope in
@@ -1250,6 +1337,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                     return nil
                 }
                 terminalStreamSubscriptions[start.subscription.route.panelID] = start.subscription
+                publishTerminalStreamSubscriptionCount()
                 return LocalRequestResult(response: start.response,
                                           agentReplayEnvelopes: [],
                                           workspaceReplayEnvelopes: [])
@@ -1273,6 +1361,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         case "unsubscribe_terminal_stream":
             if let panelID = request.params?["panel_id"]?.stringValue {
                 terminalStreamSubscriptions.removeValue(forKey: panelID)?.stop()
+                publishTerminalStreamSubscriptionCount()
             } else {
                 unsubscribeFromTerminalStreams()
             }
@@ -1306,9 +1395,17 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     private func unsubscribeFromTerminalStreams() {
         let subscriptions = terminalStreamSubscriptions.values
         terminalStreamSubscriptions.removeAll()
+        publishTerminalStreamSubscriptionCount()
         for subscription in subscriptions {
             subscription.stop()
         }
+    }
+
+    private func publishTerminalStreamSubscriptionCount() {
+        observability.setActiveTerminalStreamSubscriptionCount(
+            terminalStreamSubscriptions.count,
+            forConnectionID: connectionID
+        )
     }
 
     private func canonicalAgentEventSessionID(_ sessionID: String?) -> String? {
@@ -1443,9 +1540,27 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     }
 
     private func send(response: BridgeResponse, messageType: String = "response", to context: ChannelHandlerContext) {
+        sendEncodable(response, messageType: messageType, to: context)
+    }
+
+    private func send(envelope: AgentEventEnvelope, to context: ChannelHandlerContext) {
+        sendEncodable(envelope, messageType: "agent_event", to: context)
+    }
+
+    private func send(workspaceEnvelope: WorkspaceEventEnvelope, to context: ChannelHandlerContext) {
+        sendEncodable(workspaceEnvelope, messageType: "workspace_event", to: context)
+    }
+
+    private func send(terminalStreamEnvelope: TerminalStreamDeltaEnvelope, to context: ChannelHandlerContext) {
+        sendEncodable(terminalStreamEnvelope, messageType: "terminal_stream_delta", to: context)
+    }
+
+    private func sendEncodable<Value: Encodable>(_ value: Value,
+                                                  messageType: String,
+                                                  to context: ChannelHandlerContext) {
         do {
             let startedAt = CFAbsoluteTimeGetCurrent()
-            let payload = try encoder.encode(response)
+            let payload = try encoder.encode(value)
             observability.recordPayload(direction: .outbound,
                                         messageType: messageType,
                                         byteCount: payload.count,
@@ -1453,61 +1568,39 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
             var buffer = context.channel.allocator.buffer(capacity: payload.count)
             buffer.writeBytes(payload)
             let frame = WebSocketFrame(fin: true, opcode: .text, data: buffer)
-            context.writeAndFlush(wrapOutboundOut(frame), promise: nil)
+            write(frame: frame,
+                  messageType: messageType,
+                  byteCount: payload.count,
+                  to: context)
         } catch {
+            let bridgedError = error as NSError
+            recordConnectionEvent(kind: .encodeFailed,
+                                  errorType: String(reflecting: type(of: error)),
+                                  errorDomain: bridgedError.domain,
+                                  errorCode: bridgedError.code,
+                                  messageType: messageType)
             context.close(promise: nil)
         }
     }
 
-    private func send(envelope: AgentEventEnvelope, to context: ChannelHandlerContext) {
-        do {
-            let startedAt = CFAbsoluteTimeGetCurrent()
-            let payload = try encoder.encode(envelope)
-            observability.recordPayload(direction: .outbound,
-                                        messageType: "agent_event",
-                                        byteCount: payload.count,
-                                        durationMs: (CFAbsoluteTimeGetCurrent() - startedAt) * 1000)
-            var buffer = context.channel.allocator.buffer(capacity: payload.count)
-            buffer.writeBytes(payload)
-            let frame = WebSocketFrame(fin: true, opcode: .text, data: buffer)
-            context.writeAndFlush(wrapOutboundOut(frame), promise: nil)
-        } catch {
-            context.close(promise: nil)
+    private func write(frame: WebSocketFrame,
+                       messageType: String,
+                       byteCount: Int,
+                       to context: ChannelHandlerContext) {
+        let promise = context.eventLoop.makePromise(of: Void.self)
+        promise.futureResult.whenFailure { [weak self] error in
+            guard let self else {
+                return
+            }
+            let bridgedError = error as NSError
+            self.recordConnectionEvent(kind: .writeFailed,
+                                       errorType: String(reflecting: type(of: error)),
+                                       errorDomain: bridgedError.domain,
+                                       errorCode: bridgedError.code,
+                                       messageType: messageType,
+                                       byteCount: byteCount)
         }
-    }
-
-    private func send(workspaceEnvelope: WorkspaceEventEnvelope, to context: ChannelHandlerContext) {
-        do {
-            let startedAt = CFAbsoluteTimeGetCurrent()
-            let payload = try encoder.encode(workspaceEnvelope)
-            observability.recordPayload(direction: .outbound,
-                                        messageType: "workspace_event",
-                                        byteCount: payload.count,
-                                        durationMs: (CFAbsoluteTimeGetCurrent() - startedAt) * 1000)
-            var buffer = context.channel.allocator.buffer(capacity: payload.count)
-            buffer.writeBytes(payload)
-            let frame = WebSocketFrame(fin: true, opcode: .text, data: buffer)
-            context.writeAndFlush(wrapOutboundOut(frame), promise: nil)
-        } catch {
-            context.close(promise: nil)
-        }
-    }
-
-    private func send(terminalStreamEnvelope: TerminalStreamDeltaEnvelope, to context: ChannelHandlerContext) {
-        do {
-            let startedAt = CFAbsoluteTimeGetCurrent()
-            let payload = try encoder.encode(terminalStreamEnvelope)
-            observability.recordPayload(direction: .outbound,
-                                        messageType: "terminal_stream_delta",
-                                        byteCount: payload.count,
-                                        durationMs: (CFAbsoluteTimeGetCurrent() - startedAt) * 1000)
-            var buffer = context.channel.allocator.buffer(capacity: payload.count)
-            buffer.writeBytes(payload)
-            let frame = WebSocketFrame(fin: true, opcode: .text, data: buffer)
-            context.writeAndFlush(wrapOutboundOut(frame), promise: nil)
-        } catch {
-            context.close(promise: nil)
-        }
+        context.writeAndFlush(wrapOutboundOut(frame), promise: promise)
     }
 
     private static func iso8601Now() -> String {
