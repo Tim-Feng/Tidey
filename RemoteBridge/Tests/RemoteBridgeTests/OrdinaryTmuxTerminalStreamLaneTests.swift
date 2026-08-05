@@ -46,22 +46,31 @@ final class OrdinaryTmuxTerminalStreamLaneTests: XCTestCase {
         private let label: String
         private let eventLog: EventLog
         private let lock = NSLock()
+        private var remainingReleaseFailures: Int
         private var remainingReplacementFailures: Int
 
         init(route: OrdinaryTmuxPanelRoute,
              label: String,
              eventLog: EventLog,
+             releaseFailures: Int = 0,
              replacementFailures: Int = 0) {
             self.route = route
             self.label = label
             self.eventLog = eventLog
+            remainingReleaseFailures = releaseFailures
             remainingReplacementFailures = replacementFailures
         }
 
         @discardableResult
         func stop() -> Bool {
             eventLog.append("stop-\(label)")
-            return true
+            lock.lock()
+            let shouldFail = remainingReleaseFailures > 0
+            if shouldFail {
+                remainingReleaseFailures -= 1
+            }
+            lock.unlock()
+            return shouldFail == false
         }
 
         func stopForReplacement() throws {
@@ -178,6 +187,54 @@ final class OrdinaryTmuxTerminalStreamLaneTests: XCTestCase {
         ])
     }
 
+    func testReleaseStopFailureKeepsLeaseForReplacementRetries() throws {
+        let queue = DispatchQueue(label: "OrdinaryTmuxTerminalStreamLaneTests.releaseRetry")
+        let lane = OrdinaryTmuxTerminalStreamLane(queue: queue)
+        let eventLog = EventLog()
+        let first = makeCandidate(token: 1,
+                                  label: "1",
+                                  eventLog: eventLog,
+                                  releaseFailures: 1,
+                                  replacementFailures: 1)
+        let second = makeCandidate(token: 2, label: "2", eventLog: eventLog)
+        let third = makeCandidate(token: 3, label: "3", eventLog: eventLog)
+
+        _ = try XCTUnwrap(submit(lane: lane, sequence: 1) {
+            eventLog.append("build-1")
+            return first
+        }).get()
+        XCTAssertTrue(first.lease.deliveryGate.accept {
+            eventLog.append("invalidate-1")
+        })
+
+        lane.releaseIfCurrent(token: 1)
+        drain(queue)
+        let failed = try XCTUnwrap(submit(lane: lane, sequence: 2) {
+            eventLog.append("build-2")
+            return second
+        })
+        XCTAssertThrowsError(try failed.get())
+        XCTAssertEqual(eventLog.events, [
+            "build-1",
+            "invalidate-1",
+            "stop-1",
+            "stopForReplacement-1",
+        ])
+
+        _ = try XCTUnwrap(submit(lane: lane, sequence: 3) {
+            eventLog.append("build-3")
+            return third
+        }).get()
+        XCTAssertEqual(eventLog.events, [
+            "build-1",
+            "invalidate-1",
+            "stop-1",
+            "stopForReplacement-1",
+            "stopForReplacement-1",
+            "build-3",
+        ])
+    }
+
     func testStaleSequenceDoesNotBuildOrReplaceTheCurrentLease() throws {
         let queue = DispatchQueue(label: "OrdinaryTmuxTerminalStreamLaneTests.stale")
         let lane = OrdinaryTmuxTerminalStreamLane(queue: queue)
@@ -248,10 +305,12 @@ final class OrdinaryTmuxTerminalStreamLaneTests: XCTestCase {
     private func makeCandidate(token: UInt64,
                                label: String,
                                eventLog: EventLog,
+                               releaseFailures: Int = 0,
                                replacementFailures: Int = 0) -> OrdinaryTmuxTerminalStreamLaneCandidate {
         let subscription = RecordingSubscription(route: route(),
                                                  label: label,
                                                  eventLog: eventLog,
+                                                 releaseFailures: releaseFailures,
                                                  replacementFailures: replacementFailures)
         return OrdinaryTmuxTerminalStreamLaneCandidate(
             response: BridgeResponse(id: "subscribe-\(label)", ok: true, result: nil, error: nil),

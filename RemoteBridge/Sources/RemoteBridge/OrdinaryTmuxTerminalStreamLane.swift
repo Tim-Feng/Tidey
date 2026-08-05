@@ -125,8 +125,9 @@ final class OrdinaryTmuxTerminalStreamLane: @unchecked Sendable {
                 return
             }
             activeLease.deliveryGate.invalidate()
-            activeLease.stop()
-            self.activeLease = nil
+            if activeLease.stop() {
+                self.activeLease = nil
+            }
         }
     }
 }
