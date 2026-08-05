@@ -132,12 +132,87 @@ struct BridgeSlowOperationSnapshot: Codable, Equatable {
     }
 }
 
+enum BridgeConnectionEventKind: String, Codable, Equatable {
+    case connected
+    case peerClose = "peer_close"
+    case channelError = "channel_error"
+    case writeFailed = "write_failed"
+    case encodeFailed = "encode_failed"
+    case disconnected
+}
+
+struct BridgeConnectionEventSnapshot: Codable, Equatable {
+    let timestamp: Date
+    let connectionID: String
+    let kind: BridgeConnectionEventKind
+    let durationMs: Double?
+    let closeCode: Int?
+    let reasonByteCount: Int?
+    let errorType: String?
+    let errorDomain: String?
+    let errorCode: Int?
+    let messageType: String?
+    let byteCount: Int?
+    let terminalStreamSubscriptionCount: Int
+    let agentSubscriptionCount: Int
+    let workspaceSubscriptionCount: Int
+
+    init(connectionID: String,
+         kind: BridgeConnectionEventKind,
+         timestamp: Date = Date(),
+         durationMs: Double? = nil,
+         closeCode: Int? = nil,
+         reasonByteCount: Int? = nil,
+         errorType: String? = nil,
+         errorDomain: String? = nil,
+         errorCode: Int? = nil,
+         messageType: String? = nil,
+         byteCount: Int? = nil,
+         terminalStreamSubscriptionCount: Int = 0,
+         agentSubscriptionCount: Int = 0,
+         workspaceSubscriptionCount: Int = 0) {
+        self.timestamp = timestamp
+        self.connectionID = connectionID
+        self.kind = kind
+        self.durationMs = durationMs
+        self.closeCode = closeCode
+        self.reasonByteCount = reasonByteCount
+        self.errorType = errorType
+        self.errorDomain = errorDomain
+        self.errorCode = errorCode
+        self.messageType = messageType
+        self.byteCount = byteCount
+        self.terminalStreamSubscriptionCount = terminalStreamSubscriptionCount
+        self.agentSubscriptionCount = agentSubscriptionCount
+        self.workspaceSubscriptionCount = workspaceSubscriptionCount
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case timestamp
+        case connectionID = "connection_id"
+        case kind
+        case durationMs = "duration_ms"
+        case closeCode = "close_code"
+        case reasonByteCount = "reason_byte_count"
+        case errorType = "error_type"
+        case errorDomain = "error_domain"
+        case errorCode = "error_code"
+        case messageType = "message_type"
+        case byteCount = "byte_count"
+        case terminalStreamSubscriptionCount = "terminal_stream_subscription_count"
+        case agentSubscriptionCount = "agent_subscription_count"
+        case workspaceSubscriptionCount = "workspace_subscription_count"
+    }
+}
+
 struct BridgeAdminStatusSnapshot: Codable, Equatable {
     let generatedAt: Date
     let activeSessions: [BridgeActiveSessionStatus]
     let fetchStats: BridgeFetchStatsSnapshot
     let payloadStats: [BridgePayloadStatsSnapshot]
     let slowOperations: [BridgeSlowOperationSnapshot]
+    let activeTerminalStreamSubscriptionCount: Int
+    let connectionEvents: [BridgeConnectionEventSnapshot]
 
     enum CodingKeys: String, CodingKey {
         case generatedAt = "generated_at"
@@ -145,6 +220,8 @@ struct BridgeAdminStatusSnapshot: Codable, Equatable {
         case fetchStats = "fetch_stats"
         case payloadStats = "payload_stats"
         case slowOperations = "slow_operations"
+        case activeTerminalStreamSubscriptionCount = "active_terminal_stream_subscription_count"
+        case connectionEvents = "connection_events"
     }
 }
 
@@ -153,6 +230,7 @@ enum BridgeLogger {
     static let fetch = Logger(subsystem: "com.tidey.remote-bridge", category: "fetch")
     static let input = Logger(subsystem: "com.tidey.remote-bridge", category: "input")
     static let payload = Logger(subsystem: "com.tidey.remote-bridge", category: "payload")
+    static let connection = Logger(subsystem: "com.tidey.remote-bridge", category: "connection")
 }
 
 private struct BridgePayloadStatsAccumulator {
@@ -194,6 +272,7 @@ final class BridgeObservabilityCenter {
     private let queue = DispatchQueue(label: "com.tidey.remote-bridge.observability")
     private let slowFetchThresholdMs: Double
     private let maxSlowOperations: Int
+    private let maxConnectionEvents: Int
 
     private var totalFetches = 0
     private var fetchesWithBackfill = 0
@@ -202,11 +281,15 @@ final class BridgeObservabilityCenter {
     private var lastFetch: BridgeFetchObservation?
     private var slowOperations = [BridgeSlowOperationSnapshot]()
     private var payloadStats = [String: BridgePayloadStatsAccumulator]()
+    private var connectionEvents = [BridgeConnectionEventSnapshot]()
+    private var activeTerminalStreamSubscriptionCounts = [String: Int]()
 
     init(slowFetchThresholdMs: Double = 250,
-         maxSlowOperations: Int = 20) {
+         maxSlowOperations: Int = 20,
+         maxConnectionEvents: Int = 20) {
         self.slowFetchThresholdMs = slowFetchThresholdMs
         self.maxSlowOperations = maxSlowOperations
+        self.maxConnectionEvents = max(0, maxConnectionEvents)
     }
 
     func recordFetch(workspaceID: String,
@@ -265,6 +348,32 @@ final class BridgeObservabilityCenter {
         }
     }
 
+    func recordConnectionEvent(_ event: BridgeConnectionEventSnapshot) {
+        queue.sync {
+            connectionEvents.append(event)
+            if connectionEvents.count > maxConnectionEvents {
+                connectionEvents.removeFirst(connectionEvents.count - maxConnectionEvents)
+            }
+            BridgeLogger.connection.notice("connection event kind=\(event.kind.rawValue, privacy: .public) connection_id=\(event.connectionID, privacy: .public)")
+        }
+    }
+
+    func setActiveTerminalStreamSubscriptionCount(_ count: Int, forConnectionID connectionID: String) {
+        queue.sync {
+            if count > 0 {
+                activeTerminalStreamSubscriptionCounts[connectionID] = count
+            } else {
+                activeTerminalStreamSubscriptionCounts.removeValue(forKey: connectionID)
+            }
+        }
+    }
+
+    func clearActiveTerminalStreamSubscriptionCount(forConnectionID connectionID: String) {
+        queue.sync {
+            _ = activeTerminalStreamSubscriptionCounts.removeValue(forKey: connectionID)
+        }
+    }
+
     func snapshot(activeSessions: [BridgeActiveSessionStatus]) -> BridgeAdminStatusSnapshot {
         queue.sync {
             let average = totalFetches > 0 ? cumulativeFetchDurationMs / Double(totalFetches) : 0
@@ -289,7 +398,9 @@ final class BridgeObservabilityCenter {
                                                                                   maxDurationMs: maxFetchDurationMs,
                                                                                   lastFetch: lastFetch),
                                              payloadStats: payloadSnapshots,
-                                             slowOperations: slowOperations.sorted { $0.timestamp > $1.timestamp })
+                                             slowOperations: slowOperations.sorted { $0.timestamp > $1.timestamp },
+                                             activeTerminalStreamSubscriptionCount: activeTerminalStreamSubscriptionCounts.values.reduce(0, +),
+                                             connectionEvents: connectionEvents)
         }
     }
 }

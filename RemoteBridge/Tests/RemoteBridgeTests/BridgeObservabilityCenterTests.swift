@@ -2,6 +2,36 @@ import XCTest
 @testable import RemoteBridge
 
 final class BridgeObservabilityCenterTests: XCTestCase {
+    func testConnectionEventRingIsBounded() {
+        let center = BridgeObservabilityCenter(maxConnectionEvents: 2)
+
+        center.recordConnectionEvent(BridgeConnectionEventSnapshot(connectionID: "connection-1",
+                                                                    kind: .connected))
+        center.recordConnectionEvent(BridgeConnectionEventSnapshot(connectionID: "connection-1",
+                                                                    kind: .peerClose,
+                                                                    closeCode: 1001,
+                                                                    reasonByteCount: 4))
+        center.recordConnectionEvent(BridgeConnectionEventSnapshot(connectionID: "connection-1",
+                                                                    kind: .disconnected,
+                                                                    durationMs: 125))
+
+        let snapshot = center.snapshot(activeSessions: [])
+        XCTAssertEqual(snapshot.connectionEvents.map(\.kind), [.peerClose, .disconnected])
+        XCTAssertEqual(snapshot.connectionEvents.first?.closeCode, 1001)
+        XCTAssertEqual(snapshot.connectionEvents.first?.reasonByteCount, 4)
+    }
+
+    func testActiveTerminalStreamSubscriptionCountAggregatesConnections() {
+        let center = BridgeObservabilityCenter()
+
+        center.setActiveTerminalStreamSubscriptionCount(2, forConnectionID: "connection-1")
+        center.setActiveTerminalStreamSubscriptionCount(1, forConnectionID: "connection-2")
+        XCTAssertEqual(center.snapshot(activeSessions: []).activeTerminalStreamSubscriptionCount, 3)
+
+        center.clearActiveTerminalStreamSubscriptionCount(forConnectionID: "connection-1")
+        XCTAssertEqual(center.snapshot(activeSessions: []).activeTerminalStreamSubscriptionCount, 1)
+    }
+
     func testRecordFetchUpdatesSnapshotAndBackfillCounts() {
         let center = BridgeObservabilityCenter(slowFetchThresholdMs: 9999)
 
