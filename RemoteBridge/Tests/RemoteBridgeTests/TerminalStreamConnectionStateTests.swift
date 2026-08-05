@@ -24,86 +24,62 @@ final class TerminalStreamConnectionStateTests: XCTestCase {
         func stop() -> Bool { true }
     }
 
-    func testCommitSubscribeAcceptsNewestLeaseAndRejectsOlderLease() {
+    func testInstallSubscribeOwnsOneLeasePerPanelAndReturnsDisplacedLease() {
         var state = TerminalStreamConnectionState()
-        let current = lease(panelID: "panel-1", token: 5)
-        let stale = lease(panelID: "panel-1", token: 4)
+        let first = lease(panelID: "panel-1", token: 5)
+        let replacement = lease(panelID: "panel-1", token: 4,
+                                owner: .identified("owner-b"))
 
-        switch state.commitSubscribe(sequence: 5,
-                                     panelID: "panel-1",
-                                     lease: current,
-                                     onInvalidated: {}) {
+        switch state.installSubscribe(panelID: "panel-1",
+                                      owner: .legacy,
+                                      lease: first,
+                                      onInvalidated: {}) {
         case .accepted(let displacedLease):
             XCTAssertNil(displacedLease)
         case .rejected:
-            XCTFail("Newest lease should be accepted")
+            XCTFail("First installed lease should be accepted")
         }
-        XCTAssertTrue(current.deliveryGate.allowsDelivery)
-        XCTAssertEqual(state.count, 1)
 
-        switch state.commitSubscribe(sequence: 4,
-                                     panelID: "panel-1",
-                                     lease: stale,
-                                     onInvalidated: {}) {
-        case .accepted:
-            XCTFail("Older lease should be rejected")
+        switch state.installSubscribe(panelID: "panel-1",
+                                      owner: .identified("owner-b"),
+                                      lease: replacement,
+                                      onInvalidated: {}) {
+        case .accepted(let displacedLease):
+            XCTAssertEqual(displacedLease?.token, first.token)
         case .rejected:
-            break
+            XCTFail("Admission owns ordering; installed state should accept the admitted replacement")
         }
-        XCTAssertFalse(stale.deliveryGate.allowsDelivery)
+        XCTAssertTrue(first.deliveryGate.allowsDelivery)
+        XCTAssertTrue(replacement.deliveryGate.allowsDelivery)
         XCTAssertEqual(state.count, 1)
     }
 
-    func testUnsubscribeAllReleasesOnlyPanelsOlderThanItsSequence() {
+    func testReleaseInstalledLeasesUsesExactLeaseTokens() {
         var state = TerminalStreamConnectionState()
         let older = lease(panelID: "panel-1", token: 2)
         let newer = lease(panelID: "panel-2", token: 5)
-        _ = state.commitSubscribe(sequence: 2,
-                                  panelID: "panel-1",
-                                  lease: older,
-                                  onInvalidated: {})
-        _ = state.commitSubscribe(sequence: 5,
-                                  panelID: "panel-2",
-                                  lease: newer,
-                                  onInvalidated: {})
+        _ = state.installSubscribe(panelID: "panel-1", owner: .legacy,
+                                   lease: older, onInvalidated: {})
+        _ = state.installSubscribe(panelID: "panel-2", owner: .legacy,
+                                   lease: newer, onInvalidated: {})
 
-        switch state.commitUnsubscribeAll(sequence: 4) {
+        switch state.releaseInstalledLeases(olderThan: 4) {
         case .accepted(let leases):
             XCTAssertEqual(leases.map(\.token), [2])
         case .rejected:
-            XCTFail("Fresh unsubscribe-all should be accepted")
+            XCTFail("Active installed state should release matching tokens")
         }
         XCTAssertEqual(state.count, 1)
-
-        let fenced = lease(panelID: "panel-3", token: 3)
-        if case .accepted = state.commitSubscribe(sequence: 3,
-                                                  panelID: "panel-3",
-                                                  lease: fenced,
-                                                  onInvalidated: {}) {
-            XCTFail("Unsubscribe-all should fence older pending candidates")
-        }
-
-        switch state.commitUnsubscribe(sequence: 6, panelID: "panel-2") {
-        case .accepted(let leases):
-            XCTAssertEqual(leases.map(\.token), [5])
-        case .rejected:
-            XCTFail("Fresh targeted unsubscribe should be accepted")
-        }
-        XCTAssertEqual(state.count, 0)
     }
 
     func testExactTokenRemovalAndRetirementPreventLateResurrection() {
         var state = TerminalStreamConnectionState()
         let first = lease(panelID: "panel-1", token: 1)
         let second = lease(panelID: "panel-2", token: 2)
-        _ = state.commitSubscribe(sequence: 1,
-                                  panelID: "panel-1",
-                                  lease: first,
-                                  onInvalidated: {})
-        _ = state.commitSubscribe(sequence: 2,
-                                  panelID: "panel-2",
-                                  lease: second,
-                                  onInvalidated: {})
+        _ = state.installSubscribe(panelID: "panel-1", owner: .legacy,
+                                   lease: first, onInvalidated: {})
+        _ = state.installSubscribe(panelID: "panel-2", owner: .legacy,
+                                   lease: second, onInvalidated: {})
 
         XCTAssertFalse(state.removeIfOwned(panelID: "panel-1", token: 99))
         XCTAssertEqual(state.count, 2)
@@ -117,10 +93,10 @@ final class TerminalStreamConnectionStateTests: XCTestCase {
         XCTAssertEqual(state.count, 0)
 
         let late = lease(panelID: "panel-3", token: 3)
-        if case .accepted = state.commitSubscribe(sequence: 3,
-                                                  panelID: "panel-3",
-                                                  lease: late,
-                                                  onInvalidated: {}) {
+        if case .accepted = state.installSubscribe(panelID: "panel-3",
+                                                   owner: .legacy,
+                                                   lease: late,
+                                                   onInvalidated: {}) {
             XCTFail("Retired connections must reject late candidates")
         }
         XCTAssertFalse(late.deliveryGate.allowsDelivery)
@@ -130,13 +106,10 @@ final class TerminalStreamConnectionStateTests: XCTestCase {
     func testLegacyCleanupNeverRemovesIdentifiedLease() {
         var state = TerminalStreamConnectionState()
         let identified = lease(panelID: "panel-1", token: 10, owner: .identified("owner-b"))
-        _ = state.commitSubscribe(sequence: 10,
-                                  panelID: "panel-1",
-                                  owner: .identified("owner-b"),
-                                  lease: identified,
-                                  onInvalidated: {})
+        _ = state.installSubscribe(panelID: "panel-1", owner: .identified("owner-b"),
+                                   lease: identified, onInvalidated: {})
 
-        switch state.commitLegacyUnsubscribe(sequence: 20, panelID: "panel-1") {
+        switch state.releaseInstalledLegacyLease(panelID: "panel-1") {
         case .accepted(let leases):
             XCTAssertEqual(leases.count, 0)
         case .rejected:
@@ -149,17 +122,13 @@ final class TerminalStreamConnectionStateTests: XCTestCase {
         var state = TerminalStreamConnectionState()
         let legacy = lease(panelID: "panel-1", token: 10, owner: .legacy)
         let identified = lease(panelID: "panel-1", token: 20, owner: .identified("owner-b"))
-        _ = state.commitSubscribe(sequence: 10,
-                                  panelID: "panel-1",
-                                  owner: .legacy,
-                                  lease: legacy,
-                                  onInvalidated: {})
+        _ = state.installSubscribe(panelID: "panel-1", owner: .legacy,
+                                   lease: legacy, onInvalidated: {})
 
-        switch state.commitSubscribe(sequence: 20,
-                                     panelID: "panel-1",
-                                     owner: .identified("owner-b"),
-                                     lease: identified,
-                                     onInvalidated: {}) {
+        switch state.installSubscribe(panelID: "panel-1",
+                                      owner: .identified("owner-b"),
+                                      lease: identified,
+                                      onInvalidated: {}) {
         case .accepted(let displacedLease):
             XCTAssertEqual(displacedLease?.token, legacy.token)
         case .rejected:
@@ -168,43 +137,28 @@ final class TerminalStreamConnectionStateTests: XCTestCase {
         XCTAssertEqual(state.count, 1)
     }
 
-    func testMismatchedIdentifiedUnsubscribeIsIdempotentAndTombstonesOnlyItsOwner() {
+    func testMismatchedIdentifiedReleaseIsIdempotent() {
         var state = TerminalStreamConnectionState()
         let current = lease(panelID: "panel-1", token: 20, owner: .identified("owner-b"))
-        _ = state.commitSubscribe(sequence: 20,
-                                  panelID: "panel-1",
-                                  owner: .identified("owner-b"),
-                                  lease: current,
-                                  onInvalidated: {})
+        _ = state.installSubscribe(panelID: "panel-1", owner: .identified("owner-b"),
+                                   lease: current, onInvalidated: {})
 
-        switch state.commitIdentifiedUnsubscribe(panelID: "panel-1", id: "owner-a") {
+        switch state.releaseInstalledIdentifiedLease(panelID: "panel-1", id: "owner-a") {
         case .accepted(let leases):
             XCTAssertEqual(leases.count, 0)
         case .rejected:
             XCTFail("Mismatched identified cleanup must be idempotently accepted")
         }
         XCTAssertEqual(state.count, 1)
-
-        let tombstoned = lease(panelID: "panel-2", token: 30, owner: .identified("owner-a"))
-        if case .accepted = state.commitSubscribe(sequence: 30,
-                                                  panelID: "panel-2",
-                                                  owner: .identified("owner-a"),
-                                                  lease: tombstoned,
-                                                  onInvalidated: {}) {
-            XCTFail("Cleanup must tombstone a matching pending identified attempt")
-        }
     }
 
-    func testMatchingIdentifiedUnsubscribeRemovesOnlyItsLease() {
+    func testConnectionGlobalIdentifiedReleaseFindsItsLeaseWithoutPanelID() {
         var state = TerminalStreamConnectionState()
         let identified = lease(panelID: "panel-1", token: 10, owner: .identified("owner-a"))
-        _ = state.commitSubscribe(sequence: 10,
-                                  panelID: "panel-1",
-                                  owner: .identified("owner-a"),
-                                  lease: identified,
-                                  onInvalidated: {})
+        _ = state.installSubscribe(panelID: "panel-1", owner: .identified("owner-a"),
+                                   lease: identified, onInvalidated: {})
 
-        switch state.commitIdentifiedUnsubscribe(panelID: "panel-1", id: "owner-a") {
+        switch state.releaseInstalledIdentifiedLease(panelID: nil, id: "owner-a") {
         case .accepted(let leases):
             XCTAssertEqual(leases.map(\.token), [10])
         case .rejected:
@@ -213,89 +167,21 @@ final class TerminalStreamConnectionStateTests: XCTestCase {
         XCTAssertEqual(state.count, 0)
     }
 
-    func testFirstIdentifiedSubscribeAttemptConsumesIDEvenWhenPanelArbitrationRejects() {
+    func testInvalidatedDeliveryGateCannotBecomeInstalledOwnership() {
         var state = TerminalStreamConnectionState()
-        let current = lease(panelID: "panel-1", token: 10, owner: .legacy)
-        _ = state.commitSubscribe(sequence: 10,
-                                  panelID: "panel-1",
-                                  owner: .legacy,
-                                  lease: current,
-                                  onInvalidated: {})
-
-        let rejected = lease(panelID: "panel-1", token: 5, owner: .identified("owner-a"))
-        if case .accepted = state.commitSubscribe(sequence: 5,
-                                                  panelID: "panel-1",
-                                                  owner: .identified("owner-a"),
-                                                  lease: rejected,
-                                                  onInvalidated: {}) {
-            XCTFail("Older identified subscribe should lose panel arbitration")
-        }
-
-        let reused = lease(panelID: "panel-1", token: 20, owner: .identified("owner-a"))
-        if case .accepted = state.commitSubscribe(sequence: 20,
-                                                  panelID: "panel-1",
-                                                  owner: .identified("owner-a"),
-                                                  lease: reused,
-                                                  onInvalidated: {}) {
-            XCTFail("The same identified owner ID must never be reused")
-        }
-        XCTAssertEqual(state.count, 1)
-    }
-
-    func testStaleIdentifiedCleanupCannotRemoveNewerIdentifiedOwner() {
-        var state = TerminalStreamConnectionState()
-        let first = lease(panelID: "panel-1", token: 10, owner: .identified("owner-a"))
-        let second = lease(panelID: "panel-1", token: 20, owner: .identified("owner-b"))
-        _ = state.commitSubscribe(sequence: 10,
-                                  panelID: "panel-1",
-                                  owner: .identified("owner-a"),
-                                  lease: first,
-                                  onInvalidated: {})
-        _ = state.commitSubscribe(sequence: 20,
-                                  panelID: "panel-1",
-                                  owner: .identified("owner-b"),
-                                  lease: second,
-                                  onInvalidated: {})
-
-        switch state.commitIdentifiedUnsubscribe(panelID: "panel-1", id: "owner-a") {
-        case .accepted(let leases):
-            XCTAssertEqual(leases.count, 0)
-        case .rejected:
-            XCTFail("Stale identified cleanup should be an accepted no-op")
-        }
-        XCTAssertEqual(state.count, 1)
-    }
-
-    func testUnsubscribeAllUsesLeaseTokenInsteadOfLatestSubscribeHighWater() {
-        var state = TerminalStreamConnectionState()
-        let current = lease(panelID: "panel-1", token: 5, owner: .identified("owner-a"))
-        _ = state.commitSubscribe(sequence: 5,
-                                  panelID: "panel-1",
-                                  owner: .identified("owner-a"),
-                                  lease: current,
-                                  onInvalidated: {})
-
         let rejectedGate = TerminalStreamDeliveryGate()
         rejectedGate.invalidate()
         let rejected = OrdinaryTmuxTerminalStreamLease(
-            token: 8,
-            owner: .identified("owner-b"),
+            token: 1,
+            owner: .legacy,
             subscription: StubSubscription(panelID: "panel-1"),
             deliveryGate: rejectedGate
         )
-        if case .accepted = state.commitSubscribe(sequence: 8,
-                                                  panelID: "panel-1",
-                                                  owner: .identified("owner-b"),
-                                                  lease: rejected,
-                                                  onInvalidated: {}) {
-            XCTFail("Invalidated candidate must not replace the current lease")
-        }
-
-        switch state.commitUnsubscribeAll(sequence: 7) {
-        case .accepted(let leases):
-            XCTAssertEqual(leases.map(\.token), [5])
-        case .rejected:
-            XCTFail("A fresh unsubscribe-all should be accepted")
+        if case .accepted = state.installSubscribe(panelID: "panel-1",
+                                                   owner: .legacy,
+                                                   lease: rejected,
+                                                   onInvalidated: {}) {
+            XCTFail("Invalidated candidate must not become installed ownership")
         }
         XCTAssertEqual(state.count, 0)
     }
