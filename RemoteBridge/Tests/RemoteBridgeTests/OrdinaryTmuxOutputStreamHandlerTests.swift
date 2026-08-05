@@ -58,6 +58,16 @@ final class OrdinaryTmuxOutputStreamHandlerTests: XCTestCase {
             return initialOutput
         }
 
+        func bootstrapTerminalStream(refreshedRoute: OrdinaryTmuxPanelRoute,
+                                     outputFilePath: String,
+                                     maxLines: Int) throws -> OrdinaryTmuxTerminalStreamBootstrap {
+            let initialOutput = try captureANSIOutput(route: refreshedRoute, maxLines: maxLines)
+            let streamRoute = try startPipePane(route: refreshedRoute,
+                                                outputFilePath: outputFilePath)
+            return OrdinaryTmuxTerminalStreamBootstrap(route: streamRoute,
+                                                       initialOutput: initialOutput)
+        }
+
         func startPipePane(route: OrdinaryTmuxPanelRoute, outputFilePath: String) throws -> OrdinaryTmuxPanelRoute {
             lock.lock()
             startedPipeRoutes.append(route)
@@ -79,11 +89,19 @@ final class OrdinaryTmuxOutputStreamHandlerTests: XCTestCase {
             }
         }
 
+        func stopPipePane(exactRoute: OrdinaryTmuxPanelRoute) throws {
+            try stopPipePane(route: exactRoute)
+        }
+
         func queryCursorPosition(route: OrdinaryTmuxPanelRoute) throws -> OrdinaryTmuxCursorPosition? {
             lock.lock()
             cursorQueryCount += 1
             lock.unlock()
             return cursorPosition
+        }
+
+        func queryCursorPosition(exactRoute: OrdinaryTmuxPanelRoute) throws -> OrdinaryTmuxCursorPosition? {
+            try queryCursorPosition(route: exactRoute)
         }
     }
 

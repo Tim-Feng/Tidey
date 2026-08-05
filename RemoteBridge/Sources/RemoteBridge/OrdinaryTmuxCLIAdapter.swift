@@ -731,6 +731,18 @@ final class OrdinaryTmuxCLIAdapter {
                                           cursorVisible: visibilityFlag != 0)
     }
 
+    func bootstrapTerminalStream(refreshedRoute: OrdinaryTmuxPanelRoute,
+                                 outputFilePath: String,
+                                 maxLines: Int) throws -> OrdinaryTmuxTerminalStreamBootstrap {
+        let initialOutput = try captureOutput(refreshedRoute: refreshedRoute,
+                                              maxLines: maxLines,
+                                              includeEscapeSequences: true)
+        let streamRoute = try startPipePane(route: refreshedRoute,
+                                            outputFilePath: outputFilePath)
+        return OrdinaryTmuxTerminalStreamBootstrap(route: streamRoute,
+                                                   initialOutput: initialOutput)
+    }
+
     func startPipePane(route: OrdinaryTmuxPanelRoute, outputFilePath: String) throws -> OrdinaryTmuxPanelRoute {
         let refreshed = try refreshedRoute(route)
         let command = "cat >> \(Self.singleQuotedShellArgument(outputFilePath))"
@@ -747,9 +759,17 @@ final class OrdinaryTmuxCLIAdapter {
                               nil)
     }
 
+    func stopPipePane(exactRoute: OrdinaryTmuxPanelRoute) throws {
+        try stopPipePane(route: exactRoute)
+    }
+
     func queryCursorPosition(route: OrdinaryTmuxPanelRoute) throws -> OrdinaryTmuxCursorPosition? {
         let refreshed = try refreshedRoute(route)
         return try queryCursorPosition(refreshedRoute: refreshed)
+    }
+
+    func queryCursorPosition(exactRoute: OrdinaryTmuxPanelRoute) throws -> OrdinaryTmuxCursorPosition? {
+        try queryCursorPosition(route: exactRoute)
     }
 
     private func queryCursorPosition(refreshedRoute: OrdinaryTmuxPanelRoute) throws -> OrdinaryTmuxCursorPosition? {

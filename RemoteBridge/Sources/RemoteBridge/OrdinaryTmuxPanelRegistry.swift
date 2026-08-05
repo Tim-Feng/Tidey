@@ -280,9 +280,19 @@ protocol OrdinaryTmuxRouteRefreshing: Sendable {
 }
 
 protocol OrdinaryTmuxTerminalStreaming: Sendable {
+    func bootstrapTerminalStream(refreshedRoute: OrdinaryTmuxPanelRoute,
+                                 outputFilePath: String,
+                                 maxLines: Int) throws -> OrdinaryTmuxTerminalStreamBootstrap
     func startPipePane(route: OrdinaryTmuxPanelRoute, outputFilePath: String) throws -> OrdinaryTmuxPanelRoute
     func stopPipePane(route: OrdinaryTmuxPanelRoute) throws
+    func stopPipePane(exactRoute: OrdinaryTmuxPanelRoute) throws
     func queryCursorPosition(route: OrdinaryTmuxPanelRoute) throws -> OrdinaryTmuxCursorPosition?
+    func queryCursorPosition(exactRoute: OrdinaryTmuxPanelRoute) throws -> OrdinaryTmuxCursorPosition?
+}
+
+struct OrdinaryTmuxTerminalStreamBootstrap: Equatable, Sendable {
+    let route: OrdinaryTmuxPanelRoute
+    let initialOutput: OrdinaryTmuxCapturedOutput
 }
 
 struct OrdinaryTmuxCapturedOutput: Equatable, Sendable {
