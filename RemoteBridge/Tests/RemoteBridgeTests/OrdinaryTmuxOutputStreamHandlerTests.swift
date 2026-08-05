@@ -22,10 +22,15 @@ final class OrdinaryTmuxOutputStreamHandlerTests: XCTestCase {
     }
 
     private final class StubAdapter: OrdinaryTmuxRouteRefreshing, OrdinaryTmuxTerminalStreaming, @unchecked Sendable {
+        private enum StubError: Error {
+            case stopFailed
+        }
+
         private let lock = NSLock()
         private(set) var startedPipeRoutes = [OrdinaryTmuxPanelRoute]()
         private(set) var startedPipeOutputPaths = [String]()
         private(set) var stoppedPipeRoutes = [OrdinaryTmuxPanelRoute]()
+        var remainingStopFailures = 0
         var initialOutput = OrdinaryTmuxCapturedOutput(output: "\u{1B}[31mhello\u{1B}[0m",
                                                        cursorRow: 3,
                                                        cursorColumn: 4,
@@ -63,7 +68,14 @@ final class OrdinaryTmuxOutputStreamHandlerTests: XCTestCase {
         func stopPipePane(route: OrdinaryTmuxPanelRoute) throws {
             lock.lock()
             stoppedPipeRoutes.append(route)
+            let shouldFail = remainingStopFailures > 0
+            if shouldFail {
+                remainingStopFailures -= 1
+            }
             lock.unlock()
+            if shouldFail {
+                throw StubError.stopFailed
+            }
         }
 
         func queryCursorPosition(route: OrdinaryTmuxPanelRoute) throws -> OrdinaryTmuxCursorPosition? {
@@ -216,6 +228,37 @@ final class OrdinaryTmuxOutputStreamHandlerTests: XCTestCase {
         start.subscription.stop()
         XCTAssertEqual(tailerBox.firstTailer?.stopCount, 1)
         XCTAssertEqual(adapter.stoppedPipeRoutes, [route])
+    }
+
+    func testReplacementStopCleansUpAndRemainsRetryableAfterPipeStopFailure() throws {
+        let route = ordinaryRoute()
+        let adapter = StubAdapter()
+        adapter.remainingStopFailures = 1
+        let tailerBox = StubTailerBox()
+        let outputDirectory = temporaryDirectory()
+        let handler = OrdinaryTmuxOutputStreamHandler(routeResolver: StubResolver(route: route),
+                                                      adapter: adapter,
+                                                      outputDirectory: outputDirectory,
+                                                      makeTailer: { url, handler in
+                                                          tailerBox.makeTailer(url: url, handler: handler)
+                                                      })
+        let start = try XCTUnwrap(handler.subscribe(BridgeRequest(id: "request-1",
+                                                                  action: "subscribe_terminal_stream",
+                                                                  params: ["panel_id": .string(route.panelID)]),
+                                                    onDelta: { _ in }))
+        let subscription = try XCTUnwrap(start.subscription as? OrdinaryTmuxTerminalStreamSubscription)
+
+        XCTAssertThrowsError(try subscription.stopForReplacement())
+        XCTAssertEqual(tailerBox.firstTailer?.stopCount, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: subscription.outputFileURL.path))
+
+        XCTAssertNoThrow(try subscription.stopForReplacement())
+        XCTAssertEqual(tailerBox.firstTailer?.stopCount, 2)
+        XCTAssertEqual(adapter.stoppedPipeRoutes, [route, route])
+
+        XCTAssertNoThrow(try subscription.stopForReplacement())
+        XCTAssertEqual(tailerBox.firstTailer?.stopCount, 2)
+        XCTAssertEqual(adapter.stoppedPipeRoutes, [route, route])
     }
 
     private func ordinaryRoute() -> OrdinaryTmuxPanelRoute {

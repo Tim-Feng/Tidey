@@ -137,7 +137,7 @@ final class OrdinaryTmuxTerminalStreamSubscription: OrdinaryTmuxTerminalStreamSu
     private let tailer: TerminalByteTailing
     private let cleanup: (URL) -> Void
     private let lock = NSLock()
-    private var isStopped = false
+    private var physicallyClosed = false
 
     init(route: OrdinaryTmuxPanelRoute,
          outputFileURL: URL,
@@ -153,37 +153,32 @@ final class OrdinaryTmuxTerminalStreamSubscription: OrdinaryTmuxTerminalStreamSu
 
     func stop() {
         lock.lock()
-        guard isStopped == false else {
-            lock.unlock()
+        defer { lock.unlock() }
+        guard physicallyClosed == false else {
             return
         }
-        isStopped = true
-        lock.unlock()
 
         tailer.stop()
-        try? adapter.stopPipePane(route: route)
-        cleanup(outputFileURL)
+        defer { cleanup(outputFileURL) }
+        do {
+            try adapter.stopPipePane(route: route)
+            physicallyClosed = true
+        } catch {
+            // Best effort. A later lane replacement may retry the physical stop.
+        }
     }
 
     func stopForReplacement() throws {
         lock.lock()
-        guard isStopped == false else {
-            lock.unlock()
+        defer { lock.unlock() }
+        guard physicallyClosed == false else {
             return
         }
-        lock.unlock()
 
-        try adapter.stopPipePane(route: route)
-
-        lock.lock()
-        guard isStopped == false else {
-            lock.unlock()
-            return
-        }
-        isStopped = true
-        lock.unlock()
         tailer.stop()
-        cleanup(outputFileURL)
+        defer { cleanup(outputFileURL) }
+        try adapter.stopPipePane(route: route)
+        physicallyClosed = true
     }
 }
 
