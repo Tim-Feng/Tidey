@@ -8,6 +8,25 @@ struct TerminalStreamDeltaEnvelope: Codable, Sendable, Equatable {
     let chunkBase64: String
     let cursorRow: Int?
     let cursorColumn: Int?
+    let cursorVisible: Bool?
+
+    init(type: String,
+         workspaceID: String,
+         panelID: String,
+         chunk: String,
+         chunkBase64: String,
+         cursorRow: Int?,
+         cursorColumn: Int?,
+         cursorVisible: Bool? = nil) {
+        self.type = type
+        self.workspaceID = workspaceID
+        self.panelID = panelID
+        self.chunk = chunk
+        self.chunkBase64 = chunkBase64
+        self.cursorRow = cursorRow
+        self.cursorColumn = cursorColumn
+        self.cursorVisible = cursorVisible
+    }
 
     enum CodingKeys: String, CodingKey {
         case type
@@ -17,6 +36,7 @@ struct TerminalStreamDeltaEnvelope: Codable, Sendable, Equatable {
         case chunkBase64 = "chunk_base64"
         case cursorRow = "cursor_row"
         case cursorColumn = "cursor_col"
+        case cursorVisible = "cursor_visible"
     }
 }
 

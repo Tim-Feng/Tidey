@@ -289,11 +289,29 @@ struct OrdinaryTmuxCapturedOutput: Equatable, Sendable {
     let output: String
     let cursorRow: Int?
     let cursorColumn: Int?
+    let cursorVisible: Bool?
+
+    init(output: String,
+         cursorRow: Int?,
+         cursorColumn: Int?,
+         cursorVisible: Bool? = nil) {
+        self.output = output
+        self.cursorRow = cursorRow
+        self.cursorColumn = cursorColumn
+        self.cursorVisible = cursorVisible
+    }
 }
 
 struct OrdinaryTmuxCursorPosition: Equatable, Sendable {
     let row: Int
     let column: Int
+    let cursorVisible: Bool
+
+    init(row: Int, column: Int, cursorVisible: Bool = true) {
+        self.row = row
+        self.column = column
+        self.cursorVisible = cursorVisible
+    }
 }
 
 protocol OrdinaryTmuxRouteResolving: Sendable {
