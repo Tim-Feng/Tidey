@@ -4,6 +4,25 @@ import XCTest
 @testable import RemoteBridge
 
 final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
+    func testLocalRequestResultExposesDeferredEventLoopCommitOutcome() throws {
+        let accepted = WebSocketFrameHandler.LocalRequestResult(
+            response: BridgeResponse(id: "accepted", ok: true, result: nil, error: nil),
+            agentReplayEnvelopes: [],
+            workspaceReplayEnvelopes: [],
+            applyOnEventLoop: { .accepted }
+        )
+        let rejected = WebSocketFrameHandler.LocalRequestResult(
+            response: BridgeResponse(id: "rejected", ok: true, result: nil, error: nil),
+            agentReplayEnvelopes: [],
+            workspaceReplayEnvelopes: [],
+            applyOnEventLoop: { .rejected(reason: "newer request already owns the slot") }
+        )
+
+        XCTAssertEqual(try XCTUnwrap(accepted.applyOnEventLoop)(), .accepted)
+        XCTAssertEqual(try XCTUnwrap(rejected.applyOnEventLoop)(),
+                       .rejected(reason: "newer request already owns the slot"))
+    }
+
     private final class EventLog: @unchecked Sendable {
         private let lock = NSLock()
         private var storedEvents = [String]()

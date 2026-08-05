@@ -587,21 +587,29 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         }
     }
 
+    enum CommitOutcome: Equatable {
+        case accepted
+        case rejected(reason: String)
+    }
+
     struct LocalRequestResult {
         let response: BridgeResponse
         let agentReplayEnvelopes: [AgentEventEnvelope]
         let workspaceReplayEnvelopes: [WorkspaceEventEnvelope]
 
         let agentLiveGate: BridgeAgentEventReplayGate?
+        let applyOnEventLoop: (() -> CommitOutcome)?
 
         init(response: BridgeResponse,
              agentReplayEnvelopes: [AgentEventEnvelope],
              workspaceReplayEnvelopes: [WorkspaceEventEnvelope],
-             agentLiveGate: BridgeAgentEventReplayGate? = nil) {
+             agentLiveGate: BridgeAgentEventReplayGate? = nil,
+             applyOnEventLoop: (() -> CommitOutcome)? = nil) {
             self.response = response
             self.agentReplayEnvelopes = agentReplayEnvelopes
             self.workspaceReplayEnvelopes = workspaceReplayEnvelopes
             self.agentLiveGate = agentLiveGate
+            self.applyOnEventLoop = applyOnEventLoop
         }
     }
 
