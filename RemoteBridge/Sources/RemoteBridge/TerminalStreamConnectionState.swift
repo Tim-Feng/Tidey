@@ -56,11 +56,10 @@ struct TerminalStreamConnectionState {
         if case .legacy = owner {
             legacyOwnerHighWater[panelID] = sequence
         }
-        guard lease.deliveryGate.accept(onInvalidated: onInvalidated) else {
-            return .rejected
-        }
-        let displacedLease = ownedByPanel.updateValue(lease, forKey: panelID)
-        return .accepted(displacedLease: displacedLease)
+        return installSubscribe(panelID: panelID,
+                                owner: owner,
+                                lease: lease,
+                                onInvalidated: onInvalidated)
     }
 
     mutating func commitUnsubscribe(sequence: UInt64,
@@ -70,8 +69,7 @@ struct TerminalStreamConnectionState {
             return .rejected
         }
         latestSubscribeHighWater[panelID] = sequence
-        let leases = ownedByPanel.removeValue(forKey: panelID).map { [$0] } ?? []
-        return .accepted(leases)
+        return releaseInstalledLease(panelID: panelID)
     }
 
     mutating func commitLegacyUnsubscribe(sequence: UInt64,
@@ -81,12 +79,7 @@ struct TerminalStreamConnectionState {
             return .rejected
         }
         legacyOwnerHighWater[panelID] = sequence
-        guard let lease = ownedByPanel[panelID],
-              lease.owner == .legacy else {
-            return .accepted([])
-        }
-        ownedByPanel.removeValue(forKey: panelID)
-        return .accepted([lease])
+        return releaseInstalledLegacyLease(panelID: panelID)
     }
 
     mutating func commitIdentifiedUnsubscribe(panelID: String,
@@ -95,12 +88,7 @@ struct TerminalStreamConnectionState {
             return .rejected
         }
         consumedIdentifiedOwnerIDs.insert(id)
-        guard let lease = ownedByPanel[panelID],
-              lease.owner == .identified(id) else {
-            return .accepted([])
-        }
-        ownedByPanel.removeValue(forKey: panelID)
-        return .accepted([lease])
+        return releaseInstalledIdentifiedLease(panelID: panelID, id: id)
     }
 
     mutating func commitUnsubscribeAll(sequence: UInt64) -> ReleaseDecision {
@@ -109,12 +97,63 @@ struct TerminalStreamConnectionState {
             return .rejected
         }
         unsubscribeAllHighWater = sequence
+        return releaseInstalledLeases(olderThan: sequence)
+    }
+
+    mutating func installSubscribe(panelID: String,
+                                   owner: TerminalStreamSubscriptionOwner,
+                                   lease: OrdinaryTmuxTerminalStreamLease,
+                                   onInvalidated: @escaping @Sendable () -> Void) -> SubscribeDecision {
+        guard isRetired == false,
+              lease.route.panelID == panelID,
+              lease.owner == owner,
+              lease.deliveryGate.accept(onInvalidated: onInvalidated) else {
+            return .rejected
+        }
+        let displacedLease = ownedByPanel.updateValue(lease, forKey: panelID)
+        return .accepted(displacedLease: displacedLease)
+    }
+
+    mutating func releaseInstalledIdentifiedLease(panelID: String,
+                                                  id: String) -> ReleaseDecision {
+        guard isRetired == false else {
+            return .rejected
+        }
+        guard let lease = ownedByPanel[panelID],
+              lease.owner == .identified(id) else {
+            return .accepted([])
+        }
+        ownedByPanel.removeValue(forKey: panelID)
+        return .accepted([lease])
+    }
+
+    mutating func releaseInstalledLegacyLease(panelID: String) -> ReleaseDecision {
+        guard isRetired == false else {
+            return .rejected
+        }
+        guard let lease = ownedByPanel[panelID],
+              lease.owner == .legacy else {
+            return .accepted([])
+        }
+        ownedByPanel.removeValue(forKey: panelID)
+        return .accepted([lease])
+    }
+
+    mutating func releaseInstalledLeases(olderThan sequence: UInt64) -> ReleaseDecision {
+        guard isRetired == false else {
+            return .rejected
+        }
         let panelIDsToRelease = ownedByPanel.compactMap { panelID, lease in
             lease.token < sequence ? panelID : nil
         }
         let leases = panelIDsToRelease.compactMap { panelID in
             ownedByPanel.removeValue(forKey: panelID)
         }
+        return .accepted(leases)
+    }
+
+    private mutating func releaseInstalledLease(panelID: String) -> ReleaseDecision {
+        let leases = ownedByPanel.removeValue(forKey: panelID).map { [$0] } ?? []
         return .accepted(leases)
     }
 
