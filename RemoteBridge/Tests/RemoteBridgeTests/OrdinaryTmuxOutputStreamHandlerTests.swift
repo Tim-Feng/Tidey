@@ -30,6 +30,7 @@ final class OrdinaryTmuxOutputStreamHandlerTests: XCTestCase {
         private(set) var startedPipeRoutes = [OrdinaryTmuxPanelRoute]()
         private(set) var startedPipeOutputPaths = [String]()
         private(set) var stoppedPipeRoutes = [OrdinaryTmuxPanelRoute]()
+        private(set) var cursorQueryCount = 0
         var remainingStopFailures = 0
         var initialOutput = OrdinaryTmuxCapturedOutput(output: "\u{1B}[31mhello\u{1B}[0m",
                                                        cursorRow: 3,
@@ -79,7 +80,10 @@ final class OrdinaryTmuxOutputStreamHandlerTests: XCTestCase {
         }
 
         func queryCursorPosition(route: OrdinaryTmuxPanelRoute) throws -> OrdinaryTmuxCursorPosition? {
-            cursorPosition
+            lock.lock()
+            cursorQueryCount += 1
+            lock.unlock()
+            return cursorPosition
         }
     }
 
@@ -259,6 +263,32 @@ final class OrdinaryTmuxOutputStreamHandlerTests: XCTestCase {
         XCTAssertNoThrow(try subscription.stopForReplacement())
         XCTAssertEqual(tailerBox.firstTailer?.stopCount, 2)
         XCTAssertEqual(adapter.stoppedPipeRoutes, [route, route])
+    }
+
+    func testRejectedDeliverySkipsCursorQueryAndDeltaConstruction() throws {
+        let route = ordinaryRoute()
+        let adapter = StubAdapter()
+        let tailerBox = StubTailerBox()
+        let deltaBox = DeltaBox()
+        let handler = OrdinaryTmuxOutputStreamHandler(routeResolver: StubResolver(route: route),
+                                                      adapter: adapter,
+                                                      outputDirectory: temporaryDirectory(),
+                                                      makeTailer: { url, handler in
+                                                          tailerBox.makeTailer(url: url, handler: handler)
+                                                      })
+        let start = try XCTUnwrap(handler.subscribe(BridgeRequest(id: "request-1",
+                                                                  action: "subscribe_terminal_stream",
+                                                                  params: ["panel_id": .string(route.panelID)]),
+                                                    allowedIf: { false },
+                                                    onDelta: { delta in
+                                                        deltaBox.append(delta)
+                                                    }))
+
+        tailerBox.firstTailer?.emit("blocked")
+
+        XCTAssertEqual(adapter.cursorQueryCount, 0)
+        XCTAssertEqual(deltaBox.deltas, [])
+        start.subscription.stop()
     }
 
     private func ordinaryRoute() -> OrdinaryTmuxPanelRoute {

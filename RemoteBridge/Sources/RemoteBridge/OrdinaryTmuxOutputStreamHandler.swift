@@ -229,6 +229,12 @@ struct OrdinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreaming {
 
     func subscribe(_ request: BridgeRequest,
                    onDelta: @escaping @Sendable (TerminalStreamDeltaEnvelope) -> Void) throws -> OrdinaryTmuxOutputStreamStart? {
+        try subscribe(request, allowedIf: { true }, onDelta: onDelta)
+    }
+
+    func subscribe(_ request: BridgeRequest,
+                   allowedIf: @escaping @Sendable () -> Bool,
+                   onDelta: @escaping @Sendable (TerminalStreamDeltaEnvelope) -> Void) throws -> OrdinaryTmuxOutputStreamStart? {
         guard request.action == "subscribe_terminal_stream" else {
             return nil
         }
@@ -244,6 +250,9 @@ struct OrdinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreaming {
         let outputFileURL = try makeOutputFile()
         let initial = try adapter.captureANSIOutput(route: route, maxLines: 200)
         let tailer = makeTailer(outputFileURL) { data in
+            guard allowedIf() else {
+                return
+            }
             let cursor = try? adapter.queryCursorPosition(route: route)
             onDelta(TerminalStreamDeltaEnvelope(type: "terminal_stream_delta",
                                                 workspaceID: route.workspaceID,
