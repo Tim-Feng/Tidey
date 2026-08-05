@@ -61,6 +61,10 @@ final class OrdinaryTmuxTerminalStreamLease: @unchecked Sendable {
         self.deliveryGate = deliveryGate
     }
 
+    func activate() {
+        subscription.activate()
+    }
+
     @discardableResult
     func stop() -> Bool {
         subscription.stop()

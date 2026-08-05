@@ -162,11 +162,14 @@ final class TerminalByteFileTailer: TerminalByteTailing, @unchecked Sendable {
 
 protocol OrdinaryTmuxTerminalStreamSubscribing: AnyObject, Sendable {
     var route: OrdinaryTmuxPanelRoute { get }
+    func activate()
     @discardableResult func stop() -> Bool
     func stopForReplacement() throws
 }
 
 extension OrdinaryTmuxTerminalStreamSubscribing {
+    func activate() {}
+
     func stopForReplacement() throws {
         _ = stop()
     }
@@ -191,6 +194,10 @@ final class OrdinaryTmuxTerminalStreamSubscription: OrdinaryTmuxTerminalStreamSu
         self.adapter = adapter
         self.tailer = tailer
         self.cleanup = cleanup
+    }
+
+    func activate() {
+        tailer.activate()
     }
 
     @discardableResult

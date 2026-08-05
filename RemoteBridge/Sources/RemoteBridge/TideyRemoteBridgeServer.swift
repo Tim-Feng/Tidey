@@ -660,17 +660,20 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
 
         let agentLiveGate: BridgeAgentEventReplayGate?
         let applyOnEventLoop: (() -> CommitOutcome)?
+        let afterAcceptedResponseEnqueued: (() -> Void)?
 
         init(response: BridgeResponse,
              agentReplayEnvelopes: [AgentEventEnvelope],
              workspaceReplayEnvelopes: [WorkspaceEventEnvelope],
              agentLiveGate: BridgeAgentEventReplayGate? = nil,
-             applyOnEventLoop: (() -> CommitOutcome)? = nil) {
+             applyOnEventLoop: (() -> CommitOutcome)? = nil,
+             afterAcceptedResponseEnqueued: (() -> Void)? = nil) {
             self.response = response
             self.agentReplayEnvelopes = agentReplayEnvelopes
             self.workspaceReplayEnvelopes = workspaceReplayEnvelopes
             self.agentLiveGate = agentLiveGate
             self.applyOnEventLoop = applyOnEventLoop
+            self.afterAcceptedResponseEnqueued = afterAcceptedResponseEnqueued
         }
     }
 
