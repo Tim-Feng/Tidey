@@ -4,6 +4,7 @@ struct TerminalStreamDeltaEnvelope: Codable, Sendable, Equatable {
     let type: String
     let workspaceID: String
     let panelID: String
+    let subscriptionID: String?
     let chunk: String
     let chunkBase64: String
     let cursorRow: Int?
@@ -13,6 +14,7 @@ struct TerminalStreamDeltaEnvelope: Codable, Sendable, Equatable {
     init(type: String,
          workspaceID: String,
          panelID: String,
+         subscriptionID: String? = nil,
          chunk: String,
          chunkBase64: String,
          cursorRow: Int?,
@@ -21,6 +23,7 @@ struct TerminalStreamDeltaEnvelope: Codable, Sendable, Equatable {
         self.type = type
         self.workspaceID = workspaceID
         self.panelID = panelID
+        self.subscriptionID = subscriptionID
         self.chunk = chunk
         self.chunkBase64 = chunkBase64
         self.cursorRow = cursorRow
@@ -32,6 +35,7 @@ struct TerminalStreamDeltaEnvelope: Codable, Sendable, Equatable {
         case type
         case workspaceID = "workspace_id"
         case panelID = "panel_id"
+        case subscriptionID = "subscription_id"
         case chunk
         case chunkBase64 = "chunk_base64"
         case cursorRow = "cursor_row"

@@ -572,6 +572,10 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
 typealias BridgeRequestExecutor = (@escaping () -> Void) -> Void
 typealias TerminalStreamEventLoopScheduler = (EventLoop, @escaping () -> Void) -> Void
 
+enum BridgeProtocolCapability {
+    static let terminalStreamSubscriptionOwnership = "terminal_stream_subscription_ownership_v1"
+}
+
 final class WebSocketFrameHandler: ChannelInboundHandler {
     typealias InboundIn = WebSocketFrame
     typealias OutboundOut = WebSocketFrame
