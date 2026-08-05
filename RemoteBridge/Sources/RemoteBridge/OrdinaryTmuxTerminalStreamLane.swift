@@ -118,6 +118,10 @@ final class OrdinaryTmuxTerminalStreamLane: @unchecked Sendable {
                 return
             }
             self.highestSeenSequence = sequence
+            guard claimForPhysicalMutation() else {
+                completion(nil)
+                return
+            }
 
             if let activeLease = self.activeLease {
                 activeLease.deliveryGate.invalidate()

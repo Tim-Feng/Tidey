@@ -296,6 +296,37 @@ final class OrdinaryTmuxTerminalStreamLaneTests: XCTestCase {
         XCTAssertEqual(eventLog.events, ["build-5"])
     }
 
+    func testRejectedAdmissionDoesNotInvalidateStopBuildOrReplaceCurrentLease() throws {
+        let queue = DispatchQueue(label: "OrdinaryTmuxTerminalStreamLaneTests.rejectedAdmission")
+        let lane = OrdinaryTmuxTerminalStreamLane(queue: queue)
+        let eventLog = EventLog()
+        let current = makeCandidate(token: 1, label: "current", eventLog: eventLog)
+        let rejected = makeCandidate(token: 3, label: "rejected", eventLog: eventLog)
+        let nowStale = makeCandidate(token: 2, label: "stale", eventLog: eventLog)
+
+        _ = try XCTUnwrap(submit(lane: lane, sequence: 1) {
+            eventLog.append("build-current")
+            return current
+        }).get()
+        XCTAssertTrue(current.lease.deliveryGate.accept {
+            eventLog.append("invalidate-current")
+        })
+
+        XCTAssertNil(submit(lane: lane,
+                            sequence: 3,
+                            claimForPhysicalMutation: { false }) {
+            eventLog.append("build-rejected")
+            return rejected
+        })
+        XCTAssertNil(submit(lane: lane, sequence: 2) {
+            eventLog.append("build-stale")
+            return nowStale
+        })
+
+        XCTAssertTrue(current.lease.deliveryGate.allowsDelivery)
+        XCTAssertEqual(eventLog.events, ["build-current"])
+    }
+
     func testDeliveryGateRejectsAcceptanceAfterInvalidation() {
         let gate = TerminalStreamDeliveryGate()
         let eventLog = EventLog()
@@ -325,12 +356,15 @@ final class OrdinaryTmuxTerminalStreamLaneTests: XCTestCase {
 
     private func submit(lane: OrdinaryTmuxTerminalStreamLane,
                         sequence: UInt64,
+                        claimForPhysicalMutation: @escaping @Sendable () -> Bool = { true },
                         build: @escaping @Sendable () throws -> OrdinaryTmuxTerminalStreamLaneCandidate,
                         file: StaticString = #filePath,
                         line: UInt = #line) -> Result<OrdinaryTmuxTerminalStreamLaneCandidate, Error>? {
         let completion = expectation(description: "lane completion for sequence \(sequence)")
         let box = CompletionBox()
-        lane.submitSubscribe(sequence: sequence, build: build) { result in
+        lane.submitSubscribe(sequence: sequence,
+                             claimForPhysicalMutation: claimForPhysicalMutation,
+                             build: build) { result in
             box.store(result)
             completion.fulfill()
         }
