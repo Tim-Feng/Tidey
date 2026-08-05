@@ -9,7 +9,7 @@ final class TerminalStreamDeliveryGate: @unchecked Sendable {
 
     private let lock = NSLock()
     private var state: State = .pending
-    private var onInvalidated: (() -> Void)?
+    private var onInvalidated: (@Sendable () -> Void)?
 
     var allowsDelivery: Bool {
         lock.lock()
@@ -18,7 +18,7 @@ final class TerminalStreamDeliveryGate: @unchecked Sendable {
     }
 
     @discardableResult
-    func accept(onInvalidated: @escaping () -> Void) -> Bool {
+    func accept(onInvalidated: @escaping @Sendable () -> Void) -> Bool {
         lock.lock()
         defer { lock.unlock() }
         guard state == .pending else {
@@ -30,7 +30,7 @@ final class TerminalStreamDeliveryGate: @unchecked Sendable {
     }
 
     func invalidate() {
-        let callback: (() -> Void)?
+        let callback: (@Sendable () -> Void)?
         lock.lock()
         guard state != .invalidated else {
             lock.unlock()

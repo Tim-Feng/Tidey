@@ -11,7 +11,8 @@ final class BridgeRequestSequencer: @unchecked Sendable {
     func next() -> UInt64 {
         lock.lock()
         defer { lock.unlock() }
-        currentValue &+= 1
+        precondition(currentValue < .max, "Bridge request sequence exhausted")
+        currentValue += 1
         return currentValue
     }
 }
