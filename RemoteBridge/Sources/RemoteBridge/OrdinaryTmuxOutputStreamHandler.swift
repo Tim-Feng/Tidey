@@ -190,6 +190,17 @@ struct OrdinaryTmuxOutputStreamStart {
 protocol OrdinaryTmuxOutputStreaming {
     func subscribe(_ request: BridgeRequest,
                    onDelta: @escaping @Sendable (TerminalStreamDeltaEnvelope) -> Void) throws -> OrdinaryTmuxOutputStreamStart?
+    func subscribe(_ request: BridgeRequest,
+                   allowedIf: @escaping @Sendable () -> Bool,
+                   onDelta: @escaping @Sendable (TerminalStreamDeltaEnvelope) -> Void) throws -> OrdinaryTmuxOutputStreamStart?
+}
+
+extension OrdinaryTmuxOutputStreaming {
+    func subscribe(_ request: BridgeRequest,
+                   allowedIf: @escaping @Sendable () -> Bool,
+                   onDelta: @escaping @Sendable (TerminalStreamDeltaEnvelope) -> Void) throws -> OrdinaryTmuxOutputStreamStart? {
+        try subscribe(request, onDelta: onDelta)
+    }
 }
 
 struct OrdinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreaming {
