@@ -77,7 +77,7 @@ final class TerminalByteFileTailer: TerminalByteTailing, @unchecked Sendable {
                                                                        eventMask: [.extend, .write],
                                                                        queue: queue)
                 source.setEventHandler { [weak self] in
-                    self?.readAvailableBytes()
+                    self?.processFileEvent()
                 }
                 source.setCancelHandler { [weak self, weak handle] in
                     try? handle?.close()
@@ -107,6 +107,21 @@ final class TerminalByteFileTailer: TerminalByteTailing, @unchecked Sendable {
             source?.cancel()
             source = nil
         }
+    }
+
+    #if DEBUG
+    func processFileEventForTesting() {
+        queue.sync {
+            processFileEvent()
+        }
+    }
+    #endif
+
+    private func processFileEvent() {
+        guard isStarted else {
+            return
+        }
+        readAvailableBytes()
     }
 
     private func readAvailableBytes() {
