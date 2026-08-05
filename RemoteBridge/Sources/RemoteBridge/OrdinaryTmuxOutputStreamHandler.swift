@@ -232,6 +232,15 @@ struct OrdinaryTmuxOutputStreamStart {
     let subscription: OrdinaryTmuxTerminalStreamSubscribing
 }
 
+struct OrdinaryTmuxOutputStreamOwnedFailure: Error, LocalizedError {
+    let underlying: Error
+    let subscription: OrdinaryTmuxTerminalStreamSubscribing
+
+    var errorDescription: String? {
+        underlying.localizedDescription
+    }
+}
+
 protocol OrdinaryTmuxOutputStreaming {
     func subscribe(_ request: BridgeRequest,
                    onDelta: @escaping @Sendable (TerminalStreamDeltaEnvelope) -> Void) throws -> OrdinaryTmuxOutputStreamStart?

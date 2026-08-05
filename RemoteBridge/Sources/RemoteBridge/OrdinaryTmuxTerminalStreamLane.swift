@@ -76,6 +76,15 @@ struct OrdinaryTmuxTerminalStreamLaneCandidate: Sendable {
     let lease: OrdinaryTmuxTerminalStreamLease
 }
 
+struct OrdinaryTmuxTerminalStreamLaneOwnedFailure: Error, LocalizedError {
+    let underlying: Error
+    let lease: OrdinaryTmuxTerminalStreamLease
+
+    var errorDescription: String? {
+        underlying.localizedDescription
+    }
+}
+
 final class OrdinaryTmuxTerminalStreamLane: @unchecked Sendable {
     typealias Completion = @Sendable (Result<OrdinaryTmuxTerminalStreamLaneCandidate, Error>?) -> Void
 
