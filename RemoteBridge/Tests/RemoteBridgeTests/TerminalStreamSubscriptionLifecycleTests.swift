@@ -463,6 +463,32 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
         XCTAssertEqual(fixture.observability.snapshot(activeSessions: []).activeTerminalStreamSubscriptionCount, 0)
     }
 
+    func testInvalidatedPendingCandidateNeverActivatesUnreadBytes() throws {
+        let eventLog = EventLog()
+        let outputStreamHandler = StubTerminalStreamHandler(eventLog: eventLog,
+                                                            emitOnActivate: true)
+        let fixture = try makeFixture(outputStreamHandler: outputStreamHandler)
+        defer { fixture.cleanup() }
+        let panelID = ordinaryPanelID(windowID: "@16")
+
+        try writeRequest(subscribeRequest(id: "subscribe-1", panelID: panelID),
+                         to: fixture.channel)
+        try writeRequest(BridgeRequest(id: "unsubscribe-2",
+                                       action: "unsubscribe_terminal_stream",
+                                       params: ["panel_id": .string(panelID)]),
+                         to: fixture.channel)
+        fixture.requestExecutor.runLast()
+        fixture.requestExecutor.runFirst()
+        fixture.channel.embeddedEventLoop.run()
+        fixture.drainTerminalWork()
+
+        let responses = try readResponses(from: fixture.channel)
+        XCTAssertEqual(responses["unsubscribe-2"]?.ok, true)
+        XCTAssertEqual(responses["subscribe-1"]?.error?.code, "superseded")
+        XCTAssertEqual(eventLog.events, ["subscribe-1", "stop-1"])
+        XCTAssertEqual(fixture.observability.snapshot(activeSessions: []).activeTerminalStreamSubscriptionCount, 0)
+    }
+
     func testOlderUnsubscribeCompletingAfterNewerSubscribeCannotStopIt() throws {
         let eventLog = EventLog()
         let fixture = try makeFixture(outputStreamHandler: StubTerminalStreamHandler(eventLog: eventLog))
