@@ -66,6 +66,9 @@ struct BridgeInputActionHandler {
         case "terminal_input":
             BridgeLogger.input.info("receive action=terminal_input request_id=\(request.id, privacy: .public)")
             return try forwardTerminalInput(request)
+        case "tui_command_submit":
+            BridgeLogger.input.info("receive action=tui_command_submit request_id=\(request.id, privacy: .public)")
+            return try submitTUICommand(request)
         case "chat_submit":
             BridgeLogger.input.info("receive action=chat_submit request_id=\(request.id, privacy: .public)")
             return try submitChatMessage(request)
@@ -105,6 +108,62 @@ struct BridgeInputActionHandler {
                                              action: "send_input",
                                              params: params)
         return try socketSender.send(forwardedRequest)
+    }
+
+    private func submitTUICommand(_ request: BridgeRequest) throws -> BridgeResponse {
+        guard let params = request.params,
+              let workspaceID = params["workspace_id"]?.stringValue,
+              let panelID = params["panel_id"]?.stringValue,
+              let rawCommand = params["command"]?.stringValue else {
+            throw BridgeInternalError.invalidRequest(
+                "tui_command_submit requires workspace_id, panel_id, and command")
+        }
+
+        let command = rawCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard command.hasPrefix("/"),
+              !command.dropFirst().isEmpty,
+              command.rangeOfCharacter(from: .newlines) == nil else {
+            throw BridgeInternalError.invalidRequest(
+                "tui_command_submit command must be one non-empty slash command")
+        }
+
+        let requestedSessionID = params["session_id"]?.stringValue
+        let requestedVendor = params["vendor"]?.stringValue
+        let activeSession = sessionResolver.activeSessionForPanel(workspaceID: workspaceID,
+                                                                  panelID: panelID)
+        if let requestedSessionID,
+           let activeSession,
+           activeSession.sessionID != requestedSessionID {
+            throw BridgeInternalError.invalidRequest(
+                "tui_command_submit session_id does not match the active panel session")
+        }
+        if let requestedVendor,
+           let activeSession,
+           activeSession.vendor != requestedVendor {
+            throw BridgeInternalError.invalidRequest(
+                "tui_command_submit vendor does not match the active panel session")
+        }
+        guard let resolvedVendorID = activeSession?.vendor ?? requestedVendor else {
+            throw BridgeInternalError.invalidRequest(
+                "tui_command_submit requires vendor when no active panel session is registered")
+        }
+        guard let vendor = AgentVendorRegistry.resolve(id: resolvedVendorID) else {
+            throw BridgeInternalError.invalidRequest("tui_command_submit vendor is not supported")
+        }
+
+        BridgeLogger.input.info("dispatch action=tui_command_submit request_id=\(request.id, privacy: .public) workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) session_id=\(activeSession?.sessionID ?? requestedSessionID ?? "-", privacy: .public) vendor=\(vendor.id, privacy: .public) length=\(command.count) tail=\(summarizedTail(command), privacy: .public)")
+
+        if let failure = try deliverTerminalSubmission(command,
+                                                       vendor: vendor,
+                                                       panelID: panelID,
+                                                       request: request,
+                                                       action: "tui_command_submit") {
+            return failure
+        }
+        return Self.submittedResponse(for: request,
+                                      vendorID: vendor.id,
+                                      sessionID: activeSession?.sessionID ?? requestedSessionID,
+                                      deduplicated: false)
     }
 
     private func submitChatMessage(_ request: BridgeRequest) throws -> BridgeResponse {
@@ -243,15 +302,49 @@ struct BridgeInputActionHandler {
             }
         }
 
+        if let failure = try deliverTerminalSubmission(message,
+                                                       vendor: vendor,
+                                                       panelID: panelID,
+                                                       request: request,
+                                                       action: "chat_submit",
+                                                       stepDidDispatch: {
+                                                           finalSubmissionState = .indeterminate
+                                                       }) {
+            return failure
+        }
+
+        if let clientRequestID,
+           let resolvedSessionID = activeSession?.sessionID ?? requestedSessionID {
+            chatSubmitEchoRegistry?.register(workspaceID: workspaceID,
+                                             panelID: panelID,
+                                             sessionID: resolvedSessionID,
+                                             vendor: vendor.id,
+                                             text: message,
+                                             clientRequestID: clientRequestID)
+        }
+        finalSubmissionState = .delivered
+
+        return Self.submittedResponse(for: request,
+                                      vendorID: vendor.id,
+                                      sessionID: activeSession?.sessionID,
+                                      deduplicated: false)
+    }
+
+    private func deliverTerminalSubmission(_ text: String,
+                                           vendor: any AgentVendor,
+                                           panelID: String,
+                                           request: BridgeRequest,
+                                           action: String,
+                                           stepDidDispatch: () -> Void = {}) throws -> BridgeResponse? {
         var previousStepUsedOrdinaryTmux = false
         var forceMacSocketForRemainingSteps = false
-        for (index, step) in vendor.submitMessagePlan(text: message).enumerated() {
+        for (index, step) in vendor.submitMessagePlan(text: text).enumerated() {
             let effectiveDelay = Self.effectiveDelay(for: step,
                                                      previousStepUsedOrdinaryTmux: previousStepUsedOrdinaryTmux)
             if index > 0 {
                 try sleep(effectiveDelay)
             }
-            BridgeLogger.input.info("step action=send_input request_id=\(request.id, privacy: .public) vendor=\(vendor.id, privacy: .public) step_index=\(index) delay_ns=\(effectiveDelay) length=\(step.input.count) has_cr=\(step.input.contains("\r")) has_lf=\(step.input.contains("\n")) tail=\(summarizedTail(step.input), privacy: .public)")
+            BridgeLogger.input.info("step action=\(action, privacy: .public) request_id=\(request.id, privacy: .public) vendor=\(vendor.id, privacy: .public) step_index=\(index) delay_ns=\(effectiveDelay) length=\(step.input.count) has_cr=\(step.input.contains("\r")) has_lf=\(step.input.contains("\n")) tail=\(summarizedTail(step.input), privacy: .public)")
             let routeDecision: OrdinaryTmuxRouteDecision
             if forceMacSocketForRemainingSteps {
                 routeDecision = .macSocketFallback
@@ -263,15 +356,15 @@ struct BridgeInputActionHandler {
                 routeDecision = try routeOrdinaryTmuxInputIfAvailable(step.input,
                                                                       panelID: panelID,
                                                                       requestID: request.id,
-                                                                      action: "chat_submit",
+                                                                      action: action,
                                                                       stepIndex: index,
                                                                       mode: step.role == .submitEnter ? .rawTerminalInput : .literalChatText,
                                                                       allowAmbiguousPasteTimeout: true)
             }
             if routeDecision == .routed {
-                finalSubmissionState = .indeterminate
+                stepDidDispatch()
                 previousStepUsedOrdinaryTmux = true
-                BridgeLogger.input.info("route action=chat_submit request_id=\(request.id, privacy: .public) panel_id=\(panelID, privacy: .public) transport=ordinary_tmux step_index=\(index)")
+                BridgeLogger.input.info("route action=\(action, privacy: .public) request_id=\(request.id, privacy: .public) panel_id=\(panelID, privacy: .public) transport=ordinary_tmux step_index=\(index)")
             } else {
                 if routeDecision == .macSocketFallback {
                     forceMacSocketForRemainingSteps = true
@@ -299,26 +392,11 @@ struct BridgeInputActionHandler {
                                           result: nil,
                                           error: response.error)
                 }
-                finalSubmissionState = .indeterminate
+                stepDidDispatch()
                 previousStepUsedOrdinaryTmux = false
             }
         }
-
-        if let clientRequestID,
-           let resolvedSessionID = activeSession?.sessionID ?? requestedSessionID {
-            chatSubmitEchoRegistry?.register(workspaceID: workspaceID,
-                                             panelID: panelID,
-                                             sessionID: resolvedSessionID,
-                                             vendor: vendor.id,
-                                             text: message,
-                                             clientRequestID: clientRequestID)
-        }
-        finalSubmissionState = .delivered
-
-        return Self.submittedResponse(for: request,
-                                      vendorID: vendor.id,
-                                      sessionID: activeSession?.sessionID,
-                                      deduplicated: false)
+        return nil
     }
 
     private static func submittedResponse(for request: BridgeRequest,
