@@ -366,49 +366,35 @@ final class OrdinaryTmuxCLIAdapter {
     private func reconcileWindowSizePolicy(window: TmuxWindow,
                                            sizingClientCount: Int,
                                            socket: OrdinaryTmuxSocketSelector) throws {
-        if sizingClientCount > 1 {
-            if let previousPolicy = window.previousSizePolicy {
-                if window.sizePolicy == previousPolicy {
-                    try setWindowOption("window-size",
-                                        value: "largest",
-                                        windowID: window.id,
-                                        socket: socket)
-                } else if window.sizePolicy != "largest" {
-                    try unsetWindowOption(Self.previousWindowSizeOption,
-                                          windowID: window.id,
-                                          socket: socket)
-                }
-                return
-            }
-            guard let currentPolicy = window.sizePolicy,
-                  currentPolicy == "latest" else {
-                return
-            }
-            try setWindowOption(Self.previousWindowSizeOption,
-                                value: currentPolicy,
-                                windowID: window.id,
-                                socket: socket)
-            try setWindowOption("window-size",
-                                value: "largest",
-                                windowID: window.id,
-                                socket: socket)
-            BridgeLogger.server.info("ordinary tmux window size policy stabilized window_id=\(window.id, privacy: .public) previous=\(currentPolicy, privacy: .public) current=largest")
+        guard sizingClientCount > 0 else {
             return
         }
-
-        guard let previousPolicy = window.previousSizePolicy else {
+        if let previousPolicy = window.previousSizePolicy {
+            if window.sizePolicy == previousPolicy {
+                try setWindowOption("window-size",
+                                    value: "largest",
+                                    windowID: window.id,
+                                    socket: socket)
+            } else if window.sizePolicy != "largest" {
+                try unsetWindowOption(Self.previousWindowSizeOption,
+                                      windowID: window.id,
+                                      socket: socket)
+            }
             return
         }
-        if window.sizePolicy == "largest" {
-            try setWindowOption("window-size",
-                                value: previousPolicy,
-                                windowID: window.id,
-                                socket: socket)
+        guard let currentPolicy = window.sizePolicy,
+              currentPolicy == "latest" else {
+            return
         }
-        try unsetWindowOption(Self.previousWindowSizeOption,
-                              windowID: window.id,
-                              socket: socket)
-        BridgeLogger.server.info("ordinary tmux window size policy released window_id=\(window.id, privacy: .public) restored=\(previousPolicy, privacy: .public)")
+        try setWindowOption(Self.previousWindowSizeOption,
+                            value: currentPolicy,
+                            windowID: window.id,
+                            socket: socket)
+        try setWindowOption("window-size",
+                            value: "largest",
+                            windowID: window.id,
+                            socket: socket)
+        BridgeLogger.server.info("ordinary tmux window size policy stabilized window_id=\(window.id, privacy: .public) previous=\(currentPolicy, privacy: .public) current=largest")
     }
 
     private func setWindowOption(_ option: String,
