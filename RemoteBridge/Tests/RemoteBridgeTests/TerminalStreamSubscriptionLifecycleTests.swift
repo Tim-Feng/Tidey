@@ -131,11 +131,20 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
         let route: OrdinaryTmuxPanelRoute
         private let label: String
         private let eventLog: EventLog
+        private let onActivate: (@Sendable () -> Void)?
 
-        init(route: OrdinaryTmuxPanelRoute, label: String, eventLog: EventLog) {
+        init(route: OrdinaryTmuxPanelRoute,
+             label: String,
+             eventLog: EventLog,
+             onActivate: (@Sendable () -> Void)? = nil) {
             self.route = route
             self.label = label
             self.eventLog = eventLog
+            self.onActivate = onActivate
+        }
+
+        func activate() {
+            onActivate?()
         }
 
         @discardableResult
@@ -147,12 +156,14 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
 
     private final class StubTerminalStreamHandler: OrdinaryTmuxOutputStreaming, @unchecked Sendable {
         private let eventLog: EventLog
+        private let emitOnActivate: Bool
         private let lock = NSLock()
         private var subscribeCount = 0
         private var deltaHandlers = [Int: @Sendable (TerminalStreamDeltaEnvelope) -> Void]()
 
-        init(eventLog: EventLog) {
+        init(eventLog: EventLog, emitOnActivate: Bool = false) {
             self.eventLog = eventLog
+            self.emitOnActivate = emitOnActivate
         }
 
         func subscribe(_ request: BridgeRequest,
@@ -180,11 +191,30 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
                                             "initial_output": .string("initial"),
                                           ],
                                           error: nil)
+            let onActivate: (@Sendable () -> Void)?
+            if emitOnActivate {
+                onActivate = {
+                    self.eventLog.append("activate-\(label)")
+                    onDelta(TerminalStreamDeltaEnvelope(
+                        type: "terminal_stream_delta",
+                        workspaceID: route.workspaceID,
+                        panelID: route.panelID,
+                        chunk: "pending",
+                        chunkBase64: Data("pending".utf8).base64EncodedString(),
+                        cursorRow: 1,
+                        cursorColumn: 1,
+                        cursorVisible: true
+                    ))
+                }
+            } else {
+                onActivate = nil
+            }
             return OrdinaryTmuxOutputStreamStart(
                 response: response,
                 subscription: StubTerminalStreamSubscription(route: route,
                                                             label: label,
-                                                            eventLog: eventLog)
+                                                            eventLog: eventLog,
+                                                            onActivate: onActivate)
             )
         }
 
@@ -201,6 +231,31 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
                                                  cursorColumn: 1,
                                                  cursorVisible: true))
         }
+    }
+
+    func testResponseIsEnqueuedBeforeDurablePendingBytesActivate() throws {
+        let eventLog = EventLog()
+        let outputStreamHandler = StubTerminalStreamHandler(eventLog: eventLog,
+                                                            emitOnActivate: true)
+        let fixture = try makeFixture(outputStreamHandler: outputStreamHandler)
+        defer { fixture.cleanup() }
+        let panelID = ordinaryPanelID(windowID: "@16")
+
+        try writeRequest(subscribeRequest(id: "subscribe-1", panelID: panelID),
+                         to: fixture.channel)
+        fixture.requestExecutor.runFirst()
+        fixture.channel.embeddedEventLoop.run()
+        fixture.drainTerminalWork()
+
+        let responseFrame = try XCTUnwrap(fixture.channel.readOutbound(as: WebSocketFrame.self))
+        let response = try decode(responseFrame, as: BridgeResponse.self)
+        XCTAssertEqual(response.id, "subscribe-1")
+        XCTAssertTrue(response.ok)
+
+        let deltaFrame = try XCTUnwrap(fixture.channel.readOutbound(as: WebSocketFrame.self))
+        let delta = try decode(deltaFrame, as: TerminalStreamDeltaEnvelope.self)
+        XCTAssertEqual(delta.chunk, "pending")
+        XCTAssertEqual(eventLog.events, ["subscribe-1", "activate-1"])
     }
 
     func testResubscribeStopsExistingPanelStreamBeforeStartingReplacement() throws {
@@ -508,6 +563,13 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
             }
         }
         return responses
+    }
+
+    private func decode<Value: Decodable>(_ frame: WebSocketFrame,
+                                           as type: Value.Type) throws -> Value {
+        var data = frame.unmaskedData
+        let text = try XCTUnwrap(data.readString(length: data.readableBytes))
+        return try JSONDecoder().decode(type, from: Data(text.utf8))
     }
 
     private struct Fixture {

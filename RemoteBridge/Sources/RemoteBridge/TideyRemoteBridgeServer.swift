@@ -831,6 +831,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                 var workspaceReplayEnvelopes = [WorkspaceEventEnvelope]()
                 var agentLiveGate: BridgeAgentEventReplayGate?
                 var applyOnEventLoop: (() -> CommitOutcome)?
+                var afterAcceptedResponseEnqueued: (() -> Void)?
                 var responseMessageType = "response.invalid_request"
                 var requestID: String?
                 var requestAction: String?
@@ -855,6 +856,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                         workspaceReplayEnvelopes = localResult.workspaceReplayEnvelopes
                         agentLiveGate = localResult.agentLiveGate
                         applyOnEventLoop = localResult.applyOnEventLoop
+                        afterAcceptedResponseEnqueued = localResult.afterAcceptedResponseEnqueued
                     } else {
                         response = self.augment(response: try socketClient.send(request), for: request)
                     }
@@ -892,7 +894,10 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                         )
                         shouldReplay = false
                     }
-                    self.send(response: responseToSend, messageType: responseMessageType, to: context)
+                    self.send(response: responseToSend,
+                              messageType: responseMessageType,
+                              to: context,
+                              afterEnqueued: shouldReplay ? afterAcceptedResponseEnqueued : nil)
                     guard shouldReplay else {
                         return
                     }
@@ -1471,7 +1476,10 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                                             panelID: panelID,
                                             receiptSequence: receiptSequence,
                                             context: context
-                                          ))
+                                          ),
+                                          afterAcceptedResponseEnqueued: {
+                                            candidate.lease.activate()
+                                          })
             } catch let bridgeError as BridgeInternalError {
                 return LocalRequestResult(response: BridgeResponse(id: request.id,
                                                                    ok: false,
@@ -1785,8 +1793,14 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         return augmented
     }
 
-    private func send(response: BridgeResponse, messageType: String = "response", to context: ChannelHandlerContext) {
-        sendEncodable(response, messageType: messageType, to: context)
+    private func send(response: BridgeResponse,
+                      messageType: String = "response",
+                      to context: ChannelHandlerContext,
+                      afterEnqueued: (() -> Void)? = nil) {
+        sendEncodable(response,
+                      messageType: messageType,
+                      to: context,
+                      afterEnqueued: afterEnqueued)
     }
 
     private func send(envelope: AgentEventEnvelope, to context: ChannelHandlerContext) {
@@ -1803,7 +1817,8 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
 
     private func sendEncodable<Value: Encodable>(_ value: Value,
                                                   messageType: String,
-                                                  to context: ChannelHandlerContext) {
+                                                  to context: ChannelHandlerContext,
+                                                  afterEnqueued: (() -> Void)? = nil) {
         do {
             let startedAt = CFAbsoluteTimeGetCurrent()
             let payload = try encoder.encode(value)
@@ -1817,7 +1832,8 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
             write(frame: frame,
                   messageType: messageType,
                   byteCount: payload.count,
-                  to: context)
+                  to: context,
+                  afterEnqueued: afterEnqueued)
         } catch {
             let bridgedError = error as NSError
             recordConnectionEvent(kind: .encodeFailed,
@@ -1832,7 +1848,8 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     private func write(frame: WebSocketFrame,
                        messageType: String,
                        byteCount: Int,
-                       to context: ChannelHandlerContext) {
+                       to context: ChannelHandlerContext,
+                       afterEnqueued: (() -> Void)? = nil) {
         let promise = context.eventLoop.makePromise(of: Void.self)
         promise.futureResult.whenFailure { [weak self] error in
             guard let self else {
@@ -1847,6 +1864,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                                        byteCount: byteCount)
         }
         context.writeAndFlush(wrapOutboundOut(frame), promise: promise)
+        afterEnqueued?()
     }
 
     private static func iso8601Now() -> String {

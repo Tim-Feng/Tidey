@@ -343,7 +343,6 @@ struct OrdinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreaming {
             let bootstrap = try adapter.bootstrapTerminalStream(refreshedRoute: streamRoute,
                                                                 outputFilePath: outputFileURL.path,
                                                                 maxLines: 200)
-            tailer.activate()
             let response = BridgeResponse(id: request.id,
                                           ok: true,
                                           result: [
