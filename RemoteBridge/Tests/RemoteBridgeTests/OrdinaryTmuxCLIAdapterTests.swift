@@ -567,6 +567,27 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
         XCTAssertEqual(position, OrdinaryTmuxCursorPosition(row: 7, column: 42, cursorVisible: false))
     }
 
+    func testQueryCursorPositionTargetsOwningPaneWithoutRefreshingActivePane() throws {
+        let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
+        let route = makeRoute(socket: socket)
+        let arguments = [
+            "display-message", "-p", "-t", "%old",
+            "#{cursor_x} #{cursor_y} #{cursor_flag}",
+        ]
+        let state = RunnerState(responses: [
+            RunnerState.key(socket: socket, arguments: arguments): "42 7 0",
+        ])
+        let adapter = makeAdapter(state: state)
+
+        let position = try adapter.queryCursorPosition(exactRoute: route)
+
+        XCTAssertEqual(position,
+                       OrdinaryTmuxCursorPosition(row: 7,
+                                                  column: 42,
+                                                  cursorVisible: false))
+        XCTAssertEqual(state.calls.map(\.arguments), [arguments])
+    }
+
     func testCaptureOutputAtomicallyMapsPaneCursorIntoPhysicalRows() throws {
         let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
         let route = makeRoute(socket: socket)

@@ -771,7 +771,7 @@ final class OrdinaryTmuxCLIAdapter {
     }
 
     func queryCursorPosition(exactRoute: OrdinaryTmuxPanelRoute) throws -> OrdinaryTmuxCursorPosition? {
-        try queryCursorPosition(route: exactRoute)
+        try queryCursorPosition(refreshedRoute: exactRoute)
     }
 
     private func queryCursorPosition(refreshedRoute: OrdinaryTmuxPanelRoute) throws -> OrdinaryTmuxCursorPosition? {
