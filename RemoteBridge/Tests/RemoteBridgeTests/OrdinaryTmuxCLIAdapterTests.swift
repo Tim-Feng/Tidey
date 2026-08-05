@@ -548,6 +548,17 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
         ])
     }
 
+    func testStopPipePaneTreatsProvablyMissingOwningPaneAsClosed() {
+        let route = makeRoute(socket: .path("/tmp/tmux-501/default"))
+        let adapter = OrdinaryTmuxCLIAdapter { _, _, _ in
+            throw NSError(domain: "tmux",
+                          code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "can't find pane: %old"])
+        }
+
+        XCTAssertNoThrow(try adapter.stopPipePane(exactRoute: route))
+    }
+
     func testQueryCursorPositionParsesColumnRowAndVisibility() throws {
         let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
         let route = makeRoute(socket: socket)

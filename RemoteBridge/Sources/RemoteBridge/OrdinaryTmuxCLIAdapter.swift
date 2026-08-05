@@ -760,9 +760,15 @@ final class OrdinaryTmuxCLIAdapter {
     }
 
     func stopPipePane(exactRoute: OrdinaryTmuxPanelRoute) throws {
-        _ = try commandRunner(exactRoute.socket,
-                              ["pipe-pane", "-t", exactRoute.activePaneID],
-                              nil)
+        do {
+            _ = try commandRunner(exactRoute.socket,
+                                  ["pipe-pane", "-t", exactRoute.activePaneID],
+                                  nil)
+        } catch {
+            guard Self.isMissingTmuxPane(error) else {
+                throw error
+            }
+        }
     }
 
     func queryCursorPosition(route: OrdinaryTmuxPanelRoute) throws -> OrdinaryTmuxCursorPosition? {
@@ -879,6 +885,12 @@ final class OrdinaryTmuxCLIAdapter {
     private static func isTmuxCommandTimeout(_ error: Error) -> Bool {
         let nsError = error as NSError
         return nsError.domain == "OrdinaryTmuxCLIAdapter" && nsError.code == 124
+    }
+
+    private static func isMissingTmuxPane(_ error: Error) -> Bool {
+        (error as NSError).localizedDescription
+            .lowercased()
+            .contains("can't find pane")
     }
 
     private static func captureOutput(_ output: String, containsPasteText pasteText: String) -> Bool {
