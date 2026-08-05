@@ -72,9 +72,28 @@ struct OrdinaryTmuxClient: Equatable, Sendable {
     let sessionID: String
     let sessionName: String
     let currentWindowID: String?
+    let flags: Set<String>
+
+    init(clientTTY: String,
+         socketPath: String?,
+         sessionID: String,
+         sessionName: String,
+         currentWindowID: String?,
+         flags: Set<String> = []) {
+        self.clientTTY = clientTTY
+        self.socketPath = socketPath
+        self.sessionID = sessionID
+        self.sessionName = sessionName
+        self.currentWindowID = currentWindowID
+        self.flags = flags
+    }
 
     var stableSocketComponent: String {
         socketPath?.nilIfEmpty ?? "runtime-default"
+    }
+
+    var affectsWindowSize: Bool {
+        flags.contains("ignore-size") == false
     }
 }
 
@@ -116,6 +135,7 @@ final class OrdinaryTmuxCLIAdapter {
     typealias CommandRunner = @Sendable (_ socket: OrdinaryTmuxSocketSelector, _ arguments: [String], _ stdin: String?) throws -> String
 
     private static let fieldSeparator = "\t"
+    private static let previousWindowSizeOption = "@tidey_window_size_before_multi_client"
     private static let commandTimeoutSeconds: TimeInterval = 3
     private static let liveCommandRunner: CommandRunner = processCommandRunner(
         executablePath: TmuxStateResolver.discoverTmuxBinaryPath(),
@@ -196,6 +216,11 @@ final class OrdinaryTmuxCLIAdapter {
 
     func resolveClient(for metadata: OrdinaryTmuxAttachMetadata) throws -> OrdinaryTmuxClient? {
         BridgeLogger.server.debug("ordinary tmux resolveClient start tty=\(metadata.clientTTY, privacy: .public) target=\(metadata.targetSession ?? "<default>", privacy: .public) socket_selector=\(metadata.preferredSocketSelector.logDescription, privacy: .public)")
+        let clients = try clients(for: metadata)
+        return resolveClient(for: metadata, among: clients)
+    }
+
+    private func clients(for metadata: OrdinaryTmuxAttachMetadata) throws -> [OrdinaryTmuxClient] {
         let output = try commandRunner(
             metadata.preferredSocketSelector,
             [
@@ -207,6 +232,7 @@ final class OrdinaryTmuxCLIAdapter {
                     "#{session_id}",
                     "#{session_name}",
                     "#{client_window}",
+                    "#{client_flags}",
                 ].joined(separator: Self.fieldSeparator),
             ],
             nil
@@ -221,6 +247,11 @@ final class OrdinaryTmuxCLIAdapter {
         for client in clients {
             BridgeLogger.server.debug("ordinary tmux resolveClient parsed_client tty=\(client.clientTTY, privacy: .public) session_id=\(client.sessionID, privacy: .public) session_name=\(client.sessionName, privacy: .public) socket_path=\(client.socketPath ?? "<default>", privacy: .public) current_window=\(client.currentWindowID ?? "<none>", privacy: .public)")
         }
+        return clients
+    }
+
+    private func resolveClient(for metadata: OrdinaryTmuxAttachMetadata,
+                               among clients: [OrdinaryTmuxClient]) -> OrdinaryTmuxClient? {
         let match = clients.first { client in
             guard client.clientTTY == metadata.clientTTY else {
                 return false
@@ -239,7 +270,8 @@ final class OrdinaryTmuxCLIAdapter {
     }
 
     func projectedPanels(for metadata: OrdinaryTmuxAttachMetadata) throws -> [OrdinaryTmuxProjectedPanel] {
-        guard let client = try resolveClient(for: metadata) else {
+        let clients = try clients(for: metadata)
+        guard let client = resolveClient(for: metadata, among: clients) else {
             return []
         }
         let socket = client.socketPath.map(OrdinaryTmuxSocketSelector.path) ?? metadata.preferredSocketSelector
@@ -255,6 +287,8 @@ final class OrdinaryTmuxCLIAdapter {
                     "#{window_id}",
                     "#{window_index}",
                     "#{window_name}",
+                    "#{window-size}",
+                    "#{@tidey_window_size_before_multi_client}",
                 ].joined(separator: Self.fieldSeparator),
             ],
             nil
@@ -265,6 +299,10 @@ final class OrdinaryTmuxCLIAdapter {
             .sorted { $0.index < $1.index }
         let windowIDs = windows.map { "\($0.id):\($0.index):\($0.name)" }.joined(separator: ",")
         BridgeLogger.server.debug("ordinary tmux projectedPanels list-windows raw_line_count=\(rawWindowLines.count, privacy: .public) parsed_count=\(windows.count, privacy: .public) window_ids=\(windowIDs, privacy: .public) session_id=\(client.sessionID, privacy: .public)")
+        reconcileWindowSizePolicyBestEffort(client: client,
+                                            clients: clients,
+                                            windows: windows,
+                                            socket: socket)
 
         return try windows.map { window in
             let pane: TmuxPane
@@ -299,6 +337,99 @@ final class OrdinaryTmuxCLIAdapter {
                 subtitle: pane.cwd ?? client.sessionName
             )
         }
+    }
+
+    private func reconcileWindowSizePolicyBestEffort(
+        client: OrdinaryTmuxClient,
+        clients: [OrdinaryTmuxClient],
+        windows: [TmuxWindow],
+        socket: OrdinaryTmuxSocketSelector
+    ) {
+        guard client.affectsWindowSize else {
+            return
+        }
+        let sizingClientCount = clients.lazy
+            .filter { $0.sessionID == client.sessionID && $0.affectsWindowSize }
+            .count
+
+        for window in windows {
+            do {
+                try reconcileWindowSizePolicy(window: window,
+                                              sizingClientCount: sizingClientCount,
+                                              socket: socket)
+            } catch {
+                BridgeLogger.server.error("ordinary tmux window size reconciliation failed session_id=\(client.sessionID, privacy: .public) window_id=\(window.id, privacy: .public) sizing_client_count=\(sizingClientCount, privacy: .public) error=\(String(describing: error), privacy: .public)")
+            }
+        }
+    }
+
+    private func reconcileWindowSizePolicy(window: TmuxWindow,
+                                           sizingClientCount: Int,
+                                           socket: OrdinaryTmuxSocketSelector) throws {
+        if sizingClientCount > 1 {
+            if let previousPolicy = window.previousSizePolicy {
+                if window.sizePolicy == previousPolicy {
+                    try setWindowOption("window-size",
+                                        value: "largest",
+                                        windowID: window.id,
+                                        socket: socket)
+                } else if window.sizePolicy != "largest" {
+                    try unsetWindowOption(Self.previousWindowSizeOption,
+                                          windowID: window.id,
+                                          socket: socket)
+                }
+                return
+            }
+            guard let currentPolicy = window.sizePolicy,
+                  currentPolicy == "latest" else {
+                return
+            }
+            try setWindowOption(Self.previousWindowSizeOption,
+                                value: currentPolicy,
+                                windowID: window.id,
+                                socket: socket)
+            try setWindowOption("window-size",
+                                value: "largest",
+                                windowID: window.id,
+                                socket: socket)
+            BridgeLogger.server.info("ordinary tmux window size policy stabilized window_id=\(window.id, privacy: .public) previous=\(currentPolicy, privacy: .public) current=largest")
+            return
+        }
+
+        guard let previousPolicy = window.previousSizePolicy else {
+            return
+        }
+        if window.sizePolicy == "largest" {
+            try setWindowOption("window-size",
+                                value: previousPolicy,
+                                windowID: window.id,
+                                socket: socket)
+        }
+        try unsetWindowOption(Self.previousWindowSizeOption,
+                              windowID: window.id,
+                              socket: socket)
+        BridgeLogger.server.info("ordinary tmux window size policy released window_id=\(window.id, privacy: .public) restored=\(previousPolicy, privacy: .public)")
+    }
+
+    private func setWindowOption(_ option: String,
+                                 value: String,
+                                 windowID: String,
+                                 socket: OrdinaryTmuxSocketSelector) throws {
+        _ = try commandRunner(
+            socket,
+            ["set-option", "-w", "-t", windowID, option, value],
+            nil
+        )
+    }
+
+    private func unsetWindowOption(_ option: String,
+                                   windowID: String,
+                                   socket: OrdinaryTmuxSocketSelector) throws {
+        _ = try commandRunner(
+            socket,
+            ["set-option", "-u", "-w", "-t", windowID, option],
+            nil
+        )
     }
 
     private func activePane(forWindowID windowID: String,
@@ -666,8 +797,8 @@ final class OrdinaryTmuxCLIAdapter {
     }
 
     private static func parseClientLine(_ line: Substring) -> OrdinaryTmuxClient? {
-        let parts = split(line, maxSplits: 4)
-        guard parts.count == 4 || parts.count == 5 else {
+        let parts = split(line, maxSplits: 5)
+        guard (4...6).contains(parts.count) else {
             return nil
         }
         let clientTTY = parts[0].nilIfEmpty
@@ -680,12 +811,21 @@ final class OrdinaryTmuxCLIAdapter {
                                   socketPath: parts[1].nilIfEmpty,
                                   sessionID: sessionID,
                                   sessionName: sessionName,
-                                  currentWindowID: parts.count == 5 ? parts[4].nilIfEmpty : nil)
+                                  currentWindowID: parts.count >= 5 ? parts[4].nilIfEmpty : nil,
+                                  flags: parts.count == 6 ? Set(parts[5].split(separator: ",").map(String.init)) : [])
     }
 
-    private static func parseWindowLine(_ line: Substring) -> (id: String, index: Int, name: String)? {
-        let parts = split(line, maxSplits: 2)
-        guard parts.count == 3,
+    private struct TmuxWindow {
+        let id: String
+        let index: Int
+        let name: String
+        let sizePolicy: String?
+        let previousSizePolicy: String?
+    }
+
+    private static func parseWindowLine(_ line: Substring) -> TmuxWindow? {
+        let parts = split(line, maxSplits: 4)
+        guard parts.count == 3 || parts.count == 5,
               let index = Int(parts[1]) else {
             return nil
         }
@@ -693,7 +833,11 @@ final class OrdinaryTmuxCLIAdapter {
         guard let id else {
             return nil
         }
-        return (id, index, parts[2])
+        return TmuxWindow(id: id,
+                          index: index,
+                          name: parts[2],
+                          sizePolicy: parts.count == 5 ? parts[3].nilIfEmpty : nil,
+                          previousSizePolicy: parts.count == 5 ? parts[4].nilIfEmpty : nil)
     }
 
     private struct TmuxPane {

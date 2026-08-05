@@ -250,6 +250,169 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
         ])
     }
 
+    func testProjectionUsesLargestWindowPolicyWhileAnotherSizingClientIsAttached() throws {
+        let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
+        let state = RunnerState(responses: [
+            RunnerState.key(socket: .defaultSocket, arguments: listClientsArguments):
+                "/dev/ttys010\t/tmp/tmux-501/default\t$7\tgenesis-extraction\t@15\tattached,focused,UTF-8\n" +
+                "/dev/ttys099\t/tmp/tmux-501/default\t$7\tgenesis-extraction\t@15\tattached,UTF-8\n",
+            RunnerState.key(socket: socket, arguments: listWindowsArguments):
+                "@15\t0\tpriest\tlatest\t\n",
+            RunnerState.key(socket: socket, arguments: listPanesArguments(windowID: "@15")):
+                "%15\t1\t1015\t/Users/timfeng/GitHub/priest\tclaude\n",
+        ])
+        let adapter = makeAdapter(state: state)
+
+        _ = try adapter.projectedPanels(
+            for: OrdinaryTmuxAttachMetadata(clientTTY: "/dev/ttys010", targetSession: "genesis-extraction")
+        )
+
+        XCTAssertEqual(
+            state.calls.filter { $0.arguments.first == "set-option" },
+            [
+                .init(socket: socket,
+                      arguments: setWindowOptionArguments(windowID: "@15",
+                                                          option: "@tidey_window_size_before_multi_client",
+                                                          value: "latest"),
+                      stdin: nil),
+                .init(socket: socket,
+                      arguments: setWindowOptionArguments(windowID: "@15",
+                                                          option: "window-size",
+                                                          value: "largest"),
+                      stdin: nil),
+            ]
+        )
+    }
+
+    func testProjectionRestoresWindowPolicyAfterOtherSizingClientsDetach() throws {
+        let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
+        let state = RunnerState(responses: [
+            RunnerState.key(socket: .defaultSocket, arguments: listClientsArguments):
+                "/dev/ttys010\t/tmp/tmux-501/default\t$7\tgenesis-extraction\t@15\tattached,focused,UTF-8\n",
+            RunnerState.key(socket: socket, arguments: listWindowsArguments):
+                "@15\t0\tpriest\tlargest\tlatest\n",
+            RunnerState.key(socket: socket, arguments: listPanesArguments(windowID: "@15")):
+                "%15\t1\t1015\t/Users/timfeng/GitHub/priest\tclaude\n",
+        ])
+        let adapter = makeAdapter(state: state)
+
+        _ = try adapter.projectedPanels(
+            for: OrdinaryTmuxAttachMetadata(clientTTY: "/dev/ttys010", targetSession: "genesis-extraction")
+        )
+
+        XCTAssertEqual(
+            state.calls.filter { $0.arguments.first == "set-option" },
+            [
+                .init(socket: socket,
+                      arguments: setWindowOptionArguments(windowID: "@15",
+                                                          option: "window-size",
+                                                          value: "latest"),
+                      stdin: nil),
+                .init(socket: socket,
+                      arguments: unsetWindowOptionArguments(windowID: "@15",
+                                                            option: "@tidey_window_size_before_multi_client"),
+                      stdin: nil),
+            ]
+        )
+    }
+
+    func testProjectionLeavesWindowPolicyAloneWhenOtherClientsIgnoreSize() throws {
+        let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
+        let state = RunnerState(responses: [
+            RunnerState.key(socket: .defaultSocket, arguments: listClientsArguments):
+                "/dev/ttys010\t/tmp/tmux-501/default\t$7\tgenesis-extraction\t@15\tattached,focused,UTF-8\n" +
+                "/dev/ttys099\t/tmp/tmux-501/default\t$7\tgenesis-extraction\t@15\tattached,ignore-size,UTF-8\n",
+            RunnerState.key(socket: socket, arguments: listWindowsArguments):
+                "@15\t0\tpriest\tlatest\t\n",
+            RunnerState.key(socket: socket, arguments: listPanesArguments(windowID: "@15")):
+                "%15\t1\t1015\t/Users/timfeng/GitHub/priest\tclaude\n",
+        ])
+        let adapter = makeAdapter(state: state)
+
+        _ = try adapter.projectedPanels(
+            for: OrdinaryTmuxAttachMetadata(clientTTY: "/dev/ttys010", targetSession: "genesis-extraction")
+        )
+
+        XCTAssertFalse(state.calls.contains { $0.arguments.first == "set-option" })
+    }
+
+    func testProjectionDoesNotCountClientsFromAnotherSession() throws {
+        let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
+        let state = RunnerState(responses: [
+            RunnerState.key(socket: .defaultSocket, arguments: listClientsArguments):
+                "/dev/ttys010\t/tmp/tmux-501/default\t$7\tgenesis-extraction\t@15\tattached,focused,UTF-8\n" +
+                "/dev/ttys099\t/tmp/tmux-501/default\t$8\tother-session\t@20\tattached,UTF-8\n",
+            RunnerState.key(socket: socket, arguments: listWindowsArguments):
+                "@15\t0\tpriest\tlatest\t\n",
+            RunnerState.key(socket: socket, arguments: listPanesArguments(windowID: "@15")):
+                "%15\t1\t1015\t/Users/timfeng/GitHub/priest\tclaude\n",
+        ])
+        let adapter = makeAdapter(state: state)
+
+        _ = try adapter.projectedPanels(
+            for: OrdinaryTmuxAttachMetadata(clientTTY: "/dev/ttys010", targetSession: "genesis-extraction")
+        )
+
+        XCTAssertFalse(state.calls.contains { $0.arguments.first == "set-option" })
+    }
+
+    func testProjectionPreservesExplicitWindowPolicy() throws {
+        let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
+        let state = RunnerState(responses: [
+            RunnerState.key(socket: .defaultSocket, arguments: listClientsArguments):
+                "/dev/ttys010\t/tmp/tmux-501/default\t$7\tgenesis-extraction\t@15\tattached,focused,UTF-8\n" +
+                "/dev/ttys099\t/tmp/tmux-501/default\t$7\tgenesis-extraction\t@15\tattached,UTF-8\n",
+            RunnerState.key(socket: socket, arguments: listWindowsArguments):
+                "@15\t0\tpriest\tmanual\tlatest\n",
+            RunnerState.key(socket: socket, arguments: listPanesArguments(windowID: "@15")):
+                "%15\t1\t1015\t/Users/timfeng/GitHub/priest\tclaude\n",
+        ])
+        let adapter = makeAdapter(state: state)
+
+        _ = try adapter.projectedPanels(
+            for: OrdinaryTmuxAttachMetadata(clientTTY: "/dev/ttys010", targetSession: "genesis-extraction")
+        )
+
+        XCTAssertEqual(
+            state.calls.filter { $0.arguments.first == "set-option" },
+            [
+                .init(socket: socket,
+                      arguments: unsetWindowOptionArguments(windowID: "@15",
+                                                            option: "@tidey_window_size_before_multi_client"),
+                      stdin: nil),
+            ]
+        )
+    }
+
+    func testProjectionCompletesInterruptedPolicyTransition() throws {
+        let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
+        let state = RunnerState(responses: [
+            RunnerState.key(socket: .defaultSocket, arguments: listClientsArguments):
+                "/dev/ttys010\t/tmp/tmux-501/default\t$7\tgenesis-extraction\t@15\tattached,focused,UTF-8\n" +
+                "/dev/ttys099\t/tmp/tmux-501/default\t$7\tgenesis-extraction\t@15\tattached,UTF-8\n",
+            RunnerState.key(socket: socket, arguments: listWindowsArguments):
+                "@15\t0\tpriest\tlatest\tlatest\n",
+            RunnerState.key(socket: socket, arguments: listPanesArguments(windowID: "@15")):
+                "%15\t1\t1015\t/Users/timfeng/GitHub/priest\tclaude\n",
+        ])
+        let adapter = makeAdapter(state: state)
+
+        _ = try adapter.projectedPanels(
+            for: OrdinaryTmuxAttachMetadata(clientTTY: "/dev/ttys010", targetSession: "genesis-extraction")
+        )
+
+        XCTAssertEqual(
+            state.calls.filter { $0.arguments.first == "set-option" },
+            [
+                .init(socket: socket,
+                      arguments: setWindowOptionArguments(windowID: "@15",
+                                                          option: "window-size",
+                                                          value: "largest"),
+                      stdin: nil),
+            ]
+        )
+    }
+
     func testChoosesActivePaneWhenWindowHasSplits() throws {
         let state = RunnerState(responses: [
             RunnerState.key(socket: .defaultSocket, arguments: listClientsArguments):
@@ -293,7 +456,7 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
         [
             "list-clients",
             "-F",
-            "#{client_tty}\t#{socket_path}\t#{session_id}\t#{session_name}\t#{client_window}",
+            "#{client_tty}\t#{socket_path}\t#{session_id}\t#{session_name}\t#{client_window}\t#{client_flags}",
         ]
     }
 
@@ -307,8 +470,19 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
             "-t",
             sessionID,
             "-F",
-            "#{window_id}\t#{window_index}\t#{window_name}",
+            "#{window_id}\t#{window_index}\t#{window_name}\t#{window-size}\t#{@tidey_window_size_before_multi_client}",
         ]
+    }
+
+    private func setWindowOptionArguments(windowID: String,
+                                          option: String,
+                                          value: String) -> [String] {
+        ["set-option", "-w", "-t", windowID, option, value]
+    }
+
+    private func unsetWindowOptionArguments(windowID: String,
+                                            option: String) -> [String] {
+        ["set-option", "-u", "-w", "-t", windowID, option]
     }
 
     private func listPanesArguments(windowID: String) -> [String] {
