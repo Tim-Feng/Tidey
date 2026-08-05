@@ -22,7 +22,10 @@ final class OrdinaryTmuxRecentOutputHandlerTests: XCTestCase {
 
         func captureOutput(route: OrdinaryTmuxPanelRoute, maxLines: Int) throws -> OrdinaryTmuxCapturedOutput {
             XCTAssertEqual(maxLines, 50)
-            return OrdinaryTmuxCapturedOutput(output: "hello\nworld", cursorRow: nil, cursorColumn: nil)
+            return OrdinaryTmuxCapturedOutput(output: "hello\nworld",
+                                              cursorRow: 7,
+                                              cursorColumn: 11,
+                                              cursorVisible: false)
         }
 
         func captureANSIOutput(route: OrdinaryTmuxPanelRoute, maxLines: Int) throws -> OrdinaryTmuxCapturedOutput {
@@ -44,8 +47,9 @@ final class OrdinaryTmuxRecentOutputHandlerTests: XCTestCase {
 
         XCTAssertTrue(response.ok)
         XCTAssertEqual(response.result?["output"]?.stringValue, "hello\nworld")
-        XCTAssertNil(response.result?["cursor_row"]?.intValue)
-        XCTAssertNil(response.result?["cursor_col"]?.intValue)
+        XCTAssertEqual(response.result?["cursor_row"]?.intValue, 7)
+        XCTAssertEqual(response.result?["cursor_col"]?.intValue, 11)
+        XCTAssertEqual(response.result?["cursor_visible"]?.boolValue, false)
         XCTAssertEqual(response.result?["panel_id"]?.stringValue, route.panelID)
         XCTAssertEqual(response.result?["workspace_id"]?.stringValue, route.workspaceID)
     }

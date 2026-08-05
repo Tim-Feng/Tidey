@@ -28,8 +28,11 @@ final class OrdinaryTmuxOutputStreamHandlerTests: XCTestCase {
         private(set) var stoppedPipeRoutes = [OrdinaryTmuxPanelRoute]()
         var initialOutput = OrdinaryTmuxCapturedOutput(output: "\u{1B}[31mhello\u{1B}[0m",
                                                        cursorRow: 3,
-                                                       cursorColumn: 4)
-        var cursorPosition: OrdinaryTmuxCursorPosition? = OrdinaryTmuxCursorPosition(row: 5, column: 6)
+                                                       cursorColumn: 4,
+                                                       cursorVisible: false)
+        var cursorPosition: OrdinaryTmuxCursorPosition? = OrdinaryTmuxCursorPosition(row: 5,
+                                                                                     column: 6,
+                                                                                     cursorVisible: false)
 
         func refreshedRoute(_ route: OrdinaryTmuxPanelRoute) throws -> OrdinaryTmuxPanelRoute {
             route
@@ -171,6 +174,7 @@ final class OrdinaryTmuxOutputStreamHandlerTests: XCTestCase {
         XCTAssertEqual(start.response.result?["initial_output"]?.stringValue, adapter.initialOutput.output)
         XCTAssertEqual(start.response.result?["cursor_row"]?.intValue, 3)
         XCTAssertEqual(start.response.result?["cursor_col"]?.intValue, 4)
+        XCTAssertEqual(start.response.result?["cursor_visible"]?.boolValue, false)
         XCTAssertEqual(adapter.startedPipeRoutes, [route])
         let subscription = try XCTUnwrap(start.subscription as? OrdinaryTmuxTerminalStreamSubscription)
         XCTAssertEqual(adapter.startedPipeOutputPaths.first, subscription.outputFileURL.path)
@@ -205,7 +209,8 @@ final class OrdinaryTmuxOutputStreamHandlerTests: XCTestCase {
                                         chunk: "\u{1B}[?25lchoice",
                                         chunkBase64: Data("\u{1B}[?25lchoice".utf8).base64EncodedString(),
                                         cursorRow: 5,
-                                        cursorColumn: 6),
+                                        cursorColumn: 6,
+                                        cursorVisible: false),
         ])
 
         start.subscription.stop()

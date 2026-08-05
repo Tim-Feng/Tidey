@@ -217,7 +217,8 @@ struct OrdinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreaming {
                                                 chunk: String(data: data, encoding: .utf8) ?? "",
                                                 chunkBase64: data.base64EncodedString(),
                                                 cursorRow: cursor?.row,
-                                                cursorColumn: cursor?.column))
+                                                cursorColumn: cursor?.column,
+                                                cursorVisible: cursor?.cursorVisible))
         }
         try tailer.start()
 
@@ -239,6 +240,7 @@ struct OrdinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreaming {
                                             "initial_output": .string(initial.output),
                                             "cursor_row": initial.cursorRow.map { .number(Double($0)) } ?? .null,
                                             "cursor_col": initial.cursorColumn.map { .number(Double($0)) } ?? .null,
+                                            "cursor_visible": initial.cursorVisible.map(JSONValue.bool) ?? .null,
                                           ],
                                           error: nil)
             return OrdinaryTmuxOutputStreamStart(response: response, subscription: subscription)

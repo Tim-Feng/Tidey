@@ -532,7 +532,7 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
         ])
     }
 
-    func testQueryCursorPositionParsesColumnThenRow() throws {
+    func testQueryCursorPositionParsesColumnRowAndVisibility() throws {
         let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
         let route = makeRoute(socket: socket)
         let state = RunnerState(responses: [
@@ -541,14 +541,68 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
             RunnerState.key(socket: socket, arguments: listPanesArguments(windowID: "@15")):
                 "%21\t1\t1021\t/Users/timfeng/GitHub/work\tcodex\n",
             RunnerState.key(socket: socket,
-                            arguments: ["display-message", "-p", "-t", "%21", "#{cursor_x} #{cursor_y}"]):
-                "42 7",
+                            arguments: ["display-message", "-p", "-t", "%21", "#{cursor_x} #{cursor_y} #{cursor_flag}"]):
+                "42 7 0",
         ])
         let adapter = makeAdapter(state: state)
 
         let position = try adapter.queryCursorPosition(route: route)
 
-        XCTAssertEqual(position, OrdinaryTmuxCursorPosition(row: 7, column: 42))
+        XCTAssertEqual(position, OrdinaryTmuxCursorPosition(row: 7, column: 42, cursorVisible: false))
+    }
+
+    func testCaptureOutputIncludesCursorState() throws {
+        let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
+        let route = makeRoute(socket: socket)
+        let state = RunnerState(responses: [
+            RunnerState.key(socket: socket, arguments: windowExistsArguments):
+                "@15\n",
+            RunnerState.key(socket: socket, arguments: listPanesArguments(windowID: "@15")):
+                "%21\t1\t1021\t/Users/timfeng/GitHub/work\tcodex\n",
+            RunnerState.key(socket: socket,
+                            arguments: ["capture-pane", "-p", "-J", "-S", "-50", "-t", "%21"]):
+                "hello\nworld",
+            RunnerState.key(socket: socket,
+                            arguments: ["display-message", "-p", "-t", "%21", "#{cursor_x} #{cursor_y} #{cursor_flag}"]):
+                "11 4 1",
+        ])
+        let adapter = makeAdapter(state: state)
+
+        let captured = try adapter.captureOutput(route: route, maxLines: 50)
+
+        XCTAssertEqual(captured,
+                       OrdinaryTmuxCapturedOutput(output: "hello\nworld",
+                                                  cursorRow: 4,
+                                                  cursorColumn: 11,
+                                                  cursorVisible: true))
+    }
+
+    func testCaptureOutputKeepsOutputWhenCursorQueryFails() throws {
+        let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
+        let route = makeRoute(socket: socket)
+        let state = RunnerState(responses: [
+            RunnerState.key(socket: socket, arguments: windowExistsArguments):
+                "@15\n",
+            RunnerState.key(socket: socket, arguments: listPanesArguments(windowID: "@15")):
+                "%21\t1\t1021\t/Users/timfeng/GitHub/work\tcodex\n",
+            RunnerState.key(socket: socket,
+                            arguments: ["capture-pane", "-p", "-J", "-S", "-50", "-t", "%21"]):
+                "still available",
+        ])
+        let adapter = OrdinaryTmuxCLIAdapter { socket, arguments, stdin in
+            if arguments.first == "display-message" {
+                throw NSError(domain: "test-cursor-query", code: 1)
+            }
+            return try state.run(socket: socket, arguments: arguments, stdin: stdin)
+        }
+
+        let captured = try adapter.captureOutput(route: route, maxLines: 50)
+
+        XCTAssertEqual(captured,
+                       OrdinaryTmuxCapturedOutput(output: "still available",
+                                                  cursorRow: nil,
+                                                  cursorColumn: nil,
+                                                  cursorVisible: nil))
     }
 
     private var listClientsArguments: [String] {

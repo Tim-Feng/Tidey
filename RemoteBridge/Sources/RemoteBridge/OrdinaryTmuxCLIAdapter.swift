@@ -641,9 +641,11 @@ final class OrdinaryTmuxCLIAdapter {
         }
         arguments += ["-t", refreshed.activePaneID]
         let output = try commandRunner(refreshed.socket, arguments, nil)
+        let cursor = try? queryCursorPosition(refreshedRoute: refreshed)
         return OrdinaryTmuxCapturedOutput(output: output,
-                                          cursorRow: nil,
-                                          cursorColumn: nil)
+                                          cursorRow: cursor?.row,
+                                          cursorColumn: cursor?.column,
+                                          cursorVisible: cursor?.cursorVisible)
     }
 
     func captureANSIOutput(route: OrdinaryTmuxPanelRoute, maxLines: Int) throws -> OrdinaryTmuxCapturedOutput {
@@ -654,9 +656,11 @@ final class OrdinaryTmuxCLIAdapter {
         }
         arguments += ["-t", refreshed.activePaneID]
         let output = try commandRunner(refreshed.socket, arguments, nil)
+        let cursor = try? queryCursorPosition(refreshedRoute: refreshed)
         return OrdinaryTmuxCapturedOutput(output: output,
-                                          cursorRow: nil,
-                                          cursorColumn: nil)
+                                          cursorRow: cursor?.row,
+                                          cursorColumn: cursor?.column,
+                                          cursorVisible: cursor?.cursorVisible)
     }
 
     func startPipePane(route: OrdinaryTmuxPanelRoute, outputFilePath: String) throws -> OrdinaryTmuxPanelRoute {
@@ -677,16 +681,23 @@ final class OrdinaryTmuxCLIAdapter {
 
     func queryCursorPosition(route: OrdinaryTmuxPanelRoute) throws -> OrdinaryTmuxCursorPosition? {
         let refreshed = try refreshedRoute(route)
-        let output = try commandRunner(refreshed.socket,
-                                       ["display-message", "-p", "-t", refreshed.activePaneID, "#{cursor_x} #{cursor_y}"],
+        return try queryCursorPosition(refreshedRoute: refreshed)
+    }
+
+    private func queryCursorPosition(refreshedRoute: OrdinaryTmuxPanelRoute) throws -> OrdinaryTmuxCursorPosition? {
+        let output = try commandRunner(refreshedRoute.socket,
+                                       ["display-message", "-p", "-t", refreshedRoute.activePaneID, "#{cursor_x} #{cursor_y} #{cursor_flag}"],
                                        nil)
         let parts = output.split(whereSeparator: \.isWhitespace)
-        guard parts.count >= 2,
+        guard parts.count >= 3,
               let column = Int(parts[0]),
-              let row = Int(parts[1]) else {
+              let row = Int(parts[1]),
+              let visibilityFlag = Int(parts[2]) else {
             return nil
         }
-        return OrdinaryTmuxCursorPosition(row: row, column: column)
+        return OrdinaryTmuxCursorPosition(row: row,
+                                          column: column,
+                                          cursorVisible: visibilityFlag != 0)
     }
 
     private func verifyPasteBufferDelivery(pasteText: String,

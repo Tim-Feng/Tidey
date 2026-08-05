@@ -29,6 +29,7 @@ struct OrdinaryTmuxRecentOutputHandler {
                                 "output": .string(captured.output),
                                 "cursor_row": captured.cursorRow.map { .number(Double($0)) } ?? .null,
                                 "cursor_col": captured.cursorColumn.map { .number(Double($0)) } ?? .null,
+                                "cursor_visible": captured.cursorVisible.map(JSONValue.bool) ?? .null,
                                 "panel_id": .string(route.panelID),
                                 "workspace_id": .string(route.workspaceID),
                               ],
