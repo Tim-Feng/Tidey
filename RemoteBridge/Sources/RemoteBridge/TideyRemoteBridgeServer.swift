@@ -1530,13 +1530,24 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         let resultBox = TerminalStreamLaneResultBox()
         let outputStreamHandler = ordinaryTmuxOutputStreamHandler
         lane.submitSubscribe(sequence: receiptSequence, build: {
-            guard let start = try outputStreamHandler.subscribe(request,
-                                                                 allowedIf: { gate.allowsDelivery },
-                                                                 onDelta: { envelope in
-                                                                     sender.send(envelope,
-                                                                                 allowedIf: { gate.allowsDelivery })
-                                                                 }) else {
-                throw BridgeInternalError.invalidRequest("terminal stream handler did not accept subscribe request")
+            let start: OrdinaryTmuxOutputStreamStart
+            do {
+                guard let acceptedStart = try outputStreamHandler.subscribe(request,
+                                                                             allowedIf: { gate.allowsDelivery },
+                                                                             onDelta: { envelope in
+                                                                                 sender.send(envelope,
+                                                                                             allowedIf: { gate.allowsDelivery })
+                                                                             }) else {
+                    throw BridgeInternalError.invalidRequest("terminal stream handler did not accept subscribe request")
+                }
+                start = acceptedStart
+            } catch let ownedFailure as OrdinaryTmuxOutputStreamOwnedFailure {
+                throw OrdinaryTmuxTerminalStreamLaneOwnedFailure(
+                    underlying: ownedFailure.underlying,
+                    lease: OrdinaryTmuxTerminalStreamLease(token: receiptSequence,
+                                                           subscription: ownedFailure.subscription,
+                                                           deliveryGate: gate)
+                )
             }
             return OrdinaryTmuxTerminalStreamLaneCandidate(
                 response: start.response,

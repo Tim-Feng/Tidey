@@ -4,6 +4,7 @@ import XCTest
 
 final class OrdinaryTmuxTerminalStreamLaneTests: XCTestCase {
     private enum StubError: Error {
+        case bootstrapFailed
         case replacementStopFailed
     }
 
@@ -232,6 +233,45 @@ final class OrdinaryTmuxTerminalStreamLaneTests: XCTestCase {
             "stopForReplacement-1",
             "stopForReplacement-1",
             "build-3",
+        ])
+    }
+
+    func testAmbiguousBootstrapFailureWithFailedRollbackRetainsExactOwnerForRetry() throws {
+        let queue = DispatchQueue(label: "OrdinaryTmuxTerminalStreamLaneTests.ambiguousBootstrap")
+        let lane = OrdinaryTmuxTerminalStreamLane(queue: queue)
+        let eventLog = EventLog()
+        let cleanupOnly = makeCandidate(token: 1,
+                                        label: "cleanup",
+                                        eventLog: eventLog,
+                                        replacementFailures: 1)
+        let replacement = makeCandidate(token: 2,
+                                        label: "replacement",
+                                        eventLog: eventLog)
+
+        let failed = try XCTUnwrap(submit(lane: lane, sequence: 1) {
+            eventLog.append("build-cleanup")
+            throw OrdinaryTmuxTerminalStreamLaneOwnedFailure(underlying: StubError.bootstrapFailed,
+                                                             lease: cleanupOnly.lease)
+        })
+        XCTAssertThrowsError(try failed.get()) { error in
+            guard case StubError.bootstrapFailed = error else {
+                return XCTFail("Expected underlying bootstrap failure, got \(error)")
+            }
+        }
+        XCTAssertEqual(eventLog.events, [
+            "build-cleanup",
+            "stopForReplacement-cleanup",
+        ])
+
+        _ = try XCTUnwrap(submit(lane: lane, sequence: 2) {
+            eventLog.append("build-replacement")
+            return replacement
+        }).get()
+        XCTAssertEqual(eventLog.events, [
+            "build-cleanup",
+            "stopForReplacement-cleanup",
+            "stopForReplacement-cleanup",
+            "build-replacement",
         ])
     }
 

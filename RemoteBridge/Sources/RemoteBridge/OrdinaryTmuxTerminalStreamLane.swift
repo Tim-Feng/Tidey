@@ -121,6 +121,14 @@ final class OrdinaryTmuxTerminalStreamLane: @unchecked Sendable {
                 let candidate = try build()
                 self.activeLease = candidate.lease
                 completion(.success(candidate))
+            } catch let ownedFailure as OrdinaryTmuxTerminalStreamLaneOwnedFailure {
+                ownedFailure.lease.deliveryGate.invalidate()
+                do {
+                    try ownedFailure.lease.stopForReplacement()
+                } catch {
+                    self.activeLease = ownedFailure.lease
+                }
+                completion(.failure(ownedFailure.underlying))
             } catch {
                 completion(.failure(error))
             }
