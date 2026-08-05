@@ -1,5 +1,6 @@
 import NIOEmbedded
 import NIOCore
+import NIOWebSocket
 import XCTest
 @testable import RemoteBridge
 
@@ -40,6 +41,92 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
         }
     }
 
+    private final class LaneQueueStore: @unchecked Sendable {
+        private let lock = NSLock()
+        private var queues = [DispatchQueue]()
+
+        func makeQueue(panelID: String) -> DispatchQueue {
+            let queue = DispatchQueue(label: "TerminalStreamSubscriptionLifecycleTests.\(panelID)")
+            lock.lock()
+            queues.append(queue)
+            lock.unlock()
+            return queue
+        }
+
+        func drain() {
+            lock.lock()
+            let snapshot = queues
+            lock.unlock()
+            for queue in snapshot {
+                queue.sync {}
+            }
+        }
+    }
+
+    private final class ManualTerminalScheduler: @unchecked Sendable {
+        private struct ScheduledWork {
+            let eventLoop: EventLoop
+            let work: () -> Void
+        }
+
+        private let lock = NSLock()
+        private var scheduled = [ScheduledWork]()
+
+        func schedule(eventLoop: EventLoop, work: @escaping () -> Void) {
+            lock.lock()
+            scheduled.append(ScheduledWork(eventLoop: eventLoop, work: work))
+            lock.unlock()
+        }
+
+        func enqueuePendingOnEventLoops() {
+            lock.lock()
+            let pending = scheduled
+            scheduled.removeAll()
+            lock.unlock()
+            for item in pending {
+                item.eventLoop.execute(item.work)
+            }
+        }
+    }
+
+    private final class ManualRequestExecutor: @unchecked Sendable {
+        private let lock = NSLock()
+        private var workItems = [() -> Void]()
+
+        func enqueue(_ work: @escaping () -> Void) {
+            lock.lock()
+            workItems.append(work)
+            lock.unlock()
+        }
+
+        func runFirst(file: StaticString = #filePath, line: UInt = #line) {
+            run(at: 0, file: file, line: line)
+        }
+
+        func runLast(file: StaticString = #filePath, line: UInt = #line) {
+            lock.lock()
+            let index = workItems.indices.last
+            lock.unlock()
+            guard let index else {
+                XCTFail("No queued request work", file: file, line: line)
+                return
+            }
+            run(at: index, file: file, line: line)
+        }
+
+        private func run(at index: Int, file: StaticString, line: UInt) {
+            lock.lock()
+            guard workItems.indices.contains(index) else {
+                lock.unlock()
+                XCTFail("No queued request work at index \(index)", file: file, line: line)
+                return
+            }
+            let work = workItems.remove(at: index)
+            lock.unlock()
+            work()
+        }
+    }
+
     private final class StubTerminalStreamSubscription: OrdinaryTmuxTerminalStreamSubscribing, @unchecked Sendable {
         let route: OrdinaryTmuxPanelRoute
         private let label: String
@@ -60,6 +147,7 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
         private let eventLog: EventLog
         private let lock = NSLock()
         private var subscribeCount = 0
+        private var deltaHandlers = [Int: @Sendable (TerminalStreamDeltaEnvelope) -> Void]()
 
         init(eventLog: EventLog) {
             self.eventLog = eventLog
@@ -75,7 +163,9 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
             }
             lock.lock()
             subscribeCount += 1
-            let label = "\(subscribeCount)"
+            let subscriptionNumber = subscribeCount
+            deltaHandlers[subscriptionNumber] = onDelta
+            let label = "\(subscriptionNumber)"
             lock.unlock()
             eventLog.append("subscribe-\(label)")
             let route = TerminalStreamSubscriptionLifecycleTests.ordinaryRoute(panelID: panelID)
@@ -95,6 +185,20 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
                                                             eventLog: eventLog)
             )
         }
+
+        func emit(subscriptionNumber: Int, panelID: String, text: String) {
+            lock.lock()
+            let handler = deltaHandlers[subscriptionNumber]
+            lock.unlock()
+            handler?(TerminalStreamDeltaEnvelope(type: "terminal_stream_delta",
+                                                 workspaceID: "workspace-1",
+                                                 panelID: panelID,
+                                                 chunk: text,
+                                                 chunkBase64: Data(text.utf8).base64EncodedString(),
+                                                 cursorRow: 1,
+                                                 cursorColumn: 1,
+                                                 cursorVisible: true))
+        }
     }
 
     func testResubscribeStopsExistingPanelStreamBeforeStartingReplacement() throws {
@@ -103,10 +207,13 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
         defer { fixture.cleanup() }
         let panelID = ordinaryPanelID(windowID: "@16")
 
-        _ = try XCTUnwrap(fixture.handler.handleLocalRequest(subscribeRequest(id: "subscribe-1", panelID: panelID),
-                                                             context: fixture.context))
-        _ = try XCTUnwrap(fixture.handler.handleLocalRequest(subscribeRequest(id: "subscribe-2", panelID: panelID),
-                                                             context: fixture.context))
+        let first = try XCTUnwrap(fixture.handler.handleLocalRequest(subscribeRequest(id: "subscribe-1", panelID: panelID),
+                                                                     context: fixture.context))
+        XCTAssertEqual(first.applyOnEventLoop?() ?? .accepted, .accepted)
+        let second = try XCTUnwrap(fixture.handler.handleLocalRequest(subscribeRequest(id: "subscribe-2", panelID: panelID),
+                                                                      context: fixture.context))
+        XCTAssertEqual(second.applyOnEventLoop?() ?? .accepted, .accepted)
+        fixture.drainTerminalWork()
 
         XCTAssertEqual(eventLog.events, ["subscribe-1", "stop-1", "subscribe-2"])
         XCTAssertEqual(fixture.observability.snapshot(activeSessions: []).activeTerminalStreamSubscriptionCount, 1)
@@ -119,14 +226,18 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
         let firstPanelID = ordinaryPanelID(windowID: "@16")
         let secondPanelID = ordinaryPanelID(windowID: "@17")
 
-        _ = try XCTUnwrap(fixture.handler.handleLocalRequest(subscribeRequest(id: "subscribe-1", panelID: firstPanelID),
-                                                             context: fixture.context))
-        _ = try XCTUnwrap(fixture.handler.handleLocalRequest(subscribeRequest(id: "subscribe-2", panelID: secondPanelID),
-                                                             context: fixture.context))
-        _ = try XCTUnwrap(fixture.handler.handleLocalRequest(BridgeRequest(id: "unsubscribe-1",
-                                                                           action: "unsubscribe_terminal_stream",
-                                                                           params: ["panel_id": .string(firstPanelID)]),
-                                                             context: fixture.context))
+        let first = try XCTUnwrap(fixture.handler.handleLocalRequest(subscribeRequest(id: "subscribe-1", panelID: firstPanelID),
+                                                                     context: fixture.context))
+        XCTAssertEqual(first.applyOnEventLoop?() ?? .accepted, .accepted)
+        let second = try XCTUnwrap(fixture.handler.handleLocalRequest(subscribeRequest(id: "subscribe-2", panelID: secondPanelID),
+                                                                      context: fixture.context))
+        XCTAssertEqual(second.applyOnEventLoop?() ?? .accepted, .accepted)
+        let unsubscribe = try XCTUnwrap(fixture.handler.handleLocalRequest(BridgeRequest(id: "unsubscribe-1",
+                                                                                         action: "unsubscribe_terminal_stream",
+                                                                                         params: ["panel_id": .string(firstPanelID)]),
+                                                                           context: fixture.context))
+        XCTAssertEqual(unsubscribe.applyOnEventLoop?() ?? .accepted, .accepted)
+        fixture.drainTerminalWork()
 
         XCTAssertEqual(eventLog.events, ["subscribe-1", "subscribe-2", "stop-1"])
         XCTAssertEqual(fixture.observability.snapshot(activeSessions: []).activeTerminalStreamSubscriptionCount, 1)
@@ -137,19 +248,233 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
         let fixture = try makeFixture(outputStreamHandler: StubTerminalStreamHandler(eventLog: eventLog))
         defer { fixture.cleanup() }
 
-        _ = try XCTUnwrap(fixture.handler.handleLocalRequest(subscribeRequest(id: "subscribe-1",
-                                                                              panelID: ordinaryPanelID(windowID: "@16")),
-                                                             context: fixture.context))
-        _ = try XCTUnwrap(fixture.handler.handleLocalRequest(subscribeRequest(id: "subscribe-2",
-                                                                              panelID: ordinaryPanelID(windowID: "@17")),
-                                                             context: fixture.context))
+        let first = try XCTUnwrap(fixture.handler.handleLocalRequest(subscribeRequest(id: "subscribe-1",
+                                                                                      panelID: ordinaryPanelID(windowID: "@16")),
+                                                                     context: fixture.context))
+        XCTAssertEqual(first.applyOnEventLoop?() ?? .accepted, .accepted)
+        let second = try XCTUnwrap(fixture.handler.handleLocalRequest(subscribeRequest(id: "subscribe-2",
+                                                                                       panelID: ordinaryPanelID(windowID: "@17")),
+                                                                      context: fixture.context))
+        XCTAssertEqual(second.applyOnEventLoop?() ?? .accepted, .accepted)
         fixture.handler.channelInactive(context: fixture.context)
+        fixture.drainTerminalWork()
 
         XCTAssertEqual(Set(eventLog.events), Set(["subscribe-1", "subscribe-2", "stop-1", "stop-2"]))
         let snapshot = fixture.observability.snapshot(activeSessions: [])
         XCTAssertEqual(snapshot.activeTerminalStreamSubscriptionCount, 0)
         XCTAssertEqual(snapshot.connectionEvents.last?.kind, .disconnected)
         XCTAssertEqual(snapshot.connectionEvents.last?.terminalStreamSubscriptionCount, 2)
+    }
+
+    func testSharedPanelSubscriptionMovesOwnershipAcrossConnections() throws {
+        let eventLog = EventLog()
+        let outputStreamHandler = StubTerminalStreamHandler(eventLog: eventLog)
+        let observability = BridgeObservabilityCenter()
+        let requestSequencer = BridgeRequestSequencer()
+        let laneQueues = LaneQueueStore()
+        let terminalScheduler = ManualTerminalScheduler()
+        let laneRegistry = OrdinaryTmuxTerminalStreamLaneRegistry(makeQueue: { panelID in
+            laneQueues.makeQueue(panelID: panelID)
+        })
+        let firstFixture = try makeFixture(outputStreamHandler: outputStreamHandler,
+                                           observability: observability,
+                                           requestSequencer: requestSequencer,
+                                           terminalStreamLaneRegistry: laneRegistry,
+                                           laneQueues: laneQueues,
+                                           terminalScheduler: terminalScheduler)
+        let secondFixture = try makeFixture(outputStreamHandler: outputStreamHandler,
+                                            observability: observability,
+                                            requestSequencer: requestSequencer,
+                                            terminalStreamLaneRegistry: laneRegistry,
+                                            laneQueues: laneQueues,
+                                            terminalScheduler: terminalScheduler)
+        defer {
+            firstFixture.cleanup()
+            secondFixture.cleanup()
+        }
+        let panelID = ordinaryPanelID(windowID: "@16")
+
+        let first = try XCTUnwrap(firstFixture.handler.handleLocalRequest(
+            subscribeRequest(id: "subscribe-1", panelID: panelID),
+            context: firstFixture.context
+        ))
+        XCTAssertEqual(first.applyOnEventLoop?() ?? .accepted, .accepted)
+        let second = try XCTUnwrap(secondFixture.handler.handleLocalRequest(
+            subscribeRequest(id: "subscribe-2", panelID: panelID),
+            context: secondFixture.context
+        ))
+        XCTAssertEqual(second.applyOnEventLoop?() ?? .accepted, .accepted)
+        laneQueues.drain()
+        terminalScheduler.enqueuePendingOnEventLoops()
+        firstFixture.channel.embeddedEventLoop.run()
+        secondFixture.channel.embeddedEventLoop.run()
+
+        XCTAssertEqual(eventLog.events, ["subscribe-1", "stop-1", "subscribe-2"])
+        XCTAssertEqual(observability.snapshot(activeSessions: []).activeTerminalStreamSubscriptionCount, 1)
+    }
+
+    func testQueuedDeltaIsDroppedWhenAnotherConnectionDisplacesItsLeaseBeforeDelivery() throws {
+        let eventLog = EventLog()
+        let outputStreamHandler = StubTerminalStreamHandler(eventLog: eventLog)
+        let observability = BridgeObservabilityCenter()
+        let requestSequencer = BridgeRequestSequencer()
+        let laneQueues = LaneQueueStore()
+        let terminalScheduler = ManualTerminalScheduler()
+        let laneRegistry = OrdinaryTmuxTerminalStreamLaneRegistry(makeQueue: { panelID in
+            laneQueues.makeQueue(panelID: panelID)
+        })
+        let firstFixture = try makeFixture(outputStreamHandler: outputStreamHandler,
+                                           observability: observability,
+                                           requestSequencer: requestSequencer,
+                                           terminalStreamLaneRegistry: laneRegistry,
+                                           laneQueues: laneQueues,
+                                           terminalScheduler: terminalScheduler)
+        let secondFixture = try makeFixture(outputStreamHandler: outputStreamHandler,
+                                            observability: observability,
+                                            requestSequencer: requestSequencer,
+                                            terminalStreamLaneRegistry: laneRegistry,
+                                            laneQueues: laneQueues,
+                                            terminalScheduler: terminalScheduler)
+        defer {
+            firstFixture.cleanup()
+            secondFixture.cleanup()
+        }
+        let panelID = ordinaryPanelID(windowID: "@16")
+
+        let first = try XCTUnwrap(firstFixture.handler.handleLocalRequest(
+            subscribeRequest(id: "subscribe-1", panelID: panelID),
+            context: firstFixture.context
+        ))
+        XCTAssertEqual(first.applyOnEventLoop?() ?? .accepted, .accepted)
+        outputStreamHandler.emit(subscriptionNumber: 1, panelID: panelID, text: "stale")
+
+        let second = try XCTUnwrap(secondFixture.handler.handleLocalRequest(
+            subscribeRequest(id: "subscribe-2", panelID: panelID),
+            context: secondFixture.context
+        ))
+        XCTAssertEqual(second.applyOnEventLoop?() ?? .accepted, .accepted)
+        laneQueues.drain()
+        terminalScheduler.enqueuePendingOnEventLoops()
+        firstFixture.channel.embeddedEventLoop.run()
+        secondFixture.channel.embeddedEventLoop.run()
+
+        let staleFrame = try firstFixture.channel.readOutbound(as: WebSocketFrame.self)
+        XCTAssertNil(staleFrame)
+        XCTAssertEqual(observability.snapshot(activeSessions: []).activeTerminalStreamSubscriptionCount, 1)
+    }
+
+    func testPendingOlderSubscribeIsSupersededAfterNewerSubscribeDisplacesIt() throws {
+        let eventLog = EventLog()
+        let fixture = try makeFixture(outputStreamHandler: StubTerminalStreamHandler(eventLog: eventLog))
+        defer { fixture.cleanup() }
+        let panelID = ordinaryPanelID(windowID: "@16")
+
+        try writeRequest(subscribeRequest(id: "subscribe-1", panelID: panelID), to: fixture.channel)
+        try writeRequest(subscribeRequest(id: "subscribe-2", panelID: panelID), to: fixture.channel)
+        fixture.requestExecutor.runFirst()
+        fixture.requestExecutor.runFirst()
+        fixture.channel.embeddedEventLoop.run()
+        fixture.drainTerminalWork()
+
+        let responses = try readResponses(from: fixture.channel)
+        XCTAssertEqual(responses["subscribe-1"]?.error?.code, "superseded")
+        XCTAssertEqual(responses["subscribe-2"]?.ok, true)
+        XCTAssertEqual(eventLog.events, ["subscribe-1", "stop-1", "subscribe-2"])
+        XCTAssertEqual(fixture.observability.snapshot(activeSessions: []).activeTerminalStreamSubscriptionCount, 1)
+    }
+
+    func testNewerUnsubscribeCompletingFirstFencesOlderSubscribeCandidate() throws {
+        let eventLog = EventLog()
+        let fixture = try makeFixture(outputStreamHandler: StubTerminalStreamHandler(eventLog: eventLog))
+        defer { fixture.cleanup() }
+        let panelID = ordinaryPanelID(windowID: "@16")
+
+        try writeRequest(subscribeRequest(id: "subscribe-1", panelID: panelID), to: fixture.channel)
+        try writeRequest(BridgeRequest(id: "unsubscribe-2",
+                                       action: "unsubscribe_terminal_stream",
+                                       params: ["panel_id": .string(panelID)]),
+                         to: fixture.channel)
+        fixture.requestExecutor.runLast()
+        fixture.requestExecutor.runFirst()
+        fixture.channel.embeddedEventLoop.run()
+        fixture.drainTerminalWork()
+
+        let responses = try readResponses(from: fixture.channel)
+        XCTAssertEqual(responses["unsubscribe-2"]?.ok, true)
+        XCTAssertEqual(responses["subscribe-1"]?.error?.code, "superseded")
+        XCTAssertEqual(eventLog.events, ["subscribe-1", "stop-1"])
+        XCTAssertEqual(fixture.observability.snapshot(activeSessions: []).activeTerminalStreamSubscriptionCount, 0)
+    }
+
+    func testOlderUnsubscribeCompletingAfterNewerSubscribeCannotStopIt() throws {
+        let eventLog = EventLog()
+        let fixture = try makeFixture(outputStreamHandler: StubTerminalStreamHandler(eventLog: eventLog))
+        defer { fixture.cleanup() }
+        let panelID = ordinaryPanelID(windowID: "@16")
+
+        try writeRequest(BridgeRequest(id: "unsubscribe-1",
+                                       action: "unsubscribe_terminal_stream",
+                                       params: ["panel_id": .string(panelID)]),
+                         to: fixture.channel)
+        try writeRequest(subscribeRequest(id: "subscribe-2", panelID: panelID), to: fixture.channel)
+        fixture.requestExecutor.runLast()
+        fixture.requestExecutor.runFirst()
+        fixture.channel.embeddedEventLoop.run()
+        fixture.drainTerminalWork()
+
+        let responses = try readResponses(from: fixture.channel)
+        XCTAssertEqual(responses["subscribe-2"]?.ok, true)
+        XCTAssertEqual(responses["unsubscribe-1"]?.error?.code, "superseded")
+        XCTAssertEqual(eventLog.events, ["subscribe-1"])
+        XCTAssertEqual(fixture.observability.snapshot(activeSessions: []).activeTerminalStreamSubscriptionCount, 1)
+    }
+
+    func testDisconnectBeforeSubscribeFinalizeRejectsAndReleasesLateCandidate() throws {
+        let eventLog = EventLog()
+        let fixture = try makeFixture(outputStreamHandler: StubTerminalStreamHandler(eventLog: eventLog))
+        defer { fixture.cleanup() }
+        let panelID = ordinaryPanelID(windowID: "@16")
+
+        try writeRequest(subscribeRequest(id: "subscribe-1", panelID: panelID), to: fixture.channel)
+        fixture.requestExecutor.runFirst()
+        fixture.handler.channelInactive(context: fixture.context)
+        fixture.channel.embeddedEventLoop.run()
+        fixture.drainTerminalWork()
+
+        XCTAssertEqual(eventLog.events, ["subscribe-1", "stop-1"])
+        let snapshot = fixture.observability.snapshot(activeSessions: [])
+        XCTAssertEqual(snapshot.activeTerminalStreamSubscriptionCount, 0)
+        XCTAssertEqual(snapshot.connectionEvents.last?.kind, .disconnected)
+        XCTAssertEqual(snapshot.connectionEvents.last?.terminalStreamSubscriptionCount, 0)
+    }
+
+    func testUnsubscribeAllReleasesEveryOwnedPanelThroughItsLane() throws {
+        let eventLog = EventLog()
+        let fixture = try makeFixture(outputStreamHandler: StubTerminalStreamHandler(eventLog: eventLog))
+        defer { fixture.cleanup() }
+
+        try writeRequest(subscribeRequest(id: "subscribe-1",
+                                          panelID: ordinaryPanelID(windowID: "@16")),
+                         to: fixture.channel)
+        fixture.requestExecutor.runFirst()
+        fixture.channel.embeddedEventLoop.run()
+        try writeRequest(subscribeRequest(id: "subscribe-2",
+                                          panelID: ordinaryPanelID(windowID: "@17")),
+                         to: fixture.channel)
+        fixture.requestExecutor.runFirst()
+        fixture.channel.embeddedEventLoop.run()
+        try writeRequest(BridgeRequest(id: "unsubscribe-all",
+                                       action: "unsubscribe_terminal_stream",
+                                       params: nil),
+                         to: fixture.channel)
+        fixture.requestExecutor.runFirst()
+        fixture.channel.embeddedEventLoop.run()
+        fixture.drainTerminalWork()
+
+        let responses = try readResponses(from: fixture.channel)
+        XCTAssertEqual(responses["unsubscribe-all"]?.ok, true)
+        XCTAssertEqual(Set(eventLog.events), Set(["subscribe-1", "subscribe-2", "stop-1", "stop-2"]))
+        XCTAssertEqual(fixture.observability.snapshot(activeSessions: []).activeTerminalStreamSubscriptionCount, 0)
     }
 
     private func subscribeRequest(id: String, panelID: String) -> BridgeRequest {
@@ -161,20 +486,61 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
                       ])
     }
 
+    private func writeRequest(_ request: BridgeRequest, to channel: EmbeddedChannel) throws {
+        let payload = try JSONEncoder().encode(request)
+        var buffer = channel.allocator.buffer(capacity: payload.count)
+        buffer.writeBytes(payload)
+        _ = try channel.writeInbound(WebSocketFrame(fin: true, opcode: .text, data: buffer))
+    }
+
+    private func readResponses(from channel: EmbeddedChannel) throws -> [String: BridgeResponse] {
+        var responses = [String: BridgeResponse]()
+        while let frame = try channel.readOutbound(as: WebSocketFrame.self) {
+            var data = frame.unmaskedData
+            guard let text = data.readString(length: data.readableBytes) else {
+                continue
+            }
+            let response = try JSONDecoder().decode(BridgeResponse.self, from: Data(text.utf8))
+            if let id = response.id {
+                responses[id] = response
+            }
+        }
+        return responses
+    }
+
     private struct Fixture {
         let handler: WebSocketFrameHandler
         let context: ChannelHandlerContext
         let channel: EmbeddedChannel
         let observability: BridgeObservabilityCenter
         let supportDirectory: URL
+        let laneQueues: LaneQueueStore
+        let terminalScheduler: ManualTerminalScheduler
+        let requestExecutor: ManualRequestExecutor
+
+        func drainTerminalWork() {
+            laneQueues.drain()
+            terminalScheduler.enqueuePendingOnEventLoops()
+            channel.embeddedEventLoop.run()
+            laneQueues.drain()
+            terminalScheduler.enqueuePendingOnEventLoops()
+            channel.embeddedEventLoop.run()
+        }
 
         func cleanup() {
             _ = try? channel.finish()
+            drainTerminalWork()
             try? FileManager.default.removeItem(at: supportDirectory)
         }
     }
 
-    private func makeFixture(outputStreamHandler: OrdinaryTmuxOutputStreaming) throws -> Fixture {
+    private func makeFixture(outputStreamHandler: OrdinaryTmuxOutputStreaming,
+                             observability: BridgeObservabilityCenter = BridgeObservabilityCenter(),
+                             requestSequencer: BridgeRequestSequencer = BridgeRequestSequencer(),
+                             terminalStreamLaneRegistry: OrdinaryTmuxTerminalStreamLaneRegistry? = nil,
+                             laneQueues: LaneQueueStore? = nil,
+                             terminalScheduler: ManualTerminalScheduler? = nil,
+                             requestExecutor: ManualRequestExecutor? = nil) throws -> Fixture {
         let supportDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("TerminalStreamSubscriptionLifecycleTests-\(UUID().uuidString)",
                                     isDirectory: true)
@@ -186,7 +552,14 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
                                                   hub: eventHub,
                                                   tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
                                                   parentPIDLookup: { _ in nil })
-        let observability = BridgeObservabilityCenter()
+        let laneQueues = laneQueues ?? LaneQueueStore()
+        let terminalStreamLaneRegistry = terminalStreamLaneRegistry ?? OrdinaryTmuxTerminalStreamLaneRegistry(
+            makeQueue: { panelID in
+                laneQueues.makeQueue(panelID: panelID)
+            }
+        )
+        let terminalScheduler = terminalScheduler ?? ManualTerminalScheduler()
+        let requestExecutor = requestExecutor ?? ManualRequestExecutor()
         let handler = WebSocketFrameHandler(socketClient: TideySocketClient(locator: TideySocketLocator()),
                                             eventHub: eventHub,
                                             workspaceEventHub: WorkspaceEventHub(),
@@ -194,14 +567,23 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
                                             observability: observability,
                                             bridgePort: 0,
                                             cloudflaredManager: BridgeCloudflaredManager(binaryResolver: { nil }),
-                                            ordinaryTmuxOutputStreamHandler: outputStreamHandler)
+                                            requestExecutor: { work in requestExecutor.enqueue(work) },
+                                            terminalStreamEventLoopScheduler: { eventLoop, work in
+                                                terminalScheduler.schedule(eventLoop: eventLoop, work: work)
+                                            },
+                                            ordinaryTmuxOutputStreamHandler: outputStreamHandler,
+                                            requestSequencer: requestSequencer,
+                                            terminalStreamLaneRegistry: terminalStreamLaneRegistry)
         let channel = EmbeddedChannel(handler: handler)
         let context = try channel.pipeline.syncOperations.context(handler: handler)
         return Fixture(handler: handler,
                        context: context,
                        channel: channel,
                        observability: observability,
-                       supportDirectory: supportDirectory)
+                       supportDirectory: supportDirectory,
+                       laneQueues: laneQueues,
+                       terminalScheduler: terminalScheduler,
+                       requestExecutor: requestExecutor)
     }
 
     private static func ordinaryRoute(panelID: String) -> OrdinaryTmuxPanelRoute {

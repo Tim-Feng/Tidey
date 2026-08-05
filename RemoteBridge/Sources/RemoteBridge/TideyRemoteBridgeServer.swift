@@ -569,6 +569,9 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
     }
 }
 
+typealias BridgeRequestExecutor = (@escaping () -> Void) -> Void
+typealias TerminalStreamEventLoopScheduler = (EventLoop, @escaping () -> Void) -> Void
+
 final class WebSocketFrameHandler: ChannelInboundHandler {
     typealias InboundIn = WebSocketFrame
     typealias OutboundOut = WebSocketFrame
@@ -576,21 +579,71 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     private final class TerminalStreamDeltaSender: @unchecked Sendable {
         private weak var handler: WebSocketFrameHandler?
         private weak var context: ChannelHandlerContext?
+        private let schedule: TerminalStreamEventLoopScheduler
 
-        init(handler: WebSocketFrameHandler, context: ChannelHandlerContext) {
+        init(handler: WebSocketFrameHandler,
+             context: ChannelHandlerContext,
+             schedule: @escaping TerminalStreamEventLoopScheduler) {
             self.handler = handler
             self.context = context
+            self.schedule = schedule
         }
 
-        func send(_ envelope: TerminalStreamDeltaEnvelope) {
+        func send(_ envelope: TerminalStreamDeltaEnvelope,
+                  allowedIf isStillAccepted: @escaping @Sendable () -> Bool) {
             guard let handler, let context else {
                 return
             }
-            context.eventLoop.execute { [weak handler, weak context] in
-                guard let handler, let context else {
+            guard isStillAccepted() else {
+                return
+            }
+            schedule(context.eventLoop) { [weak handler, weak context] in
+                guard let handler, let context, isStillAccepted() else {
                     return
                 }
                 handler.send(terminalStreamEnvelope: envelope, to: context)
+            }
+        }
+    }
+
+    private final class TerminalStreamLaneResultBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storedResult: Result<OrdinaryTmuxTerminalStreamLaneCandidate, Error>??
+
+        func store(_ result: Result<OrdinaryTmuxTerminalStreamLaneCandidate, Error>?) {
+            lock.lock()
+            storedResult = .some(result)
+            lock.unlock()
+        }
+
+        var result: Result<OrdinaryTmuxTerminalStreamLaneCandidate, Error>?? {
+            lock.lock()
+            defer { lock.unlock() }
+            return storedResult
+        }
+    }
+
+    private final class TerminalStreamConnectionCallbackTarget: @unchecked Sendable {
+        private weak var handler: WebSocketFrameHandler?
+        private let eventLoop: EventLoop
+        private let schedule: TerminalStreamEventLoopScheduler
+
+        init(handler: WebSocketFrameHandler,
+             context: ChannelHandlerContext,
+             schedule: @escaping TerminalStreamEventLoopScheduler) {
+            self.handler = handler
+            self.eventLoop = context.eventLoop
+            self.schedule = schedule
+        }
+
+        func removeIfOwned(panelID: String, token: UInt64) {
+            schedule(eventLoop) { [weak handler] in
+                guard let handler,
+                      handler.terminalStreamConnectionState.removeIfOwned(panelID: panelID,
+                                                                          token: token) else {
+                    return
+                }
+                handler.publishTerminalStreamSubscriptionCount()
             }
         }
     }
@@ -632,6 +685,8 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     private let cloudflaredManager: BridgeCloudflaredManager
     private let connectionID: String
     private let now: @Sendable () -> Date
+    private let requestExecutor: BridgeRequestExecutor
+    private let terminalStreamEventLoopScheduler: TerminalStreamEventLoopScheduler
     private let ordinaryTmuxPanelRegistry: OrdinaryTmuxPanelRegistry
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
@@ -648,7 +703,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     private let ordinaryTmuxPanelProjector: OrdinaryTmuxPanelProjector
     private var agentSubscriptions = BridgeAgentSubscriptionSlots()
     private var workspaceSubscriptionID: UUID?
-    private var terminalStreamSubscriptions = [String: OrdinaryTmuxTerminalStreamSubscribing]()
+    private var terminalStreamConnectionState = TerminalStreamConnectionState()
     private var connectedAt: Date?
     private var didRecordConnection = false
     private var didRecordDisconnect = false
@@ -663,6 +718,14 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
          cloudflaredManager: BridgeCloudflaredManager,
          connectionID: String = UUID().uuidString,
          now: @escaping @Sendable () -> Date = { Date() },
+         requestExecutor: @escaping BridgeRequestExecutor = { work in
+             DispatchQueue.global(qos: .userInitiated).async {
+                 work()
+             }
+         },
+         terminalStreamEventLoopScheduler: @escaping TerminalStreamEventLoopScheduler = { eventLoop, work in
+             eventLoop.execute(work)
+         },
          ordinaryTmuxProjectionContext: OrdinaryTmuxProjectionContext = OrdinaryTmuxProjectionContext(),
          ordinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreaming? = nil,
          requestSequencer: BridgeRequestSequencer = BridgeRequestSequencer(),
@@ -680,6 +743,8 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         self.cloudflaredManager = cloudflaredManager
         self.connectionID = connectionID
         self.now = now
+        self.requestExecutor = requestExecutor
+        self.terminalStreamEventLoopScheduler = terminalStreamEventLoopScheduler
         self.ordinaryTmuxPanelRegistry = ordinaryTmuxProjectionContext.registry
         self.ordinaryTmuxPanelProjector = ordinaryTmuxProjectionContext.projector
         let routeResolver = OrdinaryTmuxRouteResolver(registry: ordinaryTmuxProjectionContext.registry)
@@ -757,7 +822,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                 return
             }
             let inboundByteCount = text.utf8.count
-            DispatchQueue.global(qos: .userInitiated).async { [decoder, socketClient] in
+            requestExecutor { [decoder, socketClient] in
                 let response: BridgeResponse
                 var agentReplayEnvelopes = [AgentEventEnvelope]()
                 var workspaceReplayEnvelopes = [WorkspaceEventEnvelope]()
@@ -852,14 +917,17 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         if !didRecordDisconnect {
             let timestamp = now()
             let durationMs = connectedAt.map { timestamp.timeIntervalSince($0) * 1_000 }
+            let terminalRetirement = terminalStreamConnectionState.retire()
             recordConnectionEvent(kind: .disconnected,
                                   timestamp: timestamp,
-                                  durationMs: durationMs)
+                                  durationMs: durationMs,
+                                  terminalStreamSubscriptionCount: terminalRetirement.preRetireCount)
             didRecordDisconnect = true
+            publishTerminalStreamSubscriptionCount()
+            releaseTerminalStreamLeases(terminalRetirement.leases)
         }
         unsubscribeFromAgentEvents()
         unsubscribeFromWorkspaceEvents()
-        unsubscribeFromTerminalStreams()
         observability.clearActiveTerminalStreamSubscriptionCount(forConnectionID: connectionID)
         context.fireChannelInactive()
     }
@@ -882,7 +950,8 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                                        errorDomain: String? = nil,
                                        errorCode: Int? = nil,
                                        messageType: String? = nil,
-                                       byteCount: Int? = nil) {
+                                       byteCount: Int? = nil,
+                                       terminalStreamSubscriptionCount: Int? = nil) {
         observability.recordConnectionEvent(
             BridgeConnectionEventSnapshot(
                 connectionID: connectionID,
@@ -896,7 +965,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                 errorCode: errorCode,
                 messageType: messageType,
                 byteCount: byteCount,
-                terminalStreamSubscriptionCount: terminalStreamSubscriptions.count,
+                terminalStreamSubscriptionCount: terminalStreamSubscriptionCount ?? terminalStreamConnectionState.count,
                 agentSubscriptionCount: agentSubscriptions.count,
                 workspaceSubscriptionCount: workspaceSubscriptionID == nil ? 0 : 1
             )
@@ -1378,22 +1447,28 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
 
         case "subscribe_terminal_stream":
             do {
-                if let panelID = request.params?["panel_id"]?.stringValue {
-                    terminalStreamSubscriptions.removeValue(forKey: panelID)?.stop()
-                    publishTerminalStreamSubscriptionCount()
+                guard let panelID = request.params?["panel_id"]?.stringValue else {
+                    throw BridgeInternalError.invalidRequest("subscribe_terminal_stream requires panel_id")
                 }
-                let sender = TerminalStreamDeltaSender(handler: self, context: context)
-                let start = try ordinaryTmuxOutputStreamHandler.subscribe(request) { envelope in
-                    sender.send(envelope)
+                guard let laneResult = awaitTerminalStreamCandidate(request: request,
+                                                                    panelID: panelID,
+                                                                    context: context,
+                                                                    receiptSequence: receiptSequence) else {
+                    return LocalRequestResult(response: supersededResponse(id: request.id,
+                                                                           reason: "newer terminal stream request already owns the panel"),
+                                              agentReplayEnvelopes: [],
+                                              workspaceReplayEnvelopes: [])
                 }
-                guard let start else {
-                    return nil
-                }
-                terminalStreamSubscriptions[start.subscription.route.panelID] = start.subscription
-                publishTerminalStreamSubscriptionCount()
-                return LocalRequestResult(response: start.response,
+                let candidate = try laneResult.get()
+                return LocalRequestResult(response: candidate.response,
                                           agentReplayEnvelopes: [],
-                                          workspaceReplayEnvelopes: [])
+                                          workspaceReplayEnvelopes: [],
+                                          applyOnEventLoop: terminalStreamSubscribeCommit(
+                                            candidate: candidate,
+                                            panelID: panelID,
+                                            receiptSequence: receiptSequence,
+                                            context: context
+                                          ))
             } catch let bridgeError as BridgeInternalError {
                 return LocalRequestResult(response: BridgeResponse(id: request.id,
                                                                    ok: false,
@@ -1412,19 +1487,16 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
             }
 
         case "unsubscribe_terminal_stream":
-            if let panelID = request.params?["panel_id"]?.stringValue {
-                terminalStreamSubscriptions.removeValue(forKey: panelID)?.stop()
-                publishTerminalStreamSubscriptionCount()
-            } else {
-                unsubscribeFromTerminalStreams()
-            }
+            let panelID = request.params?["panel_id"]?.stringValue
             return LocalRequestResult(
                 response: BridgeResponse(id: request.id,
                                          ok: true,
                                          result: ["subscribed": .bool(false)],
                                          error: nil),
                 agentReplayEnvelopes: [],
-                workspaceReplayEnvelopes: []
+                workspaceReplayEnvelopes: [],
+                applyOnEventLoop: terminalStreamUnsubscribeCommit(panelID: panelID,
+                                                                  receiptSequence: receiptSequence)
             )
 
         default:
@@ -1445,18 +1517,125 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         }
     }
 
-    private func unsubscribeFromTerminalStreams() {
-        let subscriptions = terminalStreamSubscriptions.values
-        terminalStreamSubscriptions.removeAll()
-        publishTerminalStreamSubscriptionCount()
-        for subscription in subscriptions {
-            subscription.stop()
+    private func awaitTerminalStreamCandidate(request: BridgeRequest,
+                                              panelID: String,
+                                              context: ChannelHandlerContext,
+                                              receiptSequence: UInt64) -> Result<OrdinaryTmuxTerminalStreamLaneCandidate, Error>? {
+        let gate = TerminalStreamDeliveryGate()
+        let sender = TerminalStreamDeltaSender(handler: self,
+                                               context: context,
+                                               schedule: terminalStreamEventLoopScheduler)
+        let lane = terminalStreamLaneRegistry.lane(for: panelID)
+        let completion = DispatchSemaphore(value: 0)
+        let resultBox = TerminalStreamLaneResultBox()
+        let outputStreamHandler = ordinaryTmuxOutputStreamHandler
+        lane.submitSubscribe(sequence: receiptSequence, build: {
+            guard let start = try outputStreamHandler.subscribe(request,
+                                                                 allowedIf: { gate.allowsDelivery },
+                                                                 onDelta: { envelope in
+                                                                     sender.send(envelope,
+                                                                                 allowedIf: { gate.allowsDelivery })
+                                                                 }) else {
+                throw BridgeInternalError.invalidRequest("terminal stream handler did not accept subscribe request")
+            }
+            return OrdinaryTmuxTerminalStreamLaneCandidate(
+                response: start.response,
+                lease: OrdinaryTmuxTerminalStreamLease(token: receiptSequence,
+                                                       subscription: start.subscription,
+                                                       deliveryGate: gate)
+            )
+        }, completion: { result in
+            resultBox.store(result)
+            completion.signal()
+        })
+        completion.wait()
+        guard let completed = resultBox.result else {
+            preconditionFailure("Terminal stream lane completed without recording a result")
         }
+        return completed
+    }
+
+    private func terminalStreamSubscribeCommit(candidate: OrdinaryTmuxTerminalStreamLaneCandidate,
+                                               panelID: String,
+                                               receiptSequence: UInt64,
+                                               context: ChannelHandlerContext) -> () -> CommitOutcome {
+        let lane = terminalStreamLaneRegistry.lane(for: panelID)
+        let callbackTarget = TerminalStreamConnectionCallbackTarget(
+            handler: self,
+            context: context,
+            schedule: terminalStreamEventLoopScheduler
+        )
+        return { [weak self, weak context] in
+            guard let self, context != nil else {
+                candidate.lease.deliveryGate.invalidate()
+                lane.releaseIfCurrent(token: candidate.lease.token)
+                return .rejected(reason: "terminal stream connection is no longer active")
+            }
+            let decision = self.terminalStreamConnectionState.commitSubscribe(
+                sequence: receiptSequence,
+                panelID: panelID,
+                lease: candidate.lease,
+                onInvalidated: {
+                    callbackTarget.removeIfOwned(panelID: panelID,
+                                                 token: candidate.lease.token)
+                }
+            )
+            switch decision {
+            case .accepted(let displacedLease):
+                if let displacedLease {
+                    self.releaseTerminalStreamLeases([displacedLease])
+                }
+                self.publishTerminalStreamSubscriptionCount()
+                return .accepted
+            case .rejected:
+                candidate.lease.deliveryGate.invalidate()
+                lane.releaseIfCurrent(token: candidate.lease.token)
+                return .rejected(reason: "newer terminal stream request already owns the panel")
+            }
+        }
+    }
+
+    private func terminalStreamUnsubscribeCommit(panelID: String?,
+                                                 receiptSequence: UInt64) -> () -> CommitOutcome {
+        { [weak self] in
+            guard let self else {
+                return .rejected(reason: "terminal stream connection is no longer active")
+            }
+            let decision: TerminalStreamConnectionState.ReleaseDecision
+            if let panelID {
+                decision = self.terminalStreamConnectionState.commitUnsubscribe(sequence: receiptSequence,
+                                                                                panelID: panelID)
+            } else {
+                decision = self.terminalStreamConnectionState.commitUnsubscribeAll(sequence: receiptSequence)
+            }
+            switch decision {
+            case .accepted(let leases):
+                self.releaseTerminalStreamLeases(leases)
+                self.publishTerminalStreamSubscriptionCount()
+                return .accepted
+            case .rejected:
+                return .rejected(reason: "newer terminal stream request already changed the subscription")
+            }
+        }
+    }
+
+    private func releaseTerminalStreamLeases(_ leases: [OrdinaryTmuxTerminalStreamLease]) {
+        for lease in leases {
+            lease.deliveryGate.invalidate()
+            terminalStreamLaneRegistry.lane(for: lease.route.panelID).releaseIfCurrent(token: lease.token)
+        }
+    }
+
+    private func supersededResponse(id: String?, reason: String) -> BridgeResponse {
+        BridgeResponse(id: id,
+                       ok: false,
+                       result: nil,
+                       error: BridgeErrorPayload(code: "superseded", message: reason))
     }
 
     private func publishTerminalStreamSubscriptionCount() {
         observability.setActiveTerminalStreamSubscriptionCount(
-            terminalStreamSubscriptions.count,
+            terminalStreamConnectionState.count,
             forConnectionID: connectionID
         )
     }
