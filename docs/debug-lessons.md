@@ -242,6 +242,13 @@
   - `subscribe_agent_events` 如果只回放 replay event、但不告訴 client replay 何時結束，client 只能寫死 timeout 猜「應該送完了」
   - 這種 timeout 很快會變成產品體感延遲的最大頭，甚至比實際 RTT 還大
   - 解法是在 protocol 裡明確帶 completion 訊號，例如 `replay_count` 或 `replay_end`，不要把「何時可以 reveal UI」交給 client 猜
+- tmux PTY stream 的 logical subscription 與 physical `pipe-pane` 必須分開建模
+  - WebSocket request receipt、每個 panel 的實體 pipe 置換、每條 connection 的訂閱表是三個不同 linearization boundary；只在 handler dictionary 加 lock，無法防止跨 connection 的晚到 subscribe 復活舊 owner
+  - Bridge-wide receipt sequence 先建立全域順序，per-panel serial lane 負責 invalidate→stop→build，event-loop-local state 再以 exact token commit connection ownership；三層都要保留原始 request identity
+  - delta 要在昂貴 cursor query／enqueue 前與 event-loop write 前各檢查 delivery gate；只檢查一次，invalidate 後已排隊的 chunk 仍會漏到新 owner
+- best-effort unsubscribe 仍要保留可重試的實體 teardown ownership
+  - `tmux pipe-pane` stop 失敗時可以讓 unsubscribe 對 client 完成，但 lane 不能把 active lease 清掉；否則下一次 `pipe-pane -o` 可能成功返回卻沿用 orphan pipe，形成「subscribe 成功但永遠沒有 delta」
+  - stop outcome 要穿過 subscription／lease boundary；失敗的 invalidated lease 留在 lane，後續 subscribe 必須先重試 `stopForReplacement()`，重試成功前禁止 build 新 tailer
 - session identity 不能沿用舊 panel / workspace UUID，整條鏈都要改寫成 tmux-resolved current binding
   - tmux pane matching 只能解出「現在這個 pane 對應哪個 current workspace / panel」，之後 replay / fetch / apply / buffered migrate 都要跟著改寫
   - 只在入口做一次 old→new 映射不夠，任何還拿舊 UUID 讀 panel summary、抓 transcript、套 event 的路徑都會繼續錯綁
