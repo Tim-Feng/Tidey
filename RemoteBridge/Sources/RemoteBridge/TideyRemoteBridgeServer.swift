@@ -929,10 +929,10 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     }
 
     func channelInactive(context: ChannelHandlerContext) {
+        terminalStreamConnectionAdmission.retire()
         if !didRecordDisconnect {
             let timestamp = now()
             let durationMs = connectedAt.map { timestamp.timeIntervalSince($0) * 1_000 }
-            terminalStreamConnectionAdmission.retire()
             let terminalRetirement = terminalStreamConnectionState.retire()
             recordConnectionEvent(kind: .disconnected,
                                   timestamp: timestamp,
@@ -1548,8 +1548,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                             "unsubscribe_terminal_stream requires identified ownership when subscription_id is present"
                         )
                     }
-                    guard terminalStreamConnectionAdmission.prepareIdentifiedUnsubscribe(panelID: panelID,
-                                                                                          id: id) else {
+                    guard terminalStreamConnectionAdmission.prepareIdentifiedUnsubscribe(id: id) else {
                         return LocalRequestResult(response: supersededResponse(id: request.id,
                                                                                reason: "terminal stream connection is no longer active"),
                                                   agentReplayEnvelopes: [],
@@ -1756,7 +1755,6 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                 )
             case .some(.identified(let id)):
                 decision = self.terminalStreamConnectionState.releaseInstalledIdentifiedLease(
-                    panelID: panelID,
                     id: id
                 )
             case .none:

@@ -364,6 +364,38 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
         XCTAssertEqual(fixture.observability.snapshot(activeSessions: []).activeTerminalStreamSubscriptionCount, 0)
     }
 
+    func testIdentifiedCleanupIgnoresStalePanelHintAndUsesConnectionGlobalID() throws {
+        let eventLog = EventLog()
+        let fixture = try makeFixture(outputStreamHandler: StubTerminalStreamHandler(eventLog: eventLog))
+        defer { fixture.cleanup() }
+        let ownedPanelID = ordinaryPanelID(windowID: "@16")
+        let stalePanelID = ordinaryPanelID(windowID: "@17")
+
+        let subscribe = try XCTUnwrap(fixture.handler.handleLocalRequest(
+            subscribeRequest(id: "subscribe-a",
+                             panelID: ownedPanelID,
+                             subscriptionID: "owner-a"),
+            context: fixture.context
+        ))
+        XCTAssertEqual(subscribe.applyOnEventLoop?() ?? .accepted, .accepted)
+
+        let cleanup = try XCTUnwrap(fixture.handler.handleLocalRequest(
+            BridgeRequest(id: "unsubscribe-a",
+                          action: "unsubscribe_terminal_stream",
+                          params: [
+                            "panel_id": .string(stalePanelID),
+                            "subscription_id": .string("owner-a"),
+                          ]),
+            context: fixture.context
+        ))
+        XCTAssertTrue(cleanup.response.ok)
+        XCTAssertEqual(cleanup.applyOnEventLoop?() ?? .accepted, .accepted)
+        fixture.drainTerminalWork()
+
+        XCTAssertEqual(eventLog.events, ["subscribe-1", "stop-1"])
+        XCTAssertEqual(fixture.observability.snapshot(activeSessions: []).activeTerminalStreamSubscriptionCount, 0)
+    }
+
     func testLegacyCleanupDoesNotStopIdentifiedOwner() throws {
         let eventLog = EventLog()
         let fixture = try makeFixture(outputStreamHandler: StubTerminalStreamHandler(eventLog: eventLog))

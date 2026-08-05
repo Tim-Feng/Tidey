@@ -143,7 +143,7 @@ final class TerminalStreamConnectionStateTests: XCTestCase {
         _ = state.installSubscribe(panelID: "panel-1", owner: .identified("owner-b"),
                                    lease: current, onInvalidated: {})
 
-        switch state.releaseInstalledIdentifiedLease(panelID: "panel-1", id: "owner-a") {
+        switch state.releaseInstalledIdentifiedLease(id: "owner-a") {
         case .accepted(let leases):
             XCTAssertEqual(leases.count, 0)
         case .rejected:
@@ -158,7 +158,7 @@ final class TerminalStreamConnectionStateTests: XCTestCase {
         _ = state.installSubscribe(panelID: "panel-1", owner: .identified("owner-a"),
                                    lease: identified, onInvalidated: {})
 
-        switch state.releaseInstalledIdentifiedLease(panelID: nil, id: "owner-a") {
+        switch state.releaseInstalledIdentifiedLease(id: "owner-a") {
         case .accepted(let leases):
             XCTAssertEqual(leases.map(\.token), [10])
         case .rejected:

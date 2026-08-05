@@ -90,7 +90,7 @@ final class TerminalStreamConnectionAdmissionTests: XCTestCase {
                                                                    panelID: "panel-1",
                                                                    owner: .identified("owner-b")))
 
-        XCTAssertTrue(admission.prepareIdentifiedUnsubscribe(panelID: "panel-1", id: "owner-a"))
+        XCTAssertTrue(admission.prepareIdentifiedUnsubscribe(id: "owner-a"))
         XCTAssertEqual(admission.state(of: reservation), .reserved)
         XCTAssertTrue(admission.claimForPhysicalMutation(reservation))
         XCTAssertTrue(admission.finalizeSubscribe(reservation))
@@ -102,7 +102,7 @@ final class TerminalStreamConnectionAdmissionTests: XCTestCase {
                                                                    panelID: "panel-1",
                                                                    owner: .identified("owner-a")))
 
-        XCTAssertTrue(admission.prepareIdentifiedUnsubscribe(panelID: "panel-1", id: "owner-a"))
+        XCTAssertTrue(admission.prepareIdentifiedUnsubscribe(id: "owner-a"))
         XCTAssertEqual(admission.state(of: reservation), .canceled)
         XCTAssertFalse(admission.claimForPhysicalMutation(reservation))
         XCTAssertFalse(admission.finalizeSubscribe(reservation))
@@ -115,7 +115,7 @@ final class TerminalStreamConnectionAdmissionTests: XCTestCase {
                                                                    owner: .identified("owner-a")))
 
         XCTAssertTrue(admission.claimForPhysicalMutation(reservation))
-        XCTAssertTrue(admission.prepareIdentifiedUnsubscribe(panelID: "panel-1", id: "owner-a"))
+        XCTAssertTrue(admission.prepareIdentifiedUnsubscribe(id: "owner-a"))
         XCTAssertFalse(admission.finalizeSubscribe(reservation))
         admission.abandonSubscribe(reservation)
         XCTAssertEqual(admission.state(of: reservation), .canceled)
