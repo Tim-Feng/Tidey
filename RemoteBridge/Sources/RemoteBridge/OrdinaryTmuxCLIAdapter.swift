@@ -635,32 +635,101 @@ final class OrdinaryTmuxCLIAdapter {
 
     func captureOutput(route: OrdinaryTmuxPanelRoute, maxLines: Int) throws -> OrdinaryTmuxCapturedOutput {
         let refreshed = try refreshedRoute(route)
-        var arguments = ["capture-pane", "-p", "-J"]
-        if maxLines > 0 {
-            arguments += ["-S", "-\(maxLines)"]
-        }
-        arguments += ["-t", refreshed.activePaneID]
-        let output = try commandRunner(refreshed.socket, arguments, nil)
-        let cursor = try? queryCursorPosition(refreshedRoute: refreshed)
-        return OrdinaryTmuxCapturedOutput(output: output,
-                                          cursorRow: cursor?.row,
-                                          cursorColumn: cursor?.column,
-                                          cursorVisible: cursor?.cursorVisible)
+        return try captureOutput(refreshedRoute: refreshed,
+                                 maxLines: maxLines,
+                                 includeEscapeSequences: false)
     }
 
     func captureANSIOutput(route: OrdinaryTmuxPanelRoute, maxLines: Int) throws -> OrdinaryTmuxCapturedOutput {
         let refreshed = try refreshedRoute(route)
-        var arguments = ["capture-pane", "-e", "-p"]
-        if maxLines > 0 {
-            arguments += ["-S", "-\(maxLines)"]
+        return try captureOutput(refreshedRoute: refreshed,
+                                 maxLines: maxLines,
+                                 includeEscapeSequences: true)
+    }
+
+    private func captureOutput(refreshedRoute: OrdinaryTmuxPanelRoute,
+                               maxLines: Int,
+                               includeEscapeSequences: Bool) throws -> OrdinaryTmuxCapturedOutput {
+        let markerRoot = "TIDEY_CAPTURE_\(UUID().uuidString)"
+        let beginMarker = "\(markerRoot)_BEGIN"
+        let endMarker = "\(markerRoot)_END"
+        var captureArguments = ["capture-pane"]
+        if includeEscapeSequences {
+            captureArguments.append("-e")
         }
-        arguments += ["-t", refreshed.activePaneID]
-        let output = try commandRunner(refreshed.socket, arguments, nil)
-        let cursor = try? queryCursorPosition(refreshedRoute: refreshed)
+        captureArguments.append("-p")
+        if maxLines > 0 {
+            captureArguments += ["-S", "-\(maxLines)"]
+        }
+        captureArguments += ["-t", refreshedRoute.activePaneID]
+        let arguments = [
+            "display-message", "-p", "-t", refreshedRoute.activePaneID, beginMarker,
+            ";",
+        ] + captureArguments + [
+            ";",
+            "display-message", "-p", "-t", refreshedRoute.activePaneID,
+            "\(endMarker) #{cursor_x} #{cursor_y} #{cursor_flag} #{pane_height}",
+        ]
+        let combinedOutput = try commandRunner(refreshedRoute.socket, arguments, nil)
+        return Self.parseAtomicCaptureOutput(combinedOutput,
+                                             beginMarker: beginMarker,
+                                             endMarker: endMarker)
+    }
+
+    private static func parseAtomicCaptureOutput(_ combinedOutput: String,
+                                                 beginMarker: String,
+                                                 endMarker: String) -> OrdinaryTmuxCapturedOutput {
+        let beginBoundary = "\(beginMarker)\n"
+        let endBoundary = "\n\(endMarker) "
+        guard let beginRange = combinedOutput.range(of: beginBoundary),
+              beginRange.lowerBound == combinedOutput.startIndex,
+              let endRange = combinedOutput.range(of: endBoundary,
+                                                  options: .backwards,
+                                                  range: beginRange.upperBound..<combinedOutput.endIndex) else {
+            return OrdinaryTmuxCapturedOutput(output: "",
+                                              cursorRow: nil,
+                                              cursorColumn: nil,
+                                              cursorVisible: nil)
+        }
+
+        let output = String(combinedOutput[beginRange.upperBound..<endRange.lowerBound])
+        let metadata = combinedOutput[endRange.upperBound...]
+            .split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
+            .first?
+            .split(whereSeparator: \.isWhitespace) ?? []
+        guard metadata.count >= 4,
+              let cursorColumn = Int(metadata[0]),
+              let cursorY = Int(metadata[1]),
+              let visibilityFlag = Int(metadata[2]),
+              let paneHeight = Int(metadata[3]),
+              cursorColumn >= 0,
+              cursorY >= 0,
+              paneHeight > 0,
+              cursorY < paneHeight else {
+            return OrdinaryTmuxCapturedOutput(output: output,
+                                              cursorRow: nil,
+                                              cursorColumn: nil,
+                                              cursorVisible: nil)
+        }
+
+        let capturedRowCount = output.reduce(into: 1) { count, character in
+            if character == "\n" {
+                count += 1
+            }
+        }
+        let cursorRow = capturedRowCount - paneHeight + cursorY
+        guard capturedRowCount >= paneHeight,
+              cursorRow >= 0,
+              cursorRow < capturedRowCount else {
+            return OrdinaryTmuxCapturedOutput(output: output,
+                                              cursorRow: nil,
+                                              cursorColumn: nil,
+                                              cursorVisible: nil)
+        }
         return OrdinaryTmuxCapturedOutput(output: output,
-                                          cursorRow: cursor?.row,
-                                          cursorColumn: cursor?.column,
-                                          cursorVisible: cursor?.cursorVisible)
+                                          cursorRow: cursorRow,
+                                          cursorColumn: cursorColumn,
+                                          cursorVisible: visibilityFlag != 0)
     }
 
     func startPipePane(route: OrdinaryTmuxPanelRoute, outputFilePath: String) throws -> OrdinaryTmuxPanelRoute {
