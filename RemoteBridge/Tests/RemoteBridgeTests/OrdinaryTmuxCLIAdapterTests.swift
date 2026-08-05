@@ -290,7 +290,7 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
             RunnerState.key(socket: .defaultSocket, arguments: listClientsArguments):
                 "/dev/ttys010\t/tmp/tmux-501/default\t$7\tgenesis-extraction\t@15\tattached,focused,UTF-8\n",
             RunnerState.key(socket: socket, arguments: listWindowsArguments):
-                "@15\t0\tpriest\tlatest\t\n",
+                "@15\t0\tpriest\tlatest\n",
             RunnerState.key(socket: socket, arguments: listPanesArguments(windowID: "@15")):
                 "%15\t1\t1015\t/Users/timfeng/GitHub/priest\tclaude\n",
         ])

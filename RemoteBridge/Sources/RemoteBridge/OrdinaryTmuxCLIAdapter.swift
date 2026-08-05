@@ -811,7 +811,7 @@ final class OrdinaryTmuxCLIAdapter {
 
     private static func parseWindowLine(_ line: Substring) -> TmuxWindow? {
         let parts = split(line, maxSplits: 4)
-        guard parts.count == 3 || parts.count == 5,
+        guard (3...5).contains(parts.count),
               let index = Int(parts[1]) else {
             return nil
         }
@@ -822,7 +822,7 @@ final class OrdinaryTmuxCLIAdapter {
         return TmuxWindow(id: id,
                           index: index,
                           name: parts[2],
-                          sizePolicy: parts.count == 5 ? parts[3].nilIfEmpty : nil,
+                          sizePolicy: parts.count >= 4 ? parts[3].nilIfEmpty : nil,
                           previousSizePolicy: parts.count == 5 ? parts[4].nilIfEmpty : nil)
     }
 
