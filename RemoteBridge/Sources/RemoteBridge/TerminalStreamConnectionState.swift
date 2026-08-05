@@ -18,7 +18,9 @@ struct TerminalStreamConnectionState {
 
     private(set) var isRetired = false
     private var unsubscribeAllHighWater: UInt64 = 0
-    private var panelHighWater = [String: UInt64]()
+    private var latestSubscribeHighWater = [String: UInt64]()
+    private var legacyOwnerHighWater = [String: UInt64]()
+    private var consumedIdentifiedOwnerIDs = Set<String>()
     private var ownedByPanel = [String: OrdinaryTmuxTerminalStreamLease]()
 
     var count: Int {
@@ -27,14 +29,16 @@ struct TerminalStreamConnectionState {
 
     mutating func commitSubscribe(sequence: UInt64,
                                   panelID: String,
+                                  owner: TerminalStreamSubscriptionOwner = .legacy,
                                   lease: OrdinaryTmuxTerminalStreamLease,
                                   onInvalidated: @escaping @Sendable () -> Void) -> SubscribeDecision {
         guard isRetired == false,
               lease.route.panelID == panelID,
-              sequence > max(unsubscribeAllHighWater, panelHighWater[panelID] ?? 0) else {
+              lease.owner == owner,
+              sequence > max(unsubscribeAllHighWater, latestSubscribeHighWater[panelID] ?? 0) else {
             return .rejected
         }
-        panelHighWater[panelID] = sequence
+        latestSubscribeHighWater[panelID] = sequence
         guard lease.deliveryGate.accept(onInvalidated: onInvalidated) else {
             return .rejected
         }
@@ -45,12 +49,25 @@ struct TerminalStreamConnectionState {
     mutating func commitUnsubscribe(sequence: UInt64,
                                     panelID: String) -> ReleaseDecision {
         guard isRetired == false,
-              sequence > max(unsubscribeAllHighWater, panelHighWater[panelID] ?? 0) else {
+              sequence > max(unsubscribeAllHighWater, latestSubscribeHighWater[panelID] ?? 0) else {
             return .rejected
         }
-        panelHighWater[panelID] = sequence
+        latestSubscribeHighWater[panelID] = sequence
         let leases = ownedByPanel.removeValue(forKey: panelID).map { [$0] } ?? []
         return .accepted(leases)
+    }
+
+    mutating func commitLegacyUnsubscribe(sequence: UInt64,
+                                          panelID: String) -> ReleaseDecision {
+        commitUnsubscribe(sequence: sequence, panelID: panelID)
+    }
+
+    mutating func commitIdentifiedUnsubscribe(panelID: String,
+                                              id: String) -> ReleaseDecision {
+        guard isRetired == false else {
+            return .rejected
+        }
+        return .accepted([])
     }
 
     mutating func commitUnsubscribeAll(sequence: UInt64) -> ReleaseDecision {
@@ -60,7 +77,7 @@ struct TerminalStreamConnectionState {
         }
         unsubscribeAllHighWater = sequence
         let panelIDsToRelease = ownedByPanel.keys.filter { panelID in
-            sequence > (panelHighWater[panelID] ?? 0)
+            sequence > (latestSubscribeHighWater[panelID] ?? 0)
         }
         let leases = panelIDsToRelease.compactMap { panelID in
             ownedByPanel.removeValue(forKey: panelID)

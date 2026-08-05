@@ -44,8 +44,14 @@ final class TerminalStreamDeliveryGate: @unchecked Sendable {
     }
 }
 
+enum TerminalStreamSubscriptionOwner: Hashable, Sendable {
+    case legacy
+    case identified(String)
+}
+
 final class OrdinaryTmuxTerminalStreamLease: @unchecked Sendable {
     let token: UInt64
+    let owner: TerminalStreamSubscriptionOwner
     let subscription: OrdinaryTmuxTerminalStreamSubscribing
     let deliveryGate: TerminalStreamDeliveryGate
 
@@ -54,9 +60,11 @@ final class OrdinaryTmuxTerminalStreamLease: @unchecked Sendable {
     }
 
     init(token: UInt64,
+         owner: TerminalStreamSubscriptionOwner = .legacy,
          subscription: OrdinaryTmuxTerminalStreamSubscribing,
          deliveryGate: TerminalStreamDeliveryGate) {
         self.token = token
+        self.owner = owner
         self.subscription = subscription
         self.deliveryGate = deliveryGate
     }
