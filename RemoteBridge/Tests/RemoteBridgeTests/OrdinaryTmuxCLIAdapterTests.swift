@@ -599,6 +599,46 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
         XCTAssertEqual(state.calls.map(\.arguments), [arguments])
     }
 
+    func testCombinedBootstrapUsesOneExactPaneCommand() throws {
+        let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
+        let route = makeRoute(socket: socket)
+        let state = RunnerState(responses: [
+            RunnerState.key(socket: socket, arguments: windowExistsArguments):
+                "@15\n",
+            RunnerState.key(socket: socket, arguments: listPanesArguments(windowID: "@15")):
+                "%21\t1\t1021\t/Users/timfeng/GitHub/work\tcodex\n",
+            RunnerState.key(socket: socket,
+                            arguments: ["pipe-pane", "-o", "-t", "%21", "cat >> '/tmp/stream.bytes'"]):
+                "",
+        ])
+        let adapter = makeAtomicCaptureAdapter(state: state,
+                                               body: "line-0\nline-1",
+                                               metadata: "4 1 1 2")
+
+        let bootstrap = try adapter.bootstrapTerminalStream(refreshedRoute: route,
+                                                            outputFilePath: "/tmp/stream.bytes",
+                                                            maxLines: 200)
+
+        XCTAssertEqual(bootstrap.route.activePaneID, "%old")
+        XCTAssertEqual(bootstrap.initialOutput,
+                       OrdinaryTmuxCapturedOutput(output: "line-0\nline-1",
+                                                  cursorRow: 1,
+                                                  cursorColumn: 4,
+                                                  cursorVisible: true))
+        XCTAssertEqual(state.calls.count, 1,
+                       "capture and pipe attach must share one tmux command invocation")
+        let arguments = try XCTUnwrap(state.calls.first?.arguments)
+        let separators = arguments.indices.filter { arguments[$0] == ";" }
+        XCTAssertEqual(separators.count, 3)
+        guard separators.count == 3 else {
+            return
+        }
+        XCTAssertEqual(Array(arguments[(separators[0] + 1)..<separators[1]]),
+                       ["capture-pane", "-e", "-p", "-S", "-200", "-t", "%old"])
+        XCTAssertEqual(Array(arguments[(separators[2] + 1)...]),
+                       ["pipe-pane", "-o", "-t", "%old", "cat >> '/tmp/stream.bytes'"])
+    }
+
     func testCaptureOutputAtomicallyMapsPaneCursorIntoPhysicalRows() throws {
         let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
         let route = makeRoute(socket: socket)
@@ -878,7 +918,9 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
                 return fallback
             }
             let beginMarker = arguments[firstSeparator - 1]
-            let endFormat = arguments[(secondSeparator + 1)...].last ?? ""
+            let thirdSeparator = arguments[(secondSeparator + 1)...].firstIndex(of: ";")
+            let endCommandEnd = thirdSeparator ?? arguments.endIndex
+            let endFormat = arguments[(secondSeparator + 1)..<endCommandEnd].last ?? ""
             let endMarker = endFormat.split(separator: " ", maxSplits: 1).first.map(String.init) ?? ""
             return "\(beginMarker)\n\(body)\n\(endMarker) \(metadata)\(trailingOutput)"
         }

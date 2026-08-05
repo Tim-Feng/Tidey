@@ -734,12 +734,30 @@ final class OrdinaryTmuxCLIAdapter {
     func bootstrapTerminalStream(refreshedRoute: OrdinaryTmuxPanelRoute,
                                  outputFilePath: String,
                                  maxLines: Int) throws -> OrdinaryTmuxTerminalStreamBootstrap {
-        let initialOutput = try captureOutput(refreshedRoute: refreshedRoute,
-                                              maxLines: maxLines,
-                                              includeEscapeSequences: true)
-        let streamRoute = try startPipePane(route: refreshedRoute,
-                                            outputFilePath: outputFilePath)
-        return OrdinaryTmuxTerminalStreamBootstrap(route: streamRoute,
+        let markerRoot = "TIDEY_CAPTURE_\(UUID().uuidString)"
+        let beginMarker = "\(markerRoot)_BEGIN"
+        let endMarker = "\(markerRoot)_END"
+        var captureArguments = ["capture-pane", "-e", "-p"]
+        if maxLines > 0 {
+            captureArguments += ["-S", "-\(maxLines)"]
+        }
+        captureArguments += ["-t", refreshedRoute.activePaneID]
+        let pipeCommand = "cat >> \(Self.singleQuotedShellArgument(outputFilePath))"
+        let arguments = [
+            "display-message", "-p", "-t", refreshedRoute.activePaneID, beginMarker,
+            ";",
+        ] + captureArguments + [
+            ";",
+            "display-message", "-p", "-t", refreshedRoute.activePaneID,
+            "\(endMarker) #{cursor_x} #{cursor_y} #{cursor_flag} #{pane_height}",
+            ";",
+            "pipe-pane", "-o", "-t", refreshedRoute.activePaneID, pipeCommand,
+        ]
+        let combinedOutput = try commandRunner(refreshedRoute.socket, arguments, nil)
+        let initialOutput = try Self.parseAtomicCaptureOutput(combinedOutput,
+                                                              beginMarker: beginMarker,
+                                                              endMarker: endMarker)
+        return OrdinaryTmuxTerminalStreamBootstrap(route: refreshedRoute,
                                                    initialOutput: initialOutput)
     }
 
