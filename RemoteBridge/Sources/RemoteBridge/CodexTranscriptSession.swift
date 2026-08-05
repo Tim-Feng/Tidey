@@ -1277,8 +1277,6 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         "reasoning",
         "web_search_call",
         "local_shell_call",
-        "custom_tool_call",
-        "custom_tool_call_output",
         "ghost_commit",
         "agent_message",
         "image_generation_call",
@@ -1364,6 +1362,10 @@ final class CodexTranscriptSession: AgentTranscriptSession {
             consumeFunctionCall(payload: payload, timestamp: timestamp, lineOffset: lineOffset)
         case "function_call_output":
             consumeFunctionCallOutput(payload: payload, timestamp: timestamp, lineOffset: lineOffset)
+        case "custom_tool_call":
+            consumeCustomToolCall(payload: payload, timestamp: timestamp, lineOffset: lineOffset)
+        case "custom_tool_call_output":
+            consumeCustomToolCallOutput(payload: payload, timestamp: timestamp, lineOffset: lineOffset)
         case _ where Self.knownIgnoredResponseItemTypes.contains(payloadType):
             break
         default:
@@ -1556,6 +1558,72 @@ final class CodexTranscriptSession: AgentTranscriptSession {
                           output: output,
                           toolCallID: callID,
                           metadata: ["source": "function_call_output"])
+    }
+
+    private func consumeCustomToolCall(payload: [String: Any], timestamp: String, lineOffset: Int) {
+        guard let callID = payload["call_id"] as? String, !callID.isEmpty else {
+            sourceSemanticTrust = false
+            return
+        }
+        guard let name = payload["name"] as? String, !name.isEmpty else {
+            sourceSemanticTrust = false
+            return
+        }
+        guard let input = payload["input"] as? String else {
+            sourceSemanticTrust = false
+            return
+        }
+
+        didSeeInteractiveEvent = true
+        publishFileBacked(kind: .toolCall,
+                          lineOffset: lineOffset,
+                          ordinal: 0,
+                          eventID: callID,
+                          timestamp: timestamp,
+                          role: "assistant",
+                          text: nil,
+                          name: name,
+                          input: Self.compactString(input),
+                          output: nil,
+                          toolCallID: callID,
+                          metadata: ["source": "custom_tool_call"])
+    }
+
+    private func consumeCustomToolCallOutput(payload: [String: Any], timestamp: String, lineOffset: Int) {
+        guard let callID = payload["call_id"] as? String, !callID.isEmpty else {
+            sourceSemanticTrust = false
+            return
+        }
+        guard let outputValue = payload["output"] else {
+            sourceSemanticTrust = false
+            return
+        }
+        let parsed = Self.parseContentValue(outputValue, context: .functionOutput)
+        if case .malformed = parsed {
+            sourceSemanticTrust = false
+            return
+        }
+        guard !resolvedToolCallIDs.contains(callID) else {
+            return
+        }
+        guard case .text(let output) = parsed else {
+            return
+        }
+
+        didSeeInteractiveEvent = true
+        resolvedToolCallIDs.insert(callID)
+        publishFileBacked(kind: .toolResult,
+                          lineOffset: lineOffset,
+                          ordinal: 0,
+                          eventID: "\(callID):custom-tool-output",
+                          timestamp: timestamp,
+                          role: "tool",
+                          text: nil,
+                          name: nil,
+                          input: nil,
+                          output: output,
+                          toolCallID: callID,
+                          metadata: ["source": "custom_tool_call_output"])
     }
 
     private func consumeEventMessage(payload: [String: Any], timestamp: String, lineOffset: Int) {

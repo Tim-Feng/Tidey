@@ -1888,8 +1888,7 @@ final class CodexTranscriptSessionTests: XCTestCase {
     // keep legacy catalog entries already supported by the parser history.
     func testCodexCurrentRolloutCatalogIgnoredSubtypesStayTrusted() throws {
         let observedIgnoredResponseItemTypes = [
-            "reasoning", "web_search_call", "custom_tool_call",
-            "custom_tool_call_output", "agent_message", "image_generation_call",
+            "reasoning", "web_search_call", "agent_message", "image_generation_call",
             "tool_search_call", "tool_search_output",
             // legacy catalog entries retained from parser history
             "local_shell_call", "ghost_commit",
@@ -2025,6 +2024,40 @@ final class CodexTranscriptSessionTests: XCTestCase {
                       "legal media/encrypted blocks keep the source trusted")
     }
 
+    func testCodexCustomToolCallAndOutputPublishToolLifecycle() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lines = [
+            #"{"type":"response_item","timestamp":"2026-08-05T08:47:56Z","payload":{"type":"custom_tool_call","id":"ctc-1","status":"completed","call_id":"call-1","name":"exec","input":"const result = await tools.exec_command({cmd:\"swift test\"});"}}"#,
+            #"{"type":"response_item","timestamp":"2026-08-05T08:47:57Z","payload":{"type":"custom_tool_call_output","id":"ctco-1","call_id":"call-1","output":[{"type":"input_text","text":"Script completed"},{"type":"input_text","text":"ok"}]}}"#,
+            makeCodexMessageLine(role: "assistant", content: "a-0"),
+        ]
+        try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL,
+                                                           atomically: true,
+                                                           encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(transcriptURL, hub: hub, readySentinel: "a-0")
+        defer { session.stop() }
+
+        let events = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 50).events
+        let toolCall = events.first { $0.eventID == "call-1" }
+        XCTAssertEqual(toolCall?.type, .toolCall)
+        XCTAssertEqual(toolCall?.name, "exec")
+        XCTAssertEqual(toolCall?.input,
+                       #"const result = await tools.exec_command({cmd:"swift test"});"#)
+        XCTAssertEqual(toolCall?.toolCallID, "call-1")
+
+        let toolResult = events.first { $0.eventID == "call-1:custom-tool-output" }
+        XCTAssertEqual(toolResult?.type, .toolResult)
+        XCTAssertEqual(toolResult?.output, "Script completed\nok")
+        XCTAssertEqual(toolResult?.toolCallID, "call-1")
+        XCTAssertTrue(session.validateHistoryEpoch(hub.currentHistoryEpoch(sessionID: "session")))
+    }
+
     // Guard: media/encrypted-only Array, empty String, and empty Array
     // outputs are legal no-text products — no event, no poison.
     func testCodexEventlessFunctionOutputsStayLegal() throws {
@@ -2103,6 +2136,21 @@ final class CodexTranscriptSessionTests: XCTestCase {
             ("function-output-malformed-duplicate-after-legal",
              [responseItem("{\"type\":\"function_call_output\",\"call_id\":\"dup-1\",\"output\":\"legal first\"}"),
               responseItem("{\"type\":\"function_call_output\",\"call_id\":\"dup-1\",\"output\":7}")]),
+            ("custom-tool-call-call-id-missing", [responseItem("{\"type\":\"custom_tool_call\",\"name\":\"exec\",\"input\":\"code\"}")]),
+            ("custom-tool-call-call-id-wrong-type", [responseItem("{\"type\":\"custom_tool_call\",\"call_id\":7,\"name\":\"exec\",\"input\":\"code\"}")]),
+            ("custom-tool-call-call-id-empty", [responseItem("{\"type\":\"custom_tool_call\",\"call_id\":\"\",\"name\":\"exec\",\"input\":\"code\"}")]),
+            ("custom-tool-call-name-missing", [responseItem("{\"type\":\"custom_tool_call\",\"call_id\":\"c1\",\"input\":\"code\"}")]),
+            ("custom-tool-call-name-wrong-type", [responseItem("{\"type\":\"custom_tool_call\",\"call_id\":\"c1\",\"name\":7,\"input\":\"code\"}")]),
+            ("custom-tool-call-name-empty", [responseItem("{\"type\":\"custom_tool_call\",\"call_id\":\"c1\",\"name\":\"\",\"input\":\"code\"}")]),
+            ("custom-tool-call-input-missing", [responseItem("{\"type\":\"custom_tool_call\",\"call_id\":\"c1\",\"name\":\"exec\"}")]),
+            ("custom-tool-call-input-wrong-type", [responseItem("{\"type\":\"custom_tool_call\",\"call_id\":\"c1\",\"name\":\"exec\",\"input\":7}")]),
+            ("custom-tool-output-call-id-missing", [responseItem("{\"type\":\"custom_tool_call_output\",\"output\":\"x\"}")]),
+            ("custom-tool-output-call-id-wrong-type", [responseItem("{\"type\":\"custom_tool_call_output\",\"call_id\":7,\"output\":\"x\"}")]),
+            ("custom-tool-output-call-id-empty", [responseItem("{\"type\":\"custom_tool_call_output\",\"call_id\":\"\",\"output\":\"x\"}")]),
+            ("custom-tool-output-output-missing", [responseItem("{\"type\":\"custom_tool_call_output\",\"call_id\":\"c1\"}")]),
+            ("custom-tool-output-output-wrong-type", [responseItem("{\"type\":\"custom_tool_call_output\",\"call_id\":\"c1\",\"output\":7}")]),
+            ("custom-tool-output-block-malformed", [responseItem("{\"type\":\"custom_tool_call_output\",\"call_id\":\"c1\",\"output\":[{\"type\":\"input_text\",\"text\":3}]}")]),
+            ("custom-tool-output-block-unknown", [responseItem("{\"type\":\"custom_tool_call_output\",\"call_id\":\"c1\",\"output\":[{\"type\":\"mystery\"}]}")]),
             ("agent-message-message-missing", [eventMsg("{\"type\":\"agent_message\",\"phase\":\"commentary\"}")]),
             ("agent-message-message-wrong-type", [eventMsg("{\"type\":\"agent_message\",\"message\":7,\"phase\":\"commentary\"}")]),
             // phase-missing removed: phase is Option<MessagePhase>
