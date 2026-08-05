@@ -20,7 +20,8 @@ final class TerminalStreamConnectionStateTests: XCTestCase {
                                            currentCommand: "codex")
         }
 
-        func stop() {}
+        @discardableResult
+        func stop() -> Bool { true }
     }
 
     func testCommitSubscribeAcceptsNewestLeaseAndRejectsOlderLease() {

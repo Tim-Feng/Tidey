@@ -120,13 +120,13 @@ final class TerminalByteFileTailer: TerminalByteTailing, @unchecked Sendable {
 
 protocol OrdinaryTmuxTerminalStreamSubscribing: AnyObject, Sendable {
     var route: OrdinaryTmuxPanelRoute { get }
-    func stop()
+    @discardableResult func stop() -> Bool
     func stopForReplacement() throws
 }
 
 extension OrdinaryTmuxTerminalStreamSubscribing {
     func stopForReplacement() throws {
-        stop()
+        _ = stop()
     }
 }
 
@@ -151,11 +151,12 @@ final class OrdinaryTmuxTerminalStreamSubscription: OrdinaryTmuxTerminalStreamSu
         self.cleanup = cleanup
     }
 
-    func stop() {
+    @discardableResult
+    func stop() -> Bool {
         lock.lock()
         defer { lock.unlock() }
         guard physicallyClosed == false else {
-            return
+            return true
         }
 
         tailer.stop()
@@ -163,8 +164,10 @@ final class OrdinaryTmuxTerminalStreamSubscription: OrdinaryTmuxTerminalStreamSu
         do {
             try adapter.stopPipePane(route: route)
             physicallyClosed = true
+            return true
         } catch {
             // Best effort. A later lane replacement may retry the physical stop.
+            return false
         }
     }
 

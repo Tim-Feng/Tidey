@@ -138,8 +138,10 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
             self.eventLog = eventLog
         }
 
-        func stop() {
+        @discardableResult
+        func stop() -> Bool {
             eventLog.append("stop-\(label)")
+            return true
         }
     }
 

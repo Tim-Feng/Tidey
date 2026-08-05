@@ -58,8 +58,10 @@ final class OrdinaryTmuxTerminalStreamLaneTests: XCTestCase {
             remainingReplacementFailures = replacementFailures
         }
 
-        func stop() {
+        @discardableResult
+        func stop() -> Bool {
             eventLog.append("stop-\(label)")
+            return true
         }
 
         func stopForReplacement() throws {
