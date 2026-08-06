@@ -280,6 +280,9 @@ protocol OrdinaryTmuxRouteRefreshing: Sendable {
 }
 
 protocol OrdinaryTmuxTerminalStreaming: Sendable {
+    func bootstrapStrictTerminalStream(refreshedRoute: OrdinaryTmuxPanelRoute,
+                                       outputFilePath: String,
+                                       subscriptionID: String) throws -> OrdinaryTmuxTerminalStateV1
     func bootstrapTerminalStream(refreshedRoute: OrdinaryTmuxPanelRoute,
                                  outputFilePath: String,
                                  maxLines: Int) throws -> OrdinaryTmuxTerminalStreamBootstrap
@@ -288,6 +291,14 @@ protocol OrdinaryTmuxTerminalStreaming: Sendable {
     func stopPipePane(exactRoute: OrdinaryTmuxPanelRoute) throws
     func queryCursorPosition(route: OrdinaryTmuxPanelRoute) throws -> OrdinaryTmuxCursorPosition?
     func queryCursorPosition(exactRoute: OrdinaryTmuxPanelRoute) throws -> OrdinaryTmuxCursorPosition?
+}
+
+extension OrdinaryTmuxTerminalStreaming {
+    func bootstrapStrictTerminalStream(refreshedRoute: OrdinaryTmuxPanelRoute,
+                                       outputFilePath: String,
+                                       subscriptionID: String) throws -> OrdinaryTmuxTerminalStateV1 {
+        throw BridgeInternalError.invalidResponse
+    }
 }
 
 struct OrdinaryTmuxTerminalStreamBootstrap: Equatable, Sendable {

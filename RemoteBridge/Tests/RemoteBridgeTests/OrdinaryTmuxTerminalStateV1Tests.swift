@@ -3,6 +3,23 @@ import XCTest
 @testable import RemoteBridge
 
 final class OrdinaryTmuxTerminalStateV1Tests: XCTestCase {
+    func testStrictBootstrapProtocolSeamCompiles() {
+        let seam: @Sendable (
+            any OrdinaryTmuxTerminalStreaming,
+            OrdinaryTmuxPanelRoute,
+            String,
+            String
+        ) throws -> OrdinaryTmuxTerminalStateV1 = { streaming, route, outputPath, subscriptionID in
+            try streaming.bootstrapStrictTerminalStream(
+                refreshedRoute: route,
+                outputFilePath: outputPath,
+                subscriptionID: subscriptionID
+            )
+        }
+
+        _ = seam
+    }
+
     func testStrictTerminalStateContractCompiles() {
         let cursor = OrdinaryTmuxTerminalCursorV1(row: 7, column: 11)
         let modes = OrdinaryTmuxTerminalModesV1(
