@@ -32,8 +32,11 @@ final class OrdinaryTmuxOutputStreamHandlerTests: XCTestCase {
         private(set) var startedPipeOutputPaths = [String]()
         private(set) var stoppedPipeRoutes = [OrdinaryTmuxPanelRoute]()
         private(set) var cursorQueryCount = 0
+        private(set) var strictBootstrapCount = 0
         var remainingStopFailures = 0
         var shouldFailBootstrap = false
+        var strictState: OrdinaryTmuxTerminalStateV1?
+        var strictFingerprint: OrdinaryTmuxTerminalFingerprintV1?
         var initialOutput = OrdinaryTmuxCapturedOutput(output: "\u{1B}[31mhello\u{1B}[0m",
                                                        cursorRow: 3,
                                                        cursorColumn: 4,
@@ -73,6 +76,26 @@ final class OrdinaryTmuxOutputStreamHandlerTests: XCTestCase {
                                                        initialOutput: initialOutput)
         }
 
+        func bootstrapStrictTerminalStream(
+            refreshedRoute: OrdinaryTmuxPanelRoute,
+            outputFilePath: String,
+            subscriptionID: String
+        ) throws -> OrdinaryTmuxTerminalStateV1 {
+            if shouldFailBootstrap {
+                throw StubError.bootstrapFailed
+            }
+            guard let strictState else {
+                throw BridgeInternalError.invalidResponse
+            }
+            XCTAssertEqual(strictState.subscriptionID, subscriptionID)
+            lock.lock()
+            strictBootstrapCount += 1
+            startedPipeRoutes.append(refreshedRoute)
+            startedPipeOutputPaths.append(outputFilePath)
+            lock.unlock()
+            return strictState
+        }
+
         func startPipePane(route: OrdinaryTmuxPanelRoute, outputFilePath: String) throws -> OrdinaryTmuxPanelRoute {
             lock.lock()
             startedPipeRoutes.append(route)
@@ -107,6 +130,12 @@ final class OrdinaryTmuxOutputStreamHandlerTests: XCTestCase {
 
         func queryCursorPosition(exactRoute: OrdinaryTmuxPanelRoute) throws -> OrdinaryTmuxCursorPosition? {
             try queryCursorPosition(route: exactRoute)
+        }
+
+        func queryStrictTerminalFingerprint(
+            exactRoute: OrdinaryTmuxPanelRoute
+        ) throws -> OrdinaryTmuxTerminalFingerprintV1? {
+            strictFingerprint
         }
     }
 
@@ -287,6 +316,166 @@ final class OrdinaryTmuxOutputStreamHandlerTests: XCTestCase {
         XCTAssertEqual(start.response.result?["subscription_id"]?.stringValue, "owner-a")
         XCTAssertEqual(deltaBox.deltas.first?.subscriptionID, "owner-a")
         start.subscription.stop()
+    }
+
+    func testStrictSubscribeReturnsVersionedStateAndSequencedFingerprintDeltas() throws {
+        let route = ordinaryRoute()
+        let expectedFingerprint = OrdinaryTmuxTerminalFingerprintV1(
+            paneID: route.activePaneID,
+            columns: 80,
+            rows: 2,
+            alternateOn: true
+        )
+        let adapter = StubAdapter()
+        adapter.strictState = OrdinaryTmuxTerminalStateV1(
+            subscriptionID: "owner-a",
+            paneID: route.activePaneID,
+            columns: 80,
+            rows: 2,
+            cursor: OrdinaryTmuxTerminalCursorV1(row: 1, column: 4),
+            cursorVisible: false,
+            alternateOn: true,
+            alternateSavedCursor: OrdinaryTmuxTerminalCursorV1(row: 0, column: 3),
+            scrollRegionUpper: 0,
+            scrollRegionLower: 1,
+            tabStops: [8, 16, 24],
+            modes: OrdinaryTmuxTerminalModesV1(
+                insert: false,
+                applicationCursorKeys: true,
+                applicationKeypad: false,
+                wrap: true,
+                origin: false,
+                mouseStandard: false,
+                mouseButton: false,
+                mouseAny: false,
+                mouseUTF8: false,
+                mouseSGR: true,
+                paneKeyMode: "VT10x"
+            ),
+            activeScreen: Data("menu\nchoice".utf8),
+            backgroundScreen: Data("shell\nprompt".utf8),
+            pendingPrefix: Data([0x1B, 0x5B, 0x33, 0x31])
+        )
+        adapter.strictFingerprint = expectedFingerprint
+        let tailerBox = StubTailerBox()
+        let deltaBox = DeltaBox()
+        let handler = OrdinaryTmuxOutputStreamHandler(
+            routeResolver: StubResolver(route: route),
+            adapter: adapter,
+            outputDirectory: temporaryDirectory(),
+            makeTailer: { url, handler in
+                tailerBox.makeTailer(url: url, handler: handler)
+            }
+        )
+
+        let start = try XCTUnwrap(handler.subscribe(BridgeRequest(
+            id: "request-1",
+            action: "subscribe_terminal_stream",
+            params: [
+                "panel_id": .string(route.panelID),
+                "subscription_id": .string("owner-a"),
+                "terminal_state_version": .number(1),
+            ]
+        ), onDelta: { deltaBox.append($0) }))
+
+        XCTAssertEqual(start.response.result?["terminal_state_version"]?.intValue, 1)
+        XCTAssertEqual(start.response.result?["pane_id"]?.stringValue, route.activePaneID)
+        XCTAssertEqual(start.response.result?["cols"]?.intValue, 80)
+        XCTAssertEqual(start.response.result?["rows"]?.intValue, 2)
+        XCTAssertNil(start.response.result?["initial_output"])
+        let screen = try XCTUnwrap(start.response.result?["screen"]?.objectValue)
+        XCTAssertEqual(screen["cursor_col"]?.intValue, 4)
+        XCTAssertEqual(screen["cursor_row"]?.intValue, 1)
+        XCTAssertEqual(screen["cursor_visible"]?.boolValue, false)
+        XCTAssertEqual(
+            screen["active_capture_base64"]?.stringValue,
+            Data("menu\nchoice".utf8).base64EncodedString()
+        )
+        XCTAssertEqual(
+            screen["primary_capture_base64"]?.stringValue,
+            Data("shell\nprompt".utf8).base64EncodedString()
+        )
+        let alternate = try XCTUnwrap(start.response.result?["alternate"]?.objectValue)
+        XCTAssertEqual(alternate["active"]?.boolValue, true)
+        XCTAssertEqual(alternate["saved_cursor_col"]?.intValue, 3)
+        XCTAssertEqual(alternate["saved_cursor_row"]?.intValue, 0)
+        let scrollRegion = try XCTUnwrap(start.response.result?["scroll_region"]?.objectValue)
+        XCTAssertEqual(scrollRegion["upper"]?.intValue, 0)
+        XCTAssertEqual(scrollRegion["lower"]?.intValue, 1)
+        XCTAssertEqual(
+            start.response.result?["tab_stops"]?.arrayValue?.compactMap(\.intValue),
+            [8, 16, 24]
+        )
+        let modes = try XCTUnwrap(start.response.result?["modes"]?.objectValue)
+        XCTAssertEqual(modes["insert"]?.boolValue, false)
+        XCTAssertEqual(modes["keypad_cursor"]?.boolValue, true)
+        XCTAssertEqual(modes["keypad"]?.boolValue, false)
+        XCTAssertEqual(modes["wrap"]?.boolValue, true)
+        XCTAssertEqual(modes["origin"]?.boolValue, false)
+        XCTAssertEqual(modes["mouse_sgr"]?.boolValue, true)
+        XCTAssertEqual(start.response.result?["pane_key_mode"]?.stringValue, "VT10x")
+        XCTAssertEqual(
+            start.response.result?["pending_prefix_base64"]?.stringValue,
+            Data([0x1B, 0x5B, 0x33, 0x31]).base64EncodedString()
+        )
+        XCTAssertEqual(adapter.strictBootstrapCount, 1)
+
+        start.subscription.activate()
+        tailerBox.firstTailer?.emit("one")
+        tailerBox.firstTailer?.emit("two")
+        adapter.strictFingerprint = OrdinaryTmuxTerminalFingerprintV1(
+            paneID: route.activePaneID,
+            columns: 81,
+            rows: 2,
+            alternateOn: true
+        )
+        tailerBox.firstTailer?.emit("resize")
+        tailerBox.firstTailer?.emit("must-drop")
+
+        XCTAssertEqual(deltaBox.deltas.map(\.sequence), [1, 2, 3])
+        XCTAssertEqual(deltaBox.deltas.map(\.rebootstrapRequired), [false, false, true])
+        XCTAssertEqual(deltaBox.deltas.map(\.columns), [80, 80, 81])
+        XCTAssertEqual(deltaBox.deltas.map(\.rows), [2, 2, 2])
+        XCTAssertEqual(deltaBox.deltas.map(\.alternateOn), [true, true, true])
+        XCTAssertEqual(deltaBox.deltas.map(\.subscriptionID), ["owner-a", "owner-a", "owner-a"])
+        XCTAssertEqual(adapter.cursorQueryCount, 0)
+        start.subscription.stop()
+    }
+
+    func testStrictSubscribeRequiresExactSubscriptionIdentityAndKnownVersion() {
+        let route = ordinaryRoute()
+        let handler = OrdinaryTmuxOutputStreamHandler(
+            routeResolver: StubResolver(route: route),
+            adapter: StubAdapter(),
+            outputDirectory: temporaryDirectory()
+        )
+
+        for params: [String: JSONValue] in [
+            [
+                "panel_id": .string(route.panelID),
+                "terminal_state_version": .number(1),
+            ],
+            [
+                "panel_id": .string(route.panelID),
+                "subscription_id": .string("owner-a"),
+                "terminal_state_version": .number(2),
+            ],
+        ] {
+            XCTAssertThrowsError(
+                try handler.subscribe(
+                    BridgeRequest(
+                        id: "request-1",
+                        action: "subscribe_terminal_stream",
+                        params: params
+                    ),
+                    onDelta: { _ in }
+                )
+            ) { error in
+                guard case BridgeInternalError.invalidRequest = error else {
+                    return XCTFail("unexpected error: \(error)")
+                }
+            }
+        }
     }
 
     func testReplacementStopCleansUpAndRemainsRetryableAfterPipeStopFailure() throws {

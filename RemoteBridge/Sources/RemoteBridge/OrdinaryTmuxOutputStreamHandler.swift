@@ -1,5 +1,22 @@
 import Foundation
 
+private final class OrdinaryTmuxStrictTerminalEmitterSlot: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: OrdinaryTmuxStrictTerminalEmitter?
+
+    func install(_ emitter: OrdinaryTmuxStrictTerminalEmitter) {
+        lock.lock()
+        storage = emitter
+        lock.unlock()
+    }
+
+    var emitter: OrdinaryTmuxStrictTerminalEmitter? {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
+    }
+}
+
 struct TerminalStreamDeltaEnvelope: Codable, Sendable, Equatable {
     let type: String
     let workspaceID: String
@@ -333,14 +350,41 @@ struct OrdinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreaming {
         }
         let workspaceID = request.params?["workspace_id"]?.stringValue
         let subscriptionID = request.params?["subscription_id"]?.stringValue
+        let requestedStateVersion = request.params?["terminal_state_version"]
+        let usesStrictState: Bool
+        if let requestedStateVersion {
+            guard requestedStateVersion.intValue == OrdinaryTmuxTerminalStateV1.schemaVersion else {
+                throw BridgeInternalError.invalidRequest("unsupported terminal_state_version")
+            }
+            guard let subscriptionID,
+                  subscriptionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+                throw BridgeInternalError.invalidRequest(
+                    "terminal_state_version requires subscription_id"
+                )
+            }
+            usesStrictState = true
+        } else {
+            usesStrictState = false
+        }
         guard let route = try routeResolver.route(forPanelID: panelID, workspaceID: workspaceID) else {
             throw BridgeInternalError.notFound("ordinary tmux logical panel is not authorized")
         }
         let streamRoute = try adapter.refreshedRoute(route)
 
         let outputFileURL = try makeOutputFile()
+        let strictEmitterSlot = OrdinaryTmuxStrictTerminalEmitterSlot()
         let tailer = makeTailer(outputFileURL) { data in
             guard allowedIf() else {
+                return
+            }
+            if usesStrictState {
+                let fingerprint = try? adapter.queryStrictTerminalFingerprint(
+                    exactRoute: streamRoute
+                )
+                strictEmitterSlot.emitter?.emit(
+                    chunk: data,
+                    currentFingerprint: fingerprint
+                )
                 return
             }
             let cursor = try? adapter.queryCursorPosition(exactRoute: streamRoute)
@@ -370,6 +414,61 @@ struct OrdinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreaming {
                                                                  })
 
         do {
+            if usesStrictState, let subscriptionID {
+                let state = try adapter.bootstrapStrictTerminalStream(
+                    refreshedRoute: streamRoute,
+                    outputFilePath: outputFileURL.path,
+                    subscriptionID: subscriptionID
+                )
+                guard state.subscriptionID == subscriptionID,
+                      state.paneID == streamRoute.activePaneID else {
+                    throw BridgeInternalError.invalidResponse
+                }
+                let fingerprint = OrdinaryTmuxTerminalFingerprintV1(
+                    paneID: state.paneID,
+                    columns: state.columns,
+                    rows: state.rows,
+                    alternateOn: state.alternateOn
+                )
+                let emitter = OrdinaryTmuxStrictTerminalEmitter(
+                    subscriptionID: subscriptionID,
+                    expectedFingerprint: fingerprint,
+                    onDelta: { delta in
+                        onDelta(TerminalStreamDeltaEnvelope(
+                            type: "terminal_stream_delta",
+                            workspaceID: streamRoute.workspaceID,
+                            panelID: streamRoute.panelID,
+                            subscriptionID: delta.subscriptionID,
+                            sequence: delta.sequence,
+                            paneID: delta.fingerprint.paneID,
+                            columns: delta.fingerprint.columns,
+                            rows: delta.fingerprint.rows,
+                            alternateOn: delta.fingerprint.alternateOn,
+                            rebootstrapRequired: delta.rebootstrapRequired,
+                            chunk: String(data: delta.chunk, encoding: .utf8) ?? "",
+                            chunkBase64: delta.chunk.base64EncodedString(),
+                            cursorRow: nil,
+                            cursorColumn: nil
+                        ))
+                    }
+                )
+                strictEmitterSlot.install(emitter)
+                let response = BridgeResponse(
+                    id: request.id,
+                    ok: true,
+                    result: Self.strictBootstrapResult(
+                        state: state,
+                        workspaceID: streamRoute.workspaceID,
+                        panelID: streamRoute.panelID
+                    ),
+                    error: nil
+                )
+                return OrdinaryTmuxOutputStreamStart(
+                    response: response,
+                    subscription: subscription
+                )
+            }
+
             let bootstrap = try adapter.bootstrapTerminalStream(refreshedRoute: streamRoute,
                                                                 outputFilePath: outputFileURL.path,
                                                                 maxLines: 200)
@@ -394,6 +493,64 @@ struct OrdinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreaming {
             throw OrdinaryTmuxOutputStreamOwnedFailure(underlying: error,
                                                        subscription: subscription)
         }
+    }
+
+    private static func strictBootstrapResult(
+        state: OrdinaryTmuxTerminalStateV1,
+        workspaceID: String,
+        panelID: String
+    ) -> [String: JSONValue] {
+        var screen: [String: JSONValue] = [
+            "cursor_col": .number(Double(state.cursor.column)),
+            "cursor_row": .number(Double(state.cursor.row)),
+            "cursor_visible": .bool(state.cursorVisible),
+            "active_capture_base64": .string(state.activeScreen.base64EncodedString()),
+        ]
+        if state.alternateOn {
+            screen["primary_capture_base64"] = .string(
+                state.backgroundScreen.base64EncodedString()
+            )
+        }
+
+        var alternate: [String: JSONValue] = [
+            "active": .bool(state.alternateOn),
+        ]
+        if let savedCursor = state.alternateSavedCursor {
+            alternate["saved_cursor_col"] = .number(Double(savedCursor.column))
+            alternate["saved_cursor_row"] = .number(Double(savedCursor.row))
+        }
+
+        return [
+            "subscribed": .bool(true),
+            "workspace_id": .string(workspaceID),
+            "panel_id": .string(panelID),
+            "subscription_id": .string(state.subscriptionID),
+            "terminal_state_version": .number(Double(OrdinaryTmuxTerminalStateV1.schemaVersion)),
+            "pane_id": .string(state.paneID),
+            "cols": .number(Double(state.columns)),
+            "rows": .number(Double(state.rows)),
+            "screen": .object(screen),
+            "alternate": .object(alternate),
+            "scroll_region": .object([
+                "upper": .number(Double(state.scrollRegionUpper)),
+                "lower": .number(Double(state.scrollRegionLower)),
+            ]),
+            "tab_stops": .array(state.tabStops.map { .number(Double($0)) }),
+            "modes": .object([
+                "insert": .bool(state.modes.insert),
+                "keypad_cursor": .bool(state.modes.applicationCursorKeys),
+                "keypad": .bool(state.modes.applicationKeypad),
+                "wrap": .bool(state.modes.wrap),
+                "origin": .bool(state.modes.origin),
+                "mouse_standard": .bool(state.modes.mouseStandard),
+                "mouse_button": .bool(state.modes.mouseButton),
+                "mouse_any": .bool(state.modes.mouseAny),
+                "mouse_utf8": .bool(state.modes.mouseUTF8),
+                "mouse_sgr": .bool(state.modes.mouseSGR),
+            ]),
+            "pane_key_mode": .string(state.modes.paneKeyMode),
+            "pending_prefix_base64": .string(state.pendingPrefix.base64EncodedString()),
+        ]
     }
 
     private func makeOutputFile() throws -> URL {
