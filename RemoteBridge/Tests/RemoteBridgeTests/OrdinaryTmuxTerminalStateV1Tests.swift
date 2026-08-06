@@ -3,6 +3,51 @@ import XCTest
 @testable import RemoteBridge
 
 final class OrdinaryTmuxTerminalStateV1Tests: XCTestCase {
+    func testStrictDeltaWireFieldsEncodeWithoutChangingLegacyEnvelope() throws {
+        let strict = TerminalStreamDeltaEnvelope(
+            type: "terminal_stream_delta",
+            workspaceID: "workspace-1",
+            panelID: "panel-1",
+            subscriptionID: "subscription-1",
+            sequence: 7,
+            paneID: "%21",
+            columns: 132,
+            rows: 40,
+            alternateOn: true,
+            rebootstrapRequired: false,
+            chunk: "",
+            chunkBase64: "bQ==",
+            cursorRow: nil,
+            cursorColumn: nil
+        )
+        let strictObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(strict)) as? [String: Any]
+        )
+
+        XCTAssertEqual(strictObject["sequence"] as? UInt64, 7)
+        XCTAssertEqual(strictObject["pane_id"] as? String, "%21")
+        XCTAssertEqual(strictObject["cols"] as? Int, 132)
+        XCTAssertEqual(strictObject["rows"] as? Int, 40)
+        XCTAssertEqual(strictObject["alternate_on"] as? Bool, true)
+        XCTAssertEqual(strictObject["rebootstrap_required"] as? Bool, false)
+
+        let legacy = TerminalStreamDeltaEnvelope(
+            type: "terminal_stream_delta",
+            workspaceID: "workspace-1",
+            panelID: "panel-1",
+            chunk: "legacy",
+            chunkBase64: "bGVnYWN5",
+            cursorRow: 1,
+            cursorColumn: 2
+        )
+        let legacyObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(legacy)) as? [String: Any]
+        )
+        for key in ["sequence", "pane_id", "cols", "rows", "alternate_on", "rebootstrap_required"] {
+            XCTAssertNil(legacyObject[key], "legacy envelope unexpectedly encoded \(key)")
+        }
+    }
+
     func testStrictBootstrapProtocolSeamCompiles() {
         let seam: @Sendable (
             any OrdinaryTmuxTerminalStreaming,

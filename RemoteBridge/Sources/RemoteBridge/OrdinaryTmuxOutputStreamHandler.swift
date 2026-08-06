@@ -5,6 +5,12 @@ struct TerminalStreamDeltaEnvelope: Codable, Sendable, Equatable {
     let workspaceID: String
     let panelID: String
     let subscriptionID: String?
+    let sequence: UInt64?
+    let paneID: String?
+    let columns: Int?
+    let rows: Int?
+    let alternateOn: Bool?
+    let rebootstrapRequired: Bool?
     let chunk: String
     let chunkBase64: String
     let cursorRow: Int?
@@ -15,6 +21,12 @@ struct TerminalStreamDeltaEnvelope: Codable, Sendable, Equatable {
          workspaceID: String,
          panelID: String,
          subscriptionID: String? = nil,
+         sequence: UInt64? = nil,
+         paneID: String? = nil,
+         columns: Int? = nil,
+         rows: Int? = nil,
+         alternateOn: Bool? = nil,
+         rebootstrapRequired: Bool? = nil,
          chunk: String,
          chunkBase64: String,
          cursorRow: Int?,
@@ -24,6 +36,12 @@ struct TerminalStreamDeltaEnvelope: Codable, Sendable, Equatable {
         self.workspaceID = workspaceID
         self.panelID = panelID
         self.subscriptionID = subscriptionID
+        self.sequence = sequence
+        self.paneID = paneID
+        self.columns = columns
+        self.rows = rows
+        self.alternateOn = alternateOn
+        self.rebootstrapRequired = rebootstrapRequired
         self.chunk = chunk
         self.chunkBase64 = chunkBase64
         self.cursorRow = cursorRow
@@ -36,6 +54,12 @@ struct TerminalStreamDeltaEnvelope: Codable, Sendable, Equatable {
         case workspaceID = "workspace_id"
         case panelID = "panel_id"
         case subscriptionID = "subscription_id"
+        case sequence
+        case paneID = "pane_id"
+        case columns = "cols"
+        case rows
+        case alternateOn = "alternate_on"
+        case rebootstrapRequired = "rebootstrap_required"
         case chunk
         case chunkBase64 = "chunk_base64"
         case cursorRow = "cursor_row"
