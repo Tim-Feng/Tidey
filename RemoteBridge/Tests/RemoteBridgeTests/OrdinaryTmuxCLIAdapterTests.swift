@@ -831,6 +831,40 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
         XCTAssertEqual(state.calls.map(\.arguments), [arguments])
     }
 
+    func testStrictFingerprintQueryTargetsExactPaneAndParsesState() throws {
+        let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
+        let route = makeRoute(socket: socket)
+        let arguments = [
+            "display-message", "-p", "-t", "%old",
+            "#{pane_id}\t#{pane_width}\t#{pane_height}\t#{alternate_on}",
+        ]
+        let state = RunnerState(responses: [
+            RunnerState.key(socket: socket, arguments: arguments): "%old\t132\t40\t1",
+        ])
+        let adapter = makeAdapter(state: state)
+
+        let fingerprint = try adapter.queryStrictTerminalFingerprint(exactRoute: route)
+
+        XCTAssertEqual(
+            fingerprint,
+            OrdinaryTmuxTerminalFingerprintV1(
+                paneID: "%old",
+                columns: 132,
+                rows: 40,
+                alternateOn: true
+            )
+        )
+        XCTAssertEqual(state.calls.map(\.arguments), [arguments])
+    }
+
+    func testStrictFingerprintQueryRejectsMalformedOrMismatchedPaneState() throws {
+        let route = makeRoute(socket: .path("/tmp/tmux-501/default"))
+        for response in ["%other\t132\t40\t1", "%old\t0\t40\t1", "%old\t132\t40\t2", "malformed"] {
+            let adapter = OrdinaryTmuxCLIAdapter { _, _, _ in response }
+            XCTAssertNil(try adapter.queryStrictTerminalFingerprint(exactRoute: route), "response=\(response)")
+        }
+    }
+
     func testCombinedBootstrapUsesOneExactPaneCommand() throws {
         let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
         let route = makeRoute(socket: socket)

@@ -1231,6 +1231,34 @@ final class OrdinaryTmuxCLIAdapter {
         try queryCursorPosition(refreshedRoute: exactRoute)
     }
 
+    func queryStrictTerminalFingerprint(
+        exactRoute: OrdinaryTmuxPanelRoute
+    ) throws -> OrdinaryTmuxTerminalFingerprintV1? {
+        let output = try commandRunner(
+            exactRoute.socket,
+            [
+                "display-message", "-p", "-t", exactRoute.activePaneID,
+                "#{pane_id}\(Self.fieldSeparator)#{pane_width}\(Self.fieldSeparator)#{pane_height}\(Self.fieldSeparator)#{alternate_on}",
+            ],
+            nil
+        )
+        let fields = output.split(separator: Self.fieldSeparator,
+                                  omittingEmptySubsequences: false)
+        guard fields.count == 4,
+              fields[0] == Substring(exactRoute.activePaneID),
+              let columns = Int(fields[1]), columns > 0,
+              let rows = Int(fields[2]), rows > 0,
+              let alternateOn = Self.strictBoolean(fields[3]) else {
+            return nil
+        }
+        return OrdinaryTmuxTerminalFingerprintV1(
+            paneID: exactRoute.activePaneID,
+            columns: columns,
+            rows: rows,
+            alternateOn: alternateOn
+        )
+    }
+
     private func queryCursorPosition(refreshedRoute: OrdinaryTmuxPanelRoute) throws -> OrdinaryTmuxCursorPosition? {
         let output = try commandRunner(refreshedRoute.socket,
                                        ["display-message", "-p", "-t", refreshedRoute.activePaneID, "#{cursor_x} #{cursor_y} #{cursor_flag}"],

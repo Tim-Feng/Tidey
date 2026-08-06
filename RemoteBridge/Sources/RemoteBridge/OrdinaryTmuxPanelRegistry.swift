@@ -291,6 +291,7 @@ protocol OrdinaryTmuxTerminalStreaming: Sendable {
     func stopPipePane(exactRoute: OrdinaryTmuxPanelRoute) throws
     func queryCursorPosition(route: OrdinaryTmuxPanelRoute) throws -> OrdinaryTmuxCursorPosition?
     func queryCursorPosition(exactRoute: OrdinaryTmuxPanelRoute) throws -> OrdinaryTmuxCursorPosition?
+    func queryStrictTerminalFingerprint(exactRoute: OrdinaryTmuxPanelRoute) throws -> OrdinaryTmuxTerminalFingerprintV1?
 }
 
 extension OrdinaryTmuxTerminalStreaming {
@@ -298,6 +299,10 @@ extension OrdinaryTmuxTerminalStreaming {
                                        outputFilePath: String,
                                        subscriptionID: String) throws -> OrdinaryTmuxTerminalStateV1 {
         throw BridgeInternalError.invalidResponse
+    }
+
+    func queryStrictTerminalFingerprint(exactRoute: OrdinaryTmuxPanelRoute) throws -> OrdinaryTmuxTerminalFingerprintV1? {
+        nil
     }
 }
 
