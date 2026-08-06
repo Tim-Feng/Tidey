@@ -1,6 +1,23 @@
 import CryptoKit
 import Foundation
 
+private final class OrdinaryTmuxProcessDataBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage = Data()
+
+    func store(_ data: Data) {
+        lock.lock()
+        storage = data
+        lock.unlock()
+    }
+
+    var value: Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
+    }
+}
+
 enum OrdinaryTmuxSocketSelector: Equatable, Sendable {
     case defaultSocket
     case path(String)
@@ -195,6 +212,22 @@ final class OrdinaryTmuxCLIAdapter {
                 waitSemaphore.signal()
             }
             try process.run()
+
+            try? outputPipe.fileHandleForWriting.close()
+            try? errorPipe.fileHandleForWriting.close()
+            let outputBox = OrdinaryTmuxProcessDataBox()
+            let errorBox = OrdinaryTmuxProcessDataBox()
+            let readers = DispatchGroup()
+            readers.enter()
+            DispatchQueue.global(qos: .utility).async {
+                outputBox.store(outputPipe.fileHandleForReading.readDataToEndOfFile())
+                readers.leave()
+            }
+            readers.enter()
+            DispatchQueue.global(qos: .utility).async {
+                errorBox.store(errorPipe.fileHandleForReading.readDataToEndOfFile())
+                readers.leave()
+            }
             if let stdin, let inputPipe {
                 inputPipe.fileHandleForWriting.write(Data(stdin.utf8))
                 try? inputPipe.fileHandleForWriting.close()
@@ -208,8 +241,15 @@ final class OrdinaryTmuxCLIAdapter {
                               userInfo: [NSLocalizedDescriptionKey: "tmux command timed out"])
             }
 
-            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            guard readers.wait(timeout: .now() + 1) == .success else {
+                BridgeLogger.server.info("ordinary tmux command output drain timeout argv=\(process.arguments?.joined(separator: " ") ?? "-", privacy: .public) socket=\(socket.logDescription, privacy: .public)")
+                throw NSError(domain: "OrdinaryTmuxCLIAdapter",
+                              code: 124,
+                              userInfo: [NSLocalizedDescriptionKey: "tmux command output drain timed out"])
+            }
+
+            let outputData = outputBox.value
+            let errorData = errorBox.value
             let stdoutText = String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let stderrText = String(data: errorData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             BridgeLogger.server.debug("ordinary tmux command argv=\(process.arguments?.joined(separator: " ") ?? "-", privacy: .public) socket=\(socket.logDescription, privacy: .public) exit_code=\(process.terminationStatus, privacy: .public) stdout_bytes=\(outputData.count, privacy: .public) stderr_bytes=\(errorData.count, privacy: .public) stdout_prefix=\(String(stdoutText.prefix(500)), privacy: .public) stderr_prefix=\(String(stderrText.prefix(500)), privacy: .public)")

@@ -129,6 +129,18 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
         XCTAssertEqual(output, Data([0x00, 0xFF, 0x20, 0x20, 0x0A]))
     }
 
+    func testRawProcessRunnerDrainsLargeOutputWhileProcessIsRunning() throws {
+        let byteCount = 512 * 1_024
+        let runner = OrdinaryTmuxCLIAdapter.processRawCommandRunner(
+            executablePath: "/usr/bin/head",
+            timeoutSeconds: 2
+        )
+
+        let output = try runner(.defaultSocket, ["-c", "\(byteCount)", "/dev/zero"], nil)
+
+        XCTAssertEqual(output, Data(repeating: 0, count: byteCount))
+    }
+
     func testResolvesClientByTTYAndTargetSessionFromDefaultSocket() throws {
         let state = RunnerState(responses: [
             RunnerState.key(socket: .defaultSocket, arguments: listClientsArguments):
