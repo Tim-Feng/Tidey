@@ -122,6 +122,23 @@ final class OrdinaryTmuxTerminalObserverRegistryTests: XCTestCase {
         }
     }
 
+    private final class DataBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storage = Data()
+
+        func append(_ data: Data) {
+            lock.lock()
+            storage.append(data)
+            lock.unlock()
+        }
+
+        var value: Data {
+            lock.lock()
+            defer { lock.unlock() }
+            return storage
+        }
+    }
+
     private final class StubControlProcess: OrdinaryTmuxControlModeProcessManaging, @unchecked Sendable {
         func addSubscription(name: String, paneID: String) throws {}
         func removeSubscription(name: String) throws {}
@@ -340,6 +357,62 @@ final class OrdinaryTmuxTerminalObserverRegistryTests: XCTestCase {
 
         first.stop()
         second.stop()
+    }
+
+    func testLiveManagedProcessWaitsForSubscriptionActivationAndDetachesCleanly() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "tidey-control-process-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let executable = directory.appendingPathComponent("fake-tmux", isDirectory: false)
+        let script = """
+        #!/bin/sh
+        while IFS= read -r line
+        do
+          case "$line" in
+            refresh-client*)
+              printf '%%begin 100 1 1\n%%end 100 1 1\n%%subscription-changed tidey-live $1 @2 0 %%21 : %%21,pane=132x40,window=132x40\n'
+              ;;
+            detach-client*)
+              printf '%%begin 101 2 1\n%%end 101 2 1\n%%exit\n'
+              exit 0
+              ;;
+          esac
+        done
+        """
+        try Data(script.utf8).write(to: executable)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: executable.path
+        )
+
+        let output = DataBox()
+        let exited = expectation(description: "control process exits")
+        let factory = OrdinaryTmuxLiveControlModeProcess.factory(
+            executablePath: executable.path,
+            subscriptionActivationTimeout: 2,
+            detachTimeout: 2
+        )
+        let process = try factory(
+            .defaultSocket,
+            "$1",
+            { output.append($0) },
+            { error in
+                XCTAssertNil(error)
+                exited.fulfill()
+            }
+        )
+
+        try process.addSubscription(name: "tidey-live", paneID: "%21")
+        XCTAssertTrue(
+            String(data: output.value, encoding: .utf8)?.contains(
+                "%subscription-changed tidey-live"
+            ) == true
+        )
+        process.detachAndWait()
+        wait(for: [exited], timeout: 2)
     }
 
     private func makeRequest(
