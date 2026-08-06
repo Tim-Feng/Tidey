@@ -47,6 +47,39 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
         }
     }
 
+    private final class RawRunnerState: @unchecked Sendable {
+        struct Call: Equatable {
+            let socket: OrdinaryTmuxSocketSelector
+            let arguments: [String]
+            let stdin: String?
+        }
+
+        typealias ResponseBuilder = @Sendable ([String]) throws -> Data
+
+        private let lock = NSLock()
+        private let responseBuilder: ResponseBuilder
+        private var calls = [Call]()
+
+        init(responseBuilder: @escaping ResponseBuilder) {
+            self.responseBuilder = responseBuilder
+        }
+
+        func run(socket: OrdinaryTmuxSocketSelector,
+                 arguments: [String],
+                 stdin: String?) throws -> Data {
+            lock.lock()
+            calls.append(Call(socket: socket, arguments: arguments, stdin: stdin))
+            lock.unlock()
+            return try responseBuilder(arguments)
+        }
+
+        var recordedCalls: [Call] {
+            lock.lock()
+            defer { lock.unlock() }
+            return calls
+        }
+    }
+
     func testArgumentsUseDefaultSocketWhenNoSelectorIsKnown() {
         XCTAssertEqual(
             OrdinaryTmuxCLIAdapter.arguments(for: .defaultSocket, commandArguments: ["list-clients"]),
@@ -139,6 +172,94 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
         let output = try runner(.defaultSocket, ["-c", "\(byteCount)", "/dev/zero"], nil)
 
         XCTAssertEqual(output, Data(repeating: 0, count: byteCount))
+    }
+
+    func testStrictBootstrapUsesOneRawExactPaneCommandAndAttachesPipeLast() throws {
+        let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
+        let route = makeRoute(socket: socket)
+        let activeScreen = Data([
+            0x20, 0x20, 0x0A,
+            0xFF, 0x20, 0x0A,
+            0x20, 0x20,
+        ])
+        let backgroundScreen = Data("primary  \nline-2\n   ".utf8)
+        let metadata = [
+            "%old", "132", "3", "11", "1", "1", "1", "3", "1", "0", "2",
+            "8,16,24", "0", "1", "0", "1", "0", "0", "0", "0", "0", "1", "VT10x",
+        ].joined(separator: "\t")
+        let rawState = RawRunnerState { arguments in
+            try Self.makeStrictBootstrapOutput(
+                arguments: arguments,
+                pendingCapture: Data("\\033[31".utf8),
+                activeScreen: activeScreen,
+                backgroundScreen: backgroundScreen,
+                metadata: metadata
+            )
+        }
+        let adapter = OrdinaryTmuxCLIAdapter(
+            commandRunner: { _, _, _ in
+                throw BridgeInternalError.invalidResponse
+            },
+            rawCommandRunner: { socket, arguments, stdin in
+                try rawState.run(socket: socket, arguments: arguments, stdin: stdin)
+            }
+        )
+
+        let state = try adapter.bootstrapStrictTerminalStream(
+            refreshedRoute: route,
+            outputFilePath: "/tmp/tidey stream/it\'s.bytes",
+            subscriptionID: "subscription-1"
+        )
+
+        XCTAssertEqual(
+            state,
+            OrdinaryTmuxTerminalStateV1(
+                subscriptionID: "subscription-1",
+                paneID: "%old",
+                columns: 132,
+                rows: 3,
+                cursor: OrdinaryTmuxTerminalCursorV1(row: 1, column: 11),
+                cursorVisible: true,
+                alternateOn: true,
+                alternateSavedCursor: OrdinaryTmuxTerminalCursorV1(row: 1, column: 3),
+                scrollRegionUpper: 0,
+                scrollRegionLower: 2,
+                tabStops: [8, 16, 24],
+                modes: OrdinaryTmuxTerminalModesV1(
+                    insert: false,
+                    applicationCursorKeys: true,
+                    applicationKeypad: false,
+                    wrap: true,
+                    origin: false,
+                    mouseStandard: false,
+                    mouseButton: false,
+                    mouseAny: false,
+                    mouseUTF8: false,
+                    mouseSGR: true,
+                    paneKeyMode: "VT10x"
+                ),
+                activeScreen: activeScreen,
+                backgroundScreen: backgroundScreen,
+                pendingPrefix: Data([0x1B, 0x5B, 0x33, 0x31])
+            )
+        )
+
+        XCTAssertEqual(rawState.recordedCalls.count, 1)
+        let call = try XCTUnwrap(rawState.recordedCalls.first)
+        XCTAssertEqual(call.socket, socket)
+        XCTAssertNil(call.stdin)
+        let commands = Self.splitTmuxCommandQueue(call.arguments)
+        XCTAssertEqual(commands.count, 8)
+        guard commands.count == 8 else {
+            return
+        }
+        XCTAssertEqual(commands[1], ["capture-pane", "-P", "-C", "-p", "-t", "%old"])
+        XCTAssertEqual(commands[3], ["capture-pane", "-e", "-p", "-N", "-t", "%old"])
+        XCTAssertEqual(commands[5], ["capture-pane", "-e", "-p", "-N", "-a", "-q", "-t", "%old"])
+        XCTAssertEqual(
+            commands[7],
+            ["pipe-pane", "-o", "-t", "%old", "cat >> '/tmp/tidey stream/it'\\''s.bytes'"]
+        )
     }
 
     func testResolvesClientByTTYAndTargetSessionFromDefaultSocket() throws {
@@ -993,6 +1114,56 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
             let endMarker = endFormat.split(separator: " ", maxSplits: 1).first.map(String.init) ?? ""
             return "\(beginMarker)\n\(body)\n\(endMarker) \(metadata)\(trailingOutput)"
         }
+    }
+
+    private static func makeStrictBootstrapOutput(arguments: [String],
+                                                  pendingCapture: Data,
+                                                  activeScreen: Data,
+                                                  backgroundScreen: Data,
+                                                  metadata: String) throws -> Data {
+        let commands = splitTmuxCommandQueue(arguments)
+        guard commands.count == 8,
+              let beginMarker = commands[0].last,
+              let pendingEndMarker = commands[2].last,
+              let activeEndMarker = commands[4].last,
+              let metadataFormat = commands[6].last,
+              let metadataMarker = metadataFormat.split(separator: "\t", maxSplits: 1).first else {
+            throw BridgeInternalError.invalidResponse
+        }
+
+        var output = Data()
+        output.append(Data(beginMarker.utf8))
+        output.append(0x0A)
+        output.append(pendingCapture)
+        output.append(0x0A)
+        output.append(Data(pendingEndMarker.utf8))
+        output.append(0x0A)
+        output.append(activeScreen)
+        output.append(0x0A)
+        output.append(Data(activeEndMarker.utf8))
+        output.append(0x0A)
+        output.append(backgroundScreen)
+        output.append(0x0A)
+        output.append(Data(metadataMarker.utf8))
+        output.append(0x09)
+        output.append(Data(metadata.utf8))
+        output.append(0x0A)
+        return output
+    }
+
+    private static func splitTmuxCommandQueue(_ arguments: [String]) -> [[String]] {
+        var commands = [[String]]()
+        var command = [String]()
+        for argument in arguments {
+            if argument == ";" {
+                commands.append(command)
+                command.removeAll(keepingCapacity: true)
+            } else {
+                command.append(argument)
+            }
+        }
+        commands.append(command)
+        return commands
     }
 
     private func makeRoute(socket: OrdinaryTmuxSocketSelector) -> OrdinaryTmuxPanelRoute {

@@ -812,6 +812,336 @@ final class OrdinaryTmuxCLIAdapter {
         return captured
     }
 
+    private struct StrictBootstrapMarkers {
+        let begin: String
+        let pendingEnd: String
+        let activeEnd: String
+        let metadata: String
+    }
+
+    private static let strictTerminalMetadataFormats = [
+        "#{pane_id}",
+        "#{pane_width}",
+        "#{pane_height}",
+        "#{cursor_x}",
+        "#{cursor_y}",
+        "#{cursor_flag}",
+        "#{alternate_on}",
+        "#{alternate_saved_x}",
+        "#{alternate_saved_y}",
+        "#{scroll_region_upper}",
+        "#{scroll_region_lower}",
+        "#{pane_tabs}",
+        "#{insert_flag}",
+        "#{keypad_cursor_flag}",
+        "#{keypad_flag}",
+        "#{wrap_flag}",
+        "#{origin_flag}",
+        "#{mouse_standard_flag}",
+        "#{mouse_button_flag}",
+        "#{mouse_any_flag}",
+        "#{mouse_utf8_flag}",
+        "#{mouse_sgr_flag}",
+        "#{pane_key_mode}",
+    ]
+
+    func bootstrapStrictTerminalStream(refreshedRoute: OrdinaryTmuxPanelRoute,
+                                       outputFilePath: String,
+                                       subscriptionID: String) throws -> OrdinaryTmuxTerminalStateV1 {
+        guard subscriptionID.nilIfEmpty != nil else {
+            throw BridgeInternalError.invalidResponse
+        }
+
+        let markerRoot = "TIDEY_STRICT_\(UUID().uuidString)"
+        let markers = StrictBootstrapMarkers(
+            begin: "\(markerRoot)_BEGIN",
+            pendingEnd: "\(markerRoot)_PENDING_END",
+            activeEnd: "\(markerRoot)_ACTIVE_END",
+            metadata: "\(markerRoot)_METADATA"
+        )
+        let metadataFormat = ([markers.metadata] + Self.strictTerminalMetadataFormats)
+            .joined(separator: Self.fieldSeparator)
+        let pipeCommand = "cat >> \(Self.singleQuotedShellArgument(outputFilePath))"
+        let arguments = [
+            "display-message", "-p", "-t", refreshedRoute.activePaneID, markers.begin,
+            ";",
+            "capture-pane", "-P", "-C", "-p", "-t", refreshedRoute.activePaneID,
+            ";",
+            "display-message", "-p", "-t", refreshedRoute.activePaneID, markers.pendingEnd,
+            ";",
+            "capture-pane", "-e", "-p", "-N", "-t", refreshedRoute.activePaneID,
+            ";",
+            "display-message", "-p", "-t", refreshedRoute.activePaneID, markers.activeEnd,
+            ";",
+            "capture-pane", "-e", "-p", "-N", "-a", "-q", "-t", refreshedRoute.activePaneID,
+            ";",
+            "display-message", "-p", "-t", refreshedRoute.activePaneID, metadataFormat,
+            ";",
+            "pipe-pane", "-o", "-t", refreshedRoute.activePaneID, pipeCommand,
+        ]
+        let output = try rawCommandRunner(refreshedRoute.socket, arguments, nil)
+        return try Self.parseStrictTerminalStreamBootstrapOutput(
+            output,
+            markers: markers,
+            route: refreshedRoute,
+            subscriptionID: subscriptionID
+        )
+    }
+
+    private static func parseStrictTerminalStreamBootstrapOutput(
+        _ output: Data,
+        markers: StrictBootstrapMarkers,
+        route: OrdinaryTmuxPanelRoute,
+        subscriptionID: String
+    ) throws -> OrdinaryTmuxTerminalStateV1 {
+        var offset = output.startIndex
+        try consumeStrictBootstrapPrefix("\(markers.begin)\n", from: output, offset: &offset)
+        let pendingCapture = try consumeStrictBootstrapSegment(
+            from: output,
+            offset: &offset,
+            endingWith: "\(markers.pendingEnd)\n"
+        )
+        let activeCapture = try consumeStrictBootstrapSegment(
+            from: output,
+            offset: &offset,
+            endingWith: "\(markers.activeEnd)\n"
+        )
+        let backgroundCapture = try consumeStrictBootstrapSegment(
+            from: output,
+            offset: &offset,
+            endingWith: "\(markers.metadata)\t"
+        )
+        guard output.last == 0x0A,
+              offset < output.endIndex else {
+            throw BridgeInternalError.invalidResponse
+        }
+        let metadataEnd = output.index(before: output.endIndex)
+        let metadataData = Data(output[offset..<metadataEnd])
+        guard metadataData.contains(0x0A) == false,
+              let metadata = String(data: metadataData, encoding: .utf8) else {
+            throw BridgeInternalError.invalidResponse
+        }
+
+        let pendingEncoded = try strictCapturePayload(pendingCapture)
+        let activeScreen = try strictCapturePayload(activeCapture)
+        let backgroundScreen = try strictCapturePayload(backgroundCapture)
+        let pendingPrefix = try decodeStrictPendingCapture(pendingEncoded)
+        return try strictTerminalState(
+            metadata: metadata,
+            route: route,
+            subscriptionID: subscriptionID,
+            activeScreen: activeScreen,
+            backgroundScreen: backgroundScreen,
+            pendingPrefix: pendingPrefix
+        )
+    }
+
+    private static func consumeStrictBootstrapPrefix(_ prefix: String,
+                                                     from output: Data,
+                                                     offset: inout Data.Index) throws {
+        let prefixData = Data(prefix.utf8)
+        guard output.distance(from: offset, to: output.endIndex) >= prefixData.count else {
+            throw BridgeInternalError.invalidResponse
+        }
+        let end = output.index(offset, offsetBy: prefixData.count)
+        guard Data(output[offset..<end]) == prefixData else {
+            throw BridgeInternalError.invalidResponse
+        }
+        offset = end
+    }
+
+    private static func consumeStrictBootstrapSegment(from output: Data,
+                                                      offset: inout Data.Index,
+                                                      endingWith delimiter: String) throws -> Data {
+        let delimiterData = Data(delimiter.utf8)
+        guard let range = output.range(of: delimiterData,
+                                       options: [],
+                                       in: offset..<output.endIndex) else {
+            throw BridgeInternalError.invalidResponse
+        }
+        let segment = Data(output[offset..<range.lowerBound])
+        offset = range.upperBound
+        return segment
+    }
+
+    private static func strictCapturePayload(_ capture: Data) throws -> Data {
+        guard capture.last == 0x0A else {
+            throw BridgeInternalError.invalidResponse
+        }
+        return Data(capture.dropLast())
+    }
+
+    private static func decodeStrictPendingCapture(_ encoded: Data) throws -> Data {
+        let bytes = [UInt8](encoded)
+        var decoded = Data()
+        var index = 0
+        while index < bytes.count {
+            let byte = bytes[index]
+            if byte == 0x5C {
+                guard index + 3 < bytes.count,
+                      let first = octalDigit(bytes[index + 1]),
+                      let second = octalDigit(bytes[index + 2]),
+                      let third = octalDigit(bytes[index + 3]) else {
+                    throw BridgeInternalError.invalidResponse
+                }
+                decoded.append((first << 6) | (second << 3) | third)
+                index += 4
+                continue
+            }
+            guard byte >= 0x20, byte <= 0x7E else {
+                throw BridgeInternalError.invalidResponse
+            }
+            decoded.append(byte)
+            index += 1
+        }
+        return decoded
+    }
+
+    private static func octalDigit(_ byte: UInt8) -> UInt8? {
+        guard byte >= 0x30, byte <= 0x37 else {
+            return nil
+        }
+        return byte - 0x30
+    }
+
+    private static func strictTerminalState(metadata: String,
+                                            route: OrdinaryTmuxPanelRoute,
+                                            subscriptionID: String,
+                                            activeScreen: Data,
+                                            backgroundScreen: Data,
+                                            pendingPrefix: Data) throws -> OrdinaryTmuxTerminalStateV1 {
+        let fields = metadata.split(separator: "\t", omittingEmptySubsequences: false)
+        guard fields.count == strictTerminalMetadataFormats.count,
+              fields[0] == Substring(route.activePaneID),
+              let columns = Int(fields[1]), columns > 0,
+              let rows = Int(fields[2]), rows > 0,
+              let cursorColumn = Int(fields[3]), cursorColumn >= 0, cursorColumn < columns,
+              let cursorRow = Int(fields[4]), cursorRow >= 0, cursorRow < rows,
+              let cursorVisible = strictBoolean(fields[5]),
+              let alternateOn = strictBoolean(fields[6]),
+              let savedColumn = UInt64(fields[7]),
+              let savedRow = UInt64(fields[8]),
+              let scrollRegionUpper = Int(fields[9]), scrollRegionUpper >= 0,
+              let scrollRegionLower = Int(fields[10]),
+              scrollRegionLower >= scrollRegionUpper, scrollRegionLower < rows,
+              let insert = strictBoolean(fields[12]),
+              let applicationCursorKeys = strictBoolean(fields[13]),
+              let applicationKeypad = strictBoolean(fields[14]),
+              let wrap = strictBoolean(fields[15]),
+              let origin = strictBoolean(fields[16]),
+              let mouseStandard = strictBoolean(fields[17]),
+              let mouseButton = strictBoolean(fields[18]),
+              let mouseAny = strictBoolean(fields[19]),
+              let mouseUTF8 = strictBoolean(fields[20]),
+              let mouseSGR = strictBoolean(fields[21]) else {
+            throw BridgeInternalError.invalidResponse
+        }
+
+        let tabStops = try strictTabStops(fields[11], columns: columns)
+        let paneKeyMode = String(fields[22])
+        guard paneKeyMode.isEmpty == false,
+              paneKeyMode.utf8.count <= 128,
+              paneKeyMode.unicodeScalars.allSatisfy({ $0.value >= 0x20 && $0.value != 0x7F }) else {
+            throw BridgeInternalError.invalidResponse
+        }
+
+        let savedCursor: OrdinaryTmuxTerminalCursorV1?
+        let savedCursorSentinel = UInt64(UInt32.max)
+        if savedColumn == savedCursorSentinel && savedRow == savedCursorSentinel {
+            savedCursor = nil
+        } else {
+            guard savedColumn != savedCursorSentinel,
+                  savedRow != savedCursorSentinel,
+                  savedColumn < UInt64(columns),
+                  savedRow < UInt64(rows) else {
+                throw BridgeInternalError.invalidResponse
+            }
+            savedCursor = OrdinaryTmuxTerminalCursorV1(
+                row: Int(savedRow),
+                column: Int(savedColumn)
+            )
+        }
+        guard alternateOn || savedCursor == nil,
+              strictScreenRowCount(activeScreen) == rows else {
+            throw BridgeInternalError.invalidResponse
+        }
+        if alternateOn {
+            guard strictScreenRowCount(backgroundScreen) == rows else {
+                throw BridgeInternalError.invalidResponse
+            }
+        } else if backgroundScreen.isEmpty == false {
+            throw BridgeInternalError.invalidResponse
+        }
+
+        return OrdinaryTmuxTerminalStateV1(
+            subscriptionID: subscriptionID,
+            paneID: route.activePaneID,
+            columns: columns,
+            rows: rows,
+            cursor: OrdinaryTmuxTerminalCursorV1(row: cursorRow, column: cursorColumn),
+            cursorVisible: cursorVisible,
+            alternateOn: alternateOn,
+            alternateSavedCursor: savedCursor,
+            scrollRegionUpper: scrollRegionUpper,
+            scrollRegionLower: scrollRegionLower,
+            tabStops: tabStops,
+            modes: OrdinaryTmuxTerminalModesV1(
+                insert: insert,
+                applicationCursorKeys: applicationCursorKeys,
+                applicationKeypad: applicationKeypad,
+                wrap: wrap,
+                origin: origin,
+                mouseStandard: mouseStandard,
+                mouseButton: mouseButton,
+                mouseAny: mouseAny,
+                mouseUTF8: mouseUTF8,
+                mouseSGR: mouseSGR,
+                paneKeyMode: paneKeyMode
+            ),
+            activeScreen: activeScreen,
+            backgroundScreen: backgroundScreen,
+            pendingPrefix: pendingPrefix
+        )
+    }
+
+    private static func strictBoolean(_ field: Substring) -> Bool? {
+        switch field {
+        case "0":
+            return false
+        case "1":
+            return true
+        default:
+            return nil
+        }
+    }
+
+    private static func strictTabStops(_ field: Substring, columns: Int) throws -> [Int] {
+        guard field.isEmpty == false else {
+            return []
+        }
+        let parts = field.split(separator: ",", omittingEmptySubsequences: false)
+        var result = [Int]()
+        result.reserveCapacity(parts.count)
+        for part in parts {
+            guard let value = Int(part),
+                  value >= 0,
+                  value < columns,
+                  result.last.map({ $0 < value }) ?? true else {
+                throw BridgeInternalError.invalidResponse
+            }
+            result.append(value)
+        }
+        return result
+    }
+
+    private static func strictScreenRowCount(_ screen: Data) -> Int {
+        screen.reduce(into: 1) { count, byte in
+            if byte == 0x0A {
+                count += 1
+            }
+        }
+    }
+
     func bootstrapTerminalStream(refreshedRoute: OrdinaryTmuxPanelRoute,
                                  outputFilePath: String,
                                  maxLines: Int) throws -> OrdinaryTmuxTerminalStreamBootstrap {
