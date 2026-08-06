@@ -3,6 +3,12 @@ import XCTest
 @testable import RemoteBridge
 
 final class OrdinaryTmuxTerminalObserverRegistryTests: XCTestCase {
+    private final class StubControlProcess: OrdinaryTmuxControlModeProcessManaging, @unchecked Sendable {
+        func addSubscription(name: String, paneID: String) throws {}
+        func removeSubscription(name: String) throws {}
+        func detachAndWait() {}
+    }
+
     private final class StubLease: OrdinaryTmuxTerminalObserverLeasing, @unchecked Sendable {
         func stop() {}
     }
@@ -47,5 +53,24 @@ final class OrdinaryTmuxTerminalObserverRegistryTests: XCTestCase {
 
         let lease = try StubObserver().observe(request)
         lease.stop()
+    }
+
+    func testManagedControlProcessContractCompiles() throws {
+        let factory: OrdinaryTmuxControlModeProcessFactory = {
+            socket,
+            sessionID,
+            onOutput,
+            onExit in
+            XCTAssertEqual(socket, .defaultSocket)
+            XCTAssertEqual(sessionID, "$1")
+            onOutput(Data("%session-changed $1 work\n".utf8))
+            onExit(nil)
+            return StubControlProcess()
+        }
+
+        let process = try factory(.defaultSocket, "$1", { _ in }, { _ in })
+        try process.addSubscription(name: "tidey-1", paneID: "%21")
+        try process.removeSubscription(name: "tidey-1")
+        process.detachAndWait()
     }
 }
