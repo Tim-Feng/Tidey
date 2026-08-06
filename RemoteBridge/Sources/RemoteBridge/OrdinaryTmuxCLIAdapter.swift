@@ -894,6 +894,12 @@ final class OrdinaryTmuxCLIAdapter {
         route: OrdinaryTmuxPanelRoute,
         subscriptionID: String
     ) throws -> OrdinaryTmuxTerminalStateV1 {
+        for marker in [markers.begin, markers.pendingEnd, markers.activeEnd, markers.metadata] {
+            guard strictOccurrenceCount(of: Data(marker.utf8), in: output) == 1 else {
+                throw BridgeInternalError.invalidResponse
+            }
+        }
+
         var offset = output.startIndex
         try consumeStrictBootstrapPrefix("\(markers.begin)\n", from: output, offset: &offset)
         let pendingCapture = try consumeStrictBootstrapSegment(
@@ -934,6 +940,22 @@ final class OrdinaryTmuxCLIAdapter {
             backgroundScreen: backgroundScreen,
             pendingPrefix: pendingPrefix
         )
+    }
+
+    private static func strictOccurrenceCount(of needle: Data, in haystack: Data) -> Int {
+        guard needle.isEmpty == false else {
+            return 0
+        }
+        var count = 0
+        var offset = haystack.startIndex
+        while offset < haystack.endIndex,
+              let range = haystack.range(of: needle,
+                                         options: [],
+                                         in: offset..<haystack.endIndex) {
+            count += 1
+            offset = range.upperBound
+        }
+        return count
     }
 
     private static func consumeStrictBootstrapPrefix(_ prefix: String,

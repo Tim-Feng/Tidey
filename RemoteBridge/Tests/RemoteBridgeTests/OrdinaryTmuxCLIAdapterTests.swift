@@ -262,6 +262,85 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
         )
     }
 
+    func testStrictBootstrapRejectsDuplicateMarkersEvenWhenPayloadShapesRemainPlausible() {
+        let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
+        let route = makeRoute(socket: socket)
+        let metadata = Self.strictMetadataFields().joined(separator: "\t")
+        let rawState = RawRunnerState { arguments in
+            let commands = Self.splitTmuxCommandQueue(arguments)
+            guard commands.count == 8,
+                  let duplicateMarker = commands[2].last else {
+                throw BridgeInternalError.invalidResponse
+            }
+            return try Self.makeStrictBootstrapOutput(
+                arguments: arguments,
+                pendingCapture: Data(),
+                activeScreen: Data("visible \(duplicateMarker)".utf8),
+                backgroundScreen: Data(),
+                metadata: metadata
+            )
+        }
+        let adapter = OrdinaryTmuxCLIAdapter(
+            commandRunner: { _, _, _ in throw BridgeInternalError.invalidResponse },
+            rawCommandRunner: { socket, arguments, stdin in
+                try rawState.run(socket: socket, arguments: arguments, stdin: stdin)
+            }
+        )
+
+        XCTAssertThrowsError(
+            try adapter.bootstrapStrictTerminalStream(
+                refreshedRoute: route,
+                outputFilePath: "/tmp/strict.bytes",
+                subscriptionID: "subscription-1"
+            )
+        )
+    }
+
+    func testStrictBootstrapRejectsMalformedPendingCapture() {
+        assertStrictBootstrapThrows(pendingCapture: Data("\\03".utf8))
+        assertStrictBootstrapThrows(pendingCapture: Data("raw\\slash".utf8))
+        assertStrictBootstrapThrows(pendingCapture: Data([0x1B]))
+    }
+
+    func testStrictBootstrapRejectsInvalidMetadataAndScreenShapes() {
+        var fields = Self.strictMetadataFields()
+        fields[0] = "%other"
+        assertStrictBootstrapThrows(metadataFields: fields)
+
+        fields = Self.strictMetadataFields()
+        fields[5] = "2"
+        assertStrictBootstrapThrows(metadataFields: fields)
+
+        fields = Self.strictMetadataFields()
+        fields[3] = "40"
+        assertStrictBootstrapThrows(metadataFields: fields)
+
+        fields = Self.strictMetadataFields()
+        fields[7] = "4294967295"
+        fields[8] = "0"
+        assertStrictBootstrapThrows(metadataFields: fields)
+
+        fields = Self.strictMetadataFields()
+        fields[11] = "8,8"
+        assertStrictBootstrapThrows(metadataFields: fields)
+
+        assertStrictBootstrapThrows(activeScreen: Data("row-1\nrow-2".utf8))
+
+        fields = Self.strictMetadataFields()
+        fields[6] = "1"
+        fields[7] = "0"
+        fields[8] = "0"
+        fields[2] = "2"
+        fields[10] = "1"
+        assertStrictBootstrapThrows(
+            activeScreen: Data("visible\nrow-2".utf8),
+            metadataFields: fields,
+            backgroundScreen: Data()
+        )
+
+        assertStrictBootstrapThrows(backgroundScreen: Data("unexpected".utf8))
+    }
+
     func testResolvesClientByTTYAndTargetSessionFromDefaultSocket() throws {
         let state = RunnerState(responses: [
             RunnerState.key(socket: .defaultSocket, arguments: listClientsArguments):
@@ -1164,6 +1243,51 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
         }
         commands.append(command)
         return commands
+    }
+
+    private static func strictMetadataFields() -> [String] {
+        [
+            "%old", "40", "1", "0", "0", "1", "0",
+            "4294967295", "4294967295", "0", "0", "8,16,24",
+            "0", "0", "0", "1", "0", "0", "0", "0", "0", "0", "VT10x",
+        ]
+    }
+
+    private func assertStrictBootstrapThrows(
+        pendingCapture: Data = Data(),
+        activeScreen: Data = Data("visible".utf8),
+        metadataFields: [String] = OrdinaryTmuxCLIAdapterTests.strictMetadataFields(),
+        backgroundScreen: Data = Data(),
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let route = makeRoute(socket: .path("/tmp/tmux-501/default"))
+        let metadata = metadataFields.joined(separator: "\t")
+        let rawState = RawRunnerState { arguments in
+            try Self.makeStrictBootstrapOutput(
+                arguments: arguments,
+                pendingCapture: pendingCapture,
+                activeScreen: activeScreen,
+                backgroundScreen: backgroundScreen,
+                metadata: metadata
+            )
+        }
+        let adapter = OrdinaryTmuxCLIAdapter(
+            commandRunner: { _, _, _ in throw BridgeInternalError.invalidResponse },
+            rawCommandRunner: { socket, arguments, stdin in
+                try rawState.run(socket: socket, arguments: arguments, stdin: stdin)
+            }
+        )
+
+        XCTAssertThrowsError(
+            try adapter.bootstrapStrictTerminalStream(
+                refreshedRoute: route,
+                outputFilePath: "/tmp/strict.bytes",
+                subscriptionID: "subscription-1"
+            ),
+            file: file,
+            line: line
+        )
     }
 
     private func makeRoute(socket: OrdinaryTmuxSocketSelector) -> OrdinaryTmuxPanelRoute {
