@@ -109,6 +109,15 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
         }
     }
 
+    func testStrictRawRunnerInjectionCompileSeam() {
+        let adapter = OrdinaryTmuxCLIAdapter(
+            commandRunner: { _, _, _ in "legacy" },
+            rawCommandRunner: { _, _, _ in Data([0x00, 0x0A, 0xFF]) }
+        )
+
+        _ = adapter
+    }
+
     func testResolvesClientByTTYAndTargetSessionFromDefaultSocket() throws {
         let state = RunnerState(responses: [
             RunnerState.key(socket: .defaultSocket, arguments: listClientsArguments):

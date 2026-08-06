@@ -133,6 +133,7 @@ enum OrdinaryTmuxProjectionError: Error, Equatable {
 
 final class OrdinaryTmuxCLIAdapter {
     typealias CommandRunner = @Sendable (_ socket: OrdinaryTmuxSocketSelector, _ arguments: [String], _ stdin: String?) throws -> String
+    typealias RawCommandRunner = @Sendable (_ socket: OrdinaryTmuxSocketSelector, _ arguments: [String], _ stdin: String?) throws -> Data
 
     private static let fieldSeparator = "\t"
     private static let previousWindowSizeOption = "@tidey_window_size_before_multi_client"
@@ -141,6 +142,9 @@ final class OrdinaryTmuxCLIAdapter {
         executablePath: TmuxStateResolver.discoverTmuxBinaryPath(),
         timeoutSeconds: commandTimeoutSeconds
     )
+    private static let legacyCompatibleRawCommandRunner: RawCommandRunner = { socket, arguments, stdin in
+        Data(try liveCommandRunner(socket, arguments, stdin).utf8)
+    }
 
     static func processCommandRunner(executablePath: String?,
                                      timeoutSeconds: TimeInterval) -> CommandRunner {
@@ -209,9 +213,17 @@ final class OrdinaryTmuxCLIAdapter {
     }
 
     private let commandRunner: CommandRunner
+    private let rawCommandRunner: RawCommandRunner
 
-    init(commandRunner: @escaping CommandRunner = OrdinaryTmuxCLIAdapter.liveCommandRunner) {
+    init(commandRunner: @escaping CommandRunner = OrdinaryTmuxCLIAdapter.liveCommandRunner,
+         rawCommandRunner: @escaping RawCommandRunner = OrdinaryTmuxCLIAdapter.legacyCompatibleRawCommandRunner) {
         self.commandRunner = commandRunner
+        self.rawCommandRunner = rawCommandRunner
+    }
+
+    convenience init(commandRunner: @escaping CommandRunner) {
+        self.init(commandRunner: commandRunner,
+                  rawCommandRunner: OrdinaryTmuxCLIAdapter.legacyCompatibleRawCommandRunner)
     }
 
     func resolveClient(for metadata: OrdinaryTmuxAttachMetadata) throws -> OrdinaryTmuxClient? {
