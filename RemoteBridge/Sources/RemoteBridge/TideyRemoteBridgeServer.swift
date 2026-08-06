@@ -26,6 +26,7 @@ final class TideyRemoteBridgeServer {
     private let ordinaryTmuxProjectionContext: OrdinaryTmuxProjectionContext
     private let requestSequencer: BridgeRequestSequencer
     private let terminalStreamLaneRegistry: OrdinaryTmuxTerminalStreamLaneRegistry
+    private let terminalObserver: OrdinaryTmuxTerminalObserving
     private let group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
 
     init(host: String = "0.0.0.0",
@@ -38,6 +39,9 @@ final class TideyRemoteBridgeServer {
          workspaceEventHub: WorkspaceEventHub,
          registryMonitor: AgentSessionRegistryMonitor,
          codexApprovalSubmitter: CodexAppServerApprovalPromptProviding? = nil,
+         terminalObserver: OrdinaryTmuxTerminalObserving = OrdinaryTmuxTerminalObserverRegistry(
+            makeProcess: OrdinaryTmuxLiveControlModeProcess.factory()
+         ),
          observability: BridgeObservabilityCenter,
          cloudflaredManager: BridgeCloudflaredManager = BridgeCloudflaredManager(),
          uploadGarbageCollector: BridgeUploadGarbageCollector = BridgeUploadGarbageCollector(uploadDirectory: BridgePaths().uploadsDirectory),
@@ -64,6 +68,7 @@ final class TideyRemoteBridgeServer {
         self.ordinaryTmuxProjectionContext = ordinaryTmuxProjectionContext
         self.requestSequencer = requestSequencer
         self.terminalStreamLaneRegistry = terminalStreamLaneRegistry
+        self.terminalObserver = terminalObserver
     }
 
     func run() throws {
@@ -87,12 +92,13 @@ final class TideyRemoteBridgeServer {
                 }
                 return channel.eventLoop.makeSucceededFuture([:])
             },
-            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub, registryMonitor, codexApprovalProvider, promptSubmitDeduper, observability, ordinaryTmuxProjectionContext, requestSequencer, terminalStreamLaneRegistry, port, cloudflaredManager] channel, _ in
+            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub, registryMonitor, codexApprovalProvider, promptSubmitDeduper, observability, ordinaryTmuxProjectionContext, requestSequencer, terminalStreamLaneRegistry, terminalObserver, port, cloudflaredManager] channel, _ in
                 channel.pipeline.addHandler(WebSocketFrameHandler(socketClient: socketClient,
                                                                   eventHub: eventHub,
                                                                   workspaceEventHub: workspaceEventHub,
                                                                   registryMonitor: registryMonitor,
                                                                   codexApprovalSubmitter: codexApprovalProvider,
+                                                                  terminalObserver: terminalObserver,
                                                                   observability: observability,
                                                                   bridgePort: port,
                                                                   cloudflaredManager: cloudflaredManager,
@@ -721,6 +727,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
          workspaceEventHub: WorkspaceEventHub,
          registryMonitor: AgentSessionRegistryMonitor,
          codexApprovalSubmitter: CodexAppServerApprovalPromptProviding? = nil,
+         terminalObserver: OrdinaryTmuxTerminalObserving? = nil,
          observability: BridgeObservabilityCenter,
          bridgePort: Int,
          cloudflaredManager: BridgeCloudflaredManager,
@@ -766,7 +773,10 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         self.fileActionHandler = BridgeFileActionHandler(rootResolver: TideyPanelFileRootResolver(socketSender: socketClient,
                                                                                                   ordinaryTmuxRouteResolver: routeResolver))
         self.ordinaryTmuxRecentOutputHandler = OrdinaryTmuxRecentOutputHandler(routeResolver: routeResolver)
-        self.ordinaryTmuxOutputStreamHandler = ordinaryTmuxOutputStreamHandler ?? OrdinaryTmuxOutputStreamHandler(routeResolver: routeResolver)
+        self.ordinaryTmuxOutputStreamHandler = ordinaryTmuxOutputStreamHandler ?? OrdinaryTmuxOutputStreamHandler(
+            routeResolver: routeResolver,
+            terminalObserver: terminalObserver
+        )
         self.requestSequencer = requestSequencer
         self.terminalStreamLaneRegistry = terminalStreamLaneRegistry
         self.terminalStreamConnectionAdmission = terminalStreamConnectionAdmission

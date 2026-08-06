@@ -249,6 +249,11 @@ final class BridgePairingTests: XCTestCase {
                                              eventHub: eventHub,
                                              workspaceEventHub: WorkspaceEventHub(),
                                              registryMonitor: registryMonitor,
+                                             terminalObserver: OrdinaryTmuxTerminalObserverRegistry(
+                                                makeProcess: OrdinaryTmuxLiveControlModeProcess.factory(
+                                                    executablePath: nil
+                                                )
+                                             ),
                                              observability: BridgeObservabilityCenter())
         let handle = try server.start()
         defer { try? handle.close() }
