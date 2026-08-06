@@ -48,7 +48,7 @@ final class OrdinaryTmuxManagedControlModeProcess: OrdinaryTmuxControlModeProces
             throw BridgeInternalError.invalidRequest("invalid tmux observer subscription")
         }
         try writeLine(
-            "refresh-client -B '\(name):\(paneID):#{pane_id},pane=#{pane_width}x#{pane_height},window=#{window_width}x#{window_height},alternate=#{alternate_on}'"
+            "refresh-client -B '\(name):\(paneID):#{pane_id},pane=#{pane_width}x#{pane_height},window=#{window_width}x#{window_height}'"
         )
     }
 

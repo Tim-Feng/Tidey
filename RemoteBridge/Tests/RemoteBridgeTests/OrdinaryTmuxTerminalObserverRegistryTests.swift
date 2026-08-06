@@ -186,7 +186,7 @@ final class OrdinaryTmuxTerminalObserverRegistryTests: XCTestCase {
         XCTAssertEqual(
             commands.values,
             [
-                "refresh-client -B 'tidey-A1:%21:#{pane_id},pane=#{pane_width}x#{pane_height},window=#{window_width}x#{window_height},alternate=#{alternate_on}'",
+                "refresh-client -B 'tidey-A1:%21:#{pane_id},pane=#{pane_width}x#{pane_height},window=#{window_width}x#{window_height}'",
                 "refresh-client -B 'tidey-A1'",
                 "detach-client",
             ]
