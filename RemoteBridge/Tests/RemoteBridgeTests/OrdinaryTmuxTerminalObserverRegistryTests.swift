@@ -415,6 +415,64 @@ final class OrdinaryTmuxTerminalObserverRegistryTests: XCTestCase {
         wait(for: [exited], timeout: 2)
     }
 
+    func testUnexpectedExitInvalidatesOnceAndFencesStaleGeneration() throws {
+        let factory = ProcessFactoryRecorder()
+        let firstChanges = FingerprintBox()
+        let replacementChanges = FingerprintBox()
+        let registry = OrdinaryTmuxTerminalObserverRegistry(
+            makeProcess: { socket, sessionID, onOutput, onExit in
+                try factory.make(
+                    socket: socket,
+                    sessionID: sessionID,
+                    onOutput: onOutput,
+                    onExit: onExit
+                )
+            }
+        )
+        let first = try registry.observe(
+            makeRequest(
+                subscriptionID: "strict-1",
+                paneID: "%21",
+                windowID: "@2",
+                onRebootstrapRequired: { firstChanges.append($0) }
+            )
+        )
+        let staleName = factory.process.added[0].name
+
+        factory.exit(processIndex: 0)
+        factory.exit(processIndex: 0)
+        registry.waitForIdleForTesting()
+        XCTAssertEqual(firstChanges.values.count, 1)
+        XCTAssertNil(firstChanges.values[0])
+
+        let replacement = try registry.observe(
+            makeRequest(
+                subscriptionID: "strict-2",
+                paneID: "%21",
+                windowID: "@2",
+                onRebootstrapRequired: { replacementChanges.append($0) }
+            )
+        )
+        XCTAssertEqual(factory.startCount, 2)
+        let replacementName = factory.process.added[1].name
+
+        factory.sendOutput(
+            "%subscription-changed \(staleName) $1 @2 0 %21 : %21,pane=80x24,window=80x24\n",
+            processIndex: 0
+        )
+        factory.sendOutput(
+            "%subscription-changed \(replacementName) $1 @2 0 %21 : %21,pane=120x40,window=120x40\n",
+            processIndex: 1
+        )
+        registry.waitForIdleForTesting()
+
+        XCTAssertEqual(firstChanges.values.count, 1)
+        XCTAssertEqual(replacementChanges.values.compactMap { $0 }.first?.columns, 120)
+
+        first.stop()
+        replacement.stop()
+    }
+
     private func makeRequest(
         subscriptionID: String,
         paneID: String,
