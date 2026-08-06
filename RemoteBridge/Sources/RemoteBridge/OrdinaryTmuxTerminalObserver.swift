@@ -93,8 +93,18 @@ final class OrdinaryTmuxTerminalObserverRegistry: OrdinaryTmuxTerminalObserving,
         let sessionID: String
     }
 
-    private struct Consumer {
+    private final class Consumer {
         let request: OrdinaryTmuxTerminalObservationRequest
+        var isInvalidated = false
+
+        init(request: OrdinaryTmuxTerminalObservationRequest) {
+            self.request = request
+        }
+    }
+
+    private struct InvalidationDelivery {
+        let callback: @Sendable (OrdinaryTmuxTerminalFingerprintV1?) -> Void
+        let fingerprint: OrdinaryTmuxTerminalFingerprintV1?
     }
 
     private final class PaneObservation {
@@ -114,7 +124,7 @@ final class OrdinaryTmuxTerminalObserverRegistry: OrdinaryTmuxTerminalObserving,
         let token: UUID
         let process: OrdinaryTmuxControlModeProcessManaging
         var panes = [String: PaneObservation]()
-        var outputBuffer = Data()
+        let parser = OrdinaryTmuxControlModeEventParser()
 
         init(token: UUID, process: OrdinaryTmuxControlModeProcessManaging) {
             self.token = token
@@ -289,7 +299,71 @@ final class OrdinaryTmuxTerminalObserverRegistry: OrdinaryTmuxTerminalObserving,
                   session.token == sessionToken else {
                 return
             }
-            session.outputBuffer.append(data)
+            var deliveries = [InvalidationDelivery]()
+            var processToDetach: OrdinaryTmuxControlModeProcessManaging?
+            for event in session.parser.feed(data) {
+                switch event {
+                case .layoutChanged(let windowID),
+                     .windowPaneChanged(let windowID, _):
+                    for pane in session.panes.values where pane.windowID == windowID {
+                        deliveries.append(contentsOf: Self.invalidate(pane: pane, fingerprint: nil))
+                    }
+                case .subscriptionChanged(
+                    let name,
+                    let sessionID,
+                    let windowID,
+                    let paneID,
+                    let value
+                ):
+                    guard let pane = session.panes.values.first(where: { $0.name == name }) else {
+                        continue
+                    }
+                    guard sessionID == key.sessionID,
+                          windowID == pane.windowID,
+                          paneID == pane.paneID,
+                          let dimensions = Self.parseSubscriptionValue(
+                            value,
+                            expectedPaneID: pane.paneID
+                          ) else {
+                        deliveries.append(contentsOf: Self.invalidate(pane: pane, fingerprint: nil))
+                        continue
+                    }
+                    for consumer in pane.consumers.values where consumer.isInvalidated == false {
+                        let fingerprint = OrdinaryTmuxTerminalFingerprintV1(
+                            paneID: pane.paneID,
+                            columns: dimensions.columns,
+                            rows: dimensions.rows,
+                            alternateOn: consumer.request.expectedFingerprint.alternateOn
+                        )
+                        guard fingerprint != consumer.request.expectedFingerprint else {
+                            continue
+                        }
+                        consumer.isInvalidated = true
+                        deliveries.append(
+                            InvalidationDelivery(
+                                callback: consumer.request.onRebootstrapRequired,
+                                fingerprint: fingerprint
+                            )
+                        )
+                    }
+                case .observerExited:
+                    deliveries.append(contentsOf: Self.invalidate(session: session))
+                    self.sessions.removeValue(forKey: key)
+                case .observerUnhealthy:
+                    deliveries.append(contentsOf: Self.invalidate(session: session))
+                    self.sessions.removeValue(forKey: key)
+                    processToDetach = session.process
+                }
+            }
+            guard deliveries.isEmpty == false || processToDetach != nil else {
+                return
+            }
+            self.callbackQueue.async {
+                for delivery in deliveries {
+                    delivery.callback(delivery.fingerprint)
+                }
+                processToDetach?.detachAndWait()
+            }
         }
     }
 
@@ -304,16 +378,78 @@ final class OrdinaryTmuxTerminalObserverRegistry: OrdinaryTmuxTerminalObserving,
                 return
             }
             self.sessions.removeValue(forKey: key)
-            let callbacks = session.panes.values.flatMap { pane in
-                pane.consumers.values.map { $0.request.onRebootstrapRequired }
-            }
+            let deliveries = Self.invalidate(session: session)
             self.callbackQueue.async {
-                for callback in callbacks {
-                    callback(nil)
+                for delivery in deliveries {
+                    delivery.callback(delivery.fingerprint)
                 }
             }
         }
     }
+
+    private static func invalidate(
+        session: SessionObservation
+    ) -> [InvalidationDelivery] {
+        session.panes.values.flatMap { invalidate(pane: $0, fingerprint: nil) }
+    }
+
+    private static func invalidate(
+        pane: PaneObservation,
+        fingerprint: OrdinaryTmuxTerminalFingerprintV1?
+    ) -> [InvalidationDelivery] {
+        pane.consumers.values.compactMap { consumer in
+            guard consumer.isInvalidated == false else {
+                return nil
+            }
+            consumer.isInvalidated = true
+            return InvalidationDelivery(
+                callback: consumer.request.onRebootstrapRequired,
+                fingerprint: fingerprint
+            )
+        }
+    }
+
+    private static func parseSubscriptionValue(
+        _ value: String,
+        expectedPaneID: String
+    ) -> (columns: Int, rows: Int)? {
+        let fields = value.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+        guard fields.count == 3,
+              fields[0] == expectedPaneID,
+              let pane = parseDimensions(fields[1], prefix: "pane="),
+              parseDimensions(fields[2], prefix: "window=") != nil else {
+            return nil
+        }
+        return pane
+    }
+
+    private static func parseDimensions(
+        _ value: String,
+        prefix: String
+    ) -> (columns: Int, rows: Int)? {
+        guard value.hasPrefix(prefix) else {
+            return nil
+        }
+        let dimensions = value.dropFirst(prefix.count).split(
+            separator: "x",
+            omittingEmptySubsequences: false
+        )
+        guard dimensions.count == 2,
+              let columns = Int(dimensions[0]),
+              let rows = Int(dimensions[1]),
+              columns > 0,
+              rows > 0 else {
+            return nil
+        }
+        return (columns, rows)
+    }
+
+    #if DEBUG
+    func waitForIdleForTesting() {
+        queue.sync {}
+        callbackQueue.sync {}
+    }
+    #endif
 
     private static func makeSubscriptionName() -> String {
         "tidey-" + UUID().uuidString.replacingOccurrences(of: "-", with: "")

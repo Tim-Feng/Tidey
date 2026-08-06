@@ -49,6 +49,8 @@ final class OrdinaryTmuxTerminalObserverRegistryTests: XCTestCase {
     private final class ProcessFactoryRecorder: @unchecked Sendable {
         private let lock = NSLock()
         private(set) var starts = [(socket: OrdinaryTmuxSocketSelector, sessionID: String)]()
+        private var outputHandlers = [@Sendable (Data) -> Void]()
+        private var exitHandlers = [@Sendable (Error?) -> Void]()
         let process = RecordingControlProcess()
 
         func make(
@@ -59,8 +61,24 @@ final class OrdinaryTmuxTerminalObserverRegistryTests: XCTestCase {
         ) throws -> OrdinaryTmuxControlModeProcessManaging {
             lock.lock()
             starts.append((socket, sessionID))
+            outputHandlers.append(onOutput)
+            exitHandlers.append(onExit)
             lock.unlock()
             return process
+        }
+
+        func sendOutput(_ string: String, processIndex: Int = 0) {
+            lock.lock()
+            let handler = outputHandlers[processIndex]
+            lock.unlock()
+            handler(Data(string.utf8))
+        }
+
+        func exit(_ error: Error? = nil, processIndex: Int = 0) {
+            lock.lock()
+            let handler = exitHandlers[processIndex]
+            lock.unlock()
+            handler(error)
         }
 
         var startCount: Int {
@@ -81,6 +99,23 @@ final class OrdinaryTmuxTerminalObserverRegistryTests: XCTestCase {
         }
 
         var values: [String] {
+            lock.lock()
+            defer { lock.unlock() }
+            return storage
+        }
+    }
+
+    private final class FingerprintBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storage = [OrdinaryTmuxTerminalFingerprintV1?]()
+
+        func append(_ fingerprint: OrdinaryTmuxTerminalFingerprintV1?) {
+            lock.lock()
+            storage.append(fingerprint)
+            lock.unlock()
+        }
+
+        var values: [OrdinaryTmuxTerminalFingerprintV1?] {
             lock.lock()
             defer { lock.unlock() }
             return storage
@@ -236,10 +271,84 @@ final class OrdinaryTmuxTerminalObserverRegistryTests: XCTestCase {
         XCTAssertEqual(factory.process.detachCount, 1)
     }
 
+    func testRegistryIgnoresInitialFingerprintAndRoutesExactChangesByWindow() throws {
+        let factory = ProcessFactoryRecorder()
+        let firstChanges = FingerprintBox()
+        let secondChanges = FingerprintBox()
+        let registry = OrdinaryTmuxTerminalObserverRegistry(
+            makeProcess: { socket, sessionID, onOutput, onExit in
+                try factory.make(
+                    socket: socket,
+                    sessionID: sessionID,
+                    onOutput: onOutput,
+                    onExit: onExit
+                )
+            }
+        )
+        let first = try registry.observe(
+            makeRequest(
+                subscriptionID: "strict-1",
+                paneID: "%21",
+                windowID: "@2",
+                onRebootstrapRequired: { firstChanges.append($0) }
+            )
+        )
+        let second = try registry.observe(
+            makeRequest(
+                subscriptionID: "strict-2",
+                paneID: "%22",
+                windowID: "@3",
+                onRebootstrapRequired: { secondChanges.append($0) }
+            )
+        )
+        let firstName = factory.process.added[0].name
+        let secondName = factory.process.added[1].name
+
+        factory.sendOutput(
+            "%subscription-changed \(firstName) $1 @2 0 %21 : %21,pane=132x40,window=132x40\n"
+        )
+        factory.sendOutput(
+            "%subscription-changed unknown $1 @2 0 %21 : %21,pane=80x24,window=80x24\n"
+        )
+        registry.waitForIdleForTesting()
+        XCTAssertEqual(firstChanges.values.count, 0)
+        XCTAssertEqual(secondChanges.values.count, 0)
+
+        factory.sendOutput(
+            "%subscription-changed \(firstName) $1 @2 0 %21 future : %21,pane=120x40,window=120x40\n"
+        )
+        factory.sendOutput("%layout-change @3 layout visible flags\n")
+        factory.sendOutput("%window-pane-changed @2 %99\n")
+        factory.sendOutput(
+            "%subscription-changed \(secondName) $1 @3 1 %22 : %22,pane=90x30,window=90x30\n"
+        )
+        registry.waitForIdleForTesting()
+
+        XCTAssertEqual(
+            firstChanges.values,
+            [
+                OrdinaryTmuxTerminalFingerprintV1(
+                    paneID: "%21",
+                    columns: 120,
+                    rows: 40,
+                    alternateOn: false
+                ),
+            ]
+        )
+        XCTAssertEqual(secondChanges.values.count, 1)
+        XCTAssertNil(secondChanges.values[0])
+
+        first.stop()
+        second.stop()
+    }
+
     private func makeRequest(
         subscriptionID: String,
         paneID: String,
-        windowID: String
+        windowID: String,
+        onRebootstrapRequired: @escaping @Sendable (
+            OrdinaryTmuxTerminalFingerprintV1?
+        ) -> Void = { _ in }
     ) -> OrdinaryTmuxTerminalObservationRequest {
         let route = OrdinaryTmuxPanelRoute(
             workspaceID: "workspace-1",
@@ -263,7 +372,7 @@ final class OrdinaryTmuxTerminalObserverRegistryTests: XCTestCase {
                 rows: 40,
                 alternateOn: false
             ),
-            onRebootstrapRequired: { _ in }
+            onRebootstrapRequired: onRebootstrapRequired
         )
     }
 }
