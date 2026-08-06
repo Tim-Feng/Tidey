@@ -200,6 +200,49 @@ final class OrdinaryTmuxOutputStreamHandlerTests: XCTestCase {
         }
     }
 
+    private final class ObserverLease: OrdinaryTmuxTerminalObserverLeasing, @unchecked Sendable {
+        private let lock = NSLock()
+        private var stopStorage = 0
+
+        func stop() {
+            lock.lock()
+            stopStorage += 1
+            lock.unlock()
+        }
+
+        var stopCount: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return stopStorage
+        }
+    }
+
+    private final class StubObserver: OrdinaryTmuxTerminalObserving, @unchecked Sendable {
+        private let lock = NSLock()
+        private var requestsStorage = [OrdinaryTmuxTerminalObservationRequest]()
+        let lease = ObserverLease()
+        var invalidateDuringObserve = false
+
+        func observe(
+            _ request: OrdinaryTmuxTerminalObservationRequest
+        ) throws -> OrdinaryTmuxTerminalObserverLeasing {
+            lock.lock()
+            requestsStorage.append(request)
+            let shouldInvalidate = invalidateDuringObserve
+            lock.unlock()
+            if shouldInvalidate {
+                request.onRebootstrapRequired(nil)
+            }
+            return lease
+        }
+
+        var requests: [OrdinaryTmuxTerminalObservationRequest] {
+            lock.lock()
+            defer { lock.unlock() }
+            return requestsStorage
+        }
+    }
+
     func testRejectsNonOrdinaryTmuxPanelID() throws {
         let handler = OrdinaryTmuxOutputStreamHandler(routeResolver: StubResolver(route: nil),
                                                       adapter: StubAdapter())
@@ -478,6 +521,62 @@ final class OrdinaryTmuxOutputStreamHandlerTests: XCTestCase {
         }
     }
 
+    func testStrictObserverInvalidationWaitsForActivationAndLeaseSurvivesPipeStopRetry() throws {
+        let route = ordinaryRoute()
+        let fingerprint = OrdinaryTmuxTerminalFingerprintV1(
+            paneID: route.activePaneID,
+            columns: 80,
+            rows: 2,
+            alternateOn: false
+        )
+        let adapter = StubAdapter()
+        adapter.strictFingerprint = fingerprint
+        adapter.strictState = strictState(
+            route: route,
+            subscriptionID: "owner-a",
+            fingerprint: fingerprint
+        )
+        adapter.remainingStopFailures = 1
+        let observer = StubObserver()
+        observer.invalidateDuringObserve = true
+        let tailerBox = StubTailerBox()
+        let deltaBox = DeltaBox()
+        let handler = OrdinaryTmuxOutputStreamHandler(
+            routeResolver: StubResolver(route: route),
+            adapter: adapter,
+            terminalObserver: observer,
+            outputDirectory: temporaryDirectory(),
+            makeTailer: { url, handler in
+                tailerBox.makeTailer(url: url, handler: handler)
+            }
+        )
+
+        let start = try XCTUnwrap(handler.subscribe(BridgeRequest(
+            id: "request-1",
+            action: "subscribe_terminal_stream",
+            params: [
+                "panel_id": .string(route.panelID),
+                "subscription_id": .string("owner-a"),
+                "terminal_state_version": .number(1),
+            ]
+        ), onDelta: { deltaBox.append($0) }))
+
+        XCTAssertEqual(observer.requests.count, 1)
+        XCTAssertEqual(observer.requests.first?.route, route)
+        XCTAssertEqual(observer.requests.first?.expectedFingerprint, fingerprint)
+        XCTAssertEqual(deltaBox.deltas, [])
+
+        start.subscription.activate()
+        XCTAssertEqual(deltaBox.deltas.map(\.sequence), [1])
+        XCTAssertEqual(deltaBox.deltas.map(\.rebootstrapRequired), [true])
+        XCTAssertEqual(deltaBox.deltas.map(\.chunkBase64), [Data().base64EncodedString()])
+
+        XCTAssertThrowsError(try start.subscription.stopForReplacement())
+        XCTAssertEqual(observer.lease.stopCount, 0)
+        XCTAssertNoThrow(try start.subscription.stopForReplacement())
+        XCTAssertEqual(observer.lease.stopCount, 1)
+    }
+
     func testReplacementStopCleansUpAndRemainsRetryableAfterPipeStopFailure() throws {
         let route = ordinaryRoute()
         let adapter = StubAdapter()
@@ -574,6 +673,42 @@ final class OrdinaryTmuxOutputStreamHandlerTests: XCTestCase {
                                activePaneID: "%16",
                                cwd: "/Users/timfeng/GitHub/Tidey",
                                currentCommand: "codex")
+    }
+
+    private func strictState(
+        route: OrdinaryTmuxPanelRoute,
+        subscriptionID: String,
+        fingerprint: OrdinaryTmuxTerminalFingerprintV1
+    ) -> OrdinaryTmuxTerminalStateV1 {
+        OrdinaryTmuxTerminalStateV1(
+            subscriptionID: subscriptionID,
+            paneID: route.activePaneID,
+            columns: fingerprint.columns,
+            rows: fingerprint.rows,
+            cursor: OrdinaryTmuxTerminalCursorV1(row: 0, column: 0),
+            cursorVisible: true,
+            alternateOn: fingerprint.alternateOn,
+            alternateSavedCursor: nil,
+            scrollRegionUpper: 0,
+            scrollRegionLower: fingerprint.rows - 1,
+            tabStops: [],
+            modes: OrdinaryTmuxTerminalModesV1(
+                insert: false,
+                applicationCursorKeys: false,
+                applicationKeypad: false,
+                wrap: true,
+                origin: false,
+                mouseStandard: false,
+                mouseButton: false,
+                mouseAny: false,
+                mouseUTF8: false,
+                mouseSGR: false,
+                paneKeyMode: "VT10x"
+            ),
+            activeScreen: Data("one\ntwo".utf8),
+            backgroundScreen: Data(),
+            pendingPrefix: Data()
+        )
     }
 
     private func temporaryDirectory() -> URL {

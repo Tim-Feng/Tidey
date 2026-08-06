@@ -226,40 +226,66 @@ final class OrdinaryTmuxTerminalStreamSubscription: OrdinaryTmuxTerminalStreamSu
     private let adapter: OrdinaryTmuxTerminalStreaming
     private let tailer: TerminalByteTailing
     private let cleanup: (URL) -> Void
+    private let observerInvalidationGate: OrdinaryTmuxTerminalObserverInvalidationGate?
     private let lock = NSLock()
+    private var observerLease: OrdinaryTmuxTerminalObserverLeasing?
     private var physicallyClosed = false
 
     init(route: OrdinaryTmuxPanelRoute,
          outputFileURL: URL,
          adapter: OrdinaryTmuxTerminalStreaming,
          tailer: TerminalByteTailing,
+         observerInvalidationGate: OrdinaryTmuxTerminalObserverInvalidationGate? = nil,
          cleanup: @escaping (URL) -> Void) {
         self.route = route
         self.outputFileURL = outputFileURL
         self.adapter = adapter
         self.tailer = tailer
+        self.observerInvalidationGate = observerInvalidationGate
         self.cleanup = cleanup
     }
 
     func activate() {
+        observerInvalidationGate?.activate()
         tailer.activate()
+    }
+
+    func installObserverLease(_ lease: OrdinaryTmuxTerminalObserverLeasing) {
+        var shouldStop = false
+        lock.lock()
+        if physicallyClosed || observerLease != nil {
+            shouldStop = true
+        } else {
+            observerLease = lease
+        }
+        lock.unlock()
+        if shouldStop {
+            lease.stop()
+        }
     }
 
     @discardableResult
     func stop() -> Bool {
         lock.lock()
-        defer { lock.unlock() }
         guard physicallyClosed == false else {
+            lock.unlock()
             return true
         }
 
+        observerInvalidationGate?.stop()
         tailer.stop()
-        defer { cleanup(outputFileURL) }
         do {
             try adapter.stopPipePane(exactRoute: route)
             physicallyClosed = true
+            let lease = observerLease
+            observerLease = nil
+            lock.unlock()
+            cleanup(outputFileURL)
+            lease?.stop()
             return true
         } catch {
+            lock.unlock()
+            cleanup(outputFileURL)
             // Best effort. A later lane replacement may retry the physical stop.
             return false
         }
@@ -267,15 +293,26 @@ final class OrdinaryTmuxTerminalStreamSubscription: OrdinaryTmuxTerminalStreamSu
 
     func stopForReplacement() throws {
         lock.lock()
-        defer { lock.unlock() }
         guard physicallyClosed == false else {
+            lock.unlock()
             return
         }
 
+        observerInvalidationGate?.stop()
         tailer.stop()
-        defer { cleanup(outputFileURL) }
-        try adapter.stopPipePane(exactRoute: route)
-        physicallyClosed = true
+        do {
+            try adapter.stopPipePane(exactRoute: route)
+            physicallyClosed = true
+            let lease = observerLease
+            observerLease = nil
+            lock.unlock()
+            cleanup(outputFileURL)
+            lease?.stop()
+        } catch {
+            lock.unlock()
+            cleanup(outputFileURL)
+            throw error
+        }
     }
 }
 
@@ -315,12 +352,14 @@ struct OrdinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreaming {
 
     private let routeResolver: OrdinaryTmuxRouteResolving
     private let adapter: Adapter
+    private let terminalObserver: OrdinaryTmuxTerminalObserving?
     private let outputDirectory: URL
     private let fileManager: FileManager
     private let makeTailer: TailerFactory
 
     init(routeResolver: OrdinaryTmuxRouteResolving,
          adapter: Adapter = OrdinaryTmuxCLIAdapter(),
+         terminalObserver: OrdinaryTmuxTerminalObserving? = nil,
          outputDirectory: URL = FileManager.default.temporaryDirectory.appendingPathComponent("tidey-terminal-streams", isDirectory: true),
          fileManager: FileManager = .default,
          makeTailer: @escaping TailerFactory = { url, handler in
@@ -328,6 +367,7 @@ struct OrdinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreaming {
          }) {
         self.routeResolver = routeResolver
         self.adapter = adapter
+        self.terminalObserver = terminalObserver
         self.outputDirectory = outputDirectory
         self.fileManager = fileManager
         self.makeTailer = makeTailer
@@ -373,6 +413,13 @@ struct OrdinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreaming {
 
         let outputFileURL = try makeOutputFile()
         let strictEmitterSlot = OrdinaryTmuxStrictTerminalEmitterSlot()
+        let observerInvalidationGate = usesStrictState
+            ? OrdinaryTmuxTerminalObserverInvalidationGate { fingerprint in
+                strictEmitterSlot.emitter?.requireRebootstrap(
+                    currentFingerprint: fingerprint
+                )
+            }
+            : nil
         let tailer = makeTailer(outputFileURL) { data in
             guard allowedIf() else {
                 return
@@ -409,6 +456,7 @@ struct OrdinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreaming {
                                                                  outputFileURL: outputFileURL,
                                                                  adapter: adapter,
                                                                  tailer: tailer,
+                                                                 observerInvalidationGate: observerInvalidationGate,
                                                                  cleanup: { [fileManager] url in
                                                                      try? fileManager.removeItem(at: url)
                                                                  })
@@ -453,6 +501,29 @@ struct OrdinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreaming {
                     }
                 )
                 strictEmitterSlot.install(emitter)
+                if let terminalObserver, let observerInvalidationGate {
+                    let observerLease = try terminalObserver.observe(
+                        OrdinaryTmuxTerminalObservationRequest(
+                            route: streamRoute,
+                            subscriptionID: subscriptionID,
+                            expectedFingerprint: fingerprint,
+                            onRebootstrapRequired: { observedFingerprint in
+                                observerInvalidationGate.requireRebootstrap(
+                                    observedFingerprint
+                                )
+                            }
+                        )
+                    )
+                    subscription.installObserverLease(observerLease)
+                    let admittedFingerprint = try? adapter.queryStrictTerminalFingerprint(
+                        exactRoute: streamRoute
+                    )
+                    if admittedFingerprint != fingerprint {
+                        observerInvalidationGate.requireRebootstrap(
+                            admittedFingerprint
+                        )
+                    }
+                }
                 let response = BridgeResponse(
                     id: request.id,
                     ok: true,
