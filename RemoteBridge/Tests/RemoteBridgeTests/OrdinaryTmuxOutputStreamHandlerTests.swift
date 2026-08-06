@@ -243,9 +243,35 @@ final class OrdinaryTmuxOutputStreamHandlerTests: XCTestCase {
         }
     }
 
-    func testRejectsNonOrdinaryTmuxPanelID() throws {
-        let handler = OrdinaryTmuxOutputStreamHandler(routeResolver: StubResolver(route: nil),
-                                                      adapter: StubAdapter())
+    func testRejectsMissingOrEmptyPanelID() throws {
+        let handler = OrdinaryTmuxOutputStreamHandler(
+            routeResolver: StubResolver(route: nil),
+            adapter: StubAdapter()
+        )
+
+        for params: [String: JSONValue]? in [nil, ["panel_id": .string("")]] {
+            XCTAssertThrowsError(
+                try handler.subscribe(
+                    BridgeRequest(
+                        id: "request-1",
+                        action: "subscribe_terminal_stream",
+                        params: params
+                    ),
+                    onDelta: { _ in }
+                )
+            ) { error in
+                guard case BridgeInternalError.invalidRequest = error else {
+                    return XCTFail("Unexpected error: \(error)")
+                }
+            }
+        }
+    }
+
+    func testRejectsUnregisteredNativePanelID() throws {
+        let handler = OrdinaryTmuxOutputStreamHandler(
+            routeResolver: OrdinaryTmuxRouteResolver(registry: OrdinaryTmuxPanelRegistry()),
+            adapter: StubAdapter()
+        )
 
         XCTAssertThrowsError(
             try handler.subscribe(BridgeRequest(id: "request-1",
@@ -253,11 +279,60 @@ final class OrdinaryTmuxOutputStreamHandlerTests: XCTestCase {
                                                 params: ["panel_id": .string("native-panel")]),
                                   onDelta: { _ in })
         ) { error in
-            guard case BridgeInternalError.invalidRequest(let message) = error else {
+            guard case BridgeInternalError.notFound(let message) = error else {
                 return XCTFail("Unexpected error: \(error)")
             }
-            XCTAssertTrue(message.contains("ordinary tmux panel_id"))
+            XCTAssertTrue(message.contains("not authorized"))
         }
+    }
+
+    func testStrictSubscribeAcceptsRegistryBackedSingleWindowCarrierPanelID() throws {
+        let route = carrierRoute()
+        let registry = OrdinaryTmuxPanelRegistry()
+        registry.storeRoute(route)
+        let fingerprint = OrdinaryTmuxTerminalFingerprintV1(
+            paneID: route.activePaneID,
+            columns: 80,
+            rows: 2,
+            alternateOn: false
+        )
+        let adapter = StubAdapter()
+        adapter.strictState = strictState(
+            route: route,
+            subscriptionID: "owner-a",
+            fingerprint: fingerprint
+        )
+        adapter.strictFingerprint = fingerprint
+        let tailerBox = StubTailerBox()
+        let deltaBox = DeltaBox()
+        let handler = OrdinaryTmuxOutputStreamHandler(
+            routeResolver: OrdinaryTmuxRouteResolver(registry: registry),
+            adapter: adapter,
+            outputDirectory: temporaryDirectory(),
+            makeTailer: { url, handler in
+                tailerBox.makeTailer(url: url, handler: handler)
+            }
+        )
+
+        let start = try XCTUnwrap(handler.subscribe(BridgeRequest(
+            id: "request-1",
+            action: "subscribe_terminal_stream",
+            params: [
+                "workspace_id": .string(route.workspaceID),
+                "panel_id": .string(route.panelID),
+                "subscription_id": .string("owner-a"),
+                "terminal_state_version": .number(1),
+            ]
+        ), onDelta: { deltaBox.append($0) }))
+
+        XCTAssertEqual(start.response.result?["panel_id"]?.stringValue, route.panelID)
+        XCTAssertEqual(start.response.result?["workspace_id"]?.stringValue, route.workspaceID)
+        XCTAssertEqual(adapter.strictBootstrapCount, 1)
+
+        start.subscription.activate()
+        tailerBox.firstTailer?.emit("delta")
+        XCTAssertEqual(deltaBox.deltas.map(\.panelID), [route.panelID])
+        start.subscription.stop()
     }
 
     func testSubscribeReturnsInitialOutputAndStartsPipePane() throws {
@@ -670,6 +745,20 @@ final class OrdinaryTmuxOutputStreamHandlerTests: XCTestCase {
                                sessionName: "tidey-codex",
                                windowID: "@16",
                                windowIndex: 1,
+                               activePaneID: "%16",
+                               cwd: "/Users/timfeng/GitHub/Tidey",
+                               currentCommand: "codex")
+    }
+
+    private func carrierRoute() -> OrdinaryTmuxPanelRoute {
+        OrdinaryTmuxPanelRoute(workspaceID: "workspace-1",
+                               panelID: "11111111-2222-3333-4444-555555555555",
+                               carrierPanelID: "11111111-2222-3333-4444-555555555555",
+                               socket: .path("/tmp/tmux-\(getuid())/default"),
+                               sessionID: "$7",
+                               sessionName: "coread-codex",
+                               windowID: "@16",
+                               windowIndex: 0,
                                activePaneID: "%16",
                                cwd: "/Users/timfeng/GitHub/Tidey",
                                currentCommand: "codex")

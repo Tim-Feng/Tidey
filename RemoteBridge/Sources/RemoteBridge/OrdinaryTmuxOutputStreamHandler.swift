@@ -385,8 +385,8 @@ struct OrdinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreaming {
             return nil
         }
         guard let panelID = request.params?["panel_id"]?.stringValue,
-              panelID.hasPrefix("\(OrdinaryTmuxLogicalPanelID.prefix):") else {
-            throw BridgeInternalError.invalidRequest("subscribe_terminal_stream requires ordinary tmux panel_id")
+              panelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            throw BridgeInternalError.invalidRequest("subscribe_terminal_stream requires panel_id")
         }
         let workspaceID = request.params?["workspace_id"]?.stringValue
         let subscriptionID = request.params?["subscription_id"]?.stringValue
