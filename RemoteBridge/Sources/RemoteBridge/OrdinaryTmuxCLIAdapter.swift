@@ -138,16 +138,27 @@ final class OrdinaryTmuxCLIAdapter {
     private static let fieldSeparator = "\t"
     private static let previousWindowSizeOption = "@tidey_window_size_before_multi_client"
     private static let commandTimeoutSeconds: TimeInterval = 3
+    private static let liveRawCommandRunner: RawCommandRunner = processRawCommandRunner(
+        executablePath: TmuxStateResolver.discoverTmuxBinaryPath(),
+        timeoutSeconds: commandTimeoutSeconds
+    )
     private static let liveCommandRunner: CommandRunner = processCommandRunner(
         executablePath: TmuxStateResolver.discoverTmuxBinaryPath(),
         timeoutSeconds: commandTimeoutSeconds
     )
-    private static let legacyCompatibleRawCommandRunner: RawCommandRunner = { socket, arguments, stdin in
-        Data(try liveCommandRunner(socket, arguments, stdin).utf8)
-    }
 
     static func processCommandRunner(executablePath: String?,
                                      timeoutSeconds: TimeInterval) -> CommandRunner {
+        let rawRunner = processRawCommandRunner(executablePath: executablePath,
+                                                timeoutSeconds: timeoutSeconds)
+        return { socket, arguments, stdin in
+            let outputData = try rawRunner(socket, arguments, stdin)
+            return String(data: outputData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }
+    }
+
+    static func processRawCommandRunner(executablePath: String?,
+                                        timeoutSeconds: TimeInterval) -> RawCommandRunner {
         { socket, arguments, stdin in
             guard let executablePath else {
                 BridgeLogger.server.error("ordinary tmux adapter could not find a tmux binary in supported paths")
@@ -208,7 +219,7 @@ final class OrdinaryTmuxCLIAdapter {
                               code: Int(process.terminationStatus),
                               userInfo: [NSLocalizedDescriptionKey: stderr])
             }
-            return stdoutText
+            return outputData
         }
     }
 
@@ -216,14 +227,14 @@ final class OrdinaryTmuxCLIAdapter {
     private let rawCommandRunner: RawCommandRunner
 
     init(commandRunner: @escaping CommandRunner = OrdinaryTmuxCLIAdapter.liveCommandRunner,
-         rawCommandRunner: @escaping RawCommandRunner = OrdinaryTmuxCLIAdapter.legacyCompatibleRawCommandRunner) {
+         rawCommandRunner: @escaping RawCommandRunner = OrdinaryTmuxCLIAdapter.liveRawCommandRunner) {
         self.commandRunner = commandRunner
         self.rawCommandRunner = rawCommandRunner
     }
 
     convenience init(commandRunner: @escaping CommandRunner) {
         self.init(commandRunner: commandRunner,
-                  rawCommandRunner: OrdinaryTmuxCLIAdapter.legacyCompatibleRawCommandRunner)
+                  rawCommandRunner: OrdinaryTmuxCLIAdapter.liveRawCommandRunner)
     }
 
     func resolveClient(for metadata: OrdinaryTmuxAttachMetadata) throws -> OrdinaryTmuxClient? {

@@ -118,6 +118,17 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
         _ = adapter
     }
 
+    func testRawProcessRunnerPreservesBoundaryWhitespaceAndNonUTF8Bytes() throws {
+        let runner = OrdinaryTmuxCLIAdapter.processRawCommandRunner(
+            executablePath: "/usr/bin/printf",
+            timeoutSeconds: 1
+        )
+
+        let output = try runner(.defaultSocket, ["\\000\\377  \n"], nil)
+
+        XCTAssertEqual(output, Data([0x00, 0xFF, 0x20, 0x20, 0x0A]))
+    }
+
     func testResolvesClientByTTYAndTargetSessionFromDefaultSocket() throws {
         let state = RunnerState(responses: [
             RunnerState.key(socket: .defaultSocket, arguments: listClientsArguments):
