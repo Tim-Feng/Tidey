@@ -87,6 +87,239 @@ final class OrdinaryTmuxManagedControlModeProcess: OrdinaryTmuxControlModeProces
     }
 }
 
+final class OrdinaryTmuxTerminalObserverRegistry: OrdinaryTmuxTerminalObserving, @unchecked Sendable {
+    private struct SessionKey: Hashable {
+        let socketKey: String
+        let sessionID: String
+    }
+
+    private struct Consumer {
+        let request: OrdinaryTmuxTerminalObservationRequest
+    }
+
+    private final class PaneObservation {
+        let name: String
+        let paneID: String
+        let windowID: String
+        var consumers = [UUID: Consumer]()
+
+        init(name: String, paneID: String, windowID: String) {
+            self.name = name
+            self.paneID = paneID
+            self.windowID = windowID
+        }
+    }
+
+    private final class SessionObservation {
+        let token: UUID
+        let process: OrdinaryTmuxControlModeProcessManaging
+        var panes = [String: PaneObservation]()
+        var outputBuffer = Data()
+
+        init(token: UUID, process: OrdinaryTmuxControlModeProcessManaging) {
+            self.token = token
+            self.process = process
+        }
+    }
+
+    private final class Lease: OrdinaryTmuxTerminalObserverLeasing, @unchecked Sendable {
+        private weak var registry: OrdinaryTmuxTerminalObserverRegistry?
+        private let key: SessionKey
+        private let sessionToken: UUID
+        private let paneID: String
+        private let consumerID: UUID
+        private let lock = NSLock()
+        private var didStop = false
+
+        init(registry: OrdinaryTmuxTerminalObserverRegistry,
+             key: SessionKey,
+             sessionToken: UUID,
+             paneID: String,
+             consumerID: UUID) {
+            self.registry = registry
+            self.key = key
+            self.sessionToken = sessionToken
+            self.paneID = paneID
+            self.consumerID = consumerID
+        }
+
+        func stop() {
+            lock.lock()
+            guard didStop == false else {
+                lock.unlock()
+                return
+            }
+            didStop = true
+            lock.unlock()
+            registry?.release(
+                key: key,
+                sessionToken: sessionToken,
+                paneID: paneID,
+                consumerID: consumerID
+            )
+        }
+    }
+
+    private let queue: DispatchQueue
+    private let callbackQueue: DispatchQueue
+    private let makeProcess: OrdinaryTmuxControlModeProcessFactory
+    private var sessions = [SessionKey: SessionObservation]()
+
+    init(
+        queue: DispatchQueue = DispatchQueue(
+            label: "com.tidey.remote-bridge.strict-terminal-observer-registry"
+        ),
+        callbackQueue: DispatchQueue = DispatchQueue(
+            label: "com.tidey.remote-bridge.strict-terminal-observer-callbacks"
+        ),
+        makeProcess: @escaping OrdinaryTmuxControlModeProcessFactory
+    ) {
+        self.queue = queue
+        self.callbackQueue = callbackQueue
+        self.makeProcess = makeProcess
+    }
+
+    func observe(
+        _ request: OrdinaryTmuxTerminalObservationRequest
+    ) throws -> OrdinaryTmuxTerminalObserverLeasing {
+        guard request.route.activePaneID == request.expectedFingerprint.paneID else {
+            throw BridgeInternalError.invalidResponse
+        }
+
+        return try queue.sync {
+            let key = SessionKey(
+                socketKey: request.route.socket.cacheKey,
+                sessionID: request.route.sessionID
+            )
+            let session: SessionObservation
+            if let existing = sessions[key] {
+                session = existing
+            } else {
+                let token = UUID()
+                let process = try makeProcess(
+                    request.route.socket,
+                    request.route.sessionID,
+                    { [weak self] data in
+                        self?.receiveOutput(data, key: key, sessionToken: token)
+                    },
+                    { [weak self] error in
+                        self?.processExited(error, key: key, sessionToken: token)
+                    }
+                )
+                let created = SessionObservation(token: token, process: process)
+                sessions[key] = created
+                session = created
+            }
+
+            let pane: PaneObservation
+            if let existing = session.panes[request.route.activePaneID] {
+                guard existing.windowID == request.route.windowID else {
+                    throw BridgeInternalError.invalidResponse
+                }
+                pane = existing
+            } else {
+                let name = Self.makeSubscriptionName()
+                let created = PaneObservation(
+                    name: name,
+                    paneID: request.route.activePaneID,
+                    windowID: request.route.windowID
+                )
+                session.panes[request.route.activePaneID] = created
+                do {
+                    try session.process.addSubscription(
+                        name: name,
+                        paneID: request.route.activePaneID
+                    )
+                } catch {
+                    session.panes.removeValue(forKey: request.route.activePaneID)
+                    if session.panes.isEmpty {
+                        sessions.removeValue(forKey: key)
+                        session.process.detachAndWait()
+                    }
+                    throw error
+                }
+                pane = created
+            }
+
+            let consumerID = UUID()
+            pane.consumers[consumerID] = Consumer(request: request)
+            return Lease(
+                registry: self,
+                key: key,
+                sessionToken: session.token,
+                paneID: pane.paneID,
+                consumerID: consumerID
+            )
+        }
+    }
+
+    private func release(
+        key: SessionKey,
+        sessionToken: UUID,
+        paneID: String,
+        consumerID: UUID
+    ) {
+        var processToDetach: OrdinaryTmuxControlModeProcessManaging?
+        queue.sync {
+            guard let session = sessions[key],
+                  session.token == sessionToken,
+                  let pane = session.panes[paneID],
+                  pane.consumers.removeValue(forKey: consumerID) != nil else {
+                return
+            }
+            if pane.consumers.isEmpty {
+                try? session.process.removeSubscription(name: pane.name)
+                session.panes.removeValue(forKey: paneID)
+            }
+            if session.panes.isEmpty {
+                sessions.removeValue(forKey: key)
+                processToDetach = session.process
+            }
+        }
+        processToDetach?.detachAndWait()
+    }
+
+    private func receiveOutput(
+        _ data: Data,
+        key: SessionKey,
+        sessionToken: UUID
+    ) {
+        queue.async {
+            guard let session = self.sessions[key],
+                  session.token == sessionToken else {
+                return
+            }
+            session.outputBuffer.append(data)
+        }
+    }
+
+    private func processExited(
+        _ error: Error?,
+        key: SessionKey,
+        sessionToken: UUID
+    ) {
+        queue.async {
+            guard let session = self.sessions[key],
+                  session.token == sessionToken else {
+                return
+            }
+            self.sessions.removeValue(forKey: key)
+            let callbacks = session.panes.values.flatMap { pane in
+                pane.consumers.values.map { $0.request.onRebootstrapRequired }
+            }
+            self.callbackQueue.async {
+                for callback in callbacks {
+                    callback(nil)
+                }
+            }
+        }
+    }
+
+    private static func makeSubscriptionName() -> String {
+        "tidey-" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+    }
+}
+
 struct OrdinaryTmuxTerminalObservationRequest: Sendable {
     let route: OrdinaryTmuxPanelRoute
     let subscriptionID: String
