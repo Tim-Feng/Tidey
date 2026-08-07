@@ -415,16 +415,14 @@ run_app_server_runtime_selection_test() {
 
 run_app_server_runtime_selection_test
 
-run_codex_tui_trace_fallback_seams_exist_test() {
+run_codex_runtime_compatibility_seams_exist_test() {
     CODEX_UNDER_TEST="$CODEX_UNDER_TEST" bash -c '
         set -euo pipefail
         source "$CODEX_UNDER_TEST"
         declare -F codex_installed_version_from_output >/dev/null
         declare -F codex_installed_version >/dev/null
+        declare -F codex_runtime_compatibility_expected_version >/dev/null
         declare -F codex_runtime_compatibility_allows_tracked_plain >/dev/null
-        declare -F create_private_codex_tui_trace_dir >/dev/null
-        declare -F codex_tui_trace_has_thread_read_lookup_failure >/dev/null
-        declare -F codex_remote_tui_lookup_failure_allows_plain_fallback >/dev/null
         [[ "$(codex_installed_version_from_output "codex-cli 0.147.0")" == "0.147.0" ]]
         if codex_installed_version_from_output "codex 0.147.0 extra"; then
             exit 21
@@ -432,7 +430,7 @@ run_codex_tui_trace_fallback_seams_exist_test() {
     '
 }
 
-run_codex_tui_trace_fallback_seams_exist_test
+run_codex_runtime_compatibility_seams_exist_test
 
 run_codex_runtime_compatibility_marker_matrix_test() {
     local tmpdir
@@ -1095,78 +1093,7 @@ FAKE_CODEX
 
 run_app_server_runtime_resume_failure_cleanup_test
 
-run_codex_tui_trace_classifier_matrix_test() {
-    local tmpdir
-    local trace_log
-    local wrong_trace_log
-    local empty_trace_log
-    local rollout_path
-    local wrong_rollout_path
-    local empty_rollout_path
-    local resume_id="019eac34-764c-7893-9599-5b6000037cea"
-    local wrong_id="019eac34-764c-7893-9599-5b6000037ceb"
-    local uppercase_id="019EAC34-764C-7893-9599-5B6000037CEA"
-
-    tmpdir="$(mktemp -d "/private/tmp/tidey-codex-trace-classifier.XXXXXX")"
-    trace_log="$tmpdir/codex-tui.log"
-    wrong_trace_log="$tmpdir/wrong-codex-tui.log"
-    empty_trace_log="$tmpdir/empty-codex-tui.log"
-    rollout_path="$tmpdir/rollout-2026-06-09T22-00-00-$resume_id.jsonl"
-    wrong_rollout_path="$tmpdir/rollout-2026-06-09T22-00-00-$wrong_id.jsonl"
-    empty_rollout_path="$tmpdir/rollout-2026-06-09T22-00-00-empty-$resume_id.jsonl"
-
-    printf '%s\n' '{"type":"session_meta"}' > "$rollout_path"
-    printf '%s\n' '{"type":"session_meta"}' > "$wrong_rollout_path"
-    : > "$empty_rollout_path"
-    : > "$empty_trace_log"
-    printf '%s\n' "2026-08-08T00:00:00Z WARN codex_tui thread/read failed during TUI session lookup session=$resume_id err=request timed out" > "$trace_log"
-    printf '%s\n' "2026-08-08T00:00:00Z WARN codex_tui writer conflict session=$resume_id" > "$wrong_trace_log"
-
-    CODEX_UNDER_TEST="$CODEX_UNDER_TEST" \
-        TRACE_LOG="$trace_log" \
-        WRONG_TRACE_LOG="$wrong_trace_log" \
-        EMPTY_TRACE_LOG="$empty_trace_log" \
-        ROLLOUT_PATH="$rollout_path" \
-        WRONG_ROLLOUT_PATH="$wrong_rollout_path" \
-        EMPTY_ROLLOUT_PATH="$empty_rollout_path" \
-        RESUME_ID="$resume_id" \
-        WRONG_ID="$wrong_id" \
-        UPPERCASE_ID="$uppercase_id" \
-        bash -c '
-            set -euo pipefail
-            source "$CODEX_UNDER_TEST"
-            codex_remote_tui_lookup_failure_allows_plain_fallback 1 "$TRACE_LOG" "$UPPERCASE_ID" "$ROLLOUT_PATH" 0
-            for status in 0 42 130 143; do
-                if codex_remote_tui_lookup_failure_allows_plain_fallback "$status" "$TRACE_LOG" "$RESUME_ID" "$ROLLOUT_PATH" 0; then
-                    exit 10
-                fi
-            done
-            if codex_remote_tui_lookup_failure_allows_plain_fallback 1 "$TRACE_LOG" "$WRONG_ID" "$ROLLOUT_PATH" 0; then
-                exit 11
-            fi
-            if codex_remote_tui_lookup_failure_allows_plain_fallback 1 "$WRONG_TRACE_LOG" "$RESUME_ID" "$ROLLOUT_PATH" 0; then
-                exit 12
-            fi
-            if codex_remote_tui_lookup_failure_allows_plain_fallback 1 "$EMPTY_TRACE_LOG" "$RESUME_ID" "$ROLLOUT_PATH" 0; then
-                exit 13
-            fi
-            if codex_remote_tui_lookup_failure_allows_plain_fallback 1 "$TRACE_LOG" "$RESUME_ID" "$WRONG_ROLLOUT_PATH" 0; then
-                exit 14
-            fi
-            if codex_remote_tui_lookup_failure_allows_plain_fallback 1 "$TRACE_LOG" "$RESUME_ID" "$EMPTY_ROLLOUT_PATH" 0; then
-                exit 15
-            fi
-            if codex_remote_tui_lookup_failure_allows_plain_fallback 1 "$TRACE_LOG" "$RESUME_ID" "$ROLLOUT_PATH" 1; then
-                exit 16
-            fi
-        ' || fail "Codex TUI trace classifier matrix failed"
-
-    rm -rf "$tmpdir"
-}
-
-run_codex_tui_trace_classifier_matrix_test
-
-run_app_server_runtime_thread_read_failure_falls_back_once_test() {
+run_app_server_runtime_remote_failure_does_not_infer_plain_fallback_test() {
     local tmpdir
     local fake_home
     local fake_bin
@@ -1174,27 +1101,16 @@ run_app_server_runtime_thread_read_failure_falls_back_once_test() {
     local socket
     local socket_pid
     local codex_log
-    local trace_dir_file
-    local trace_mode_file
-    local plain_started_file
-    local plain_release_file
     local rollout_path
-    local registry_file
-    local trace_dir
-    local wrapper_pid
     local status
     local resume_id="019eac34-764c-7893-9599-5b6000037cea"
 
-    tmpdir="$(mktemp -d "/private/tmp/tidey-codex-thread-read-fallback.XXXXXX")"
+    tmpdir="$(mktemp -d "/private/tmp/tidey-codex-remote-failure.XXXXXX")"
     fake_home="$tmpdir/home"
     fake_bin="$tmpdir/bin"
     registry_root="$fake_home/Library/Application Support/Tidey Remote Bridge/agent-sessions/codex"
     socket="$tmpdir/tidey.sock"
     codex_log="$tmpdir/codex.log"
-    trace_dir_file="$tmpdir/trace-dir"
-    trace_mode_file="$tmpdir/trace-mode"
-    plain_started_file="$tmpdir/plain-started"
-    plain_release_file="$tmpdir/plain-release"
     rollout_path="$fake_home/.codex/sessions/2026/06/09/rollout-2026-06-09T22-00-00-$resume_id.jsonl"
     mkdir -p "$fake_bin" "$registry_root" "$(dirname "$rollout_path")"
     printf '%s\n' '{"type":"session_meta"}' > "$rollout_path"
@@ -1235,13 +1151,112 @@ if [[ " $* " == *" --remote "* ]]; then
         shift
     done
     if [[ -n "$trace_dir" ]]; then
-        printf '%s\n' "$trace_dir" > "$FAKE_TRACE_DIR_FILE"
-        stat -f %Lp "$trace_dir" > "$FAKE_TRACE_MODE_FILE"
-        [[ "${RUST_LOG:-}" == "codex_tui=warn" ]] || exit 91
-        printf '%s\n' "2026-08-08T00:00:00Z WARN codex_tui thread/read failed during TUI session lookup session=$FAKE_RESUME_ID err=request timed out" > "$trace_dir/codex-tui.log"
-        chmod 600 "$trace_dir/codex-tui.log"
+        printf '%s\n' "trace-config" >> "$FAKE_CODEX_LOG"
+        printf '%s\n' "2026-08-08T00:00:00Z WARN codex_tui thread/read failed during TUI session lookup session=$FAKE_RESUME_ID err=permission denied" > "$trace_dir/codex-tui.log"
+    fi
+    if [[ -n "${RUST_LOG:-}" ]]; then
+        printf '%s\n' "rust-log" >> "$FAKE_CODEX_LOG"
     fi
     exit 1
+fi
+printf '%s\n' "plain" >> "$FAKE_CODEX_LOG"
+exit 0
+FAKE_CODEX
+    chmod +x "$fake_bin/codex"
+
+    python3 -c 'import socket, sys, time; sock = socket.socket(socket.AF_UNIX); sock.bind(sys.argv[1]); time.sleep(10)' "$socket" &
+    socket_pid="$!"
+    for _ in $(seq 1 50); do
+        [[ -S "$socket" ]] && break
+        sleep 0.02
+    done
+
+    set +e
+    HOME="$fake_home" \
+        CODEX_HOME="$fake_home/.codex" \
+        PATH="$fake_bin:/usr/bin:/bin" \
+        TIDEY_SOCKET_PATH="$socket" \
+        TIDEY_WORKSPACE_ID="workspace-1" \
+        TIDEY_PANEL_ID="panel-1" \
+        FAKE_CODEX_LOG="$codex_log" \
+        FAKE_RESUME_ID="$resume_id" \
+        TMPDIR="$tmpdir" \
+        "$CODEX_UNDER_TEST" resume "$resume_id" >/dev/null 2>&1
+    status=$?
+    set -e
+
+    [[ "$status" == "1" ]] || fail "generic thread/read warning did not preserve remote TUI status 1"
+    [[ "$(grep -c '^app-server$' "$codex_log")" == "1" ]] || fail "remote failure did not run app-server exactly once"
+    [[ "$(grep -c '^remote$' "$codex_log")" == "1" ]] || fail "remote failure did not run remote TUI exactly once"
+    if grep -q '^plain$' "$codex_log"; then
+        fail "generic thread/read warning inferred a tracked plain fallback"
+    fi
+    if grep -q '^trace-config$' "$codex_log"; then
+        fail "remote TUI still received the retired trace classifier configuration"
+    fi
+    if grep -q '^rust-log$' "$codex_log"; then
+        fail "remote TUI still received the retired trace classifier environment"
+    fi
+    [[ -z "$(find "$registry_root" -name 'codex-*.json' -print -quit)" ]] || fail "remote failure left a registry file"
+
+    kill "$socket_pid" 2>/dev/null || true
+    wait "$socket_pid" 2>/dev/null || true
+    rm -rf "$tmpdir"
+}
+
+run_app_server_runtime_remote_failure_does_not_infer_plain_fallback_test
+
+run_codex_runtime_compatibility_marker_routes_to_tracked_plain_test() {
+    local tmpdir
+    local fake_home
+    local fake_bin
+    local registry_root
+    local socket
+    local socket_pid
+    local codex_log
+    local marker_file
+    local plain_started_file
+    local plain_release_file
+    local rollout_path
+    local registry_file
+    local wrapper_pid
+    local status
+    local resume_id="019eac34-764c-7893-9599-5b6000037cea"
+
+    tmpdir="$(mktemp -d "/private/tmp/tidey-codex-marker-routing.XXXXXX")"
+    fake_home="$tmpdir/home"
+    fake_bin="$tmpdir/bin"
+    registry_root="$fake_home/Library/Application Support/Tidey Remote Bridge/agent-sessions/codex"
+    socket="$tmpdir/tidey.sock"
+    codex_log="$tmpdir/codex.log"
+    marker_file="$fake_home/Library/Application Support/Tidey Remote Bridge/codex-runtime-compatibility.json"
+    plain_started_file="$tmpdir/plain-started"
+    plain_release_file="$tmpdir/plain-release"
+    rollout_path="$fake_home/.codex/sessions/2026/06/09/rollout-2026-06-09T22-00-00-$resume_id.jsonl"
+    mkdir -p "$fake_bin" "$registry_root" "$(dirname "$rollout_path")"
+    printf '%s\n' '{"type":"session_meta"}' > "$rollout_path"
+    printf '%s\n' "{\"schema_version\":1,\"tracked_plain_overrides\":[{\"session_id\":\"$resume_id\",\"codex_version\":\"0.147.0\",\"reason\":\"app_server_thread_read_incompatible\"}]}" > "$marker_file"
+    chmod 600 "$marker_file"
+
+    cat > "$fake_bin/codex" <<'FAKE_CODEX'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "--version" ]]; then
+    printf '%s\n' "version" >> "$FAKE_CODEX_LOG"
+    printf '%s\n' "codex-cli 0.147.0"
+    exit 0
+fi
+if [[ "${1:-}" == "--help" ]]; then
+    printf '%s\n' "Usage: codex --profile <CONFIG_PROFILE_V2>"
+    exit 0
+fi
+if [[ " $* " == *" app-server "* ]]; then
+    printf '%s\n' "app-server" >> "$FAKE_CODEX_LOG"
+    exit 91
+fi
+if [[ " $* " == *" --remote "* ]]; then
+    printf '%s\n' "remote" >> "$FAKE_CODEX_LOG"
+    exit 92
 fi
 printf '%s\n' "plain" >> "$FAKE_CODEX_LOG"
 printf '%s\n' "$$" > "$FAKE_PLAIN_STARTED_FILE"
@@ -1266,12 +1281,11 @@ FAKE_CODEX
         TIDEY_SOCKET_PATH="$socket" \
         TIDEY_WORKSPACE_ID="workspace-1" \
         TIDEY_PANEL_ID="panel-1" \
+        TIDEY_CODEX_APP_SERVER_SOCKET_WAIT_ATTEMPTS=3 \
+        TIDEY_CODEX_APP_SERVER_SOCKET_WAIT_INTERVAL=0.01 \
         FAKE_CODEX_LOG="$codex_log" \
-        FAKE_TRACE_DIR_FILE="$trace_dir_file" \
-        FAKE_TRACE_MODE_FILE="$trace_mode_file" \
         FAKE_PLAIN_STARTED_FILE="$plain_started_file" \
         FAKE_PLAIN_RELEASE_FILE="$plain_release_file" \
-        FAKE_RESUME_ID="$resume_id" \
         TMPDIR="$tmpdir" \
         "$CODEX_UNDER_TEST" resume "$resume_id" >/dev/null 2>&1 &
     wrapper_pid="$!"
@@ -1281,18 +1295,18 @@ FAKE_CODEX
         kill -0 "$wrapper_pid" 2>/dev/null || break
         sleep 0.02
     done
-    [[ -f "$plain_started_file" ]] || fail "thread/read lookup failure did not fall back to plain Codex"
-    [[ -f "$trace_dir_file" ]] || fail "remote TUI did not receive a private trace directory"
-    [[ "$(cat "$trace_mode_file")" == "700" ]] || fail "remote TUI trace directory was not private"
-    trace_dir="$(cat "$trace_dir_file")"
-    [[ ! -e "$trace_dir" ]] || fail "remote TUI trace directory survived fallback cleanup"
-
-    [[ "$(grep -c '^app-server$' "$codex_log")" == "1" ]] || fail "thread/read fallback launched app-server more than once"
-    [[ "$(grep -c '^remote$' "$codex_log")" == "1" ]] || fail "thread/read fallback launched remote TUI more than once"
-    [[ "$(grep -c '^plain$' "$codex_log")" == "1" ]] || fail "thread/read fallback did not launch plain Codex exactly once"
+    [[ -f "$plain_started_file" ]] || fail "compatibility marker did not route to tracked plain Codex"
+    [[ "$(grep -c '^version$' "$codex_log")" == "1" ]] || fail "compatibility marker did not probe the real Codex version exactly once"
+    if grep -q '^app-server$' "$codex_log"; then
+        fail "compatibility marker started app-server before routing to tracked plain Codex"
+    fi
+    if grep -q '^remote$' "$codex_log"; then
+        fail "compatibility marker started a remote TUI before routing to tracked plain Codex"
+    fi
+    [[ "$(grep -c '^plain$' "$codex_log")" == "1" ]] || fail "compatibility marker did not launch tracked plain Codex exactly once"
 
     registry_file="$(find "$registry_root" -name 'codex-*.json' -print -quit)"
-    [[ -n "$registry_file" ]] || fail "thread/read fallback did not publish a plain registry"
+    [[ -n "$registry_file" ]] || fail "compatibility marker did not publish a tracked plain registry"
     python3 - "$registry_file" "$wrapper_pid" <<'PY'
 import json
 import sys
@@ -1309,14 +1323,14 @@ PY
     wait "$wrapper_pid"
     status=$?
     set -e
-    [[ "$status" == "0" ]] || fail "thread/read fallback should return plain Codex status"
+    [[ "$status" == "0" ]] || fail "compatibility marker should return tracked plain Codex status"
 
     kill "$socket_pid" 2>/dev/null || true
     wait "$socket_pid" 2>/dev/null || true
     rm -rf "$tmpdir"
 }
 
-run_app_server_runtime_thread_read_failure_falls_back_once_test
+run_codex_runtime_compatibility_marker_routes_to_tracked_plain_test
 
 run_app_server_runtime_startup_exit_falls_back_to_plain_test() {
     local tmpdir

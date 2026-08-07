@@ -443,21 +443,20 @@ codex_installed_version() {
     codex_installed_version_from_output "$output"
 }
 
-codex_runtime_compatibility_allows_tracked_plain() {
+codex_runtime_compatibility_expected_version() {
     local marker_file="${1:-}"
-    local installed_version="${2:-}"
-    local durable_id="${3:-}"
-    local expected_uid="${4:-}"
+    local durable_id="${2:-}"
+    local expected_uid="${3:-}"
 
-    [[ -n "$marker_file" && -n "$installed_version" && -n "$durable_id" && "$expected_uid" =~ ^[0-9]+$ ]] || return 1
-    python3 - "$marker_file" "$installed_version" "$durable_id" "$expected_uid" <<'PY'
+    [[ -n "$marker_file" && -n "$durable_id" && "$expected_uid" =~ ^[0-9]+$ ]] || return 1
+    python3 - "$marker_file" "$durable_id" "$expected_uid" <<'PY'
 import json
 import os
 import re
 import stat
 import sys
 
-path, installed_version, durable_id, expected_uid_text = sys.argv[1:]
+path, durable_id, expected_uid_text = sys.argv[1:]
 expected_uid = int(expected_uid_text)
 uuid_pattern = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
@@ -482,7 +481,7 @@ def strict_object(pairs):
     return result
 
 
-if not uuid_pattern.fullmatch(durable_id) or not version_pattern.fullmatch(installed_version):
+if not uuid_pattern.fullmatch(durable_id):
     reject()
 
 try:
@@ -535,7 +534,7 @@ if type(overrides) is not list:
     reject()
 
 seen = set()
-matched = False
+matched_version = None
 for override in overrides:
     if type(override) is not dict or set(override) != {"session_id", "codex_version", "reason"}:
         reject()
@@ -552,11 +551,26 @@ for override in overrides:
     if key in seen:
         reject()
     seen.add(key)
-    if key == (durable_id, installed_version):
-        matched = True
+    if session_id == durable_id:
+        if matched_version is not None:
+            reject()
+        matched_version = codex_version
 
-raise SystemExit(0 if matched else 1)
+if matched_version is None:
+    reject()
+print(matched_version)
 PY
+}
+
+codex_runtime_compatibility_allows_tracked_plain() {
+    local marker_file="${1:-}"
+    local installed_version="${2:-}"
+    local durable_id="${3:-}"
+    local expected_uid="${4:-}"
+    local configured_version=""
+
+    configured_version="$(codex_runtime_compatibility_expected_version "$marker_file" "$durable_id" "$expected_uid")" || return 1
+    [[ "$configured_version" == "$installed_version" ]]
 }
 
 codex_profile_flag() {
@@ -835,58 +849,6 @@ derive_session_id_from_rollout() {
     fi
 }
 
-create_private_codex_tui_trace_dir() {
-    local trace_dir=""
-
-    trace_dir="$(umask 077; mktemp -d "${TMPDIR:-/tmp}/tidey-codex-tui-trace.XXXXXX")" || return 1
-    chmod 700 "$trace_dir" || return 1
-    printf '%s' "$trace_dir"
-}
-
-codex_tui_trace_has_thread_read_lookup_failure() {
-    local trace_log_path="$1"
-    local expected_session_id="$2"
-    local expected_session_id_lower=""
-    local line=""
-    local line_lower=""
-    local message="thread/read failed during tui session lookup"
-    local session_pattern=""
-
-    is_uuid "$expected_session_id" || return 1
-    [[ -f "$trace_log_path" && -r "$trace_log_path" && -s "$trace_log_path" ]] || return 1
-    expected_session_id_lower="$(printf '%s' "$expected_session_id" | tr '[:upper:]' '[:lower:]')"
-    session_pattern="session=\"?${expected_session_id_lower}\"?([[:space:],]|$)"
-
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        line_lower="$(printf '%s' "$line" | tr '[:upper:]' '[:lower:]')"
-        if [[ "$line_lower" == *"$message"* && "$line_lower" =~ $session_pattern ]]; then
-            return 0
-        fi
-    done < "$trace_log_path"
-
-    return 1
-}
-
-codex_remote_tui_lookup_failure_allows_plain_fallback() {
-    local remote_status="$1"
-    local trace_log_path="$2"
-    local expected_session_id="$3"
-    local rollout_path="$4"
-    local fallback_attempted="$5"
-    local rollout_session_id=""
-    local rollout_session_id_lower=""
-    local expected_session_id_lower=""
-
-    [[ "$remote_status" == "1" && "$fallback_attempted" == "0" ]] || return 1
-    is_uuid "$expected_session_id" || return 1
-    [[ -f "$rollout_path" && -r "$rollout_path" && -s "$rollout_path" ]] || return 1
-    rollout_session_id="$(derive_session_id_from_rollout "$rollout_path")"
-    rollout_session_id_lower="$(printf '%s' "$rollout_session_id" | tr '[:upper:]' '[:lower:]')"
-    expected_session_id_lower="$(printf '%s' "$expected_session_id" | tr '[:upper:]' '[:lower:]')"
-    [[ "$rollout_session_id_lower" == "$expected_session_id_lower" ]] || return 1
-    codex_tui_trace_has_thread_read_lookup_failure "$trace_log_path" "$expected_session_id"
-}
-
 monitor_rollout_and_registry() {
     local pid="$1"
     local workspace_id="$2"
@@ -996,10 +958,7 @@ run_codex_app_server_runtime() {
     local app_server_pid=""
     local remote_tui_pid=""
     local app_server_log=""
-    local remote_trace_dir=""
-    local remote_trace_log=""
     local remote_status=0
-    local fallback_attempted=0
     local socket_wait_attempts="${TIDEY_CODEX_APP_SERVER_SOCKET_WAIT_ATTEMPTS:-1200}"
     local socket_wait_interval="${TIDEY_CODEX_APP_SERVER_SOCKET_WAIT_INTERVAL:-0.05}"
     local socket_wait_iteration=0
@@ -1020,7 +979,6 @@ run_codex_app_server_runtime() {
             kill_processes_matching_text "$socket_path"
         fi
         rm -f "${registry_file:-}"
-        rm -rf "${remote_trace_dir:-}"
         rm -rf "${socket_dir:-}"
     }
 
@@ -1078,35 +1036,14 @@ run_codex_app_server_runtime() {
         "$HOOK_DIR/tidey" codex-hook session-start || true
     fi
 
-    remote_trace_dir="$(create_private_codex_tui_trace_dir || true)"
-    if [[ -n "$remote_trace_dir" ]]; then
-        remote_trace_log="$remote_trace_dir/codex-tui.log"
-    fi
-
     set +e
-    if [[ -n "$remote_trace_dir" ]]; then
-        env TIDEY_CODEX_HOOKS_ENABLED=1 RUST_LOG=codex_tui=warn CODEX_HOME="$real_codex_home" "$real_codex" \
-            -c "log_dir=$(toml_inline_string "$remote_trace_dir")" \
-            --remote "unix://$socket_path" "$@" &
-    else
-        env TIDEY_CODEX_HOOKS_ENABLED=1 CODEX_HOME="$real_codex_home" "$real_codex" --remote "unix://$socket_path" "$@" &
-    fi
+    env TIDEY_CODEX_HOOKS_ENABLED=1 CODEX_HOME="$real_codex_home" "$real_codex" --remote "unix://$socket_path" "$@" &
     remote_tui_pid="$!"
     tidey_hydrate_tmux_pane_identity
     write_registry_file "$registry_file" "$TIDEY_WORKSPACE_ID" "$session_id" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$created_at" "$rollout_path" "codex_app_server" "$socket_path" "$app_server_pid" "$remote_tui_pid" "$thread_id" "$thread_id"
     wait "$remote_tui_pid"
     remote_status=$?
     set -e
-
-    if codex_remote_tui_lookup_failure_allows_plain_fallback \
-        "$remote_status" \
-        "$remote_trace_log" \
-        "$thread_id" \
-        "$rollout_path" \
-        "$fallback_attempted"; then
-        fallback_attempted=1
-        fallback_to_plain_codex "remote TUI thread/read lookup failed" 0 "$@"
-    fi
 
     cleanup_codex_app_server_runtime "$remote_status"
 }
@@ -1134,6 +1071,8 @@ main() {
     local app_server_runtime_session_id=""
     local app_server_runtime_thread_id=""
     local app_server_runtime_rollout_path=""
+    local compatibility_codex_version=""
+    local installed_codex_version=""
     local use_app_server_runtime=0
     local registry_file=""
     local profile_flag=""
@@ -1173,6 +1112,18 @@ main() {
         if [[ -n "$app_server_runtime_session_id" ]]; then
             app_server_runtime_thread_id="$app_server_runtime_session_id"
             app_server_runtime_rollout_path="$(codex_rollout_path_for_session_id "$real_codex_home" "$app_server_runtime_thread_id" || true)"
+            if [[ -f "$app_server_runtime_rollout_path" && -r "$app_server_runtime_rollout_path" && -s "$app_server_runtime_rollout_path" ]]; then
+                compatibility_codex_version="$(codex_runtime_compatibility_expected_version \
+                    "$CODEX_RUNTIME_COMPATIBILITY_FILE" \
+                    "$app_server_runtime_thread_id" \
+                    "$(id -u)" || true)"
+                if [[ -n "$compatibility_codex_version" ]]; then
+                    installed_codex_version="$(codex_installed_version "$real_codex" || true)"
+                    if [[ "$installed_codex_version" == "$compatibility_codex_version" ]]; then
+                        use_app_server_runtime=0
+                    fi
+                fi
+            fi
         fi
     fi
     registry_file="$REGISTRY_ROOT/codex-$session_id.json"
