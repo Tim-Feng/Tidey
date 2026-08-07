@@ -328,6 +328,121 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
         XCTAssertNotNil(gate.descriptor(forPanelID: "panel-1"))
     }
 
+    func testRemovalDropsRuntimeDescriptorAndRestoresOrdinaryTmuxFallback()
+        throws {
+        let gate = TideyRuntimeResumeDescriptorUpdateGate()
+        let first = gate.acceptUpdatePayload(
+            socketUpdatePayload(
+                durableResumeID: "thread-old",
+                workingDirectory: "/tmp/project"
+            ),
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertTrue(first.accepted)
+        let oldRemovalPayload = try removalPayload(
+            from: XCTUnwrap(
+                gate.runtimeAgentDescriptorSnapshots(
+                    currentWorkspaceIDByPanelID: [
+                        "panel-1": "workspace-1"
+                    ]
+                ).first
+            )
+        )
+
+        let second = gate.acceptUpdatePayload(
+            socketUpdatePayload(
+                durableResumeID: "thread-new",
+                workingDirectory: "/tmp/project"
+            ),
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertEqual(second.descriptor?.revision, 2)
+
+        let staleRevision = gate.removeRuntimeAgentDescriptorPayload(
+            oldRemovalPayload,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertFalse(staleRevision.accepted)
+        XCTAssertFalse(staleRevision.changed)
+        XCTAssertEqual(
+            staleRevision.errorCode,
+            "descriptor_changed"
+        )
+        XCTAssertEqual(
+            gate.descriptor(forPanelID: "panel-1")?
+                .agent?.durableResumeID,
+            "thread-new"
+        )
+
+        let currentRemovalPayload = try removalPayload(
+            from: XCTUnwrap(
+                gate.runtimeAgentDescriptorSnapshots(
+                    currentWorkspaceIDByPanelID: [
+                        "panel-1": "workspace-1"
+                    ]
+                ).first
+            )
+        )
+        let staleBinding = gate.removeRuntimeAgentDescriptorPayload(
+            currentRemovalPayload,
+            currentWorkspaceID: "workspace-other",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertEqual(staleBinding.errorCode, "stale_binding")
+        XCTAssertNotNil(gate.descriptor(forPanelID: "panel-1"))
+
+        let removed = gate.removeRuntimeAgentDescriptorPayload(
+            currentRemovalPayload,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertTrue(removed.accepted)
+        XCTAssertTrue(removed.changed)
+        XCTAssertNil(gate.descriptor(forPanelID: "panel-1"))
+
+        let repeated = gate.removeRuntimeAgentDescriptorPayload(
+            currentRemovalPayload,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertTrue(repeated.accepted)
+        XCTAssertFalse(repeated.changed)
+
+        let fallback = try XCTUnwrap(
+            TideyRuntimeResumeDescriptorFactory().descriptor(
+                fromOrdinaryTmuxMetadata: [
+                    "socket_name": "tidey",
+                    "target_session": "work",
+                ]
+            )
+        )
+        XCTAssertEqual(fallback.kind, .ordinaryTmux)
+        XCTAssertEqual(fallback.restorePolicy, .attachOnly)
+
+        let ordinaryGate = TideyRuntimeResumeDescriptorUpdateGate(
+            initialDescriptorsByPanelID: [
+                "panel-1": fallback
+            ]
+        )
+        let ordinaryRemoval =
+            ordinaryGate.removeRuntimeAgentDescriptorPayload(
+                currentRemovalPayload,
+                currentWorkspaceID: "workspace-1",
+                currentPanelID: "panel-1"
+            )
+        XCTAssertEqual(
+            ordinaryRemoval.errorCode,
+            "not_agent_descriptor"
+        )
+        XCTAssertEqual(
+            ordinaryGate.descriptor(forPanelID: "panel-1")?.kind,
+            .ordinaryTmux
+        )
+    }
+
     func testOrdinaryTmuxMetadataProducesAttachOnlyDescriptorWithoutBridge() throws {
         let factory = TideyRuntimeResumeDescriptorFactory()
         let pathDescriptor = try XCTUnwrap(
@@ -1167,6 +1282,22 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
                     ]
                 ]
             ]
+        ]
+    }
+
+    private func removalPayload(
+        from snapshot: [String: Any]
+    ) throws -> [String: Any] {
+        [
+            "binding": try XCTUnwrap(
+                snapshot["binding"] as? [String: Any]
+            ),
+            "expected_revision": try XCTUnwrap(
+                snapshot["revision"]
+            ),
+            "expected_descriptor": try XCTUnwrap(
+                snapshot["descriptor"] as? [String: Any]
+            ),
         ]
     }
 }

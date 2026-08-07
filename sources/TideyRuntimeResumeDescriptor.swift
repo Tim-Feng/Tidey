@@ -910,6 +910,18 @@ private struct TideyRuntimeResumeDescriptorUpdateWire: Codable {
     let descriptor: TideyRuntimeResumeDescriptorContentWire
 }
 
+private struct TideyRuntimeResumeDescriptorRemovalWire: Codable {
+    let binding: TideyRuntimeResumeDescriptorBindingWire
+    let expectedRevision: Int64
+    let expectedDescriptor: TideyRuntimeResumeDescriptorContentWire
+
+    enum CodingKeys: String, CodingKey {
+        case binding
+        case expectedRevision = "expected_revision"
+        case expectedDescriptor = "expected_descriptor"
+    }
+}
+
 @objc(TideyRuntimeResumeDescriptorUpdateResult)
 @objcMembers
 final class TideyRuntimeResumeDescriptorUpdateResult: NSObject {
@@ -1072,6 +1084,80 @@ final class TideyRuntimeResumeDescriptorUpdateGate: NSObject {
                 "descriptor": descriptor,
             ]
         }
+    }
+
+    @objc(
+        removeRuntimeAgentDescriptorPayload:currentWorkspaceID:currentPanelID:
+    )
+    func removeRuntimeAgentDescriptorPayload(
+        _ payload: [String: Any],
+        currentWorkspaceID: String,
+        currentPanelID: String
+    ) -> TideyRuntimeResumeDescriptorUpdateResult {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let removal: TideyRuntimeResumeDescriptorRemovalWire
+        do {
+            removal = try TideyRuntimeResumeDescriptorDictionaryCodec
+                .decode(
+                    TideyRuntimeResumeDescriptorRemovalWire.self,
+                    from: payload
+                )
+        } catch {
+            return rejected(errorCode: "invalid_descriptor")
+        }
+        guard !removal.binding.workspaceID.isEmpty,
+              !removal.binding.panelID.isEmpty,
+              removal.binding.workspaceID == currentWorkspaceID,
+              removal.binding.panelID == currentPanelID else {
+            return rejected(errorCode: "stale_binding")
+        }
+
+        let expectedCanonicalContent: Data
+        do {
+            let expectedDescriptor = try removal
+                .expectedDescriptor.validatedModel(
+                    revision: removal.expectedRevision
+                )
+            guard expectedDescriptor.kind == .agent else {
+                return rejected(
+                    errorCode: "not_agent_descriptor"
+                )
+            }
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            expectedCanonicalContent = try encoder.encode(
+                removal.expectedDescriptor
+            )
+        } catch {
+            return rejected(errorCode: "invalid_descriptor")
+        }
+
+        guard let existing = entriesByPanelID[currentPanelID] else {
+            return TideyRuntimeResumeDescriptorUpdateResult(
+                accepted: true,
+                changed: false,
+                descriptor: nil,
+                errorCode: nil
+            )
+        }
+        guard existing.descriptor.kind == .agent else {
+            return rejected(errorCode: "not_agent_descriptor")
+        }
+        guard existing.descriptor.revision ==
+                removal.expectedRevision,
+              existing.canonicalContent ==
+                expectedCanonicalContent else {
+            return rejected(errorCode: "descriptor_changed")
+        }
+        entriesByPanelID[currentPanelID] = nil
+        return TideyRuntimeResumeDescriptorUpdateResult(
+            accepted: true,
+            changed: true,
+            descriptor: nil,
+            errorCode: nil
+        )
     }
 
     @objc(replaceDescriptorsByPanelID:)
