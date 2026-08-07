@@ -133,6 +133,238 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
         )
     }
 
+    func testColdRebootInventoryProducesCompleteDurableDescriptorSet()
+        throws {
+        let registry = OrdinaryTmuxPanelRegistry()
+        let socket = OrdinaryTmuxSocketSelector.name(
+            "tidey-agents"
+        )
+        var routesByWorkspace =
+            [String: [OrdinaryTmuxPanelRoute]]()
+        var records = [RuntimeResumeAgentRegistryRecord]()
+        var statesBySessionID =
+            [String: RuntimeResumeTmuxSessionState]()
+
+        let genesisWorkspaceID = "workspace-1"
+        let genesisCarrierPanelID = "carrier-genesis"
+        let genesisSessionID = "$100"
+        var genesisWindows = [RuntimeResumeTmuxWindowState]()
+        for windowIndex in 0 ..< 12 {
+            let paneID = "%g\(windowIndex)"
+            let panelID = "genesis-window-\(windowIndex)"
+            routesByWorkspace[genesisWorkspaceID, default: []]
+                .append(
+                    OrdinaryTmuxPanelRoute(
+                        workspaceID: genesisWorkspaceID,
+                        panelID: panelID,
+                        carrierPanelID: genesisCarrierPanelID,
+                        socket: socket,
+                        sessionID: genesisSessionID,
+                        sessionName: "genesis-extraction",
+                        windowID: "@g\(windowIndex)",
+                        windowIndex: windowIndex,
+                        activePaneID: paneID,
+                        cwd: "/tmp/genesis/\(windowIndex)",
+                        currentCommand:
+                            windowIndex < 11 ? "claude" : "bash"
+                    )
+                )
+            genesisWindows.append(
+                RuntimeResumeTmuxWindowState(
+                    windowID: "@g\(windowIndex)",
+                    index: windowIndex,
+                    name: windowIndex < 11
+                        ? "claude-\(windowIndex + 1)"
+                        : "monitor",
+                    isActive: windowIndex == 11,
+                    panes: [
+                        RuntimeResumeTmuxPaneState(
+                            paneID: paneID,
+                            index: 0,
+                            workingDirectory:
+                                "/tmp/genesis/\(windowIndex)",
+                            isActive: true
+                        ),
+                    ]
+                )
+            )
+            if windowIndex < 11 {
+                let durableID = "claude-\(windowIndex + 1)"
+                records.append(
+                    RuntimeResumeAgentRegistryRecord(
+                        binding: RuntimeResumeDescriptorBinding(
+                            workspaceID: genesisWorkspaceID,
+                            panelID: panelID,
+                            tmuxPaneID: paneID
+                        ),
+                        vendor: .claude,
+                        durableResumeID: durableID,
+                        launch: RuntimeResumeLaunchSpecification(
+                            executable: "claude",
+                            arguments: ["--resume", durableID],
+                            workingDirectory:
+                                "/tmp/genesis/\(windowIndex)"
+                        )
+                    )
+                )
+            }
+        }
+        statesBySessionID[genesisSessionID] =
+            RuntimeResumeTmuxSessionState(
+                sessionID: genesisSessionID,
+                sessionName: "genesis-extraction",
+                windows: genesisWindows
+            )
+
+        for offset in 0 ..< 10 {
+            let workspaceID = "workspace-\((offset % 6) + 2)"
+            let sessionID = "$\(101 + offset)"
+            let isStorage = offset == 9
+            let canonicalSessionName = isStorage
+                ? "storage"
+                : "carrier-\(offset + 1)-session"
+            let persistedSessionName = isStorage
+                ? "s"
+                : canonicalSessionName
+            let carrierPanelID = "carrier-\(offset + 1)"
+            let panelID = "agent-\(offset + 1)"
+            let paneID = "%a\(offset + 1)"
+            let vendor: RuntimeResumeAgentVendor =
+                offset < 5 ? .claude : .codex
+            let durableID = offset < 5
+                ? "claude-\(offset + 12)"
+                : "codex-\(offset - 4)"
+            let executable = vendor == .claude
+                ? "claude"
+                : "codex"
+            let resumeArgument = vendor == .claude
+                ? "--resume"
+                : "resume"
+            let workingDirectory = "/tmp/agent/\(offset + 1)"
+            routesByWorkspace[workspaceID, default: []].append(
+                OrdinaryTmuxPanelRoute(
+                    workspaceID: workspaceID,
+                    panelID: panelID,
+                    carrierPanelID: carrierPanelID,
+                    socket: socket,
+                    sessionID: sessionID,
+                    sessionName: persistedSessionName,
+                    windowID: "@a\(offset + 1)",
+                    windowIndex: 0,
+                    activePaneID: paneID,
+                    cwd: workingDirectory,
+                    currentCommand: executable
+                )
+            )
+            records.append(
+                RuntimeResumeAgentRegistryRecord(
+                    binding: RuntimeResumeDescriptorBinding(
+                        workspaceID: workspaceID,
+                        panelID: panelID,
+                        tmuxPaneID: paneID
+                    ),
+                    vendor: vendor,
+                    durableResumeID: durableID,
+                    launch: RuntimeResumeLaunchSpecification(
+                        executable: executable,
+                        arguments: [resumeArgument, durableID],
+                        workingDirectory: workingDirectory
+                    )
+                )
+            )
+            statesBySessionID[sessionID] =
+                RuntimeResumeTmuxSessionState(
+                    sessionID: sessionID,
+                    sessionName: canonicalSessionName,
+                    windows: [
+                        RuntimeResumeTmuxWindowState(
+                            windowID: "@a\(offset + 1)",
+                            index: 0,
+                            name: executable,
+                            isActive: true,
+                            panes: [
+                                RuntimeResumeTmuxPaneState(
+                                    paneID: paneID,
+                                    index: 0,
+                                    workingDirectory:
+                                        workingDirectory,
+                                    isActive: true
+                                ),
+                            ]
+                        ),
+                    ]
+                )
+        }
+        for workspaceID in routesByWorkspace.keys.sorted() {
+            registry.replaceRoutes(
+                workspaceID: workspaceID,
+                routes: routesByWorkspace[workspaceID] ?? []
+            )
+        }
+        let planner = OrdinaryTmuxRuntimeResumeCarrierPlanner(
+            registry: registry,
+            sessionReader: StubRuntimeResumeTmuxSessionReader(
+                statesBySessionID: statesBySessionID
+            )
+        )
+
+        let plans = try planner.publicationPlans(for: records)
+        let launches = plans.flatMap {
+            $0.topology.windows.flatMap {
+                $0.panes.compactMap(\.launch)
+            }
+        }
+        let durableIDs = launches.map { $0.arguments[1] }
+        let occurrences = Dictionary(
+            grouping: durableIDs,
+            by: { $0 }
+        ).mapValues(\.count)
+        let expectedIDs = Set(
+            (1 ... 16).map { "claude-\($0)" } +
+                (1 ... 5).map { "codex-\($0)" }
+        )
+
+        XCTAssertEqual(routesByWorkspace.keys.count, 7)
+        XCTAssertEqual(plans.count, 11)
+        XCTAssertEqual(Set(plans.map(\.binding.panelID)).count, 11)
+        XCTAssertEqual(launches.filter {
+            $0.executable == "claude"
+        }.count, 16)
+        XCTAssertEqual(launches.filter {
+            $0.executable == "codex"
+        }.count, 5)
+        XCTAssertEqual(Set(durableIDs), expectedIDs)
+        XCTAssertTrue(occurrences.values.allSatisfy { $0 == 1 })
+
+        let genesis = try XCTUnwrap(
+            plans.first {
+                $0.target.tmuxSession == "genesis-extraction"
+            }
+        )
+        XCTAssertEqual(genesis.topology.windows.count, 12)
+        XCTAssertEqual(
+            genesis.topology.windows.flatMap(\.panes)
+                .compactMap(\.launch).count,
+            11
+        )
+        XCTAssertEqual(
+            genesis.topology.windows.flatMap(\.panes)
+                .filter { $0.launch == nil }.count,
+            1
+        )
+        XCTAssertEqual(genesis.topology.activeWindowIndex, 11)
+        XCTAssertEqual(genesis.topology.activePaneIndex, 0)
+        XCTAssertEqual(genesis.binding.tmuxPaneID, "%g11")
+
+        let storage = try XCTUnwrap(
+            plans.first { $0.target.tmuxSession == "storage" }
+        )
+        XCTAssertEqual(storage.target.tmuxSession, "storage")
+        XCTAssertFalse(
+            plans.contains { $0.target.tmuxSession == "s" }
+        )
+    }
+
     func testRegistryReaderPublishesLiveResolvedBindingWithoutRewritingRegistry()
         throws {
         let supportDirectory = FileManager.default.temporaryDirectory
