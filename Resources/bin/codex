@@ -860,7 +860,10 @@ run_codex_app_server_runtime() {
     local app_server_pid=""
     local remote_tui_pid=""
     local app_server_log=""
+    local remote_trace_dir=""
+    local remote_trace_log=""
     local remote_status=0
+    local fallback_attempted=0
     local socket_wait_attempts="${TIDEY_CODEX_APP_SERVER_SOCKET_WAIT_ATTEMPTS:-1200}"
     local socket_wait_interval="${TIDEY_CODEX_APP_SERVER_SOCKET_WAIT_INTERVAL:-0.05}"
     local socket_wait_iteration=0
@@ -881,6 +884,7 @@ run_codex_app_server_runtime() {
             kill_processes_matching_text "$socket_path"
         fi
         rm -f "${registry_file:-}"
+        rm -rf "${remote_trace_dir:-}"
         rm -rf "${socket_dir:-}"
     }
 
@@ -892,8 +896,9 @@ run_codex_app_server_runtime() {
 
     fallback_to_plain_codex() {
         local reason="$1"
+        local emit_session_start_hook="$2"
         local fallback_log="$real_codex_home/.tmp/tidey-codex-app-server-startup-fallback.log"
-        shift
+        shift 2
         mkdir -p "$real_codex_home/.tmp" 2>/dev/null || true
         {
             printf 'reason=%s\n' "$reason"
@@ -903,7 +908,7 @@ run_codex_app_server_runtime() {
         } > "$fallback_log" 2>/dev/null || true
         cleanup_codex_app_server_artifacts
         trap - EXIT HUP INT TERM
-        launch_tracked_plain_codex_runtime "$real_codex" "$real_codex_home" "$profile_flag" "$profile_name" "$registry_file" "$session_id" "$created_at" 1 "$@"
+        launch_tracked_plain_codex_runtime "$real_codex" "$real_codex_home" "$profile_flag" "$profile_name" "$registry_file" "$session_id" "$created_at" "$emit_session_start_hook" "$@"
     }
 
     trap cleanup_codex_app_server_runtime EXIT HUP INT TERM
@@ -922,12 +927,12 @@ run_codex_app_server_runtime() {
             break
         fi
         if ! kill -0 "$app_server_pid" 2>/dev/null; then
-            fallback_to_plain_codex "app-server exited before socket was ready" "$@"
+            fallback_to_plain_codex "app-server exited before socket was ready" 1 "$@"
         fi
         sleep "$socket_wait_interval"
     done
     if [[ ! -S "$socket_path" ]]; then
-        fallback_to_plain_codex "socket was not ready before timeout" "$@"
+        fallback_to_plain_codex "socket was not ready before timeout" 1 "$@"
     fi
 
     tidey_hydrate_tmux_pane_identity
@@ -937,14 +942,36 @@ run_codex_app_server_runtime() {
         "$HOOK_DIR/tidey" codex-hook session-start || true
     fi
 
+    remote_trace_dir="$(create_private_codex_tui_trace_dir || true)"
+    if [[ -n "$remote_trace_dir" ]]; then
+        remote_trace_log="$remote_trace_dir/codex-tui.log"
+    fi
+
     set +e
-    env TIDEY_CODEX_HOOKS_ENABLED=1 CODEX_HOME="$real_codex_home" "$real_codex" --remote "unix://$socket_path" "$@" &
+    if [[ -n "$remote_trace_dir" ]]; then
+        env TIDEY_CODEX_HOOKS_ENABLED=1 RUST_LOG=codex_tui=warn CODEX_HOME="$real_codex_home" "$real_codex" \
+            -c "log_dir=$(toml_inline_string "$remote_trace_dir")" \
+            --remote "unix://$socket_path" "$@" &
+    else
+        env TIDEY_CODEX_HOOKS_ENABLED=1 CODEX_HOME="$real_codex_home" "$real_codex" --remote "unix://$socket_path" "$@" &
+    fi
     remote_tui_pid="$!"
     tidey_hydrate_tmux_pane_identity
     write_registry_file "$registry_file" "$TIDEY_WORKSPACE_ID" "$session_id" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$created_at" "$rollout_path" "codex_app_server" "$socket_path" "$app_server_pid" "$remote_tui_pid" "$thread_id" "$thread_id"
     wait "$remote_tui_pid"
     remote_status=$?
     set -e
+
+    if codex_remote_tui_lookup_failure_allows_plain_fallback \
+        "$remote_status" \
+        "$remote_trace_log" \
+        "$thread_id" \
+        "$rollout_path" \
+        "$fallback_attempted"; then
+        fallback_attempted=1
+        fallback_to_plain_codex "remote TUI thread/read lookup failed" 0 "$@"
+    fi
+
     cleanup_codex_app_server_runtime "$remote_status"
 }
 
