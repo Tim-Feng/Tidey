@@ -475,6 +475,18 @@
 - 所有 durable save 入口都必須共用 hydration readiness gate
   - 定期儲存、`needsSave` flush 與 termination synchronous save 都要等 driver restoration、controller readiness、workspace hydration 三者完成；只封鎖 scheduler 仍會從其他入口寫入 provisional graph
   - scheduler 被拒絕後會依自己的 dirty/retry 狀態重試，這和 `_driver.needsSave` 是兩條機制；不能假設 periodic refusal 會自動設定 `needsSave`
+- Remote 顯示用的 logical panel identity 不能直接當 durable restore identity
+  - 同一個 native carrier panel 可以投影成多個 tmux window／agent panel；若每個 logical panel 各發布 descriptor，native binding gate 會拒絕 logical panel ID，或讓同一 carrier 最後只留下其中一個 agent
+  - 保存前要依 `(workspace, native carrier panel, tmux socket, session ID)` 聚合成一份 descriptor，並把每個 Claude／Codex resume command 放到實際 pane 的 topology launch；active pane 可以是沒有 launch 的 monitor
+- runtime descriptor publisher 必須讀取已由 live process／pane 證據校正的 in-memory binding
+  - registry JSON 是 wrapper 啟動時的歷史觀測，workspace／panel 可能已經 rename、move 或重新投影；重新讀磁碟會把正確的 live binding 降回 stale binding
+  - 校正結果只作為當前發布權威，不要反向改寫 wrapper-owned registry；遇到 pane、carrier 或 durable ID 衝突時 fail closed，不發布部分 topology
+- tmux restore target 必須保存 server 回報的完整 canonical session name
+  - 使用者啟動時可用 `tmux attach -t s` 這類 prefix，但 prefix 不是 durable identity；冷重開後 exact attach 到 `=s` 不會等同 `storage`
+  - topology capture 要以穩定的 session ID 查詢 `list-panes -s`，再保存輸出中的 `session_name`、真實 `window_index` 與 `pane_index`
+- 正常 ⌘Q／重開不能當成 cold-reboot agent restoration 驗收
+  - tmux server 還活著時只是在 reattach，會遮蔽 descriptor 遺漏；部署前要比對 live agent ID 集合與 saved descriptor pane-launch ID 集合，要求每個 ID 恰好一次
+  - production-shaped fixture 與實際快照都要檢查 native carrier 數、完整 agent 數、multi-window carrier 的 monitor 空 launch，以及 canonical session target；allowlist 以外的 monitor process 只恢復 window／cwd，不宣稱自動重啟
 
 ## Testing
 
