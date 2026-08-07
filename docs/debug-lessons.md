@@ -510,6 +510,15 @@
 - 事故 artifact 要標明時間與資料來源，不能把較早的 SavedState 當成最後 reboot input
   - 2026-08-07 的較早 native graph 是 2 個 create + 9 個 attach-only descriptor，但最後重開前已發布 11 個 v2 create carrier／21 launches；復原時前者只提供 workspace graph，descriptor inventory 由最後 rollout 的 canonical manifest 取代
   - 保存 unified log、native DB、collapsed DB、canonical manifest 與雜湊；若舊版未記 command status／stderr，文件必須明說這段證據不存在，不能用後來的推論補成既成事實
+- Codex app-server 的 generic `thread/read failed during TUI session lookup` warning 不能當成自動切換 runtime 的依據
+  - Codex 0.147 對所有 `thread_read` request error 都輸出同一段 warning，外層 trace 看不出 writer、權限、認證、transport 或特定大型 thread 不相容；rollout 大小也沒有上游保證的門檻
+  - 只有人工確認過的 exact durable ID ＋ exact Codex 版本，才可由 Tidey-owned、owner/mode/schema 驗證通過的相容性檔改走 tracked plain；缺檔、壞檔、錯 ID、錯版本或不安全權限一律維持 app-server
+  - wrapper 不得依 warning、exit status、等待時間或 rollout 大小自行新增相容性紀錄；版本升級後 exact-version 不再命中，驗證新版本可用後再由 operator 刪除舊紀錄
+  - tracked plain 仍可提供 history、一般輸入與 `/status`，但 structured prompt、approval 與完整 lifecycle/busy 狀態屬於 app-server 能力，驗收文件要明講差異
+- app-server cleanup 不得保留已由 `wait` 回收的 Remote TUI PID
+  - `wait` 取得 status 後立刻清空 PID；否則後續 cleanup 可能對已重用的 PID 發 signal
+  - 手動 cleanup／fallback 前先解除 `EXIT`、`HUP`、`INT`、`TERM` traps；cleanup 函式本身也先解除 traps 再執行，避免 `exit` 重新觸發 EXIT trap 而清理兩次
+  - 測試直接攔截 signal 嘗試與 socket-directory cleanup 次數，不要靠作業系統真的重用 PID，也不要只驗最後程序已死亡
 
 ## Testing
 
