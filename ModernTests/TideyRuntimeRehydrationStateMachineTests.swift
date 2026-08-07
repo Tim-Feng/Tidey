@@ -329,6 +329,93 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
         XCTAssertNotNil(builder as Any)
     }
 
+    func testMultiAgentRestoreLaunchesEveryPaneAndPreservesActiveSelection()
+        throws {
+        let claudeLaunch = TideyRuntimeLaunchSpecification(
+            executable: "claude",
+            arguments: ["--resume", "claude-session"],
+            workingDirectory: "/tmp/claude"
+        )
+        let codexLaunch = TideyRuntimeLaunchSpecification(
+            executable: "codex",
+            arguments: ["resume", "codex-thread"],
+            workingDirectory: "/tmp/codex"
+        )
+        let descriptor = TideyRuntimeResumeDescriptor(
+            descriptorVersion:
+                TideyRuntimeResumeDescriptor
+                    .topologyOwnedAgentDescriptorVersion,
+            revision: 1,
+            kind: .agent,
+            restorePolicy: .create,
+            target: TideyRuntimeResumeTarget(
+                defaultSocketAndTmuxSession: "work"
+            ),
+            topology: TideyRuntimeTmuxTopology(
+                windows: [
+                    TideyRuntimeTmuxWindowTopology(
+                        index: 1,
+                        name: "agents",
+                        panes: [
+                            TideyRuntimeTmuxPaneTopology(
+                                index: 0,
+                                workingDirectory: "/tmp/claude",
+                                launch: claudeLaunch
+                            ),
+                            TideyRuntimeTmuxPaneTopology(
+                                index: 1,
+                                workingDirectory: "/tmp/codex",
+                                launch: codexLaunch
+                            ),
+                        ]
+                    ),
+                    TideyRuntimeTmuxWindowTopology(
+                        index: 2,
+                        name: "monitor",
+                        panes: [
+                            TideyRuntimeTmuxPaneTopology(
+                                index: 0,
+                                workingDirectory: "/tmp/monitor",
+                                launch: nil
+                            ),
+                        ]
+                    ),
+                ],
+                activeWindowIndex: 2,
+                activePaneIndex: 0
+            ),
+            agent: nil
+        )
+
+        let plan = try XCTUnwrap(
+            TideyRuntimeTmuxAgentLaunchPlanBuilder()
+                .plan(for: descriptor)
+        )
+
+        XCTAssertEqual(plan.jobs.count, 2)
+        XCTAssertEqual(
+            plan.jobs.map {
+                [
+                    $0.windowIndex,
+                    $0.paneIndex,
+                ]
+            },
+            [
+                [1, 0],
+                [1, 1],
+            ]
+        )
+        XCTAssertEqual(
+            plan.jobs.map(\.launch.arguments),
+            [
+                ["--resume", "claude-session"],
+                ["resume", "codex-thread"],
+            ]
+        )
+        XCTAssertEqual(plan.activeWindowIndex, 2)
+        XCTAssertEqual(plan.activePaneIndex, 0)
+    }
+
     func testRepeatedCompletionCannotAttachCreateOrResumeTwice() {
         let targetProbe = TideyRuntimeTargetProbeSpy()
         let topologyCreator = TideyRuntimeTopologyCreatorSpy()

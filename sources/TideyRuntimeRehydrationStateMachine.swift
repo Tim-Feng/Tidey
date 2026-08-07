@@ -292,7 +292,126 @@ final class TideyRuntimeTmuxAgentLaunchPlanBuilder: NSObject {
     func plan(
         for descriptor: TideyRuntimeResumeDescriptor
     ) -> TideyRuntimeTmuxAgentLaunchPlan? {
-        nil
+        guard descriptor.kind == .agent,
+              descriptor.restorePolicy == .create,
+              let topology = descriptor.topology else {
+            return nil
+        }
+        let windows = topology.windows.sorted {
+            $0.index < $1.index
+        }
+        guard windows.isEmpty == false,
+              Set(windows.map(\.index)).count == windows.count,
+              windows.allSatisfy({ $0.index >= 0 }),
+              windows.contains(where: {
+                  $0.index == topology.activeWindowIndex &&
+                      $0.panes.contains(where: {
+                          $0.index == topology.activePaneIndex
+                      })
+              }) else {
+            return nil
+        }
+
+        let topologyOwnsLaunches =
+            descriptor.topologyOwnsAgentLaunches
+        let topLevelLaunch = descriptor.agent?.launch
+        if topologyOwnsLaunches {
+            guard descriptor.agent == nil else {
+                return nil
+            }
+        } else {
+            guard descriptor.descriptorVersion ==
+                    TideyRuntimeResumeDescriptor
+                        .currentDescriptorVersion,
+                  let topLevelLaunch,
+                  Self.isAllowlisted(topLevelLaunch) else {
+                return nil
+            }
+        }
+
+        var jobs = [TideyRuntimeTmuxPaneLaunchJob]()
+        var durableResumeKeys = Set<String>()
+        for window in windows {
+            let panes = window.panes.sorted {
+                $0.index < $1.index
+            }
+            guard panes.isEmpty == false,
+                  Set(panes.map(\.index)).count == panes.count,
+                  panes.map(\.index) == Array(0 ..< panes.count) else {
+                return nil
+            }
+            for pane in panes {
+                var launch = pane.launch
+                let isActive =
+                    window.index == topology.activeWindowIndex &&
+                    pane.index == topology.activePaneIndex
+                if topologyOwnsLaunches == false && isActive {
+                    if let launch,
+                       Self.launchesAreEqual(
+                        launch,
+                        topLevelLaunch
+                       ) == false {
+                        return nil
+                    }
+                    launch = topLevelLaunch
+                }
+                guard let launch else {
+                    continue
+                }
+                guard Self.isAllowlisted(launch) else {
+                    return nil
+                }
+                let durableResumeKey = [
+                    launch.executable,
+                    launch.arguments[1],
+                ].joined(separator: "|")
+                guard durableResumeKeys
+                    .insert(durableResumeKey).inserted else {
+                    return nil
+                }
+                jobs.append(
+                    TideyRuntimeTmuxPaneLaunchJob(
+                        windowIndex: window.index,
+                        paneIndex: pane.index,
+                        launch: launch
+                    )
+                )
+            }
+        }
+        guard jobs.isEmpty == false else {
+            return nil
+        }
+        return TideyRuntimeTmuxAgentLaunchPlan(
+            jobs: jobs,
+            activeWindowIndex: topology.activeWindowIndex,
+            activePaneIndex: topology.activePaneIndex
+        )
+    }
+
+    private static func isAllowlisted(
+        _ launch: TideyRuntimeLaunchSpecification
+    ) -> Bool {
+        let isClaude = launch.executable == "claude" &&
+            launch.arguments.count == 2 &&
+            launch.arguments[0] == "--resume"
+        let isCodex = launch.executable == "codex" &&
+            launch.arguments.count == 2 &&
+            launch.arguments[0] == "resume"
+        return (isClaude || isCodex) &&
+            launch.arguments[1].isEmpty == false &&
+            launch.workingDirectory?.isEmpty != true
+    }
+
+    private static func launchesAreEqual(
+        _ lhs: TideyRuntimeLaunchSpecification,
+        _ rhs: TideyRuntimeLaunchSpecification?
+    ) -> Bool {
+        guard let rhs else {
+            return false
+        }
+        return lhs.executable == rhs.executable &&
+            lhs.arguments == rhs.arguments &&
+            lhs.workingDirectory == rhs.workingDirectory
     }
 }
 

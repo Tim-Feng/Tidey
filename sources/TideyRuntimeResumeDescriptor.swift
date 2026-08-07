@@ -717,7 +717,14 @@ private struct TideyRuntimeResumeDescriptorContentWire: Codable {
                 .flatMap(\.panes)
                 .compactMap(\.launch)
             var durableResumeKeys = Set<String>()
-            guard launches.isEmpty == false,
+            guard topologyModel.windows.allSatisfy({ window in
+                      window.index >= 0 &&
+                          window.panes.sorted(by: {
+                              $0.index < $1.index
+                          }).map(\.index) ==
+                          Array(0 ..< window.panes.count)
+                  }),
+                  launches.isEmpty == false,
                   launches.allSatisfy({ launch in
                       let vendor = launch.executable
                       let durableResumeID = launch.arguments[1]

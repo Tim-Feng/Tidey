@@ -429,6 +429,36 @@ static NSArray<NSString *> *TideyRuntimeNonemptyLines(NSString *output) {
     return lines;
 }
 
+static NSDictionary<NSNumber *, NSString *> *
+TideyRuntimePaneIDsByIndex(NSString *output) {
+    NSMutableDictionary<NSNumber *, NSString *> *result =
+        [NSMutableDictionary dictionary];
+    for (NSString *line in [output componentsSeparatedByCharactersInSet:
+                            [NSCharacterSet newlineCharacterSet]]) {
+        if (line.length == 0) {
+            continue;
+        }
+        NSArray<NSString *> *fields =
+            [line componentsSeparatedByString:@"\t"];
+        if (fields.count != 2) {
+            return nil;
+        }
+        NSString *indexString = fields[0];
+        NSString *paneID = fields[1];
+        NSInteger index = indexString.integerValue;
+        if (index < 0 ||
+            ![[NSString stringWithFormat:@"%ld", (long)index]
+                isEqualToString:indexString] ||
+            ![paneID hasPrefix:@"%"] ||
+            paneID.length < 2 ||
+            result[@(index)] != nil) {
+            return nil;
+        }
+        result[@(index)] = paneID;
+    }
+    return result.count > 0 ? result : nil;
+}
+
 static NSArray<TideyRuntimeTmuxWindowTopology *> *
 TideyRuntimeSortedWindows(TideyRuntimeTmuxTopology *topology) {
     return [topology.windows sortedArrayUsingComparator:
@@ -597,11 +627,15 @@ static BOOL TideyRuntimeLaunchesAreEqual(
 }
 
 - (BOOL)createTopologyForDescriptor:(TideyRuntimeResumeDescriptor *)descriptor {
+    BOOL topologyOwnsAgentLaunches =
+        descriptor.topologyOwnsAgentLaunches;
     if (descriptor.kind != TideyRuntimeResumeKindAgent ||
         descriptor.restorePolicy != TideyRuntimeRestorePolicyCreate ||
         descriptor.target.tmuxSession.length == 0 ||
-        !descriptor.agent ||
-        !TideyRuntimeLaunchIsAllowlisted(descriptor.agent.launch)) {
+        (topologyOwnsAgentLaunches && !descriptor.topology) ||
+        (!topologyOwnsAgentLaunches &&
+         (!descriptor.agent ||
+          !TideyRuntimeLaunchIsAllowlisted(descriptor.agent.launch)))) {
         return NO;
     }
 
@@ -611,6 +645,14 @@ static BOOL TideyRuntimeLaunchesAreEqual(
             : @[];
     if (descriptor.topology && windows.count == 0) {
         return NO;
+    }
+    if (descriptor.topology) {
+        TideyRuntimeTmuxAgentLaunchPlanBuilder *builder =
+            [[[TideyRuntimeTmuxAgentLaunchPlanBuilder alloc] init]
+                autorelease];
+        if (![builder planForDescriptor:descriptor]) {
+            return NO;
+        }
     }
     for (TideyRuntimeTmuxWindowTopology *window in windows) {
         if (window.index < 0 || window.panes.count == 0) {
@@ -857,26 +899,31 @@ static BOOL TideyRuntimeLaunchesAreEqual(
 
 - (BOOL)resumeAgentWithDescriptor:(TideyRuntimeResumeDescriptor *)descriptor {
     TideyRuntimeAgentResumeSpecification *agent = descriptor.agent;
+    BOOL topologyOwnsAgentLaunches =
+        descriptor.topologyOwnsAgentLaunches;
     if (descriptor.kind != TideyRuntimeResumeKindAgent ||
         descriptor.restorePolicy != TideyRuntimeRestorePolicyCreate ||
-        !agent ||
-        !TideyRuntimeLaunchIsAllowlisted(agent.launch)) {
+        (topologyOwnsAgentLaunches && !descriptor.topology) ||
+        (!topologyOwnsAgentLaunches &&
+         (!agent || !TideyRuntimeLaunchIsAllowlisted(agent.launch)))) {
         return NO;
     }
-    NSString *expectedExecutable =
-        agent.vendor == TideyRuntimeAgentVendorClaude
-            ? @"claude"
-            : @"codex";
-    NSString *expectedPrefix =
-        agent.vendor == TideyRuntimeAgentVendorClaude
-            ? @"--resume"
-            : @"resume";
-    if (![agent.launch.executable isEqualToString:expectedExecutable] ||
-        ![agent.launch.arguments isEqualToArray:@[
-            expectedPrefix,
-            agent.durableResumeID,
-        ]]) {
-        return NO;
+    if (!topologyOwnsAgentLaunches) {
+        NSString *expectedExecutable =
+            agent.vendor == TideyRuntimeAgentVendorClaude
+                ? @"claude"
+                : @"codex";
+        NSString *expectedPrefix =
+            agent.vendor == TideyRuntimeAgentVendorClaude
+                ? @"--resume"
+                : @"resume";
+        if (![agent.launch.executable isEqualToString:expectedExecutable] ||
+            ![agent.launch.arguments isEqualToArray:@[
+                expectedPrefix,
+                agent.durableResumeID,
+            ]]) {
+            return NO;
+        }
     }
 
     NSMutableArray<NSDictionary *> *jobs = [NSMutableArray array];
@@ -911,6 +958,16 @@ static BOOL TideyRuntimeLaunchesAreEqual(
             @"launch": agent.launch,
         }];
     } else {
+        TideyRuntimeTmuxAgentLaunchPlanBuilder *builder =
+            [[[TideyRuntimeTmuxAgentLaunchPlanBuilder alloc] init]
+                autorelease];
+        TideyRuntimeTmuxAgentLaunchPlan *plan =
+            [builder planForDescriptor:descriptor];
+        if (!plan) {
+            return NO;
+        }
+        NSMutableDictionary<NSString *, NSString *> *paneIDsByCoordinate =
+            [NSMutableDictionary dictionary];
         for (TideyRuntimeTmuxWindowTopology *window in windows) {
             NSArray<TideyRuntimeTmuxPaneTopology *> *panes =
                 TideyRuntimeSortedPanes(window);
@@ -925,48 +982,47 @@ static BOOL TideyRuntimeLaunchesAreEqual(
                             window.index
                         ),
                         @"-F",
-                        @"#{pane_id}",
+                        @"#{pane_index}\t#{pane_id}",
                     ],
                     &output
                 )) {
                 return NO;
             }
-            NSArray<NSString *> *paneIDs =
-                TideyRuntimeNonemptyLines(output);
-            if (paneIDs.count != panes.count) {
+            NSDictionary<NSNumber *, NSString *> *paneIDsByIndex =
+                TideyRuntimePaneIDsByIndex(output);
+            if (paneIDsByIndex.count != panes.count) {
                 return NO;
             }
-            for (NSUInteger paneOffset = 0;
-                 paneOffset < panes.count;
-                 paneOffset++) {
-                TideyRuntimeTmuxPaneTopology *pane = panes[paneOffset];
-                TideyRuntimeLaunchSpecification *launch = pane.launch;
-                BOOL isActive =
-                    window.index ==
-                        descriptor.topology.activeWindowIndex &&
-                    pane.index ==
-                        descriptor.topology.activePaneIndex;
-                if (isActive) {
-                    activePaneID = paneIDs[paneOffset];
-                    if (launch &&
-                        !TideyRuntimeLaunchesAreEqual(
-                            launch,
-                            agent.launch
-                        )) {
-                        return NO;
-                    }
-                    launch = agent.launch;
+            for (TideyRuntimeTmuxPaneTopology *pane in panes) {
+                NSString *paneID = paneIDsByIndex[@(pane.index)];
+                if (!paneID) {
+                    return NO;
                 }
-                if (launch) {
-                    if (!TideyRuntimeLaunchIsAllowlisted(launch)) {
-                        return NO;
-                    }
-                    [jobs addObject:@{
-                        @"pane_id": paneIDs[paneOffset],
-                        @"launch": launch,
-                    }];
-                }
+                paneIDsByCoordinate[
+                    [NSString stringWithFormat:@"%ld:%ld",
+                     (long)window.index,
+                     (long)pane.index]
+                ] = paneID;
             }
+        }
+        activePaneID = paneIDsByCoordinate[
+            [NSString stringWithFormat:@"%ld:%ld",
+             (long)plan.activeWindowIndex,
+             (long)plan.activePaneIndex]
+        ];
+        for (TideyRuntimeTmuxPaneLaunchJob *job in plan.jobs) {
+            NSString *paneID = paneIDsByCoordinate[
+                [NSString stringWithFormat:@"%ld:%ld",
+                 (long)job.windowIndex,
+                 (long)job.paneIndex]
+            ];
+            if (!paneID || !TideyRuntimeLaunchIsAllowlisted(job.launch)) {
+                return NO;
+            }
+            [jobs addObject:@{
+                @"pane_id": paneID,
+                @"launch": job.launch,
+            }];
         }
     }
     if (!activePaneID || jobs.count == 0) {
