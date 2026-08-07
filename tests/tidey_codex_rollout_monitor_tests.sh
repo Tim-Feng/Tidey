@@ -434,6 +434,94 @@ run_codex_tui_trace_fallback_seams_exist_test() {
 
 run_codex_tui_trace_fallback_seams_exist_test
 
+run_codex_runtime_compatibility_marker_matrix_test() {
+    local tmpdir
+    local marker_file
+    local malformed_file
+    local duplicate_key_file
+    local hardlink_file
+    local hardlink_source
+    local symlink_file
+    local missing_file
+    local resume_id="019eac34-764c-7893-9599-5b6000037cea"
+    local unrelated_id="019eac34-764c-7893-9599-5b6000037ceb"
+    local expected_uid
+    local wrong_uid
+
+    tmpdir="$(mktemp -d "/private/tmp/tidey-codex-runtime-compatibility.XXXXXX")"
+    marker_file="$tmpdir/codex-runtime-compatibility.json"
+    malformed_file="$tmpdir/malformed.json"
+    duplicate_key_file="$tmpdir/duplicate-key.json"
+    hardlink_file="$tmpdir/hardlink.json"
+    hardlink_source="$tmpdir/hardlink-source.json"
+    symlink_file="$tmpdir/symlink.json"
+    missing_file="$tmpdir/missing.json"
+    expected_uid="$(id -u)"
+    wrong_uid="$((expected_uid + 1))"
+
+    cat > "$marker_file" <<JSON
+{"schema_version":1,"tracked_plain_overrides":[{"session_id":"$resume_id","codex_version":"0.147.0","reason":"app_server_thread_read_incompatible"}]}
+JSON
+    chmod 600 "$marker_file"
+    printf '%s\n' '{"schema_version":1' > "$malformed_file"
+    chmod 600 "$malformed_file"
+    printf '%s\n' "{\"schema_version\":1,\"schema_version\":1,\"tracked_plain_overrides\":[{\"session_id\":\"$resume_id\",\"codex_version\":\"0.147.0\",\"reason\":\"app_server_thread_read_incompatible\"}]}" > "$duplicate_key_file"
+    chmod 600 "$duplicate_key_file"
+    cp "$marker_file" "$hardlink_source"
+    chmod 600 "$hardlink_source"
+    ln "$hardlink_source" "$hardlink_file"
+    ln -s "$marker_file" "$symlink_file"
+
+    CODEX_UNDER_TEST="$CODEX_UNDER_TEST" \
+        MARKER_FILE="$marker_file" \
+        MALFORMED_FILE="$malformed_file" \
+        DUPLICATE_KEY_FILE="$duplicate_key_file" \
+        HARDLINK_FILE="$hardlink_file" \
+        SYMLINK_FILE="$symlink_file" \
+        MISSING_FILE="$missing_file" \
+        RESUME_ID="$resume_id" \
+        UNRELATED_ID="$unrelated_id" \
+        EXPECTED_UID="$expected_uid" \
+        WRONG_UID="$wrong_uid" \
+        bash -c '
+            set -euo pipefail
+            source "$CODEX_UNDER_TEST"
+            codex_runtime_compatibility_allows_tracked_plain "$MARKER_FILE" "0.147.0" "$RESUME_ID" "$EXPECTED_UID"
+            if codex_runtime_compatibility_allows_tracked_plain "$MARKER_FILE" "0.148.0" "$RESUME_ID" "$EXPECTED_UID"; then
+                exit 31
+            fi
+            if codex_runtime_compatibility_allows_tracked_plain "$MARKER_FILE" "0.147.0" "$UNRELATED_ID" "$EXPECTED_UID"; then
+                exit 32
+            fi
+            if codex_runtime_compatibility_allows_tracked_plain "$MALFORMED_FILE" "0.147.0" "$RESUME_ID" "$EXPECTED_UID"; then
+                exit 33
+            fi
+            if codex_runtime_compatibility_allows_tracked_plain "$DUPLICATE_KEY_FILE" "0.147.0" "$RESUME_ID" "$EXPECTED_UID"; then
+                exit 37
+            fi
+            if codex_runtime_compatibility_allows_tracked_plain "$HARDLINK_FILE" "0.147.0" "$RESUME_ID" "$EXPECTED_UID"; then
+                exit 38
+            fi
+            if codex_runtime_compatibility_allows_tracked_plain "$SYMLINK_FILE" "0.147.0" "$RESUME_ID" "$EXPECTED_UID"; then
+                exit 39
+            fi
+            if codex_runtime_compatibility_allows_tracked_plain "$MISSING_FILE" "0.147.0" "$RESUME_ID" "$EXPECTED_UID"; then
+                exit 34
+            fi
+            if codex_runtime_compatibility_allows_tracked_plain "$MARKER_FILE" "0.147.0" "$RESUME_ID" "$WRONG_UID"; then
+                exit 35
+            fi
+            chmod 644 "$MARKER_FILE"
+            if codex_runtime_compatibility_allows_tracked_plain "$MARKER_FILE" "0.147.0" "$RESUME_ID" "$EXPECTED_UID"; then
+                exit 36
+            fi
+        ' || fail "Codex runtime compatibility marker matrix failed"
+
+    rm -rf "$tmpdir"
+}
+
+run_codex_runtime_compatibility_marker_matrix_test
+
 run_app_server_runtime_resume_allows_second_instance_without_clobbering_live_record_test() {
     local tmpdir
     local fake_home
