@@ -2,7 +2,9 @@
 
 set -euo pipefail
 
-REGISTRY_ROOT="$HOME/Library/Application Support/Tidey Remote Bridge/agent-sessions/codex"
+TIDEY_REMOTE_BRIDGE_SUPPORT_ROOT="$HOME/Library/Application Support/Tidey Remote Bridge"
+REGISTRY_ROOT="$TIDEY_REMOTE_BRIDGE_SUPPORT_ROOT/agent-sessions/codex"
+CODEX_RUNTIME_COMPATIBILITY_FILE="$TIDEY_REMOTE_BRIDGE_SUPPORT_ROOT/codex-runtime-compatibility.json"
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 # shellcheck source=/dev/null
 source "$HOOK_DIR/tidey-tmux-pane-identity"
@@ -420,6 +422,28 @@ find_real_codex() {
         [[ "$d" == "$self_dir" ]] && continue
         [[ -x "$d/codex" ]] && printf '%s' "$d/codex" && return 0
     done
+    return 1
+}
+
+codex_installed_version_from_output() {
+    local output="$1"
+
+    if [[ "$output" =~ ^codex-cli[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+        printf '%s' "${BASH_REMATCH[1]}"
+        return 0
+    fi
+    return 1
+}
+
+codex_installed_version() {
+    local real_codex="$1"
+    local output=""
+
+    output="$("$real_codex" --version 2>&1)" || return 1
+    codex_installed_version_from_output "$output"
+}
+
+codex_runtime_compatibility_allows_tracked_plain() {
     return 1
 }
 
