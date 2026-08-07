@@ -11,7 +11,7 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
         let resolved =
             TideyRuntimeLegacyDefaultSocketTargetResolver.resolve(
                 target: target,
-                descriptorVersion: 2,
+                descriptorVersion: 3,
                 kind: .agent,
                 restorePolicy: .create,
                 environment: [:],
@@ -20,6 +20,142 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
             )
 
         XCTAssertTrue(resolved === target)
+    }
+
+    func testLegacyDefaultSocketTargetResolverMigratesOnlyEligibleCanonicalPaths() {
+        let canonicalize: (String) -> String? = { path in
+            switch path {
+            case "/tmp":
+                return "/private/tmp"
+            case "/alternate-tmux":
+                return "/private/tmp/alternate-tmux"
+            default:
+                return nil
+            }
+        }
+        func resolve(
+            _ path: String,
+            version: Int = 2,
+            kind: TideyRuntimeResumeKind = .agent,
+            policy: TideyRuntimeRestorePolicy = .create,
+            environment: [String: String] = [:]
+        ) -> TideyRuntimeResumeTarget {
+            TideyRuntimeLegacyDefaultSocketTargetResolver.resolve(
+                target: TideyRuntimeResumeTarget(
+                    socketPath: path,
+                    tmuxSession: "work"
+                ),
+                descriptorVersion: version,
+                kind: kind,
+                restorePolicy: policy,
+                environment: environment,
+                userID: 501,
+                canonicalizeExistingPath: canonicalize
+            )
+        }
+        func assertDefault(
+            _ target: TideyRuntimeResumeTarget,
+            file: StaticString = #filePath,
+            line: UInt = #line
+        ) {
+            XCTAssertEqual(
+                target.socketEndpointKind,
+                .defaultSocket,
+                file: file,
+                line: line
+            )
+            XCTAssertNil(target.socketPath, file: file, line: line)
+            XCTAssertNil(target.socketName, file: file, line: line)
+            XCTAssertEqual(
+                target.tmuxSession,
+                "work",
+                file: file,
+                line: line
+            )
+        }
+        func assertPath(
+            _ target: TideyRuntimeResumeTarget,
+            _ path: String,
+            file: StaticString = #filePath,
+            line: UInt = #line
+        ) {
+            XCTAssertEqual(
+                target.socketEndpointKind,
+                .path,
+                file: file,
+                line: line
+            )
+            XCTAssertEqual(
+                target.socketPath,
+                path,
+                file: file,
+                line: line
+            )
+        }
+
+        assertDefault(resolve("/private/tmp/tmux-501/default"))
+        assertDefault(resolve("/tmp/tmux-501/default"))
+        assertDefault(
+            resolve(
+                "/private/tmp/alternate-tmux/tmux-501/default",
+                environment: ["TMUX_TMPDIR": "/alternate-tmux"]
+            )
+        )
+        assertDefault(
+            resolve(
+                "/private/tmp/tmux-501/default",
+                environment: ["TMUX_TMPDIR": "/missing"]
+            )
+        )
+
+        assertPath(
+            resolve(
+                "/private/tmp/tmux-501/default",
+                version: 3
+            ),
+            "/private/tmp/tmux-501/default"
+        )
+        assertPath(
+            resolve(
+                "/private/tmp/tmux-501/default",
+                version: 1
+            ),
+            "/private/tmp/tmux-501/default"
+        )
+        assertPath(
+            resolve(
+                "/private/tmp/tmux-501/default",
+                kind: .ordinaryTmux,
+                policy: .attachOnly
+            ),
+            "/private/tmp/tmux-501/default"
+        )
+        assertPath(
+            resolve("/custom/default"),
+            "/custom/default"
+        )
+        assertPath(
+            resolve("/private/tmp/tmux-502/default"),
+            "/private/tmp/tmux-502/default"
+        )
+        assertPath(
+            resolve("/private/tmp/tmux-501/not-default"),
+            "/private/tmp/tmux-501/not-default"
+        )
+        assertPath(
+            resolve(
+                "/var/folders/random/tmux-501/default",
+                environment: ["TMPDIR": "/var/folders/random"]
+            ),
+            "/var/folders/random/tmux-501/default"
+        )
+        assertPath(
+            resolve(
+                "/private/tmp/tmux-501/default",
+                environment: ["TMUX_TMPDIR": "/alternate-tmux"]
+            ),
+            "/private/tmp/tmux-501/default"
+        )
     }
 
     func testRestoredSessionIdentityOptionSeamsCompile() {
@@ -147,6 +283,66 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
 
         XCTAssertTrue(descriptor.topologyOwnsAgentLaunches)
         XCTAssertNil(descriptor.agent)
+    }
+
+    func testTopologyDescriptorVersionGateMigratesV2ButTrustsV3EndpointKind()
+        throws {
+        let socketPath =
+            "/private/tmp/tmux-\(getuid())/default"
+        let launch = TideyRuntimeLaunchSpecification(
+            executable: "codex",
+            arguments: ["resume", "thread-1"],
+            workingDirectory: "/tmp/project"
+        )
+        func descriptor(
+            version: Int
+        ) -> TideyRuntimeResumeDescriptor {
+            TideyRuntimeResumeDescriptor(
+                descriptorVersion: version,
+                revision: 1,
+                kind: .agent,
+                restorePolicy: .create,
+                target: TideyRuntimeResumeTarget(
+                    socketPath: socketPath,
+                    tmuxSession: "work"
+                ),
+                topology: TideyRuntimeTmuxTopology(
+                    windows: [
+                        TideyRuntimeTmuxWindowTopology(
+                            index: 0,
+                            name: "codex",
+                            panes: [
+                                TideyRuntimeTmuxPaneTopology(
+                                    index: 0,
+                                    workingDirectory: "/tmp/project",
+                                    launch: launch
+                                ),
+                            ]
+                        ),
+                    ],
+                    activeWindowIndex: 0,
+                    activePaneIndex: 0
+                ),
+                agent: nil
+            )
+        }
+        let codec = TideyRuntimeResumeDescriptorDictionaryCodec()
+
+        let v2 = try codec.decode(codec.encode(descriptor(version: 2)))
+        let v3 = try codec.decode(codec.encode(descriptor(version: 3)))
+
+        XCTAssertTrue(v2.topologyOwnsAgentLaunches)
+        XCTAssertTrue(v3.topologyOwnsAgentLaunches)
+        XCTAssertEqual(
+            v2.target?.socketEndpointKind,
+            .defaultSocket
+        )
+        XCTAssertNil(v2.target?.socketPath)
+        XCTAssertEqual(v3.target?.socketEndpointKind, .path)
+        XCTAssertEqual(v3.target?.socketPath, socketPath)
+        XCTAssertThrowsError(
+            try codec.encode(descriptor(version: 4))
+        )
     }
 
     func testMultiAgentCreateDescriptorRoundTripsEveryPaneLaunch()

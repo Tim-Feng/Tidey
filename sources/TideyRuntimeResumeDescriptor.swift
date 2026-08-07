@@ -149,7 +149,77 @@ struct TideyRuntimeLegacyDefaultSocketTargetResolver {
         userID: UInt32,
         canonicalizeExistingPath: ExistingPathCanonicalizer
     ) -> TideyRuntimeResumeTarget {
-        target
+        guard descriptorVersion == 2,
+              kind == .agent,
+              restorePolicy == .create,
+              target.socketEndpointKind == .path,
+              let socketPath = target.socketPath else {
+            return target
+        }
+        let configuredRoot = environment["TMUX_TMPDIR"].flatMap {
+            $0.isEmpty ? nil : $0
+        }
+        let canonicalRoot = configuredRoot.flatMap(
+            canonicalizeExistingPath
+        ) ?? canonicalizeExistingPath("/tmp")
+        guard let canonicalRoot else {
+            return target
+        }
+        let expectedPath = (canonicalRoot as NSString)
+            .appendingPathComponent("tmux-\(userID)/default")
+        guard normalizedMacOSTmpAlias(socketPath) ==
+                normalizedMacOSTmpAlias(expectedPath) else {
+            return target
+        }
+        return TideyRuntimeResumeTarget(
+            defaultSocketAndTmuxSession: target.tmuxSession
+        )
+    }
+
+    static func resolveForCurrentProcess(
+        target: TideyRuntimeResumeTarget,
+        descriptorVersion: Int,
+        kind: TideyRuntimeResumeKind,
+        restorePolicy: TideyRuntimeRestorePolicy
+    ) -> TideyRuntimeResumeTarget {
+        resolve(
+            target: target,
+            descriptorVersion: descriptorVersion,
+            kind: kind,
+            restorePolicy: restorePolicy,
+            environment: ProcessInfo.processInfo.environment,
+            userID: getuid(),
+            canonicalizeExistingPath: canonicalizeExistingPath
+        )
+    }
+
+    private static func canonicalizeExistingPath(
+        _ path: String
+    ) -> String? {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(
+            atPath: path,
+            isDirectory: &isDirectory
+        ), isDirectory.boolValue else {
+            return nil
+        }
+        return URL(fileURLWithPath: path)
+            .resolvingSymlinksInPath()
+            .path
+    }
+
+    private static func normalizedMacOSTmpAlias(
+        _ path: String
+    ) -> String {
+        if path == "/private/tmp" {
+            return "/tmp"
+        }
+        if path.hasPrefix("/private/tmp/") {
+            return "/tmp/" + String(
+                path.dropFirst("/private/tmp/".count)
+            )
+        }
+        return path
     }
 }
 
@@ -175,7 +245,8 @@ final class TideyRuntimeAgentResumeSpecification: NSObject {
 @objcMembers
 final class TideyRuntimeResumeDescriptor: NSObject {
     static let currentDescriptorVersion = 1
-    static let topologyOwnedAgentDescriptorVersion = 2
+    static let legacyTopologyOwnedAgentDescriptorVersion = 2
+    static let topologyOwnedAgentDescriptorVersion = 3
 
     let descriptorVersion: Int
     let revision: Int64
@@ -186,7 +257,10 @@ final class TideyRuntimeResumeDescriptor: NSObject {
     let agent: TideyRuntimeAgentResumeSpecification?
 
     var topologyOwnsAgentLaunches: Bool {
-        descriptorVersion == Self.topologyOwnedAgentDescriptorVersion &&
+        (descriptorVersion ==
+            Self.legacyTopologyOwnedAgentDescriptorVersion ||
+            descriptorVersion ==
+            Self.topologyOwnedAgentDescriptorVersion) &&
             kind == .agent &&
             restorePolicy == .create
     }
@@ -681,6 +755,9 @@ private struct TideyRuntimeResumeDescriptorContentWire: Codable {
                     .currentDescriptorVersion ||
                 descriptorVersion ==
                 TideyRuntimeResumeDescriptor
+                    .legacyTopologyOwnedAgentDescriptorVersion ||
+                descriptorVersion ==
+                TideyRuntimeResumeDescriptor
                     .topologyOwnedAgentDescriptorVersion else {
             throw TideyRuntimeResumeDescriptorCodecError
                 .unsupportedDescriptorVersion(descriptorVersion)
@@ -715,11 +792,22 @@ private struct TideyRuntimeResumeDescriptorContentWire: Codable {
             throw TideyRuntimeResumeDescriptorCodecError
                 .malformedField("restore_policy")
         }
-        let targetModel = try target?.validatedModel()
+        let decodedTargetModel = try target?.validatedModel()
+        let targetModel = decodedTargetModel.map {
+            TideyRuntimeLegacyDefaultSocketTargetResolver
+                .resolveForCurrentProcess(
+                    target: $0,
+                    descriptorVersion: descriptorVersion,
+                    kind: kindModel,
+                    restorePolicy: policyModel
+                )
+        }
         let topologyModel = try topology?.validatedModel()
         let agentModel = try agent?.validatedModel()
 
         if descriptorVersion == TideyRuntimeResumeDescriptor
+            .legacyTopologyOwnedAgentDescriptorVersion ||
+            descriptorVersion == TideyRuntimeResumeDescriptor
             .topologyOwnedAgentDescriptorVersion {
             guard kindModel == .agent,
                   policyModel == .create,
