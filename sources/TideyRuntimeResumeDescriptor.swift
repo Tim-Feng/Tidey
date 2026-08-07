@@ -137,6 +137,22 @@ final class TideyRuntimeResumeTarget: NSObject {
     }
 }
 
+struct TideyRuntimeLegacyDefaultSocketTargetResolver {
+    typealias ExistingPathCanonicalizer = (String) -> String?
+
+    static func resolve(
+        target: TideyRuntimeResumeTarget,
+        descriptorVersion: Int,
+        kind: TideyRuntimeResumeKind,
+        restorePolicy: TideyRuntimeRestorePolicy,
+        environment: [String: String],
+        userID: UInt32,
+        canonicalizeExistingPath: ExistingPathCanonicalizer
+    ) -> TideyRuntimeResumeTarget {
+        target
+    }
+}
+
 @objc(TideyRuntimeAgentResumeSpecification)
 @objcMembers
 final class TideyRuntimeAgentResumeSpecification: NSObject {

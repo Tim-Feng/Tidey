@@ -2,6 +2,26 @@ import XCTest
 @testable import iTerm2SharedARC
 
 final class TideyRuntimeResumeDescriptorTests: XCTestCase {
+    func testLegacyDefaultSocketTargetResolverSeamCompiles() {
+        let target = TideyRuntimeResumeTarget(
+            socketPath: "/private/tmp/tmux-501/default",
+            tmuxSession: "work"
+        )
+
+        let resolved =
+            TideyRuntimeLegacyDefaultSocketTargetResolver.resolve(
+                target: target,
+                descriptorVersion: 2,
+                kind: .agent,
+                restorePolicy: .create,
+                environment: [:],
+                userID: 501,
+                canonicalizeExistingPath: { $0 }
+            )
+
+        XCTAssertTrue(resolved === target)
+    }
+
     func testRestoredSessionIdentityOptionSeamsCompile() {
         let options: [String: Any] = [
             PTYSessionArrangementOptionsTideyWorkspaceID:
