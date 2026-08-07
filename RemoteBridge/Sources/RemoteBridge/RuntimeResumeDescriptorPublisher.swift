@@ -717,10 +717,52 @@ struct RuntimeResumeDescriptorSocketUpdate:
     let content: RuntimeResumeDescriptorContent
 }
 
+struct RuntimeResumeDescriptorSlot:
+    Equatable,
+    Hashable,
+    Sendable {
+    let workspaceID: String
+    let panelID: String
+
+    init(workspaceID: String, panelID: String) {
+        self.workspaceID = workspaceID
+        self.panelID = panelID
+    }
+
+    init(binding: RuntimeResumeDescriptorBinding) {
+        workspaceID = binding.workspaceID
+        panelID = binding.panelID
+    }
+}
+
+struct RuntimeResumeStoredDescriptor:
+    Equatable,
+    Sendable {
+    let slot: RuntimeResumeDescriptorSlot
+    let revision: Int64
+    let content: RuntimeResumeDescriptorContent
+}
+
+struct RuntimeResumeDescriptorSocketRemoval:
+    Equatable,
+    Sendable {
+    let slot: RuntimeResumeDescriptorSlot
+    let expectedRevision: Int64
+    let expectedContent: RuntimeResumeDescriptorContent
+}
+
 protocol RuntimeResumeDescriptorSocketSending: Sendable {
     func send(
         _ update: RuntimeResumeDescriptorSocketUpdate
     ) throws
+}
+
+protocol RuntimeResumeDescriptorInventoryReconciling: Sendable {
+    func currentAgentDescriptors()
+        throws -> [RuntimeResumeStoredDescriptor]
+    func remove(
+        _ removal: RuntimeResumeDescriptorSocketRemoval
+    ) throws -> Bool
 }
 
 private struct RuntimeResumeDescriptorSocketPayload:
@@ -775,6 +817,8 @@ final class RuntimeResumeDescriptorPublisher:
         RuntimeResumeTmuxCarrierPlanning?
     private let canonicalizer:
         RuntimeResumeDescriptorCanonicalizer
+    private let inventoryReconciler:
+        RuntimeResumeDescriptorInventoryReconciling?
     private let socketSender:
         RuntimeResumeDescriptorSocketSending
     private let queue: DispatchQueue
@@ -792,6 +836,8 @@ final class RuntimeResumeDescriptorPublisher:
         canonicalizer:
             RuntimeResumeDescriptorCanonicalizer =
                 RuntimeResumeDescriptorCanonicalizer(),
+        inventoryReconciler:
+            RuntimeResumeDescriptorInventoryReconciling? = nil,
         socketSender:
             RuntimeResumeDescriptorSocketSending,
         queue: DispatchQueue = DispatchQueue(
@@ -803,6 +849,7 @@ final class RuntimeResumeDescriptorPublisher:
         self.topologyReader = topologyReader
         self.carrierPlanner = carrierPlanner
         self.canonicalizer = canonicalizer
+        self.inventoryReconciler = inventoryReconciler
         self.socketSender = socketSender
         self.queue = queue
     }

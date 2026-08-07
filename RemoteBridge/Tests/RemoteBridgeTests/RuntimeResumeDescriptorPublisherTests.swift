@@ -4,6 +4,60 @@ import XCTest
 @testable import RemoteBridge
 
 final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
+    func testDescriptorRemovalSocketSeamCompiles() {
+        let slot = RuntimeResumeDescriptorSlot(
+            workspaceID: "workspace-1",
+            panelID: "panel-1"
+        )
+        let content = RuntimeResumeDescriptorContent(
+            descriptorVersion: 1,
+            kind: .agent,
+            restorePolicy: .directResume,
+            target: nil,
+            topology: nil,
+            agent: RuntimeResumeAgentSpecification(
+                vendor: .codex,
+                durableResumeID: "thread-1",
+                launch: RuntimeResumeLaunchSpecification(
+                    executable: "codex",
+                    arguments: ["resume", "thread-1"],
+                    workingDirectory: "/tmp/project"
+                )
+            )
+        )
+        let stored = RuntimeResumeStoredDescriptor(
+            slot: slot,
+            revision: 4,
+            content: content
+        )
+        let removal = RuntimeResumeDescriptorSocketRemoval(
+            slot: slot,
+            expectedRevision: stored.revision,
+            expectedContent: stored.content
+        )
+        let reconciler = StubRuntimeResumeInventoryReconciler(
+            descriptors: [stored]
+        )
+        let publisher = RuntimeResumeDescriptorPublisher(
+            registryReader: StubRuntimeResumeRegistryReader(
+                records: []
+            ),
+            topologyReader: StubRuntimeResumeTopologyReader(
+                snapshotsByBinding: [:]
+            ),
+            inventoryReconciler: reconciler,
+            socketSender: RecordingRuntimeResumeSocketSender()
+        )
+
+        XCTAssertEqual(stored.slot, slot)
+        XCTAssertEqual(removal.expectedRevision, 4)
+        XCTAssertEqual(
+            try! reconciler.currentAgentDescriptors(),
+            [stored]
+        )
+        XCTAssertNotNil(publisher as Any)
+    }
+
     func testRegistrySnapshotCompletenessSeamCompiles() {
         let snapshot = RuntimeResumeAgentRegistrySnapshot(
             sourceRecordCount: 1,
@@ -1619,6 +1673,27 @@ private final class RecordingRuntimeResumeSocketSender:
         lock.lock()
         storedUpdates.append(update)
         lock.unlock()
+    }
+}
+
+private final class StubRuntimeResumeInventoryReconciler:
+    RuntimeResumeDescriptorInventoryReconciling,
+    @unchecked Sendable {
+    private let descriptors: [RuntimeResumeStoredDescriptor]
+
+    init(descriptors: [RuntimeResumeStoredDescriptor]) {
+        self.descriptors = descriptors
+    }
+
+    func currentAgentDescriptors()
+        throws -> [RuntimeResumeStoredDescriptor] {
+        descriptors
+    }
+
+    func remove(
+        _ removal: RuntimeResumeDescriptorSocketRemoval
+    ) throws -> Bool {
+        false
     }
 }
 
