@@ -40,6 +40,10 @@ let registryMonitor = AgentSessionRegistryMonitor(hub: eventHub,
 codexRuntimeSyncer.activeThreadHandler = { [weak registryMonitor] sessionID, threadID in
     registryMonitor?.appServerActiveThreadDidChange(sessionID: sessionID, threadID: threadID)
 }
+let runtimeResumeDescriptorSocketSender =
+    TideyRuntimeResumeDescriptorSocketSender(
+        requestSender: socketClient
+    )
 let runtimeResumeDescriptorPublisher = RuntimeResumeDescriptorPublisher(
     registryReader: AgentSessionRegistryRuntimeResumeReader(
         monitor: registryMonitor
@@ -51,9 +55,8 @@ let runtimeResumeDescriptorPublisher = RuntimeResumeDescriptorPublisher(
         registry: ordinaryTmuxProjectionContext.registry,
         sessionReader: OrdinaryTmuxCLIAdapter()
     ),
-    socketSender: TideyRuntimeResumeDescriptorSocketSender(
-        requestSender: socketClient
-    )
+    inventoryReconciler: runtimeResumeDescriptorSocketSender,
+    socketSender: runtimeResumeDescriptorSocketSender
 )
 let workspaceEventMonitor = TideyWorkspaceEventMonitor(locator: locator,
                                                        hub: workspaceEventHub,

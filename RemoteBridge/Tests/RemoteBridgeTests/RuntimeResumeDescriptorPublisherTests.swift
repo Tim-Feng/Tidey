@@ -4,6 +4,172 @@ import XCTest
 @testable import RemoteBridge
 
 final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
+    func testCompleteSnapshotRevokesExitedAndMovedBindings()
+        throws {
+        let oldContent = Self.directContent(
+            durableResumeID: "thread-old"
+        )
+        let oldSlot = RuntimeResumeDescriptorSlot(
+            workspaceID: "workspace-old",
+            panelID: "panel-old"
+        )
+        let socket = ReconcilingRuntimeResumeSocket(
+            descriptors: [
+                RuntimeResumeStoredDescriptor(
+                    slot: oldSlot,
+                    revision: 3,
+                    content: oldContent
+                ),
+            ]
+        )
+        let newBinding = RuntimeResumeDescriptorBinding(
+            workspaceID: "workspace-new",
+            panelID: "panel-new",
+            tmuxPaneID: nil
+        )
+        let newRecord = RuntimeResumeAgentRegistryRecord(
+            binding: newBinding,
+            vendor: .codex,
+            durableResumeID: "thread-new",
+            launch: RuntimeResumeLaunchSpecification(
+                executable: "codex",
+                arguments: ["resume", "thread-new"],
+                workingDirectory: "/tmp/project"
+            )
+        )
+        let publisher = RuntimeResumeDescriptorPublisher(
+            registryReader: StubRuntimeResumeRegistryReader(
+                records: [newRecord]
+            ),
+            topologyReader: StubRuntimeResumeTopologyReader(
+                snapshotsByBinding: [:]
+            ),
+            inventoryReconciler: socket,
+            socketSender: socket
+        )
+
+        try publisher.publishCurrentDescriptors()
+
+        XCTAssertEqual(
+            socket.events,
+            [
+                "update:panel-new",
+                "list",
+                "remove:panel-old",
+            ]
+        )
+        XCTAssertEqual(
+            socket.descriptors.map(\.slot),
+            [
+                RuntimeResumeDescriptorSlot(
+                    workspaceID: "workspace-new",
+                    panelID: "panel-new"
+                ),
+            ]
+        )
+
+        let restartedPublisher = RuntimeResumeDescriptorPublisher(
+            registryReader: StubRuntimeResumeRegistryReader(
+                records: []
+            ),
+            topologyReader: StubRuntimeResumeTopologyReader(
+                snapshotsByBinding: [:]
+            ),
+            inventoryReconciler: socket,
+            socketSender: socket
+        )
+        try restartedPublisher.publishCurrentDescriptors()
+        XCTAssertEqual(
+            Array(socket.events.suffix(2)),
+            ["list", "remove:panel-new"]
+        )
+        XCTAssertTrue(socket.descriptors.isEmpty)
+
+        let incompletePublisher = RuntimeResumeDescriptorPublisher(
+            registryReader: StubRuntimeResumeRegistryReader(
+                snapshot: RuntimeResumeAgentRegistrySnapshot(
+                    sourceRecordCount: 1,
+                    resolvedCandidateCount: 0,
+                    records: []
+                )
+            ),
+            topologyReader: StubRuntimeResumeTopologyReader(
+                snapshotsByBinding: [:]
+            ),
+            inventoryReconciler: socket,
+            socketSender: socket
+        )
+        let eventCountBeforeIncomplete = socket.events.count
+        XCTAssertThrowsError(
+            try incompletePublisher.publishCurrentDescriptors()
+        )
+        XCTAssertEqual(
+            socket.events.count,
+            eventCountBeforeIncomplete
+        )
+
+        let tmuxRecord = RuntimeResumeAgentRegistryRecord(
+            binding: RuntimeResumeDescriptorBinding(
+                workspaceID: "workspace-tmux",
+                panelID: "panel-tmux",
+                tmuxPaneID: "%9"
+            ),
+            vendor: .claude,
+            durableResumeID: "claude-session",
+            launch: RuntimeResumeLaunchSpecification(
+                executable: "claude",
+                arguments: ["--resume", "claude-session"],
+                workingDirectory: "/tmp/project"
+            )
+        )
+        let planningGapPublisher = RuntimeResumeDescriptorPublisher(
+            registryReader: StubRuntimeResumeRegistryReader(
+                records: [tmuxRecord]
+            ),
+            topologyReader: StubRuntimeResumeTopologyReader(
+                snapshotsByBinding: [:]
+            ),
+            carrierPlanner: StubRuntimeResumeCarrierPlanner(
+                plans: []
+            ),
+            inventoryReconciler: socket,
+            socketSender: socket
+        )
+        XCTAssertThrowsError(
+            try planningGapPublisher.publishCurrentDescriptors()
+        )
+        XCTAssertEqual(
+            socket.events.count,
+            eventCountBeforeIncomplete
+        )
+
+        let failingSocket = ReconcilingRuntimeResumeSocket(
+            descriptors: [
+                RuntimeResumeStoredDescriptor(
+                    slot: oldSlot,
+                    revision: 3,
+                    content: oldContent
+                ),
+            ],
+            failNextUpdate: true
+        )
+        let failingPublisher = RuntimeResumeDescriptorPublisher(
+            registryReader: StubRuntimeResumeRegistryReader(
+                records: [newRecord]
+            ),
+            topologyReader: StubRuntimeResumeTopologyReader(
+                snapshotsByBinding: [:]
+            ),
+            inventoryReconciler: failingSocket,
+            socketSender: failingSocket
+        )
+        XCTAssertThrowsError(
+            try failingPublisher.publishCurrentDescriptors()
+        )
+        XCTAssertEqual(failingSocket.events, ["update:panel-new"])
+        XCTAssertEqual(failingSocket.descriptors.map(\.slot), [oldSlot])
+    }
+
     func testDescriptorRemovalSocketSeamCompiles() {
         let slot = RuntimeResumeDescriptorSlot(
             workspaceID: "workspace-1",
@@ -1697,6 +1863,27 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
             currentCommand: "zsh"
         )
     }
+
+    private static func directContent(
+        durableResumeID: String
+    ) -> RuntimeResumeDescriptorContent {
+        RuntimeResumeDescriptorContent(
+            descriptorVersion: 1,
+            kind: .agent,
+            restorePolicy: .directResume,
+            target: nil,
+            topology: nil,
+            agent: RuntimeResumeAgentSpecification(
+                vendor: .codex,
+                durableResumeID: durableResumeID,
+                launch: RuntimeResumeLaunchSpecification(
+                    executable: "codex",
+                    arguments: ["resume", durableResumeID],
+                    workingDirectory: "/tmp/project"
+                )
+            )
+        )
+    }
 }
 
 private final class StubRuntimeResumeRegistryReader:
@@ -1765,6 +1952,104 @@ private final class StubRuntimeResumeTmuxSessionReader:
         for route: OrdinaryTmuxPanelRoute
     ) throws -> RuntimeResumeTmuxSessionState? {
         statesBySessionID[route.sessionID]
+    }
+}
+
+private struct StubRuntimeResumeCarrierPlanner:
+    RuntimeResumeTmuxCarrierPlanning,
+    Sendable {
+    let plans: [RuntimeResumeTmuxCarrierPublicationPlan]
+
+    func publicationPlans(
+        for records: [RuntimeResumeAgentRegistryRecord]
+    ) throws -> [RuntimeResumeTmuxCarrierPublicationPlan] {
+        plans
+    }
+}
+
+private final class ReconcilingRuntimeResumeSocket:
+    RuntimeResumeDescriptorSocketSending,
+    RuntimeResumeDescriptorInventoryReconciling,
+    @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedBySlot:
+        [RuntimeResumeDescriptorSlot: RuntimeResumeStoredDescriptor]
+    private var storedEvents = [String]()
+    private var failNextUpdate: Bool
+
+    init(
+        descriptors: [RuntimeResumeStoredDescriptor],
+        failNextUpdate: Bool = false
+    ) {
+        storedBySlot = Dictionary(
+            uniqueKeysWithValues: descriptors.map { ($0.slot, $0) }
+        )
+        self.failNextUpdate = failNextUpdate
+    }
+
+    var events: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedEvents
+    }
+
+    var descriptors: [RuntimeResumeStoredDescriptor] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedBySlot.values.sorted {
+            ($0.slot.workspaceID, $0.slot.panelID) <
+                ($1.slot.workspaceID, $1.slot.panelID)
+        }
+    }
+
+    func send(
+        _ update: RuntimeResumeDescriptorSocketUpdate
+    ) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        storedEvents.append("update:\(update.binding.panelID)")
+        if failNextUpdate {
+            failNextUpdate = false
+            throw BridgeInternalError.invalidResponse
+        }
+        let slot = RuntimeResumeDescriptorSlot(
+            binding: update.binding
+        )
+        let revision =
+            (storedBySlot[slot]?.revision ?? 0) + 1
+        storedBySlot[slot] = RuntimeResumeStoredDescriptor(
+            slot: slot,
+            revision: revision,
+            content: update.content
+        )
+    }
+
+    func currentAgentDescriptors()
+        throws -> [RuntimeResumeStoredDescriptor] {
+        lock.lock()
+        defer { lock.unlock() }
+        storedEvents.append("list")
+        return storedBySlot.values.sorted {
+            ($0.slot.workspaceID, $0.slot.panelID) <
+                ($1.slot.workspaceID, $1.slot.panelID)
+        }
+    }
+
+    func remove(
+        _ removal: RuntimeResumeDescriptorSocketRemoval
+    ) throws -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        storedEvents.append("remove:\(removal.slot.panelID)")
+        guard let stored = storedBySlot[removal.slot] else {
+            return false
+        }
+        guard stored.revision == removal.expectedRevision,
+              stored.content == removal.expectedContent else {
+            throw BridgeInternalError.invalidResponse
+        }
+        storedBySlot[removal.slot] = nil
+        return true
     }
 }
 

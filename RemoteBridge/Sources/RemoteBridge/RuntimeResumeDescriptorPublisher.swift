@@ -681,6 +681,14 @@ enum RuntimeResumeDescriptorPublisherError:
         resolvedCandidateCount: Int,
         publishedRecordCount: Int
     )
+    case incompleteCarrierPlanning(recordCount: Int)
+    case incompleteTopologySnapshot(
+        RuntimeResumeDescriptorBinding
+    )
+    case duplicateDesiredSlot(
+        workspaceID: String,
+        panelID: String
+    )
 }
 
 struct RuntimeResumeDescriptorPublicationReducer: Sendable {
@@ -1016,6 +1024,62 @@ final class RuntimeResumeDescriptorPublisher:
         let records = snapshot.records.sorted(
             by: Self.recordPrecedes(_:_:)
         )
+        let desiredUpdates = try desiredUpdates(
+            for: records,
+            requiresCompleteInventory:
+                inventoryReconciler != nil
+        )
+        var desiredSlots = Set<RuntimeResumeDescriptorSlot>()
+        let preparedUpdates = try desiredUpdates.map { update in
+            let slot = RuntimeResumeDescriptorSlot(
+                binding: update.binding
+            )
+            guard desiredSlots.insert(slot).inserted else {
+                throw RuntimeResumeDescriptorPublisherError
+                    .duplicateDesiredSlot(
+                        workspaceID: slot.workspaceID,
+                        panelID: slot.panelID
+                    )
+            }
+            return (
+                update: update,
+                canonicalContent: try canonicalizer.canonicalize(
+                    update.content
+                )
+            )
+        }
+
+        for prepared in preparedUpdates {
+            try publish(
+                canonicalContent: prepared.canonicalContent,
+                binding: prepared.update.binding,
+                force: inventoryReconciler != nil
+            )
+        }
+
+        guard let inventoryReconciler else {
+            return
+        }
+        let storedDescriptors =
+            try inventoryReconciler.currentAgentDescriptors()
+        for stored in storedDescriptors
+            .filter({ desiredSlots.contains($0.slot) == false })
+            .sorted(by: Self.storedDescriptorPrecedes(_:_:)) {
+            _ = try inventoryReconciler.remove(
+                RuntimeResumeDescriptorSocketRemoval(
+                    slot: stored.slot,
+                    expectedRevision: stored.revision,
+                    expectedContent: stored.content
+                )
+            )
+        }
+    }
+
+    private func desiredUpdates(
+        for records: [RuntimeResumeAgentRegistryRecord],
+        requiresCompleteInventory: Bool
+    ) throws -> [RuntimeResumeDescriptorSocketUpdate] {
+        var updates = [RuntimeResumeDescriptorSocketUpdate]()
         for record in records where record.binding.tmuxPaneID == nil {
             let agent = RuntimeResumeAgentSpecification(
                 vendor: record.vendor,
@@ -1030,26 +1094,42 @@ final class RuntimeResumeDescriptorPublisher:
                 topology: nil,
                 agent: agent
             )
-            try publish(content: content, binding: record.binding)
+            updates.append(
+                RuntimeResumeDescriptorSocketUpdate(
+                    binding: record.binding,
+                    content: content
+                )
+            )
         }
 
         let tmuxRecords = records.filter {
             $0.binding.tmuxPaneID != nil
         }
         if let carrierPlanner {
-            for plan in try carrierPlanner.publicationPlans(
+            let plans = try carrierPlanner.publicationPlans(
                 for: tmuxRecords
-            ) {
-                try publish(
-                    content: RuntimeResumeDescriptorContent(
-                        descriptorVersion: 2,
-                        kind: .agent,
-                        restorePolicy: .create,
-                        target: plan.target,
-                        topology: plan.topology,
-                        agent: nil
-                    ),
-                    binding: plan.binding
+            )
+            if requiresCompleteInventory,
+               tmuxRecords.isEmpty == false,
+               plans.isEmpty {
+                throw RuntimeResumeDescriptorPublisherError
+                    .incompleteCarrierPlanning(
+                        recordCount: tmuxRecords.count
+                    )
+            }
+            for plan in plans {
+                updates.append(
+                    RuntimeResumeDescriptorSocketUpdate(
+                        binding: plan.binding,
+                        content: RuntimeResumeDescriptorContent(
+                            descriptorVersion: 2,
+                            kind: .agent,
+                            restorePolicy: .create,
+                            target: plan.target,
+                            topology: plan.topology,
+                            agent: nil
+                        )
+                    )
                 )
             }
         } else {
@@ -1064,34 +1144,45 @@ final class RuntimeResumeDescriptorPublisher:
                             for: record.binding
                         ),
                       snapshot.binding == record.binding else {
+                    if requiresCompleteInventory {
+                        throw RuntimeResumeDescriptorPublisherError
+                            .incompleteTopologySnapshot(
+                                record.binding
+                            )
+                    }
                     continue
                 }
-                try publish(
-                    content: RuntimeResumeDescriptorContent(
-                        descriptorVersion: 1,
-                        kind: .agent,
-                        restorePolicy: .create,
-                        target: snapshot.target,
-                        topology: snapshot.topology,
-                        agent: agent
-                    ),
-                    binding: record.binding
+                updates.append(
+                    RuntimeResumeDescriptorSocketUpdate(
+                        binding: record.binding,
+                        content: RuntimeResumeDescriptorContent(
+                            descriptorVersion: 1,
+                            kind: .agent,
+                            restorePolicy: .create,
+                            target: snapshot.target,
+                            topology: snapshot.topology,
+                            agent: agent
+                        )
+                    )
                 )
             }
         }
+        return updates
     }
 
     private func publish(
-        content: RuntimeResumeDescriptorContent,
-        binding: RuntimeResumeDescriptorBinding
+        canonicalContent:
+            RuntimeResumeDescriptorCanonicalContent,
+        binding: RuntimeResumeDescriptorBinding,
+        force: Bool
     ) throws {
-        let canonicalContent =
-            try canonicalizer.canonicalize(content)
-        guard reducer.decision(
-            binding: binding,
-            canonicalContent: canonicalContent
-        ) == .publish else {
-            return
+        if force == false {
+            guard reducer.decision(
+                binding: binding,
+                canonicalContent: canonicalContent
+            ) == .publish else {
+                return
+            }
         }
         try socketSender.send(
             RuntimeResumeDescriptorSocketUpdate(
@@ -1123,6 +1214,15 @@ final class RuntimeResumeDescriptorPublisher:
             rhs.vendor.rawValue,
             rhs.durableResumeID,
         ]
+        return lhsKey.lexicographicallyPrecedes(rhsKey)
+    }
+
+    private static func storedDescriptorPrecedes(
+        _ lhs: RuntimeResumeStoredDescriptor,
+        _ rhs: RuntimeResumeStoredDescriptor
+    ) -> Bool {
+        let lhsKey = [lhs.slot.workspaceID, lhs.slot.panelID]
+        let rhsKey = [rhs.slot.workspaceID, rhs.slot.panelID]
         return lhsKey.lexicographicallyPrecedes(rhsKey)
     }
 }
