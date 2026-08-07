@@ -1187,6 +1187,8 @@ if [[ " $* " == *" app-server "* ]]; then
 fi
 if [[ " $* " == *" --remote "* ]]; then
     printf '%s\n' "remote" >> "$FAKE_CODEX_LOG"
+    warning="2026-08-08T00:00:00Z WARN codex_tui thread/read failed during TUI session lookup session=$FAKE_RESUME_ID err=permission denied"
+    printf '%s\n' "$warning" >&2
     trace_dir=""
     while [[ $# -gt 0 ]]; do
         if [[ "$1" == "-c" && $# -ge 2 && "$2" == log_dir=* ]]; then
@@ -1200,7 +1202,7 @@ if [[ " $* " == *" --remote "* ]]; then
     done
     if [[ -n "$trace_dir" ]]; then
         printf '%s\n' "trace-config" >> "$FAKE_CODEX_LOG"
-        printf '%s\n' "2026-08-08T00:00:00Z WARN codex_tui thread/read failed during TUI session lookup session=$FAKE_RESUME_ID err=permission denied" > "$trace_dir/codex-tui.log"
+        printf '%s\n' "$warning" > "$trace_dir/codex-tui.log"
     fi
     if [[ -n "${RUST_LOG:-}" ]]; then
         printf '%s\n' "rust-log" >> "$FAKE_CODEX_LOG"
