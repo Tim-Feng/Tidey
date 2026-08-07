@@ -3131,6 +3131,79 @@ ITERM_WEAKLY_REFERENCEABLE
     return response;
 }
 
+- (NSArray<NSDictionary *> *)tideyRuntimeAgentDescriptorSnapshots {
+    NSAssert([NSThread isMainThread], @"Runtime descriptor inventory reads native window state.");
+    [self ensureTideyWorkspacesInitialized];
+    NSMutableDictionary<NSString *, NSString *> *workspaceIDByPanelID =
+        [NSMutableDictionary dictionary];
+    for (Workspace *workspace in self.workspaces) {
+        NSString *workspaceID =
+            [self tideyWorkspaceIdentifierForWorkspace:workspace];
+        if (workspaceID.length == 0) {
+            continue;
+        }
+        for (PTYTab *panel in workspace.panels) {
+            NSString *panelID = [self tideyPanelIdentifierForPanel:panel];
+            if (panelID.length > 0) {
+                workspaceIDByPanelID[panelID] = workspaceID;
+            }
+        }
+    }
+    return [[self tideyRuntimeResumeDescriptorUpdateGate]
+        runtimeAgentDescriptorSnapshotsWithCurrentWorkspaceIDByPanelID:
+            workspaceIDByPanelID];
+}
+
+- (NSDictionary *)tideyRemoveRuntimeResumeDescriptorPayload:(NSDictionary *)payload {
+    NSAssert([NSThread isMainThread], @"Runtime descriptor removals mutate native window state.");
+    if (![payload isKindOfClass:[NSDictionary class]]) {
+        return @{
+            @"accepted": @NO,
+            @"changed": @NO,
+            @"error_code": @"invalid_descriptor",
+        };
+    }
+    NSDictionary *binding =
+        [payload[@"binding"] isKindOfClass:[NSDictionary class]]
+            ? payload[@"binding"]
+            : nil;
+    NSString *panelID =
+        [binding[@"panel_id"] isKindOfClass:[NSString class]]
+            ? binding[@"panel_id"]
+            : nil;
+    Workspace *workspace = nil;
+    PTYTab *panel =
+        [self tideyPanelWithIdentifier:panelID
+                             workspace:&workspace
+                        workspaceIndex:nil
+                            panelIndex:nil];
+    if (!panel || !workspace) {
+        return @{
+            @"accepted": @NO,
+            @"changed": @NO,
+            @"error_code": @"stale_binding",
+        };
+    }
+    TideyRuntimeResumeDescriptorUpdateResult *result =
+        [[self tideyRuntimeResumeDescriptorUpdateGate]
+            removeRuntimeAgentDescriptorPayload:payload
+            currentWorkspaceID:[self tideyWorkspaceIdentifierForWorkspace:workspace] ?: @""
+            currentPanelID:[self tideyPanelIdentifierForPanel:panel] ?: @""];
+    if (result.changed) {
+        [TideyRestorableStateDirtyTracker.shared markDirty];
+        [[iTermRestorableStateController sharedInstance] tideyRequestSaveSoon];
+    }
+    NSMutableDictionary *response =
+        [NSMutableDictionary dictionaryWithDictionary:@{
+            @"accepted": @(result.accepted),
+            @"changed": @(result.changed),
+        }];
+    if (result.errorCode.length > 0) {
+        response[@"error_code"] = result.errorCode;
+    }
+    return response;
+}
+
 - (PTYSession *)tideySelectedSessionForWorkspaceIdentifier:(NSString *)workspaceIdentifier {
     Workspace *workspace = [self tideyWorkspaceWithIdentifier:workspaceIdentifier index:nil];
     return workspace.selectedPanel.activeSession;

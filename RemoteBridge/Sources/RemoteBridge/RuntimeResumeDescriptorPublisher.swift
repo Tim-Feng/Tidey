@@ -771,8 +771,39 @@ private struct RuntimeResumeDescriptorSocketPayload:
     let descriptor: RuntimeResumeDescriptorContent
 }
 
+private struct RuntimeResumeStoredDescriptorWire: Decodable {
+    let binding: RuntimeResumeDescriptorBinding
+    let revision: Int64
+    let descriptor: RuntimeResumeDescriptorContent
+}
+
+private struct RuntimeResumeDescriptorRemovalBinding:
+    Encodable {
+    let workspaceID: String
+    let panelID: String
+
+    enum CodingKeys: String, CodingKey {
+        case workspaceID = "workspace_id"
+        case panelID = "panel_id"
+    }
+}
+
+private struct RuntimeResumeDescriptorRemovalPayload:
+    Encodable {
+    let binding: RuntimeResumeDescriptorRemovalBinding
+    let expectedRevision: Int64
+    let expectedDescriptor: RuntimeResumeDescriptorContent
+
+    enum CodingKeys: String, CodingKey {
+        case binding
+        case expectedRevision = "expected_revision"
+        case expectedDescriptor = "expected_descriptor"
+    }
+}
+
 final class TideyRuntimeResumeDescriptorSocketSender:
     RuntimeResumeDescriptorSocketSending,
+    RuntimeResumeDescriptorInventoryReconciling,
     @unchecked Sendable {
     private let requestSender: TideyRequestSending
 
@@ -804,6 +835,79 @@ final class TideyRuntimeResumeDescriptorSocketSender:
         guard response.ok else {
             throw BridgeInternalError.invalidResponse
         }
+    }
+
+    func currentAgentDescriptors()
+        throws -> [RuntimeResumeStoredDescriptor] {
+        let request = BridgeRequest(
+            id: UUID().uuidString,
+            action: "list_runtime_resume_descriptors",
+            params: nil
+        )
+        let response = try requestSender.send(request)
+        guard response.ok,
+              let values = response.result?["descriptors"]?
+                .arrayValue else {
+            throw BridgeInternalError.invalidResponse
+        }
+        let data = try JSONEncoder().encode(values)
+        let wires = try JSONDecoder().decode(
+            [RuntimeResumeStoredDescriptorWire].self,
+            from: data
+        )
+        var seenSlots = Set<RuntimeResumeDescriptorSlot>()
+        return try wires.map { wire in
+            let slot = RuntimeResumeDescriptorSlot(
+                binding: wire.binding
+            )
+            guard slot.workspaceID.isEmpty == false,
+                  slot.panelID.isEmpty == false,
+                  wire.revision > 0,
+                  wire.descriptor.kind == .agent,
+                  seenSlots.insert(slot).inserted else {
+                throw BridgeInternalError.invalidResponse
+            }
+            return RuntimeResumeStoredDescriptor(
+                slot: slot,
+                revision: wire.revision,
+                content: wire.descriptor
+            )
+        }
+    }
+
+    func remove(
+        _ removal: RuntimeResumeDescriptorSocketRemoval
+    ) throws -> Bool {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(
+            RuntimeResumeDescriptorRemovalPayload(
+                binding: RuntimeResumeDescriptorRemovalBinding(
+                    workspaceID: removal.slot.workspaceID,
+                    panelID: removal.slot.panelID
+                ),
+                expectedRevision: removal.expectedRevision,
+                expectedDescriptor: removal.expectedContent
+            )
+        )
+        let params = try JSONDecoder().decode(
+            [String: JSONValue].self,
+            from: data
+        )
+        let response = try requestSender.send(
+            BridgeRequest(
+                id: UUID().uuidString,
+                action: "remove_runtime_resume_descriptor",
+                params: params
+            )
+        )
+        guard response.ok,
+              response.result?["accepted"]?.boolValue == true,
+              let changed = response.result?["changed"]?
+                .boolValue else {
+            throw BridgeInternalError.invalidResponse
+        }
+        return changed
     }
 }
 

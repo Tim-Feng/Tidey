@@ -587,6 +587,69 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
         return;
     }
 
+    if ([action isEqualToString:@"list_runtime_resume_descriptors"]) {
+        if (![NSThread isMainThread]) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self handleRequestMessage:message onConnection:connection];
+            });
+            return;
+        }
+        NSMutableArray<NSDictionary *> *descriptors =
+            [NSMutableArray array];
+        for (PseudoTerminal *term in
+                [[iTermController sharedInstance] terminals]) {
+            [descriptors addObjectsFromArray:
+                [term tideyRuntimeAgentDescriptorSnapshots]];
+        }
+        [self sendSuccessResponseForRequestID:requestID
+                                       result:@{ @"descriptors": descriptors }
+                                  onConnection:connection];
+        return;
+    }
+
+    if ([action isEqualToString:@"remove_runtime_resume_descriptor"]) {
+        if (![NSThread isMainThread]) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self handleRequestMessage:message onConnection:connection];
+            });
+            return;
+        }
+        NSDictionary *binding =
+            [source[@"binding"] isKindOfClass:[NSDictionary class]]
+                ? source[@"binding"]
+                : nil;
+        NSString *panelID = TideySocketStringParam(binding, @"panel_id");
+        NSString *workspaceID =
+            TideySocketStringParam(binding, @"workspace_id");
+        PseudoTerminal *term =
+            [self tideyTerminalForPanelIdentifier:panelID] ?:
+            [self tideyTerminalForWorkspaceIdentifier:workspaceID];
+        if (!term) {
+            [self sendErrorResponseForRequestID:requestID
+                                           code:@"stale_binding"
+                                        message:@"Runtime descriptor binding is no longer current."
+                                   onConnection:connection];
+            return;
+        }
+        NSDictionary *result =
+            [term tideyRemoveRuntimeResumeDescriptorPayload:source];
+        if (![result[@"accepted"] boolValue]) {
+            NSString *code =
+                [result[@"error_code"] isKindOfClass:[NSString class]]
+                    ? result[@"error_code"]
+                    : @"invalid_descriptor";
+            [self sendErrorResponseForRequestID:requestID
+                                           code:code
+                                        message:@"Runtime descriptor removal was rejected."
+                                   onConnection:connection];
+            return;
+        }
+        [self sendSuccessResponseForRequestID:requestID
+                                       result:result
+                                  onConnection:connection];
+        return;
+    }
+
     if ([action isEqualToString:@"send_input"]) {
         NSString *panelID = TideySocketStringParam(source, @"panel_id");
         NSString *workspaceID = TideySocketStringParam(source, @"workspace_id");

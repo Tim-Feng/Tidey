@@ -278,6 +278,14 @@ extern NSString *const PseudoTerminalTideyWorkspaceEventNotification;
 // workspace/panel binding still names this window's current native graph.
 - (NSDictionary *)tideyAcceptRuntimeResumeDescriptorUpdatePayload:(NSDictionary *)payload;
 
+// Returns agent-only runtime descriptors with their stable binding and
+// native revision for Bridge reconciliation.
+- (NSArray<NSDictionary *> *)tideyRuntimeAgentDescriptorSnapshots;
+
+// Removes an agent descriptor only when the stable binding, revision, and
+// canonical descriptor still match the current native state.
+- (NSDictionary *)tideyRemoveRuntimeResumeDescriptorPayload:(NSDictionary *)payload;
+
 // Returns the selected session for the workspace with the given identifier, if it exists.
 - (nullable PTYSession *)tideySelectedSessionForWorkspaceIdentifier:(NSString *)workspaceIdentifier;
 

@@ -1325,6 +1325,120 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
         )
     }
 
+    func testSocketSenderListsAndConditionallyRemovesAgentDescriptors()
+        throws {
+        let content = RuntimeResumeDescriptorContent(
+            descriptorVersion: 1,
+            kind: .agent,
+            restorePolicy: .directResume,
+            target: nil,
+            topology: nil,
+            agent: RuntimeResumeAgentSpecification(
+                vendor: .codex,
+                durableResumeID: "thread-1",
+                launch: RuntimeResumeLaunchSpecification(
+                    executable: "codex",
+                    arguments: ["resume", "thread-1"],
+                    workingDirectory: "/tmp/project"
+                )
+            )
+        )
+        let contentData = try JSONEncoder().encode(content)
+        let contentObject = try JSONDecoder().decode(
+            [String: JSONValue].self,
+            from: contentData
+        )
+        let requestSender = RecordingTideyRequestSender(
+            responses: [
+                BridgeResponse(
+                    id: nil,
+                    ok: true,
+                    result: [
+                        "descriptors": .array([
+                            .object([
+                                "binding": .object([
+                                    "workspace_id": .string(
+                                        "workspace-1"
+                                    ),
+                                    "panel_id": .string("panel-1"),
+                                ]),
+                                "revision": .number(4),
+                                "descriptor": .object(
+                                    contentObject
+                                ),
+                            ]),
+                        ]),
+                    ],
+                    error: nil
+                ),
+                BridgeResponse(
+                    id: nil,
+                    ok: true,
+                    result: [
+                        "accepted": .bool(true),
+                        "changed": .bool(true),
+                    ],
+                    error: nil
+                ),
+            ]
+        )
+        let sender = TideyRuntimeResumeDescriptorSocketSender(
+            requestSender: requestSender
+        )
+
+        let stored = try XCTUnwrap(
+            sender.currentAgentDescriptors().first
+        )
+        XCTAssertEqual(
+            stored.slot,
+            RuntimeResumeDescriptorSlot(
+                workspaceID: "workspace-1",
+                panelID: "panel-1"
+            )
+        )
+        XCTAssertEqual(stored.revision, 4)
+        XCTAssertEqual(stored.content, content)
+
+        let changed = try sender.remove(
+            RuntimeResumeDescriptorSocketRemoval(
+                slot: stored.slot,
+                expectedRevision: stored.revision,
+                expectedContent: stored.content
+            )
+        )
+        XCTAssertTrue(changed)
+        XCTAssertEqual(
+            requestSender.requests.map(\.action),
+            [
+                "list_runtime_resume_descriptors",
+                "remove_runtime_resume_descriptor",
+            ]
+        )
+        let removalParams = try XCTUnwrap(
+            requestSender.requests.last?.params
+        )
+        XCTAssertEqual(
+            removalParams["binding"]?.objectValue?["workspace_id"]?
+                .stringValue,
+            "workspace-1"
+        )
+        XCTAssertEqual(
+            removalParams["binding"]?.objectValue?["panel_id"]?
+                .stringValue,
+            "panel-1"
+        )
+        XCTAssertNil(
+            removalParams["binding"]?.objectValue?["tmux_pane_id"]
+        )
+        XCTAssertEqual(
+            removalParams["expected_revision"]?.intValue,
+            4
+        )
+        XCTAssertNotNil(
+            removalParams["expected_descriptor"]?.objectValue
+        )
+    }
+
     func testPublishesCanonicalAgentAndTmuxTopologyForBoundPanel()
         throws {
         let binding = RuntimeResumeDescriptorBinding(
@@ -1700,10 +1814,18 @@ private final class StubRuntimeResumeInventoryReconciler:
 private final class RecordingTideyRequestSender:
     TideyRequestSending {
     private(set) var requests = [BridgeRequest]()
+    private var responses: [BridgeResponse]
+
+    init(responses: [BridgeResponse] = []) {
+        self.responses = responses
+    }
 
     func send(_ request: BridgeRequest)
         throws -> BridgeResponse {
         requests.append(request)
+        if responses.isEmpty == false {
+            return responses.removeFirst()
+        }
         return BridgeResponse(
             id: request.id,
             ok: true,
