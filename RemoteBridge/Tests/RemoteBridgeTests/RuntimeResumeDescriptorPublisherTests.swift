@@ -41,8 +41,19 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
             registry: registry,
             sessionReader: sessionReader
         )
+        let publisher = RuntimeResumeDescriptorPublisher(
+            registryReader: StubRuntimeResumeRegistryReader(
+                records: []
+            ),
+            topologyReader: StubRuntimeResumeTopologyReader(
+                snapshotsByBinding: [:]
+            ),
+            carrierPlanner: planner,
+            socketSender: RecordingRuntimeResumeSocketSender()
+        )
 
         XCTAssertNotNil(planner as Any)
+        XCTAssertNotNil(publisher as Any)
         XCTAssertTrue(
             try! planner.publicationPlans(for: []).isEmpty
         )

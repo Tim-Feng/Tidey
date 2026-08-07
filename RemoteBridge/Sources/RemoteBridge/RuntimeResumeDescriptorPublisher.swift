@@ -518,6 +518,8 @@ final class RuntimeResumeDescriptorPublisher:
         RuntimeResumeAgentRegistryReading
     private let topologyReader:
         RuntimeResumeTmuxTopologyReading
+    private let carrierPlanner:
+        RuntimeResumeTmuxCarrierPlanning?
     private let canonicalizer:
         RuntimeResumeDescriptorCanonicalizer
     private let socketSender:
@@ -532,6 +534,8 @@ final class RuntimeResumeDescriptorPublisher:
             RuntimeResumeAgentRegistryReading,
         topologyReader:
             RuntimeResumeTmuxTopologyReading,
+        carrierPlanner:
+            RuntimeResumeTmuxCarrierPlanning? = nil,
         canonicalizer:
             RuntimeResumeDescriptorCanonicalizer =
                 RuntimeResumeDescriptorCanonicalizer(),
@@ -544,6 +548,7 @@ final class RuntimeResumeDescriptorPublisher:
     ) {
         self.registryReader = registryReader
         self.topologyReader = topologyReader
+        self.carrierPlanner = carrierPlanner
         self.canonicalizer = canonicalizer
         self.socketSender = socketSender
         self.queue = queue
