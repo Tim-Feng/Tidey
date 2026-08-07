@@ -597,6 +597,12 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
         XCTAssertNil(result.launchErrorDescription)
     }
 
+    func testTmuxSessionCreationPostconditionSeamCompiles() {
+        XCTAssertNotNil(
+            TideyRuntimeTmuxSessionCreationPostcondition() as Any
+        )
+    }
+
     func testRuntimeTaskRunnerTimeoutDoesNotBlockNextCommand() {
         let runner = TideyRuntimeTaskRunner()
         let start = Date()

@@ -76,6 +76,42 @@ final class TideyRuntimeTaskExecutionResult: NSObject {
     }
 }
 
+@objc(TideyRuntimeTmuxSessionCreationPostcondition)
+@objcMembers
+final class TideyRuntimeTmuxSessionCreationPostcondition: NSObject {
+    func exactProbeArguments(
+        sessionName: String
+    ) -> [String]? {
+        guard !sessionName.isEmpty else {
+            return nil
+        }
+        return ["has-session", "-t", "=\(sessionName)"]
+    }
+
+    func parsedWindowIndex(
+        output: String
+    ) -> NSNumber? {
+        let trimmed = output.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard let value = Int(trimmed),
+              String(value) == trimmed else {
+            return nil
+        }
+        return NSNumber(value: value)
+    }
+
+    func isSatisfied(
+        creationResult: TideyRuntimeTaskExecutionResult?,
+        parsedWindowIndex: NSNumber?,
+        sessionProbeResult: TideyRuntimeTaskExecutionResult?
+    ) -> Bool {
+        _ = sessionProbeResult
+        return creationResult?.succeeded == true &&
+            parsedWindowIndex != nil
+    }
+}
+
 private final class TideyRuntimeBoundedDataAccumulator {
     private let maximumBytes: Int
     private let lock = NSLock()

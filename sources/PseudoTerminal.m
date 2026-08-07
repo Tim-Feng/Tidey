@@ -390,9 +390,11 @@ static NSString *TideyRuntimeBoundedLogValue(NSString *value) {
         stringByAppendingString:@"…"];
 }
 
-static TideyRuntimeTaskExecutionResult *TideyRuntimeRunTask(
+static TideyRuntimeTaskExecutionResult *
+TideyRuntimeRunTaskWithEnvironment(
     NSString *executable,
     NSArray<NSString *> *arguments,
+    NSDictionary<NSString *, NSString *> *environment,
     NSTimeInterval timeout
 ) {
     if (executable.length == 0) {
@@ -402,13 +404,28 @@ static TideyRuntimeTaskExecutionResult *TideyRuntimeRunTask(
         [[[TideyRuntimeTaskRunner alloc] init] autorelease];
     return [runner runExecutable:executable
                        arguments:arguments
-                     environment:TideyRuntimeTaskEnvironment()
+                     environment:environment
                          timeout:timeout];
 }
 
-static TideyRuntimeTaskExecutionResult *TideyRuntimeRunTmuxTask(
+static TideyRuntimeTaskExecutionResult *TideyRuntimeRunTask(
+    NSString *executable,
+    NSArray<NSString *> *arguments,
+    NSTimeInterval timeout
+) {
+    return TideyRuntimeRunTaskWithEnvironment(
+        executable,
+        arguments,
+        TideyRuntimeTaskEnvironment(),
+        timeout
+    );
+}
+
+static TideyRuntimeTaskExecutionResult *
+TideyRuntimeRunTmuxTaskWithEnvironment(
     TideyRuntimeResumeDescriptor *descriptor,
     NSArray<NSString *> *commandArguments,
+    NSDictionary<NSString *, NSString *> *environment,
     NSTimeInterval timeout
 ) {
     NSString *executable = TideyRuntimeTmuxExecutablePath();
@@ -425,9 +442,11 @@ static TideyRuntimeTaskExecutionResult *TideyRuntimeRunTmuxTask(
     }
     NSArray<NSString *> *arguments =
         [socketArguments arrayByAddingObjectsFromArray:commandArguments];
-    TideyRuntimeTaskExecutionResult *result = TideyRuntimeRunTask(
+    TideyRuntimeTaskExecutionResult *result =
+        TideyRuntimeRunTaskWithEnvironment(
         executable,
         arguments,
+        environment,
         timeout
     );
     DLog(@"[TideyRuntimeRehydration] phase=%@ descriptor_version=%ld "
@@ -447,6 +466,19 @@ static TideyRuntimeTaskExecutionResult *TideyRuntimeRunTmuxTask(
          TideyRuntimeBoundedLogValue(result.launchErrorDescription),
          TideyRuntimeBoundedLogValue(result.standardError));
     return result;
+}
+
+static TideyRuntimeTaskExecutionResult *TideyRuntimeRunTmuxTask(
+    TideyRuntimeResumeDescriptor *descriptor,
+    NSArray<NSString *> *commandArguments,
+    NSTimeInterval timeout
+) {
+    return TideyRuntimeRunTmuxTaskWithEnvironment(
+        descriptor,
+        commandArguments,
+        TideyRuntimeTaskEnvironment(),
+        timeout
+    );
 }
 
 static BOOL TideyRuntimeRunTmux(
