@@ -1021,21 +1021,18 @@ static NSString *TideyRuntimeAgentExecutablePath(
 
     for (NSDictionary *job in jobs) {
         TideyRuntimeLaunchSpecification *launch = job[@"launch"];
-        NSMutableArray<NSString *> *arguments =
-            [NSMutableArray arrayWithArray:@[
-                @"respawn-pane",
-                @"-k",
-                @"-t",
-                job[@"pane_id"],
-            ]];
-        if (launch.workingDirectory.length > 0) {
-            [arguments addObjectsFromArray:@[
-                @"-c",
-                launch.workingDirectory,
-            ]];
+        NSString *executable =
+            TideyRuntimeAgentExecutablePath(launch);
+        TideyRuntimeTmuxRespawnCommandBuilder *builder =
+            [[[TideyRuntimeTmuxRespawnCommandBuilder alloc] init]
+                autorelease];
+        NSArray<NSString *> *arguments =
+            [builder argumentsWithPaneID:job[@"pane_id"]
+                         agentExecutable:executable ?: @""
+                                  launch:launch];
+        if (!arguments) {
+            return NO;
         }
-        [arguments addObject:launch.executable];
-        [arguments addObjectsFromArray:launch.arguments];
         if (!TideyRuntimeRunTmux(descriptor, arguments, nil)) {
             return NO;
         }

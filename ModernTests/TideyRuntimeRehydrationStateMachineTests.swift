@@ -258,6 +258,57 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
         XCTAssertNotNil(builder as Any)
     }
 
+    func testTmuxRespawnUsesBundledExecutableAndLiteralArguments() {
+        let resumeIdentity =
+            "thread'; $(touch /tmp/tidey-owned); " +
+            "`touch /tmp/tidey-owned`"
+        let executable =
+            "/Applications/Tidey.app/Contents/Resources/bin/codex"
+        let launch = TideyRuntimeLaunchSpecification(
+            executable: "codex",
+            arguments: ["resume", resumeIdentity],
+            workingDirectory: "/tmp/project with spaces"
+        )
+
+        let arguments = TideyRuntimeTmuxRespawnCommandBuilder()
+            .arguments(
+                paneID: "%7",
+                agentExecutable: executable,
+                launch: launch
+            )
+
+        XCTAssertEqual(
+            arguments?.dropLast(),
+            [
+                "respawn-pane",
+                "-k",
+                "-t",
+                "%7",
+                "-c",
+                "/tmp/project with spaces",
+            ]
+        )
+        XCTAssertEqual(
+            ((arguments?.last ?? "") as NSString)
+                .componentsInShellCommand(),
+            [executable, "resume", resumeIdentity]
+        )
+        XCTAssertNil(
+            TideyRuntimeTmuxRespawnCommandBuilder().arguments(
+                paneID: "%7",
+                agentExecutable: "codex",
+                launch: launch
+            )
+        )
+        XCTAssertNil(
+            TideyRuntimeTmuxRespawnCommandBuilder().arguments(
+                paneID: "pane-7",
+                agentExecutable: executable,
+                launch: launch
+            )
+        )
+    }
+
     func testReducerAndExecutorSeamsCompile() {
         let reducer = TideyRuntimeRehydrationReducer()
         let targetProbe = TideyRuntimeTargetProbeSpy()

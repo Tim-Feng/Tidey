@@ -258,7 +258,39 @@ final class TideyRuntimeTmuxRespawnCommandBuilder: NSObject {
         agentExecutable: String,
         launch: TideyRuntimeLaunchSpecification
     ) -> [String]? {
-        nil
+        let executableURL = URL(fileURLWithPath: agentExecutable)
+        guard paneID.first == "%",
+              paneID.dropFirst().isEmpty == false,
+              paneID.dropFirst().allSatisfy(\.isNumber),
+              agentExecutable.hasPrefix("/"),
+              executableURL.standardizedFileURL.path ==
+                agentExecutable,
+              executableURL.lastPathComponent == launch.executable,
+              launch.workingDirectory?.isEmpty != true,
+              ![paneID, agentExecutable,
+                 launch.workingDirectory ?? ""]
+                .contains(where: { $0.contains("\u{0}") }),
+              let command = TideyRuntimeDirectAgentCommandBuilder()
+                .command(
+                    agentExecutable: agentExecutable,
+                    arguments: launch.arguments
+                ) else {
+            return nil
+        }
+        var result = [
+            "respawn-pane",
+            "-k",
+            "-t",
+            paneID,
+        ]
+        if let workingDirectory = launch.workingDirectory {
+            result.append(contentsOf: [
+                "-c",
+                workingDirectory,
+            ])
+        }
+        result.append(command)
+        return result
     }
 }
 
