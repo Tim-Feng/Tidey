@@ -1171,6 +1171,26 @@ final class TideyRuntimeResumeDescriptorUpdateGate: NSObject {
         _ descriptorsByPanelID:
             [String: TideyRuntimeResumeDescriptor]
     ) {
+        let replacements = validatedEntries(
+            for: descriptorsByPanelID
+        )
+        lock.lock()
+        installEntriesLocked(replacements)
+        lock.unlock()
+    }
+
+    @objc(restoreDescriptorsByPanelIDAwaitingRuntimeEvidence:)
+    func restoreDescriptorsByPanelIDAwaitingRuntimeEvidence(
+        _ descriptorsByPanelID:
+            [String: TideyRuntimeResumeDescriptor]
+    ) {
+        replaceDescriptorsByPanelID(descriptorsByPanelID)
+    }
+
+    private func validatedEntries(
+        for descriptorsByPanelID:
+            [String: TideyRuntimeResumeDescriptor]
+    ) -> [String: Entry] {
         var replacements: [String: Entry] = [:]
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -1191,7 +1211,12 @@ final class TideyRuntimeResumeDescriptorUpdateGate: NSObject {
                 canonicalContent: data
             )
         }
-        lock.lock()
+        return replacements
+    }
+
+    private func installEntriesLocked(
+        _ replacements: [String: Entry]
+    ) {
         entriesByPanelID = replacements
         for (panelID, entry) in replacements {
             revisionHighWaterByPanelID[panelID] = max(
@@ -1199,15 +1224,6 @@ final class TideyRuntimeResumeDescriptorUpdateGate: NSObject {
                 entry.descriptor.revision
             )
         }
-        lock.unlock()
-    }
-
-    @objc(restoreDescriptorsByPanelIDAwaitingRuntimeEvidence:)
-    func restoreDescriptorsByPanelIDAwaitingRuntimeEvidence(
-        _ descriptorsByPanelID:
-            [String: TideyRuntimeResumeDescriptor]
-    ) {
-        replaceDescriptorsByPanelID(descriptorsByPanelID)
     }
 
     private func rejected(
