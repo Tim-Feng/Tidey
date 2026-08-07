@@ -755,6 +755,28 @@ start_rollout_monitor_if_needed() {
     monitor_rollout_and_registry "$pid" "$workspace_id" "$panel_id" "$cwd" "$created_at" "$initial_registry_file" "$initial_session_id" >/dev/null 2>&1 &
 }
 
+launch_tracked_plain_codex_runtime() {
+    local real_codex="$1"
+    local real_codex_home="$2"
+    local profile_flag="$3"
+    local profile_name="$4"
+    local registry_file="$5"
+    local session_id="$6"
+    local created_at="$7"
+    local emit_session_start_hook="$8"
+    shift 8
+
+    cleanup_stale_app_server_registry_records
+    write_registry_file "$registry_file" "$TIDEY_WORKSPACE_ID" "$session_id" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$created_at" ""
+    start_rollout_monitor_if_needed "$$" "${TIDEY_WORKSPACE_ID:-}" "${TIDEY_PANEL_ID:-}" "$PWD" "$created_at" "$registry_file" "$session_id"
+
+    if [[ "$emit_session_start_hook" == "1" && -n "${TIDEY_SOCKET_PATH:-}" && -n "${TIDEY_WORKSPACE_ID:-}" && -x "$HOOK_DIR/tidey" ]]; then
+        "$HOOK_DIR/tidey" codex-hook session-start || true
+    fi
+
+    exec env TIDEY_CODEX_HOOKS_ENABLED=1 CODEX_HOME="$real_codex_home" "$real_codex" "$profile_flag" "$profile_name" "$@"
+}
+
 should_use_codex_app_server_runtime() {
     if [[ "${TIDEY_CODEX_APP_SERVER_DISABLE:-}" == "1" ]]; then
         return 1
@@ -945,16 +967,7 @@ main() {
         exit $?
     fi
 
-    cleanup_stale_app_server_registry_records
-
-    write_registry_file "$registry_file" "$TIDEY_WORKSPACE_ID" "$session_id" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$created_at" ""
-    start_rollout_monitor_if_needed "$$" "${TIDEY_WORKSPACE_ID:-}" "${TIDEY_PANEL_ID:-}" "$PWD" "$created_at" "$registry_file" "$session_id"
-
-    if [[ -n "${TIDEY_SOCKET_PATH:-}" && -n "${TIDEY_WORKSPACE_ID:-}" && -x "$HOOK_DIR/tidey" ]]; then
-        "$HOOK_DIR/tidey" codex-hook session-start || true
-    fi
-
-    exec env TIDEY_CODEX_HOOKS_ENABLED=1 CODEX_HOME="$real_codex_home" "$real_codex" "$profile_flag" "$profile_name" "$@"
+    launch_tracked_plain_codex_runtime "$real_codex" "$real_codex_home" "$profile_flag" "$profile_name" "$registry_file" "$session_id" "$created_at" 1 "$@"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
