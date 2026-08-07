@@ -190,6 +190,77 @@ struct RuntimeResumeTmuxTopologySnapshot:
     let topology: RuntimeResumeTmuxTopology
 }
 
+struct RuntimeResumeTmuxPaneState:
+    Equatable,
+    Sendable {
+    let paneID: String
+    let index: Int
+    let workingDirectory: String?
+    let isActive: Bool
+}
+
+struct RuntimeResumeTmuxWindowState:
+    Equatable,
+    Sendable {
+    let windowID: String
+    let index: Int
+    let name: String?
+    let isActive: Bool
+    let panes: [RuntimeResumeTmuxPaneState]
+}
+
+struct RuntimeResumeTmuxSessionState:
+    Equatable,
+    Sendable {
+    let sessionID: String
+    let sessionName: String
+    let windows: [RuntimeResumeTmuxWindowState]
+}
+
+protocol RuntimeResumeTmuxSessionReading: Sendable {
+    func runtimeResumeSessionState(
+        for route: OrdinaryTmuxPanelRoute
+    ) throws -> RuntimeResumeTmuxSessionState?
+}
+
+struct RuntimeResumeTmuxCarrierPublicationPlan:
+    Equatable,
+    Sendable {
+    let binding: RuntimeResumeDescriptorBinding
+    let target: RuntimeResumeTmuxTarget
+    let topology: RuntimeResumeTmuxTopology
+}
+
+protocol RuntimeResumeTmuxCarrierPlanning: Sendable {
+    func publicationPlans(
+        for records: [RuntimeResumeAgentRegistryRecord]
+    ) throws -> [RuntimeResumeTmuxCarrierPublicationPlan]
+}
+
+final class OrdinaryTmuxRuntimeResumeCarrierPlanner:
+    RuntimeResumeTmuxCarrierPlanning,
+    @unchecked Sendable {
+    private let registry: OrdinaryTmuxPanelRegistry
+    private let sessionReader: RuntimeResumeTmuxSessionReading
+
+    init(
+        registry: OrdinaryTmuxPanelRegistry,
+        sessionReader: RuntimeResumeTmuxSessionReading
+    ) {
+        self.registry = registry
+        self.sessionReader = sessionReader
+    }
+
+    func publicationPlans(
+        for records: [RuntimeResumeAgentRegistryRecord]
+    ) throws -> [RuntimeResumeTmuxCarrierPublicationPlan] {
+        _ = registry
+        _ = sessionReader
+        _ = records
+        return []
+    }
+}
+
 protocol RuntimeResumeAgentRegistryReading: Sendable {
     func readAgentRegistryRecords()
         throws -> [RuntimeResumeAgentRegistryRecord]

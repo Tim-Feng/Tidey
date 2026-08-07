@@ -32,6 +32,22 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
         XCTAssertNil(content.target)
     }
 
+    func testCarrierPublicationPlannerSeamsCompile() {
+        let registry = OrdinaryTmuxPanelRegistry()
+        let sessionReader = StubRuntimeResumeTmuxSessionReader(
+            statesBySessionID: [:]
+        )
+        let planner = OrdinaryTmuxRuntimeResumeCarrierPlanner(
+            registry: registry,
+            sessionReader: sessionReader
+        )
+
+        XCTAssertNotNil(planner as Any)
+        XCTAssertTrue(
+            try! planner.publicationPlans(for: []).isEmpty
+        )
+    }
+
     func testRegistryReaderPublishesLiveResolvedBindingWithoutRewritingRegistry()
         throws {
         let supportDirectory = FileManager.default.temporaryDirectory
@@ -737,6 +753,26 @@ private final class StubRuntimeResumeTopologyReader:
         for binding: RuntimeResumeDescriptorBinding
     ) throws -> RuntimeResumeTmuxTopologySnapshot? {
         snapshotsByBinding[binding]
+    }
+}
+
+private final class StubRuntimeResumeTmuxSessionReader:
+    RuntimeResumeTmuxSessionReading,
+    @unchecked Sendable {
+    let statesBySessionID:
+        [String: RuntimeResumeTmuxSessionState]
+
+    init(
+        statesBySessionID:
+            [String: RuntimeResumeTmuxSessionState]
+    ) {
+        self.statesBySessionID = statesBySessionID
+    }
+
+    func runtimeResumeSessionState(
+        for route: OrdinaryTmuxPanelRoute
+    ) throws -> RuntimeResumeTmuxSessionState? {
+        statesBySessionID[route.sessionID]
     }
 }
 
