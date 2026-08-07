@@ -129,6 +129,102 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
         XCTAssertNil(descriptor.agent)
     }
 
+    func testMultiAgentCreateDescriptorRoundTripsEveryPaneLaunch()
+        throws {
+        let claudeLaunch = TideyRuntimeLaunchSpecification(
+            executable: "claude",
+            arguments: ["--resume", "claude-session"],
+            workingDirectory: "/tmp/claude"
+        )
+        let codexLaunch = TideyRuntimeLaunchSpecification(
+            executable: "codex",
+            arguments: ["resume", "codex-thread"],
+            workingDirectory: "/tmp/codex"
+        )
+        func descriptor(
+            launches: [TideyRuntimeLaunchSpecification?]
+        ) -> TideyRuntimeResumeDescriptor {
+            TideyRuntimeResumeDescriptor(
+                descriptorVersion:
+                    TideyRuntimeResumeDescriptor
+                        .topologyOwnedAgentDescriptorVersion,
+                revision: 4,
+                kind: .agent,
+                restorePolicy: .create,
+                target: TideyRuntimeResumeTarget(
+                    socketName: "tidey-agents",
+                    tmuxSession: "genesis-extraction"
+                ),
+                topology: TideyRuntimeTmuxTopology(
+                    windows: [
+                        TideyRuntimeTmuxWindowTopology(
+                            index: 1,
+                            name: "agents",
+                            panes: launches.enumerated().map {
+                                index, launch in
+                                TideyRuntimeTmuxPaneTopology(
+                                    index: index,
+                                    workingDirectory:
+                                        launch?.workingDirectory ??
+                                        "/tmp/monitor",
+                                    launch: launch
+                                )
+                            }
+                        ),
+                    ],
+                    activeWindowIndex: 1,
+                    activePaneIndex: launches.count - 1
+                ),
+                agent: nil
+            )
+        }
+        let codec = TideyRuntimeResumeDescriptorDictionaryCodec()
+
+        let roundTripped = try codec.decode(
+            codec.encode(
+                descriptor(
+                    launches: [
+                        claudeLaunch,
+                        codexLaunch,
+                        nil,
+                    ]
+                )
+            )
+        )
+
+        XCTAssertTrue(roundTripped.topologyOwnsAgentLaunches)
+        XCTAssertNil(roundTripped.agent)
+        XCTAssertEqual(
+            roundTripped.topology?.windows
+                .flatMap(\.panes)
+                .compactMap(\.launch)
+                .map(\.arguments),
+            [
+                ["--resume", "claude-session"],
+                ["resume", "codex-thread"],
+            ]
+        )
+        XCTAssertEqual(
+            roundTripped.topology?.activePaneIndex,
+            2
+        )
+        XCTAssertThrowsError(
+            try codec.encode(
+                descriptor(launches: [nil])
+            )
+        )
+        XCTAssertThrowsError(
+            try codec.encode(
+                descriptor(
+                    launches: [
+                        claudeLaunch,
+                        claudeLaunch,
+                    ]
+                )
+            )
+        )
+    }
+
     func testSocketUpdateAcceptsDirectAgentWithoutTmuxCarrier()
         throws {
         let gate = TideyRuntimeResumeDescriptorUpdateGate()

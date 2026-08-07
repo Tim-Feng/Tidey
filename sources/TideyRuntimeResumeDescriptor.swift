@@ -662,7 +662,10 @@ private struct TideyRuntimeResumeDescriptorContentWire: Codable {
     ) throws -> TideyRuntimeResumeDescriptor {
         guard descriptorVersion ==
                 TideyRuntimeResumeDescriptor
-                    .currentDescriptorVersion else {
+                    .currentDescriptorVersion ||
+                descriptorVersion ==
+                TideyRuntimeResumeDescriptor
+                    .topologyOwnedAgentDescriptorVersion else {
             throw TideyRuntimeResumeDescriptorCodecError
                 .unsupportedDescriptorVersion(descriptorVersion)
         }
@@ -696,6 +699,46 @@ private struct TideyRuntimeResumeDescriptorContentWire: Codable {
             throw TideyRuntimeResumeDescriptorCodecError
                 .malformedField("restore_policy")
         }
+        let targetModel = try target?.validatedModel()
+        let topologyModel = try topology?.validatedModel()
+        let agentModel = try agent?.validatedModel()
+
+        if descriptorVersion == TideyRuntimeResumeDescriptor
+            .topologyOwnedAgentDescriptorVersion {
+            guard kindModel == .agent,
+                  policyModel == .create,
+                  targetModel != nil,
+                  let topologyModel,
+                  agentModel == nil else {
+                throw TideyRuntimeResumeDescriptorCodecError
+                    .malformedField("agent")
+            }
+            let launches = topologyModel.windows
+                .flatMap(\.panes)
+                .compactMap(\.launch)
+            var durableResumeKeys = Set<String>()
+            guard launches.isEmpty == false,
+                  launches.allSatisfy({ launch in
+                      let vendor = launch.executable
+                      let durableResumeID = launch.arguments[1]
+                      return durableResumeKeys.insert(
+                          "\(vendor)|\(durableResumeID)"
+                      ).inserted
+                  }) else {
+                throw TideyRuntimeResumeDescriptorCodecError
+                    .malformedField("topology.pane.launch")
+            }
+            return TideyRuntimeResumeDescriptor(
+                descriptorVersion: descriptorVersion,
+                revision: revision,
+                kind: kindModel,
+                restorePolicy: policyModel,
+                target: targetModel,
+                topology: topologyModel,
+                agent: nil
+            )
+        }
+
         switch kindModel {
         case .ordinaryTmux:
             guard policyModel == .attachOnly,
@@ -733,9 +776,9 @@ private struct TideyRuntimeResumeDescriptorContentWire: Codable {
             revision: revision,
             kind: kindModel,
             restorePolicy: policyModel,
-            target: try target?.validatedModel(),
-            topology: try topology?.validatedModel(),
-            agent: try agent?.validatedModel()
+            target: targetModel,
+            topology: topologyModel,
+            agent: agentModel
         )
     }
 }
