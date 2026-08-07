@@ -473,6 +473,79 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
         XCTAssertEqual(plan.activePaneIndex, 0)
     }
 
+    func testV1LaunchPlanPreservesSparsePaneIndexCompatibility()
+        throws {
+        let claudeLaunch = TideyRuntimeLaunchSpecification(
+            executable: "claude",
+            arguments: ["--resume", "claude-session"],
+            workingDirectory: "/tmp/claude"
+        )
+        let codexLaunch = TideyRuntimeLaunchSpecification(
+            executable: "codex",
+            arguments: ["resume", "codex-thread"],
+            workingDirectory: "/tmp/codex"
+        )
+        let descriptor = TideyRuntimeResumeDescriptor(
+            descriptorVersion:
+                TideyRuntimeResumeDescriptor.currentDescriptorVersion,
+            revision: 1,
+            kind: .agent,
+            restorePolicy: .create,
+            target: TideyRuntimeResumeTarget(
+                defaultSocketAndTmuxSession: "work"
+            ),
+            topology: TideyRuntimeTmuxTopology(
+                windows: [
+                    TideyRuntimeTmuxWindowTopology(
+                        index: 4,
+                        name: "agents",
+                        panes: [
+                            TideyRuntimeTmuxPaneTopology(
+                                index: 3,
+                                workingDirectory: "/tmp/claude",
+                                launch: claudeLaunch
+                            ),
+                            TideyRuntimeTmuxPaneTopology(
+                                index: 9,
+                                workingDirectory: "/tmp/codex",
+                                launch: nil
+                            ),
+                        ]
+                    ),
+                ],
+                activeWindowIndex: 4,
+                activePaneIndex: 9
+            ),
+            agent: TideyRuntimeAgentResumeSpecification(
+                vendor: .codex,
+                durableResumeID: "codex-thread",
+                launch: codexLaunch
+            )
+        )
+
+        let plan = try XCTUnwrap(
+            TideyRuntimeTmuxAgentLaunchPlanBuilder()
+                .plan(for: descriptor)
+        )
+
+        XCTAssertEqual(
+            plan.jobs.map { [$0.windowIndex, $0.paneIndex] },
+            [
+                [4, 0],
+                [4, 1],
+            ]
+        )
+        XCTAssertEqual(
+            plan.jobs.map(\.launch.arguments),
+            [
+                ["--resume", "claude-session"],
+                ["resume", "codex-thread"],
+            ]
+        )
+        XCTAssertEqual(plan.activeWindowIndex, 4)
+        XCTAssertEqual(plan.activePaneIndex, 1)
+    }
+
     func testRepeatedCompletionCannotAttachCreateOrResumeTwice() {
         let targetProbe = TideyRuntimeTargetProbeSpy()
         let topologyCreator = TideyRuntimeTopologyCreatorSpy()

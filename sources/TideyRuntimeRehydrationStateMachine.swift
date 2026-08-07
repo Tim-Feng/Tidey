@@ -376,20 +376,29 @@ final class TideyRuntimeTmuxAgentLaunchPlanBuilder: NSObject {
 
         var jobs = [TideyRuntimeTmuxPaneLaunchJob]()
         var durableResumeKeys = Set<String>()
+        var effectiveActivePaneIndex: Int?
         for window in windows {
             let panes = window.panes.sorted {
                 $0.index < $1.index
             }
             guard panes.isEmpty == false,
                   Set(panes.map(\.index)).count == panes.count,
-                  panes.map(\.index) == Array(0 ..< panes.count) else {
+                  panes.allSatisfy({ $0.index >= 0 }),
+                  topologyOwnsLaunches == false ||
+                    panes.map(\.index) ==
+                    Array(0 ..< panes.count) else {
                 return nil
             }
-            for pane in panes {
+            for (paneOffset, pane) in panes.enumerated() {
                 var launch = pane.launch
                 let isActive =
                     window.index == topology.activeWindowIndex &&
                     pane.index == topology.activePaneIndex
+                if isActive {
+                    effectiveActivePaneIndex = topologyOwnsLaunches
+                        ? pane.index
+                        : paneOffset
+                }
                 if topologyOwnsLaunches == false && isActive {
                     if let launch,
                        Self.launchesAreEqual(
@@ -417,19 +426,22 @@ final class TideyRuntimeTmuxAgentLaunchPlanBuilder: NSObject {
                 jobs.append(
                     TideyRuntimeTmuxPaneLaunchJob(
                         windowIndex: window.index,
-                        paneIndex: pane.index,
+                        paneIndex: topologyOwnsLaunches
+                            ? pane.index
+                            : paneOffset,
                         launch: launch
                     )
                 )
             }
         }
-        guard jobs.isEmpty == false else {
+        guard jobs.isEmpty == false,
+              let effectiveActivePaneIndex else {
             return nil
         }
         return TideyRuntimeTmuxAgentLaunchPlan(
             jobs: jobs,
             activeWindowIndex: topology.activeWindowIndex,
-            activePaneIndex: topology.activePaneIndex
+            activePaneIndex: effectiveActivePaneIndex
         )
     }
 
