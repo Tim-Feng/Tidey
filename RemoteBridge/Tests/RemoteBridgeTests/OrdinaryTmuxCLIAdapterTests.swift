@@ -151,6 +151,58 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
         _ = adapter
     }
 
+    func testRuntimeResumeSessionStateUsesCanonicalSessionNameFromServerWidePaneOutput()
+        throws {
+        let socket = OrdinaryTmuxSocketSelector.name(
+            "tidey-agents"
+        )
+        let state = RunnerState(responses: [
+            RunnerState.key(
+                socket: socket,
+                arguments: runtimeResumeListPanesArguments(
+                    sessionID: "$7"
+                )
+            ):
+                "$7\tstorage\t@15\t0\tmain\t1\t%7\t0\t1\t/tmp/storage\n",
+        ])
+        let adapter = makeAdapter(state: state)
+        let route = OrdinaryTmuxPanelRoute(
+            workspaceID: "workspace-1",
+            panelID: "panel-storage",
+            carrierPanelID: "carrier-storage",
+            socket: socket,
+            sessionID: "$7",
+            sessionName: "s",
+            windowID: "@15",
+            windowIndex: 0,
+            activePaneID: "%7",
+            cwd: "/tmp/storage",
+            currentCommand: "codex"
+        )
+
+        let snapshot = try XCTUnwrap(
+            adapter.runtimeResumeSessionState(for: route)
+        )
+
+        XCTAssertEqual(snapshot.sessionID, "$7")
+        XCTAssertEqual(snapshot.sessionName, "storage")
+        XCTAssertEqual(snapshot.windows.count, 1)
+        XCTAssertEqual(snapshot.windows.first?.windowID, "@15")
+        XCTAssertEqual(snapshot.windows.first?.panes.first?.paneID, "%7")
+        XCTAssertEqual(
+            state.calls,
+            [
+                RunnerState.Call(
+                    socket: socket,
+                    arguments: runtimeResumeListPanesArguments(
+                        sessionID: "$7"
+                    ),
+                    stdin: nil
+                ),
+            ]
+        )
+    }
+
     func testRawProcessRunnerPreservesBoundaryWhitespaceAndNonUTF8Bytes() throws {
         let runner = OrdinaryTmuxCLIAdapter.processRawCommandRunner(
             executablePath: "/usr/bin/printf",
@@ -1199,6 +1251,30 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
             windowID,
             "-F",
             "#{pane_id}\t#{pane_active}\t#{pane_pid}\t#{pane_current_path}\t#{pane_current_command}",
+        ]
+    }
+
+    private func runtimeResumeListPanesArguments(
+        sessionID: String
+    ) -> [String] {
+        [
+            "list-panes",
+            "-s",
+            "-t",
+            sessionID,
+            "-F",
+            [
+                "#{session_id}",
+                "#{session_name}",
+                "#{window_id}",
+                "#{window_index}",
+                "#{window_name}",
+                "#{window_active}",
+                "#{pane_id}",
+                "#{pane_index}",
+                "#{pane_active}",
+                "#{pane_current_path}",
+            ].joined(separator: "\t"),
         ]
     }
 
