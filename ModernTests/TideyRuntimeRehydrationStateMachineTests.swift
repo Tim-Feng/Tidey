@@ -258,10 +258,17 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
         XCTAssertNotNil(builder as Any)
     }
 
-    func testTmuxRespawnUsesBundledExecutableAndLiteralArguments() {
+    func testTmuxRespawnUsesBundledExecutableAndLiteralArguments() throws {
+        let injectionMarker = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(
+                "tidey-tmux-quote-\(UUID().uuidString)"
+            )
+        defer {
+            try? FileManager.default.removeItem(at: injectionMarker)
+        }
         let resumeIdentity =
-            "thread'; $(touch /tmp/tidey-owned); " +
-            "`touch /tmp/tidey-owned`"
+            "thread'; $(touch '\(injectionMarker.path)'); " +
+            "`touch '\(injectionMarker.path)'`"
         let executable =
             "/Applications/Tidey.app/Contents/Resources/bin/codex"
         let launch = TideyRuntimeLaunchSpecification(
@@ -274,6 +281,7 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
             .arguments(
                 paneID: "%7",
                 agentExecutable: executable,
+                loginShellExecutable: "/bin/zsh",
                 launch: launch
             )
 
@@ -288,15 +296,48 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
                 "/tmp/project with spaces",
             ]
         )
+        let parser = Process()
+        let parserOutput = Pipe()
+        parser.executableURL = URL(fileURLWithPath: "/bin/sh")
+        parser.arguments = [
+            "-c",
+            "set -- \(arguments?.last ?? ""); " +
+                "printf '%s\\n' \"$@\"",
+        ]
+        parser.standardOutput = parserOutput
+        try parser.run()
+        parser.waitUntilExit()
+        let outputData = parserOutput.fileHandleForReading.readDataToEndOfFile()
+        let output = String(decoding: outputData, as: UTF8.self)
+        let shellArguments = Array(
+            output.components(separatedBy: "\n").dropLast()
+        )
+
+        XCTAssertEqual(parser.terminationStatus, 0)
         XCTAssertEqual(
-            ((arguments?.last ?? "") as NSString)
-                .componentsInShellCommand(),
+            shellArguments,
+            [
+                "/bin/zsh",
+                "-lic",
+                TideyRuntimeDirectAgentCommandBuilder().command(
+                    agentExecutable: executable,
+                    arguments: launch.arguments
+                )! + "; exec '/bin/zsh' -l",
+            ]
+        )
+        XCTAssertEqual(
+            (TideyRuntimeDirectAgentCommandBuilder().command(
+                agentExecutable: executable,
+                arguments: launch.arguments
+            )! as NSString).componentsInShellCommand(),
             [executable, "resume", resumeIdentity]
         )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: injectionMarker.path))
         XCTAssertNil(
             TideyRuntimeTmuxRespawnCommandBuilder().arguments(
                 paneID: "%7",
                 agentExecutable: "codex",
+                loginShellExecutable: "/bin/zsh",
                 launch: launch
             )
         )
@@ -304,8 +345,57 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
             TideyRuntimeTmuxRespawnCommandBuilder().arguments(
                 paneID: "pane-7",
                 agentExecutable: executable,
+                loginShellExecutable: "/bin/zsh",
                 launch: launch
             )
+        )
+        XCTAssertNil(
+            TideyRuntimeTmuxRespawnCommandBuilder().arguments(
+                paneID: "%7",
+                agentExecutable: executable,
+                loginShellExecutable: "zsh",
+                launch: launch
+            )
+        )
+        XCTAssertNil(
+            TideyRuntimeTmuxRespawnCommandBuilder().arguments(
+                paneID: "%7",
+                agentExecutable: executable,
+                loginShellExecutable: "/bin/zsh\u{0}",
+                launch: launch
+            )
+        )
+    }
+
+    func testTmuxAgentRespawnReturnsToLoginShellAfterWrapperExit() {
+        let executable =
+            "/Applications/Tidey.app/Contents/Resources/bin/claude"
+        let launch = TideyRuntimeLaunchSpecification(
+            executable: "claude",
+            arguments: ["--resume", "claude-session"],
+            workingDirectory: "/tmp/project"
+        )
+        let arguments = TideyRuntimeTmuxRespawnCommandBuilder()
+            .arguments(
+                paneID: "%11",
+                agentExecutable: executable,
+                loginShellExecutable: "/bin/zsh",
+                launch: launch
+            )
+        let agentCommand = TideyRuntimeDirectAgentCommandBuilder()
+            .command(
+                agentExecutable: executable,
+                arguments: launch.arguments
+            )!
+
+        XCTAssertEqual(
+            ((arguments?.last ?? "") as NSString)
+                .componentsInShellCommand(),
+            [
+                "/bin/zsh",
+                "-lic",
+                "\(agentCommand); exec '/bin/zsh' -l",
+            ]
         )
     }
 

@@ -811,9 +811,23 @@ static NSString *TideyRuntimeAgentExecutablePath(
 - (void)resumeAgentInPanel:(NSString *)panelID
             withDescriptor:(TideyRuntimeResumeDescriptor *)descriptor
                 completion:(void (^)(BOOL))completion {
+    NSAssert([NSThread isMainThread],
+             @"tmux agent relaunch must begin on the main thread.");
+    PTYSession *session =
+        [_windowController tideySelectedSessionForPanelIdentifier:panelID];
+    NSString *loginShellExecutable = [session.userShell copy];
+    if (loginShellExecutable.length == 0) {
+        [loginShellExecutable release];
+        completion(NO);
+        return;
+    }
     dispatch_async(_queue, ^{
-        completion([self resumeAgentWithDescriptor:descriptor]);
+        completion(
+            [self resumeAgentWithDescriptor:descriptor
+                       loginShellExecutable:loginShellExecutable]
+        );
     });
+    [loginShellExecutable release];
 }
 
 - (void)resumeDirectAgentInPanel:(NSString *)panelID
@@ -887,7 +901,8 @@ static NSString *TideyRuntimeAgentExecutablePath(
                completion:completion];
 }
 
-- (BOOL)resumeAgentWithDescriptor:(TideyRuntimeResumeDescriptor *)descriptor {
+- (BOOL)resumeAgentWithDescriptor:(TideyRuntimeResumeDescriptor *)descriptor
+             loginShellExecutable:(NSString *)loginShellExecutable {
     TideyRuntimeAgentResumeSpecification *agent = descriptor.agent;
     BOOL topologyOwnsAgentLaunches =
         descriptor.topologyOwnsAgentLaunches;
@@ -1029,6 +1044,7 @@ static NSString *TideyRuntimeAgentExecutablePath(
         NSArray<NSString *> *arguments =
             [builder argumentsWithPaneID:job[@"pane_id"]
                          agentExecutable:executable ?: @""
+                    loginShellExecutable:loginShellExecutable
                                   launch:launch];
         if (!arguments) {
             return NO;

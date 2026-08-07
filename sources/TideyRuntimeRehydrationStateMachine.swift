@@ -162,11 +162,11 @@ final class TideyRuntimeDirectAgentCommandBuilder: NSObject {
 @objc(TideyRuntimeLoginShellCommandBuilder)
 @objcMembers
 final class TideyRuntimeLoginShellCommandBuilder: NSObject {
-    @objc(commandWithLoginShellExecutable:innerCommand:)
-    func command(
+    @objc(argumentsWithLoginShellExecutable:innerCommand:)
+    func arguments(
         loginShellExecutable: String,
         innerCommand: String
-    ) -> String? {
+    ) -> [String]? {
         guard loginShellExecutable.hasPrefix("/"),
               URL(fileURLWithPath: loginShellExecutable)
                 .standardizedFileURL.path == loginShellExecutable,
@@ -182,8 +182,21 @@ final class TideyRuntimeLoginShellCommandBuilder: NSObject {
             "\(innerCommand); exec " +
                 "\(Self.shellQuote(loginShellExecutable)) -l",
         ]
-        .map(Self.commandArgumentQuote)
-        .joined(separator: " ")
+    }
+
+    @objc(commandWithLoginShellExecutable:innerCommand:)
+    func command(
+        loginShellExecutable: String,
+        innerCommand: String
+    ) -> String? {
+        guard let arguments = arguments(
+            loginShellExecutable: loginShellExecutable,
+            innerCommand: innerCommand
+        ) else {
+            return nil
+        }
+        return arguments.map(Self.commandArgumentQuote)
+            .joined(separator: " ")
     }
 
     private static func shellQuote(_ argument: String) -> String {
@@ -252,10 +265,13 @@ final class TideyRuntimeAttachCommandBuilder: NSObject {
 @objc(TideyRuntimeTmuxRespawnCommandBuilder)
 @objcMembers
 final class TideyRuntimeTmuxRespawnCommandBuilder: NSObject {
-    @objc(argumentsWithPaneID:agentExecutable:launch:)
+    @objc(
+        argumentsWithPaneID:agentExecutable:loginShellExecutable:launch:
+    )
     func arguments(
         paneID: String,
         agentExecutable: String,
+        loginShellExecutable: String,
         launch: TideyRuntimeLaunchSpecification
     ) -> [String]? {
         let executableURL = URL(fileURLWithPath: agentExecutable)
@@ -274,6 +290,11 @@ final class TideyRuntimeTmuxRespawnCommandBuilder: NSObject {
                 .command(
                     agentExecutable: agentExecutable,
                     arguments: launch.arguments
+                ),
+              let loginShellArguments =
+                TideyRuntimeLoginShellCommandBuilder().arguments(
+                    loginShellExecutable: loginShellExecutable,
+                    innerCommand: command
                 ) else {
             return nil
         }
@@ -289,8 +310,20 @@ final class TideyRuntimeTmuxRespawnCommandBuilder: NSObject {
                 workingDirectory,
             ])
         }
-        result.append(command)
+        result.append(
+            loginShellArguments.map(Self.shellQuote)
+                .joined(separator: " ")
+        )
         return result
+    }
+
+    private static func shellQuote(_ argument: String) -> String {
+        "'" +
+        argument.replacingOccurrences(
+            of: "'",
+            with: "'\\''"
+        ) +
+        "'"
     }
 }
 
