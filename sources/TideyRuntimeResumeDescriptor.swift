@@ -137,6 +137,11 @@ final class TideyRuntimeResumeTarget: NSObject {
     }
 }
 
+struct TideyRuntimeLegacyDefaultSocketTargetResolution {
+    let target: TideyRuntimeResumeTarget
+    let migrationApplied: Bool
+}
+
 struct TideyRuntimeLegacyDefaultSocketTargetResolver {
     typealias ExistingPathCanonicalizer = (String) -> String?
 
@@ -149,12 +154,35 @@ struct TideyRuntimeLegacyDefaultSocketTargetResolver {
         userID: UInt32,
         canonicalizeExistingPath: ExistingPathCanonicalizer
     ) -> TideyRuntimeResumeTarget {
+        resolveWithMetadata(
+            target: target,
+            descriptorVersion: descriptorVersion,
+            kind: kind,
+            restorePolicy: restorePolicy,
+            environment: environment,
+            userID: userID,
+            canonicalizeExistingPath: canonicalizeExistingPath
+        ).target
+    }
+
+    static func resolveWithMetadata(
+        target: TideyRuntimeResumeTarget,
+        descriptorVersion: Int,
+        kind: TideyRuntimeResumeKind,
+        restorePolicy: TideyRuntimeRestorePolicy,
+        environment: [String: String],
+        userID: UInt32,
+        canonicalizeExistingPath: ExistingPathCanonicalizer
+    ) -> TideyRuntimeLegacyDefaultSocketTargetResolution {
         guard descriptorVersion == 2,
               kind == .agent,
               restorePolicy == .create,
               target.socketEndpointKind == .path,
               let socketPath = target.socketPath else {
-            return target
+            return TideyRuntimeLegacyDefaultSocketTargetResolution(
+                target: target,
+                migrationApplied: false
+            )
         }
         let configuredRoot = environment["TMUX_TMPDIR"].flatMap {
             $0.isEmpty ? nil : $0
@@ -163,16 +191,25 @@ struct TideyRuntimeLegacyDefaultSocketTargetResolver {
             canonicalizeExistingPath
         ) ?? canonicalizeExistingPath("/tmp")
         guard let canonicalRoot else {
-            return target
+            return TideyRuntimeLegacyDefaultSocketTargetResolution(
+                target: target,
+                migrationApplied: false
+            )
         }
         let expectedPath = (canonicalRoot as NSString)
             .appendingPathComponent("tmux-\(userID)/default")
         guard normalizedMacOSTmpAlias(socketPath) ==
                 normalizedMacOSTmpAlias(expectedPath) else {
-            return target
+            return TideyRuntimeLegacyDefaultSocketTargetResolution(
+                target: target,
+                migrationApplied: false
+            )
         }
-        return TideyRuntimeResumeTarget(
-            defaultSocketAndTmuxSession: target.tmuxSession
+        return TideyRuntimeLegacyDefaultSocketTargetResolution(
+            target: TideyRuntimeResumeTarget(
+                defaultSocketAndTmuxSession: target.tmuxSession
+            ),
+            migrationApplied: true
         )
     }
 
@@ -182,7 +219,21 @@ struct TideyRuntimeLegacyDefaultSocketTargetResolver {
         kind: TideyRuntimeResumeKind,
         restorePolicy: TideyRuntimeRestorePolicy
     ) -> TideyRuntimeResumeTarget {
-        resolve(
+        resolveForCurrentProcessWithMetadata(
+            target: target,
+            descriptorVersion: descriptorVersion,
+            kind: kind,
+            restorePolicy: restorePolicy
+        ).target
+    }
+
+    static func resolveForCurrentProcessWithMetadata(
+        target: TideyRuntimeResumeTarget,
+        descriptorVersion: Int,
+        kind: TideyRuntimeResumeKind,
+        restorePolicy: TideyRuntimeRestorePolicy
+    ) -> TideyRuntimeLegacyDefaultSocketTargetResolution {
+        resolveWithMetadata(
             target: target,
             descriptorVersion: descriptorVersion,
             kind: kind,
@@ -255,6 +306,7 @@ final class TideyRuntimeResumeDescriptor: NSObject {
     let target: TideyRuntimeResumeTarget?
     let topology: TideyRuntimeTmuxTopology?
     let agent: TideyRuntimeAgentResumeSpecification?
+    let legacyDefaultSocketMigrationApplied: Bool
 
     var topologyOwnsAgentLaunches: Bool {
         (descriptorVersion ==
@@ -272,7 +324,8 @@ final class TideyRuntimeResumeDescriptor: NSObject {
         restorePolicy: TideyRuntimeRestorePolicy,
         target: TideyRuntimeResumeTarget?,
         topology: TideyRuntimeTmuxTopology?,
-        agent: TideyRuntimeAgentResumeSpecification?
+        agent: TideyRuntimeAgentResumeSpecification?,
+        legacyDefaultSocketMigrationApplied: Bool = false
     ) {
         self.descriptorVersion = descriptorVersion
         self.revision = revision
@@ -281,6 +334,8 @@ final class TideyRuntimeResumeDescriptor: NSObject {
         self.target = target
         self.topology = topology
         self.agent = agent
+        self.legacyDefaultSocketMigrationApplied =
+            legacyDefaultSocketMigrationApplied
     }
 }
 
@@ -793,15 +848,18 @@ private struct TideyRuntimeResumeDescriptorContentWire: Codable {
                 .malformedField("restore_policy")
         }
         let decodedTargetModel = try target?.validatedModel()
-        let targetModel = decodedTargetModel.map {
+        let targetResolution = decodedTargetModel.map {
             TideyRuntimeLegacyDefaultSocketTargetResolver
-                .resolveForCurrentProcess(
+                .resolveForCurrentProcessWithMetadata(
                     target: $0,
                     descriptorVersion: descriptorVersion,
                     kind: kindModel,
                     restorePolicy: policyModel
                 )
         }
+        let targetModel = targetResolution?.target
+        let legacyDefaultSocketMigrationApplied =
+            targetResolution?.migrationApplied ?? false
         let topologyModel = try topology?.validatedModel()
         let agentModel = try agent?.validatedModel()
 
@@ -846,7 +904,9 @@ private struct TideyRuntimeResumeDescriptorContentWire: Codable {
                 restorePolicy: policyModel,
                 target: targetModel,
                 topology: topologyModel,
-                agent: nil
+                agent: nil,
+                legacyDefaultSocketMigrationApplied:
+                    legacyDefaultSocketMigrationApplied
             )
         }
 
@@ -889,7 +949,9 @@ private struct TideyRuntimeResumeDescriptorContentWire: Codable {
             restorePolicy: policyModel,
             target: targetModel,
             topology: topologyModel,
-            agent: agentModel
+            agent: agentModel,
+            legacyDefaultSocketMigrationApplied:
+                legacyDefaultSocketMigrationApplied
         )
     }
 }

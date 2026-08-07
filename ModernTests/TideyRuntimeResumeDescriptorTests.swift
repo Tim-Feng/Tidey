@@ -338,8 +338,10 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
             .defaultSocket
         )
         XCTAssertNil(v2.target?.socketPath)
+        XCTAssertTrue(v2.legacyDefaultSocketMigrationApplied)
         XCTAssertEqual(v3.target?.socketEndpointKind, .path)
         XCTAssertEqual(v3.target?.socketPath, socketPath)
+        XCTAssertFalse(v3.legacyDefaultSocketMigrationApplied)
         XCTAssertThrowsError(
             try codec.encode(descriptor(version: 4))
         )
