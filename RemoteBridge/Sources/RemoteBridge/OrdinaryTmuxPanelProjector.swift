@@ -712,6 +712,7 @@ final class OrdinaryTmuxPanelProjector {
             panelID: panelID ?? projectedPanel.panelID,
             carrierPanelID: carrierPanelID,
             socket: projectedPanel.socketPath.map(OrdinaryTmuxSocketSelector.path) ?? metadata.preferredSocketSelector,
+            restorationSocket: metadata.preferredSocketSelector,
             sessionID: projectedPanel.sessionID,
             sessionName: projectedPanel.sessionName,
             windowID: projectedPanel.windowID,

@@ -5,6 +5,7 @@ struct OrdinaryTmuxPanelRoute: Equatable, Sendable {
     let panelID: String
     let carrierPanelID: String
     let socket: OrdinaryTmuxSocketSelector
+    let restorationSocket: OrdinaryTmuxSocketSelector
     let sessionID: String
     let sessionName: String
     let windowID: String
@@ -12,6 +13,32 @@ struct OrdinaryTmuxPanelRoute: Equatable, Sendable {
     let activePaneID: String
     let cwd: String?
     let currentCommand: String?
+
+    init(workspaceID: String,
+         panelID: String,
+         carrierPanelID: String,
+         socket: OrdinaryTmuxSocketSelector,
+         restorationSocket: OrdinaryTmuxSocketSelector? = nil,
+         sessionID: String,
+         sessionName: String,
+         windowID: String,
+         windowIndex: Int,
+         activePaneID: String,
+         cwd: String?,
+         currentCommand: String?) {
+        self.workspaceID = workspaceID
+        self.panelID = panelID
+        self.carrierPanelID = carrierPanelID
+        self.socket = socket
+        self.restorationSocket = restorationSocket ?? socket
+        self.sessionID = sessionID
+        self.sessionName = sessionName
+        self.windowID = windowID
+        self.windowIndex = windowIndex
+        self.activePaneID = activePaneID
+        self.cwd = cwd
+        self.currentCommand = currentCommand
+    }
 }
 
 struct OrdinaryTmuxLogicalPanelID: Equatable, Sendable {
@@ -71,9 +98,26 @@ struct OrdinaryTmuxAuthorizedTarget: Equatable, Sendable {
     let workspaceID: String
     let carrierPanelID: String
     let socket: OrdinaryTmuxSocketSelector
+    let restorationSocket: OrdinaryTmuxSocketSelector
     let sessionID: String
     let sessionName: String
     let authorizedAt: Date
+
+    init(workspaceID: String,
+         carrierPanelID: String,
+         socket: OrdinaryTmuxSocketSelector,
+         restorationSocket: OrdinaryTmuxSocketSelector? = nil,
+         sessionID: String,
+         sessionName: String,
+         authorizedAt: Date) {
+        self.workspaceID = workspaceID
+        self.carrierPanelID = carrierPanelID
+        self.socket = socket
+        self.restorationSocket = restorationSocket ?? socket
+        self.sessionID = sessionID
+        self.sessionName = sessionName
+        self.authorizedAt = authorizedAt
+    }
 
     var socketComponent: String {
         socket.stablePanelIDComponent
@@ -104,6 +148,7 @@ final class OrdinaryTmuxPanelRegistry: @unchecked Sendable {
                 let target = OrdinaryTmuxAuthorizedTarget(workspaceID: route.workspaceID,
                                                           carrierPanelID: route.carrierPanelID,
                                                           socket: route.socket,
+                                                          restorationSocket: route.restorationSocket,
                                                           sessionID: route.sessionID,
                                                           sessionName: route.sessionName,
                                                           authorizedAt: observedAt)
@@ -125,6 +170,7 @@ final class OrdinaryTmuxPanelRegistry: @unchecked Sendable {
                 let target = OrdinaryTmuxAuthorizedTarget(workspaceID: route.workspaceID,
                                                           carrierPanelID: route.carrierPanelID,
                                                           socket: route.socket,
+                                                          restorationSocket: route.restorationSocket,
                                                           sessionID: route.sessionID,
                                                           sessionName: route.sessionName,
                                                           authorizedAt: observedAt)
@@ -151,6 +197,7 @@ final class OrdinaryTmuxPanelRegistry: @unchecked Sendable {
                 let target = OrdinaryTmuxAuthorizedTarget(workspaceID: route.workspaceID,
                                                           carrierPanelID: route.carrierPanelID,
                                                           socket: route.socket,
+                                                          restorationSocket: route.restorationSocket,
                                                           sessionID: route.sessionID,
                                                           sessionName: route.sessionName,
                                                           authorizedAt: observedAt)
@@ -167,6 +214,7 @@ final class OrdinaryTmuxPanelRegistry: @unchecked Sendable {
             let target = OrdinaryTmuxAuthorizedTarget(workspaceID: route.workspaceID,
                                                       carrierPanelID: route.carrierPanelID,
                                                       socket: route.socket,
+                                                      restorationSocket: route.restorationSocket,
                                                       sessionID: route.sessionID,
                                                       sessionName: route.sessionName,
                                                       authorizedAt: observedAt)
