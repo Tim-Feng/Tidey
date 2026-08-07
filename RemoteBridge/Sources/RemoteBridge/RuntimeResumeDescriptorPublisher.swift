@@ -182,6 +182,13 @@ struct RuntimeResumeAgentRegistryRecord:
     let launch: RuntimeResumeLaunchSpecification
 }
 
+struct RuntimeResumeAgentRegistrySnapshot:
+    Equatable,
+    Sendable {
+    let records: [RuntimeResumeAgentRegistryRecord]
+    let isComplete: Bool
+}
+
 struct RuntimeResumeTmuxTopologySnapshot:
     Equatable,
     Sendable {
@@ -484,8 +491,15 @@ final class OrdinaryTmuxRuntimeResumeCarrierPlanner:
 }
 
 protocol RuntimeResumeAgentRegistryReading: Sendable {
+    func readAgentRegistrySnapshot()
+        throws -> RuntimeResumeAgentRegistrySnapshot
+}
+
+extension RuntimeResumeAgentRegistryReading {
     func readAgentRegistryRecords()
-        throws -> [RuntimeResumeAgentRegistryRecord]
+        throws -> [RuntimeResumeAgentRegistryRecord] {
+        try readAgentRegistrySnapshot().records
+    }
 }
 
 final class AgentSessionRegistryRuntimeResumeReader:
@@ -497,9 +511,12 @@ final class AgentSessionRegistryRuntimeResumeReader:
         self.monitor = monitor
     }
 
-    func readAgentRegistryRecords()
-        throws -> [RuntimeResumeAgentRegistryRecord] {
-        monitor.currentRuntimeResumeAgentRecords()
+    func readAgentRegistrySnapshot()
+        throws -> RuntimeResumeAgentRegistrySnapshot {
+        RuntimeResumeAgentRegistrySnapshot(
+            records: monitor.currentRuntimeResumeAgentRecords(),
+            isComplete: true
+        )
     }
 }
 
@@ -819,7 +836,7 @@ final class RuntimeResumeDescriptorPublisher:
     private func publishCurrentDescriptorsOnQueue()
         throws {
         let records =
-            try registryReader.readAgentRegistryRecords()
+            try registryReader.readAgentRegistrySnapshot().records
                 .sorted(by: Self.recordPrecedes(_:_:))
         for record in records where record.binding.tmuxPaneID == nil {
             let agent = RuntimeResumeAgentSpecification(

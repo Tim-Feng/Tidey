@@ -4,6 +4,16 @@ import XCTest
 @testable import RemoteBridge
 
 final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
+    func testRegistrySnapshotCompletenessSeamCompiles() {
+        let snapshot = RuntimeResumeAgentRegistrySnapshot(
+            records: [],
+            isComplete: false
+        )
+
+        XCTAssertTrue(snapshot.records.isEmpty)
+        XCTAssertFalse(snapshot.isComplete)
+    }
+
     func testDirectAgentDescriptorSeamsCompile() {
         let binding = RuntimeResumeDescriptorBinding(
             workspaceID: "workspace-direct",
@@ -1413,9 +1423,12 @@ private final class StubRuntimeResumeRegistryReader:
         self.records = records
     }
 
-    func readAgentRegistryRecords()
-        throws -> [RuntimeResumeAgentRegistryRecord] {
-        records
+    func readAgentRegistrySnapshot()
+        throws -> RuntimeResumeAgentRegistrySnapshot {
+        RuntimeResumeAgentRegistrySnapshot(
+            records: records,
+            isComplete: true
+        )
     }
 }
 
