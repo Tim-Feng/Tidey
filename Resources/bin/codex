@@ -448,7 +448,8 @@ codex_runtime_compatibility_expected_version() {
     local durable_id="${2:-}"
     local expected_uid="${3:-}"
 
-    [[ -n "$marker_file" && -n "$durable_id" && "$expected_uid" =~ ^[0-9]+$ ]] || return 1
+    [[ -n "$marker_file" && -n "$durable_id" ]] || return 1
+    [[ -z "$expected_uid" || "$expected_uid" =~ ^[0-9]+$ ]] || return 1
     python3 - "$marker_file" "$durable_id" "$expected_uid" <<'PY'
 import json
 import os
@@ -457,7 +458,7 @@ import stat
 import sys
 
 path, durable_id, expected_uid_text = sys.argv[1:]
-expected_uid = int(expected_uid_text)
+expected_uid = os.geteuid() if expected_uid_text == "" else int(expected_uid_text)
 uuid_pattern = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 )
@@ -1122,8 +1123,7 @@ main() {
                 if codex_runtime_compatibility_allows_tracked_plain \
                     "$CODEX_RUNTIME_COMPATIBILITY_FILE" \
                     "$real_codex" \
-                    "$app_server_runtime_thread_id" \
-                    "$(id -u)"; then
+                    "$app_server_runtime_thread_id"; then
                     use_app_server_runtime=0
                 fi
             fi
