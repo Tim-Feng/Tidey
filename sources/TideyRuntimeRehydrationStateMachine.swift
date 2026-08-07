@@ -249,6 +249,19 @@ final class TideyRuntimeAttachCommandBuilder: NSObject {
     }
 }
 
+@objc(TideyRuntimeTmuxRespawnCommandBuilder)
+@objcMembers
+final class TideyRuntimeTmuxRespawnCommandBuilder: NSObject {
+    @objc(argumentsWithPaneID:agentExecutable:launch:)
+    func arguments(
+        paneID: String,
+        agentExecutable: String,
+        launch: TideyRuntimeLaunchSpecification
+    ) -> [String]? {
+        nil
+    }
+}
+
 @objc(TideyRuntimeTmuxPaneLaunchJob)
 @objcMembers
 final class TideyRuntimeTmuxPaneLaunchJob: NSObject {

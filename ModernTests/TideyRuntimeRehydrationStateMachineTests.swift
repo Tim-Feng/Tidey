@@ -252,6 +252,12 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
         )
     }
 
+    func testTmuxRespawnCommandBuilderSeamCompiles() {
+        let builder = TideyRuntimeTmuxRespawnCommandBuilder()
+
+        XCTAssertNotNil(builder as Any)
+    }
+
     func testReducerAndExecutorSeamsCompile() {
         let reducer = TideyRuntimeRehydrationReducer()
         let targetProbe = TideyRuntimeTargetProbeSpy()
