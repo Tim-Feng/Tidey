@@ -1039,6 +1039,41 @@ final class TideyRuntimeResumeDescriptorUpdateGate: NSObject {
         return entriesByPanelID[panelID]?.descriptor
     }
 
+    @objc(
+        runtimeAgentDescriptorSnapshotsWithCurrentWorkspaceIDByPanelID:
+    )
+    func runtimeAgentDescriptorSnapshots(
+        currentWorkspaceIDByPanelID: [String: String]
+    ) -> [[String: Any]] {
+        lock.lock()
+        defer { lock.unlock() }
+        return entriesByPanelID.keys.sorted().compactMap {
+            panelID in
+            guard let entry = entriesByPanelID[panelID],
+                  entry.descriptor.kind == .agent,
+                  let workspaceID =
+                    currentWorkspaceIDByPanelID[panelID],
+                  let descriptor = try?
+                    TideyRuntimeResumeDescriptorDictionaryCodec
+                        .dictionary(
+                            from:
+                                TideyRuntimeResumeDescriptorContentWire(
+                                    entry.descriptor
+                                )
+                        ) else {
+                return nil
+            }
+            return [
+                "binding": [
+                    "workspace_id": workspaceID,
+                    "panel_id": panelID,
+                ],
+                "revision": entry.descriptor.revision,
+                "descriptor": descriptor,
+            ]
+        }
+    }
+
     @objc(replaceDescriptorsByPanelID:)
     func replaceDescriptorsByPanelID(
         _ descriptorsByPanelID:
