@@ -294,6 +294,40 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
         )
     }
 
+    func testDescriptorRemovalSeamCompiles() throws {
+        let gate = TideyRuntimeResumeDescriptorUpdateGate()
+        let accepted = gate.acceptUpdatePayload(
+            socketUpdatePayload(
+                durableResumeID: "thread-inventory",
+                workingDirectory: "/tmp/project"
+            ),
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertTrue(accepted.accepted)
+
+        let snapshots = gate.runtimeAgentDescriptorSnapshots(
+            currentWorkspaceIDByPanelID: [
+                "panel-1": "workspace-1"
+            ]
+        )
+
+        XCTAssertEqual(snapshots.count, 1)
+        XCTAssertEqual(snapshots[0]["revision"] as? Int64, 1)
+        let binding = try XCTUnwrap(
+            snapshots[0]["binding"] as? [String: Any]
+        )
+        XCTAssertEqual(
+            binding["workspace_id"] as? String,
+            "workspace-1"
+        )
+        XCTAssertEqual(binding["panel_id"] as? String, "panel-1")
+        XCTAssertNotNil(
+            snapshots[0]["descriptor"] as? [String: Any]
+        )
+        XCTAssertNotNil(gate.descriptor(forPanelID: "panel-1"))
+    }
+
     func testOrdinaryTmuxMetadataProducesAttachOnlyDescriptorWithoutBridge() throws {
         let factory = TideyRuntimeResumeDescriptorFactory()
         let pathDescriptor = try XCTUnwrap(
