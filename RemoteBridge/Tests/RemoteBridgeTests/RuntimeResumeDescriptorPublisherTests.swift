@@ -6,12 +6,62 @@ import XCTest
 final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
     func testRegistrySnapshotCompletenessSeamCompiles() {
         let snapshot = RuntimeResumeAgentRegistrySnapshot(
-            records: [],
-            isComplete: false
+            sourceRecordCount: 1,
+            resolvedCandidateCount: 0,
+            records: []
         )
 
         XCTAssertTrue(snapshot.records.isEmpty)
+        XCTAssertEqual(snapshot.sourceRecordCount, 1)
+        XCTAssertEqual(snapshot.resolvedCandidateCount, 0)
         XCTAssertFalse(snapshot.isComplete)
+    }
+
+    func testIncompleteRegistrySnapshotPublishesNothing()
+        throws {
+        let binding = RuntimeResumeDescriptorBinding(
+            workspaceID: "workspace-direct",
+            panelID: "panel-direct",
+            tmuxPaneID: nil
+        )
+        let record = RuntimeResumeAgentRegistryRecord(
+            binding: binding,
+            vendor: .codex,
+            durableResumeID: "thread-direct",
+            launch: RuntimeResumeLaunchSpecification(
+                executable: "codex",
+                arguments: ["resume", "thread-direct"],
+                workingDirectory: "/tmp/project"
+            )
+        )
+        let socketSender = RecordingRuntimeResumeSocketSender()
+        let publisher = RuntimeResumeDescriptorPublisher(
+            registryReader: StubRuntimeResumeRegistryReader(
+                snapshot: RuntimeResumeAgentRegistrySnapshot(
+                    sourceRecordCount: 2,
+                    resolvedCandidateCount: 1,
+                    records: [record]
+                )
+            ),
+            topologyReader: StubRuntimeResumeTopologyReader(
+                snapshotsByBinding: [:]
+            ),
+            socketSender: socketSender
+        )
+
+        XCTAssertThrowsError(
+            try publisher.publishCurrentDescriptors()
+        ) { error in
+            XCTAssertEqual(
+                error as? RuntimeResumeDescriptorPublisherError,
+                .incompleteRegistrySnapshot(
+                    sourceRecordCount: 2,
+                    resolvedCandidateCount: 1,
+                    publishedRecordCount: 1
+                )
+            )
+        }
+        XCTAssertTrue(socketSender.updates.isEmpty)
     }
 
     func testDirectAgentDescriptorSeamsCompile() {
@@ -722,9 +772,76 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
                 )
             ]
         )
-        XCTAssertTrue(
-            try reader.readAgentRegistryRecords().isEmpty
+        let incompleteSnapshot =
+            try reader.readAgentRegistrySnapshot()
+        XCTAssertEqual(incompleteSnapshot.sourceRecordCount, 1)
+        XCTAssertEqual(
+            incompleteSnapshot.resolvedCandidateCount,
+            0
         )
+        XCTAssertTrue(incompleteSnapshot.records.isEmpty)
+        XCTAssertFalse(incompleteSnapshot.isComplete)
+    }
+
+    func testRegistrySnapshotRejectsConflictingRecordsSharingBinding()
+        throws {
+        let supportDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "RuntimeResumeDescriptorPublisherTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        defer {
+            try? FileManager.default.removeItem(
+                at: supportDirectory
+            )
+        }
+        let paths = BridgePaths(
+            supportDirectory: supportDirectory
+        )
+        try paths.ensureSupportDirectoriesExist()
+        for sessionID in ["session-a", "session-b"] {
+            let record = AgentSessionRegistryRecord(
+                version: 1,
+                vendor: "claude",
+                workspaceID: "workspace-direct",
+                sessionID: sessionID,
+                panelID: "panel-direct",
+                pid: getpid(),
+                cwd: "/tmp/project",
+                createdAt: "2026-08-07T00:00:00Z",
+                transcriptPath: nil
+            )
+            let recordURL = paths
+                .agentSessionsDirectory(for: "claude")
+                .appendingPathComponent("\(sessionID).json")
+            try JSONEncoder().encode(record).write(to: recordURL)
+        }
+        let monitor = AgentSessionRegistryMonitor(
+            paths: paths,
+            hub: AgentEventHub()
+        )
+        monitor.replaceLivePanels(
+            workspaceID: "workspace-direct",
+            panels: [
+                AgentPanelProcessSnapshot(
+                    workspaceID: "workspace-direct",
+                    panelID: "panel-direct",
+                    effectiveShellPID: getpid(),
+                    tmuxPaneID: nil,
+                    tmuxSocketPath: nil
+                )
+            ]
+        )
+        monitor.scanRegistryForTesting()
+
+        let snapshot = try AgentSessionRegistryRuntimeResumeReader(
+            monitor: monitor
+        ).readAgentRegistrySnapshot()
+
+        XCTAssertEqual(snapshot.sourceRecordCount, 2)
+        XCTAssertEqual(snapshot.resolvedCandidateCount, 2)
+        XCTAssertTrue(snapshot.records.isEmpty)
+        XCTAssertFalse(snapshot.isComplete)
     }
 
     func testTopologyReaderRequiresExactCurrentPaneBinding()
@@ -1417,18 +1534,27 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
 private final class StubRuntimeResumeRegistryReader:
     RuntimeResumeAgentRegistryReading,
     @unchecked Sendable {
-    let records: [RuntimeResumeAgentRegistryRecord]
+    let snapshot: RuntimeResumeAgentRegistrySnapshot
+
+    var records: [RuntimeResumeAgentRegistryRecord] {
+        snapshot.records
+    }
 
     init(records: [RuntimeResumeAgentRegistryRecord]) {
-        self.records = records
+        snapshot = RuntimeResumeAgentRegistrySnapshot(
+            sourceRecordCount: records.count,
+            resolvedCandidateCount: records.count,
+            records: records
+        )
+    }
+
+    init(snapshot: RuntimeResumeAgentRegistrySnapshot) {
+        self.snapshot = snapshot
     }
 
     func readAgentRegistrySnapshot()
         throws -> RuntimeResumeAgentRegistrySnapshot {
-        RuntimeResumeAgentRegistrySnapshot(
-            records: records,
-            isComplete: true
-        )
+        snapshot
     }
 }
 

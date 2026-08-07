@@ -185,8 +185,14 @@ struct RuntimeResumeAgentRegistryRecord:
 struct RuntimeResumeAgentRegistrySnapshot:
     Equatable,
     Sendable {
+    let sourceRecordCount: Int
+    let resolvedCandidateCount: Int
     let records: [RuntimeResumeAgentRegistryRecord]
-    let isComplete: Bool
+
+    var isComplete: Bool {
+        sourceRecordCount == resolvedCandidateCount &&
+            resolvedCandidateCount == records.count
+    }
 }
 
 struct RuntimeResumeTmuxTopologySnapshot:
@@ -513,10 +519,7 @@ final class AgentSessionRegistryRuntimeResumeReader:
 
     func readAgentRegistrySnapshot()
         throws -> RuntimeResumeAgentRegistrySnapshot {
-        RuntimeResumeAgentRegistrySnapshot(
-            records: monitor.currentRuntimeResumeAgentRecords(),
-            isComplete: true
-        )
+        monitor.currentRuntimeResumeAgentSnapshot()
     }
 }
 
@@ -667,6 +670,17 @@ enum RuntimeResumeDescriptorPublicationDecision:
     Sendable {
     case publish
     case unchanged
+}
+
+enum RuntimeResumeDescriptorPublisherError:
+    Error,
+    Equatable,
+    Sendable {
+    case incompleteRegistrySnapshot(
+        sourceRecordCount: Int,
+        resolvedCandidateCount: Int,
+        publishedRecordCount: Int
+    )
 }
 
 struct RuntimeResumeDescriptorPublicationReducer: Sendable {
@@ -835,9 +849,22 @@ final class RuntimeResumeDescriptorPublisher:
 
     private func publishCurrentDescriptorsOnQueue()
         throws {
-        let records =
-            try registryReader.readAgentRegistrySnapshot().records
-                .sorted(by: Self.recordPrecedes(_:_:))
+        let snapshot =
+            try registryReader.readAgentRegistrySnapshot()
+        guard snapshot.isComplete else {
+            throw RuntimeResumeDescriptorPublisherError
+                .incompleteRegistrySnapshot(
+                    sourceRecordCount:
+                        snapshot.sourceRecordCount,
+                    resolvedCandidateCount:
+                        snapshot.resolvedCandidateCount,
+                    publishedRecordCount:
+                        snapshot.records.count
+                )
+        }
+        let records = snapshot.records.sorted(
+            by: Self.recordPrecedes(_:_:)
+        )
         for record in records where record.binding.tmuxPaneID == nil {
             let agent = RuntimeResumeAgentSpecification(
                 vendor: record.vendor,

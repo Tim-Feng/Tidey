@@ -599,8 +599,15 @@ final class AgentSessionRegistryMonitor {
 
     func currentRuntimeResumeAgentRecords()
         -> [RuntimeResumeAgentRegistryRecord] {
+        currentRuntimeResumeAgentSnapshot().records
+    }
+
+    func currentRuntimeResumeAgentSnapshot()
+        -> RuntimeResumeAgentRegistrySnapshot {
         queue.sync {
             let sourceRecords = Array(activeRecords.values)
+            var resolvedCandidates =
+                [RuntimeResumeAgentRegistryRecord]()
             var candidatesByBinding =
                 [RuntimeResumeDescriptorBinding:
                     [RuntimeResumeAgentRegistryRecord]]()
@@ -611,12 +618,14 @@ final class AgentSessionRegistryMonitor {
                         ) else {
                     continue
                 }
+                resolvedCandidates.append(candidate)
                 candidatesByBinding[
                     candidate.binding,
                     default: []
                 ].append(candidate)
             }
-            return candidatesByBinding
+            let records: [RuntimeResumeAgentRegistryRecord] =
+                candidatesByBinding
                 .compactMap { _, candidates in
                     guard let first = candidates.first,
                           candidates.dropFirst().allSatisfy({
@@ -639,6 +648,12 @@ final class AgentSessionRegistryMonitor {
                     ]
                     return lhs.lexicographicallyPrecedes(rhs)
                 }
+            return RuntimeResumeAgentRegistrySnapshot(
+                sourceRecordCount: sourceRecords.count,
+                resolvedCandidateCount:
+                    resolvedCandidates.count,
+                records: records
+            )
         }
     }
 
