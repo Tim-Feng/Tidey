@@ -699,6 +699,58 @@ derive_session_id_from_rollout() {
     fi
 }
 
+create_private_codex_tui_trace_dir() {
+    local trace_dir=""
+
+    trace_dir="$(umask 077; mktemp -d "${TMPDIR:-/tmp}/tidey-codex-tui-trace.XXXXXX")" || return 1
+    chmod 700 "$trace_dir" || return 1
+    printf '%s' "$trace_dir"
+}
+
+codex_tui_trace_has_thread_read_lookup_failure() {
+    local trace_log_path="$1"
+    local expected_session_id="$2"
+    local expected_session_id_lower=""
+    local line=""
+    local line_lower=""
+    local message="thread/read failed during tui session lookup"
+    local session_pattern=""
+
+    is_uuid "$expected_session_id" || return 1
+    [[ -f "$trace_log_path" && -r "$trace_log_path" && -s "$trace_log_path" ]] || return 1
+    expected_session_id_lower="$(printf '%s' "$expected_session_id" | tr '[:upper:]' '[:lower:]')"
+    session_pattern="session=\"?${expected_session_id_lower}\"?([[:space:],]|$)"
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line_lower="$(printf '%s' "$line" | tr '[:upper:]' '[:lower:]')"
+        if [[ "$line_lower" == *"$message"* && "$line_lower" =~ $session_pattern ]]; then
+            return 0
+        fi
+    done < "$trace_log_path"
+
+    return 1
+}
+
+codex_remote_tui_lookup_failure_allows_plain_fallback() {
+    local remote_status="$1"
+    local trace_log_path="$2"
+    local expected_session_id="$3"
+    local rollout_path="$4"
+    local fallback_attempted="$5"
+    local rollout_session_id=""
+    local rollout_session_id_lower=""
+    local expected_session_id_lower=""
+
+    [[ "$remote_status" == "1" && "$fallback_attempted" == "0" ]] || return 1
+    is_uuid "$expected_session_id" || return 1
+    [[ -f "$rollout_path" && -r "$rollout_path" && -s "$rollout_path" ]] || return 1
+    rollout_session_id="$(derive_session_id_from_rollout "$rollout_path")"
+    rollout_session_id_lower="$(printf '%s' "$rollout_session_id" | tr '[:upper:]' '[:lower:]')"
+    expected_session_id_lower="$(printf '%s' "$expected_session_id" | tr '[:upper:]' '[:lower:]')"
+    [[ "$rollout_session_id_lower" == "$expected_session_id_lower" ]] || return 1
+    codex_tui_trace_has_thread_read_lookup_failure "$trace_log_path" "$expected_session_id"
+}
+
 monitor_rollout_and_registry() {
     local pid="$1"
     local workspace_id="$2"

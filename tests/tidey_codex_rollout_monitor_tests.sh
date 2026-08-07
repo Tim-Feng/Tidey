@@ -415,6 +415,18 @@ run_app_server_runtime_selection_test() {
 
 run_app_server_runtime_selection_test
 
+run_codex_tui_trace_fallback_seams_exist_test() {
+    CODEX_UNDER_TEST="$CODEX_UNDER_TEST" bash -c '
+        set -euo pipefail
+        source "$CODEX_UNDER_TEST"
+        declare -F create_private_codex_tui_trace_dir >/dev/null
+        declare -F codex_tui_trace_has_thread_read_lookup_failure >/dev/null
+        declare -F codex_remote_tui_lookup_failure_allows_plain_fallback >/dev/null
+    '
+}
+
+run_codex_tui_trace_fallback_seams_exist_test
+
 run_app_server_runtime_resume_allows_second_instance_without_clobbering_live_record_test() {
     local tmpdir
     local fake_home
