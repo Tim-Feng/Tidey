@@ -1202,6 +1202,14 @@ final class TideyRuntimeResumeDescriptorUpdateGate: NSObject {
         lock.unlock()
     }
 
+    @objc(restoreDescriptorsByPanelIDAwaitingRuntimeEvidence:)
+    func restoreDescriptorsByPanelIDAwaitingRuntimeEvidence(
+        _ descriptorsByPanelID:
+            [String: TideyRuntimeResumeDescriptor]
+    ) {
+        replaceDescriptorsByPanelID(descriptorsByPanelID)
+    }
+
     private func rejected(
         errorCode: String
     ) -> TideyRuntimeResumeDescriptorUpdateResult {

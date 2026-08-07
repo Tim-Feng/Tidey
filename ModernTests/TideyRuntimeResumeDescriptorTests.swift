@@ -328,6 +328,30 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
         XCTAssertNotNil(gate.descriptor(forPanelID: "panel-1"))
     }
 
+    func testRestoredDescriptorRemovalReadinessSeamCompiles() throws {
+        let descriptor = try XCTUnwrap(
+            TideyRuntimeResumeDescriptorUpdateGate()
+                .acceptUpdatePayload(
+                    socketUpdatePayload(
+                        durableResumeID: "thread-restored",
+                        workingDirectory: "/tmp/project"
+                    ),
+                    currentWorkspaceID: "workspace-1",
+                    currentPanelID: "panel-1"
+                ).descriptor
+        )
+        let gate = TideyRuntimeResumeDescriptorUpdateGate()
+
+        gate.restoreDescriptorsByPanelIDAwaitingRuntimeEvidence([
+            "panel-1": descriptor
+        ])
+
+        XCTAssertEqual(
+            gate.descriptor(forPanelID: "panel-1")?.revision,
+            descriptor.revision
+        )
+    }
+
     func testRemovalDropsRuntimeDescriptorAndRestoresOrdinaryTmuxFallback()
         throws {
         let gate = TideyRuntimeResumeDescriptorUpdateGate()
