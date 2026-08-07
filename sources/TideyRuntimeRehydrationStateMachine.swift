@@ -249,6 +249,53 @@ final class TideyRuntimeAttachCommandBuilder: NSObject {
     }
 }
 
+@objc(TideyRuntimeTmuxPaneLaunchJob)
+@objcMembers
+final class TideyRuntimeTmuxPaneLaunchJob: NSObject {
+    let windowIndex: Int
+    let paneIndex: Int
+    let launch: TideyRuntimeLaunchSpecification
+
+    init(
+        windowIndex: Int,
+        paneIndex: Int,
+        launch: TideyRuntimeLaunchSpecification
+    ) {
+        self.windowIndex = windowIndex
+        self.paneIndex = paneIndex
+        self.launch = launch
+    }
+}
+
+@objc(TideyRuntimeTmuxAgentLaunchPlan)
+@objcMembers
+final class TideyRuntimeTmuxAgentLaunchPlan: NSObject {
+    let jobs: [TideyRuntimeTmuxPaneLaunchJob]
+    let activeWindowIndex: Int
+    let activePaneIndex: Int
+
+    init(
+        jobs: [TideyRuntimeTmuxPaneLaunchJob],
+        activeWindowIndex: Int,
+        activePaneIndex: Int
+    ) {
+        self.jobs = jobs
+        self.activeWindowIndex = activeWindowIndex
+        self.activePaneIndex = activePaneIndex
+    }
+}
+
+@objc(TideyRuntimeTmuxAgentLaunchPlanBuilder)
+@objcMembers
+final class TideyRuntimeTmuxAgentLaunchPlanBuilder: NSObject {
+    @objc(planForDescriptor:)
+    func plan(
+        for descriptor: TideyRuntimeResumeDescriptor
+    ) -> TideyRuntimeTmuxAgentLaunchPlan? {
+        nil
+    }
+}
+
 @objc(TideyRuntimeRehydrationReducer)
 @objcMembers
 final class TideyRuntimeRehydrationReducer:

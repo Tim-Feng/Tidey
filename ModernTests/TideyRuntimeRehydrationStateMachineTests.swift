@@ -286,6 +286,49 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
         XCTAssertNotNil(stateMachine)
     }
 
+    func testTopologyOwnedAgentLaunchPlanSeamsCompile() {
+        let builder = TideyRuntimeTmuxAgentLaunchPlanBuilder()
+        let descriptor = TideyRuntimeResumeDescriptor(
+            descriptorVersion:
+                TideyRuntimeResumeDescriptor
+                    .topologyOwnedAgentDescriptorVersion,
+            revision: 1,
+            kind: .agent,
+            restorePolicy: .create,
+            target: TideyRuntimeResumeTarget(
+                defaultSocketAndTmuxSession: "work"
+            ),
+            topology: TideyRuntimeTmuxTopology(
+                windows: [
+                    TideyRuntimeTmuxWindowTopology(
+                        index: 0,
+                        name: nil,
+                        panes: [
+                            TideyRuntimeTmuxPaneTopology(
+                                index: 0,
+                                workingDirectory: "/tmp",
+                                launch: TideyRuntimeLaunchSpecification(
+                                    executable: "codex",
+                                    arguments: [
+                                        "resume",
+                                        "thread-1",
+                                    ],
+                                    workingDirectory: "/tmp"
+                                )
+                            ),
+                        ]
+                    ),
+                ],
+                activeWindowIndex: 0,
+                activePaneIndex: 0
+            ),
+            agent: nil
+        )
+
+        _ = builder.plan(for: descriptor)
+        XCTAssertNotNil(builder as Any)
+    }
+
     func testRepeatedCompletionCannotAttachCreateOrResumeTwice() {
         let targetProbe = TideyRuntimeTargetProbeSpy()
         let topologyCreator = TideyRuntimeTopologyCreatorSpy()
