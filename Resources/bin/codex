@@ -564,12 +564,14 @@ PY
 
 codex_runtime_compatibility_allows_tracked_plain() {
     local marker_file="${1:-}"
-    local installed_version="${2:-}"
+    local real_codex="${2:-}"
     local durable_id="${3:-}"
     local expected_uid="${4:-}"
     local configured_version=""
+    local installed_version=""
 
     configured_version="$(codex_runtime_compatibility_expected_version "$marker_file" "$durable_id" "$expected_uid")" || return 1
+    installed_version="$(codex_installed_version "$real_codex")" || return 1
     [[ "$configured_version" == "$installed_version" ]]
 }
 
@@ -1077,8 +1079,6 @@ main() {
     local app_server_runtime_session_id=""
     local app_server_runtime_thread_id=""
     local app_server_runtime_rollout_path=""
-    local compatibility_codex_version=""
-    local installed_codex_version=""
     local use_app_server_runtime=0
     local registry_file=""
     local profile_flag=""
@@ -1119,15 +1119,12 @@ main() {
             app_server_runtime_thread_id="$app_server_runtime_session_id"
             app_server_runtime_rollout_path="$(codex_rollout_path_for_session_id "$real_codex_home" "$app_server_runtime_thread_id" || true)"
             if [[ -f "$app_server_runtime_rollout_path" && -r "$app_server_runtime_rollout_path" && -s "$app_server_runtime_rollout_path" ]]; then
-                compatibility_codex_version="$(codex_runtime_compatibility_expected_version \
+                if codex_runtime_compatibility_allows_tracked_plain \
                     "$CODEX_RUNTIME_COMPATIBILITY_FILE" \
+                    "$real_codex" \
                     "$app_server_runtime_thread_id" \
-                    "$(id -u)" || true)"
-                if [[ -n "$compatibility_codex_version" ]]; then
-                    installed_codex_version="$(codex_installed_version "$real_codex" || true)"
-                    if [[ "$installed_codex_version" == "$compatibility_codex_version" ]]; then
-                        use_app_server_runtime=0
-                    fi
+                    "$(id -u)"; then
+                    use_app_server_runtime=0
                 fi
             fi
         fi

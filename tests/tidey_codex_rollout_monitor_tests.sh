@@ -441,6 +441,8 @@ run_codex_runtime_compatibility_marker_matrix_test() {
     local hardlink_source
     local symlink_file
     local missing_file
+    local matching_codex
+    local mismatching_codex
     local resume_id="019eac34-764c-7893-9599-5b6000037cea"
     local unrelated_id="019eac34-764c-7893-9599-5b6000037ceb"
     local expected_uid
@@ -454,6 +456,8 @@ run_codex_runtime_compatibility_marker_matrix_test() {
     hardlink_source="$tmpdir/hardlink-source.json"
     symlink_file="$tmpdir/symlink.json"
     missing_file="$tmpdir/missing.json"
+    matching_codex="$tmpdir/codex-0.147.0"
+    mismatching_codex="$tmpdir/codex-0.148.0"
     expected_uid="$(id -u)"
     wrong_uid="$((expected_uid + 1))"
 
@@ -469,6 +473,9 @@ JSON
     chmod 600 "$hardlink_source"
     ln "$hardlink_source" "$hardlink_file"
     ln -s "$marker_file" "$symlink_file"
+    printf '%s\n' '#!/bin/sh' 'printf "%s\\n" "codex-cli 0.147.0"' > "$matching_codex"
+    printf '%s\n' '#!/bin/sh' 'printf "%s\\n" "codex-cli 0.148.0"' > "$mismatching_codex"
+    chmod +x "$matching_codex" "$mismatching_codex"
 
     CODEX_UNDER_TEST="$CODEX_UNDER_TEST" \
         MARKER_FILE="$marker_file" \
@@ -477,6 +484,8 @@ JSON
         HARDLINK_FILE="$hardlink_file" \
         SYMLINK_FILE="$symlink_file" \
         MISSING_FILE="$missing_file" \
+        MATCHING_CODEX="$matching_codex" \
+        MISMATCHING_CODEX="$mismatching_codex" \
         RESUME_ID="$resume_id" \
         UNRELATED_ID="$unrelated_id" \
         EXPECTED_UID="$expected_uid" \
@@ -484,33 +493,33 @@ JSON
         bash -c '
             set -euo pipefail
             source "$CODEX_UNDER_TEST"
-            codex_runtime_compatibility_allows_tracked_plain "$MARKER_FILE" "0.147.0" "$RESUME_ID" "$EXPECTED_UID"
-            if codex_runtime_compatibility_allows_tracked_plain "$MARKER_FILE" "0.148.0" "$RESUME_ID" "$EXPECTED_UID"; then
+            codex_runtime_compatibility_allows_tracked_plain "$MARKER_FILE" "$MATCHING_CODEX" "$RESUME_ID" "$EXPECTED_UID"
+            if codex_runtime_compatibility_allows_tracked_plain "$MARKER_FILE" "$MISMATCHING_CODEX" "$RESUME_ID" "$EXPECTED_UID"; then
                 exit 31
             fi
-            if codex_runtime_compatibility_allows_tracked_plain "$MARKER_FILE" "0.147.0" "$UNRELATED_ID" "$EXPECTED_UID"; then
+            if codex_runtime_compatibility_allows_tracked_plain "$MARKER_FILE" "$MATCHING_CODEX" "$UNRELATED_ID" "$EXPECTED_UID"; then
                 exit 32
             fi
-            if codex_runtime_compatibility_allows_tracked_plain "$MALFORMED_FILE" "0.147.0" "$RESUME_ID" "$EXPECTED_UID"; then
+            if codex_runtime_compatibility_allows_tracked_plain "$MALFORMED_FILE" "$MATCHING_CODEX" "$RESUME_ID" "$EXPECTED_UID"; then
                 exit 33
             fi
-            if codex_runtime_compatibility_allows_tracked_plain "$DUPLICATE_KEY_FILE" "0.147.0" "$RESUME_ID" "$EXPECTED_UID"; then
+            if codex_runtime_compatibility_allows_tracked_plain "$DUPLICATE_KEY_FILE" "$MATCHING_CODEX" "$RESUME_ID" "$EXPECTED_UID"; then
                 exit 37
             fi
-            if codex_runtime_compatibility_allows_tracked_plain "$HARDLINK_FILE" "0.147.0" "$RESUME_ID" "$EXPECTED_UID"; then
+            if codex_runtime_compatibility_allows_tracked_plain "$HARDLINK_FILE" "$MATCHING_CODEX" "$RESUME_ID" "$EXPECTED_UID"; then
                 exit 38
             fi
-            if codex_runtime_compatibility_allows_tracked_plain "$SYMLINK_FILE" "0.147.0" "$RESUME_ID" "$EXPECTED_UID"; then
+            if codex_runtime_compatibility_allows_tracked_plain "$SYMLINK_FILE" "$MATCHING_CODEX" "$RESUME_ID" "$EXPECTED_UID"; then
                 exit 39
             fi
-            if codex_runtime_compatibility_allows_tracked_plain "$MISSING_FILE" "0.147.0" "$RESUME_ID" "$EXPECTED_UID"; then
+            if codex_runtime_compatibility_allows_tracked_plain "$MISSING_FILE" "$MATCHING_CODEX" "$RESUME_ID" "$EXPECTED_UID"; then
                 exit 34
             fi
-            if codex_runtime_compatibility_allows_tracked_plain "$MARKER_FILE" "0.147.0" "$RESUME_ID" "$WRONG_UID"; then
+            if codex_runtime_compatibility_allows_tracked_plain "$MARKER_FILE" "$MATCHING_CODEX" "$RESUME_ID" "$WRONG_UID"; then
                 exit 35
             fi
             chmod 644 "$MARKER_FILE"
-            if codex_runtime_compatibility_allows_tracked_plain "$MARKER_FILE" "0.147.0" "$RESUME_ID" "$EXPECTED_UID"; then
+            if codex_runtime_compatibility_allows_tracked_plain "$MARKER_FILE" "$MATCHING_CODEX" "$RESUME_ID" "$EXPECTED_UID"; then
                 exit 36
             fi
         ' || fail "Codex runtime compatibility marker matrix failed"
