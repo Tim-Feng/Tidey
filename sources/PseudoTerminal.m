@@ -520,16 +520,6 @@ static NSString *TideyRuntimeAgentExecutablePath(
         : nil;
 }
 
-static BOOL TideyRuntimeLaunchesAreEqual(
-    TideyRuntimeLaunchSpecification *lhs,
-    TideyRuntimeLaunchSpecification *rhs
-) {
-    return [lhs.executable isEqualToString:rhs.executable] &&
-        [lhs.arguments isEqualToArray:rhs.arguments] &&
-        ((lhs.workingDirectory == nil && rhs.workingDirectory == nil) ||
-         [lhs.workingDirectory isEqualToString:rhs.workingDirectory]);
-}
-
 @interface PseudoTerminal (TideyRuntimeRehydrationPrivate)
 
 - (PTYSession *)tideySelectedSessionForPanelIdentifier:(NSString *)panelIdentifier;
