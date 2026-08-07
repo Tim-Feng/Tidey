@@ -443,6 +443,66 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
         )
     }
 
+    func testRemovalRevisionDoesNotRepeatAfterDeleteAndReinsert()
+        throws {
+        let gate = TideyRuntimeResumeDescriptorUpdateGate()
+        let payload = socketUpdatePayload(
+            durableResumeID: "thread-same",
+            workingDirectory: "/tmp/project"
+        )
+        let first = gate.acceptUpdatePayload(
+            payload,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertEqual(first.descriptor?.revision, 1)
+        let oldRemovalPayload = try removalPayload(
+            from: XCTUnwrap(
+                gate.runtimeAgentDescriptorSnapshots(
+                    currentWorkspaceIDByPanelID: [
+                        "panel-1": "workspace-1"
+                    ]
+                ).first
+            )
+        )
+        let removed = gate.removeRuntimeAgentDescriptorPayload(
+            oldRemovalPayload,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertTrue(removed.accepted)
+        XCTAssertTrue(removed.changed)
+
+        let reinserted = gate.acceptUpdatePayload(
+            payload,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertEqual(reinserted.descriptor?.revision, 2)
+
+        let replayedRemoval =
+            gate.removeRuntimeAgentDescriptorPayload(
+                oldRemovalPayload,
+                currentWorkspaceID: "workspace-1",
+                currentPanelID: "panel-1"
+            )
+        XCTAssertFalse(replayedRemoval.accepted)
+        XCTAssertFalse(replayedRemoval.changed)
+        XCTAssertEqual(
+            replayedRemoval.errorCode,
+            "descriptor_changed"
+        )
+        XCTAssertEqual(
+            gate.descriptor(forPanelID: "panel-1")?.revision,
+            2
+        )
+        XCTAssertEqual(
+            gate.descriptor(forPanelID: "panel-1")?
+                .agent?.durableResumeID,
+            "thread-same"
+        )
+    }
+
     func testOrdinaryTmuxMetadataProducesAttachOnlyDescriptorWithoutBridge() throws {
         let factory = TideyRuntimeResumeDescriptorFactory()
         let pathDescriptor = try XCTUnwrap(

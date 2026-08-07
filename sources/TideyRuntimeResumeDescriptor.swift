@@ -953,6 +953,7 @@ final class TideyRuntimeResumeDescriptorUpdateGate: NSObject {
 
     private let lock = NSLock()
     private var entriesByPanelID: [String: Entry] = [:]
+    private var revisionHighWaterByPanelID: [String: Int64] = [:]
 
     @objc(initWithInitialDescriptorsByPanelID:)
     init(
@@ -1019,7 +1020,10 @@ final class TideyRuntimeResumeDescriptorUpdateGate: NSObject {
                 errorCode: nil
             )
         }
-        let currentRevision = existing?.descriptor.revision ?? 0
+        let currentRevision = max(
+            existing?.descriptor.revision ?? 0,
+            revisionHighWaterByPanelID[currentPanelID] ?? 0
+        )
         guard currentRevision < Int64.max else {
             return rejected(errorCode: "revision_overflow")
         }
@@ -1031,6 +1035,8 @@ final class TideyRuntimeResumeDescriptorUpdateGate: NSObject {
                 descriptor: descriptor,
                 canonicalContent: canonicalContent
             )
+            revisionHighWaterByPanelID[currentPanelID] =
+                descriptor.revision
             return TideyRuntimeResumeDescriptorUpdateResult(
                 accepted: true,
                 changed: true,
@@ -1187,6 +1193,12 @@ final class TideyRuntimeResumeDescriptorUpdateGate: NSObject {
         }
         lock.lock()
         entriesByPanelID = replacements
+        for (panelID, entry) in replacements {
+            revisionHighWaterByPanelID[panelID] = max(
+                revisionHighWaterByPanelID[panelID] ?? 0,
+                entry.descriptor.revision
+            )
+        }
         lock.unlock()
     }
 
