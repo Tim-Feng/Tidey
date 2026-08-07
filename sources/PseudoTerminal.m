@@ -356,45 +356,97 @@ static NSString *TideyRuntimeWindowTarget(
             (long)windowIndex];
 }
 
-static BOOL TideyRuntimeRunTask(
+static const NSTimeInterval TideyRuntimeProbeTimeout = 3;
+static const NSTimeInterval TideyRuntimeMutationTimeout = 10;
+
+static NSDictionary<NSString *, NSString *> *
+TideyRuntimeTaskEnvironment(void) {
+    NSString *socketPath = [TideySocketServer socketPath] ?: @"";
+    NSString *binDirectory =
+        [[[NSBundle mainBundle] resourcePath]
+            stringByAppendingPathComponent:@"bin"] ?: @"";
+    TideyRuntimeTaskEnvironmentBuilder *builder =
+        [[[TideyRuntimeTaskEnvironmentBuilder alloc] init] autorelease];
+    return [builder
+        environmentWithParentEnvironment:
+            [NSProcessInfo processInfo].environment
+        canonicalSocketPath:socketPath
+        canonicalBinDirectory:binDirectory];
+}
+
+static NSString *TideyRuntimeBoundedLogValue(NSString *value) {
+    if (value.length == 0) {
+        return @"";
+    }
+    NSString *singleLine =
+        [[value componentsSeparatedByCharactersInSet:
+          [NSCharacterSet newlineCharacterSet]]
+            componentsJoinedByString:@" "];
+    static const NSUInteger maximumLength = 4096;
+    if (singleLine.length <= maximumLength) {
+        return singleLine;
+    }
+    return [[singleLine substringToIndex:maximumLength]
+        stringByAppendingString:@"…"];
+}
+
+static TideyRuntimeTaskExecutionResult *TideyRuntimeRunTask(
     NSString *executable,
     NSArray<NSString *> *arguments,
-    NSString **output
+    NSTimeInterval timeout
 ) {
     if (executable.length == 0) {
-        return NO;
+        return nil;
     }
-    NSTask *task = [[[NSTask alloc] init] autorelease];
-    NSPipe *pipe = [NSPipe pipe];
-    task.launchPath = executable;
-    task.arguments = arguments;
-    NSMutableDictionary<NSString *, NSString *> *environment =
-        [NSMutableDictionary dictionaryWithDictionary:
-         [NSProcessInfo processInfo].environment];
-    [environment removeObjectsForKeys:@[
-        @"TMUX",
-        @"TMUX_PANE",
-        @"TIDEY_WORKSPACE_ID",
-        @"TIDEY_PANEL_ID",
-        @"TIDEY_AGENT_SESSION_ID",
-        @"TIDEY_AGENT_VENDOR",
-    ]];
-    task.environment = environment;
-    task.standardOutput = pipe;
-    @try {
-        [task launch];
-    } @catch (NSException *exception) {
-        DLog(@"Tidey runtime task failed to launch: %@", exception);
-        return NO;
+    TideyRuntimeTaskRunner *runner =
+        [[[TideyRuntimeTaskRunner alloc] init] autorelease];
+    return [runner runExecutable:executable
+                       arguments:arguments
+                     environment:TideyRuntimeTaskEnvironment()
+                         timeout:timeout];
+}
+
+static TideyRuntimeTaskExecutionResult *TideyRuntimeRunTmuxTask(
+    TideyRuntimeResumeDescriptor *descriptor,
+    NSArray<NSString *> *commandArguments,
+    NSTimeInterval timeout
+) {
+    NSString *executable = TideyRuntimeTmuxExecutablePath();
+    NSArray<NSString *> *socketArguments =
+        TideyRuntimeTmuxSocketArguments(descriptor.target);
+    if (!executable || !socketArguments) {
+        DLog(@"[TideyRuntimeRehydration] phase=%@ descriptor_version=%ld "
+             "revision=%lld session=%@ outcome=invalid_input",
+             commandArguments.firstObject ?: @"unknown",
+             (long)descriptor.descriptorVersion,
+             descriptor.revision,
+             descriptor.target.tmuxSession ?: @"");
+        return nil;
     }
-    NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
-    [task waitUntilExit];
-    if (output) {
-        *output = [[[NSString alloc] initWithData:data
-                                        encoding:NSUTF8StringEncoding] autorelease];
-    }
-    return task.terminationReason == NSTaskTerminationReasonExit &&
-        task.terminationStatus == 0;
+    NSArray<NSString *> *arguments =
+        [socketArguments arrayByAddingObjectsFromArray:commandArguments];
+    TideyRuntimeTaskExecutionResult *result = TideyRuntimeRunTask(
+        executable,
+        arguments,
+        timeout
+    );
+    DLog(@"[TideyRuntimeRehydration] phase=%@ descriptor_version=%ld "
+         "revision=%lld session=%@ executable=%@ arguments=%@ "
+         "launched=%@ timed_out=%@ termination_reason=%ld status=%d "
+         "launch_error=%@ stderr=%@",
+         commandArguments.firstObject ?: @"unknown",
+         (long)descriptor.descriptorVersion,
+         descriptor.revision,
+         descriptor.target.tmuxSession ?: @"",
+         executable,
+         arguments,
+         result.launched ? @"YES" : @"NO",
+         result.timedOut ? @"YES" : @"NO",
+         (long)result.terminationReason,
+         result.terminationStatus,
+         TideyRuntimeBoundedLogValue(result.launchErrorDescription),
+         TideyRuntimeBoundedLogValue(result.standardError));
+    return result;
 }
 
 static BOOL TideyRuntimeRunTmux(
@@ -402,17 +454,15 @@ static BOOL TideyRuntimeRunTmux(
     NSArray<NSString *> *commandArguments,
     NSString **output
 ) {
-    NSString *executable = TideyRuntimeTmuxExecutablePath();
-    NSArray<NSString *> *socketArguments =
-        TideyRuntimeTmuxSocketArguments(descriptor.target);
-    if (!executable || !socketArguments) {
-        return NO;
-    }
-    return TideyRuntimeRunTask(
-        executable,
-        [socketArguments arrayByAddingObjectsFromArray:commandArguments],
-        output
+    TideyRuntimeTaskExecutionResult *result = TideyRuntimeRunTmuxTask(
+        descriptor,
+        commandArguments,
+        TideyRuntimeMutationTimeout
     );
+    if (output) {
+        *output = result.standardOutput;
+    }
+    return result.succeeded;
 }
 
 static NSArray<NSString *> *TideyRuntimeNonemptyLines(NSString *output) {
@@ -568,40 +618,38 @@ static NSString *TideyRuntimeAgentExecutablePath(
             completion(TideyRuntimeTargetProbeResultFailed);
             return;
         }
-        NSTask *task = [[[NSTask alloc] init] autorelease];
-        task.launchPath = executable;
-        task.arguments = [socketArguments arrayByAddingObjectsFromArray:@[
+        NSArray<NSString *> *arguments = @[
             @"has-session",
             @"-t",
             TideyRuntimeExactSessionTarget(
                 descriptor.target.tmuxSession
             ),
-        ]];
-        NSMutableDictionary<NSString *, NSString *> *environment =
-            [NSMutableDictionary dictionaryWithDictionary:
-             [NSProcessInfo processInfo].environment];
-        [environment removeObjectsForKeys:@[
-            @"TMUX",
-            @"TMUX_PANE",
-            @"TIDEY_WORKSPACE_ID",
-            @"TIDEY_PANEL_ID",
-            @"TIDEY_AGENT_SESSION_ID",
-            @"TIDEY_AGENT_VENDOR",
-        ]];
-        task.environment = environment;
-        @try {
-            [task launch];
-        } @catch (NSException *exception) {
-            DLog(@"Tidey runtime probe failed to launch: %@", exception);
-            completion(TideyRuntimeTargetProbeResultFailed);
-            return;
+        ];
+        TideyRuntimeTaskExecutionResult *result = nil;
+        for (NSInteger attempt = 1; attempt <= 2; attempt++) {
+            result = TideyRuntimeRunTmuxTask(
+                descriptor,
+                arguments,
+                TideyRuntimeProbeTimeout
+            );
+            BOOL isMissing = result.launched &&
+                !result.timedOut &&
+                result.terminationReason == NSTaskTerminationReasonExit &&
+                result.terminationStatus == 1;
+            if (result.succeeded || isMissing || attempt == 2) {
+                break;
+            }
+            DLog(@"[TideyRuntimeRehydration] phase=has-session "
+                 "revision=%lld session=%@ outcome=retry",
+                 descriptor.revision,
+                 descriptor.target.tmuxSession ?: @"");
         }
-        [task waitUntilExit];
-        if (task.terminationReason != NSTaskTerminationReasonExit) {
-            completion(TideyRuntimeTargetProbeResultFailed);
-        } else if (task.terminationStatus == 0) {
+        if (result.succeeded) {
             completion(TideyRuntimeTargetProbeResultExisting);
-        } else if (task.terminationStatus == 1) {
+        } else if (result.launched &&
+                   !result.timedOut &&
+                   result.terminationReason == NSTaskTerminationReasonExit &&
+                   result.terminationStatus == 1) {
             completion(TideyRuntimeTargetProbeResultMissing);
         } else {
             completion(TideyRuntimeTargetProbeResultFailed);
@@ -612,7 +660,13 @@ static NSString *TideyRuntimeAgentExecutablePath(
 - (void)createTopologyForDescriptor:(TideyRuntimeResumeDescriptor *)descriptor
                          completion:(void (^)(BOOL))completion {
     dispatch_async(_queue, ^{
-        completion([self createTopologyForDescriptor:descriptor]);
+        BOOL succeeded = [self createTopologyForDescriptor:descriptor];
+        DLog(@"[TideyRuntimeRehydration] phase=create_topology "
+             "revision=%lld session=%@ succeeded=%@",
+             descriptor.revision,
+             descriptor.target.tmuxSession ?: @"",
+             succeeded ? @"YES" : @"NO");
+        completion(succeeded);
     });
 }
 
@@ -822,10 +876,16 @@ static NSString *TideyRuntimeAgentExecutablePath(
         return;
     }
     dispatch_async(_queue, ^{
-        completion(
+        BOOL succeeded =
             [self resumeAgentWithDescriptor:descriptor
-                       loginShellExecutable:loginShellExecutable]
-        );
+                       loginShellExecutable:loginShellExecutable];
+        DLog(@"[TideyRuntimeRehydration] phase=resume_agent panel=%@ "
+             "revision=%lld session=%@ succeeded=%@",
+             panelID,
+             descriptor.revision,
+             descriptor.target.tmuxSession ?: @"",
+             succeeded ? @"YES" : @"NO");
+        completion(succeeded);
     });
     [loginShellExecutable release];
 }
@@ -898,7 +958,14 @@ static NSString *TideyRuntimeAgentExecutablePath(
               arrangement:nil
           fromArrangement:YES
      webViewConfiguration:nil
-               completion:completion];
+               completion:^(BOOL succeeded) {
+        DLog(@"[TideyRuntimeRehydration] phase=resume_direct_agent "
+             "panel=%@ revision=%lld succeeded=%@",
+             panelID,
+             descriptor.revision,
+             succeeded ? @"YES" : @"NO");
+        completion(succeeded);
+    }];
 }
 
 - (BOOL)resumeAgentWithDescriptor:(TideyRuntimeResumeDescriptor *)descriptor
@@ -1119,7 +1186,15 @@ static NSString *TideyRuntimeAgentExecutablePath(
               arrangement:nil
           fromArrangement:YES
      webViewConfiguration:nil
-               completion:completion];
+               completion:^(BOOL succeeded) {
+        DLog(@"[TideyRuntimeRehydration] phase=attach_panel panel=%@ "
+             "revision=%lld session=%@ succeeded=%@",
+             panelID,
+             descriptor.revision,
+             descriptor.target.tmuxSession ?: @"",
+             succeeded ? @"YES" : @"NO");
+        completion(succeeded);
+    }];
 }
 
 - (void)markPanelUnavailable:(NSString *)panelID
@@ -1128,6 +1203,11 @@ static NSString *TideyRuntimeAgentExecutablePath(
              @"Restored panel state must update on the main thread.");
     PTYSession *session =
         [_windowController tideySelectedSessionForPanelIdentifier:panelID];
+    DLog(@"[TideyRuntimeRehydration] phase=mark_unavailable panel=%@ "
+         "revision=%lld session=%@",
+         panelID,
+         descriptor.revision,
+         descriptor.target.tmuxSession ?: @"");
     if (!session) {
         return;
     }
@@ -7771,7 +7851,8 @@ ITERM_WEAKLY_REFERENCEABLE
                            availablePanelIDs:panelsByID.allKeys
                                 panelIDRemap:panelIDRemap ?: @{}];
     [[self tideyRuntimeResumeDescriptorUpdateGate]
-        replaceDescriptorsByPanelID:hydratedState.runtimeDescriptorsByPanelID];
+        restoreDescriptorsByPanelIDAwaitingRuntimeEvidence:
+            hydratedState.runtimeDescriptorsByPanelID];
 
     NSMutableArray<Workspace *> *restoredWorkspaces = [NSMutableArray array];
     for (TideyWorkspaceState *workspaceState in hydratedState.workspaces) {
@@ -7855,8 +7936,19 @@ ITERM_WEAKLY_REFERENCEABLE
         TideyRuntimeResumeDescriptor *descriptor =
             descriptorsByPanelID[panelID];
         if (!session || !descriptor) {
+            DLog(@"[TideyRuntimeRehydration] phase=admit panel=%@ "
+                 "outcome=missing_panel_or_descriptor",
+                 panelID);
             continue;
         }
+        DLog(@"[TideyRuntimeRehydration] phase=admit panel=%@ "
+             "descriptor_version=%ld revision=%lld session=%@ "
+             "native_outcome=%ld",
+             panelID,
+             (long)descriptor.descriptorVersion,
+             descriptor.revision,
+             descriptor.target.tmuxSession ?: @"",
+             (long)session.tideyNativeServerReattachOutcome);
         [_tideyRuntimeRehydrationStateMachine
             handlePanelID:panelID
             descriptor:descriptor

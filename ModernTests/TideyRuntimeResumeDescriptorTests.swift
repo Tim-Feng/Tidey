@@ -352,6 +352,66 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
         )
     }
 
+    func testRestoredDescriptorRejectsRemovalUntilMatchingRuntimeEvidenceArrives()
+        throws {
+        let updatePayload = socketUpdatePayload(
+            durableResumeID: "thread-restored",
+            workingDirectory: "/tmp/project"
+        )
+        let descriptor = try XCTUnwrap(
+            TideyRuntimeResumeDescriptorUpdateGate()
+                .acceptUpdatePayload(
+                    updatePayload,
+                    currentWorkspaceID: "workspace-1",
+                    currentPanelID: "panel-1"
+                ).descriptor
+        )
+        let gate = TideyRuntimeResumeDescriptorUpdateGate()
+        gate.restoreDescriptorsByPanelIDAwaitingRuntimeEvidence([
+            "panel-1": descriptor
+        ])
+        let stored = try XCTUnwrap(
+            gate.runtimeAgentDescriptorSnapshots(
+                currentWorkspaceIDByPanelID: [
+                    "panel-1": "workspace-1"
+                ]
+            ).first
+        )
+        let removal = try removalPayload(from: stored)
+
+        let rejected = gate.removeRuntimeAgentDescriptorPayload(
+            removal,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+
+        XCTAssertFalse(rejected.accepted)
+        XCTAssertFalse(rejected.changed)
+        XCTAssertEqual(
+            rejected.errorCode,
+            "runtime_rehydration_pending"
+        )
+        XCTAssertNotNil(gate.descriptor(forPanelID: "panel-1"))
+
+        let evidence = gate.acceptUpdatePayload(
+            updatePayload,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertTrue(evidence.accepted)
+        XCTAssertFalse(evidence.changed)
+        XCTAssertEqual(evidence.descriptor?.revision, descriptor.revision)
+
+        let removed = gate.removeRuntimeAgentDescriptorPayload(
+            removal,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertTrue(removed.accepted)
+        XCTAssertTrue(removed.changed)
+        XCTAssertNil(gate.descriptor(forPanelID: "panel-1"))
+    }
+
     func testRemovalDropsRuntimeDescriptorAndRestoresOrdinaryTmuxFallback()
         throws {
         let gate = TideyRuntimeResumeDescriptorUpdateGate()
@@ -922,7 +982,7 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
         )
     }
 
-    func testManagedRestoreDefersSavedProgramOnlyAfterNativeReattachFails() {
+    func testManagedRestoreDefersSavedProgramWheneverValidDescriptorOwnsColdBootRelaunch() {
         let policy = TideyManagedRestoreLaunchPolicy()
 
         XCTAssertEqual(
@@ -930,7 +990,7 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
                 nativeReattachOutcome: .notAttempted,
                 hasValidDescriptor: true
             ),
-            .launchSavedProgram
+            .deferToRuntimeRehydrator
         )
         XCTAssertEqual(
             policy.disposition(
@@ -938,6 +998,13 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
                 hasValidDescriptor: true
             ),
             .preserveNativeAttachment
+        )
+        XCTAssertEqual(
+            policy.disposition(
+                nativeReattachOutcome: .notAttempted,
+                hasValidDescriptor: false
+            ),
+            .launchSavedProgram
         )
         XCTAssertEqual(
             policy.disposition(

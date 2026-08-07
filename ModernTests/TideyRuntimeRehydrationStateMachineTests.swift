@@ -12,9 +12,73 @@ final class TideyRuntimeTaskEnvironmentBuilderTests: XCTestCase {
 
         XCTAssertEqual(environment["CUSTOM_VALUE"], "preserved")
     }
+
+    func testRuntimeTaskEnvironmentUsesCanonicalTideyPathsAndRemovesControllerIdentity() {
+        let environment = TideyRuntimeTaskEnvironmentBuilder().environment(
+            parentEnvironment: [
+                "PATH": "/usr/bin:/bin",
+                "CUSTOM_VALUE": "preserved",
+                "CODEX_HOME": "/tmp/codex-home",
+                "TMUX": "/tmp/stale-tmux,1,0",
+                "TMUX_PANE": "%99",
+                "NO_COLOR": "1",
+                "CODEX_CI": "1",
+                "CODEX_THREAD_ID": "controller-thread",
+                "CODEX_PERMISSION_PROFILE": "controller-profile",
+                "CODEX_SANDBOX": "controller-sandbox",
+                "CODEX_SANDBOX_NETWORK_DISABLED": "1",
+                "CODEX_ESCALATE_SOCKET": "/tmp/controller.sock",
+                "TIDEY_SOCKET_PATH": "/tmp/stale-tidey.sock",
+                "TIDEY_BIN_DIR": "/tmp/stale-bin",
+                "TIDEY_WORKSPACE_ID": "stale-workspace",
+                "TIDEY_PANEL_ID": "stale-panel",
+                "TIDEY_AGENT_SESSION_ID": "stale-agent",
+                "TIDEY_AGENT_VENDOR": "stale-vendor",
+                "TIDEY_CUSTOM_PARENT_VALUE": "must-not-leak",
+            ],
+            canonicalSocketPath: "/tmp/tidey-dev.sock",
+            canonicalBinDirectory:
+                "/Applications/Tidey Dev.app/Contents/Resources/bin"
+        )
+
+        XCTAssertEqual(environment["PATH"], "/usr/bin:/bin")
+        XCTAssertEqual(environment["CUSTOM_VALUE"], "preserved")
+        XCTAssertEqual(environment["CODEX_HOME"], "/tmp/codex-home")
+        XCTAssertEqual(
+            environment["TIDEY_SOCKET_PATH"],
+            "/tmp/tidey-dev.sock"
+        )
+        XCTAssertEqual(
+            environment["TIDEY_BIN_DIR"],
+            "/Applications/Tidey Dev.app/Contents/Resources/bin"
+        )
+        for key in [
+            "TMUX",
+            "TMUX_PANE",
+            "NO_COLOR",
+            "CODEX_CI",
+            "CODEX_THREAD_ID",
+            "CODEX_PERMISSION_PROFILE",
+            "CODEX_SANDBOX",
+            "CODEX_SANDBOX_NETWORK_DISABLED",
+            "CODEX_ESCALATE_SOCKET",
+            "TIDEY_WORKSPACE_ID",
+            "TIDEY_PANEL_ID",
+            "TIDEY_AGENT_SESSION_ID",
+            "TIDEY_AGENT_VENDOR",
+            "TIDEY_CUSTOM_PARENT_VALUE",
+        ] {
+            XCTAssertNil(environment[key], "Unexpected inherited key: \(key)")
+        }
+    }
 }
 
 final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
+    private let controllerEnvironmentUnsetCommand =
+        "unset NO_COLOR CODEX_CI CODEX_THREAD_ID " +
+        "CODEX_PERMISSION_PROFILE CODEX_SANDBOX " +
+        "CODEX_SANDBOX_NETWORK_DISABLED CODEX_ESCALATE_SOCKET"
+
     func testDirectAgentLauncherSeamsCompile() {
         let builder = TideyRuntimeDirectAgentCommandBuilder()
         let command = builder.command(
@@ -89,7 +153,8 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
             [
                 "/bin/zsh",
                 "-lic",
-                "\(innerCommand); exec '/bin/zsh' -l",
+                "\(controllerEnvironmentUnsetCommand); " +
+                    "\(innerCommand); exec '/bin/zsh' -l",
             ]
         )
     }
@@ -114,7 +179,8 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
             [
                 "/bin/zsh",
                 "-lic",
-                "\(innerCommand); exec '/bin/zsh' -l",
+                "\(controllerEnvironmentUnsetCommand); " +
+                    "\(innerCommand); exec '/bin/zsh' -l",
             ]
         )
         XCTAssertEqual(
@@ -289,6 +355,10 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
             arguments: ["resume", resumeIdentity],
             workingDirectory: "/tmp/project with spaces"
         )
+        let agentCommand = TideyRuntimeDirectAgentCommandBuilder().command(
+            agentExecutable: executable,
+            arguments: launch.arguments
+        )!
 
         let arguments = TideyRuntimeTmuxRespawnCommandBuilder()
             .arguments(
@@ -332,17 +402,12 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
             [
                 "/bin/zsh",
                 "-lic",
-                TideyRuntimeDirectAgentCommandBuilder().command(
-                    agentExecutable: executable,
-                    arguments: launch.arguments
-                )! + "; exec '/bin/zsh' -l",
+                "\(controllerEnvironmentUnsetCommand); " +
+                    "\(agentCommand); exec '/bin/zsh' -l",
             ]
         )
         XCTAssertEqual(
-            (TideyRuntimeDirectAgentCommandBuilder().command(
-                agentExecutable: executable,
-                arguments: launch.arguments
-            )! as NSString).componentsInShellCommand(),
+            (agentCommand as NSString).componentsInShellCommand(),
             [executable, "resume", resumeIdentity]
         )
         XCTAssertFalse(FileManager.default.fileExists(atPath: injectionMarker.path))
@@ -407,7 +472,8 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
             [
                 "/bin/zsh",
                 "-lic",
-                "\(agentCommand); exec '/bin/zsh' -l",
+                "\(controllerEnvironmentUnsetCommand); " +
+                    "\(agentCommand); exec '/bin/zsh' -l",
             ]
         )
     }
@@ -444,6 +510,157 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
         )
 
         XCTAssertNotNil(stateMachine)
+    }
+
+    func testColdBootWithoutNativeReattachProbesManagedCreateTarget() {
+        XCTAssertEqual(
+            TideyManagedRestoreLaunchPolicy().disposition(
+                nativeReattachOutcome: .notAttempted,
+                hasValidDescriptor: true
+            ),
+            .deferToRuntimeRehydrator
+        )
+        let targetProbe = TideyRuntimeTargetProbeSpy()
+        let topologyCreator = TideyRuntimeTopologyCreatorSpy()
+        let panelLauncher = TideyRuntimePanelLauncherSpy()
+        let stateMachine = TideyRuntimeRehydrationStateMachine(
+            reducer: TideyRuntimeRehydrationReducer(),
+            targetProbe: targetProbe,
+            topologyCreator: topologyCreator,
+            panelLauncher: panelLauncher
+        )
+        let descriptor = descriptor(revision: 1)
+
+        stateMachine.handle(
+            panelID: "panel-cold-boot",
+            descriptor: descriptor,
+            nativeReattachOutcome: .notAttempted
+        )
+        stateMachine.handle(
+            panelID: "panel-cold-boot",
+            descriptor: descriptor,
+            nativeReattachOutcome: .notAttempted
+        )
+
+        XCTAssertEqual(targetProbe.probeCount, 1)
+        targetProbe.complete(.missing)
+        XCTAssertEqual(topologyCreator.createCount, 1)
+    }
+
+    func testColdBootWithoutNativeReattachResumesDirectAgent() {
+        let targetProbe = TideyRuntimeTargetProbeSpy()
+        let topologyCreator = TideyRuntimeTopologyCreatorSpy()
+        let panelLauncher = TideyRuntimePanelLauncherSpy()
+        let stateMachine = TideyRuntimeRehydrationStateMachine(
+            reducer: TideyRuntimeRehydrationReducer(),
+            targetProbe: targetProbe,
+            topologyCreator: topologyCreator,
+            panelLauncher: panelLauncher
+        )
+
+        stateMachine.handle(
+            panelID: "panel-direct-cold-boot",
+            descriptor: directDescriptor(revision: 1),
+            nativeReattachOutcome: .notAttempted
+        )
+        stateMachine.handle(
+            panelID: "panel-direct-cold-boot",
+            descriptor: directDescriptor(revision: 1),
+            nativeReattachOutcome: .notAttempted
+        )
+
+        XCTAssertEqual(panelLauncher.directResumeCount, 1)
+        XCTAssertEqual(targetProbe.probeCount, 0)
+    }
+
+    func testRuntimeTaskRunnerCapturesExitStatusAndDiagnostics() {
+        let result = TideyRuntimeTaskRunner().run(
+            executable: "/bin/sh",
+            arguments: [
+                "-c",
+                "printf stdout; printf stderr >&2; exit 7",
+            ],
+            environment: ["PATH": "/usr/bin:/bin"],
+            timeout: 2
+        )
+
+        XCTAssertTrue(result.launched)
+        XCTAssertFalse(result.timedOut)
+        XCTAssertFalse(result.succeeded)
+        XCTAssertEqual(
+            result.terminationReason,
+            Process.TerminationReason.exit.rawValue
+        )
+        XCTAssertEqual(result.terminationStatus, 7)
+        XCTAssertEqual(result.standardOutput, "stdout")
+        XCTAssertEqual(result.standardError, "stderr")
+        XCTAssertNil(result.launchErrorDescription)
+    }
+
+    func testRuntimeTaskRunnerTimeoutDoesNotBlockNextCommand() {
+        let runner = TideyRuntimeTaskRunner()
+        let start = Date()
+        let timedOut = runner.run(
+            executable: "/bin/sleep",
+            arguments: ["5"],
+            environment: [:],
+            timeout: 0.05
+        )
+        let next = runner.run(
+            executable: "/usr/bin/printf",
+            arguments: ["second-carrier"],
+            environment: [:],
+            timeout: 2
+        )
+
+        XCTAssertTrue(timedOut.launched)
+        XCTAssertTrue(timedOut.timedOut)
+        XCTAssertFalse(timedOut.succeeded)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 2)
+        XCTAssertTrue(next.succeeded)
+        XCTAssertEqual(next.standardOutput, "second-carrier")
+    }
+
+    func testRuntimeTaskRunnerForceKillsProcessesThatIgnoreTermination() {
+        let start = Date()
+        let result = TideyRuntimeTaskRunner().run(
+            executable: "/bin/sh",
+            arguments: [
+                "-c",
+                "trap '' TERM; while :; do :; done",
+            ],
+            environment: ["PATH": "/usr/bin:/bin"],
+            timeout: 0.05
+        )
+
+        XCTAssertTrue(result.launched)
+        XCTAssertTrue(result.timedOut)
+        XCTAssertFalse(result.succeeded)
+        XCTAssertEqual(
+            result.terminationReason,
+            Process.TerminationReason.uncaughtSignal.rawValue
+        )
+        XCTAssertEqual(result.terminationStatus, SIGKILL)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 2)
+    }
+
+    func testRuntimeTaskRunnerDrainsAndBoundsBothOutputStreams() {
+        let result = TideyRuntimeTaskRunner().run(
+            executable: "/bin/sh",
+            arguments: [
+                "-c",
+                "dd if=/dev/zero bs=65536 count=8 2>/dev/null; " +
+                    "dd if=/dev/zero bs=65536 count=8 1>&2 2>/dev/null",
+            ],
+            environment: ["PATH": "/usr/bin:/bin"],
+            timeout: 2
+        )
+
+        XCTAssertTrue(result.succeeded)
+        XCTAssertGreaterThan(result.standardOutput.utf8.count, 0)
+        XCTAssertGreaterThan(result.standardError.utf8.count, 0)
+        XCTAssertLessThanOrEqual(result.standardOutput.utf8.count, 262_144)
+        XCTAssertLessThanOrEqual(result.standardError.utf8.count, 262_144)
     }
 
     func testTopologyOwnedAgentLaunchPlanSeamsCompile() {

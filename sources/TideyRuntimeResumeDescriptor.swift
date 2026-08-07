@@ -276,10 +276,10 @@ final class TideyManagedRestoreLaunchPolicy: NSObject {
         switch nativeReattachOutcome {
         case .succeeded:
             return .preserveNativeAttachment
-        case .failed where hasValidDescriptor:
-            return .deferToRuntimeRehydrator
         case .notAttempted, .failed:
-            return .launchSavedProgram
+            return hasValidDescriptor
+                ? .deferToRuntimeRehydrator
+                : .launchSavedProgram
         @unknown default:
             return .launchSavedProgram
         }
@@ -954,6 +954,8 @@ final class TideyRuntimeResumeDescriptorUpdateGate: NSObject {
     private let lock = NSLock()
     private var entriesByPanelID: [String: Entry] = [:]
     private var revisionHighWaterByPanelID: [String: Int64] = [:]
+    private var awaitingRuntimeEvidenceByPanelID:
+        [String: Entry] = [:]
 
     @objc(initWithInitialDescriptorsByPanelID:)
     init(
@@ -1013,6 +1015,7 @@ final class TideyRuntimeResumeDescriptorUpdateGate: NSObject {
 
         let existing = entriesByPanelID[currentPanelID]
         if existing?.canonicalContent == canonicalContent {
+            awaitingRuntimeEvidenceByPanelID[currentPanelID] = nil
             return TideyRuntimeResumeDescriptorUpdateResult(
                 accepted: true,
                 changed: false,
@@ -1035,6 +1038,7 @@ final class TideyRuntimeResumeDescriptorUpdateGate: NSObject {
                 descriptor: descriptor,
                 canonicalContent: canonicalContent
             )
+            awaitingRuntimeEvidenceByPanelID[currentPanelID] = nil
             revisionHighWaterByPanelID[currentPanelID] =
                 descriptor.revision
             return TideyRuntimeResumeDescriptorUpdateResult(
@@ -1157,6 +1161,15 @@ final class TideyRuntimeResumeDescriptorUpdateGate: NSObject {
                 expectedCanonicalContent else {
             return rejected(errorCode: "descriptor_changed")
         }
+        if let pending =
+                awaitingRuntimeEvidenceByPanelID[currentPanelID],
+           pending.descriptor.revision ==
+                existing.descriptor.revision,
+           pending.canonicalContent == existing.canonicalContent {
+            return rejected(
+                errorCode: "runtime_rehydration_pending"
+            )
+        }
         entriesByPanelID[currentPanelID] = nil
         return TideyRuntimeResumeDescriptorUpdateResult(
             accepted: true,
@@ -1176,6 +1189,7 @@ final class TideyRuntimeResumeDescriptorUpdateGate: NSObject {
         )
         lock.lock()
         installEntriesLocked(replacements)
+        awaitingRuntimeEvidenceByPanelID.removeAll()
         lock.unlock()
     }
 
@@ -1184,7 +1198,15 @@ final class TideyRuntimeResumeDescriptorUpdateGate: NSObject {
         _ descriptorsByPanelID:
             [String: TideyRuntimeResumeDescriptor]
     ) {
-        replaceDescriptorsByPanelID(descriptorsByPanelID)
+        let replacements = validatedEntries(
+            for: descriptorsByPanelID
+        )
+        lock.lock()
+        installEntriesLocked(replacements)
+        awaitingRuntimeEvidenceByPanelID = replacements.filter {
+            $0.value.descriptor.kind == .agent
+        }
+        lock.unlock()
     }
 
     private func validatedEntries(

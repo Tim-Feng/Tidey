@@ -1,16 +1,274 @@
 import Foundation
+import Darwin
 
 @objc(TideyRuntimeTaskEnvironmentBuilder)
 @objcMembers
 final class TideyRuntimeTaskEnvironmentBuilder: NSObject {
+    @objc(
+        environmentWithParentEnvironment:canonicalSocketPath:
+        canonicalBinDirectory:
+    )
     func environment(
         parentEnvironment: [String: String],
         canonicalSocketPath: String,
         canonicalBinDirectory: String
     ) -> [String: String] {
-        _ = canonicalSocketPath
-        _ = canonicalBinDirectory
-        return parentEnvironment
+        var environment = parentEnvironment.filter {
+            !$0.key.hasPrefix("TIDEY_")
+        }
+        for key in [
+            "TMUX",
+            "TMUX_PANE",
+            "NO_COLOR",
+            "CODEX_CI",
+            "CODEX_THREAD_ID",
+            "CODEX_PERMISSION_PROFILE",
+            "CODEX_SANDBOX",
+            "CODEX_SANDBOX_NETWORK_DISABLED",
+            "CODEX_ESCALATE_SOCKET",
+        ] {
+            environment[key] = nil
+        }
+        if !canonicalSocketPath.isEmpty {
+            environment["TIDEY_SOCKET_PATH"] = canonicalSocketPath
+        }
+        if !canonicalBinDirectory.isEmpty {
+            environment["TIDEY_BIN_DIR"] = canonicalBinDirectory
+        }
+        return environment
+    }
+}
+
+@objc(TideyRuntimeTaskExecutionResult)
+@objcMembers
+final class TideyRuntimeTaskExecutionResult: NSObject {
+    let launched: Bool
+    let timedOut: Bool
+    let terminationReason: Int
+    let terminationStatus: Int32
+    let standardOutput: String
+    let standardError: String
+    let launchErrorDescription: String?
+
+    var succeeded: Bool {
+        launched &&
+            !timedOut &&
+            terminationReason == Process.TerminationReason.exit.rawValue &&
+            terminationStatus == 0
+    }
+
+    init(
+        launched: Bool,
+        timedOut: Bool,
+        terminationReason: Int,
+        terminationStatus: Int32,
+        standardOutput: String,
+        standardError: String,
+        launchErrorDescription: String?
+    ) {
+        self.launched = launched
+        self.timedOut = timedOut
+        self.terminationReason = terminationReason
+        self.terminationStatus = terminationStatus
+        self.standardOutput = standardOutput
+        self.standardError = standardError
+        self.launchErrorDescription = launchErrorDescription
+    }
+}
+
+private final class TideyRuntimeBoundedDataAccumulator {
+    private let maximumBytes: Int
+    private let lock = NSLock()
+    private var data = Data()
+
+    init(maximumBytes: Int) {
+        self.maximumBytes = maximumBytes
+    }
+
+    func append(_ newData: Data) {
+        lock.lock()
+        defer { lock.unlock() }
+        let remaining = maximumBytes - data.count
+        guard remaining > 0 else {
+            return
+        }
+        data.append(newData.prefix(remaining))
+    }
+
+    func string() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return String(decoding: data, as: UTF8.self)
+    }
+}
+
+private final class TideyRuntimePipeDrain {
+    private let pipe: Pipe
+    private let accumulator: TideyRuntimeBoundedDataAccumulator
+    private let completion = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var finished = false
+
+    init(pipe: Pipe, maximumBytes: Int) {
+        self.pipe = pipe
+        accumulator = TideyRuntimeBoundedDataAccumulator(
+            maximumBytes: maximumBytes
+        )
+    }
+
+    func start() {
+        DispatchQueue.global(qos: .userInteractive).async { [self] in
+            defer { finish() }
+            do {
+                while let data = try pipe.fileHandleForReading.read(
+                    upToCount: 65_536
+                ), !data.isEmpty {
+                    accumulator.append(data)
+                }
+            } catch {
+                return
+            }
+        }
+    }
+
+    func closeParentWriteEnd() {
+        try? pipe.fileHandleForWriting.close()
+    }
+
+    func waitForEnd(timeout: TimeInterval) {
+        let result = completion.wait(
+            timeout: .now() + max(0, timeout)
+        )
+        if result == .timedOut {
+            finish()
+        }
+    }
+
+    func finish() {
+        lock.lock()
+        guard !finished else {
+            lock.unlock()
+            return
+        }
+        finished = true
+        lock.unlock()
+
+        try? pipe.fileHandleForReading.close()
+        completion.signal()
+    }
+
+    func string() -> String {
+        accumulator.string()
+    }
+}
+
+@objc(TideyRuntimeTaskRunner)
+@objcMembers
+final class TideyRuntimeTaskRunner: NSObject {
+    private static let maximumCapturedBytes = 262_144
+    private static let terminationGrace: TimeInterval = 0.25
+    private static let forcedTerminationGrace: TimeInterval = 1
+    private static let pipeDrainGrace: TimeInterval = 0.5
+
+    @objc(runExecutable:arguments:environment:timeout:)
+    func run(
+        executable: String,
+        arguments: [String],
+        environment: [String: String],
+        timeout: TimeInterval
+    ) -> TideyRuntimeTaskExecutionResult {
+        guard executable.hasPrefix("/"), timeout.isFinite, timeout > 0 else {
+            return TideyRuntimeTaskExecutionResult(
+                launched: false,
+                timedOut: false,
+                terminationReason: -1,
+                terminationStatus: -1,
+                standardOutput: "",
+                standardError: "",
+                launchErrorDescription: "Invalid executable or timeout"
+            )
+        }
+
+        let process = Process()
+        let standardOutputPipe = Pipe()
+        let standardErrorPipe = Pipe()
+        let standardOutputDrain = TideyRuntimePipeDrain(
+            pipe: standardOutputPipe,
+            maximumBytes: Self.maximumCapturedBytes
+        )
+        let standardErrorDrain = TideyRuntimePipeDrain(
+            pipe: standardErrorPipe,
+            maximumBytes: Self.maximumCapturedBytes
+        )
+        let termination = DispatchSemaphore(value: 0)
+
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        process.environment = environment
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = standardOutputPipe
+        process.standardError = standardErrorPipe
+        process.terminationHandler = { _ in
+            termination.signal()
+        }
+        standardOutputDrain.start()
+        standardErrorDrain.start()
+
+        do {
+            try process.run()
+        } catch {
+            standardOutputDrain.closeParentWriteEnd()
+            standardErrorDrain.closeParentWriteEnd()
+            standardOutputDrain.finish()
+            standardErrorDrain.finish()
+            return TideyRuntimeTaskExecutionResult(
+                launched: false,
+                timedOut: false,
+                terminationReason: -1,
+                terminationStatus: -1,
+                standardOutput: standardOutputDrain.string(),
+                standardError: standardErrorDrain.string(),
+                launchErrorDescription: error.localizedDescription
+            )
+        }
+
+        standardOutputDrain.closeParentWriteEnd()
+        standardErrorDrain.closeParentWriteEnd()
+
+        var timedOut = false
+        if termination.wait(timeout: .now() + timeout) == .timedOut {
+            timedOut = true
+            if process.isRunning {
+                process.terminate()
+            }
+            if termination.wait(
+                timeout: .now() + Self.terminationGrace
+            ) == .timedOut,
+               process.isRunning {
+                Darwin.kill(process.processIdentifier, SIGKILL)
+                _ = termination.wait(
+                    timeout: .now() + Self.forcedTerminationGrace
+                )
+            }
+        }
+
+        standardOutputDrain.waitForEnd(timeout: Self.pipeDrainGrace)
+        standardErrorDrain.waitForEnd(timeout: Self.pipeDrainGrace)
+
+        let hasTerminated = !process.isRunning
+        return TideyRuntimeTaskExecutionResult(
+            launched: true,
+            timedOut: timedOut,
+            terminationReason: hasTerminated
+                ? process.terminationReason.rawValue
+                : -1,
+            terminationStatus: hasTerminated
+                ? process.terminationStatus
+                : -1,
+            standardOutput: standardOutputDrain.string(),
+            standardError: standardErrorDrain.string(),
+            launchErrorDescription: nil
+        )
     }
 }
 
@@ -176,6 +434,16 @@ final class TideyRuntimeDirectAgentCommandBuilder: NSObject {
 @objc(TideyRuntimeLoginShellCommandBuilder)
 @objcMembers
 final class TideyRuntimeLoginShellCommandBuilder: NSObject {
+    private static let controllerRuntimeEnvironmentKeys = [
+        "NO_COLOR",
+        "CODEX_CI",
+        "CODEX_THREAD_ID",
+        "CODEX_PERMISSION_PROFILE",
+        "CODEX_SANDBOX",
+        "CODEX_SANDBOX_NETWORK_DISABLED",
+        "CODEX_ESCALATE_SOCKET",
+    ]
+
     @objc(argumentsWithLoginShellExecutable:innerCommand:)
     func arguments(
         loginShellExecutable: String,
@@ -190,10 +458,14 @@ final class TideyRuntimeLoginShellCommandBuilder: NSObject {
               ) else {
             return nil
         }
+        let unsetControllerRuntime =
+            "unset " +
+            Self.controllerRuntimeEnvironmentKeys.joined(separator: " ")
         return [
             loginShellExecutable,
             "-lic",
-            "\(innerCommand); exec " +
+            "\(unsetControllerRuntime); " +
+                "\(innerCommand); exec " +
                 "\(Self.shellQuote(loginShellExecutable)) -l",
         ]
     }
@@ -669,7 +941,7 @@ final class TideyRuntimeRehydrationStateMachine: NSObject {
         case .failed:
             event = .nativeReattachFailed
         case .notAttempted:
-            return
+            event = .nativeReattachFailed
         @unknown default:
             return
         }
