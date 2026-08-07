@@ -460,7 +460,7 @@ final class OrdinaryTmuxRuntimeResumeCarrierPlanner:
         }
 
         let target: RuntimeResumeTmuxTarget
-        switch anchor.route.socket {
+        switch anchor.route.restorationSocket {
         case .defaultSocket:
             target = RuntimeResumeTmuxTarget(
                 defaultSocketAndTmuxSession: sessionName
@@ -498,6 +498,7 @@ final class OrdinaryTmuxRuntimeResumeCarrierPlanner:
             route.workspaceID,
             route.carrierPanelID,
             route.socket.cacheKey,
+            route.restorationSocket.cacheKey,
             route.sessionID,
         ].joined(separator: "|")
     }
@@ -611,7 +612,7 @@ final class OrdinaryTmuxRuntimeResumeTopologyReader:
         let tmuxSession = trimmedSessionName.isEmpty
             ? activeRoute.sessionID
             : trimmedSessionName
-        switch activeRoute.socket {
+        switch activeRoute.restorationSocket {
         case .defaultSocket:
             target = RuntimeResumeTmuxTarget(
                 defaultSocketAndTmuxSession: tmuxSession
@@ -1180,7 +1181,7 @@ final class RuntimeResumeDescriptorPublisher:
                     RuntimeResumeDescriptorSocketUpdate(
                         binding: plan.binding,
                         content: RuntimeResumeDescriptorContent(
-                            descriptorVersion: 2,
+                            descriptorVersion: 3,
                             kind: .agent,
                             restorePolicy: .create,
                             target: plan.target,

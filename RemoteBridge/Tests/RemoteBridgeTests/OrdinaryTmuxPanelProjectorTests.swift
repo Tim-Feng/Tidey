@@ -376,11 +376,15 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
     }
 
     func testProjectsMultiWindowCarrierIntoRemoteOnlyPanels() {
-        let projector = OrdinaryTmuxPanelProjector(adapter: StubAdapter(panels: [
-            projectedPanel(windowID: "@15", index: 0, name: "priest", paneID: "%15", current: true),
-            projectedPanel(windowID: "@16", index: 1, name: "mother_nature", paneID: "%16", current: false),
-            projectedPanel(windowID: "@17", index: 2, name: "peon_001", paneID: "%17", current: false),
-        ]))
+        let registry = OrdinaryTmuxPanelRegistry()
+        let projector = OrdinaryTmuxPanelProjector(
+            adapter: StubAdapter(panels: [
+                projectedPanel(windowID: "@15", index: 0, name: "priest", paneID: "%15", current: true),
+                projectedPanel(windowID: "@16", index: 1, name: "mother_nature", paneID: "%16", current: false),
+                projectedPanel(windowID: "@17", index: 2, name: "peon_001", paneID: "%17", current: false),
+            ]),
+            registry: registry
+        )
 
         let result = projector.projectPanelListResult(panelListResult())
 
@@ -397,6 +401,20 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
         XCTAssertEqual(panels?.first?["ordinary_tmux_logical"]?.objectValue?["active_pane_id"]?.stringValue, "%15")
         XCTAssertEqual(panels?.first?["ordinary_tmux_logical"]?.objectValue?["socket_path"]?.stringValue, "/tmp/tmux-501/default")
         XCTAssertEqual(panels?.first?["effective_shell_pid"]?.intValue, 1015)
+        XCTAssertEqual(
+            registry.route(
+                forPanelID:
+                    "ordinary-tmux:/tmp/tmux-501/default:$7:@15"
+            )?.socket,
+            .path("/tmp/tmux-501/default")
+        )
+        XCTAssertEqual(
+            registry.route(
+                forPanelID:
+                    "ordinary-tmux:/tmp/tmux-501/default:$7:@15"
+            )?.restorationSocket,
+            .defaultSocket
+        )
     }
 
     func testProjectedLogicalPanelUsesItsOwnLifecycleAggregate() throws {

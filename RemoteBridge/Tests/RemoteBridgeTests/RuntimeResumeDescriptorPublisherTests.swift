@@ -587,6 +587,196 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
         )
     }
 
+    func testCarrierDescriptorUsesRestorationSocketWithoutChangingLiveSocket()
+        throws {
+        let registry = OrdinaryTmuxPanelRegistry()
+        let liveSocket = OrdinaryTmuxSocketSelector.path(
+            "/private/tmp/tmux-501/default"
+        )
+        registry.replaceRoutes(
+            workspaceID: "workspace-1",
+            routes: [
+                OrdinaryTmuxPanelRoute(
+                    workspaceID: "workspace-1",
+                    panelID: "panel-1",
+                    carrierPanelID: "carrier-1",
+                    socket: liveSocket,
+                    restorationSocket: .defaultSocket,
+                    sessionID: "$1",
+                    sessionName: "work",
+                    windowID: "@1",
+                    windowIndex: 0,
+                    activePaneID: "%7",
+                    cwd: "/tmp/project",
+                    currentCommand: "codex"
+                ),
+            ]
+        )
+        let planner = OrdinaryTmuxRuntimeResumeCarrierPlanner(
+            registry: registry,
+            sessionReader: StubRuntimeResumeTmuxSessionReader(
+                statesBySessionID: [
+                    "$1": RuntimeResumeTmuxSessionState(
+                        sessionID: "$1",
+                        sessionName: "work",
+                        windows: [
+                            RuntimeResumeTmuxWindowState(
+                                windowID: "@1",
+                                index: 0,
+                                name: "codex",
+                                isActive: true,
+                                panes: [
+                                    RuntimeResumeTmuxPaneState(
+                                        paneID: "%7",
+                                        index: 0,
+                                        workingDirectory:
+                                            "/tmp/project",
+                                        isActive: true
+                                    ),
+                                ]
+                            ),
+                        ]
+                    ),
+                ]
+            )
+        )
+        let record = RuntimeResumeAgentRegistryRecord(
+            binding: RuntimeResumeDescriptorBinding(
+                workspaceID: "workspace-1",
+                panelID: "panel-1",
+                tmuxPaneID: "%7"
+            ),
+            vendor: .codex,
+            durableResumeID: "thread-1",
+            launch: RuntimeResumeLaunchSpecification(
+                executable: "codex",
+                arguments: ["resume", "thread-1"],
+                workingDirectory: "/tmp/project"
+            )
+        )
+
+        let plan = try XCTUnwrap(
+            planner.publicationPlans(for: [record]).first
+        )
+
+        XCTAssertEqual(
+            registry.route(forPanelID: "panel-1")?.socket,
+            liveSocket
+        )
+        XCTAssertEqual(
+            plan.target,
+            RuntimeResumeTmuxTarget(
+                defaultSocketAndTmuxSession: "work"
+            )
+        )
+    }
+
+    func testCarrierPlannerRejectsMixedRestorationSocketSemantics()
+        throws {
+        let registry = OrdinaryTmuxPanelRegistry()
+        let liveSocket = OrdinaryTmuxSocketSelector.path(
+            "/private/tmp/tmux-501/default"
+        )
+        registry.replaceRoutes(
+            workspaceID: "workspace-1",
+            routes: [
+                Self.route(
+                    panelID: "panel-1",
+                    windowID: "@1",
+                    windowIndex: 0,
+                    paneID: "%7",
+                    cwd: "/tmp/one",
+                    socket: liveSocket,
+                    restorationSocket: .defaultSocket
+                ),
+                Self.route(
+                    panelID: "panel-2",
+                    windowID: "@2",
+                    windowIndex: 1,
+                    paneID: "%8",
+                    cwd: "/tmp/two",
+                    socket: liveSocket,
+                    restorationSocket: liveSocket
+                ),
+            ]
+        )
+        let planner = OrdinaryTmuxRuntimeResumeCarrierPlanner(
+            registry: registry,
+            sessionReader: StubRuntimeResumeTmuxSessionReader(
+                statesBySessionID: [
+                    "$1": RuntimeResumeTmuxSessionState(
+                        sessionID: "$1",
+                        sessionName: "work",
+                        windows: [
+                            RuntimeResumeTmuxWindowState(
+                                windowID: "@1",
+                                index: 0,
+                                name: "one",
+                                isActive: true,
+                                panes: [
+                                    RuntimeResumeTmuxPaneState(
+                                        paneID: "%7",
+                                        index: 0,
+                                        workingDirectory: "/tmp/one",
+                                        isActive: true
+                                    ),
+                                ]
+                            ),
+                            RuntimeResumeTmuxWindowState(
+                                windowID: "@2",
+                                index: 1,
+                                name: "two",
+                                isActive: false,
+                                panes: [
+                                    RuntimeResumeTmuxPaneState(
+                                        paneID: "%8",
+                                        index: 0,
+                                        workingDirectory: "/tmp/two",
+                                        isActive: true
+                                    ),
+                                ]
+                            ),
+                        ]
+                    ),
+                ]
+            )
+        )
+        let records = [
+            RuntimeResumeAgentRegistryRecord(
+                binding: RuntimeResumeDescriptorBinding(
+                    workspaceID: "workspace-1",
+                    panelID: "panel-1",
+                    tmuxPaneID: "%7"
+                ),
+                vendor: .claude,
+                durableResumeID: "claude-1",
+                launch: RuntimeResumeLaunchSpecification(
+                    executable: "claude",
+                    arguments: ["--resume", "claude-1"],
+                    workingDirectory: "/tmp/one"
+                )
+            ),
+            RuntimeResumeAgentRegistryRecord(
+                binding: RuntimeResumeDescriptorBinding(
+                    workspaceID: "workspace-1",
+                    panelID: "panel-2",
+                    tmuxPaneID: "%8"
+                ),
+                vendor: .codex,
+                durableResumeID: "codex-1",
+                launch: RuntimeResumeLaunchSpecification(
+                    executable: "codex",
+                    arguments: ["resume", "codex-1"],
+                    workingDirectory: "/tmp/two"
+                )
+            ),
+        ]
+
+        XCTAssertTrue(
+            try planner.publicationPlans(for: records).isEmpty
+        )
+    }
+
     func testColdRebootInventoryProducesCompleteDurableDescriptorSet()
         throws {
         let registry = OrdinaryTmuxPanelRegistry()
@@ -796,7 +986,7 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
         XCTAssertEqual(Set(updates.map(\.binding.panelID)).count, 11)
         XCTAssertEqual(Set(updates.map(\.binding.workspaceID)).count, 7)
         XCTAssertTrue(updates.allSatisfy {
-            $0.content.descriptorVersion == 2 &&
+            $0.content.descriptorVersion == 3 &&
                 $0.content.kind == .agent &&
                 $0.content.restorePolicy == .create &&
                 $0.content.agent == nil
@@ -1538,6 +1728,57 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
         )
     }
 
+    func testTopologyReaderUsesRestorationSocketWithoutChangingLiveSocket()
+        throws {
+        let registry = OrdinaryTmuxPanelRegistry()
+        let liveSocket = OrdinaryTmuxSocketSelector.path(
+            "/private/tmp/tmux-501/default"
+        )
+        registry.replaceRoutes(
+            workspaceID: "workspace-1",
+            routes: [
+                OrdinaryTmuxPanelRoute(
+                    workspaceID: "workspace-1",
+                    panelID: "panel-1",
+                    carrierPanelID: "carrier-1",
+                    socket: liveSocket,
+                    restorationSocket: .defaultSocket,
+                    sessionID: "$1",
+                    sessionName: "work",
+                    windowID: "@1",
+                    windowIndex: 0,
+                    activePaneID: "%7",
+                    cwd: "/tmp/project",
+                    currentCommand: "codex"
+                ),
+            ]
+        )
+        let reader = OrdinaryTmuxRuntimeResumeTopologyReader(
+            registry: registry
+        )
+
+        let snapshot = try XCTUnwrap(
+            reader.topologySnapshot(
+                for: RuntimeResumeDescriptorBinding(
+                    workspaceID: "workspace-1",
+                    panelID: "panel-1",
+                    tmuxPaneID: "%7"
+                )
+            )
+        )
+
+        XCTAssertEqual(
+            registry.route(forPanelID: "panel-1")?.socket,
+            liveSocket
+        )
+        XCTAssertEqual(
+            snapshot.target,
+            RuntimeResumeTmuxTarget(
+                defaultSocketAndTmuxSession: "work"
+            )
+        )
+    }
+
     func testPublishesOneCarrierDescriptorWithEveryPaneAgentLaunch()
         throws {
         let registry = OrdinaryTmuxPanelRegistry()
@@ -1682,7 +1923,7 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
                 tmuxPaneID: "%9"
             )
         )
-        XCTAssertEqual(update.content.descriptorVersion, 2)
+        XCTAssertEqual(update.content.descriptorVersion, 3)
         XCTAssertEqual(update.content.kind, .agent)
         XCTAssertEqual(update.content.restorePolicy, .create)
         XCTAssertEqual(
@@ -2153,13 +2394,17 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
         cwd: String?,
         carrierPanelID: String = "carrier-1",
         sessionID: String = "$1",
-        sessionName: String = "work"
+        sessionName: String = "work",
+        socket: OrdinaryTmuxSocketSelector =
+            .name("tidey-agents"),
+        restorationSocket: OrdinaryTmuxSocketSelector? = nil
     ) -> OrdinaryTmuxPanelRoute {
         OrdinaryTmuxPanelRoute(
             workspaceID: "workspace-1",
             panelID: panelID,
             carrierPanelID: carrierPanelID,
-            socket: .name("tidey-agents"),
+            socket: socket,
+            restorationSocket: restorationSocket,
             sessionID: sessionID,
             sessionName: sessionName,
             windowID: windowID,
