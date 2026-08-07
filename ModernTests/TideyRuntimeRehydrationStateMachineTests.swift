@@ -683,6 +683,20 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
         )
     }
 
+    func testTmuxPaneListCodecSeamPreservesStrictIndexMapping() {
+        let codec = TideyRuntimeTmuxPaneListCodec()
+        let output = codec.formatString
+            .replacingOccurrences(of: "#{pane_index}", with: "0")
+            .replacingOccurrences(of: "#{pane_id}", with: "%5") + "\n"
+
+        XCTAssertEqual(
+            codec.paneIDsByIndex(from: output),
+            [NSNumber(value: 0): "%5"]
+        )
+        XCTAssertNil(codec.paneIDsByIndex(from: "0\t%5\n0\t%6\n"))
+        XCTAssertNil(codec.paneIDsByIndex(from: "00\t%5\n"))
+    }
+
     func testTmuxSessionCreationRequiresExactLiveSessionPostcondition() {
         let postcondition = TideyRuntimeTmuxSessionCreationPostcondition()
         let creationResult = TideyRuntimeTaskExecutionResult(

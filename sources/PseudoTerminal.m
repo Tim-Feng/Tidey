@@ -531,36 +531,6 @@ static NSArray<NSString *> *TideyRuntimeNonemptyLines(NSString *output) {
     return lines;
 }
 
-static NSDictionary<NSNumber *, NSString *> *
-TideyRuntimePaneIDsByIndex(NSString *output) {
-    NSMutableDictionary<NSNumber *, NSString *> *result =
-        [NSMutableDictionary dictionary];
-    for (NSString *line in [output componentsSeparatedByCharactersInSet:
-                            [NSCharacterSet newlineCharacterSet]]) {
-        if (line.length == 0) {
-            continue;
-        }
-        NSArray<NSString *> *fields =
-            [line componentsSeparatedByString:@"\t"];
-        if (fields.count != 2) {
-            return nil;
-        }
-        NSString *indexString = fields[0];
-        NSString *paneID = fields[1];
-        NSInteger index = indexString.integerValue;
-        if (index < 0 ||
-            ![[NSString stringWithFormat:@"%ld", (long)index]
-                isEqualToString:indexString] ||
-            ![paneID hasPrefix:@"%"] ||
-            paneID.length < 2 ||
-            result[@(index)] != nil) {
-            return nil;
-        }
-        result[@(index)] = paneID;
-    }
-    return result.count > 0 ? result : nil;
-}
-
 static NSArray<TideyRuntimeTmuxWindowTopology *> *
 TideyRuntimeSortedWindows(TideyRuntimeTmuxTopology *topology) {
     return [topology.windows sortedArrayUsingComparator:
@@ -1211,6 +1181,8 @@ static NSString *TideyRuntimeAgentExecutablePath(
         if (!plan) {
             return NO;
         }
+        TideyRuntimeTmuxPaneListCodec *paneListCodec =
+            [[[TideyRuntimeTmuxPaneListCodec alloc] init] autorelease];
         NSMutableDictionary<NSString *, NSString *> *paneIDsByCoordinate =
             [NSMutableDictionary dictionary];
         for (TideyRuntimeTmuxWindowTopology *window in windows) {
@@ -1227,14 +1199,14 @@ static NSString *TideyRuntimeAgentExecutablePath(
                             window.index
                         ),
                         @"-F",
-                        @"#{pane_index}\t#{pane_id}",
+                        paneListCodec.formatString,
                     ],
                     &output
                 )) {
                 return NO;
             }
             NSDictionary<NSNumber *, NSString *> *paneIDsByIndex =
-                TideyRuntimePaneIDsByIndex(output);
+                [paneListCodec paneIDsByIndexFromOutput:output];
             if (paneIDsByIndex.count != panes.count) {
                 return NO;
             }

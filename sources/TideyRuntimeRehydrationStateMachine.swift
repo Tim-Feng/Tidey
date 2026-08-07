@@ -301,6 +301,40 @@ final class TideyRuntimeTmuxSessionCreationPostcondition: NSObject {
     }
 }
 
+@objc(TideyRuntimeTmuxPaneListCodec)
+@objcMembers
+final class TideyRuntimeTmuxPaneListCodec: NSObject {
+    let formatString = "#{pane_index}\t#{pane_id}"
+
+    @objc(paneIDsByIndexFromOutput:)
+    func paneIDsByIndex(
+        from output: String
+    ) -> [NSNumber: String]? {
+        var result = [NSNumber: String]()
+        for line in output.components(separatedBy: .newlines) {
+            if line.isEmpty {
+                continue
+            }
+            let fields = line.components(separatedBy: "\t")
+            guard fields.count == 2 else {
+                return nil
+            }
+            let indexString = fields[0]
+            let paneID = fields[1]
+            guard let index = Int(indexString),
+                  index >= 0,
+                  String(index) == indexString,
+                  paneID.hasPrefix("%"),
+                  paneID.count >= 2,
+                  result[NSNumber(value: index)] == nil else {
+                return nil
+            }
+            result[NSNumber(value: index)] = paneID
+        }
+        return result.isEmpty ? nil : result
+    }
+}
+
 private final class TideyRuntimeBoundedDataAccumulator {
     private let maximumBytes: Int
     private let lock = NSLock()
