@@ -1008,6 +1008,13 @@ run_app_server_runtime_resume_failure_cleanup_test() {
     local socket_pid
     local codex_log
     local app_server_child_pid_file
+    local remote_tui_pid_file
+    local remote_tui_pid
+    local bash_env_file
+    local kill_log
+    local cleanup_log
+    local remote_kill_count
+    local cleanup_count
     local resume_id="019eac34-764c-7893-9599-5b6000037cea"
 
     tmpdir="$(mktemp -d "/private/tmp/tidey-codex-resume-failure.XXXXXX")"
@@ -1017,7 +1024,28 @@ run_app_server_runtime_resume_failure_cleanup_test() {
     socket="$tmpdir/tidey.sock"
     codex_log="$tmpdir/codex.log"
     app_server_child_pid_file="$tmpdir/app-server-child.pid"
+    remote_tui_pid_file="$tmpdir/remote-tui.pid"
+    bash_env_file="$tmpdir/bash-env"
+    kill_log="$tmpdir/kill.log"
+    cleanup_log="$tmpdir/cleanup.log"
     mkdir -p "$fake_bin" "$registry_root"
+
+    cat > "$bash_env_file" <<'BASH_ENV_FILE'
+kill() {
+    local target="${!#}"
+    if [[ "${1:-}" != "-0" ]]; then
+        printf '%s\n' "$target" >> "$FAKE_KILL_LOG"
+    fi
+    builtin kill "$@"
+}
+
+rm() {
+    if [[ "$*" == *"tidey-codex-app-server."* ]]; then
+        printf '%s\n' "$*" >> "$FAKE_CLEANUP_LOG"
+    fi
+    /bin/rm "$@"
+}
+BASH_ENV_FILE
 
     cat > "$fake_bin/codex" <<'FAKE_CODEX'
 #!/usr/bin/env bash
@@ -1042,6 +1070,7 @@ if [[ " $* " == *" app-server "* ]]; then
     exit 0
 fi
 if [[ "$*" == *"--remote"* ]]; then
+    printf '%s\n' "$$" > "$FAKE_REMOTE_TUI_PID_FILE"
     exit 42
 fi
 exit 0
@@ -1061,8 +1090,12 @@ FAKE_CODEX
         TIDEY_SOCKET_PATH="$socket" \
         TIDEY_WORKSPACE_ID="workspace-1" \
         TIDEY_PANEL_ID="panel-1" \
+        BASH_ENV="$bash_env_file" \
         FAKE_CODEX_LOG="$codex_log" \
         FAKE_APP_SERVER_CHILD_PID_FILE="$app_server_child_pid_file" \
+        FAKE_REMOTE_TUI_PID_FILE="$remote_tui_pid_file" \
+        FAKE_KILL_LOG="$kill_log" \
+        FAKE_CLEANUP_LOG="$cleanup_log" \
         TMPDIR="$tmpdir" \
         "$CODEX_UNDER_TEST" resume "$resume_id"
     status=$?
@@ -1070,6 +1103,12 @@ FAKE_CODEX
 
     [[ "$status" == "42" ]] || fail "resume remote TUI failure status was not propagated"
     [[ -z "$(find "$registry_root" -name "codex-*.json" -print -quit)" ]] || fail "failed resume registry file was not cleaned up"
+    [[ -f "$remote_tui_pid_file" ]] || fail "failed resume remote TUI pid was not recorded"
+    remote_tui_pid="$(cat "$remote_tui_pid_file")"
+    remote_kill_count="$(grep -cx "$remote_tui_pid" "$kill_log" 2>/dev/null || true)"
+    [[ "$remote_kill_count" == "0" ]] || fail "cleanup signaled a reaped remote TUI pid $remote_kill_count times"
+    cleanup_count="$(wc -l < "$cleanup_log" | tr -d ' ')"
+    [[ "$cleanup_count" == "1" ]] || fail "app-server socket directory cleanup ran $cleanup_count times"
     [[ -f "$app_server_child_pid_file" ]] || fail "failed resume app-server child pid was not recorded"
     app_server_child_pid="$(cat "$app_server_child_pid_file")"
     for _ in $(seq 1 50); do

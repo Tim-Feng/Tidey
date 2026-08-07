@@ -984,6 +984,8 @@ run_codex_app_server_runtime() {
 
     cleanup_codex_app_server_runtime() {
         local status="${1:-$?}"
+        trap - EXIT HUP INT TERM
+        set +e
         cleanup_codex_app_server_artifacts
         exit "$status"
     }
@@ -1000,12 +1002,15 @@ run_codex_app_server_runtime() {
                 cat "$app_server_log"
             fi
         } > "$fallback_log" 2>/dev/null || true
-        cleanup_codex_app_server_artifacts
         trap - EXIT HUP INT TERM
+        cleanup_codex_app_server_artifacts
         launch_tracked_plain_codex_runtime "$real_codex" "$real_codex_home" "$profile_flag" "$profile_name" "$registry_file" "$session_id" "$created_at" "$emit_session_start_hook" "$@"
     }
 
-    trap cleanup_codex_app_server_runtime EXIT HUP INT TERM
+    trap 'cleanup_codex_app_server_runtime "$?"' EXIT
+    trap 'cleanup_codex_app_server_runtime 129' HUP
+    trap 'cleanup_codex_app_server_runtime 130' INT
+    trap 'cleanup_codex_app_server_runtime 143' TERM
 
     if ! [[ "$socket_wait_attempts" =~ ^[0-9]+$ ]] || [[ "$socket_wait_attempts" -lt 1 ]]; then
         socket_wait_attempts=1200
@@ -1043,6 +1048,7 @@ run_codex_app_server_runtime() {
     write_registry_file "$registry_file" "$TIDEY_WORKSPACE_ID" "$session_id" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$created_at" "$rollout_path" "codex_app_server" "$socket_path" "$app_server_pid" "$remote_tui_pid" "$thread_id" "$thread_id"
     wait "$remote_tui_pid"
     remote_status=$?
+    remote_tui_pid=""
     set -e
 
     cleanup_codex_app_server_runtime "$remote_status"
