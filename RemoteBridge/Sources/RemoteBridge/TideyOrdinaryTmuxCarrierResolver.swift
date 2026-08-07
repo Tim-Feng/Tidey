@@ -34,9 +34,14 @@ final class TideyOrdinaryTmuxCarrierResolver {
 
         do {
             guard let workspaces = try listWorkspaces(),
-                  let workspaceID = workspaceID(in: workspaces, targetSession: context.sessionName),
+                  let workspaceID = workspaceID(
+                      in: workspaces,
+                      targetSession: context.sessionName,
+                      socketPath: context.socketPath
+                  ),
                   let panelID = try carrierPanelID(workspaceID: workspaceID,
-                                                   targetSession: context.sessionName) else {
+                                                   targetSession: context.sessionName,
+                                                   socketPath: context.socketPath) else {
                 return nil
             }
             return TideyOrdinaryTmuxCarrierIdentity(workspaceID: workspaceID,
@@ -70,7 +75,11 @@ final class TideyOrdinaryTmuxCarrierResolver {
         return response.result?["workspaces"]?.arrayValue
     }
 
-    private func workspaceID(in workspaces: [JSONValue], targetSession: String) -> String? {
+    private func workspaceID(
+        in workspaces: [JSONValue],
+        targetSession: String,
+        socketPath: String
+    ) -> String? {
         for workspaceValue in workspaces {
             guard let workspace = workspaceValue.objectValue,
                   let workspaceID = workspace["workspace_id"]?.stringValue,
@@ -78,14 +87,22 @@ final class TideyOrdinaryTmuxCarrierResolver {
                   let ordinaryTmux = workspace["ordinary_tmux"]?.objectValue else {
                 continue
             }
-            if ordinaryTmux["target_session"]?.stringValue == targetSession {
+            if self.targetSession(
+                ordinaryTmux["target_session"]?.stringValue,
+                resolvesTo: targetSession,
+                socketPath: socketPath
+            ) {
                 return workspaceID
             }
         }
         return nil
     }
 
-    private func carrierPanelID(workspaceID: String, targetSession: String) throws -> String? {
+    private func carrierPanelID(
+        workspaceID: String,
+        targetSession: String,
+        socketPath: String
+    ) throws -> String? {
         let response = try requestSender(BridgeRequest(id: UUID().uuidString,
                                                        action: "list_panels",
                                                        params: ["workspace_id": .string(workspaceID)]))
@@ -98,12 +115,39 @@ final class TideyOrdinaryTmuxCarrierResolver {
                   let panelID = panel["panel_id"]?.stringValue,
                   panelID.isEmpty == false,
                   let ordinaryTmux = panel["ordinary_tmux"]?.objectValue,
-                  ordinaryTmux["target_session"]?.stringValue == targetSession else {
+                  self.targetSession(
+                      ordinaryTmux["target_session"]?.stringValue,
+                      resolvesTo: targetSession,
+                      socketPath: socketPath
+                  ) else {
                 continue
             }
             return panelID
         }
         return nil
+    }
+
+    private func targetSession(
+        _ persistedTarget: String?,
+        resolvesTo canonicalSessionName: String,
+        socketPath: String
+    ) -> Bool {
+        guard let rawPersistedTarget = persistedTarget else {
+            return false
+        }
+        let persistedTarget = rawPersistedTarget.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard persistedTarget.isEmpty == false else {
+            return false
+        }
+        if persistedTarget == canonicalSessionName {
+            return true
+        }
+        return tmuxResolver.resolveTargetSession(
+            persistedTarget,
+            socketPath: socketPath
+        )?.sessionName == canonicalSessionName
     }
 
     private static func normalizeSocketPath(_ path: String) -> String {

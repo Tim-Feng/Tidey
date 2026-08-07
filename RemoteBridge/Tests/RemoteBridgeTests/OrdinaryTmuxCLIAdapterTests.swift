@@ -460,6 +460,51 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
         XCTAssertEqual(client?.sessionName, "genesis-extraction")
     }
 
+    func testResolvesClientWhenTmuxCanonicalizesUniqueTargetPrefix() throws {
+        let state = RunnerState(responses: [
+            RunnerState.key(socket: .defaultSocket, arguments: listClientsArguments):
+                "/dev/ttys000\t/private/tmp/tmux-501/default\t$8\tstorage\t@8\n",
+        ])
+        let adapter = makeAdapter(state: state)
+
+        let client = try adapter.resolveClient(
+            for: OrdinaryTmuxAttachMetadata(clientTTY: "/dev/ttys000", targetSession: "s")
+        )
+
+        XCTAssertEqual(client?.sessionID, "$8")
+        XCTAssertEqual(client?.sessionName, "storage")
+    }
+
+    func testRejectsAmbiguousTargetSessionPrefix() throws {
+        let state = RunnerState(responses: [
+            RunnerState.key(socket: .defaultSocket, arguments: listClientsArguments):
+                "/dev/ttys000\t/private/tmp/tmux-501/default\t$8\tstorage\t@8\n" +
+                "/dev/ttys001\t/private/tmp/tmux-501/default\t$9\tsandbox\t@9\n",
+        ])
+        let adapter = makeAdapter(state: state)
+
+        let client = try adapter.resolveClient(
+            for: OrdinaryTmuxAttachMetadata(clientTTY: "/dev/ttys000", targetSession: "s")
+        )
+
+        XCTAssertNil(client)
+    }
+
+    func testReturnsNilWhenMultipleClientsClaimSameTTY() throws {
+        let state = RunnerState(responses: [
+            RunnerState.key(socket: .defaultSocket, arguments: listClientsArguments):
+                "/dev/ttys000\t/private/tmp/tmux-501/default\t$8\tstorage\t@8\n" +
+                "/dev/ttys000\t/private/tmp/tmux-501/default\t$9\tsandbox\t@9\n",
+        ])
+        let adapter = makeAdapter(state: state)
+
+        let client = try adapter.resolveClient(
+            for: OrdinaryTmuxAttachMetadata(clientTTY: "/dev/ttys000", targetSession: "storage")
+        )
+
+        XCTAssertNil(client)
+    }
+
     func testReturnsNilWhenNoClientTTYMatches() throws {
         let state = RunnerState(responses: [
             RunnerState.key(socket: .defaultSocket, arguments: listClientsArguments):

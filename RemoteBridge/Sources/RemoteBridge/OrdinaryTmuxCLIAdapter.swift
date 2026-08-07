@@ -315,14 +315,36 @@ final class OrdinaryTmuxCLIAdapter {
 
     private func resolveClient(for metadata: OrdinaryTmuxAttachMetadata,
                                among clients: [OrdinaryTmuxClient]) -> OrdinaryTmuxClient? {
-        let match = clients.first { client in
-            guard client.clientTTY == metadata.clientTTY else {
-                return false
+        let ttyMatches = clients.filter {
+            $0.clientTTY == metadata.clientTTY
+        }
+        guard ttyMatches.count == 1,
+              let ttyClient = ttyMatches.first else {
+            BridgeLogger.server.debug("ordinary tmux resolveClient rejected_tty_match_count tty=\(metadata.clientTTY, privacy: .public) target=\(metadata.targetSession ?? "<default>", privacy: .public) tty_match_count=\(ttyMatches.count, privacy: .public)")
+            return nil
+        }
+
+        let match: OrdinaryTmuxClient?
+        if let targetSession = metadata.targetSession {
+            // Deliberately resolve against attached sessions from list-clients.
+            // A detached sibling created after this client attached must not
+            // invalidate the client identity anchored by its exact TTY.
+            let liveSessions = clients.map {
+                TmuxSessionIdentity(
+                    sessionID: $0.sessionID,
+                    sessionName: $0.sessionName
+                )
             }
-            guard let targetSession = metadata.targetSession else {
-                return true
-            }
-            return targetSession == client.sessionName || targetSession == client.sessionID
+            let resolvedSession = TmuxTargetSessionResolver.resolve(
+                target: targetSession,
+                liveSessions: liveSessions
+            )
+            match = ttyClient.sessionID == resolvedSession?.sessionID &&
+                ttyClient.sessionName == resolvedSession?.sessionName
+                ? ttyClient
+                : nil
+        } else {
+            match = ttyClient
         }
         if let match {
             BridgeLogger.server.debug("ordinary tmux resolveClient matched tty=\(metadata.clientTTY, privacy: .public) target=\(metadata.targetSession ?? "<default>", privacy: .public) session_id=\(match.sessionID, privacy: .public) session_name=\(match.sessionName, privacy: .public) current_window=\(match.currentWindowID ?? "<none>", privacy: .public)")

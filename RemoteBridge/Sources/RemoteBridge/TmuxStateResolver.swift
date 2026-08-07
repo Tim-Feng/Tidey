@@ -93,11 +93,17 @@ final class TmuxStateResolver {
         let loadedAt: Date
     }
 
+    private struct SessionIdentityCacheEntry {
+        let identities: [TmuxSessionIdentity]
+        let loadedAt: Date
+    }
+
     private let queue = DispatchQueue(label: "com.tidey.remote-bridge.tmux-state")
     private let ttl: TimeInterval
     private let commandRunner: CommandRunner
     private var cache = [String: CacheEntry]()
     private var paneIdentityCache = [String: PaneIdentityCacheEntry]()
+    private var sessionIdentityCache = [String: SessionIdentityCacheEntry]()
 
     init(ttl: TimeInterval = 5,
          commandRunner: @escaping CommandRunner = TmuxStateResolver.liveCommandRunner) {
@@ -138,14 +144,37 @@ final class TmuxStateResolver {
         }
     }
 
+    func resolveTargetSession(
+        _ target: String,
+        socketPath: String
+    ) -> TmuxSessionIdentity? {
+        queue.sync {
+            let identities =
+                loadSessionIdentities(
+                    socketPath: socketPath,
+                    forceRefresh: false
+                ) ??
+                loadSessionIdentities(
+                    socketPath: socketPath,
+                    forceRefresh: true
+                ) ?? []
+            return TmuxTargetSessionResolver.resolve(
+                target: target,
+                liveSessions: identities
+            )
+        }
+    }
+
     func invalidate(socketPath: String? = nil) {
         queue.sync {
             if let socketPath {
                 cache.removeValue(forKey: socketPath)
                 paneIdentityCache.removeValue(forKey: socketPath)
+                sessionIdentityCache.removeValue(forKey: socketPath)
             } else {
                 cache.removeAll()
                 paneIdentityCache.removeAll()
+                sessionIdentityCache.removeAll()
             }
         }
     }
@@ -208,6 +237,44 @@ final class TmuxStateResolver {
         }
     }
 
+    private func loadSessionIdentities(
+        socketPath: String,
+        forceRefresh: Bool
+    ) -> [TmuxSessionIdentity]? {
+        if !forceRefresh,
+           let entry = sessionIdentityCache[socketPath],
+           Date().timeIntervalSince(entry.loadedAt) < ttl {
+            return entry.identities
+        }
+
+        do {
+            let output = try commandRunner(
+                socketPath,
+                [
+                    "list-sessions",
+                    "-F",
+                    "#{session_id}|#{session_name}",
+                ]
+            )
+            let rawLines = output.split(whereSeparator: \.isNewline)
+            let identities = rawLines.compactMap(
+                Self.parseSessionIdentityLine(_:)
+            )
+            guard rawLines.count == identities.count else {
+                BridgeLogger.server.error("tmux resolver session identity parse mismatch socket=\(socketPath, privacy: .public) raw_line_count=\(rawLines.count, privacy: .public) parsed_count=\(identities.count, privacy: .public)")
+                return nil
+            }
+            sessionIdentityCache[socketPath] = SessionIdentityCacheEntry(
+                identities: identities,
+                loadedAt: Date()
+            )
+            return identities
+        } catch {
+            BridgeLogger.server.error("tmux resolver session identity refresh failed socket=\(socketPath, privacy: .public) error=\(String(describing: error), privacy: .public)")
+            return nil
+        }
+    }
+
     private static func paneIdentitySnapshot(output: String) -> TmuxPaneIdentitySnapshot {
         let identities = output
             .split(whereSeparator: \.isNewline)
@@ -253,6 +320,33 @@ final class TmuxStateResolver {
             return nil
         }
         return (pid, sessionName)
+    }
+
+    private static func parseSessionIdentityLine(
+        _ line: Substring
+    ) -> TmuxSessionIdentity? {
+        let parts = line.split(
+            separator: "|",
+            maxSplits: 1,
+            omittingEmptySubsequences: false
+        )
+        guard parts.count == 2 else {
+            return nil
+        }
+        let sessionID = String(parts[0]).trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        let sessionName = String(parts[1]).trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard sessionID.isEmpty == false,
+              sessionName.isEmpty == false else {
+            return nil
+        }
+        return TmuxSessionIdentity(
+            sessionID: sessionID,
+            sessionName: sessionName
+        )
     }
 
     static func discoverTmuxBinaryPath(fileManager: FileManager = .default,
